@@ -7,6 +7,8 @@ import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAc
 import { writeExistingSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { sync } from '@/sync/sync';
 import { requireLocalSessionVisibleForRoute } from '@/sync/runtime/orchestration/serverScopedRpc/localSessionRouteReadiness';
+import { hydrateComposerDraftReferencesFromMessage } from '@/components/sessions/composer/composerScopeAdapters';
+import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 
 type ForkNavigationOptions = Readonly<{ serverId?: string }>;
 
@@ -39,17 +41,22 @@ function isExpectedForkChild(session: Session, parentSessionId: string): boolean
     return forkRecord.v === 1 && forkRecord.parentSessionId === parentSessionId;
 }
 
-function writeRestoredDraft(childSessionId: string, restoredDraftText: string, serverId?: string | null): void {
+function writeRestoredDraft(input: Readonly<{ childSessionId: string; parentSessionId: string; restoredDraftText: string;
+    sourceMessageId?: string | null; serverId?: string | null }>): void {
     try {
         const activeScope = getActiveServerAccountScope();
         if (!activeScope) return;
+        const source = input.sourceMessageId
+            ? storage.getState().sessionMessages[input.parentSessionId]?.messagesById[input.sourceMessageId] : null;
+        const draft = hydrateComposerDraftReferencesFromMessage({ text: input.restoredDraftText,
+            meta: source?.kind === 'user-text' ? source.meta : undefined });
         writeExistingSessionDraft({
             scope: {
-                serverId: normalizeServerId(serverId) ?? activeScope.serverId,
+                serverId: normalizeServerId(input.serverId) ?? activeScope.serverId,
                 accountId: activeScope.accountId,
             },
-            sessionId: childSessionId,
-            patch: { text: restoredDraftText },
+            sessionId: input.childSessionId,
+            patch: { text: draft.text, mentions: draft.mentions.map(mention => StrictJsonValueSchema.parse(mention)) },
             materializationIntent: 'seeded',
         });
     } catch {
@@ -92,7 +99,7 @@ export async function completeSessionForkNavigation(
     // A wrong or still-unhydrated child must never receive the parent's draft.
     // Keep this immediately before navigation, after the canonical route owner
     // proved the expected child and without a fork-specific polling loop.
-    if (restoredDraftText) writeRestoredDraft(params.childSessionId, restoredDraftText, params.serverId);
+    if (restoredDraftText) writeRestoredDraft({ ...params, restoredDraftText });
     await params.navigate(
         params.childSessionId,
         serverId ? { serverId } : undefined,

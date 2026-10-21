@@ -5,6 +5,8 @@ import { createPlainSessionCurrentProjectionRecordFixture, requireComposerDraftD
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { configureConnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createReducer } from '@happier-dev/session-core/reducer';
+import { MessageMetaSchema, type UserTextMessage } from '@happier-dev/session-core/messages';
 
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -94,6 +96,26 @@ describe('completeSessionForkNavigation', () => {
             });
             expect(events).toEqual(['hydrate', 'draft', 'navigate', 'persist']);
         } finally { unsubscribe(); }
+    });
+
+    it('restores exact inline reference ranges from the source message envelope', async () => {
+        const token = '[Auth fix](happier-ref:session:auth)';
+        const message: UserTextMessage = { id: 'reference-source', kind: 'user-text', localId: null, createdAt: 1, seq: 7,
+            text: `Continue ${token}`, meta: MessageMetaSchema.parse({ happierStructuredInputV1: { v: 1, mentions: [
+                { kind: 'happier.session', ref: 'session:auth', label: 'Auth fix', token },
+            ] } }) };
+        const messagesById = { [message.id]: message };
+        storage.setState(state => ({ sessionMessages: { ...state.sessionMessages, parent: {
+            messagesById, messagesMap: messagesById, messageIdsOldestFirst: [message.id], messagesVersion: 1,
+            reducerState: createReducer(), latestThinkingMessageId: null, latestThinkingMessageActivityAtMs: null, isLoaded: true,
+        } } }));
+        await completeSessionForkNavigation({ childSessionId: 'child', parentSessionId: 'parent', serverId,
+            navigate: () => {}, restoredDraftText: message.text, sourceMessageId: message.id });
+        const snapshot = getSessionDraftSnapshot(scope(), address);
+        if (!snapshot) throw new Error('Expected the restored fork draft');
+        expect(requireComposerDraftDocument(snapshot.document).composer.mentions?.value).toEqual([
+            expect.objectContaining({ ref: 'session:auth', tokenText: token, start: 9, end: message.text.length }),
+        ]);
     });
 
     it('does not write a restored draft, navigate, or persist prompt metadata for a wrong child', async () => {
