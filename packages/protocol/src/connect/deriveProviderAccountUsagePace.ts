@@ -151,17 +151,16 @@ export function hasProviderAccountUsageWitnessedReset(input: Readonly<{ previous
   if (previous.recordId !== current.recordId || previous.observedAtMs >= current.observedAtMs
     || previous.state !== 'loaded_data' || current.state !== 'loaded_data'
     || !isConnectedServiceQuotaObservationFresh({ observedAtMs: current.observedAtMs, nowMs, maxAgeMs: current.staleAfterMs })) return false;
-  const before = deriveProviderAccountUsagePace({ snapshot: previous, meterId, nowMs: previous.observedAtMs });
-  const after = deriveProviderAccountUsagePace({ snapshot: current, meterId, nowMs });
   const beforeWindow = resolveProviderAccountUsagePaceWindow(previous, meterId);
   const afterWindow = resolveProviderAccountUsagePaceWindow(current, meterId);
-  return !!beforeWindow && !!afterWindow
-    && (before.status === 'available' || before.reason === 'zero_elapsed'
+  if (!beforeWindow || !afterWindow || afterWindow.windowStartAtMs !== beforeWindow.resetAtMs
+    || afterWindow.windowDurationMs !== beforeWindow.windowDurationMs) return false;
+  const before = deriveProviderAccountUsagePace({ snapshot: previous, meterId, nowMs: previous.observedAtMs });
+  const after = deriveProviderAccountUsagePace({ snapshot: current, meterId, nowMs });
+  return (before.status === 'available' || before.reason === 'zero_elapsed'
       || (before.reason === 'outside_window' && previous.observedAtMs === beforeWindow.resetAtMs))
     && (after.status === 'available' || after.reason === 'zero_elapsed')
-    && readProviderAccountUsageWindowComparabilityReason({ previous, current, meterId }) === null
-    && afterWindow.windowStartAtMs === beforeWindow.resetAtMs
-    && afterWindow.windowDurationMs === beforeWindow.windowDurationMs;
+    && readProviderAccountUsageWindowComparabilityReason({ previous, current, meterId }) === null;
 }
 
 function deriveWitnessedPace(input: Readonly<{ snapshot: ProviderAccountUsageSnapshotV1; meterId: string; nowMs: number; history?: readonly ProviderAccountUsageSnapshotV1[] }>, terminal: boolean): ProviderAccountUsagePaceV1 {

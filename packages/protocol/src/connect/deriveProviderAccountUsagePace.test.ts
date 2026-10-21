@@ -11,10 +11,12 @@ function snapshot(at = 250): ProviderAccountUsageSnapshotV1 {
 describe('accepted provider usage pace', () => {
   it('rejects ordinary same-window observations before deriving pace or comparing entitlement', () => {
     let entitlementReads = 0;
+    let counterReads = 0;
     const observations = Array.from({ length: 100 }, (_, index) => {
       const value = snapshot(index + 1);
       // Transparent input instrumentation, not a mock of the pace/reset owner.
       Object.defineProperty(value, 'planLabel', { get() { entitlementReads++; return null; } });
+      Object.defineProperty(value.meters[0]!, 'used', { get() { counterReads++; return 50; } });
       return value;
     });
     for (let index = 1; index < observations.length; index++) {
@@ -22,6 +24,7 @@ describe('accepted provider usage pace', () => {
         meterId: 'weekly', nowMs: index + 1 })).toBe(false);
     }
     expect(entitlementReads).toBe(0);
+    expect(counterReads).toBe(0);
     const previous = snapshot(900);
     const current = snapshot(1000);
     current.meters[0]!.resetsAt = 2000;
