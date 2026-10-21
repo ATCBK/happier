@@ -13,6 +13,7 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/
 import { installSessionActionFixture, installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -264,6 +265,14 @@ describe('conversation search through real Account/store wiring', () => {
             createdAtFromMs: time, createdAtToMs: time, summary: 'amber orchard', score: 0.5 });
         for (const id of ['home-first', 'home-second']) installSessionActionFixture({ homes, storage, serverId,
             session: { id, encryptionMode: 'plain', seq: 1 } });
+        // Current Session authorization batches the same HTTP facts seeded above.
+        const sessionReads = createSessionReadBatchFetchBoundary(homes.request);
+        homes.answer(serverId, '/v2/sessions/read-batch', { select: async (body, context) => {
+            const response = await sessionReads('https://search-continuity.test/v2/sessions/read-batch', {
+                method: 'POST', body: JSON.stringify(body), signal: context.signal,
+            });
+            return { body: await response.json() };
+        } });
         homes.answer(serverId, '/v1/home/search', { body: MemorySearchResultV1Schema.parse({
             v: 1, ok: true, hits: [homeHit('home-first', 1)], hasMore: true, nextCursor: 'home-remaining',
         }) });
