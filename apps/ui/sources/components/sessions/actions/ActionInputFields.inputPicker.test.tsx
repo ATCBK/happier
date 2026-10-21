@@ -16,6 +16,10 @@ import { installSessionActionsCommonModuleMocks } from './sessionActionsTestHelp
 installSessionActionsCommonModuleMocks();
 vi.mock('@/utils/web/reactDomCjs', async () => (await import('@/dev/testkit/mocks/reactDomCjs')).createReactDomCjsRendererMock());
 
+// Load the real form after its boundary installation during collection, not
+// inside the first interaction's timeout on a cold source worker.
+const { ActionInputFields } = await import('./ActionInputFields');
+
 // The public authoring example's declared repository type, its options Resource and picker.
 const declared: ResolvedInputTypeV1 = {
     identity: repositoryInputTypeRef,
@@ -46,7 +50,6 @@ async function mountFields(options: Readonly<{
     settlement?: unknown;
     withPort?: boolean;
 }> = {}) {
-    const { ActionInputFields } = await import('./ActionInputFields');
     const { createInputTypePickerPort } = await import('./inputTypePickerPort');
     const onPatch = vi.fn();
     const openPicker = vi.fn(async (_request: Parameters<Parameters<typeof createInputTypePickerPort>[0]['openPicker']>[0]) => options.settlement ?? { kind: 'cancelled' });

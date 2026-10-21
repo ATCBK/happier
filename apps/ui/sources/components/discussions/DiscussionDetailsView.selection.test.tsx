@@ -106,6 +106,10 @@ const draftState = vi.hoisted(() => ({
   setComposer: vi.fn(),
   setTitle: vi.fn(),
   setPassage: vi.fn(),
+  recipients: [] as readonly never[],
+  setRecipients: vi.fn(),
+  participants: [] as readonly never[],
+  setParticipants: vi.fn(),
   // Keep the existing screen fixture on the real draft content binding, including inherited passage context.
   prepareContent: (content: DiscussionMessageContentV1, options?: Readonly<{ replyTarget?: DiscussionReplyTargetV1; passage?: DocPassageRefV1 | null }>): DiscussionMessageContentV1 =>
     prepareDiscussionContentForPassage({ content: prepareDiscussionContentForRecipients({ content, recipients: [], replyTarget: options?.replyTarget }),
@@ -304,8 +308,13 @@ vi.mock('@/sync/ops/discussions/discussionRepositoryRegistry', () => ({
   getDiscussionRepository: (options: Record<string, unknown>) => {
     repositoryOptions.current = options;
     return {
+      scope: options.scope,
       mount: () => () => undefined,
+      subscribe: () => () => undefined,
       getSnapshot: () => snapshot,
+      // The Discussion menu's pause setting reads through the repository; this screen does not exercise it.
+      getSettings: vi.fn(async () => ({ kind: 'failed', errorCode: 'unavailable' })),
+      setSettings: vi.fn(async () => ({ kind: 'failed', errorCode: 'unavailable' })),
       refreshDiscussion: repositoryRefreshDiscussion,
       participants: readParticipants,
       setReadState: vi.fn(async () => ({
@@ -2225,10 +2234,9 @@ describe('DiscussionDetailsView selection', () => {
   });
 
   it('purges draft presentation and decrypted rows when access is explicitly revoked', async () => {
-    const activeList = snapshot.lists.active as typeof snapshot.lists.active & {
-      status?: string;
-    };
-    activeList.status = 'revoked';
+    const thread = snapshot.threads['discussion-a'];
+    const previousStatus = thread.status;
+    thread.status = 'revoked';
     try {
       const screen = await renderScreen(
         <DiscussionDetailsView
@@ -2247,7 +2255,7 @@ describe('DiscussionDetailsView selection', () => {
         screen.findByTestId('session-discussion-message-content-message-a'),
       ).toBeNull();
     } finally {
-      delete activeList.status;
+      thread.status = previousStatus;
     }
   });
 

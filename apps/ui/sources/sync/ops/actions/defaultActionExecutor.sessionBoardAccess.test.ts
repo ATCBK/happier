@@ -6,6 +6,7 @@ import {
     tryWriteServerEnabledBitInPlace,
 } from '@happier-dev/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { SessionReadBatchResponseV1Schema } from '@happier-dev/protocol/sessions/read/sessionReadBatchV1';
 
 // Imported from their owning testkit modules, never the `@/dev/testkit` barrel:
 // the harness installs its network boundaries with `vi.doMock`, which only
@@ -123,7 +124,13 @@ async function addBoardHome(options: Readonly<{
     harness.answer(serverId, '/v1/account/encryption/currentness', {
         body: { mode: 'plain', version: 0, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 },
     });
-    harness.answer(serverId, `/v2/sessions/${SESSION_ID}?accessProjectionVersion=1`, { body: homeSessionRow(options.viewer ?? 'owner') });
+    const sessionDetail = homeSessionRow(options.viewer ?? 'owner');
+    harness.answer(serverId, `/v2/sessions/${SESSION_ID}?accessProjectionVersion=1`, { body: sessionDetail });
+    // Approval replay reads the same Session through the current context-only
+    // batch transport; both HTTP paths serve the one canonical fixture.
+    harness.answer(serverId, 'POST /v2/sessions/read-batch', { body: SessionReadBatchResponseV1Schema.parse({
+        results: [{ sessionId: SESSION_ID, detail: { status: 200, body: sessionDetail } }],
+    }) });
     harness.answer(serverId, LAYOUT_READ_PATH, { body: storedLayout });
     harness.answer(serverId, `PUT ${BOARD_PATH}`, {
         body: { operation: 'update_layout', outcome: 'updated', layoutRevision: REVISION },

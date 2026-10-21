@@ -239,7 +239,12 @@ describe('Workflow inputs through real Action option resolution', () => {
         await waitForHomeGovernance(() => expect(choiceRowLabels(panel)).toEqual(reply.options.map(option => option.label)));
     });
 
-    it.each([false, true])('offers a typed input’s declared picker with descriptor-scoped options (picker-only=%s)', async (pickerOnly) => {
+    it.each([
+        { consumer: 'workflow', outcome: 'selected', pickerOnly: false },
+        { consumer: 'workflow', outcome: 'cancelled', pickerOnly: true },
+        ...(['action', 'widget'] as const).flatMap(consumer =>
+            (['selected', 'cancelled', 'invalid', 'retired'] as const).map(outcome => ({ consumer, outcome, pickerOnly: false }))),
+    ])('offers a typed input’s declared picker through $consumer ($outcome, picker-only=$pickerOnly)', async ({ consumer, outcome, pickerOnly }) => {
         const { repositoryInputTypeRef, repositoryInputTypes } = await import('../../../../../../packages/plugin-sdk/examples/public-authoring/inputTypes');
         const typed: readonly WorkflowInputDefinition[] = [{ name: 'repository', valueType: 'json', required: true, inputType: repositoryInputTypeRef }];
         const review = { repositoryId: 'example/review-assistant' };
@@ -356,10 +361,34 @@ describe('Workflow inputs through real Action option resolution', () => {
             expect(productionPanel.findByType(HappierInputField).props.optionsStatus).toBe('ready');
             expect(productionPanel.findHostByTestId('workflow-run-inputs-repository-picker')?.props.disabled).toBe(false);
         });
-        const productionBrowse = productionPanel.findHostByTestId('workflow-run-inputs-repository-picker');
+        let fieldScreen = productionPanel;
         const { HappierInputPickerProvider } = await import('@happier-dev/plugin-ui/presentation');
         const pickerPort: HappierInputPickerPort | null = productionPanel.findByType(HappierInputPickerProvider).props.port;
         if (!pickerPort) throw new Error('Expected the production input-picker port');
+        // All three real field consumers use the demanded production port. The
+        // real modal, publication, native loader and settlement stay composed.
+        if (consumer === 'action') {
+            const { ActionInputFields } = await import('@/components/sessions/actions/ActionInputFields');
+            fieldScreen = await renderScreen(<HappierInputPickerProvider port={pickerPort}>
+                <ActionInputFields fields={[{ path: 'repository', title: 'Repository', widget: 'select', inputType: repositoryInputTypeRef,
+                    visible: true, required: true, disabled: false }]} input={{}} editable
+                    resolveFieldOptions={() => [{ value: review, label: 'Review assistant' }]} onPatch={onChangeValues}
+                    resolveFieldTestID={() => 'composed-repository'} />
+            </HappierInputPickerProvider>);
+        } else if (consumer === 'widget') {
+            const { WidgetSetupFieldRow } = await import('@/components/widgets/add/WidgetSetupFieldRow');
+            fieldScreen = await renderScreen(<HappierInputPickerProvider port={pickerPort}>
+                <WidgetSetupFieldRow entry={{ field: { path: 'repository', title: 'Repository', widget: 'select', inputType: repositoryInputTypeRef } }}
+                    row={{ kind: 'needed' }} options={[{ value: review, label: 'Review assistant' }]} optionsStatus="ready"
+                    plainValue={undefined} phone={false} onChange={change => {
+                        if (change.kind === 'pin') onChangeValues({ repository: change.value });
+                    }} testID="composed-repository" />
+            </HappierInputPickerProvider>);
+        }
+        const productionBrowse = consumer === 'action'
+            ? findAllHostTestInstances(fieldScreen.tree.root, node =>
+                (node.props.accessibilityLabel ?? node.props['aria-label']) === 'inputPicker.browseField').at(-1)
+            : fieldScreen.findHostByTestId(consumer === 'workflow' ? 'workflow-run-inputs-repository-picker' : 'composed-repository.control-picker');
         const pickerAttempt = vi.spyOn(pickerPort, 'pick');
         const { act } = await import('react-test-renderer');
         // Opening returns the terminal settlement promise. Do not await that before
@@ -378,29 +407,34 @@ describe('Workflow inputs through real Action option resolution', () => {
         expect(nativeBoundary.context?.launchInput).toEqual({ inputType: repositoryInputTypeRef, semantic: 'repository',
             ...(pickerOnly ? {} : { options: [{ value: review, label: 'Review assistant' }] }) });
         const pickerContext = nativeBoundary.context!;
-        const nativeChoice = pickerOnly ? 'Cancel' : 'Review assistant';
+        const nativeChoice = outcome === 'cancelled' ? 'Cancel' : 'Review assistant';
         const nativeControl = () => findAllHostTestInstances(productionPanel.findByType(PluginSurfaceHost), node =>
             (node.props.accessibilityLabel ?? node.props['aria-label']) === nativeChoice
                 && (typeof node.props.onPress === 'function' || typeof node.props.onClick === 'function')).at(-1);
         await waitForHomeGovernance(() => expect(nativeControl()).toBeDefined());
         expect(nativeControl()?.props.disabled).not.toBe(true);
         expect(nativeBoundary.context?.signal.aborted).toBe(false);
-        await choose(nativeControl());
+        if (outcome === 'invalid') await act(async () => {
+            await pickerContext.hostApi.settleEphemeralInput({ kind: 'completed', input: { repositoryId: 'someone/else' } });
+        });
+        else if (outcome === 'retired') await fieldScreen.unmount();
+        else await choose(nativeControl());
         // Assert the public picker outcome before waiting for its controlled
         // value callback: selecting a value must not silently become Cancel.
-        await expect(pickerAttempt.mock.results[0]!.value).resolves.toEqual(pickerOnly
-            ? { status: 'cancelled' } : { status: 'selected', value: review });
+        await expect(pickerAttempt.mock.results[0]!.value).resolves.toEqual(outcome === 'selected'
+            ? { status: 'selected', value: review }
+            : outcome === 'invalid' ? { status: 'error', message: 'inputPicker.invalid' } : { status: 'cancelled' });
         // The real presenter retains the modal for its canonical exit animation.
         // Flush that clock boundary inside act before observing actual retirement.
         const { motionTokens } = await import('@/components/ui/motion/motionTokens');
         await act(async () => { await new Promise(resolve => setTimeout(resolve, motionTokens.overlay.modal.exitMs)); });
         expect(productionPanel.findAllByType(PluginSurfaceHost)).toHaveLength(0);
-        if (pickerOnly) expect(onChangeValues).not.toHaveBeenCalled();
+        if (outcome !== 'selected') expect(onChangeValues).not.toHaveBeenCalled();
         else await waitForHomeGovernance(() => expect(onChangeValues).toHaveBeenCalledWith({ repository: review }));
         // The retired native mount cannot replace the first selected/cancelled settlement.
         await expect(pickerContext.hostApi.settleEphemeralInput({ kind: 'completed', input: review }))
             .rejects.toMatchObject({ code: 'stale_surface' });
-        expect(onChangeValues.mock.calls).toEqual(pickerOnly ? [] : [[{ repository: review }]]);
+        expect(onChangeValues.mock.calls).toEqual(outcome === 'selected' ? [[{ repository: review }]] : []);
         expect(rpc.action).toHaveBeenCalledWith({ consumer: { kind: 'workflow', workflow }, fieldPath: 'repository',
             draftInput: { machineId: machine.id } });
         expect(rpc.action.mock.calls.every(([request]) => request.optionsSourceId === undefined)).toBe(true);
