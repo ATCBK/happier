@@ -199,7 +199,7 @@ describe('SherpaStreamingSttController (native)', () => {
     controller.setHandsFreeSession('s1');
     await controller.start('s1');
 
-    // Native endpoint rule 3 (max utterance length) keeps isEndpoint=true once tripped; growing text is speech.
+    // A native build without stream reset keeps isEndpoint=true once tripped; growing text is still speech.
     const words = ['one', 'one two', 'one two three', 'one two three four', 'one two three four five'];
     for (const [n, text] of words.entries()) {
       for (let i = 1; i <= 5; i++) emitAudioFrame(n * 5 + i);

@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -121,7 +122,10 @@ std::string ReadStreamText(const SherpaOnnxOnlineRecognizer *recognizer, const S
   // Default endpointing tuned for streaming turn-taking. Units are seconds.
   config.rule1_min_trailing_silence = 1.2f;
   config.rule2_min_trailing_silence = 0.6f;
-  config.rule3_min_utterance_length = 15.0f;
+  // Rule 3 fires on utterance length alone, i.e. mid-speech. The stream resets on every endpoint and
+  // the UI ends the hands-free turn on it, so only the trailing-silence rules may report one. Zero
+  // would select the sherpa-onnx default (20 s), so disable it with an unreachable length.
+  config.rule3_min_utterance_length = std::numeric_limits<float>::max();
 
   const SherpaOnnxOnlineRecognizer *recognizer = SherpaOnnxCreateOnlineRecognizer(&config);
   if (!recognizer) {
