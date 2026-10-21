@@ -4,7 +4,9 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, symlinkSync } fro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ExecutionRunScmDiffSummaryInputV1Schema, ExecutionRunStartRequestSchema } from '@happier-dev/protocol/execution/runs/startRequest';
-import { ExecutionRunSendRequestSchema } from '@happier-dev/protocol';
+import { createActionExecutor, ExecutionRunSendRequestSchema } from '@happier-dev/protocol';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { readExecutionRunProtocolV2Support } from '@happier-dev/protocol/execution/runs/protocolSupport';
 import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
 import { SCM_DIFF_SUMMARY_CACHE_SCHEMA_VERSION, ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
 import { ScmComparisonSchema, type ScmComparisonSource } from '@happier-dev/protocol/scm/comparison';
@@ -64,13 +66,14 @@ describe('initial generation context', () => {
       const refs = captured.comparison.inventory.files.flatMap(file => file.occurrences.map(change => change.id));
       const saved = await scmDiffSummaryResultStore.create({ cwd, output: ScmDiffSummaryGenerateOutputSchema.parse({
         success: true, sourceKey: captured.comparison.id, comparison: captured.comparison, metadata: captured.metadata,
+        analysis: { suppliedChangeRefs: refs, analysedChangeRefs: refs, remainingChangeRefs: [] },
         requestedOutputs: ['summary', 'walkthrough'], outputs: {
-          summary: { state: 'complete', value: { summaryMarkdown: 'Saved summary' } },
+          summary: { state: 'partial', value: { summaryMarkdown: 'Saved summary' }, reason: 'Earlier analysis was incomplete' },
           walkthrough: { state: 'complete', value: { title: 'Generated title', intro: 'Saved intro', otherChangeRefs: [],
             stops: [{ id: 'authorization', title: 'Permission', explanationMarkdown: 'Saved explanation', changeRefs: refs },
               { id: 'editorial', title: 'Editorial context', explanationMarkdown: 'Retain this stop', changeRefs: [] }] } },
         }, runId: 'retired-generator',
-      }), generator: { backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, modelId: 'test-model' } });
+      }), generator: { backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' }, modelId: 'test-model' } });
       const scope = { cwd, resultId: saved.resultId };
       const edited = await scmDiffSummaryResultStore.edit({ ...scope, expectedRevision: 0,
         edit: { kind: 'renameWalkthrough', title: 'My saved title' } });
@@ -78,13 +81,19 @@ describe('initial generation context', () => {
       let prompt = '';
       let beforeTurn: unknown;
       let completion: unknown;
-      const response = await executeScmActionOperation({ actionId: 'scm.diffSummary.discuss', workingDirectory: cwd,
-        actionContext: { surface: 'cli', executionRunTargetMachineId: 'machine' },
-        input: { ...scope, expectedRevision: edited.result.revision, stopIds: ['authorization'],
-          message: 'Why is this allowed?', startNew: true },
-        executeCanonicalAction: async (id, value) => {
-          if (id === 'execution.run.get') return { ok: false, errorCode: 'execution_run_not_found', error: 'Retired' };
-          if (id !== 'execution.run.start') throw new Error('Unexpected transport');
+      const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+        scmActionExecute: ({ actionId, input, context, executeCanonicalAction }) => executeScmActionOperation({
+          actionId, input, actionContext: context, executeCanonicalAction, workingDirectory: cwd,
+        }),
+        // Only the remote Run transport/model is replaced. Both Actions pass
+        // through the production executor and their actual strict schemas.
+        executionRunCheckProtocolV2: async (_sessionId, requirement, options) => readExecutionRunProtocolV2Support({
+          supported: true, response: { results: { 'tool.executionRuns': { ok: true, data: { protocolVersion: 2,
+            features: { detachedScope: true, startAndWait: true, exactInputResults: true,
+              runScopedAgentBindings: true, secretReferenceOverlay: true } } } } },
+        }, requirement, options?.signal),
+        executionRunGet: async () => { throw new Error('Retired Run transport is unavailable'); },
+        executionRunStart: async (_sessionId, value) => {
           const request = ExecutionRunStartRequestSchema.parse(value);
           const prepared = await ScmDiffSummaryProfile.prepareStartParams!({ cwd, sessionId: null, request });
           const admitted = ExecutionRunStartRequestSchema.parse({ ...request, ...prepared });
@@ -97,9 +106,14 @@ describe('initial generation context', () => {
           completion = await ScmDiffSummaryProfile.onTurnComplete!({ start: current, previousStructuredMeta: initial?.structuredMeta,
             turnId: 'native-answer', inputIds: [request.localInputId], finishedAtMs: 3, rawText: JSON.stringify({ walkthrough: { title: 'Unrequested replacement',
               intro: '', stops: [{ id: 'authorization', title: 'Replacement', explanationMarkdown: 'Replace', changeRefs: ['c1'] }], otherChangeRefs: [] } }) });
-          return { ok: true, result: { runId: current.runId, callId: current.callId, sidechainId: current.sidechainId } };
+          expect(await ScmDiffSummaryProfile.onTerminal!({ start: current, status: 'failed', finishedAtMs: 4,
+            structuredMeta: initial?.structuredMeta })).toBeNull();
+          return { runId: current.runId, callId: current.callId, sidechainId: current.sidechainId };
         } });
-      expect(response).toMatchObject({ success: true, runId: 'seeded-discussion', seededFromRunId: 'retired-generator' });
+      const response = await executor.execute('scm.diffSummary.discuss', { ...scope, expectedRevision: edited.result.revision,
+        stopIds: ['authorization'], message: 'Why is this allowed?', startNew: true },
+      { surface: 'cli', bypassApprovals: true, executionRunTargetMachineId: 'machine' });
+      expect(response).toMatchObject({ ok: true, result: { success: true, runId: 'seeded-discussion', seededFromRunId: 'retired-generator' } });
       expect(await scmDiffSummaryResultStore.read(scope)).toEqual(beforeTurn);
       expect(completion).toBeNull();
       expect(prompt).toContain('Answer the user in prose');
