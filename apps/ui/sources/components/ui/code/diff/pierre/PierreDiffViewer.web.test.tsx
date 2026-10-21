@@ -349,7 +349,6 @@ describe('PierreDiffViewer (web)', () => {
         vi.spyOn(instance, 'revealLine').mockReturnValue(false);
         vi.spyOn(instance, 'getLinePosition').mockReturnValue({ top: 400, height: 20 });
         vi.spyOn(virtualizer, 'getOffsetInScrollContainer').mockReturnValue(120);
-        vi.spyOn(virtualizer, 'getScrollContainerElement').mockReturnValue(scroller);
         vi.spyOn(virtualizer, 'scrollTo').mockImplementation(({ top }) => { scroller.scrollTop = top; });
         const context = (await import('@pierre/diffs/react')).VirtualizerContext;
         const screen = await renderScreen(<context.Provider value={virtualizer}>

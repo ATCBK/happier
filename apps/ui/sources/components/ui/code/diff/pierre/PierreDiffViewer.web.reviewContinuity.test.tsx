@@ -3,7 +3,7 @@ import * as React from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
-import { Virtualizer, type VirtualizedFileDiff } from '@pierre/diffs';
+import { Virtualizer, VirtualizedFileDiff } from '@pierre/diffs';
 import { VirtualizerContext } from '@pierre/diffs/react';
 import { storage } from '@/sync/domains/state/storageStore';
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
@@ -36,6 +36,12 @@ it('keeps the real Pierre body and measured wrapped height when only review mark
     Object.defineProperties(container, { clientHeight: { value: 241 }, scrollHeight: { value: 950 } });
     container.scrollTo = () => {};
     const virtualizer = new Virtualizer();
+    let connectedDiff: VirtualizedFileDiff | undefined;
+    const connect = virtualizer.connect.bind(virtualizer);
+    vi.spyOn(virtualizer, 'connect').mockImplementation((host, instance) => {
+        if (instance instanceof VirtualizedFileDiff) connectedDiff = instance;
+        return connect(host, instance);
+    });
     virtualizer.setup(container);
     const root = createRoot(container);
     const patch = '--- a/a.txt\n+++ b/a.txt\n@@ -1,3 +1,3 @@\n before\n-old wrapped line\n+new wrapped line\n after\n';
@@ -56,7 +62,8 @@ it('keeps the real Pierre body and measured wrapped height when only review mark
         });
         const host = container.querySelector<HTMLElement>('diffs-container')!;
         const pre = host.shadowRoot!.querySelector('pre');
-        const instance = virtualizer.observers.get(host) as VirtualizedFileDiff<React.ReactNode, undefined>;
+        const instance = connectedDiff;
+        if (!instance) throw new Error('Pierre did not connect its virtualized diff');
         for (const line of host.shadowRoot!.querySelectorAll<HTMLElement>('[data-line-index]')) {
             vi.spyOn(line, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 300, 100));
         }
