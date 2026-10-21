@@ -347,6 +347,12 @@ export async function inspectDaemonRunningStateAndCleanupStaleState(): Promise<D
   const ownerProcess = await classifyDaemonLifecycleProcessByPid(state.pid)
     .catch(() => ({ kind: 'unknown' as const }));
 
+  if (state.httpPort === 0) {
+    return ownerProcess.kind === 'not_daemon'
+      ? { status: 'not-running' }
+      : { status: 'starting', state };
+  }
+
   try {
     if (state.controlToken) {
       const ping = await daemonPost('/ping', undefined, { timeoutMs: resolveDaemonPingTimeoutMs() });

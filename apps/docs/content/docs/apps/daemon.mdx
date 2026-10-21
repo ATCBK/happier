@@ -342,6 +342,14 @@ or reboot. Missing `systemctl` in your shell does not prove systemd is stopped. 
 does not disable an existing service: if its automatic startup resumes later, that service can
 take over a conflicting manually started daemon under the existing ownership rules.
 
+In unreleased 0.3 builds, manual `daemon start` waits up to its configured startup
+reporting interval (60 seconds by default). If Home connectivity or other
+preparation is still pending, it returns **starting** and the available daemon log
+path; `--json` returns `status: "starting"`. The detached daemon continues trying
+to connect. This result does not mean the Machine is ready. Use `daemon status`
+to inspect it or `daemon stop` to cancel a manual startup. A daemon owned by an
+automatic startup service still requires `service stop`.
+
 The development CLI checks for missing service commands before installation or doctor repair
 changes service definitions. It also lets manual startup proceed past readable leftover systemd
 units when `systemctl` is absent. Running daemon ownership and unreadable service state still

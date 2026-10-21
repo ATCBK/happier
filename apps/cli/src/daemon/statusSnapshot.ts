@@ -82,7 +82,7 @@ export async function readDaemonStatusSnapshot(): Promise<DaemonStatusSnapshot> 
       running: daemonRunning,
       healthy: daemonHealthy,
       pid,
-      httpPort: typeof daemonState?.httpPort === 'number' ? daemonState.httpPort : null,
+      httpPort: typeof daemonState?.httpPort === 'number' && daemonState.httpPort > 0 ? daemonState.httpPort : null,
       startedWithCliVersion: typeof daemonState?.startedWithCliVersion === 'string'
         ? daemonState.startedWithCliVersion
         : undefined,

@@ -56,10 +56,19 @@ async function startUntilCredentialGate(startDaemon: () => Promise<void>) {
     try {
         void inspectLog!();
         await Promise.race([credentialGate, startup.then(() => expectCredentialGateReached(true))]);
+        const { readDaemonState } = await import('@/persistence');
+        const { configuration } = await import('@/configuration');
+        expect(await readDaemonState()).toMatchObject({
+            pid: process.pid,
+            httpPort: 0,
+            startedWithCliVersion: configuration.currentCliVersion,
+            startupSource: process.env.HAPPIER_DAEMON_STARTUP_SOURCE ?? 'manual',
+        });
         if (ownerProcess) expect(await waitForProcessExit(ownerProcess.pid)).toBe(true);
         // Retire the actual credential waiter only after its observable admission.
         process.emit('SIGTERM');
         await expect(startup).resolves.toBeUndefined();
+        expect(await readDaemonState()).toBeNull();
     } catch (error) {
         logger.flushSync();
         throw new Error(await readFile(logger.logFilePath, 'utf8'), { cause: error });
@@ -71,6 +80,8 @@ async function startUntilCredentialGate(startDaemon: () => Promise<void>) {
 }
 
 describe('startDaemon ownership preflight', () => {
+    const startupEvents = ['SIGINT', 'SIGTERM', 'uncaughtException', 'unhandledRejection', 'exit', 'beforeExit'] as const;
+    let listenersBefore = new Map<string, ReturnType<typeof process.listeners>>();
     const envScope = createEnvKeyScope([
         'HAPPIER_HOME_DIR',
         'HAPPIER_ACTIVE_SERVER_ID',
@@ -88,6 +99,7 @@ describe('startDaemon ownership preflight', () => {
         'HAPPIER_DAEMON_SERVICE_CHANNEL',
         'HAPPIER_DAEMON_SERVICE_TARGET_MODE',
         'HAPPIER_DAEMON_WAIT_FOR_AUTH',
+        'HAPPIER_HOME_CARRIER_POLICY',
     ]);
     const fetchMock = vi.fn();
     let ownerControlClosed = false;
@@ -95,6 +107,7 @@ describe('startDaemon ownership preflight', () => {
     let outputTty: boolean | undefined;
 
     beforeEach(() => {
+        listenersBefore = new Map(startupEvents.map(event => [event, process.listeners(event)]));
         envScope.patch({ HAPPIER_DAEMON_WAIT_FOR_AUTH: '1' });
         inputTty = process.stdin.isTTY;
         outputTty = process.stdout.isTTY;
@@ -124,7 +137,54 @@ describe('startDaemon ownership preflight', () => {
         vi.restoreAllMocks();
         Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: inputTty });
         Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: outputTty });
+        for (const event of startupEvents) {
+            for (const listener of process.listeners(event)) {
+                if (!listenersBefore.get(event)?.includes(listener)) process.removeListener(event, listener);
+            }
+        }
         vi.resetModules();
+    });
+
+    it.each(['manual', 'background-service'] as const)('publishes %s ownership before an unavailable Home and releases it on shutdown', async startupSource => {
+        await withTempDir('happier-start-daemon-home-wait-', async homeDir => {
+            envScope.patch({ HAPPIER_HOME_DIR: homeDir, HAPPIER_ACTIVE_SERVER_ID: 'transport-wait',
+                HAPPIER_SERVER_URL: 'https://home.example.test', HAPPIER_PUBLIC_SERVER_URL: undefined,
+                HAPPIER_LOCAL_SERVER_URL: undefined, HAPPIER_WEBAPP_URL: 'https://home.example.test',
+                HAPPIER_DAEMON_STARTUP_SOURCE: startupSource, HAPPIER_HOME_CARRIER_POLICY: 'standard_only',
+                HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: homeDir });
+            const { reloadConfiguration } = await import('@/configuration');
+            reloadConfiguration();
+            const { seedTestServerProfile } = await import('@/testkit/serverProfiles');
+            await seedTestServerProfile({ id: 'transport-wait', homeId: 'srv_startup_fixture',
+                serverUrl: 'https://home.example.test' });
+            const { getServerProfile } = await import('@/server/serverProfiles');
+            expect((await getServerProfile('transport-wait')).homeConnectionDescriptor?.homeServerIdentityId)
+                .toBe('srv_startup_fixture');
+            const { writeCredentialsTokenOnly, readDaemonState, readDaemonLockSnapshot } = await import('@/persistence');
+            await writeCredentialsTokenOnly({ token: 'fixture-startup-terminal' });
+            let observedRequest!: () => void;
+            const requested = new Promise<void>(resolve => { observedRequest = resolve; });
+            const unavailableHome = vi.fn<typeof fetch>(async () => {
+                observedRequest();
+                throw new TypeError('fixture Home is unreachable');
+            });
+            vi.stubGlobal('fetch', unavailableHome);
+            vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+            const { startDaemon } = await import('./startDaemon');
+            const startup = startDaemon();
+            try {
+                await Promise.race([requested, startup.then(() => { throw new Error('Startup ended before Home preparation'); })]);
+                expect(String(unavailableHome.mock.calls[0]?.[0])).toBe('https://home.example.test/v1/features');
+                expect(await readDaemonState()).toMatchObject({ pid: process.pid, httpPort: 0,
+                    startupSource, machineControlReady: false });
+                expect(readDaemonLockSnapshot()?.pid).toBe(process.pid);
+            } finally {
+                process.emit('SIGTERM');
+                await startup;
+            }
+            expect(await readDaemonState()).toBeNull();
+            expect(readDaemonLockSnapshot()).toBeNull();
+        });
     });
 
     it('fails closed before auth setup when a different relay owner already owns the relay', async () => {

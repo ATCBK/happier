@@ -4693,15 +4693,23 @@ not measured calm/zero. Real Bun busy/handle telemetry remains an unresolved
 machine-resources plan amendment; Node metrics and observed memory are separate
 from that obligation.
 
-In current 0.3 development, `daemon start` uses its existing wait budget as a
-reporting checkpoint while the observed startup process remains alive.
-It reports that startup is continuing and waits for control-server readiness;
-elapsed time alone does not establish failure. Stack passes its readiness
-budget to that foreground wait. On Windows, the launch adapter preserves the
-detached daemon PID returned by PowerShell and observes it through the shared
-process-liveness owner; the launcher's own exit does not establish daemon failure.
-When no live child can be observed, control-state inspection can still return
-the existing background `starting` result after the foreground wait.
+In current 0.3 development, detached `daemon start` waits for control-server
+readiness within `HAPPIER_DAEMON_START_WAIT_TIMEOUT_MS` (60 seconds by default).
+At that reporting checkpoint it returns `starting` when local ownership proves
+startup is continuing, including the daemon log path when available. This is
+neither readiness nor failure: the daemon continues its Home transport retries.
+Stack passes its readiness budget to that foreground wait and separately verifies
+the daemon. Restart and service readiness waits retain their own policies.
+On Windows, the launch adapter preserves the detached daemon PID returned by
+PowerShell; the launcher's own exit does not establish daemon failure.
+
+The daemon acquires its lifecycle lock and publishes ownership before waiting
+for credentials or Home transport. Its ordinary local state uses `httpPort: 0`,
+no control token and `machineControlReady: false` until the control listener is
+available. Inspection reports `starting`. Manual Stop uses the existing exact
+process/lock identity checks, while service-owned startup still requires
+`service stop`. Startup cancellation and failure clear only that lock owner's
+publication. Older positive-port and legacy state remain readable.
 
 Doctor repair's auth context uses the process's selected Home unless an explicit
 `--server` target is supplied; reading a scoped report does not change the terminal's

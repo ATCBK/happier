@@ -145,7 +145,7 @@ export async function resolveLiveDaemonControlTargetForServer(serverId: string):
   const normalizedServerId = String(serverId ?? '').trim();
   if (!normalizedServerId) return null;
   const { state } = await resolveDaemonStateForServer(normalizedServerId);
-  if (!state || !isPidPresent(state.pid)) return null;
+  if (!state || state.httpPort === 0 || !isPidPresent(state.pid)) return null;
   return {
     pid: state.pid,
     httpPort: state.httpPort,
@@ -398,7 +398,7 @@ export async function listDaemonStatusesForAllKnownServers(): Promise<DaemonStat
       },
       daemon: {
         pid: state?.pid ?? null,
-        httpPort: state?.httpPort ?? null,
+        httpPort: state?.httpPort || null,
         running,
         presence: presence?.status ?? 'not_running',
         staleStateFile,

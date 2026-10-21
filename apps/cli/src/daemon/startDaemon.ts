@@ -454,6 +454,29 @@ export async function startDaemon(
       return;
     }
 
+    // Publish local ownership before authentication or Home transport can wait.
+    // The same lock and state owner govern startup, the live listener and cleanup.
+    daemonLockHandle = await acquireDaemonLock(5, 200);
+    if (!daemonLockHandle) return;
+    const startupState = {
+      pid: process.pid,
+      httpPort: 0,
+      startedAt: Date.now(),
+      startedWithCliVersion: configuration.currentCliVersion,
+      startedWithPublicReleaseChannel: publicReleaseChannel,
+      ...(runningRuntime.entrypoint ? { startedWithRuntimeEntrypoint: runningRuntime.entrypoint } : {}),
+      ...(runningRuntime.builtAt ? { startedWithRuntimeBuiltAt: runningRuntime.builtAt } : {}),
+      runtimeId,
+      startupSource,
+      ...(serviceLabel ? { serviceLabel } : {}),
+      machineControlReady: false,
+      daemonLogPath: logger.logFilePath,
+    };
+    if (!writeDaemonStateForLockOwner(daemonLockHandle, startupState)) {
+      throw new Error('Daemon startup lost lifecycle ownership before publication');
+    }
+    daemonStateOwner = startupState;
+
     const credentialsGate = await waitForInitialCredentials({
       isInteractive,
       waitForAuthEnabled,
@@ -461,14 +484,19 @@ export async function startDaemon(
       credentialsPath: configuration.privateKeyFile,
       readCredentials: readStoredCredentials,
       acquireDaemonLock: () => acquireDaemonLock(5, 200),
-      releaseDaemonLock,
+      releaseDaemonLock: async handle => {
+        if (daemonStateOwner) clearDaemonStateForLockOwner(handle, daemonStateOwner);
+        await releaseDaemonLock(handle);
+      },
       resolvesWhenShutdownRequested,
       logger,
       daemonLockHandle,
     });
     if (credentialsGate.action === 'exit') {
+      await releaseDaemonOwnershipAfterFatal({ daemonLockHandle, daemonStateOwner });
       logger.flushSync();
       process.exit(credentialsGate.exitCode);
+      return;
     }
     if (credentialsGate.action === 'shutdown') {
       return;

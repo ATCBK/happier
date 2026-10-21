@@ -328,6 +328,7 @@ function migrateSettings(raw: any, fromVersion: number): any {
  */
 export interface DaemonLocallyPersistedState {
   pid: number;
+  /** Zero while the lifecycle-lock owner is preparing its local control server. */
   httpPort: number;
   startedAt: number;
   startedWithCliVersion: string;
@@ -363,7 +364,7 @@ export interface DaemonLocallyPersistedState {
 
 const DaemonLocallyPersistedStateSchemaV2 = z.object({
   pid: z.number().check(z.int(), z.positive()),
-  httpPort: z.number().check(z.int(), z.positive()),
+  httpPort: z.number().check(z.int(), z.nonnegative()),
   startedAt: z.number().check(z.int(), z.nonnegative()),
   startedWithCliVersion: z.string(),
   startedWithPublicReleaseChannel: z.optional(DaemonPublicReleaseChannelLabelSchema),
@@ -379,7 +380,10 @@ const DaemonLocallyPersistedStateSchemaV2 = z.object({
   machineControlReady: z.optional(z.boolean()),
   daemonLogPath: z.optional(z.string()),
   controlToken: z.optional(z.string()),
-});
+}).check(z.refine(state => state.httpPort > 0 || (
+  state.controlToken === undefined && state.startupSource !== undefined
+  && state.startedWithPublicReleaseChannel !== undefined && state.machineControlReady === false
+), { message: 'A startup publication has no control listener or ready Machine' }));
 
 // Legacy format (string timestamps, no control token).
 const DaemonLocallyPersistedStateSchemaLegacy = z.object({

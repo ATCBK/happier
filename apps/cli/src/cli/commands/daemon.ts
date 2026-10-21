@@ -23,7 +23,6 @@ import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { readPositiveIntEnv } from '@/utils/readPositiveIntEnv';
 import {
   hasObservableDaemonStartProcessExited,
-  hasObservableDaemonStartProcessRunning,
   waitForDaemonRunningWithinBudget,
 } from '@/daemon/waitForDaemonRunningWithinBudget';
 import { readDaemonStartWaitPollMs, readDaemonStartWaitTimeoutMs } from '@/daemon/startupWaitDefaults';
@@ -318,10 +317,6 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
       started = await waitForDaemonRunningWithinBudget({
         isRunning: () => checkIfDaemonRunningAndCleanupStaleState(),
         shouldAbort: () => hasObservableDaemonStartProcessExited(child),
-        isStillStarting: () => hasObservableDaemonStartProcessRunning(child),
-        onStillStarting: () => {
-          if (!jsonRequested) console.log(warn('Daemon is still starting; waiting for readiness'));
-        },
         timeoutMs,
         pollMs,
       });

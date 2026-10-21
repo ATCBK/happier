@@ -5,6 +5,23 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
 
 describe('readDaemonState', () => {
+    it('reads an owned startup publication before the control server has a port', async () => {
+        await withTempDir('happier-cli-daemon-startup-state-', async homeDir => {
+            envScope.patch({ HAPPIER_HOME_DIR: homeDir, HAPPIER_ACTIVE_SERVER_ID: undefined });
+            const { reloadConfiguration } = await import('./configuration');
+            reloadConfiguration();
+            const { readDaemonState, writeDaemonState } = await import('./persistence');
+            const state = { pid: process.pid, httpPort: 0, startedAt: Date.now(),
+                startedWithCliVersion: '0.0.0-test', startupSource: 'manual' as const,
+                startedWithPublicReleaseChannel: 'dev' as const, machineControlReady: false };
+            writeDaemonState(state);
+            expect(await readDaemonState()).toEqual(state);
+            // Port zero cannot represent an authenticated control listener.
+            writeDaemonState({ ...state, controlToken: 'fixture-token' });
+            expect(await readDaemonState()).toBeNull();
+        });
+    });
+
     const envKeys = [
         'HAPPIER_HOME_DIR',
         'HAPPIER_ACTIVE_SERVER_ID',
