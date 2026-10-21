@@ -55,15 +55,15 @@ function isSentenceEndAt(text: string, i: number, atEnd: boolean): boolean {
     return !/^(?:[A-Za-z]\.)+[A-Za-z]$/.test(word);
 }
 
-/** Keeps surrogate pairs and emphasis delimiter runs intact at a hard cut. */
+/** Keeps surrogate pairs and Markdown delimiter runs intact at a hard cut. */
 function avoidSurrogateSplit(text: string, index: number): number {
     if (index <= 0 || index >= text.length) return index;
     const code = text.charCodeAt(index);
     const end = code >= 0xdc00 && code <= 0xdfff ? index - 1 : index;
-    // Keep an emphasis delimiter together, with its following character available to the
+    // Keep a Markdown delimiter together, with its following character available to the
     // speech normalizer. This also covers a hard cut immediately after an opening delimiter.
-    const marker = /[*_~]/u.test(text[end - 1] ?? '') ? text[end - 1] : text[end];
-    if (marker === '*' || marker === '_' || marker === '~') {
+    const marker = /[*_~`]/u.test(text[end - 1] ?? '') ? text[end - 1] : text[end];
+    if (marker === '*' || marker === '_' || marker === '~' || marker === '`') {
         let start = end;
         while (start > 0 && text[start - 1] === marker) start -= 1;
         // Chunks trim boundary whitespace. Keep literal identifier flanking with the delimiter,

@@ -119,6 +119,26 @@ async function speak(text: string, tts: Record<string, unknown>, registerPlaybac
 
 describe('speakAssistantText', () => {
   it.each([
+    ['Call `f(*args, **kwargs)` and then **continue speaking**.', 'Call f(*args, **kwargs) and then continue speaking.'],
+    [`${'a'.repeat(31)}\`\`f(*args, \`literal\`, **kwargs)\`\` then **done**.`, `${'a'.repeat(31)}f(*args, \`literal\`, **kwargs) then done.`],
+  ])('preserves inline code across supported streamed cuts: %s', async (text, expected) => {
+    const chunker = createTtsChunker(32);
+    const speechTextContext = { emphasis: [] };
+    for (const chunk of [...chunker.push(text), ...chunker.flush()]) {
+      await speakAssistantText({
+        text: chunk,
+        speechTextContext,
+        settings: settingsWithTts({ provider: 'device' }),
+        networkTimeoutMs: 15000,
+        registerPlaybackStopper: () => () => {},
+        onSpeaking: () => {},
+      });
+    }
+    expect(speech.speak.mock.calls.map(([spoken]) => spoken).join('').replace(/\s+/gu, ''))
+      .toBe(expected.replace(/\s+/gu, ''));
+  });
+
+  it.each([
     [`**${'a'.repeat(29)}**`, 'a'.repeat(29)],
     [`${'a'.repeat(32)}_count`, `${'a'.repeat(32)}_count`],
     [`${'a'.repeat(31)}_count`, `${'a'.repeat(31)}_count`],
@@ -190,14 +210,14 @@ describe('speakAssistantText', () => {
     stopper!();
 
     await expect(done).resolves.toBe(true);
-    expect(getLocalVoiceState().error).toBe(null);
+    expect(getLocalVoiceState()).toMatchObject({ error: null, errorMessage: null });
   });
 
   it('reports a device speech error that was not caused by a stop', async () => {
     speech.speak.mockImplementation((_text, options) => options?.onError?.(new Error('synthesis-failed')));
 
     await expect(speak('hello', { provider: 'device' })).resolves.toBe(false);
-    expect(getLocalVoiceState().error).toBe('tts_failed');
+    expect(getLocalVoiceState()).toMatchObject({ error: 'tts_failed', errorMessage: 'synthesis-failed' });
   });
 
   it('synthesizes and plays OpenAI-compatible speech', async () => {
@@ -216,7 +236,7 @@ describe('speakAssistantText', () => {
     await speak('hello', OPENAI_TTS);
 
     expect(playedSources.length).toBe(0);
-    expect(getLocalVoiceState().error).toBe('tts_failed');
+    expect(getLocalVoiceState()).toMatchObject({ error: 'tts_failed', errorMessage: 'tts_failed:500' });
   });
 
   it('synthesizes and plays Google Cloud speech', async () => {
@@ -242,7 +262,7 @@ describe('speakAssistantText', () => {
     });
 
     expect(speech.speak).not.toHaveBeenCalled();
-    expect(getLocalVoiceState().error).toBe('tts_failed');
+    expect(getLocalVoiceState()).toMatchObject({ error: 'tts_failed', errorMessage: 'model_pack_not_installed' });
   });
 
   it('passes no Kokoro voice when none is configured so each platform picks its own default', async () => {

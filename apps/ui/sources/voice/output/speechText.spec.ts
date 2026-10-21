@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { toSpeechText } from './speechText';
 
 describe('toSpeechText', () => {
+  it('keeps literal punctuation and URLs inside inline code', () => {
+    expect(toSpeechText('Call `f(*args, **kwargs)`, `__init__`, `~~value~~`, `max`_retry_count, and `https://example.test/a`. After `x` # keep. Then **done**.'))
+      .toBe('Call f(*args, **kwargs), __init__, ~~value~~, max_retry_count, and https://example.test/a. After x # keep. Then done.');
+  });
+
   it('omits fenced code blocks and keeps the surrounding prose', () => {
     expect(toSpeechText('Run this:\n```ts\nconst a = 1;\n```\nThen restart.')).toBe('Run this:\nThen restart.');
   });

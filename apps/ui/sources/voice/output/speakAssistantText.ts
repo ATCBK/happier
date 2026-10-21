@@ -1,7 +1,7 @@
 import type { VoicePlaybackStopperRegistrar } from '@/voice/runtime/VoicePlaybackController';
 import { VoiceLocalTtsSchema } from '@/sync/domains/settings/voiceLocalTtsSettings';
 import { speakWithLocalTtsProvider } from '@/voice/backends/tts/runtime';
-import { patchLocalVoiceState } from '@/voice/local/localVoiceState';
+import { patchLocalVoiceState, resolveLocalVoiceError } from '@/voice/local/localVoiceState';
 import { toSpeechText, type SpeechTextContext } from '@/voice/output/speechText';
 
 /**
@@ -43,7 +43,7 @@ export async function speakAssistantText(params: {
     return true;
   } catch (error) {
     console.warn(`[voice/tts] ${providerLabel} speech failed`, error instanceof Error ? error.message : error);
-    patchLocalVoiceState({ error: 'tts_failed' });
+    patchLocalVoiceState(resolveLocalVoiceError(error, 'tts_failed'));
     return false;
   }
 }

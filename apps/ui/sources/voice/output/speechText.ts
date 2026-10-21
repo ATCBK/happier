@@ -1,15 +1,15 @@
 import { readFenceLayout } from '@/voice/output/codeFences';
 
-/** Only the five emphasis delimiters can be retained; no assistant text is buffered. */
-export type SpeechTextContext = { emphasis: string[]; previousCharacter?: string };
+/** Delimiter context only; no assistant text is buffered. */
+export type SpeechTextContext = { emphasis: string[]; previousCharacter?: string; inlineCodeDelimiter?: number };
 
 export function createSpeechTextContext(): SpeechTextContext {
-  return { emphasis: [], previousCharacter: '' };
+  return { emphasis: [], previousCharacter: '', inlineCodeDelimiter: 0 };
 }
 
-function removeSpeechEmphasis(text: string, context: SpeechTextContext): string {
+function removeSpeechEmphasis(text: string, context: SpeechTextContext, precedingCharacter: string): string {
   const normalized = text.replace(/\*{1,2}|_{1,2}|~~/g, (marker: string, offset: number) => {
-    const before = text[offset - 1] ?? '';
+    const before = text[offset - 1] ?? precedingCharacter;
     const after = text[offset + marker.length] ?? '';
     const active = context.emphasis.indexOf(marker);
     if (marker.startsWith('*')
@@ -46,17 +46,8 @@ function removeFencedCode(text: string): string {
   return openStart === null ? out + text.slice(cursor) : `${out}${text.slice(cursor, openStart)}\n`;
 }
 
-/**
- * Converts assistant markdown into text suitable for a speech synthesizer. This is the single
- * spoken-text normalizer for every TTS provider; it runs at the canonical speech entry
- * (`speakAssistantText`).
- */
-export function toSpeechText(markdown: string, context = createSpeechTextContext()): string {
-  let text = markdown.replace(/\r\n?/g, '\n');
-
-  // Code is not read aloud; an unterminated fence drops the rest of the text.
-  text = removeFencedCode(text);
-
+function normalizeSpeechProse(text: string, context: SpeechTextContext, atLineStart: boolean): string {
+  const removeBlockMarker = (marker: string, offset: number) => offset === 0 && !atLineStart ? marker : '';
   // Images and links keep their visible text.
   text = text.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1');
   text = text.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
@@ -64,20 +55,42 @@ export function toSpeechText(markdown: string, context = createSpeechTextContext
   // Bare URLs are read as their domain.
   text = text.replace(/\bhttps?:\/\/(?:www\.)?([^\s/?#)]+)[^\s)]*/gi, '$1');
 
-  // Inline code keeps its content.
-  text = text.replace(/`([^`\n]*)`/g, '$1');
-
   // Block-level markers at the start of a line.
-  text = text.replace(/^[ \t]*#{1,6}[ \t]+/gm, '');
-  text = text.replace(/^[ \t]*>[ \t]?/gm, '');
+  text = text.replace(/^[ \t]*#{1,6}[ \t]+/gm, removeBlockMarker);
+  text = text.replace(/^[ \t]*>[ \t]?/gm, removeBlockMarker);
   // Horizontal rules before list markers, so `- - -` is not read as a list item.
-  text = text.replace(/^[ \t]*(?:[-*_][ \t]*){3,}$/gm, '');
-  text = text.replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gm, '');
+  text = text.replace(/^[ \t]*(?:[-*_][ \t]*){3,}$/gm, removeBlockMarker);
+  text = text.replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gm, removeBlockMarker);
 
   // Retain only delimiter context when one emphasis span crosses streamed chunks.
-  text = removeSpeechEmphasis(text, context);
+  return removeSpeechEmphasis(text, context, atLineStart ? '' : context.previousCharacter ?? '');
+}
 
-  return text
+/** Canonical spoken-text policy for whole replies and streamed chunks at speakAssistantText. */
+export function toSpeechText(markdown: string, context = createSpeechTextContext()): string {
+  const text = removeFencedCode(markdown.replace(/\r\n?/g, '\n'));
+  let spoken = '';
+  let cursor = 0;
+  const append = (end: number) => {
+    const part = text.slice(cursor, end);
+    if (context.inlineCodeDelimiter) {
+      spoken += part;
+      context.previousCharacter = part.at(-1) ?? context.previousCharacter;
+    } else {
+      spoken += normalizeSpeechProse(part, context, cursor === 0 || text[cursor - 1] === '\n');
+    }
+  };
+  for (const match of text.matchAll(/`+/gu)) {
+    append(match.index);
+    const length = match[0].length;
+    if (!context.inlineCodeDelimiter) context.inlineCodeDelimiter = length;
+    else if (context.inlineCodeDelimiter === length) context.inlineCodeDelimiter = 0;
+    else spoken += match[0];
+    cursor = match.index + length;
+  }
+  append(text.length);
+
+  return spoken
     .split('\n')
     .map((line) => line.replace(/[ \t]+/g, ' ').trim())
     .filter((line) => line.length > 0)
