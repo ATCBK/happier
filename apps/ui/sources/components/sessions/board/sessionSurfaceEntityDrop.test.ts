@@ -53,6 +53,17 @@ describe('qualified Session surface entity drops', () => {
         expect(key(resolveSessionCompanionEntityDrop({ ...companion, anchor: { side: 'before', itemKey: 'widget:three' } }))).toBe(companionGap);
         expect(key(resolveSessionCompanionEntityDrop({ ...companion, anchor: { side: 'after', itemKey: 'widget:three' } }))).not.toBe(companionGap);
     });
+    it('refuses a placement move on a Board that cannot take a layout change with the reason, and leaves a widget arriving from another surface to its own admission', () => {
+        const context = { item, scope, address, board: board(), viewId: 'b', preview };
+        for (const [blocked, code] of [['offline', 'board-offline'], ['approval_pending', 'board-approval_pending'], ['busy', 'board-busy']] as const) {
+            expect(resolveSessionBoardEntityDrop({ ...context, blocked })).toMatchObject({ status: 'refused', reason: { code, message: expect.any(String) } });
+        }
+        expect(resolveSessionBoardEntityDrop({ ...context, blocked: null })).toMatchObject({ status: 'allowed' });
+        const ref = { surface: { ...scope, owner: { kind: 'project' as const, projectId: 'portable-source' } }, instanceId: 'configured-one' };
+        expect(resolveSessionBoardEntityDrop({ ...context, item: { kind: 'widget-area-instance', scope, ref }, blocked: 'offline' })).toMatchObject({
+            status: 'allowed', effect: { actionId: 'widgets.item.move' },
+        });
+    });
     it('routes a qualified Project-area copy to Board and Companion through the existing movement Action', () => {
         const ref = { surface: { ...scope, owner: { kind: 'project' as const, projectId: 'portable-source' } }, instanceId: 'configured-one' };
         const carried: EntityDragItemV1 = { kind: 'widget-area-instance', scope, ref };

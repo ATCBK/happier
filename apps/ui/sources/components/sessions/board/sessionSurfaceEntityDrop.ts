@@ -1,6 +1,7 @@
 import { entityDragScopesEqualV1, type EntityDragItemV1, type EntityDragScopeV1, type EntityDropAdmissionV1, type EntityDropEffectV1, type EntityDropPreviewV1 } from '@happier-dev/protocol/plugins/ui';
 import type { SessionCompanionPresentationItemRefV1 } from '@happier-dev/protocol/sessions';
 import type { SessionBoardSnapshot } from '@/sync/domains/session/board';
+import type { SessionBoardController, SessionBoardMutationBlockedReason } from './useSessionBoardController';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { sessionCompanionItemKey } from '../companion/state/sessionCompanionPreference';
 import { t } from '@/text';
@@ -20,7 +21,21 @@ export function sessionSurfaceEntityDropDestinationKey(admission: Extract<Entity
         : destinationKeys.get(admission.effect) ?? null;
 }
 
-type Context = Readonly<{ item: EntityDragItemV1; scope: EntityDragScopeV1; address: SessionAddress; board: SessionBoardSnapshot | null; preview: EntityDropPreviewV1; widgetSourceRef?: WidgetInstanceRefV1 | null }>;
+/** Why this Board cannot take a layout change right now: the controller's own reason, or a change of its own still being saved. */
+export type SessionBoardMoveBlockedReason = SessionBoardMutationBlockedReason | 'busy';
+type Context = Readonly<{ item: EntityDragItemV1; scope: EntityDragScopeV1; address: SessionAddress; board: SessionBoardSnapshot | null; preview: EntityDropPreviewV1; widgetSourceRef?: WidgetInstanceRefV1 | null;
+    /** `null` when the Board can take a layout change. A blocked Board still answers a carry, with the reason. */
+    blocked?: SessionBoardMoveBlockedReason | null }>;
+export function moveBlockedReason(controller: Pick<SessionBoardController, 'mutationsBlockedReason' | 'supports'>): SessionBoardMoveBlockedReason | null {
+    return controller.mutationsBlockedReason ?? (controller.supports('item.moveAnchored') ? null : 'busy');
+}
+const BLOCKED_MESSAGES = {
+    offline: () => t('sessionBoard.mutation.offline'),
+    no_capability: () => t('entityDragDrop.surface.readOnly'),
+    no_producer: () => t('sessionBoard.mutation.unavailable'),
+    approval_pending: () => t('sessionBoard.mutation.approvalRequired'),
+    busy: () => t('entityDragDrop.surface.widgetLayoutChanged'),
+} as const satisfies Record<SessionBoardMoveBlockedReason, () => string>;
 export function sessionSurfaceDropRefused(code: string): Extract<EntityDropAdmissionV1, { status: 'refused' }> {
     const message = ENTITY_DROP_UNCHANGED_CODES.has(code) ? t('entityDragDrop.reasons.noChange')
         : code === 'scope-mismatch' ? t('entityDragDrop.surface.scopeMismatch')
@@ -54,6 +69,9 @@ export function resolveSessionBoardEntityDrop(input: Context & Readonly<{ viewId
     }
     if (!exactSession(input)) return sessionSurfaceDropRefused('scope-mismatch');
     const { item, board, anchor } = input;
+    // Moving a placement is a layout change of the shared Board; it waits on the Board's own writability
+    // (reachable, editable, nothing else saving), never on whether the card's plugin content can run here.
+    if (input.blocked) return { status: 'refused', reason: { code: `board-${input.blocked}`, message: BLOCKED_MESSAGES[input.blocked]() } };
     if (item.kind !== 'session-board-item' || !readableBoardPlacement(input, item)) return sessionSurfaceDropRefused('board-unavailable');
     if (!board?.canEdit) return sessionSurfaceDropRefused('board-read-only');
     const source = board.views.find(view => view.id === item.viewId);

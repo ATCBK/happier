@@ -32,7 +32,7 @@ import { measureWindowBounds, readWindowBounds, useTreeDropAutoscroll, useEntity
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { sessionSurfaceMeasurable, useSessionSurfaceEntityDrag, useSessionSurfaceGeometryRefresh, SessionSurfaceEntityFeedback, type SessionSurfaceEntityBinding } from './SessionSurfaceEntityDrag';
-import { resolveSessionBoardEntityDrop, sessionSurfaceDropRefused, sessionSurfaceEntityDropDestinationKey } from './sessionSurfaceEntityDrop';
+import { resolveSessionBoardEntityDrop, sessionSurfaceDropRefused, sessionSurfaceEntityDropDestinationKey, moveBlockedReason } from './sessionSurfaceEntityDrop';
 import { executeSessionBoardEntityDrop, SessionBoardDestinationSchema, SessionBoardViewDestinationSchema } from './sessionBoardEntityBinding';
 import { resolveSessionSurfaceKeyboardDestination } from './sessionSurfaceKeyboardDestination';
 import { useWidgetMovementAdmission } from '@/components/widgets/surface/useWidgetMovementAdmission';
@@ -717,7 +717,7 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
     const widgetMovement = useWidgetMovementAdmission(props.retained ? null : widgetMovementSurface, controller.snapshot);
     const admitWidgetMovement = widgetMovement.admit;
     const viewStripDrag = useSessionSurfaceEntityDrag(dragScope && dragAddress && mutationControls ? {
-        scope: dragScope.scope, isCurrent: () => dragScope.isCurrent() && controller.supports('item.moveAnchored'),
+        scope: dragScope.scope, isCurrent: () => dragScope.isCurrent(),
         admitWidgetMovement,
         getItem: () => null, title: t('sessionBoard.views.label'),
         pointerDestination: (bounds, pointer) => {
@@ -734,7 +734,7 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
             resolve: ({ item, destination }) => {
                 const parsed = SessionBoardViewDestinationSchema.safeParse(destination);
                 const viewId = parsed.success ? parsed.data.viewId : null;
-                return viewId ? resolveSessionBoardEntityDrop({ item, scope: dragScope.scope, address: dragAddress, board: controller.snapshot, viewId, widgetSourceRef: widgetMovement.sourceRef,
+                return viewId ? resolveSessionBoardEntityDrop({ item, scope: dragScope.scope, address: dragAddress, board: controller.snapshot, viewId, widgetSourceRef: widgetMovement.sourceRef, blocked: moveBlockedReason(controller),
                     preview: { verb: t('sessionBoard.item.moveTargetView', { title: controller.snapshot?.views.find(view => view.id === viewId)?.title ?? t('sessionBoard.views.label') }), target: controller.snapshot?.views.find(view => view.id === viewId)?.title ?? t('sessionBoard.views.label') } }) : sessionSurfaceDropRefused('target-gone');
             },
             execute: effect => executeSessionBoardEntityDrop(controller, effect),
@@ -1041,7 +1041,7 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
                 const rect = placementRects.current.get(itemId);
                 return viewport && rect ? { ...rect, x: viewport.x + rect.x, y: viewport.y + gridContentY.current + rect.y - scrollOffsetY.current } : null;
             },
-            ...(mutationControls && controller.supports('item.moveAnchored') ? {
+            ...(mutationControls ? {
                 getBoardTarget: () => ({ surface: { ...dragScope.scope, owner: { kind: 'sessionBoard', sessionId: dragAddress.sessionId } },
                     tabId: activeView.id, itemId, itemIds: controller.snapshot?.views.find(view => view.id === activeView.id)?.placements.map(placement => placement.itemId) ?? [] }),
                 pointerDestination: (bounds: WindowBounds, pointer: Readonly<{ x: number; y: number }>) => {
@@ -1066,7 +1066,7 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
                     listDestinations: () => (['before', 'after'] as const).map(side => ({ destination: { side, itemId, viewId: activeView.id }, group: `${t('sessionBoard.views.label')} · ${resolveSessionBoardViewTitle(activeView)}`, label: t(side === 'before' ? 'entityDragDrop.preview.moveAbove' : 'entityDragDrop.preview.moveBelow', { target: displayTitleOf() }) })),
                     resolve: ({ item, destination }: Parameters<NonNullable<SessionSurfaceEntityBinding['target']>['resolve']>[0]) => {
                         const anchor = SessionBoardDestinationSchema.safeParse(destination);
-                        return anchor.success ? resolveSessionBoardEntityDrop({ item, scope: dragScope.scope, address: dragAddress, board: controller.snapshot, viewId: activeView.id, anchor: anchor.data, widgetSourceRef: widgetMovement.sourceRef,
+                        return anchor.success ? resolveSessionBoardEntityDrop({ item, scope: dragScope.scope, address: dragAddress, board: controller.snapshot, viewId: activeView.id, anchor: anchor.data, widgetSourceRef: widgetMovement.sourceRef, blocked: moveBlockedReason(controller),
                             preview: { verb: t(anchor.data.side === 'before' ? 'entityDragDrop.preview.moveAbove' : 'entityDragDrop.preview.moveBelow', { target: displayTitleOf() }), target: displayTitleOf() } }) : sessionSurfaceDropRefused('same-position');
                     },
                     execute: (effect: Parameters<typeof executeSessionBoardEntityDrop>[1]) => executeSessionBoardEntityDrop(controller, effect),

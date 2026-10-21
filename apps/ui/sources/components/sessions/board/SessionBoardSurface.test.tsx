@@ -588,6 +588,86 @@ describe('SessionBoardSurface', () => {
         } finally { await screen.unmount(); }
     });
 
+    describe('a card carried onto another view tab', () => {
+        const TWO_VIEWS: SessionBoardLayoutV1 = { v: 1, tabs: [
+            { id: 'overview', title: 'Overview', items: [{ itemId: 'note-1', width: 'medium' }] },
+            { id: 'research', title: 'Research', items: [] },
+        ] };
+        const tabMock = (element: { props: { children?: React.ReactNode } }) => {
+            const card = React.Children.toArray(element.props.children).some(child => React.isValidElement(child)
+                && child.type === SessionSurfaceEntityTargetFeedback);
+            return { getBoundingClientRect: () => card
+                ? { x: 100, y: 200, width: 400, height: 200 }
+                : { x: 100, y: 100, width: 400, height: 50 } };
+        };
+        async function signIn(name: string) {
+            const serverUrl = `https://${name}.example.test`;
+            const serverId = `srv_${name.replace(/-/g, '_')}`;
+            await upsertServerProfile({ serverUrl, name });
+            await setServerProfileIdentityForUrl(serverUrl, serverId);
+            expect(await TokenStorage.setCredentialsForServerUrl(serverUrl, { serverId }, {
+                token: `e30.${Buffer.from(JSON.stringify({ sub: 'board-editor' })).toString('base64url')}.signature`,
+            })).toBe(true);
+            return serverId;
+        }
+        async function carryOverResearch(screen: Awaited<ReturnType<typeof renderScreen>>) {
+            await vi.waitFor(() => expect(screen.findHostByTestId('session-board-item-note-1-move-handle')).not.toBeNull());
+            const drag = screen.tree.root.findByType(SessionSurfaceEntityDragHandle).props.drag as React.ComponentProps<typeof SessionSurfaceEntityDragHandle>['drag'];
+            let carry: ReturnType<typeof drag.runtime.begin> = null;
+            await act(async () => {
+                screen.findHostByTestId('session-board-views-view-overview')!.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 100, height: 40 } } });
+                screen.findHostByTestId('session-board-views-view-research')!.props.onLayout({ nativeEvent: { layout: { x: 110, y: 0, width: 100, height: 40 } } });
+                carry = drag.runtime.begin(drag.sourceId, 'pointer');
+                expect(carry).not.toBeNull();
+                carry!.move({ x: 250, y: 120 });
+            });
+            return { drag, carry: carry! };
+        }
+
+        it('moves on release, not waiting on the card’s plugin content to be executable', async () => {
+            const serverId = await signIn('board-view-release');
+            const puts: unknown[] = [];
+            const actions = realBoardActions(async (_path, init) => {
+                if (init?.method !== 'PUT') return Response.json({ record: {
+                    id: 'layout-row', address: { owner: 'host', namespace: 'surface', kind: 'layout.v1', localId: 'layout' },
+                    content: { t: 'plain', v: mutableLayout(TWO_VIEWS) }, revision: REVISION,
+                    createdAt: '2026-09-26T00:00:00.000Z', updatedAt: '2026-09-26T00:00:00.000Z',
+                } });
+                puts.push(SessionBoardMutationV1Schema.parse(JSON.parse(String(init.body))));
+                return Response.json({ operation: 'update_layout', outcome: 'updated', layoutRevision: NEXT_REVISION });
+            }, undefined, ADDRESS);
+            // An installed widget whose plugin is not projected here: its body is paused ("not available here yet").
+            const screen = await renderScreen(<Harness serverId={serverId} actions={actions} snapshot={snapshot({
+                layout: TWO_VIEWS,
+                items: [{ itemId: 'note-1', item: { ...note('Plan'), source: { kind: 'widget', instance: {
+                    v: 1, id: 'note-1', definition: { kind: 'installed', surface: { pluginId: 'acme.review', localId: 'status' } }, bindings: {},
+                } } } }],
+            })} />, { createNodeMock: tabMock });
+            try {
+                const { drag, carry } = await carryOverResearch(screen);
+                expect(drag.runtime.getSnapshot().admission).toMatchObject({ status: 'allowed', effect: {
+                    actionId: 'session.board.layout.update', input: { operation: { op: 'item.move', fromTabId: 'overview', toTabId: 'research' } },
+                } });
+                await act(async () => { await carry.release(); });
+                await vi.waitFor(() => expect(puts).toHaveLength(1));
+                expect(JSON.stringify(puts[0])).toContain('research');
+            } finally { await screen.unmount(); }
+        });
+
+        it('says why an offline Board will not take it instead of showing no verdict at all', async () => {
+            const serverId = await signIn('board-view-offline');
+            const base = snapshot({ layout: TWO_VIEWS, items: [{ itemId: 'note-1', item: note('Plan') }] });
+            const screen = await renderScreen(<Harness serverId={serverId} snapshot={{ ...base, reachability: 'offline' }} />, { createNodeMock: tabMock });
+            try {
+                const { drag } = await carryOverResearch(screen);
+                const verdict = drag.runtime.getSnapshot();
+                expect(verdict.targetId).not.toBeNull();
+                expect(verdict.admission).toMatchObject({ status: 'refused', reason: { message: t('sessionBoard.mutation.offline') } });
+                await act(async () => { drag.runtime.cancel('test-end'); });
+            } finally { await screen.unmount(); }
+        });
+    });
+
     it('offers the available built-in sources on an empty Board without advertising unavailable sources', async () => {
         const screen = await renderScreen(<Harness snapshot={snapshot({})} />);
 
