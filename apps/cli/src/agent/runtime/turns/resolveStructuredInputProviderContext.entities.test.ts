@@ -18,7 +18,13 @@ it('resolves current entity titles through real Actions and projects folders wit
   const deletedId = '22222222-2222-4222-8222-222222222222';
   const unused = (): never => { throw new Error('unexpected_operation'); };
   const definitions = createWorkflowDefinitionActions({ artifactStore: { ...transport,
-    list: boundary.transport.list, delete: boundary.transport.delete }, encodeListCursor: row => row.artifactId,
+    read: async (id, options) => {
+      const row = await transport.read(id, options);
+      if (!row) return null;
+      if (!row.access) throw new Error('fixture_access_missing');
+      return { ...row, access: row.access };
+    },
+    list: unused, delete: boundary.transport.delete }, encodeListCursor: row => row.artifactId,
     assertDefinitionWriteAllowed: unused });
   await transport.create({ artifactId: definitionId,
     header: { kind: 'workflow-definition.v1', definitionId, revision: { headerVersion: 1, bodyVersion: 1 }, metadata: { title: 'Current workflow' } },
@@ -32,7 +38,17 @@ it('resolves current entity titles through real Actions and projects folders wit
   const area = createWidgetAreaActionPortV1(surface => createWidgetSurfaceArtifactPortV1(transport, { surface, isCurrent: () => true }));
   const executor = createActionExecutor({ workflowAction: createWorkflowActionExecutor({ isWorkflowFeatureEnabled: () => true,
     definitions, runs: { execute: unused } }), widgetAccountScope: () => ({ serverId: 'home', accountId: 'account' }),
-    widgetSurfaceActions: { project: area } });
+    widgetSurfaceActions: { project: area },
+    executionRunStart: unused, executionRunList: unused, executionRunGet: unused,
+    detachedExecutionRunSend: unused, executionRunStop: unused, executionRunAction: unused, executionRunWait: unused,
+    sessionOpen: unused, sessionFork: unused, sessionRollback: unused, sessionSpawnNew: unused,
+    resolveAgentStartContext: unused, pathsListRecent: unused, machinesList: unused, serversList: unused,
+    reviewEnginesList: unused, agentsBackendsList: unused, agentsModelsList: unused,
+    sessionSendMessage: unused, sessionPermissionRespond: unused, sessionUserActionAnswer: unused,
+    sessionModeSet: unused, sessionModesList: unused, sessionTargetPrimarySet: unused, sessionTargetTrackedSet: unused,
+    sessionList: unused, sessionActivityGet: unused, sessionRecentMessagesGet: unused, resetGlobalVoiceAgent: unused,
+    daemonMemorySearch: unused, daemonMemoryGetWindow: unused, daemonMemoryEnsureUpToDate: unused,
+  });
   expect(await executor.execute('workflow.definition.get', { definitionId }, { surface: 'cli' })).toMatchObject({ ok: true,
     result: { metadata: { title: 'Current workflow' } } });
   const refs = [{ kind: MENTION_KIND_V1.workflow, opaque: definitionId }, { kind: MENTION_KIND_V1.widget, opaque: formatWidgetInstanceRefKeyV1(widget) },
@@ -43,11 +59,11 @@ it('resolves current entity titles through real Actions and projects folders wit
   const folder = buildUploadedAttachment({ id: 'folder', name: 'source', path: '.happier/uploads/source', mimeType: 'inode/directory', sizeBytes: 23 });
   const text = `Use ${refs.map(ref => ref.token).join(' and ')} and [source](happier-ref:attachment:folder).`;
   const catalogs: StructuredInputCatalogReaders = { readReferenceAction: async (actionId, input, signal) => {
-      const result = await executor.execute(actionId, input, { surface: 'cli', signal });
-      return result.ok ? result.result : null;
+    const result = await executor.execute(actionId, input, { surface: 'cli', signal });
+    return result.ok ? result.result : null;
   } };
   const prepare = (signal = new AbortController().signal) => prepareSessionInputForProviderDispatch({
-    prompt: { text, attachments: [folder], structuredInput: { v: 1, mentions: refs } }, transformedUserText: text,
+    prompt: { text, localId: 'input', attachments: [folder], structuredInput: { v: 1, mentions: refs } }, transformedUserText: text,
     providerNativeCommand: false, signal, localId: 'input', services: { catalogs } });
   const prepared = await prepare();
   expect(prepared.requiredPrompt).toContain('Use @Workflow "Current workflow" and @Widget "Current widget" and @Workflow "Old title" and [Folder: source].');

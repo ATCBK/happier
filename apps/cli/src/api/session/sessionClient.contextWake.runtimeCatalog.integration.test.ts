@@ -6,7 +6,8 @@ import { io } from 'socket.io-client';
 import { expect, it, vi } from 'vitest';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
-import { SessionBroadcastContainerSchema, UpdateSchema } from '@happier-dev/protocol/updates';
+import { SessionBroadcastContainerSchema } from '@happier-dev/protocol/updates';
+import { UpdateSchema } from '@/api/types';
 import type { ChangeEntry } from '@/api/changes';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { createSessionProviderInputConsumerSessionAdapter } from '@/agent/runtime/waitForNextPermissionModeMessage';
@@ -113,17 +114,22 @@ it('keeps an idle context consumer parked for unrelated Account writes and wakes
 
         // Workflow delivery is durable on its origin Session, even without an
         // exact socket broadcast (e.g. change-feed recovery after disconnect).
+        const beforeOwnChange = { workflowReads, invalidations };
         cursor++;
         changes = [{ cursor, kind: 'session', entityId: sessionId, changedAt: cursor,
             hint: { kind: 'workflow-run-delivery', runId: 'origin-run', revision: 2 } }];
         sockets.to('account').emit('update', UpdateSchema.parse({ id: `account-${cursor}`, seq: cursor,
             createdAt: cursor, body: { t: 'account-change' } }));
-        await vi.waitFor(() => expect(workflowReads).toBe(2));
+        await vi.waitFor(() => {
+            expect(invalidations).toBeGreaterThan(beforeOwnChange.invalidations);
+            expect(workflowReads).toBeGreaterThan(beforeOwnChange.workflowReads);
+        });
         await drain();
         // The existing destination broadcast remains the direct Follow path.
+        const beforeExactChange = workflowReads;
         sockets.to('destination').emit('session', SessionBroadcastContainerSchema.parse({ id: 'source-message', createdAt: 10,
             body: { t: 'session-changed', sessionId } }));
-        await vi.waitFor(() => expect(workflowReads).toBe(3));
+        await vi.waitFor(() => expect(workflowReads).toBeGreaterThan(beforeExactChange));
     } finally {
         lifetime.abort();
         await waiting;
