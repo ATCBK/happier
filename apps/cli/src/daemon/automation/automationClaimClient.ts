@@ -12,6 +12,8 @@ import { PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1 } from '@happier-dev/p
 import { AutomationExecutionRunLifecycleSourcesResponseSchema, AutomationExecutionRunLifecycleReportResponseSchema } from '@happier-dev/protocol/automations/automationRunLifecycle';
 
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { classifyDaemonServerWorkError } from '@/daemon/serverWork/classifyDaemonServerWorkError';
+import { logger } from '@/ui/logger';
 import {
   createDefaultPluginInstallationPublisherHeader,
   type CreatePluginInstallationPublisherHeader,
@@ -210,17 +212,36 @@ export function createAutomationClaimClient(params: {
         attempt: paramsHeartbeat.attempt,
         leaseDurationMs: paramsHeartbeat.leaseDurationMs,
       };
-      const response = await axios.post(
-        `${baseUrl}${path}`,
-        body,
-        {
-          headers: await workerHeaders({ method: 'POST', path, body }),
-          timeout: 15_000,
-        },
-      );
-      const { leaseExpiresAt } = AutomationV3WorkerHeartbeatResponseSchema.parse(response.data);
-      if (leaseExpiresAt === null) throw new Error('automation_claim_lease_unavailable');
-      return leaseExpiresAt;
+      let stage: 'publisher_proof' | 'http' | 'response_decode' = 'publisher_proof';
+      let stageStartedAtMs = Date.now();
+      const observe = (event: 'begin' | 'end' | 'failure', result?: Readonly<{
+        status?: number; leaseExpiresAtMs?: number; errorKind?: string;
+      }>) => {
+        try {
+          logger.warnLocalFile('[DAEMON AUTOMATION] Lease renewal transport', {
+            runId: paramsHeartbeat.runId, machineId: paramsHeartbeat.machineId, attempt: paramsHeartbeat.attempt,
+            event, stage, stageStartedAtMs, durationMs: Date.now() - stageStartedAtMs, ...result,
+          });
+        } catch { /* Local diagnostics cannot change renewal transport. */ }
+      };
+      observe('begin');
+      try {
+        const headers = await workerHeaders({ method: 'POST', path, body });
+        stage = 'http';
+        stageStartedAtMs = Date.now();
+        observe('begin');
+        const response = await axios.post(`${baseUrl}${path}`, body, { headers, timeout: 15_000 });
+        stage = 'response_decode';
+        const { leaseExpiresAt } = AutomationV3WorkerHeartbeatResponseSchema.parse(response.data);
+        if (leaseExpiresAt === null) throw new Error('automation_claim_lease_unavailable');
+        stage = 'http';
+        observe('end', { status: response.status, leaseExpiresAtMs: leaseExpiresAt });
+        return leaseExpiresAt;
+      } catch (error) {
+        const classification = classifyDaemonServerWorkError(error);
+        observe('failure', { status: classification.statusCode, errorKind: classification.kind });
+        throw error;
+      }
     },
 
     async startRun(paramsStart: {

@@ -19,6 +19,7 @@ vi.mock('axios', async (importOriginal) => ({
 }));
 
 import type { CreatePluginInstallationPublisherHeader } from '@/plugins/installations/publisherProof';
+import { logger } from '@/ui/logger';
 
 import {
   createAutomationClaimClient,
@@ -84,6 +85,49 @@ describe('createAutomationClaimClient', () => {
     axiosGet.mockReset();
     axiosPost.mockReset();
     axiosLifecycleGet.mockReset().mockResolvedValue({ data: { sources: [] } });
+  });
+
+  it.each(['renewed', 'http_failure', 'decode_failure'] as const)('distinguishes pending heartbeat stages and their outcome without private data (%s)', async outcome => {
+    const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+    let releaseProof!: (proof: string) => void;
+    const proof = new Promise<string>(resolve => { releaseProof = resolve; });
+    let releaseHttp!: (response: { status: number; data: unknown }) => void;
+    let rejectHttp!: (error: Error) => void;
+    axiosPost.mockImplementationOnce(() => new Promise((resolve, reject) => { releaseHttp = resolve; rejectHttp = reject; }));
+    const client = createAutomationClaimClient({ token: 'private-account-token', createPublisherHeader: () => proof });
+    const heartbeat = client.heartbeatRun({ protocol: 'v3', runId: 'lease-run', machineId: 'machine-1',
+      attempt: 2, leaseDurationMs: 30_000 });
+    try {
+      expect(log).toHaveBeenLastCalledWith('[DAEMON AUTOMATION] Lease renewal transport',
+        expect.objectContaining({ event: 'begin', stage: 'publisher_proof', runId: 'lease-run', attempt: 2 }));
+      expect(axiosPost).not.toHaveBeenCalled();
+      releaseProof('private-publisher-proof');
+      await vi.waitFor(() => expect(axiosPost).toHaveBeenCalledOnce());
+      expect(log).toHaveBeenLastCalledWith('[DAEMON AUTOMATION] Lease renewal transport',
+        expect.objectContaining({ event: 'begin', stage: 'http' }));
+      if (outcome === 'renewed') {
+        releaseHttp({ status: 200, data: { ok: true, leaseExpiresAt: 123_456 } });
+        await expect(heartbeat).resolves.toBe(123_456);
+        expect(log).toHaveBeenLastCalledWith('[DAEMON AUTOMATION] Lease renewal transport',
+          expect.objectContaining({ event: 'end', stage: 'http', status: 200, leaseExpiresAtMs: 123_456 }));
+      } else if (outcome === 'http_failure') {
+        const failure = Object.assign(new Error('private-error-message'), {
+          response: { status: 503, data: { token: 'private-response-token' } },
+        });
+        rejectHttp(failure);
+        await expect(heartbeat).rejects.toBe(failure);
+        expect(log).toHaveBeenLastCalledWith('[DAEMON AUTOMATION] Lease renewal transport',
+          expect.objectContaining({ event: 'failure', stage: 'http', status: 503, errorKind: 'server_error' }));
+      } else {
+        releaseHttp({ status: 200, data: { ok: true, leaseExpiresAt: 'private-response-token' } });
+        await expect(heartbeat).rejects.toMatchObject({ issues: expect.arrayContaining([
+          expect.objectContaining({ code: 'invalid_type', path: ['leaseExpiresAt'] }),
+        ]) });
+        expect(log).toHaveBeenLastCalledWith('[DAEMON AUTOMATION] Lease renewal transport',
+          expect.objectContaining({ event: 'failure', stage: 'response_decode' }));
+      }
+      expect(JSON.stringify(log.mock.calls)).not.toMatch(/private-account-token|private-publisher-proof|private-error-message|private-response-token/);
+    } finally { log.mockRestore(); }
   });
 
   it.each(['assignments', 'run-lifecycle'] as const)('propagates a %s transport timeout and recovers on the next refresh', async source => {

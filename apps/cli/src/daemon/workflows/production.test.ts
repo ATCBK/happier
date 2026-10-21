@@ -234,6 +234,7 @@ describe('production workflow coordinator', () => {
   it('keeps renewing a claimed Workflow during slow native admission and an overlapping Account currentness read', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     vi.setSystemTime(0);
+    const leaseLog = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
     let releaseNative!: () => void;
     const nativeOpen = new Promise<void>(resolve => { releaseNative = resolve; });
     let releaseCurrentness!: () => void;
@@ -289,6 +290,9 @@ describe('production workflow coordinator', () => {
       await vi.advanceTimersByTimeAsync(elapsed);
       expect(currentnessEntered).toBe(true);
       expect(heartbeatRun).toHaveBeenCalledTimes(elapsed / polling.heartbeatMs);
+      expect(leaseLog).toHaveBeenCalledWith('[DAEMON AUTOMATION] Claim lease observation',
+        expect.objectContaining({ runId, machineId, attempt: 0, event: 'renewed',
+          currentnessInFlight: true, leaseExpiresAtMs: elapsed + polling.leaseDurationMs }));
       releaseCurrentness();
       releaseNative();
       await running;
@@ -297,6 +301,7 @@ describe('production workflow coordinator', () => {
     } finally {
       releaseCurrentness(); releaseNative();
       await running;
+      leaseLog.mockRestore();
       vi.useRealTimers();
     }
   });

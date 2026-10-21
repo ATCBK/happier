@@ -7,6 +7,7 @@ import {
   type ValidatedAutomationAccountEncryptionV1,
 } from '@/plugins/runtime/automations/automationAccountCurrentness';
 import { getRandomBytes } from '@/api/encryption';
+import { logger } from '@/ui/logger';
 import { startAutomationLeaseHeartbeat } from './automationLeaseHeartbeat';
 import { logAutomationWarn } from './automationTelemetry';
 import type { AutomationClaimedRunPayload, AutomationV3ClaimedAutomation } from './automationTypes';
@@ -230,6 +231,9 @@ export async function executeClaimedRun(params: {
     const leaseExpiresAtMs = claimed.run.leaseExpiresAt;
     heartbeat = startAutomationLeaseHeartbeat({
       heartbeatMs, leaseExpiresAtMs, onHeartbeat: renewLease, onRenewed: checkCurrentness,
+      onObservation: observation => logger.warnLocalFile('[DAEMON AUTOMATION] Claim lease observation', {
+        runId: claimed.run.id, machineId, attempt, ...observation,
+      }),
       onTransientError: (error) => logAutomationWarn('Lease heartbeat failed; retaining the confirmed lease', error, {
         runId: claimed.run.id, automationId: claimedAutomationId,
       }),

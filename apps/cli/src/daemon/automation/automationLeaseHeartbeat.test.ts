@@ -4,6 +4,30 @@ import { startAutomationLeaseHeartbeat } from './automationLeaseHeartbeat';
 afterEach(() => vi.useRealTimers());
 
 describe('Automation claim lease observation', () => {
+  it('identifies a delayed renewal and its late response without reviving the expired claim', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let acknowledge!: (expiry: number) => void;
+    const response = new Promise<number>(resolve => { acknowledge = resolve; });
+    const onObservation = vi.fn();
+    const onError = vi.fn();
+    const heartbeat = startAutomationLeaseHeartbeat({ heartbeatMs: 1_000, leaseExpiresAtMs: 3_000,
+      onHeartbeat: () => response, onError, onObservation });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(onObservation.mock.calls.map(([event]) => event)).toEqual([
+      expect.objectContaining({ event: 'renewal_started', observedAtMs: 1_000, scheduledAtMs: 1_000,
+        leaseExpiresAtMs: 3_000, renewalStartedAtMs: 1_000 }),
+      expect.objectContaining({ event: 'expired', observedAtMs: 3_000, renewalStartedAtMs: 1_000,
+        renewalInFlight: true, currentnessInFlight: false }),
+    ]);
+    acknowledge(30_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(onObservation).toHaveBeenLastCalledWith(expect.objectContaining({ event: 'late_response',
+      observedAtMs: 3_000, renewalStartedAtMs: 1_000, leaseExpiresAtMs: 3_000 }));
+    expect(onError).toHaveBeenCalledOnce();
+    heartbeat.stop();
+  });
+
   it('renews the confirmed lease while a currentness read is pending without overlapping those reads', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

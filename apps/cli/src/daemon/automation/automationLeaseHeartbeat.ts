@@ -1,5 +1,15 @@
 import { classifyDaemonServerWorkError } from '@/daemon/serverWork/classifyDaemonServerWorkError';
 
+export type AutomationLeaseObservation = Readonly<{
+  event: 'renewal_started' | 'renewed' | 'transient_failure' | 'refused' | 'expired' | 'stopped' | 'late_response';
+  observedAtMs: number;
+  scheduledAtMs: number;
+  leaseExpiresAtMs: number;
+  renewalStartedAtMs: number | null;
+  renewalInFlight: boolean;
+  currentnessInFlight: boolean;
+}>;
+
 export function startAutomationLeaseHeartbeat(params: {
   heartbeatMs: number;
   leaseExpiresAtMs: number;
@@ -7,43 +17,61 @@ export function startAutomationLeaseHeartbeat(params: {
   onRenewed?: () => Promise<void>;
   onError: (error: unknown) => void;
   onTransientError?: (error: unknown) => void;
+  onObservation?: (observation: AutomationLeaseObservation) => void;
 }): { stop: () => void } {
   let active = true;
   let leaseExpiresAtMs = params.leaseExpiresAtMs;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let inFlight = false;
   let currentnessInFlight = false;
+  let scheduledAtMs = Date.now();
+  let renewalStartedAtMs: number | null = null;
+  const observe = (event: AutomationLeaseObservation['event']) => {
+    try {
+      params.onObservation?.({ event, observedAtMs: Date.now(), scheduledAtMs, leaseExpiresAtMs,
+        renewalStartedAtMs, renewalInFlight: inFlight, currentnessInFlight });
+    } catch { /* Local diagnostics cannot change claim ownership. */ }
+  };
   const stop = () => {
+    if (!active) return;
+    observe('stopped');
     active = false;
     clearTimeout(timer);
   };
-  const fail = (error: unknown) => {
+  const fail = (error: unknown, event: 'expired' | 'refused' = 'refused') => {
     if (!active) return;
-    stop();
+    observe(event);
+    active = false;
+    clearTimeout(timer);
     params.onError(error);
   };
-  const expire = () => fail(Object.assign(new Error('automation_claim_lease_expired'), { code: 'automation_claim_lease_expired' }));
+  const expire = () => fail(Object.assign(new Error('automation_claim_lease_expired'), { code: 'automation_claim_lease_expired' }), 'expired');
   const schedule = () => {
     if (!active) return;
     const remainingMs = leaseExpiresAtMs - Date.now();
     if (remainingMs <= 0) { expire(); return; }
     // One existing cadence timer also observes the lease boundary while its
     // transport request is pending. A lost response never extends that lease.
-    timer = setTimeout(tick, Math.min(Math.max(1_000, params.heartbeatMs), remainingMs));
+    const delayMs = Math.min(Math.max(1_000, params.heartbeatMs), remainingMs);
+    scheduledAtMs = Date.now() + delayMs;
+    timer = setTimeout(tick, delayMs);
   };
   const tick = () => {
     if (!active) return;
     if (Date.now() >= leaseExpiresAtMs) { expire(); return; }
-    schedule();
-    if (inFlight) return;
+    if (inFlight) { schedule(); return; }
     inFlight = true;
+    renewalStartedAtMs = Date.now();
+    observe('renewal_started');
+    schedule();
     void params.onHeartbeat().then(expiresAtMs => {
-      if (!active) return;
+      if (!active) { observe('late_response'); return; }
       if (Date.now() >= leaseExpiresAtMs || !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
         expire();
         return;
       }
       leaseExpiresAtMs = expiresAtMs;
+      observe('renewed');
       clearTimeout(timer);
       schedule();
       // Authorization/control reads can outlive this lease. Keep them serialized
@@ -51,13 +79,14 @@ export function startAutomationLeaseHeartbeat(params: {
       if (params.onRenewed && !currentnessInFlight) {
         currentnessInFlight = true;
         void Promise.resolve().then(() => active ? params.onRenewed?.() : undefined)
-          .catch(fail).finally(() => { currentnessInFlight = false; });
+          .catch((error: unknown) => fail(error)).finally(() => { currentnessInFlight = false; });
       }
     }).catch((error: unknown) => {
-      if (!active) return;
+      if (!active) { observe('late_response'); return; }
       const { kind } = classifyDaemonServerWorkError(error);
       if (kind === 'network' || kind === 'timeout' || kind === 'server_error'
         || kind === 'dependency_unavailable' || kind === 'rate_limited') {
+        observe('transient_failure');
         params.onTransientError?.(error);
       } else {
         fail(error);
