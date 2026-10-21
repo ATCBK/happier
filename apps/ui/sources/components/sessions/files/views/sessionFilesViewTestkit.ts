@@ -11,7 +11,7 @@ import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/
 import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
-import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
+import { isFilesystemActionId, type FilesystemActionId } from '@happier-dev/protocol/actions/filesystemActionFamily';
 
 export type FileViewRpcRequest = Readonly<{ targetId: string; method: string; payload: unknown }>;
 type FileViewTransport = Readonly<{
@@ -125,7 +125,7 @@ export async function createSessionFilesViewFixture(input: Readonly<{
     const serverUrl = input.serverUrl ?? 'https://session-file-views.test';
     const requests: FileViewRpcRequest[] = [];
     type ActionIssuer = Awaited<ReturnType<typeof import('@/dev/testkit/harness/externalActionAccountHttpBoundary').createExternalActionAccountHttpBoundary>>;
-    const actionIssuers = new Map<string, ActionIssuer>();
+    const actionIssuers = new Map<FilesystemActionId, ActionIssuer>();
     const emissions: FileViewTransport['emissions'] = [];
     const dispatch = (request: FileViewRpcRequest) => {
         requests.push(request);
@@ -136,13 +136,13 @@ export async function createSessionFilesViewFixture(input: Readonly<{
     const authoringMemory = createAuthoringMemoryHttpBoundary();
     // The Account-carrier Action transport admits only a Home Machine row that proves its custodian and ready access.
     const { createPlainMachineRowFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
-    const issuerFor = async (actionId: string) => {
+    const issuerFor = async (actionId: FilesystemActionId) => {
         if (!serverIdentityId) return null;
         const { createExternalActionAccountHttpBoundary } = await import('@/dev/testkit/harness/externalActionAccountHttpBoundary');
         let issuer = actionIssuers.get(actionId);
         if (!issuer) {
             issuer = await createExternalActionAccountHttpBoundary({ serverUrl, serverIdentityId, accountId: 'alice',
-                machineId: machineId, actionId: actionId as ActionId, tokenEpoch: 0,
+                machineId: machineId, actionId, tokenEpoch: 0,
                 execute: (actionInput, context) => {
                     const { machineId: targetId = context.target.machineId, ...payload } = actionInput as Record<string, unknown> & { machineId?: string };
                     return dispatch({ targetId, method: actionId, payload });
@@ -152,7 +152,7 @@ export async function createSessionFilesViewFixture(input: Readonly<{
         return issuer;
     };
     // With an advertised Home identity (required by the Account-carrier Action transport), the Machine's installation key is shared by every Action issuer, so its rows publish the one the carrier seals to.
-    const installationPublicKey = (await issuerFor('daemon.filesystem.list'))?.machine.installationPublicKey;
+    const installationPublicKey = (await issuerFor('daemon.filesystem.listDirectory'))?.machine.installationPublicKey;
     const machine = input.machine === null ? null
         : { ...(input.machine ?? transferMachine({ id: input.machineId ?? 'm1', storageMode: 'plain' })), active: true, activeAt: Date.now() };
     // Own-Machine Action admission reads the Machine's ready custody from the full row.
@@ -169,8 +169,8 @@ export async function createSessionFilesViewFixture(input: Readonly<{
         const path = requestUrl.pathname;
         const handled = await input.request?.(url, init);
         if (handled && handled.status !== 404) return handled;
-        const filesystemAction = /^\/v1\/actions\/(daemon\.filesystem\.[a-z.]+?)(?:\/execution-authorization)?$/.exec(path)?.[1];
-        if (filesystemAction && machine) {
+        const filesystemAction = /^\/v1\/actions\/([^/]+)(?:\/execution-authorization)?$/.exec(path)?.[1];
+        if (filesystemAction && isFilesystemActionId(filesystemAction) && machine) {
             // The admitted Account carrier: the Home issues the authorization and the Machine executes the Action.
             const issuer = await issuerFor(filesystemAction);
             const issued = await issuer?.handle(requestUrl, init);

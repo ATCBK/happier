@@ -245,10 +245,10 @@ describe('Code consumes the qualified browser and real entry-history batch', () 
     it('Refresh re-reads the README after a same-path edit, and a failed README read recovers through Retry', async () => {
         const rootPath = '/code-readme-refresh';
         let readme: { success: true; content: string } | { success: false; error: string } = { success: false, error: 'EIO' };
-        fixture = await createSessionFilesViewFixture({ rootPath, rpc: request => {
+        fixture = await createSessionFilesViewFixture({ rootPath, serverIdentityId: 'srv_code_readme_refresh', rpc: request => {
             if (request.method === RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY) return { ok: true, path: rootPath, truncated: false,
                 entries: [{ name: 'README.md', path: `${rootPath}/README.md`, type: 'file' }] };
-            if (String(request.method).toLowerCase().includes('readfile')) return readme;
+            if (request.method === 'daemon.filesystem.readFile') return readme;
             return { success: false, errorCode: 'FEATURE_UNSUPPORTED', error: 'Unavailable boundary operation' };
         } });
         const screen = await fixture.render(<WorkspaceCodeBrowserView paneScopeId="code-readme-test" scope={fixture.scope}
@@ -257,6 +257,11 @@ describe('Code consumes the qualified browser and real entry-history batch', () 
             && typeof node.props.markdown === 'string')[0]?.props.markdown;
         // A failed first read offers the shared Retry, and Retry recovers.
         await vi.waitFor(() => expect(screen.findByTestId('workspace-code-readme-error-action')).toBeTruthy());
+        // The error must come from this Machine's real read, not failed Action admission.
+        expect(fixture.requests).toContainEqual(expect.objectContaining({
+            targetId: fixture.scope.machineId, method: 'daemon.filesystem.readFile',
+            payload: expect.objectContaining({ rootPath, path: `${rootPath}/README.md` }),
+        }));
         readme = { success: true, content: btoa('First version') };
         await screen.pressByTestIdAsync('workspace-code-readme-error-action');
         await vi.waitFor(() => expect(readmeText()).toBe('First version'));

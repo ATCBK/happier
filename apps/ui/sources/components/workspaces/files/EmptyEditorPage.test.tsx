@@ -131,6 +131,7 @@ describe('EmptyEditorPage (empty editor column, lab EM1)', () => {
     snapshot = changedSnapshot(0);
     const open = vi.fn();
     const screen = await renderPage({ sessionId: 's1', open });
+    expect(screen.findByTestId('pane-empty-editor-scene')).not.toBeNull();
     await screen.pressByTestIdAsync('pane-empty-editor-open-file');
     expect(open).toHaveBeenCalledWith(
       undefined,

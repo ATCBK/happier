@@ -149,8 +149,10 @@ export const EmptyEditorPage = React.memo(function EmptyEditorPage(
       contentContainerStyle={styles.content}
     >
       <EmptyState
+        testID="pane-empty-editor"
         layout="centered"
         size="details"
+        scene="exploring"
         iconName="file"
         title={props.title}
         subtitle={props.reason}

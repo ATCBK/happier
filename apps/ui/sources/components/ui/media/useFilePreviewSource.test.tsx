@@ -101,7 +101,9 @@ describe('useFilePreviewSource', () => {
         try {
             await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ status: 'error', errorCode: 'too_large' }));
             expect(buildImageCompareModel({ changeKind: 'added', before: { status: 'disabled' },
-                after: projectImageComparePreview(hook.getCurrent()) }).after).toEqual({ kind: 'noPreview', reason: 'too_large' });
+                after: projectImageComparePreview(hook.getCurrent()) }).after).toEqual({
+                kind: 'unavailable', reason: { kind: 'tooLarge', sizeBytes: null },
+            });
         } finally { await hook.unmount(); }
     });
 
@@ -119,10 +121,10 @@ describe('useFilePreviewSource', () => {
     });
 
     it.each([
-        { code: 'not_found', side: 'unreadable' },
-        { code: 'machine_carrier_transport_failed', side: 'loadFailed' },
-        { code: undefined, side: 'loadFailed' },
-    ])('preserves the owner failure $code through the preview and comparison projection', async ({ code, side }) => {
+        { code: 'not_found', reason: { kind: 'missing' } },
+        { code: 'machine_carrier_transport_failed', reason: { kind: 'loadFailed', error: 'File does not exist' } },
+        { code: undefined, reason: { kind: 'loadFailed', error: 'File does not exist' } },
+    ])('preserves the owner failure $code through the preview and comparison projection', async ({ code, reason }) => {
         // The Machine Action response is a genuine external boundary. Identical messages must not classify the cause.
         downloadFailure = { success: false, status: 'failed', error: 'File does not exist', ...(code ? { errorCode: code } : {}) };
         const hook = await renderHook(({ enabled }: { enabled: boolean }) => useFilePreviewSource({ enabled,
@@ -131,7 +133,7 @@ describe('useFilePreviewSource', () => {
         try {
             await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ status: 'error', errorCode: code ?? null }));
             expect(buildImageCompareModel({ changeKind: 'added', before: { status: 'disabled' },
-                after: projectImageComparePreview(hook.getCurrent()) }).after.kind).toBe(side);
+                after: projectImageComparePreview(hook.getCurrent()) }).after).toEqual({ kind: 'unavailable', reason });
             await hook.rerender({ enabled: false });
             expect(hook.getCurrent()).toEqual({ status: 'disabled', uri: null, error: null });
         } finally { await hook.unmount(); }
