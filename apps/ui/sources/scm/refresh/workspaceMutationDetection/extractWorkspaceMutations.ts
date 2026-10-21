@@ -274,7 +274,7 @@ export function readToolCallMutationPaths(toolPart: Readonly<{ name: string; inp
     } else if (toolKind !== 'container') {
         hasUnknownMutations = readStringField(toolInput, ['command', 'cmd']) !== null;
     }
-    const region = readInputRegion(toolInput);
+    const region = readInputRegion(toolInput) ?? readWrittenContentRegion(toolInput);
     const anchorText = region ? undefined : readInputAnchorText(toolInput);
     for (const path of paths) mutations.set(path, { kind: defaultKind, ...(region ? { region } : {}), ...(anchorText ? { anchorText } : {}) });
     if (toolKind === 'patch') {
@@ -302,6 +302,15 @@ function readInputRegion(input: unknown): ToolCallFileMutation['region'] {
     return typeof startLine === 'number' && Number.isInteger(startLine) && startLine > 0
         && typeof endLine === 'number' && Number.isInteger(endLine) && endLine >= startLine
         ? Object.freeze({ startLine, endLine }) : undefined;
+}
+
+/** A Write lands as its whole content (P5 §3.10, lab tr T1 is a new file): lines 1 to its last line. */
+function readWrittenContentRegion(input: unknown): ToolCallFileMutation['region'] {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+    const content = (input as Record<string, unknown>).content;
+    if (typeof content !== 'string' || content.length === 0) return undefined;
+    const lines = content.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n').length;
+    return Object.freeze({ startLine: 1, endLine: lines });
 }
 
 /** Edit's `old_string`, or MultiEdit's first edit's: where the write lands when no lines are named. */

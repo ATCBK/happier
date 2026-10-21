@@ -76,6 +76,8 @@ export type CodeEditorHandle = Readonly<{
     getSelection?: () => { startLine: number; endLine: number; text: string; rect: Rect | null; collapsed?: boolean } | null;
     subscribeSelection?: (listener: () => void) => () => void;
     getLineRect?: (line: number) => Rect | null;
+    /** Where a text position sits (1-based line, 0-based UTF-16 character), in window coordinates; null off screen. */
+    getPositionRect?: (line: number, character: number) => Rect | null;
     /**
      * Room in the text for the host's change peek (ade-shell ED3 E1): the lines after `afterLine` (0 = above the
      * first line) move down by `height`, and a newly opened room scrolls just enough to show whole, from the line's

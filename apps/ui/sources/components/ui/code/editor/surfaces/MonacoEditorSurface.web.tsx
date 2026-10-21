@@ -553,6 +553,16 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                     ? editor.getTopForLineNumber(line + 1) - editor.getScrollTop() - top : latestFontMetricsRef.current.lineHeight;
                 return { x: bounds.left + layout.contentLeft, y: bounds.top + top, width: layout.contentWidth, height };
             },
+            getPositionRect: (line, character) => {
+                const editor = editorRef.current as MonacoEditorApi.IStandaloneCodeEditor | null;
+                const model = modelRef.current as MonacoEditorApi.ITextModel | null;
+                if (!editor || !model || line < 1 || line > model.getLineCount()) return null;
+                const bounds = editor.getDomNode?.()?.getBoundingClientRect();
+                const column = Math.min(character + 1, model.getLineMaxColumn(line));
+                const point = editor.getScrolledVisiblePosition?.({ lineNumber: line, column });
+                if (!bounds || !point) return null;
+                return { x: bounds.left + point.left, y: bounds.top + point.top, width: 0, height: point.height };
+            },
             subscribeSelection: (listener) => {
                 selectionListenersRef.current.add(listener);
                 return () => { selectionListenersRef.current.delete(listener); };

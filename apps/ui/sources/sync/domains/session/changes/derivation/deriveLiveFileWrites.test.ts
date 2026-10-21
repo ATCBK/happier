@@ -52,7 +52,7 @@ describe('deriveLiveFileWrites', () => {
             call('shell', 'Bash', { command: 'touch src/shell.ts' }),
         ], options);
         expect([...writes.keys()]).toEqual(['src/edit.ts', 'src/write.ts', 'src/multi.ts', 'src/patch.ts', 'src/acp.ts', 'src/old.ts', 'src/new.ts']);
-        expect(writes.get('src/write.ts')).toEqual({ toolCallId: 'write', kind: 'create', startedAt: 12, sessionId: 'session-1' });
+        expect(writes.get('src/write.ts')).toEqual({ toolCallId: 'write', kind: 'create', startedAt: 12, sessionId: 'session-1', region: { startLine: 1, endLine: 1 } });
         expect(writes.get('src/new.ts')?.kind).toBe('rename');
         expect(Object.isFrozen(writes)).toBe(true);
     });
@@ -94,6 +94,15 @@ describe('deriveLiveFileWrites', () => {
             diff: '@@ -3 +8,2 @@\n-a\n+b\n+c\n@@ -90 +95,3 @@\n-x\n+y\n+z\n+w',
         }] })], options);
         expect(writes.get('src/app.ts')?.region).toEqual({ startLine: 8, endLine: 9 });
+    });
+
+    it('places a Write over the whole content it writes (lab tr T1: a new file)', () => {
+        const writes = deriveLiveFileWrites([
+            call('write', 'Write', { file_path: 'src/useSettingsRouteKey.ts', content: 'a\nb\nc\n' }),
+            call('empty', 'Write', { file_path: 'src/empty.ts', content: '' }),
+        ], options);
+        expect(writes.get('src/useSettingsRouteKey.ts')?.region).toEqual({ startLine: 1, endLine: 3 });
+        expect(writes.get('src/empty.ts')?.region).toBeUndefined();
     });
 
     it('carries the text an Edit replaces when the call names no lines, so the open file can place it', () => {

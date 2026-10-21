@@ -16,7 +16,10 @@ export type TrackPresence = Readonly<{
     anchorText?: string;
     agentId: string | null;
     agentName: string;
+    /** Track asks the page to scroll to the region (a new `seq` per request); absent while you have taken over. */
+    reveal?: Readonly<{ seq: number; behavior?: 'smooth' | 'instant' }>;
 }>;
+export type TrackReveal = Readonly<{ seq: number; path: string; behavior: 'smooth' | 'instant' }>;
 const TrackPresenceContext = React.createContext<TrackPresence | null>(null);
 
 /** File views and the tab strip report user intent; passive scroll/activation echoes are not input. */

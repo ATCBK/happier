@@ -76,8 +76,11 @@ export function createTrackAgentEditsController(effects: TrackAgentEditsEffects)
         const regionChanged = previousTarget?.path !== target.path
             || previousTarget?.region?.startLine !== target.region?.startLine
             || previousTarget?.region?.endLine !== target.region?.endLine
-            || previousTarget?.region?.column !== target.region?.column;
-        if (target.region && (resuming || pathChanged || regionChanged)) {
+            || previousTarget?.region?.column !== target.region?.column
+            || previousTarget?.write.anchorText !== target.write.anchorText;
+        // Placeable: lines from the call, or the text it replaces (the File page resolves both, P5 §3.10).
+        const placeable = target.region !== undefined || target.write.anchorText !== undefined;
+        if (placeable && (resuming || pathChanged || regionChanged)) {
             effects.revealRegion(target, effects.reducedMotion() ? 'instant' : 'smooth', token);
         }
     }

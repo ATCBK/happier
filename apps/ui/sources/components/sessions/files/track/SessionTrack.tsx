@@ -22,7 +22,7 @@ import { useLocalSettingMutable } from '@/sync/domains/state/storage';
 import { useWorkspaceScopeForSession } from '@/sync/domains/session/resolveWorkspaceScopeForSession';
 import { useDeviceType } from '@/utils/platform/responsive';
 
-import { TrackPauseSignalProvider, type TrackPresence } from './TrackPauseSignal';
+import { TrackPauseSignalProvider, type TrackPresence, type TrackReveal } from './TrackPauseSignal';
 import {
   useTrackAgentEdits,
   type TrackAgentEditsModel,
@@ -38,7 +38,7 @@ function isInsideTrackCapsule(target: unknown): boolean {
 }
 
 export type SessionTrackModel = TrackAgentEditsModel &
-  Readonly<{ agentId: string | null; agentTitle: string }>;
+  Readonly<{ agentId: string | null; agentTitle: string; reveal: TrackReveal | null }>;
 
 /**
  * The Session pane's one Track composition (P5 U7): P3's Session-current writes, P4's dirty paths and the
@@ -86,39 +86,19 @@ export function useSessionTrack(
       void opener.open(target, {
         intent: 'preview',
         present: options.present,
-        anchor: options.anchor,
         anchorSource: options.anchorSource,
       });
     },
     [opener],
   );
-  // A later edit in the already-open file moves that tab's anchor in place (its existing jump path):
-  // reopening the same preview tab would pin it.
+  // Track decides when to scroll (path change, new region, Resume); the File page showing the path resolves
+  // where (the call's lines, or the text it replaces) and scrolls there: one region owner for caret and scroll.
+  const [reveal, setReveal] = React.useState<TrackReveal | null>(null);
   const revealRegion = React.useCallback(
-    (target: TrackTarget) => {
-      const scope = pane.scopeState?.details;
-      const tab = scope?.tabs.find(
-        (candidate) =>
-          candidate.kind === 'file' &&
-          candidate.resource &&
-          typeof candidate.resource === 'object' &&
-          (candidate.resource as { path?: unknown }).path === target.path,
-      );
-      if (!tab || !target.region) return;
-      pane.replaceDetailsTab(
-        tab.key,
-        {
-          ...tab,
-          resource: {
-            ...(tab.resource as object),
-            anchor: { kind: 'fileLine', startLine: target.region.startLine },
-            anchorSource: 'file',
-          },
-        },
-        { intent: tab.isPinned ? 'pinned' : 'preview' },
-      );
+    (target: TrackTarget, behavior: 'smooth' | 'instant') => {
+      setReveal((previous) => ({ seq: (previous?.seq ?? 0) + 1, path: target.path, behavior }));
     },
-    [pane],
+    [],
   );
   const track = useTrackAgentEdits({
     scopeId: params.scopeId,
@@ -136,8 +116,8 @@ export function useSessionTrack(
     ? resolveAgentCatalogTitle(agentId)
     : t('newSession.wizardSection.agent');
   return React.useMemo(
-    () => ({ ...track, agentId, agentTitle }),
-    [agentId, agentTitle, track],
+    () => ({ ...track, agentId, agentTitle, reveal }),
+    [agentId, agentTitle, reveal, track],
   );
 }
 
@@ -146,7 +126,7 @@ export function useSessionTrack(
  * on (following or paused by your input; the caret reports the agent, pausing only stops the following).
  */
 export function readTrackPresence(
-  track: Pick<SessionTrackModel, 'enabled' | 'target' | 'agentId' | 'agentTitle'>,
+  track: Pick<SessionTrackModel, 'enabled' | 'paused' | 'target' | 'agentId' | 'agentTitle' | 'reveal'>,
 ): TrackPresence | null {
     const target = track.target;
     if (!track.enabled || !target) return null;
@@ -158,6 +138,9 @@ export function readTrackPresence(
         ...(anchorText ? { anchorText } : {}),
         agentId: track.agentId,
         agentName: track.agentTitle,
+        // Track's scroll request for this path; none while you have taken over (paused).
+        ...(track.reveal && track.reveal.path === target.path && !track.paused
+            ? { reveal: { seq: track.reveal.seq, behavior: track.reveal.behavior } } : {}),
     };
 }
 
@@ -188,10 +171,10 @@ export function TrackInputBoundary(
         : null,
     [following, pause],
   );
-  const { enabled, target, agentId, agentTitle } = props.track;
+  const { enabled, paused, target, agentId, agentTitle, reveal } = props.track;
   const presence = React.useMemo(
-    () => readTrackPresence({ enabled, target, agentId, agentTitle }),
-    [enabled, target, agentId, agentTitle],
+    () => readTrackPresence({ enabled, paused, target, agentId, agentTitle, reveal }),
+    [enabled, paused, target, agentId, agentTitle, reveal],
   );
   return (
     <TrackPauseSignalProvider signal={pause} presence={presence}>

@@ -55,6 +55,16 @@ describe('Track agent edits controller', () => {
         }
     });
 
+    it('reveals an Edit placed only by the text it replaces, and again when that text changes', () => {
+        const { update, revealRegion } = setup();
+        const edit = (startedAt: number, anchorText: string): TrackWrite => ({ toolCallId: `e${startedAt}`, sessionId: 'session', startedAt, anchorText });
+        update({ writes: new Map([['a.ts', edit(1, 'return key;')]]) });
+        expect(revealRegion.mock.calls.at(-1)?.[0]).toMatchObject({ path: 'a.ts', write: { anchorText: 'return key;' } });
+        update({ activePath: 'a.ts', writes: new Map([['a.ts', edit(2, 'const width = 1;')]]) });
+        expect(revealRegion).toHaveBeenCalledTimes(2);
+        expect(revealRegion.mock.calls.at(-1)?.[0]).toMatchObject({ write: { anchorText: 'const width = 1;' } });
+    });
+
     it.each<TrackPauseReason>(['scroll', 'touch', 'selection', 'typing', 'tabActivation'])('pauses immediately for %s and Resume returns to the current region', (reason) => {
         const { controller, update, openPreview, revealRegion } = setup();
         update();

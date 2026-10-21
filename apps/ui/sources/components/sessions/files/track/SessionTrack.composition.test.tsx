@@ -138,6 +138,8 @@ describe('Session Track composition', () => {
         await act(async () => { await waitForHomeGovernance(() => {
             expect(readTrackPresence(hook.getCurrent().track)).toMatchObject({ path: 'a.ts', anchorText: 'return key;' });
         }); });
+        // Track asks the File page to scroll there; the page resolves the text to lines (one region owner).
+        expect(readTrackPresence(hook.getCurrent().track)?.reveal).toMatchObject({ seq: expect.any(Number) });
         expect(readTrackPresence(hook.getCurrent().track)?.region).toBeUndefined();
         await hook.unmount();
     });

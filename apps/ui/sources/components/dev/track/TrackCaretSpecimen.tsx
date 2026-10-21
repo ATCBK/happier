@@ -3,7 +3,10 @@ import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Text } from '@/components/ui/text/Text';
+import type { TextEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
 import { FileContentPanel } from '@/components/workspaces/files/file/FileContentPanel';
+import { FileEditorAgentPresence } from '@/components/workspaces/files/file/editor/FileEditorAgentPresence';
+import { FileEditorPanel } from '@/components/workspaces/files/file/editor/FileEditorPanel';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 
 /**
@@ -51,10 +54,12 @@ const MODAL_DIFF = [
 
 const NO_LINES = new Set<string>();
 
-export function TrackCaretSpecimen(props: Readonly<{ mode: 'file' | 'diff'; line: number | null }>) {
+export function TrackCaretSpecimen(props: Readonly<{ mode: 'file' | 'diff' | 'edit'; line: number | null }>) {
     const { theme } = useUnistyles();
     const reducedMotion = useReducedMotionPreference();
     const diff = props.mode === 'diff';
+    const editorRef = React.useRef<TextEditorHandle | null>(null);
+    const [editor, setEditor] = React.useState<TextEditorHandle | null>(null);
     const endLine = props.line ?? (diff ? 21 : 15);
     const presence = React.useMemo(() => ({ startLine: endLine - 1, endLine, agentId: 'claude', agentName: 'Claude', reducedMotion }),
         [endLine, reducedMotion]);
@@ -63,7 +68,11 @@ export function TrackCaretSpecimen(props: Readonly<{ mode: 'file' | 'diff'; line
             <Text variant="title" emphasis="semiBold" style={styles.title}>{diff ? 'SettingsModal.tsx' : 'useSettingsRouteKey.ts'}</Text>
             <Text variant="meta" style={styles.meta}>Claude is writing · line {endLine - 1}</Text>
             <View style={styles.body}>
-                <FileContentPanel
+                {props.mode === 'edit' ? <>
+                    <FileEditorPanel theme={theme} editorRef={editorRef} resetKey="track" value={ROUTE_KEY} language="typescript"
+                        onChange={() => {}} onReady={() => setEditor(editorRef.current)} filePath="apps/ui/sources/components/settings/useSettingsRouteKey.ts" />
+                    <FileEditorAgentPresence handle={editor} presence={presence} />
+                </> : <FileContentPanel
                     theme={theme}
                     displayMode={diff ? 'diff' : 'file'}
                     sessionId=""
@@ -75,7 +84,7 @@ export function TrackCaretSpecimen(props: Readonly<{ mode: 'file' | 'diff'; line
                     lineSelectionEnabled={false}
                     onToggleLine={() => {}}
                     agentPresence={presence}
-                />
+                />}
             </View>
         </View>
     );

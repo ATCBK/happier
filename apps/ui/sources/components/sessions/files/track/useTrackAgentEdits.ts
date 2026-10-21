@@ -4,7 +4,6 @@ import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneSco
 import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
 import { useLocalSettingMutable } from '@/sync/domains/state/storage';
 import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
-import type { FileTargetAnchor } from '@/utils/url/sessionFileDeepLink';
 
 import { createTrackAgentEditsController, type TrackAgentEditsEffects, type TrackWrite } from './trackAgentEditsController';
 
@@ -16,7 +15,7 @@ function filePath(resource: unknown): string | null {
 
 export type TrackFileOpen = (
     target: Readonly<SessionAddress & { kind: 'session'; path: string }>,
-    options: Readonly<{ intent: 'preview'; present: false; anchor?: FileTargetAnchor; anchorSource: 'file' }>,
+    options: Readonly<{ intent: 'preview'; present: false; anchorSource: 'file' }>,
     programmaticToken: symbol,
 ) => void;
 
@@ -43,10 +42,10 @@ export function useTrackAgentEdits(params: Readonly<{
     current.current = params;
     const addressKey = sessionAddressKey(params.sessionAddress);
     const controller = React.useMemo(() => createTrackAgentEditsController({
+        // The open carries no anchor: the File page resolves the region and scrolls there on Track's reveal.
         openPreview: (target, token) => {
-            const anchor = target.region ? { kind: 'fileLine' as const, startLine: target.region.startLine } : undefined;
             current.current.openFile({ kind: 'session', ...current.current.sessionAddress, path: target.path }, {
-                intent: 'preview', present: false, anchor, anchorSource: 'file',
+                intent: 'preview', present: false, anchorSource: 'file',
             }, token);
         },
         revealRegion: (...args) => current.current.revealRegion(...args),

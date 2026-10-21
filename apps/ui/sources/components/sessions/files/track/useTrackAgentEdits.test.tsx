@@ -27,7 +27,7 @@ describe('Track through the real pane and local setting owners', () => {
             const pane = useAppPaneScope('session:track-contract');
             // This consumer-level test exercises the real pane. P3's async opener binding is a later composed gate.
             const openFile = React.useCallback<TrackFileOpen>((target, options) => {
-                pane.openDetailsTab(createWorkspaceFileDetailsTab(target.path, options.anchor, options.anchorSource), options);
+                pane.openDetailsTab(createWorkspaceFileDetailsTab(target.path, undefined, options.anchorSource), options);
             }, [pane]);
             const track = useTrackAgentEdits({ scopeId: 'session:track-contract', sessionAddress: { serverId: 'home', sessionId: 'session' },
                 active: true, sessionActive: true, ...props, reducedMotion: false, revealRegion, openFile });
@@ -36,8 +36,10 @@ describe('Track through the real pane and local setting owners', () => {
             <PanePresentationProvider value={present}>{children}</PanePresentationProvider>
         </AppPaneProvider> });
         const tab = () => hook.getCurrent().pane.scopeState?.details.tabs[0];
-        expect(tab()).toMatchObject({ key: 'file:a.ts', isPreview: true, isPinned: false,
-            resource: { anchor: { kind: 'fileLine', startLine: 14 } } });
+        expect(tab()).toMatchObject({ key: 'file:a.ts', isPreview: true, isPinned: false });
+        // The File page owns the region and the scroll (P5 §3.10): the open carries no anchor of its own.
+        expect((tab()?.resource as { anchor?: unknown } | undefined)?.anchor).toBeUndefined();
+        expect(revealRegion.mock.calls.at(-1)?.[0]).toMatchObject({ path: 'a.ts', region: { startLine: 14 } });
         expect(present).not.toHaveBeenCalled();
         await hook.rerender({ ...initialProps, writes: new Map([['a.ts', {
             toolCallId: 'a2', sessionId: 'session', startedAt: 2, region: { startLine: 20, endLine: 21 },

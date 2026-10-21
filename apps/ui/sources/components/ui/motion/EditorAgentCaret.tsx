@@ -1,5 +1,6 @@
 import {
   HAPPIER_TYPE_SCALE,
+  type HappierAgentCursorMotion,
   type HappierAgentCursorMotionDriver,
 } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
@@ -40,8 +41,19 @@ export type EditorAgentCaretProps = Readonly<{
 export function EditorAgentCaret(
   props: EditorAgentCaretProps,
 ): React.ReactElement {
+  return props.motionDriver ? (
+    <EditorAgentCaretLayer {...props} driver={props.motionDriver} />
+  ) : (
+    <EditorAgentCaretLayer {...props} driver={reanimatedAgentCursorMotion} />
+  );
+}
+
+function EditorAgentCaretLayer<Motion extends HappierAgentCursorMotion>(
+  props: EditorAgentCaretProps &
+    Readonly<{ driver: HappierAgentCursorMotionDriver<Motion> }>,
+): React.ReactElement {
   const { theme } = useUnistyles();
-  const driver = props.motionDriver ?? reanimatedAgentCursorMotion;
+  const driver = props.driver;
   const motion = driver.useMotion();
   const { reducedMotion, travelFromPx } = props;
   React.useLayoutEffect(() => {
