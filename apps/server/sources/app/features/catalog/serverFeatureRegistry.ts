@@ -2,6 +2,7 @@ import type { FeaturesPayloadDelta, FeaturesResponse } from '../types';
 
 import { resolveAutomationsFeature } from '../automationsFeature';
 import { resolveWorkflowsFeature } from '../workflowsFeature';
+import { resolvePublicProfilesFeature } from '../publicProfilesFeature';
 import { resolveBugReportsFeature } from '../bugReportsFeature';
 import { resolveSharingFeature } from '../sharingFeature';
 import { resolveVoiceFeature } from '../voiceFeature';
@@ -60,6 +61,7 @@ function register(
 }
 
 export const serverFeatureRegistry = Object.freeze([
+    register(['account'], (env) => resolvePublicProfilesFeature(env)),
     register([], () => resolveAccountStoredContentCompatibilityFeature()),
     register([], (env) => resolveAccountDirectoryFeature(env)),
     register([], () => resolveSessionProtocolCapabilitiesFeature()),

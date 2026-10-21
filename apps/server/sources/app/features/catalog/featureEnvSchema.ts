@@ -1,4 +1,5 @@
 export const FEATURE_ENV_KEYS = Object.freeze({
+  accountPublicProfilesEnabled: 'HAPPIER_FEATURE_ACCOUNT_PUBLIC_PROFILES__ENABLED',
   machinesPoolsEnabled: 'HAPPIER_FEATURE_MACHINES_POOLS__ENABLED',
   teamsEnabled: 'HAPPIER_FEATURE_TEAMS__ENABLED',
   teamsCredentialResourcesEnabled: 'HAPPIER_FEATURE_TEAMS_CREDENTIAL_RESOURCES__ENABLED',

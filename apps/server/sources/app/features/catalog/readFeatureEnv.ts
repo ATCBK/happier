@@ -489,6 +489,10 @@ export function readAutomationsFeatureEnv(env: NodeJS.ProcessEnv): AutomationsFe
   };
 }
 
+export function readPublicProfilesFeatureEnv(env: NodeJS.ProcessEnv): Readonly<{ enabled: boolean }> {
+  return { enabled: readFeatureConfig(env, 'accountPublicProfilesEnabled') };
+}
+
 export function readWorkflowsFeatureEnv(env: NodeJS.ProcessEnv): WorkflowsFeatureEnv {
   return {
     enabled: readFeatureConfig(env, 'workflowsEnabled'),

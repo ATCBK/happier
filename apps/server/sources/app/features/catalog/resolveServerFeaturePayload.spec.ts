@@ -73,6 +73,13 @@ describe("resolveServerFeaturePayload", () => {
         expect(resolveServerFeaturePayload({}, serverFeatureRegistry).capabilities.session.messages.turns).toBe(true);
     });
 
+    it('advertises public Account profiles by default with a live operator opt-out independent of Friends', () => {
+        expect(readServerEnabledBit(resolveServerFeaturePayload({ HAPPIER_FEATURE_SOCIAL_FRIENDS__ENABLED: '0' }, serverFeatureRegistry),
+            'account.publicProfiles')).toBe(true);
+        expect(readServerEnabledBit(resolveServerFeaturePayload({ HAPPIER_FEATURE_ACCOUNT_PUBLIC_PROFILES__ENABLED: '0' }, serverFeatureRegistry),
+            'account.publicProfiles')).toBe(false);
+    });
+
     it("advertises approved Workflow activation only while its Automations dependency is enabled", () => {
         expect(readServerEnabledBit(
             resolveServerFeaturePayload({}, serverFeatureRegistry),

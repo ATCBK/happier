@@ -105,6 +105,16 @@ The catalog entry is client-represented, has `defaultFailMode: 'fail_closed'`, a
 
 Features that declare `sessions.direct` as a dependency, including the current Claude unified-terminal and Codex app-server feature rows, are disabled by `applyFeatureDependencies(...)` when External Sessions is disabled or unknown. Call sites must not reproduce or bypass that dependency closure.
 
+### Public Account profiles feature id
+
+`account.publicProfiles` is server-represented, fail-closed and independent of
+Friends. Its canonical server resolver defaults on; operators can opt out with
+`HAPPIER_FEATURE_ACCOUNT_PUBLIC_PROFILES__ENABLED=0` through the normal live Home
+configuration. This advertises delivery support, not consent: publishing still
+requires an explicit reviewed Account disclosure and configured public ingress
+and report contact. Owner reads, pause and unpublish remain reachable when the
+feature is disabled. A client without a valid enabled bit refuses publication.
+
 ### Session Agent switching feature id
 
 `sessions.agentSwitching` gates continuing one Session with another Agent (`agent-transition.md`).

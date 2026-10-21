@@ -42,6 +42,7 @@ const OFF = { type: 'boolean', default: false } as const;
 const LIVE_STREAM_CAP = { type: 'int', bounds: { min: 1 }, ...AT_STARTUP } as const;
 
 export const FEATURE_READER_DEFAULTS = {
+    accountPublicProfilesEnabled: { ...ON, ...HOME },
     machinesPoolsEnabled: { ...ON, ...HOME },
     teamsEnabled: { ...ON, ...HOME },
     teamsCredentialResourcesEnabled: { ...ON, ...HOME },
