@@ -11,7 +11,7 @@ import type { ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/co
 import { machineCapabilitiesInvoke } from '@/sync/ops/capabilities';
 import { resolveAccountVoiceCredentialSourceSelection, resolveAccountVoiceCredentialStatus, resolveSelectedVoiceCredentialRawGrants } from '@/voice/credentials/accountVoiceCredential';
 import { inspectRawCredentialAuthorizationReadiness } from '@/voice/credentials/rawCredentialAuthorizationClient';
-import { parseLocalVoiceSttSettings, parseLocalVoiceTtsSettings, resolveLocalVoiceAdapterSettings } from '@/voice/local/localVoiceSettings';
+import { parseLocalVoiceSttSettings, parseLocalVoiceTtsSettings, resolveLocalVoiceAdapterSettings, resolveLocalVoiceAdapterSettingsFromVoice } from '@/voice/local/localVoiceSettings';
 import { projectVoiceProviderCredentialReadiness, projectVoiceProviderSettings, type VoiceProviderRegistry } from '@/voice/registry/providerRegistry';
 import { projectVoiceProviderAgentRealtimePassiveSetup, projectVoiceProviderConnectedServicesCredentialFact, projectVoiceProviderPassiveSetupFacts, readVoiceProviderConnectedServicesBinding, readVoiceProviderPassiveRealtimeSetupResult, type VoiceProviderAgentRealtimePassiveSetup } from './passiveSetup';
 import { createVoiceDictationRuntimeSettingsSnapshot } from '@/voice/dictation/voiceDictationRuntimeSettings';
@@ -55,7 +55,9 @@ export type VoiceRawSpeechReadinessTarget = Readonly<{
 /** Canonical selected speech credential targets, shared by page checks and Actions. */
 export function projectVoiceRawSpeechReadinessTargets(settings: Pick<Settings, 'voice' | 'voiceSettingsV1' | 'secrets'>, registry: VoiceProviderRegistry, machineId: string | null, purpose: 'conversation' | 'dictation', connectedPurposes: ConnectedPurposeCatalogV1 | null): readonly VoiceRawSpeechReadinessTarget[] | null {
     const runtime = purpose === 'dictation' ? createVoiceDictationRuntimeSettingsSnapshot(settings) : settings;
-    const config = resolveLocalVoiceAdapterSettings(runtime).config;
+    const config = purpose === 'conversation'
+        ? resolveLocalVoiceAdapterSettingsFromVoice(settings.voice).config
+        : resolveLocalVoiceAdapterSettings(runtime).config;
     const providerIds = purpose === 'dictation' ? [parseLocalVoiceSttSettings(config.stt).provider]
         : [parseLocalVoiceSttSettings(config.stt).provider, parseLocalVoiceTtsSettings(config.tts).provider];
     const targets: VoiceRawSpeechReadinessTarget[] = [];

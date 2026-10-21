@@ -16,6 +16,7 @@ import {
   readLocalDirectVoiceSettings,
   readVoiceProviderSettingsConfig,
   voiceSettingsParse,
+  type VoiceSettings,
 } from '@/sync/domains/settings/voiceSettings';
 import { resolveVoiceProviderIdFromSettings } from '@/voice/settings/resolveVoiceProviderId';
 import { normalizeNonEmptyString } from '@/voice/shared/normalizeNonEmptyString';
@@ -24,7 +25,13 @@ export function resolveLocalVoiceAdapterSettings(settings: any): {
   adapterId: 'local_direct' | 'local_conversation';
   config: any;
 } {
-  const voice = voiceSettingsParse(settings?.voice);
+  return resolveLocalVoiceAdapterSettingsFromVoice(voiceSettingsParse(settings?.voice));
+}
+
+/** Already-normalized Voice inputs retain provider-owned config validation without repeating root migration. */
+export function resolveLocalVoiceAdapterSettingsFromVoice(voice: VoiceSettings):
+  | Readonly<{ adapterId: 'local_direct'; config: ReturnType<typeof readLocalDirectVoiceSettings> }>
+  | Readonly<{ adapterId: 'local_conversation'; config: ReturnType<typeof readLocalConversationVoiceSettings> }> {
   const providerId = resolveVoiceProviderIdFromSettings(voice);
   if (providerId === 'local_direct') {
     return { adapterId: 'local_direct', config: readLocalDirectVoiceSettings(voice) };

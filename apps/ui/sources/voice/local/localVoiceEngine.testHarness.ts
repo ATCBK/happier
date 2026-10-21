@@ -84,7 +84,7 @@ vi.mock('@/platform/cryptoRandom', () => import('@/platform/cryptoRandom.node'))
 
 type LocalVoiceAccountTransport = Readonly<{ home: { id: string; serverUrl: string }; credentials: AuthCredentials; dispose(): Promise<void> }>;
 let speechAccount: LocalVoiceAccountTransport | null = null;
-export const localVoiceSpeechOutputBoundary = createVoiceSpeechOutputBoundary({ getAccount: () => {
+export const localVoiceSpeechOutputBoundary: ReturnType<typeof createVoiceSpeechOutputBoundary> = createVoiceSpeechOutputBoundary({ getAccount: () => {
     if (!speechAccount) throw new Error('Expected restored Voice Account');
     return speechAccount;
 } });

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -262,7 +263,7 @@ beforeEach(async () => {
   platformOsMock.value = 'ios';
   resetServerFeaturesClientForTests();
   account = await restoreServerAccountForTest({ serverUrl: 'https://voice-selection.example.test', accountId: 'voice-account',
-    request: async url => {
+    request: async (url, init) => {
       const path = new URL(String(url)).pathname;
       if (path === '/v1/features' || path === '/v1/features/authenticated') {
         const features = buildServerFeaturesResponse({ voiceEnabled: true });
@@ -282,6 +283,7 @@ beforeEach(async () => {
           ...(machine ? { ...machine, metadata: encodePlainMachineStoredContent(machine.metadata),
             daemonState: encodePlainMachineStoredContent(machine.daemonState) } : {}) };
       };
+      if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body, machineRow);
       if (machineId) return Response.json({ machine: machineRow(machineId) });
       if (path === '/v1/machines') return Response.json(Object.keys(storage.getState().machines).map(machineRow));
       if (path === '/v1/account/authoring-memory') return Response.json({ rows: [] });

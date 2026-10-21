@@ -4,7 +4,7 @@ import type { VoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import {
   parseLocalVoiceSttSettings,
   parseLocalVoiceTtsSettings,
-  resolveLocalVoiceAdapterSettings,
+  resolveLocalVoiceAdapterSettingsFromVoice,
 } from '@/voice/local/localVoiceSettings';
 import type {
   VoiceCredentialReadinessFact,
@@ -104,7 +104,7 @@ export function projectLocalConversationReadinessFacts(input: Readonly<{
   speechReadiness: LocalVoiceSpeechReadiness;
   thinkReadiness: VoiceRoleReadiness;
 }> {
-  const local = resolveLocalVoiceAdapterSettings({ voice: input.voice });
+  const local = resolveLocalVoiceAdapterSettingsFromVoice(input.voice);
   const stt = parseLocalVoiceSttSettings(local.config.stt);
   const tts = parseLocalVoiceTtsSettings(local.config.tts);
   const endpointFacts = [
@@ -167,7 +167,8 @@ export function projectLocalConversationReadinessFacts(input: Readonly<{
     : credentialFacts.includes('unknown')
       ? 'unknown'
       : 'ready';
-  const serverFeature: VoiceReadinessFact = local.config.conversationMode !== 'agent'
+  const conversation = local.adapterId === 'local_conversation' ? local.config : null;
+  const serverFeature: VoiceReadinessFact = conversation?.conversationMode !== 'agent'
     || input.voiceAgentEnabled
     ? 'ready'
     : 'missing';
@@ -175,11 +176,11 @@ export function projectLocalConversationReadinessFacts(input: Readonly<{
   const adapterSettings = adapterEntry
     ? projectVoiceProviderSettings(adapterEntry, input.voice.providers[local.adapterId] ?? null)
     : null;
-  const needsAgent = local.config.conversationMode === 'agent';
-  const needsConfiguredAgent = needsAgent && local.config.agent.agentSource === 'agent';
+  const needsAgent = conversation?.conversationMode === 'agent';
+  const needsConfiguredAgent = needsAgent && conversation.agent.agentSource === 'agent';
   const thinkSettings: VoiceSettingsReadinessFact = adapterSettings?.status !== 'ready'
     ? adapterSettings?.status ?? 'unknown'
-    : needsAgent && local.config.agent.agentSource === 'agent' && !local.config.agent.agentId.trim()
+    : needsAgent && conversation.agent.agentSource === 'agent' && !conversation.agent.agentId.trim()
       ? 'missing_required_setting'
       : 'ready';
   const agentRuntime = input.voiceAgentRuntime ?? 'unknown';
