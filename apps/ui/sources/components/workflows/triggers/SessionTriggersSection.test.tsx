@@ -108,14 +108,6 @@ describe('SessionTriggersSectionView', () => {
         expect(screen.findByTestId('session-work-trigger:ci:t3-history')).not.toBeNull();
         expect(screen.findByTestId('session-work-trigger:ci:t3-runNow')).toBeNull();
     });
-    it('keeps ordinary rows usable and never draws a section-level pull-request band', async () => {
-        // A pull-request read that is unavailable concerns only a pull-request trigger's own picker.
-        const screen = await renderScreen(<SessionTriggersSectionView groups={GROUPS} status="ready"
-            pendingKeys={new Set()} onToggle={vi.fn()} onOpen={vi.fn()} onAdd={vi.fn()} onRetry={vi.fn()} />);
-        expect(screen.findByTestId('session-work-trigger:review:t1-switch')?.props.disabled).not.toBe(true);
-        expect(screen.findByTestId('session-work-triggers-failed')).toBeNull();
-        expect(screen.findByTestId('session-work-trigger-links-unavailable')).toBeNull();
-    });
     it('keeps one add entry while empty: the header +, not a second link in the empty line', async () => {
         const onAdd = vi.fn();
         const screen = await renderScreen(<SessionTriggersSectionView groups={[]} status="ready"

@@ -54,6 +54,8 @@ export function useWorkflowComposerStart(params: Readonly<{
     onStarted: (result: WorkflowRunStartResultV1, serverId: string) => void;
 }>): (workflow: string | WorkflowPluginSourceV1 | WorkflowStartSelection, options?: Readonly<{ retainedDraft?: string }>) => void {
     const [pending, setPending] = React.useState<PendingStart | null>(null);
+    const pendingRef = React.useRef(pending);
+    pendingRef.current = pending;
     const runNow = useWorkflowRunNowController(pending?.lifetime ?? params.accountLifetime);
     const { clearRefusal } = runNow;
     const mounted = useMountedRef();
@@ -69,7 +71,7 @@ export function useWorkflowComposerStart(params: Readonly<{
         inputs: Readonly<Record<string, JsonValue>> | undefined,
         roleOverrides?: readonly RoleOverrideV1[],
     ) => {
-        const isCurrent = () => mounted.current && selected.lifetime.isCurrent();
+        const isCurrent = () => mounted.current && selected.lifetime.isCurrent() && pendingRef.current === selected;
         if (!isCurrent()) return;
         const { entry } = selected;
         const runId = pendingRunIdRef.current ?? randomUUID();
@@ -125,12 +127,15 @@ export function useWorkflowComposerStart(params: Readonly<{
         const text = options?.retainedDraft ?? '';
         const main = findWorkflowMainInput(entry.definition.inputs);
         const draft = main && text.trim() ? { [main.name]: text } : {};
-        setPending({ entry, lifetime, values: draft, rawTextValues: draft, project: params.project,
+        const next = { entry, lifetime, values: draft, rawTextValues: draft, project: params.project,
             origin: params.origin, originSession: params.originSession, onComplete: params.onComplete,
-            retainedDraft: text, mainInputName: main?.name ?? null, prepareOrigin: params.prepareOrigin });
+            retainedDraft: text, mainInputName: main?.name ?? null, prepareOrigin: params.prepareOrigin };
+        pendingRef.current = next;
+        setPending(next);
     }, [clearRefusal, directory, machineId, params.accountLifetime, params.onComplete, params.origin, params.originSession, params.prepareOrigin, params.project]);
 
     const cancel = React.useCallback(() => {
+        pendingRef.current = null;
         clearRefusal();
         setPending(null);
     }, [clearRefusal]);

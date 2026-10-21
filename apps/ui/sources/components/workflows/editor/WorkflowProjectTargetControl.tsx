@@ -89,10 +89,12 @@ const styles = StyleSheet.create((theme) => ({
 const EMPTY_WORKSPACE_REFS: ReadonlyArray<WorkspaceRefV1> = [];
 
 /**
- * The one "where it runs" summary: "{machine} / {folder}". The header chip, the
- * Workflow settings field and the phone value row all show this string, so a
- * compacted surface truncates it and never rephrases it. `null` means no
- * Machine is chosen yet.
+ * The one "where it runs" summary: "{machine} · {folder}". The header chip, the
+ * Workflow settings field, the start composers' Where chip and the phone value
+ * row all show this string, so a compacted surface truncates it and never
+ * rephrases it. The separator is the app's Machine · folder one, never a slash:
+ * a folder is itself a path, so "Mac / /" would read as one broken path. `null`
+ * means no Machine is chosen yet.
  */
 export function formatWorkflowWhereSummary(params: Readonly<{
     target: WorkflowAuthoringTarget | null | undefined;
@@ -102,7 +104,7 @@ export function formatWorkflowWhereSummary(params: Readonly<{
     const { target } = params;
     if (target === null || target === undefined || params.machineName === null) return null;
     if (!isWorkflowProjectTarget(target) || target.directory.trim().length === 0) return params.machineName;
-    return `${params.machineName} / ${formatPathRelativeToHome(target.directory, params.machineHomeDir ?? undefined)}`;
+    return `${params.machineName} · ${formatPathRelativeToHome(target.directory, params.machineHomeDir ?? undefined)}`;
 }
 
 /** Opens the Where owner's picker from elsewhere (Run now with no Machine chosen). */
@@ -120,7 +122,7 @@ type WorkflowProjectTargetControlProps = Readonly<{
     machineHomeDir?: string | null;
     onChange?: (target: WorkflowAuthoringTarget) => void;
     /**
-     * `chip`: the editor header's chip ("MacBook Pro / ~/src/happier", or the
+     * `chip`: the editor header's chip ("MacBook Pro · ~/src/happier", or the
      * quiet "Choose where it runs" while missing). `field`: one settings row —
      * its label, its description and one field select showing the same summary
      * (Workflow settings' "Machine and project", a trigger set's "Runs on").

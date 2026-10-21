@@ -194,6 +194,23 @@ describe('session trigger form', () => {
         expect(readTriggerWhen(custom)).toEqual({ kind: 'schedule', schedule: null, expression: '*/15 * * * *', timezone: null });
     });
 
+    it.each([null, 'viewed-session'])('keeps a retained lifecycle source independent of the editor context %s', async sessionId => {
+        const { WorkflowTriggerSetV1Schema } = await import('@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1');
+        const trigger = WorkflowTriggerSetV1Schema.parse({ automationId: 'habit', revision: 1, enabled: true,
+            health: 'available', target: { kind: 'workflow', ref: 'builtin:review-and-converge' },
+            triggers: [{ id: 'event', revision: 1, kind: 'sessionLifecycle', enabled: true,
+                sourceSessionId: 'original-source', events: ['parentTurnCompleted', 'parentTurnFailed', 'parentTurnCancelled'],
+                policy: { kind: 'currentTurn', sourceTurnId: 'turn-7' }, createdAt: 1, updatedAt: 1,
+                remainingOccurrences: 1, status: { state: 'waiting', runId: null }, triggerDefinitionEnvelope: null }] }).triggers[0]!;
+        const when = readTriggerWhen(trigger);
+        if (!when) throw new Error('Expected editable lifecycle');
+        expect(buildTriggerDefinition({ when, enabled: false, sessionId })).toEqual({
+            kind: 'sessionLifecycle', enabled: false, sourceSessionId: 'original-source',
+            events: ['parentTurnCompleted', 'parentTurnFailed', 'parentTurnCancelled'],
+            policy: { kind: 'currentTurn', sourceTurnId: 'turn-7' },
+        });
+    });
+
     it('keeps an interval schedule ("Every hour") editable: it reads back and is written back as the same interval', () => {
         const hourly = { kind: 'schedule', schedule: { kind: 'interval', scheduleExpr: null, everyMs: 3_600_000, timezone: 'Europe/Zurich' } } as unknown as Parameters<typeof readTriggerWhen>[0];
         const when = readTriggerWhen(hourly);

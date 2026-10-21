@@ -786,7 +786,7 @@ describe('workflow editor body', () => {
         });
 
         // One row and one value: the where-summary, home-relative, never a raw absolute path.
-        expect(screen.getTextContent()).toContain('Mac Studio / ~/project');
+        expect(screen.getTextContent()).toContain('Mac Studio · ~/project');
         expect(screen.findByTestId('workflow-editor-project-directory')).toBeNull();
         await screen.pressByTestIdAsync('workflow-editor-machine-row');
         expect(screen.findByTestId('workflow-editor-where-popover')).not.toBeNull();
@@ -878,7 +878,7 @@ describe('workflow editor body', () => {
         // Where and Agent & model are header chips over their one owners; the
         // Where chip says the one summary string.
         const where = screen.root.findAll((node) => node.props?.filter?.id === 'workflow-where')[0];
-        expect(where?.props.filter.valueLabel).toBe('Mac Studio / ~/project');
+        expect(where?.props.filter.valueLabel).toBe('Mac Studio · ~/project');
         expect(screen.findByTestId('workflow-editor-header-engine')).not.toBeNull();
         // Settings are a pane, closed until asked for; the document carries no settings wall.
         expect(screen.findByTestId('workflow-editor-defaults')).toBeNull();

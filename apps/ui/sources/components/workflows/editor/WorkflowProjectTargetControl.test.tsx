@@ -289,7 +289,7 @@ describe('workflow project target control', () => {
         // One row: its label, its consequence and one value — no nested Machine tile and no
         // separate folder line until the person opens the field.
         expect(screen.getTextContent()).toContain('Runs on');
-        expect(screen.getTextContent()).toContain('Mac Studio / ~/project');
+        expect(screen.getTextContent()).toContain('Mac Studio · ~/project');
         expect(screen.getTextContent()).not.toContain('/Users/me/project');
         expect(screen.findAllByType(MachineSelector)).toHaveLength(0);
         expect(screen.findByTestId('workflow-editor-project-directory')).toBeNull();
@@ -311,5 +311,15 @@ describe('workflow project target control', () => {
 
         const unresolved = await renderControl({ target: null, machines: undefined, machineName: null });
         expect(unresolved.getTextContent()).toContain('workflows.editor.targetRequired');
+    });
+});
+
+describe('workflow where summary', () => {
+    it('keeps the Machine and its folder apart even when the folder is the root', async () => {
+        const { formatWorkflowWhereSummary } = await import('./WorkflowProjectTargetControl');
+        expect(formatWorkflowWhereSummary({ target: { machineId: 'machine-1', directory: '/' }, machineName: 'Mac Studio', machineHomeDir: '/Users/me' }))
+            .toBe('Mac Studio · /');
+        expect(formatWorkflowWhereSummary({ target: { machineId: 'machine-1', directory: '/Users/me/project' }, machineName: 'Mac Studio', machineHomeDir: '/Users/me' }))
+            .toBe('Mac Studio · ~/project');
     });
 });

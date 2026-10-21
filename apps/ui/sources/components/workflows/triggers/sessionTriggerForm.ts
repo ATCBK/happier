@@ -33,10 +33,11 @@ export type TriggerWhenValue =
     | Readonly<{ kind: 'pluginEvent'; value: PluginEventTriggerInput | null; eventRef?: Readonly<{ pluginId: string; localId: string }> }>
     | Readonly<{
         kind: 'turnEnds';
+        sourceSessionId?: string;
         /** "When this turn finishes…" (04 §5.5): bound to that exact turn, it fires once for it. */
         sourceTurnId?: string;
     }>
-    | Readonly<{ kind: 'needsYou' | 'sessionArchived' | 'sessionStarts' }>
+    | Readonly<{ kind: 'needsYou' | 'sessionArchived' | 'sessionStarts'; sourceSessionId?: string }>
     /**
      * A simple schedule, a cron kept as written, or an interval ("Every hour", `everyMs`) kept as it
      * was saved until the person picks a simple schedule instead.
@@ -139,14 +140,15 @@ export function buildTriggerDefinition(params: Readonly<{
         if (expression.length === 0) return null;
         return { kind: 'schedule', enabled, schedule: { kind: 'cron', scheduleExpr: expression, everyMs: null, timezone: when.timezone } };
     }
-    if (params.sessionId === null) return null;
     if (when.kind === 'prComment' || when.kind === 'ciFailed') {
-        return when.pullRequest === null ? null : { kind: when.kind, enabled, pullRequest: when.pullRequest };
+        return params.sessionId === null || when.pullRequest === null ? null : { kind: when.kind, enabled, pullRequest: when.pullRequest };
     }
+    const sourceSessionId = when.sourceSessionId ?? params.sessionId;
+    if (sourceSessionId === null) return null;
     return {
         kind: 'sessionLifecycle',
         enabled,
-        sourceSessionId: params.sessionId,
+        sourceSessionId,
         events: [...LIFECYCLE_EVENTS[when.kind]],
         policy: when.kind === 'turnEnds' && when.sourceTurnId !== undefined
             ? { kind: 'currentTurn', sourceTurnId: when.sourceTurnId }
@@ -343,10 +345,11 @@ export function readTriggerWhen(trigger: SetTrigger | SessionInitialTriggerDefin
     if (trigger.kind === 'schedule') return readScheduleWhen(trigger.schedule);
     if (trigger.kind === 'sessionLifecycle') {
         const kind = readSessionLifecycleKind(trigger.events);
+        const source = 'sourceSessionId' in trigger ? { sourceSessionId: trigger.sourceSessionId } : {};
         // A trigger bound to one turn stays bound when edited.
         return kind === 'turnEnds' && trigger.policy.kind === 'currentTurn'
-            ? { kind, sourceTurnId: trigger.policy.sourceTurnId }
-            : { kind };
+            ? { kind, ...source, sourceTurnId: trigger.policy.sourceTurnId }
+            : { kind, ...source };
     }
     return null;
 }
