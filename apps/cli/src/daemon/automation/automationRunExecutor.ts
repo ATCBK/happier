@@ -9,6 +9,7 @@ import {
 import { getRandomBytes } from '@/api/encryption';
 import { logger } from '@/ui/logger';
 import { startAutomationLeaseHeartbeat } from './automationLeaseHeartbeat';
+import type { AutomationLeaseRenewalProgress } from './automationClaimClient';
 import { logAutomationWarn } from './automationTelemetry';
 import type { AutomationClaimedRunPayload, AutomationV3ClaimedAutomation } from './automationTypes';
 import type { createProductionWorkflowRunCoordinator } from '@/daemon/workflows/production';
@@ -56,6 +57,7 @@ type AutomationRunClaimClient = Readonly<{
     machineId: string;
     attempt: number;
     leaseDurationMs: number;
+    onProgress?: (progress: AutomationLeaseRenewalProgress) => void;
   }) => Promise<number>;
   failRun: (params: AutomationV3RunFailureSettlement) => Promise<void>;
 }>;
@@ -210,12 +212,13 @@ export async function executeClaimedRun(params: {
 
   try {
     if (!isCurrent()) return;
-    const renewLease = async () => await claimClient.heartbeatRun({
+    const renewLease = async (onProgress: (progress: AutomationLeaseRenewalProgress) => void) => await claimClient.heartbeatRun({
       protocol: claimed.protocol,
       runId: claimed.run.id,
       machineId,
       attempt,
       leaseDurationMs,
+      onProgress,
     });
     const checkCurrentness = async () => {
       if (workflowAuthorizationCurrentnessCheck
@@ -231,9 +234,12 @@ export async function executeClaimedRun(params: {
     const leaseExpiresAtMs = claimed.run.leaseExpiresAt;
     heartbeat = startAutomationLeaseHeartbeat({
       heartbeatMs, leaseExpiresAtMs, onHeartbeat: renewLease, onRenewed: checkCurrentness,
-      onObservation: observation => logger.warnLocalFile('[DAEMON AUTOMATION] Claim lease observation', {
-        runId: claimed.run.id, machineId, attempt, ...observation,
-      }),
+      onObservation: observation => {
+        if (observation.event === 'renewal_started' || observation.event === 'renewed') return;
+        logger.warnLocalFile('[DAEMON AUTOMATION] Claim lease observation', {
+          runId: claimed.run.id, machineId, attempt, ...observation,
+        });
+      },
       onTransientError: (error) => logAutomationWarn('Lease heartbeat failed; retaining the confirmed lease', error, {
         runId: claimed.run.id, automationId: claimedAutomationId,
       }),

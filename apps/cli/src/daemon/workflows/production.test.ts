@@ -77,6 +77,7 @@ import {
   type WorkflowProductionExecutionDeps,
 } from './production';
 import { executeClaimedRun } from '@/daemon/automation/automationRunExecutor';
+import { createAutomationClaimClient } from '@/daemon/automation/automationClaimClient';
 import { resolveAutomationPollingConfig } from '@/daemon/automation/automationScheduler';
 import {  workflowInvocationKey } from './coordinator';
 import { AgentStateRequestStore } from '@/agent/permissions/agentStateRequestStore';
@@ -274,7 +275,16 @@ describe('production workflow coordinator', () => {
       workspaceScm: { inspectLocation: async () => null, verifyRecordedWorkspace: async () => 'available' },
     });
     const polling = resolveAutomationPollingConfig({});
-    const heartbeatRun = vi.fn(async () => Date.now() + polling.leaseDurationMs);
+    let failHeartbeat = false;
+    const readinessPost = vi.mocked(axios.post).getMockImplementation()!;
+    const heartbeatHttp = vi.spyOn(axios, 'post').mockImplementation(async (url, body, config) => {
+      if (!url.endsWith('/heartbeat')) return await readinessPost(url, body, config);
+      if (failHeartbeat) throw { response: { status: 503, data: { token: 'private-response-token' } } };
+      return { status: 200, data: { ok: true, leaseExpiresAt: Date.now() + polling.leaseDurationMs } };
+    });
+    const claimClient = createAutomationClaimClient({ token: 'private-account-token',
+      createPublisherHeader: async () => 'private-publisher-proof' });
+    const heartbeatRun = vi.fn(claimClient.heartbeatRun);
     const running = executeClaimedRun({ machineId, coordinateWorkflowRun: coordinate,
       ...polling,
       claimClient: { heartbeatRun, failRun: async () => { throw new Error('unexpected refusal'); } },
@@ -290,18 +300,31 @@ describe('production workflow coordinator', () => {
       await vi.advanceTimersByTimeAsync(elapsed);
       expect(currentnessEntered).toBe(true);
       expect(heartbeatRun).toHaveBeenCalledTimes(elapsed / polling.heartbeatMs);
+      const leaseRecords = () => leaseLog.mock.calls.filter(([message]) =>
+        message === '[DAEMON AUTOMATION] Claim lease observation' || message === '[DAEMON AUTOMATION] Lease renewal transport');
+      expect(leaseRecords()).toEqual([]);
+      failHeartbeat = true;
+      await vi.advanceTimersByTimeAsync(polling.heartbeatMs);
       expect(leaseLog).toHaveBeenCalledWith('[DAEMON AUTOMATION] Claim lease observation',
-        expect.objectContaining({ runId, machineId, attempt: 0, event: 'renewed',
-          currentnessInFlight: true, leaseExpiresAtMs: elapsed + polling.leaseDurationMs }));
+        expect.objectContaining({ runId, machineId, attempt: 0, event: 'transient_failure', currentnessInFlight: true,
+          renewalTransport: expect.objectContaining({ stage: 'http', publisherProofDurationMs: 0 }) }));
+      expect(leaseLog).toHaveBeenCalledWith('[DAEMON AUTOMATION] Lease renewal transport',
+        expect.objectContaining({ runId, machineId, attempt: 0, event: 'failure', stage: 'http', status: 503 }));
+      expect(JSON.stringify(leaseRecords())).not.toMatch(/private-account-token|private-publisher-proof|private-response-token/);
+      failHeartbeat = false;
+      await vi.advanceTimersByTimeAsync(polling.heartbeatMs / 2);
       releaseCurrentness();
       releaseNative();
       await running;
       expect(boundary.run().state).toBe('succeeded');
       expect(enqueue).toHaveBeenCalledOnce();
+      expect(leaseLog).toHaveBeenCalledWith('[DAEMON AUTOMATION] Claim lease observation',
+        expect.objectContaining({ event: 'stopped', runId, machineId, attempt: 0 }));
     } finally {
       releaseCurrentness(); releaseNative();
       await running;
       leaseLog.mockRestore();
+      heartbeatHttp.mockRestore();
       vi.useRealTimers();
     }
   });

@@ -33,6 +33,14 @@ function authHeaders(token: string): Record<string, string> {
 
 export type AutomationClaimClient = ReturnType<typeof createAutomationClaimClient>;
 
+export type AutomationLeaseRenewalProgress = Readonly<{
+  stage: 'publisher_proof' | 'http' | 'response_decode';
+  renewalStartedAtMs: number;
+  stageStartedAtMs: number;
+  publisherProofDurationMs?: number;
+  httpDurationMs?: number;
+}>;
+
 type AutomationWorkerProtocol = 'v3';
 
 /**
@@ -205,6 +213,7 @@ export function createAutomationClaimClient(params: {
       machineId: string;
       attempt: number;
       leaseDurationMs: number;
+      onProgress?: (progress: AutomationLeaseRenewalProgress) => void;
     }): Promise<number> {
       const path = `/${paramsHeartbeat.protocol}/automations/runs/${encodeURIComponent(paramsHeartbeat.runId)}/heartbeat`;
       const body = {
@@ -212,34 +221,41 @@ export function createAutomationClaimClient(params: {
         attempt: paramsHeartbeat.attempt,
         leaseDurationMs: paramsHeartbeat.leaseDurationMs,
       };
-      let stage: 'publisher_proof' | 'http' | 'response_decode' = 'publisher_proof';
-      let stageStartedAtMs = Date.now();
-      const observe = (event: 'begin' | 'end' | 'failure', result?: Readonly<{
-        status?: number; leaseExpiresAtMs?: number; errorKind?: string;
-      }>) => {
+      const renewalStartedAtMs = Date.now();
+      let progress: AutomationLeaseRenewalProgress = {
+        stage: 'publisher_proof', renewalStartedAtMs, stageStartedAtMs: renewalStartedAtMs,
+      };
+      const observeProgress = () => {
         try {
-          logger.warnLocalFile('[DAEMON AUTOMATION] Lease renewal transport', {
-            runId: paramsHeartbeat.runId, machineId: paramsHeartbeat.machineId, attempt: paramsHeartbeat.attempt,
-            event, stage, stageStartedAtMs, durationMs: Date.now() - stageStartedAtMs, ...result,
-          });
+          paramsHeartbeat.onProgress?.(progress);
         } catch { /* Local diagnostics cannot change renewal transport. */ }
       };
-      observe('begin');
+      // Keep phases in the active renewal, so expiry/late-response diagnostics
+      // can attribute a pending request without writing healthy ticks to disk.
+      observeProgress();
       try {
         const headers = await workerHeaders({ method: 'POST', path, body });
-        stage = 'http';
-        stageStartedAtMs = Date.now();
-        observe('begin');
+        const httpStartedAtMs = Date.now();
+        progress = { ...progress, stage: 'http', stageStartedAtMs: httpStartedAtMs,
+          publisherProofDurationMs: httpStartedAtMs - renewalStartedAtMs };
+        observeProgress();
         const response = await axios.post(`${baseUrl}${path}`, body, { headers, timeout: 15_000 });
-        stage = 'response_decode';
+        const decodeStartedAtMs = Date.now();
+        progress = { ...progress, stage: 'response_decode', stageStartedAtMs: decodeStartedAtMs,
+          httpDurationMs: decodeStartedAtMs - httpStartedAtMs };
+        observeProgress();
         const { leaseExpiresAt } = AutomationV3WorkerHeartbeatResponseSchema.parse(response.data);
         if (leaseExpiresAt === null) throw new Error('automation_claim_lease_unavailable');
-        stage = 'http';
-        observe('end', { status: response.status, leaseExpiresAtMs: leaseExpiresAt });
         return leaseExpiresAt;
       } catch (error) {
         const classification = classifyDaemonServerWorkError(error);
-        observe('failure', { status: classification.statusCode, errorKind: classification.kind });
+        try {
+          logger.warnLocalFile('[DAEMON AUTOMATION] Lease renewal transport', {
+            runId: paramsHeartbeat.runId, machineId: paramsHeartbeat.machineId, attempt: paramsHeartbeat.attempt,
+            event: 'failure', ...progress, durationMs: Date.now() - progress.stageStartedAtMs,
+            status: classification.statusCode, errorKind: classification.kind,
+          });
+        } catch { /* Local diagnostics cannot change renewal transport. */ }
         throw error;
       }
     },

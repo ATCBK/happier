@@ -1,4 +1,5 @@
 import { classifyDaemonServerWorkError } from '@/daemon/serverWork/classifyDaemonServerWorkError';
+import type { AutomationLeaseRenewalProgress } from './automationClaimClient';
 
 export type AutomationLeaseObservation = Readonly<{
   event: 'renewal_started' | 'renewed' | 'transient_failure' | 'refused' | 'expired' | 'stopped' | 'late_response';
@@ -6,6 +7,8 @@ export type AutomationLeaseObservation = Readonly<{
   scheduledAtMs: number;
   leaseExpiresAtMs: number;
   renewalStartedAtMs: number | null;
+  renewalScheduledAtMs: number | null;
+  renewalTransport: AutomationLeaseRenewalProgress | null;
   renewalInFlight: boolean;
   currentnessInFlight: boolean;
 }>;
@@ -13,7 +16,7 @@ export type AutomationLeaseObservation = Readonly<{
 export function startAutomationLeaseHeartbeat(params: {
   heartbeatMs: number;
   leaseExpiresAtMs: number;
-  onHeartbeat: () => Promise<number>;
+  onHeartbeat: (onProgress: (progress: AutomationLeaseRenewalProgress) => void) => Promise<number>;
   onRenewed?: () => Promise<void>;
   onError: (error: unknown) => void;
   onTransientError?: (error: unknown) => void;
@@ -26,10 +29,12 @@ export function startAutomationLeaseHeartbeat(params: {
   let currentnessInFlight = false;
   let scheduledAtMs = Date.now();
   let renewalStartedAtMs: number | null = null;
+  let renewalScheduledAtMs: number | null = null;
+  let renewalTransport: AutomationLeaseRenewalProgress | null = null;
   const observe = (event: AutomationLeaseObservation['event']) => {
     try {
       params.onObservation?.({ event, observedAtMs: Date.now(), scheduledAtMs, leaseExpiresAtMs,
-        renewalStartedAtMs, renewalInFlight: inFlight, currentnessInFlight });
+        renewalStartedAtMs, renewalScheduledAtMs, renewalTransport, renewalInFlight: inFlight, currentnessInFlight });
     } catch { /* Local diagnostics cannot change claim ownership. */ }
   };
   const stop = () => {
@@ -61,10 +66,12 @@ export function startAutomationLeaseHeartbeat(params: {
     if (Date.now() >= leaseExpiresAtMs) { expire(); return; }
     if (inFlight) { schedule(); return; }
     inFlight = true;
+    renewalScheduledAtMs = scheduledAtMs;
     renewalStartedAtMs = Date.now();
+    renewalTransport = null;
     observe('renewal_started');
     schedule();
-    void params.onHeartbeat().then(expiresAtMs => {
+    void params.onHeartbeat(progress => { renewalTransport = progress; }).then(expiresAtMs => {
       if (!active) { observe('late_response'); return; }
       if (Date.now() >= leaseExpiresAtMs || !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
         expire();

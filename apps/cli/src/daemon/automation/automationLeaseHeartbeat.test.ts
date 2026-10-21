@@ -4,6 +4,61 @@ import { startAutomationLeaseHeartbeat } from './automationLeaseHeartbeat';
 afterEach(() => vi.useRealTimers());
 
 describe('Automation claim lease observation', () => {
+  it.each(['publisher_proof', 'http'] as const)('retains the pending %s phase only for expiry and late-response attribution', async stage => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let acknowledge!: (expiry: number) => void;
+    const response = new Promise<number>(resolve => { acknowledge = resolve; });
+    const onObservation = vi.fn();
+    const onError = vi.fn();
+    const heartbeat = startAutomationLeaseHeartbeat({ heartbeatMs: 1_000, leaseExpiresAtMs: 3_000,
+      onHeartbeat: onProgress => {
+        onProgress({ stage, renewalStartedAtMs: 1_000, stageStartedAtMs: stage === 'http' ? 1_250 : 1_000,
+          ...(stage === 'http' ? { publisherProofDurationMs: 250 } : {}) });
+        return response;
+      }, onError, onObservation });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(onObservation).toHaveBeenCalledWith(expect.objectContaining({ event: 'expired',
+      observedAtMs: 3_000, renewalScheduledAtMs: 1_000, renewalStartedAtMs: 1_000,
+      renewalTransport: expect.objectContaining({ stage, stageStartedAtMs: stage === 'http' ? 1_250 : 1_000 }) }));
+    acknowledge(30_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(onObservation).toHaveBeenLastCalledWith(expect.objectContaining({ event: 'late_response',
+      renewalTransport: expect.objectContaining({ stage }) }));
+    expect(onError).toHaveBeenCalledOnce();
+    heartbeat.stop();
+  });
+
+  it('identifies a starved cadence before any renewal starts', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const onHeartbeat = vi.fn(async () => 30_000);
+    const onObservation = vi.fn();
+    const heartbeat = startAutomationLeaseHeartbeat({ heartbeatMs: 1_000, leaseExpiresAtMs: 3_000,
+      onHeartbeat, onError: vi.fn(), onObservation });
+    vi.setSystemTime(3_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(onHeartbeat).not.toHaveBeenCalled();
+    expect(onObservation).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ event: 'expired',
+      observedAtMs: 4_000, scheduledAtMs: 1_000, renewalStartedAtMs: null, renewalTransport: null }));
+    heartbeat.stop();
+  });
+
+  it('keeps renewing and stopping when the observation callback throws', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const onHeartbeat = vi.fn(async () => Date.now() + 3_000);
+    const onError = vi.fn();
+    const heartbeat = startAutomationLeaseHeartbeat({ heartbeatMs: 1_000, leaseExpiresAtMs: 3_000,
+      onHeartbeat, onError, onObservation: () => { throw new Error('observer failed'); } });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(onHeartbeat).toHaveBeenCalledTimes(5);
+    expect(onError).not.toHaveBeenCalled();
+    expect(() => heartbeat.stop()).not.toThrow();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(onHeartbeat).toHaveBeenCalledTimes(5);
+  });
+
   it('identifies a delayed renewal and its late response without reviving the expired claim', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

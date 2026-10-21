@@ -378,7 +378,8 @@ describe('workflow Session step executor', () => {
       if (!admitted) return { type: 'error', errorCode: 'DAEMON_RPC_UNAVAILABLE', errorMessage: 'Requester Session custody unavailable' };
       return { type: 'success', sessionId: 'new-session', sessionCreationOutcome: {
         disposition: 'created', organizationPlacement: { folderId: null, tagIds: [] } } };
-    } }, awaitAgentSessionOpen: async () => ({ status: 'opened', request: { kind: 'create', sessionId: 'new-session', cwd: '/repo' } }) });
+    }, stopSession: async () => { throw new Error('An opened Session must not be retired during startup'); } },
+      awaitAgentSessionOpen: async () => ({ status: 'opened', request: { kind: 'create', sessionId: 'new-session', cwd: '/repo' } }) });
     const create = createProductionFreshWorkflowSessionConversation({ credentials, serverId: 'server-1', machineId,
       workDepth: 0, originRunId: 'run-1', machineAdmissionTransport: vi.fn(), sessionStartup: input => runObservedWorkflowSessionStartup(input, {
         serverId: 'server-1', machineId, observeExecution: operations.observeExecution, rpcContext: {},
@@ -419,7 +420,8 @@ describe('workflow Session step executor', () => {
       observedBeforeLaunch = observations.some(operation => operation.operationId === 'original-refusal' && operation.state === 'running');
       launches++;
       return { type: 'error', errorCode: 'DAEMON_RPC_UNAVAILABLE', errorMessage: 'Requester Session custody unavailable' };
-    } }, awaitAgentSessionOpen: async () => { throw new Error('No runner admitted'); } });
+    }, stopSession: async () => { throw new Error('No runner admitted for retirement'); } },
+      awaitAgentSessionOpen: async () => { throw new Error('No runner admitted'); } });
     const startup = runObservedWorkflowSessionStartup({ creationKey: 'workflow:refusal',
       request: { credentials: { token: 'token', encryption: null }, directory: '/repo', machineId: scope.machineId,
         agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } },
@@ -470,7 +472,8 @@ describe('workflow Session step executor', () => {
       return { type: 'success', sessionId: 'original-session', sessionCreationOutcome: {
         disposition: 'created', organizationPlacement: { folderId: null, tagIds: [] },
       } };
-    } }, awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [tracked], ...input }) });
+    }, stopSession: async () => { throw new Error('Setup review does not refuse a native child'); } },
+      awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [tracked], ...input }) });
     const startup: WorkflowSessionStartup = input => runObservedWorkflowSessionStartup(input, { serverId: 'server-1', machineId: scope.machineId,
         observeExecution: operations.observeExecution, rpcContext: {},
         transport: operation => ({ spawn: (request, options) => handler(request, { ...options, localActionContext: operation }),
