@@ -4,7 +4,12 @@ import { UsageAnalyticsQueryResponseSchema, type UsageAnalyticsQueryResponse } f
 import { resolveUsageCalendarInstant } from './usageCalendar.js';
 import { projectUsageFootprint, UsageFootprintProjectionSchema } from './usageFootprint.js';
 import { isUsageNightHour, projectUsageWorkIntervals, selectUsageWorkPermissions, UsageNightHoursV1Schema, UsageWorkIntervalsProjectionSchema, type UsageWorkIntervalFact,
+    projectUsageClosedTurns, UsageRunLengthSummarySchema, type UsageClosedTurnFact,
     type UsageWorkPermissionFact, type UsageWorkIntervalsInput } from './usageWorkIntervals.js';
+import { projectUsageSteering, UsageSteeringSummarySchema } from './usageSteering.js';
+import { resolveUsageCollaboration, UsageCollaborationSummarySchema, type UsageCollaborationFact } from './usageCollaboration.js';
+import { projectUsageAgentCalendar, UsageAgentCalendarSchema } from './usageAgentCalendar.js';
+import type { UsageCostMode } from './usageCostFacts.js';
 import type { UsageCoachReadEvidence } from './coach/coachFinding.js';
 
 /** Exact accepted custody outcomes; queued intent is not an accepted input. */
@@ -22,6 +27,8 @@ export interface UsageHowYouWorkDetailInput {
     facts?: readonly UsageWorkIntervalFact[];
     permissions?: readonly UsageWorkPermissionFact[];
     acceptedInputs?: readonly UsageAcceptedInputFact[];
+    closedTurns?: readonly UsageClosedTurnFact[];
+    collaboration?: readonly UsageCollaborationFact[];
     activityAtMs?: readonly number[];
     /** Same admitted private detail read; never an accounting metadata carrier. */
     coach?: UsageCoachReadEvidence;
@@ -46,6 +53,10 @@ export const UsageHowYouWorkSchema = lazyZodSchema(() => z.strictObject({
     sessionCoverage: z.optional(UsageSessionEvidenceCoverageSchema),
     autopsy: z.optional(z.strictObject({ coverage: z.enum(['complete', 'partial']), events: z.array(UsageAutopsyEventSchema) })),
     intervals: z.nullable(UsageWorkIntervalsProjectionSchema),
+    runLengths: z.optional(z.nullable(UsageRunLengthSummarySchema)),
+    steering: z.optional(z.nullable(UsageSteeringSummarySchema)),
+    collaboration: z.optional(z.nullable(UsageCollaborationSummarySchema)),
+    agentCalendar: z.optional(z.nullable(UsageAgentCalendarSchema)),
     todayInParallel: z.nullable(z.strictObject({ date: z.string(), startMs: z.number().check(z.int()), endMs: z.number().check(z.int()),
         agentTimeMs: DurationSchema, elapsedBusyMs: DurationSchema, parallelBusyMs: DurationSchema, maxParallel: CountSchema,
     })),
@@ -69,8 +80,15 @@ export const UsageHowYouWorkSchema = lazyZodSchema(() => z.strictObject({
             context.addIssue({ code: 'custom', path: ['nightShift', 'observedBusyMs'], message: 'Unknown private detail cannot disclose busy duration' });
         }
         if (value.autopsy !== undefined) context.addIssue({ code: 'custom', path: ['autopsy'], message: 'Unknown private detail cannot disclose autopsy facts' });
-        for (const field of ['intervals', 'todayInParallel', 'permissions', 'inputs'] as const) {
-            if (value[field] !== null) context.addIssue({ code: 'custom', path: [field], message: 'Unknown private detail cannot disclose facts' });
+        for (const field of ['intervals', 'todayInParallel', 'permissions', 'inputs', 'runLengths', 'steering', 'collaboration'] as const) {
+            if (value[field] != null) context.addIssue({ code: 'custom', path: [field], message: 'Unknown private detail cannot disclose facts' });
+        }
+        const calendar = value.agentCalendar;
+        if (calendar && (calendar.coverage.busy !== 'unavailable' || calendar.coverage.steering !== 'unavailable'
+            || calendar.weeklyPeakParallel.length > 0
+            || [calendar.periodSummary, ...calendar.days, ...calendar.weeks, ...calendar.hours, ...calendar.weekdayHourBuckets, ...calendar.hourOfDayBuckets].some(bucket => [bucket.totals, ...bucket.agents.map(agent => agent.metrics)]
+                .some(metrics => metrics.busyMs !== null || metrics.steeringCount !== null || metrics.peakParallel !== null)))) {
+            context.addIssue({ code: 'custom', path: ['agentCalendar'], message: 'Unknown private detail cannot disclose calendar interventions or busy facts' });
         }
     }
 })));
@@ -79,6 +97,11 @@ export type UsageHowYouWork = z.infer<typeof UsageHowYouWorkSchema>;
 export function resolveUsageHowYouWork(input: Readonly<{
     period: UsageWorkIntervalsInput['period']; timeZoneOffsetMinutes: number; nowMs?: number;
     accounting?: UsageAnalyticsQueryResponse; detail?: UsageHowYouWorkDetailInput; nightHours?: UsageWorkIntervalsInput['nightHours'];
+    /** The query's existing transcript demand; interval-only charts do not shape intervention grids. */
+    includeSteering?: boolean;
+    /** Existing accounting Activity/timeline demand, not another query or cache. */
+    includeAgentCalendar?: boolean;
+    costMode?: UsageCostMode;
     sessionCoverage?: UsageSessionEvidenceCoverage;
     /** Already admitted private projection for this exact query, only while its source is pending. */
     retained?: UsageHowYouWork;
@@ -120,6 +143,8 @@ export function resolveUsageHowYouWork(input: Readonly<{
             parallelBusyMs: todayIntervals.parallelBusyMs, maxParallel: todayIntervals.maxParallel } : retained?.todayInParallel ?? null,
         nightShift, activity: input.accounting?.activity ?? null, footprint: input.accounting ? projectUsageFootprint(input.accounting) : null,
         permissions: retained?.permissions ?? null, inputs: retained?.inputs ?? null,
+        runLengths: retained?.runLengths ?? null, steering: retained?.steering ?? null,
+        collaboration: retained?.collaboration ?? null,
     };
     if (detail) {
         const inPeriod = (instant: number) => Number.isSafeInteger(instant) && instant >= input.period.startMs && instant < input.period.endMs;
@@ -155,16 +180,36 @@ export function resolveUsageHowYouWork(input: Readonly<{
         const inputs: NonNullable<UsageHowYouWork['inputs']> = { acceptedCount: 0, steeringCount: 0,
             byDeliveryKind: { newTurn: 0, followUp: 0, steer: 0 } };
         const accepted = new Set<string>();
+        const selectedInputs: UsageAcceptedInputFact[] = [];
         for (const fact of detail.acceptedInputs ?? []) {
             const key = JSON.stringify([fact.workId, fact.inputId]);
             if (accepted.has(key) || !inPeriod(fact.acceptedAtMs)) continue;
             accepted.add(key);
+            selectedInputs.push(fact);
             inputs.acceptedCount += 1;
             inputs.byDeliveryKind[fact.deliveryKind] += 1;
             if (fact.deliveryKind === 'steer') inputs.steeringCount += 1;
         }
         if (detail.permissions !== undefined && (detail.status === 'available' || permissions.requestCount > 0)) result.permissions = permissions;
         if (detail.acceptedInputs !== undefined) result.inputs = inputs;
+        const coverage = detail.status === 'available' ? 'complete_for_supplied_facts' as const : 'partial' as const;
+        if (detail.closedTurns !== undefined) result.runLengths = projectUsageClosedTurns({
+            period: input.period, facts: detail.closedTurns, coverage,
+        });
+        if (detail.collaboration !== undefined) result.collaboration = resolveUsageCollaboration({
+            period: input.period, facts: detail.collaboration,
+        });
+        if (input.includeSteering !== false && (detail.permissions !== undefined || detail.acceptedInputs !== undefined)) {
+            result.steering = projectUsageSteering({ period: input.period, timeZoneOffsetMinutes: input.timeZoneOffsetMinutes,
+                coverage, intervals, facts: detail.facts, closedTurns: detail.closedTurns,
+                ...(detail.acceptedInputs === undefined ? {} : { acceptedInputs: selectedInputs }),
+                ...(detail.permissions === undefined ? {} : { permissions: selectedPermissions }),
+            });
+        }
     }
+    if (input.includeAgentCalendar !== false) result.agentCalendar = projectUsageAgentCalendar({
+        period: input.period, timeZoneOffsetMinutes: input.timeZoneOffsetMinutes, accounting: input.accounting,
+        intervals, detailStatus: result.detailStatus, steering: result.steering, nightHours, costMode: input.costMode,
+    });
     return result;
 }

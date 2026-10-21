@@ -223,11 +223,17 @@ describe('evidence-bound usage coach', () => {
                 range: { startMs: 0, endMs: 1000, complete: true }, ranked: [] },
             contributions: [{ id: 'a', observedAtMs: 20, sessionId: null, turnId: null, agentId: 'agent', modelId: 'model',
                 machineId: 'm', projectKey: null, workspaceId: null, source: 'collector', tokens,
+                sourceContext: { path: 'native' as const, execution: 'outside' as const },
                 cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } }] };
         expect(result({ accounting }, 'outside_usage')).toMatchObject({ status: 'finding', finding: {
             summaryCode: 'outside_happier_usage_observed', measurements: [{ metric: 'outside_tokens', value: 100, unit: 'tokens' }] } });
         expect(result({ accounting: { ...accounting, coverage: undefined } }, 'outside_usage').status).toBe('insufficient_evidence');
-        expect(result({ accounting: { ...accounting, contributions: [{ ...accounting.contributions[0]!, sessionId: 'linked' }] } }, 'outside_usage').status).toBe('no_finding');
+        const readExecution = (execution: 'happier' | 'outside' | 'unknown') => result({ accounting: { ...accounting,
+            contributions: [{ ...accounting.contributions[0]!, sourceContext: { path: 'native', execution } }] } }, 'outside_usage');
+        expect(readExecution('happier').status).toBe('no_finding');
+        expect(readExecution('unknown').status).toBe('insufficient_evidence');
+        expect(result({ accounting: { ...accounting, contributions: [{ ...accounting.contributions[0]!,
+            sourceContext: undefined }] } }, 'outside_usage').status).toBe('insufficient_evidence');
     });
     it('never proves a negative from partial detail or includes facts outside the requested period', () => {
         expect(result({ detail: { coverage: 'partial', compactions: [] } }, 'compaction_storms').status).toBe('insufficient_evidence');

@@ -9,6 +9,56 @@ const fact = (workId: string, startMs: number, endMs: number) => ({
 });
 
 describe('How-you-work admitted projection', () => {
+    it('distributes only full closed turns, deduplicating work and keeping open, cropped and invalid observations separate', () => {
+        const turn = { workId: 'closed', agentId: 'claude', status: 'completed' as const, startMs: day, endMs: day + hour };
+        const result = resolveUsageHowYouWork({ period: { startMs: day, endMs: day + 4 * hour }, timeZoneOffsetMinutes: 0,
+            detail: { status: 'partial', facts: [fact('closed', day, day + hour),
+                { ...fact('closed', day, day + hour / 2), kind: 'permission_wait' }], closedTurns: [turn, turn,
+                { ...turn, workId: 'long', endMs: day + 3 * hour },
+                { ...turn, workId: 'open', status: 'in_progress', endMs: null },
+                { ...turn, workId: 'cropped', startMs: day - hour },
+                { ...turn, workId: 'invalid', endMs: day - 1 },
+            ] } });
+        expect(result.runLengths).toMatchObject({ coverage: 'partial', sampleCount: 2, openCount: 1, croppedCount: 1,
+            invalidCount: 1, byAgent: [{ agentId: 'claude', sampleCount: 2, medianMs: 2 * hour, p90Ms: 3 * hour,
+                durationsMs: [hour, 3 * hour] }] });
+        expect(UsageHowYouWorkSchema.safeParse(result).success).toBe(true);
+    });
+
+    it('joins accepted steering to historical work, bins answers by decision time and names the observed busy-hour denominator', () => {
+        const result = resolveUsageHowYouWork({ period: { startMs: day, endMs: day + 4 * hour }, timeZoneOffsetMinutes: 0,
+            detail: { status: 'partial', facts: [
+                { ...fact('old-turn', day, day + 2 * hour), agentId: 'claude' },
+                { ...fact('new-turn', day + 2 * hour, day + 3 * hour), agentId: 'codex' },
+                { ...fact('old-turn', day, day + 2 * hour), agentId: 'claude' },
+            ], acceptedInputs: [
+                { inputId: 's', workId: 'old-turn', turnId: 'old', acceptedAtMs: day + hour, deliveryKind: 'steer' },
+                { inputId: 's', workId: 'old-turn', turnId: 'old', acceptedAtMs: day + hour, deliveryKind: 'steer' },
+                { inputId: 'f', workId: 'new-turn', turnId: 'new', acceptedAtMs: day + 2 * hour, deliveryKind: 'followUp' },
+                { inputId: 'u', workId: 'missing-turn', turnId: 'missing', acceptedAtMs: day, deliveryKind: 'steer' },
+            ], permissions: [
+                { requestId: 'paired', workId: 'old-turn', requestedAtMs: day + hour, decidedAtMs: day + 2 * hour,
+                    toolId: 'shell', answeringClientCategory: 'ios' },
+                { requestId: 'unpaired', workId: 'missing-turn', requestedAtMs: null, decidedAtMs: day + hour,
+                    toolId: 'shell', answeringClientCategory: 'web' },
+                { requestId: 'cancelled', workId: 'new-turn', requestedAtMs: day + 2 * hour, decidedAtMs: null,
+                    toolId: 'shell', answeringClientCategory: null },
+            ] } });
+        expect(result.steering?.byAgent).toEqual(expect.arrayContaining([
+            expect.objectContaining({ agentId: 'claude', steeringCount: 1, followUpCount: 0, busyMs: 2 * hour,
+                steersPerBusyHour: 0.5, permissionAnswerCount: 1, pairedDecisionCount: 1, decisionLatencyMs: hour }),
+            expect.objectContaining({ agentId: 'codex', steeringCount: 0, followUpCount: 1, permissionAnswerCount: 0 }),
+            expect.objectContaining({ agentId: null, steeringCount: 1, busyMs: null, steersPerBusyHour: null,
+                permissionAnswerCount: 1, pairedDecisionCount: 0, decisionLatencyMs: null }),
+        ]));
+        expect(result.steering?.hourly).toEqual(expect.arrayContaining([
+            expect.objectContaining({ agentId: 'claude', hour: 2, permissionAnswerCount: 1,
+                byAnsweringClient: { ios: 1, android: 0, web: 0, desktop: 0, unknown: 0 } }),
+            expect.objectContaining({ agentId: null, hour: 1, permissionAnswerCount: 1,
+                byAnsweringClient: { ios: 0, android: 0, web: 1, desktop: 0, unknown: 0 } }),
+        ]));
+        expect(UsageHowYouWorkSchema.safeParse(result).success).toBe(true);
+    });
     it('retains native night activity when private lifecycle duration is unavailable', () => {
         const result = resolveUsageHowYouWork({ period: { startMs: day, endMs: day + hour }, timeZoneOffsetMinutes: 0,
             nightHours: { startHour: 22, endHour: 6 }, accounting: { v: 1, totals: { eventCount: 7,

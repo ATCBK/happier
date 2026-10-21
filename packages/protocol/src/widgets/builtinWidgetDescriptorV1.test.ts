@@ -4,8 +4,45 @@ import { isWidgetTargetHostableV1, readWidgetInputTargetV1, resolveConfiguredWid
 import { composeWidgetGroupContextV1 } from './widgetActionInputResolverV1.js';
 import { normalizeUsageQuery } from '../inputs/usageQuery.js';
 import { setWidgetInputBindingsV1, type WidgetInstanceV1 } from './widgetInstanceV1.js';
+import { proposeWidgetInputDefaultBindingsV1 } from './widgetInputAdmissionV1.js';
+import { createUsageWidgetPresets } from './usageWidgetPresetsV1.js';
+import { resolveEffectiveInputFields } from '../inputs/inputFieldRuntime.js';
 
 describe('native widget target contracts', () => {
+    it('keeps evidence metrics out of retained accounting-only bodies, including direct binder reads', () => {
+        const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_period_summary' })!;
+        const instance: WidgetInstanceV1 = { v: 1, id: 'summary', definition: { kind: 'builtin', id: 'usage_period_summary' },
+            bindings: { ...proposeWidgetInputDefaultBindingsV1(descriptor), metric: { kind: 'value', value: 'busy' } } };
+        expect(resolveConfiguredWidgetInputs({ descriptor, instance, providedContext: {}, viewerValues: {} })).toMatchObject({ status: 'invalid' });
+    });
+    it('declares chart styles as own values, with truthful defaults and conditional Sky colour', () => {
+        const rhythm = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_rhythm' })!;
+        const parallel = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_parallel' })!;
+        const defaults = proposeWidgetInputDefaultBindingsV1(rhythm);
+        expect(defaults).toMatchObject({ metric: { kind: 'value', value: 'busy' }, style: { kind: 'value', value: 'heatmap' } });
+        expect(proposeWidgetInputDefaultBindingsV1(parallel)).toMatchObject({ style: { kind: 'value', value: 'lanes' } });
+        expect(parallel.inputs?.fields.find(field => field.path === 'style')).toMatchObject({ contextMode: 'own', options: [
+            { value: 'lanes' }, { value: 'dial' }, { value: 'timeline' },
+        ] });
+        expect(resolveEffectiveInputFields({ inputHints: rhythm.inputs }, { style: 'sky' }).map(field => field.path)).toContain('colourBy');
+        expect(resolveEffectiveInputFields({ inputHints: rhythm.inputs }, { style: 'weekTide' }).map(field => field.path)).not.toContain('colourBy');
+        expect(rhythm.inputs?.fields.filter(field => ['metric', 'style', 'colourBy'].includes(field.path)).every(field => field.contextMode === 'own')).toBe(true);
+    });
+    it('discovers the five distinct chart questions and materializes Agents preset from descriptor defaults', () => {
+        for (const id of ['usage_score', 'usage_orbit', 'usage_constellation', 'usage_planet', 'usage_run_length']) {
+            expect(readBuiltinWidgetDescriptorV1({ kind: 'builtin', id })).toMatchObject({ target: 'app' });
+        }
+        const presets = createUsageWidgetPresets();
+        expect(presets.map(preset => preset.id)).toEqual(['overview', 'costs', 'work', 'usage', 'plans', 'coach', 'how-you-work', 'sources', 'agents']);
+        const agents = presets.find(preset => preset.id === 'agents')!;
+        expect(agents).toBeDefined();
+        const children = agents.items.flatMap(item => item.kind === 'group' ? item.children : []);
+        expect(children.map(child => child.instance.definition)).toContainEqual({ kind: 'builtin', id: 'usage_score' });
+        const crew = children.find(child => child.instance.definition.kind === 'builtin' && child.instance.definition.id === 'usage_breakdowns')!;
+        expect(crew.instance.bindings).toMatchObject({ style: { kind: 'value', value: 'crew' },
+            period: { kind: 'context', slot: 'period' }, agents: { kind: 'context', slot: 'agents' } });
+        expect(crew.instance.bindings.style?.kind === 'value' && crew.instance.bindings.style.value).not.toEqual([]);
+    });
     it.each(['usage_source_coverage', 'usage_unpriced'])('admits %s with independently bound query scope and no presentation controls', id => {
         const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id });
         expect(descriptor).not.toBeNull();
@@ -114,7 +151,7 @@ describe('native widget target contracts', () => {
         expect(readWidgetInputTargetV1(descriptor)).toEqual({ kind: 'app' });
         const context = Object.fromEntries((['period', 'agents', 'machines', 'projects', 'sources', 'session', 'costBasis'] as const)
             .map(path => [path, [query[path]]]));
-        const bindings = Object.fromEntries(descriptor.inputs!.fields.map(field => [field.path,
+        const bindings = Object.fromEntries(descriptor.inputs!.fields.filter(field => field.contextMode === 'follow' || field.path === 'metric' || field.path === 'breakdown').map(field => [field.path,
             field.contextMode === 'follow' ? { kind: 'context' as const, slot: field.path }
                 : { kind: 'value' as const, value: field.path === 'metric' ? 'cost' : ['agent'] }]));
         const options = { descriptor, instance: { v: 1 as const, id: 'flow', definition: { kind: 'builtin' as const, id: 'usage_flow' }, bindings },

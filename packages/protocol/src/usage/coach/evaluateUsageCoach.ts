@@ -6,6 +6,7 @@ import { COACH_VENDOR_FACTS as facts, COACH_RESEARCH_SOURCES as research } from 
 import { UsageRequestAttributionSchema } from '../usageAnalyticsContracts.js';
 import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
 import { selectUsageWorkPermissions } from '../usageWorkIntervals.js';
+import { summarizeUsageExecutionSources } from '../usageSourceSummary.js';
 import { UsageCoachPreferencesV1Schema, type UsageCoachPreferencesV1 } from '../../account/settings/usageCoachPreferencesV1.js';
 import { USAGE_COACH_DETECTOR_IDS, USAGE_COACH_REQUIRED_EVIDENCE, type UsageCoachCapability, type UsageCoachEvaluation,
     type UsageCoachEvaluationInput, type UsageCoachConceptEvaluation, type UsageCoachDetectorId, type UsageCoachFinding,
@@ -101,7 +102,7 @@ export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoach
                 advice: ['Show actual growing request context and cached-history cost. Clear between unrelated tasks or compact at natural breaks.',
                     `Haiku 5.5 prompts above ${facts.pricing.haiku55LongPromptTokens} tokens (including cache) have a ${facts.pricing.haiku55LongPromptMultiplier}× price step.`,
                     `For OpenAI reasoning models, the experimental guidance is to reserve at least ${facts.reasoning.experimentalHeadroomTokens} tokens for reasoning and output, then tune to observed workloads; it is not a universal trigger.`] };
-            case 'outside_usage': return { method: 'native_unlinked_accounting_v1', kind: 'observation',
+            case 'outside_usage': return { method: 'witnessed_execution_accounting_v1', kind: 'observation',
                 citations: [facts.costs.citation], limitations: ['Informational, not waste or savings. Vendor local dashboards exclude other devices and web usage.'], advice: [] };
             case 'effort_audit': return { method: 'recorded_request_effort_audit_v1', kind: 'observation',
                 citations: [facts.costs.citation, facts.reasoning.citation, facts.requestCache.citation],
@@ -571,11 +572,10 @@ export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoach
             case 'outside_usage': {
                 const accounting = input.accounting;
                 if (!accounting?.contributions || !accounting.coverage) return insufficient(id, capability);
-                const paths = new Map(accounting.coverage.sources.map(row => [row.source, row.path]));
                 const rows = [...new Map(accounting.contributions.filter(row => inPeriod(row.observedAtMs))
                     .map(row => [row.id, row])).values()];
-                const outside = rows.filter(row => row.sessionId === null && row.machineId !== null
-                    && row.source !== null && paths.get(row.source) === 'native');
+                const summary = summarizeUsageExecutionSources(rows);
+                const outside = summary.groups.find(group => group.execution === 'outside')?.contributions ?? [];
                 if (outside.length) return finding(id, capability, 'outside_happier_usage_observed',
                     outside.map(row => ({ kind: 'accounting', id: row.id, observedAtMs: row.observedAtMs })),
                     [{ metric: 'outside_tokens', value: outside.reduce((sum, row) => sum + row.tokens.total, 0), unit: 'tokens' }], accounting.coverage.status,
@@ -583,8 +583,7 @@ export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoach
                         observedAtMs: row.observedAtMs, value: row.tokens.total })))] });
                 return negative(id, capability, accounting.coverage.status === 'complete' && accounting.coverage.range.complete
                     && accounting.coverage.range.startMs === input.period.startMs && accounting.coverage.range.endMs === input.period.endMs
-                    && rows.every(row => row.sessionId !== null || row.source !== null && paths.has(row.source)
-                        && paths.get(row.source) !== 'unknown' && row.machineId !== null));
+                    && summary.coverage === 'complete');
             }
             default: return insufficient(id, capability);
         }

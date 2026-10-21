@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { allocateUsageOutcomes, UsageWorkProjectionSchema, type UsageWorkContribution, type UsageWorkEvidence } from './usageOutcomeAllocation.js';
+import { allocateUsageOutcomes, summarizeUsageMergedOutcomes, UsageMergedOutcomeSummarySchema,
+  UsageWorkProjectionSchema, type UsageWorkContribution, type UsageWorkEvidence } from './usageOutcomeAllocation.js';
 
 const tokens = { input: 10, output: 4, reasoning: 1, cacheRead: 2, cacheWrite: 0, total: 14 };
 function contribution(id: string, sessionId: string, turnId: string | null): UsageWorkContribution {
@@ -16,6 +17,89 @@ function evidence(sessionId: string, turnId: string, number: number, repositoryK
 }
 
 describe('evidence-derived Work allocation', () => {
+  it('summarizes only distinct merged outcomes and uses actual merge dates, the query offset and witnessed Agent contributions', () => {
+    const period = { startMs: Date.parse('2026-10-11T23:00:00Z'), endMs: Date.parse('2026-10-20T23:00:00Z') };
+    const timeZoneOffsetMinutes = 120;
+    const contributions = [
+      { ...contribution('a', 's1', 't1'), agentId: 'alpha' },
+      { ...contribution('b', 's2', 't2'), agentId: 'beta' },
+      { ...contribution('c', 's2', 't3'), agentId: 'alpha' },
+      { ...contribution('d', 's3', 't4'), agentId: null },
+      { ...contribution('e', 's3', 't5'), agentId: 'beta' },
+      contribution('f', 's4', 't6'), contribution('g', 's4', 't7'), contribution('h', 's4', 't8'),
+      contribution('i', 's4', 't9'),
+    ];
+    const merged = (sessionId: string, turnId: string, number: number, mergedAtMs?: number): UsageWorkEvidence => {
+      const witness = evidence(sessionId, turnId, number);
+      return { ...witness, pullRequest: { ...witness.pullRequest, ...(mergedAtMs === undefined ? {} : { mergedAtMs }),
+        author: { login: 'unrelated-author' } } };
+    };
+    const witnesses = [
+      merged('s1', 't1', 1, period.startMs), merged('s2', 't2', 1, period.startMs),
+      merged('s2', 't3', 1, period.startMs), merged('s3', 't4', 2),
+      merged('s3', 't5', 3, Date.parse('2026-10-18T22:30:00Z')),
+      { ...merged('s4', 't6', 4), pullRequest: { ...evidence('s4', 't6', 4).pullRequest, state: 'open' as const } },
+      merged('s4', 't7', 5, period.startMs - 1), merged('s4', 't8', 6, period.endMs),
+      { ...merged('s4', 't9', 7), pullRequest: { ...evidence('s4', 't9', 7).pullRequest,
+        state: 'closed' as const, closedAtMs: period.startMs } },
+    ];
+    const work = allocateUsageOutcomes({ contributions, evidence: [...witnesses, witnesses[0]] });
+    const summary = summarizeUsageMergedOutcomes({ work, period, timeZoneOffsetMinutes });
+    expect(summary).toMatchObject({ period, timeZoneOffsetMinutes, attributionBasis: 'contribution_count',
+      linkedMergedCount: 5, mergedInPeriodCount: 2, outsidePeriodMergedCount: 2, undatedMergedCount: 1,
+      mergeWeeks: [
+        { bucketStartMs: period.startMs, bucketEndMs: Date.parse('2026-10-18T22:00:00Z'), count: 1 },
+        { bucketStartMs: Date.parse('2026-10-18T22:00:00Z'), bucketEndMs: period.endMs, count: 1 },
+      ],
+    });
+    expect(summary.outcomes).toHaveLength(5);
+    expect(summary.outcomes.find(row => row.key === '["repo",1]')).toEqual({
+      key: '["repo",1]', mergedAtMs: period.startMs, attribution: 'mixed',
+      agentContributions: [{ agentId: 'alpha', contributionCount: 2 }, { agentId: 'beta', contributionCount: 1 }],
+      leadingAgentIds: ['alpha'],
+    });
+    expect(summary.outcomes.find(row => row.key === '["repo",2]')).toEqual({
+      key: '["repo",2]', mergedAtMs: null, attribution: 'unknown',
+      agentContributions: [{ agentId: null, contributionCount: 1 }], leadingAgentIds: [null],
+    });
+    expect(summarizeUsageMergedOutcomes({ work: allocateUsageOutcomes({ contributions: [...contributions].reverse(),
+      evidence: [...witnesses].reverse() }), period, timeZoneOffsetMinutes })).toEqual(summary);
+  });
+
+  it('retains Unknown and tied leading Agents while refusing ambiguous or shared-writer attribution', () => {
+    const period = { startMs: 0, endMs: 1_000 };
+    const contributions = [
+      { ...contribution('a', 's1', 't1'), agentId: 'alpha' },
+      { ...contribution('b', 's2', 't2'), agentId: 'beta' },
+      { ...contribution('c', 's3', 't3'), agentId: null },
+      contribution('ambiguous', 's4', 't4'), contribution('shared', 's5', 't5'),
+    ];
+    const work = allocateUsageOutcomes({ contributions, evidence: [
+      ...[['s1', 't1'], ['s2', 't2'], ['s3', 't3']].map(([sessionId, turnId]) => {
+        const witness = evidence(sessionId, turnId, 1);
+        return { ...witness, pullRequest: { ...witness.pullRequest, mergedAtMs: 0 } };
+      }),
+      evidence('s4', 't4', 2), evidence('s4', 't4', 3),
+      { ...evidence('s5', 't5', 4), attributionScope: 'shared_worktree' },
+    ] });
+    const summary = summarizeUsageMergedOutcomes({ work, period, timeZoneOffsetMinutes: 0 });
+    expect(summary).toMatchObject({ linkedMergedCount: 1, mergedInPeriodCount: 1, outsidePeriodMergedCount: 0,
+      undatedMergedCount: 0, mergeWeeks: [{ bucketStartMs: 0, bucketEndMs: 1_000, count: 1 }],
+      outcomes: [{ key: '["repo",1]', mergedAtMs: 0, attribution: 'mixed',
+        agentContributions: [{ agentId: 'alpha', contributionCount: 1 }, { agentId: 'beta', contributionCount: 1 },
+          { agentId: null, contributionCount: 1 }], leadingAgentIds: ['alpha', 'beta', null] }],
+    });
+    expect(UsageMergedOutcomeSummarySchema.safeParse(summary).success).toBe(true);
+    expect(UsageMergedOutcomeSummarySchema.safeParse({ ...summary, outcomes: [{ ...summary.outcomes[0], author: 'guessed' }] }).success).toBe(false);
+    expect(UsageMergedOutcomeSummarySchema.safeParse({ ...summary, outcomes: [{ ...summary.outcomes[0], agentContributions: [
+      { ...summary.outcomes[0].agentContributions[0], currentSessionAgent: 'guessed' },
+    ] }] }).success).toBe(false);
+    expect(summarizeUsageMergedOutcomes({ work: allocateUsageOutcomes({ contributions: [], evidence: [] }), period,
+      timeZoneOffsetMinutes: 0 })).toEqual({ period, timeZoneOffsetMinutes: 0, attributionBasis: 'contribution_count',
+      linkedMergedCount: 0, mergedInPeriodCount: 0, outsidePeriodMergedCount: 0, undatedMergedCount: 0,
+      mergeWeeks: [], outcomes: [] });
+  });
+
   it('allocates standalone branch graphs once without changing PR allocation, and retains ambiguity/shared writers', () => {
     const witnessed = evidence('s', 't', 1);
     const { pullRequest: _pullRequest, ...checkpoint } = witnessed;

@@ -19,7 +19,8 @@ export const SESSION_COMPANION_BUILTIN_ITEM_IDS = ['session_summary', 'agent_pla
 export const PROJECT_BUILTIN_WIDGET_IDS_V1 = ['project_about', 'project_code', 'project_readme', 'project_checkouts', 'project_scripts', 'project_sessions', 'project_changes'] as const;
 export const USAGE_BUILTIN_WIDGET_IDS_V1 = ['usage_daily', 'usage_period_summary', 'usage_cost_facts', 'usage_flow', 'usage_efficiency', 'usage_breakdowns',
     'usage_capacity', 'usage_projections', 'usage_resets', 'usage_plan_fit', 'usage_project_ledger', 'usage_session_value', 'usage_outcomes', 'usage_coach',
-    'usage_rhythm', 'usage_parallel', 'usage_human_loop', 'usage_night_shift', 'usage_recap', 'usage_footprint', 'usage_sources', 'usage_source_coverage', 'usage_unpriced'] as const;
+    'usage_rhythm', 'usage_parallel', 'usage_human_loop', 'usage_night_shift', 'usage_recap', 'usage_footprint', 'usage_sources', 'usage_source_coverage', 'usage_unpriced',
+    'usage_score', 'usage_orbit', 'usage_constellation', 'usage_planet', 'usage_run_length'] as const;
 export type SessionBuiltinWidgetIdV1 = (typeof SESSION_COMPANION_BUILTIN_ITEM_IDS)[number];
 export type ProjectBuiltinWidgetIdV1 = (typeof PROJECT_BUILTIN_WIDGET_IDS_V1)[number];
 export type UsageBuiltinWidgetIdV1 = (typeof USAGE_BUILTIN_WIDGET_IDS_V1)[number];
@@ -82,6 +83,11 @@ const nativeMetadata = {
     usage_sources: { title: 'Sources', titleKey: 'usage.widgets.usage_sources', descriptionKey: 'usage.board.page.purposeSources', icon: 'stack' },
     usage_source_coverage: { title: 'Coverage', titleKey: 'usage.widgets.usage_source_coverage', descriptionKey: 'usage.board.sources.coveragePurpose', icon: 'stack' },
     usage_unpriced: { title: 'Unpriced', titleKey: 'usage.widgets.usage_unpriced', descriptionKey: 'usage.board.sources.unpricedPurpose', icon: 'currency-dollar' },
+    usage_score: { title: 'Score dots', titleKey: 'usage.widgets.usage_score', icon: 'dots-nine' },
+    usage_orbit: { title: 'Orbit', titleKey: 'usage.widgets.usage_orbit', icon: 'planet' },
+    usage_constellation: { title: 'Constellation', titleKey: 'usage.widgets.usage_constellation', icon: 'graph' },
+    usage_planet: { title: 'Your planet', titleKey: 'usage.widgets.usage_planet', icon: 'planet' },
+    usage_run_length: { title: 'Run length', titleKey: 'usage.widgets.usage_run_length', icon: 'timer' },
     machine_vitals: { title: 'Vitals', titleKey: 'machines.widgets.machine_vitals', descriptionKey: 'machines.widgets.body.purpose.machine_vitals', icon: 'pulse' },
     machine_fleet: { title: 'Machines', titleKey: 'machines.widgets.machine_fleet', descriptionKey: 'machines.widgets.body.purpose.machine_fleet', icon: 'desktop' },
     machine_metric: { title: 'Metric', titleKey: 'machines.widgets.machine_metric', descriptionKey: 'machines.widgets.body.purpose.machine_metric', icon: 'chart-line' },
@@ -114,18 +120,45 @@ const workspaceInputs: WidgetInputDescriptorV1 = {
 const usagePresentationInputs: Readonly<Partial<Record<UsageBuiltinWidgetIdV1, readonly ('metric' | 'breakdown')[]>>> = {
     usage_daily: ['metric'], usage_period_summary: ['metric'], usage_flow: ['metric', 'breakdown'],
     usage_breakdowns: ['metric', 'breakdown'], usage_project_ledger: ['metric'], usage_session_value: ['metric'],
-    usage_outcomes: ['metric'], usage_recap: ['metric'],
+    usage_outcomes: ['metric'], usage_recap: ['metric'], usage_rhythm: ['metric'],
 };
-const usageInputSchema = lazyDefinition(() => PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaObject(UsageQuerySchema, { target: 'draft-7' })));
-const usageInputs = (id: UsageBuiltinWidgetIdV1): WidgetInputDescriptorV1 => ({
-    inputs: { fields: USAGE_QUERY_INPUT_FIELDS.filter(field => field.contextMode === 'follow'
+function usageInputs(id: UsageBuiltinWidgetIdV1): WidgetInputDescriptorV1 {
+    const styles = id === 'usage_breakdowns' ? ['breakdowns', 'crew'] as const
+        : id === 'usage_flow' ? ['flow', 'agentRiver'] as const
+        : id === 'usage_outcomes' ? ['outcomes', 'shipped'] as const
+        : id === 'usage_rhythm' ? ['heatmap', 'weekdayHour', 'sky', 'weekTide', 'daylight'] as const
+        // The retained machine timeline is a distinct existing question, not a saved-copy rewrite.
+        : id === 'usage_parallel' ? ['lanes', 'dial', 'timeline'] as const
+        : id === 'usage_recap' ? ['recap', 'personalRecords'] as const
+        : id === 'usage_human_loop' ? ['humanLoop', 'tide'] as const : null;
+    const labels: Readonly<Record<string, string>> = { breakdowns: 'Breakdowns', crew: 'Crew', flow: 'Flow', agentRiver: 'Agent river',
+        outcomes: 'Outcomes', shipped: 'Shipped', heatmap: 'Calendar', weekdayHour: 'Weekday / hour', sky: 'Sky of days',
+        weekTide: 'Week tide', daylight: 'Daylight', lanes: 'Lanes', dial: 'Dial', timeline: 'Machine timeline', recap: 'Recap',
+        personalRecords: 'Personal records', humanLoop: 'Human loop', tide: 'Steering by Agent' };
+    const fields: InputFieldHint[] = USAGE_QUERY_INPUT_FIELDS.filter(field => field.contextMode === 'follow'
         || usagePresentationInputs[id]?.some(path => path === field.path))
         .map(field => ({ ...(id === 'usage_breakdowns' && field.path === 'breakdown' ? USAGE_MULTI_BREAKDOWN_INPUT_FIELD : field),
-            required: field.required ?? true })) },
-    // The per-field picker projections and complete input schema share one UsageQuery owner;
-    // target admission remains an app read, not a Usage Session id projection.
-    inputSchema: usageInputSchema,
-});
+            ...(field.path === 'metric' && id !== 'usage_rhythm' ? { options: field.options?.filter(option => option.value === 'tokens' || option.value === 'cost') } : {}),
+            required: field.required ?? true }));
+    if (id === 'usage_rhythm') {
+        const metric = fields.find(field => field.path === 'metric')!;
+        metric.required = false; // Retained copies predate the Metric input.
+    }
+    if (styles) fields.push({ path: 'style', title: 'Style', widget: 'select', contextMode: 'own',
+        options: styles.map(value => ({ value, label: labels[value]! })) });
+    if (id === 'usage_rhythm') fields.push({ path: 'colourBy', title: 'Colour by', widget: 'select', contextMode: 'own',
+        visibleWhen: { op: 'eq', path: 'style', value: 'sky' },
+        options: [{ value: 'intensity', label: 'Intensity' }, { value: 'leadingAgent', label: 'Leading Agent' }] });
+    if (id === 'usage_parallel' || id === 'usage_score') fields.push({ path: 'day', title: 'Day', widget: 'text', contextMode: 'own' });
+    return { inputs: { fields }, inputSchema: lazyDefinition(() => PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaObject(
+        z.extend(UsageQuerySchema, {
+            ...(id === 'usage_rhythm' ? { metric: z._default(UsageQuerySchema.shape.metric._zod.def.innerType, 'busy'),
+                colourBy: z._default(z.enum(['intensity', 'leadingAgent']), 'intensity') }
+                : { metric: z._default(z.enum(['tokens', 'cost']), 'tokens') }),
+            ...(styles ? { style: z._default(z.enum(styles), styles[0]) } : {}),
+            ...(id === 'usage_parallel' || id === 'usage_score' ? { day: z.optional(z.iso.date()) } : {}),
+        }), { target: 'draft-7' }))) };
+}
 const sourceInventoryInputs: WidgetInputDescriptorV1 = {
     inputs: { fields: USAGE_QUERY_INPUT_FIELDS.filter(field => ['agents', 'machines', 'sources'].includes(field.path))
         .map(field => ({ ...field, required: field.required ?? true })) },

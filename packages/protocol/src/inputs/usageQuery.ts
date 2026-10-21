@@ -9,6 +9,10 @@ import { resolveUsageBucketBounds } from '../usage/usageCalendar.js';
 export const UsageRelativePeriodSchema = z.enum(['today', '7days', '30days', '90days', 'year', 'all']);
 export type UsageRelativePeriod = z.infer<typeof UsageRelativePeriodSchema>;
 
+/** Presentation identity, not an accounting HTTP clause. Evidence-backed measures retain their unit. */
+export const UsagePresentationMetricSchema = z.enum(['tokens', 'cost', 'sessions', 'busy', 'steering', 'peakParallel']);
+export type UsagePresentationMetric = z.infer<typeof UsagePresentationMetricSchema>;
+
 /** Personal usage input. Authority is captured by the host, never carried by the query. */
 export const UsageQuerySchema = lazyZodSchema(() => {
   const clauses = UsageAnalyticsQueryRequestSchema.shape;
@@ -22,9 +26,10 @@ export const UsageQuerySchema = lazyZodSchema(() => {
     sources: z._default(filters.sources._zod.def.innerType, []),
     session: z._default(z.nullable(z.union([filters.sessionIds._zod.def.innerType._zod.def.element, filters.sessionIds._zod.def.innerType])), null),
     costBasis: z._default(clauses.costMode._zod.def.innerType, 'auto'),
-    metric: z._default(z.enum(['tokens', 'cost']), 'tokens'),
+    metric: z._default(UsagePresentationMetricSchema, 'tokens'),
     // Host projection demand; accounting transport never receives this clause.
     includeAccounting: z._default(z.boolean(), true),
+    includeQuotaHistory: z._default(z.boolean(), true),
     includeSessionEvidence: z._default(z.boolean(), true),
     includeTranscriptEvidence: z._default(z.boolean(), true),
     includeWorkEvidence: z._default(z.boolean(), true),
@@ -51,6 +56,7 @@ export function normalizeUsageQuery(value: unknown): UsageQuery {
   const query = UsageQuerySchema.parse(value);
   const sessions = query.session === null ? [] : typeof query.session === 'string' ? [query.session] : query.session;
   return { ...query,
+    population: query.population ?? 'all_personal_history',
     agents: sortedSet(query.agents), machines: sortedSet(query.machines), projects: sortedSet(query.projects),
     sources: sortedSet(query.sources), session: sessions.length ? sortedSet(sessions) : null,
     modelIds: sortedSet(query.modelIds), workspaceIds: sortedSet(query.workspaceIds), backendModes: sortedSet(query.backendModes),
@@ -94,11 +100,13 @@ export function resolveUsageQueryPeriod(query: Pick<UsageQuery, 'period' | 'time
 export function usageQueryToAnalyticsRequest(value: UsageQuery, nowMs = Date.now()): UsageAnalyticsQueryRequest {
   const query = normalizeUsageQuery(value);
   const { period: _period, agents, machines, projects, sources, session, costBasis, metric: _metric,
-    includeAccounting: _accounting, includeSessionEvidence: _sessionEvidence, includeTranscriptEvidence: _transcriptEvidence,
+    includeAccounting: _accounting, includeQuotaHistory: _quotaHistory, includeSessionEvidence: _sessionEvidence, includeTranscriptEvidence: _transcriptEvidence,
     includeWorkEvidence: _workEvidence, breakdown,
-    modelIds, workspaceIds, backendModes, ...clauses } = query;
+    modelIds, workspaceIds, backendModes, population, ...clauses } = query;
   const selected = (values: string[]) => values.length ? values : undefined;
-  return UsageAnalyticsQueryRequestSchema.parse({ ...clauses, dateRange: resolveUsageQueryPeriod(query, nowMs), costMode: costBasis, breakdowns: breakdown,
+  return UsageAnalyticsQueryRequestSchema.parse({ ...clauses,
+    ...(population === 'public_eligible_personal' ? { population } : {}),
+    dateRange: resolveUsageQueryPeriod(query, nowMs), costMode: costBasis, breakdowns: breakdown,
     filters: { agentIds: selected(agents), machineIds: selected(machines), projectKeys: selected(projects), sources: selected(sources),
       sessionIds: session === null ? undefined : typeof session === 'string' ? [session] : session,
       modelIds: selected(modelIds), workspaceIds: selected(workspaceIds), backendModes: selected(backendModes) },
@@ -170,6 +178,8 @@ export const USAGE_QUERY_INPUT_FIELDS: readonly InputFieldHint[] = [
       label: { auto: 'Automatic', reported: 'Reported', estimated: 'Estimated', api_equivalent: 'API equivalent' }[value] })) },
   { path: 'metric', title: 'Metric', widget: 'select', contextMode: 'own', options: [
     { value: 'tokens', label: 'Tokens' }, { value: 'cost', label: 'Cost' },
+    { value: 'sessions', label: 'Sessions' }, { value: 'busy', label: 'Busy time' },
+    { value: 'steering', label: 'Accepted steers' }, { value: 'peakParallel', label: 'Peak parallel' },
   ] },
   { path: 'breakdown', title: 'Group by', widget: 'select', contextMode: 'own', optionsSourceId: 'usage.query.breakdown' },
 ];

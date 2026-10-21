@@ -419,6 +419,18 @@ describe('destination-aware widget move through canonical owners', () => {
       .toMatchObject({ ok: false, errorCode: 'widget_edit_denied' });
     expect(f.upserts).toHaveLength(2);
   });
+  it('refuses moving a readable read-only source before changing either layout', async () => {
+    const f = await fixture();
+    expect(await f.move()).toMatchObject({ ok: true });
+    f.faults.sharedReadOnly = true;
+    const source = f.document();
+    const destination = await f.homeHubArtifacts.read();
+    expect(await f.executor.execute('widgets.item.move', {
+      ref: { surface: board, instanceId: instance.id }, to: { surface: home, index: 0 },
+    }, { surface: 'mcp', bypassApprovals: true })).toMatchObject({ ok: false, errorCode: 'widget_edit_denied' });
+    expect(f.document()).toEqual(source);
+    expect(await f.homeHubArtifacts.read()).toEqual(destination);
+  });
   it('rejects a removed caller-supplied viewer map before shared add', async () => {
     const f = await fixture();
     const draft = { ...instance, id: 'viewer-copy', bindings: { connection: { kind: 'viewer', purpose: 'metrics' } } };

@@ -5,13 +5,16 @@ import type { ActionExecuteFailure, ActionExecuteResult } from '../actionExecuti
 import type { ActionExecutorContext } from './types.js';
 import type { UsageActionId } from '../specs/usage.js';
 import { readActionFailureEnvelope } from './actionFailureEnvelope.js';
-import { UsageRecapComposeInputSchema, UsageRecapExportResultSchema, usageRecapImageFileName,
-  type UsageRecapComposed } from '../../usage/usageRecap.js';
+import { UsageRecapComposeInputSchema, UsageRecapExportResultSchema, UsageRecapDeliveryInputSchema,
+  UsageRecapDeliveryOutcomeSchema, UsageRecapDeliveryResultSchema, usageRecapImageFileName,
+  type UsageRecapComposed, type UsageRecapImageResult, type UsageRecapDeliveryInput, type UsageRecapDeliveryOutcome } from '../../usage/usageRecap.js';
 import { composeUsageRecap } from '../../usage/composeUsageRecap.js';
 import { UsageCalendarExportInputSchema, buildUsageCalendarFileResult } from '../../usage/usageCalendarExport.js';
 import { ConnectedServiceQuotaGetResultV1Schema, type ConnectedServiceQuotaGetInputV1, type ConnectedServiceQuotaGetResultV1 } from '../../connect/providerAccountUsageHistory.js';
 import { sameQualifiedConnectedAccountRef } from '../../connect/qualifiedConnectedAccountPersistence.js';
 import { UsageModelPriceCatalogSchema, type UsageModelPriceCatalog } from '../../usage/usageModelPriceSchemas.js';
+import { PublicProfileReadResultV1Schema, type PublicProfileReadResultV1 } from '../../account/publicProfilePublication.js';
+import { composePublicUsageRecap } from '../../usage/composePublicUsageRecap.js';
 
 export type UsageActionPorts = Readonly<{
   prices?: Readonly<{
@@ -24,6 +27,9 @@ export type UsageActionPorts = Readonly<{
   /** Optional client-only rasterization boundary. Headless hosts can read query/B facts without image rendering. */
   renderRecap?(compose: UsageRecapComposed, context: ActionExecutorContext): Promise<
     Readonly<{ kind: 'rendered'; base64: string }> | Readonly<{ kind: 'unavailable'; reason: 'render_target_unavailable' | 'render_failed' }>>;
+  /** Consumes only bytes produced and validated by the same admitted invocation. */
+  deliverRecap?(file: UsageRecapImageResult, intent: UsageRecapDeliveryInput['intent'], context: ActionExecutorContext): Promise<UsageRecapDeliveryOutcome>;
+  readPublicProfile?(context: ActionExecutorContext): Promise<PublicProfileReadResultV1 | ActionExecuteFailure>;
 }>;
 
 const failure = (errorCode: string): ActionExecuteFailure => ({ ok: false, errorCode, error: errorCode });
@@ -61,17 +67,30 @@ export async function executeUsageAction(actionId: UsageActionId, value: unknown
     const result = await read(UsageQueryBatchInputSchema.parse(value));
     return 'ok' in result ? result : { ok: true, result };
   }
-  if (actionId === 'usage.recap.compose' || actionId === 'usage.recap.export') {
-    const request = UsageRecapComposeInputSchema.parse(value);
-    const query = normalizeUsageQuery({ ...request.query, breakdown: [...request.query.breakdown,
-      ...(request.selectedFields.includes('agentMix') ? ['agent' as const] : []),
-      ...(request.selectedFields.includes('modelMix') ? ['model' as const] : []),
-    ] });
-    const queried = await read({ queries: [query] });
-    if ('ok' in queried) return queried;
-    const snapshot = queried.results[0];
-    if (!snapshot) return failure('usage_query_result_invalid');
-    const compose = composeUsageRecap({ input: { ...request, query }, snapshot });
+  if (actionId === 'usage.recap.compose' || actionId === 'usage.recap.export' || actionId === 'usage.recap.deliver') {
+    const delivery = actionId === 'usage.recap.deliver' ? UsageRecapDeliveryInputSchema.parse(value) : null;
+    const request = delivery ? (({ intent: _intent, ...compose }) => compose)(delivery) : UsageRecapComposeInputSchema.parse(value);
+    const compose = await (async () => {
+      if ('source' in request) {
+        if (!ports.readPublicProfile) return { kind: 'unavailable' as const, reason: 'public_profile_source_unavailable' as const };
+        const raw = await ports.readPublicProfile(context);
+        if (context.signal?.aborted) return failure('cancelled');
+        const refusal = readActionFailureEnvelope(raw);
+        if (refusal) return refusal;
+        const source = PublicProfileReadResultV1Schema.safeParse(raw);
+        return source.success ? composePublicUsageRecap(request, source.data) : failure('usage_recap_result_invalid');
+      }
+      const query = normalizeUsageQuery({ ...request.query, breakdown: [...request.query.breakdown,
+        ...(request.selectedFields.includes('agentMix') ? ['agent' as const] : []),
+        ...(request.selectedFields.includes('modelMix') ? ['model' as const] : []),
+      ] });
+      const queried = await read({ queries: [query] });
+      if ('ok' in queried) return queried;
+      const snapshot = queried.results[0];
+      if (!snapshot) return failure('usage_query_result_invalid');
+      return composeUsageRecap({ input: { ...request, query }, snapshot });
+    })();
+    if ('ok' in compose) return compose;
     if (actionId === 'usage.recap.compose') return { ok: true, result: compose };
     if (compose.kind !== 'composed') return { ok: true, result: { kind: 'unavailable', reason: 'compose_unavailable', compose } };
     if (!ports.renderRecap) return { ok: true, result: { kind: 'unavailable', reason: 'render_target_unavailable', compose } };
@@ -81,7 +100,14 @@ export async function executeUsageAction(actionId: UsageActionId, value: unknown
     const result = UsageRecapExportResultSchema.safeParse({ kind: 'exported', compose,
       file: { v: 1, mediaType: 'image/png', fileName: usageRecapImageFileName(compose), base64: rendered.base64,
         selectedFields: compose.selectedFields, asOfMs: compose.asOfMs } });
-    return result.success ? { ok: true, result: result.data } : failure('usage_recap_result_invalid');
+    if (!result.success || result.data.kind !== 'exported') return failure('usage_recap_result_invalid');
+    if (!delivery) return { ok: true, result: result.data };
+    if (!ports.deliverRecap) return { ok: true, result: { kind: 'unavailable', reason: 'delivery_target_unavailable', compose } };
+    const delivered = await ports.deliverRecap(result.data.file, delivery.intent, context);
+    if (context.signal?.aborted) return failure('cancelled');
+    const outcome = UsageRecapDeliveryOutcomeSchema.safeParse(delivered);
+    if (!outcome.success) return failure('usage_recap_result_invalid');
+    return { ok: true, result: UsageRecapDeliveryResultSchema.parse({ ...outcome.data, compose }) };
   }
   if (actionId === 'usage.calendar.export') {
     const request = UsageCalendarExportInputSchema.parse(value);

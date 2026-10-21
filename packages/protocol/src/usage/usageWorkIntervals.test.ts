@@ -1,11 +1,41 @@
 import { describe, expect, it } from 'vitest';
-import { projectUsageWorkIntervals, type UsageWorkIntervalFact } from './usageWorkIntervals.js';
+import { projectUsageWorkIntervals, summarizeUsageRunLengthObservations, type UsageWorkIntervalFact } from './usageWorkIntervals.js';
 
 const at = (value: string) => Date.parse(value);
 const period = { startMs: at('2026-07-01T22:00:00Z'), endMs: at('2026-07-02T22:00:00Z') };
 const busy = (workId: string, start: string, end: string | null, machineId = 'a'): UsageWorkIntervalFact => ({
     workId, machineId, agentId: 'agent', evidenceId: workId, kind: 'busy',
     startMs: at(start), endMs: end === null ? null : at(end),
+});
+
+describe('anonymous run-length observations', () => {
+    it('retains equal-value samples and Unknown, sharing exact quantiles without lifecycle identities or dates', () => {
+        const observations = [
+            { agentId: 'claude', durationMs: 400 }, { agentId: 'claude', durationMs: 100 },
+            { agentId: 'claude', durationMs: 400 }, { agentId: 'claude', durationMs: 200 },
+            { agentId: null, durationMs: 0 },
+            ...[100, 1, 9, 2, 8, 3, 7, 4, 6, 5].map(durationMs => ({ agentId: 'codex', durationMs })),
+        ];
+        const summary = summarizeUsageRunLengthObservations(observations);
+        expect(summary).toEqual({ sampleCount: 15, byAgent: [
+            { agentId: null, sampleCount: 1, medianMs: 0, p90Ms: 0, durationsMs: [0] },
+            { agentId: 'claude', sampleCount: 4, medianMs: 300, p90Ms: 400, durationsMs: [100, 200, 400, 400] },
+            { agentId: 'codex', sampleCount: 10, medianMs: 5.5, p90Ms: 9, durationsMs: [1, 2, 3, 4, 5, 6, 7, 8, 9, 100] },
+        ] });
+        expect(summarizeUsageRunLengthObservations([...observations].reverse())).toEqual(summary);
+        expect(summarizeUsageRunLengthObservations([])).toEqual({ sampleCount: 0, byAgent: [] });
+        expect(summarizeUsageRunLengthObservations([
+            { agentId: 'claude', durationMs: Number.MAX_VALUE },
+            { agentId: 'claude', durationMs: Number.MAX_VALUE },
+        ]).byAgent[0]?.medianMs).toBe(Number.MAX_VALUE);
+        expect(observations[0]).toEqual({ agentId: 'claude', durationMs: 400 });
+    });
+
+    it('refuses invalid duration values rather than silently changing the observed sample population', () => {
+        for (const durationMs of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+            expect(() => summarizeUsageRunLengthObservations([{ agentId: 'claude', durationMs }])).toThrow(RangeError);
+        }
+    });
 });
 
 describe('projectUsageWorkIntervals', () => {

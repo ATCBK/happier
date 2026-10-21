@@ -35,6 +35,35 @@ export function resolveProviderAccountUsagePaceWindow(snapshot: ProviderAccountU
   return { recordId: snapshot.recordId, meterId, resetAtMs, windowStartAtMs: resetAtMs - duration, windowDurationMs: duration };
 }
 
+/** Clock interval in which unchanged observations have the same pace/ended-window facts. Not read authority. */
+export function getProviderAccountUsageDerivationInterval(input: Readonly<{
+  current: ProviderAccountUsageSnapshotV1 | null; history: readonly ProviderAccountUsageSnapshotV1[]; nowMs: number;
+}>): Readonly<{ fromMs: number; untilMs: number }> | null {
+  if (!Number.isFinite(input.nowMs) || input.nowMs < 0) return null;
+  let fromMs = 0;
+  let untilMs = Number.POSITIVE_INFINITY;
+  const boundary = (atMs: number) => {
+    if (!Number.isFinite(atMs) || atMs < 0) return;
+    if (atMs <= input.nowMs) fromMs = Math.max(fromMs, atMs);
+    else untilMs = Math.min(untilMs, atMs);
+  };
+  if (input.current) {
+    boundary(input.current.observedAtMs);
+    boundary(input.current.observedAtMs + input.current.staleAfterMs);
+    for (const meter of input.current.meters) {
+      const window = resolveProviderAccountUsagePaceWindow(input.current, meter.meterId);
+      if (window) boundary(window.resetAtMs);
+    }
+  }
+  // Unused capacity includes a historical window only once it actually ends,
+  // including meters no longer present in the current observation.
+  for (const snapshot of input.history) for (const meter of snapshot.meters) {
+    const window = resolveProviderAccountUsagePaceWindow(snapshot, meter.meterId);
+    if (window) boundary(window.resetAtMs);
+  }
+  return { fromMs, untilMs };
+}
+
 function fraction(meter: ConnectedServiceQuotaMeterV1): number | null {
   if (meter.status === 'unavailable') return null;
   if (meter.used != null && meter.limit != null) return meter.limit > 0 && meter.used >= 0 ? meter.used / meter.limit : null;

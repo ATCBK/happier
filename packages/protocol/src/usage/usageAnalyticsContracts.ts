@@ -190,6 +190,8 @@ export const UsageAnalyticsQueryFiltersSchema = lazyZodSchema(() => z.strictObje
 export type UsageAnalyticsQueryFilters = z.infer<typeof UsageAnalyticsQueryFiltersSchema>;
 
 export const UsageAnalyticsQueryRequestSchema = lazyZodSchema(() => z.strictObject({
+  /** Omitted retains ordinary personal history; public selection requires supporting capability. */
+  population: z.optional(z.enum(['all_personal_history', 'public_eligible_personal'])),
   dateRange: z.optional(z.strictObject({
     startMs: z.optional(z.number().check(z.int(), z.minimum(0))),
     endMs: z.optional(z.number().check(z.int(), z.minimum(0))),

@@ -2,15 +2,15 @@ import { getUsageQueryKey } from '../inputs/usageQuery.js';
 import type { UsageQueryResultSlice } from './resolveUsagePageAggregation.js';
 import { projectUsagePageCost } from './usageCostFacts.js';
 import { projectUsageCostFactTotals } from './usageCostFactTotals.js';
-import { UsageRecapComposeInputSchema, UsageRecapComposeResultSchema, USAGE_RECAP_FIELDS,
-  type UsageRecapComposeInput, type UsageRecapComposeResult, type UsageRecapFacts } from './usageRecap.js';
+import { UsageRecapPrivateComposeInputSchema, UsageRecapComposeResultSchema, USAGE_RECAP_FIELDS,
+  type UsageRecapPrivateComposeInput, type UsageRecapComposeResult, type UsageRecapFacts } from './usageRecap.js';
 
 /** One selected-fact projection for all styles and formats, with no file or sharing effect. */
 export function composeUsageRecap(args: Readonly<{
-  input: UsageRecapComposeInput;
+  input: UsageRecapPrivateComposeInput;
   snapshot: UsageQueryResultSlice;
 }>): UsageRecapComposeResult {
-  const input = UsageRecapComposeInputSchema.parse(args.input);
+  const input = UsageRecapPrivateComposeInputSchema.parse(args.input);
   const { snapshot } = args;
   const key = getUsageQueryKey(input.query);
   if (snapshot.key !== key || getUsageQueryKey(snapshot.requestedQuery) !== key || getUsageQueryKey(snapshot.shownQuery) !== key) {

@@ -5,6 +5,7 @@ import { UsageObservationTokensSchema, UsageAnalyticsCostFactValueSchema, UsageA
 import { UsageQuerySourceStatusSchema } from './resolveUsagePageAggregation.js';
 import { UsageHowYouWorkSchema } from './resolveUsageHowYouWork.js';
 import { UsageFileResultSchema } from './usageExport.js';
+import { PublicProfileSnapshotV1Schema } from '../account/publicProfile.js';
 
 export const USAGE_RECAP_STYLES = ['daybreak', 'sigil', 'editorial', 'glass', 'holo', 'skyline', 'terminal'] as const;
 export const USAGE_RECAP_FORMATS = ['square', 'story', 'link-preview'] as const;
@@ -13,13 +14,31 @@ export const UsageRecapFieldSchema = lazyZodSchema(() => z.enum(USAGE_RECAP_FIEL
 export type UsageRecapField = z.infer<typeof UsageRecapFieldSchema>;
 
 /** One closed input for private preview and subsequent client image rendering. */
-export const UsageRecapComposeInputSchema = lazyZodSchema(() => z.strictObject({
+export const UsageRecapPrivateComposeInputSchema = lazyZodSchema(() => z.strictObject({
   query: UsageQuerySchema,
   style: z._default(z.enum(USAGE_RECAP_STYLES), 'daybreak'),
   format: z._default(z.enum(USAGE_RECAP_FORMATS), 'square'),
   selectedFields: z._default(z.array(UsageRecapFieldSchema), ['tokens', 'activeDays', 'modelMix', 'cache', 'rhythm', 'highlights']),
 }));
+export type UsageRecapPrivateComposeInput = z.infer<typeof UsageRecapPrivateComposeInputSchema>;
+export const USAGE_RECAP_PUBLIC_FIELDS = ['tokens', 'activeDays', 'streak', 'agentMix', 'rhythm', 'parallel', 'work', 'highlights'] as const;
+/** The captured Account selects the current public view; a caller cannot provide public data or a target. */
+export const UsageRecapPublicComposeInputSchema = lazyZodSchema(() => z.strictObject({
+  source: z.strictObject({ kind: z.literal('public_profile') }),
+  style: z._default(z.enum(USAGE_RECAP_STYLES), 'daybreak'),
+  format: z._default(z.enum(USAGE_RECAP_FORMATS), 'square'),
+  selectedFields: z._default(z.array(z.enum(USAGE_RECAP_PUBLIC_FIELDS)), [...USAGE_RECAP_PUBLIC_FIELDS]),
+}));
+export type UsageRecapPublicComposeInput = z.infer<typeof UsageRecapPublicComposeInputSchema>;
+export const UsageRecapComposeInputSchema = lazyZodSchema(() => z.union([UsageRecapPrivateComposeInputSchema, UsageRecapPublicComposeInputSchema]));
 export type UsageRecapComposeInput = z.infer<typeof UsageRecapComposeInputSchema>;
+
+/** Device effects accept source intent only, never caller-supplied bytes or paths. */
+export const UsageRecapDeliveryInputSchema = lazyZodSchema(() => z.union([
+  z.extend(UsageRecapPrivateComposeInputSchema, { intent: z.enum(['copy', 'save', 'share']) }),
+  z.extend(UsageRecapPublicComposeInputSchema, { intent: z.enum(['copy', 'save', 'share']) }),
+]));
+export type UsageRecapDeliveryInput = z.infer<typeof UsageRecapDeliveryInputSchema>;
 
 const count = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
 const amount = lazyZodSchema(() => z.number().check(z.nonnegative()));
@@ -73,10 +92,17 @@ export const UsageRecapComposeResultSchema = lazyZodSchema(() => z.discriminated
     selectedFields: z.array(UsageRecapFieldSchema), unavailableFields: z.array(UsageRecapFieldSchema),
     period: z.strictObject({ startMs: count, endMs: count, timeZoneOffsetMinutes: UsageQuerySchema.shape.timeZoneOffsetMinutes }),
     asOfMs: z.nullable(count), coverage: UsageRecapCoverageSchema, facts: UsageRecapFactsSchema,
+    source: z.optional(z.literal('public_profile')), publicSnapshot: z.optional(PublicProfileSnapshotV1Schema),
   }),
-  z.strictObject({ kind: z.literal('unavailable'), reason: z.enum(['query_mismatch', 'accounting_unavailable', 'period_unavailable']) }),
+  z.strictObject({ kind: z.literal('unavailable'), reason: z.enum(['query_mismatch', 'accounting_unavailable', 'period_unavailable',
+    'public_profile_source_unavailable', 'public_profile_unavailable']) }),
 ]).check(z.superRefine((result, context) => {
   if (result.kind !== 'composed') return;
+  if ((result.source === 'public_profile') !== (result.publicSnapshot !== undefined)
+    || result.source === 'public_profile' && (Object.keys(result.facts).length > 0
+      || result.selectedFields.some(field => !USAGE_RECAP_PUBLIC_FIELDS.some(allowed => allowed === field)))) {
+    context.addIssue({ code: 'custom', message: 'Public recap requires only admitted public facts and compatible fields' });
+  }
   for (const [field, value] of Object.entries(result.facts)) {
     if (value !== undefined && !result.selectedFields.some(selected => selected === field)) {
       context.addIssue({ code: 'custom', path: ['facts', field], message: 'Fact is outside the selected manifest' });
@@ -116,6 +142,25 @@ export const UsageRecapExportResultSchema = lazyZodSchema(() => z.discriminatedU
   }
 })));
 export type UsageRecapExportResult = z.infer<typeof UsageRecapExportResultSchema>;
+
+export const UsageRecapDeliveryOutcomeSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('delivered') }),
+  z.strictObject({ kind: z.literal('cancelled') }),
+  z.strictObject({ kind: z.literal('unavailable'), reason: z.enum(['delivery_target_unavailable', 'clipboard_unavailable']) }),
+  z.strictObject({ kind: z.literal('failed'), reason: z.enum(['delivery_failed', 'outcome_unobservable']),
+    handoff: z.optional(z.literal('presented')) }),
+]));
+export type UsageRecapDeliveryOutcome = z.infer<typeof UsageRecapDeliveryOutcomeSchema>;
+
+export const UsageRecapDeliveryResultSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('delivered'), compose: UsageRecapComposeResultSchema }),
+  z.strictObject({ kind: z.literal('cancelled'), compose: UsageRecapComposeResultSchema }),
+  z.strictObject({ kind: z.literal('unavailable'), compose: UsageRecapComposeResultSchema,
+    reason: z.enum(['render_target_unavailable', 'render_failed', 'compose_unavailable', 'delivery_target_unavailable', 'clipboard_unavailable']) }),
+  z.strictObject({ kind: z.literal('failed'), compose: UsageRecapComposeResultSchema,
+    reason: z.enum(['delivery_failed', 'outcome_unobservable']), handoff: z.optional(z.literal('presented')) }),
+]));
+export type UsageRecapDeliveryResult = z.infer<typeof UsageRecapDeliveryResultSchema>;
 
 /** Nameless display name from style, format and the last covered calendar date. */
 export function usageRecapImageFileName(result: UsageRecapComposed): string {

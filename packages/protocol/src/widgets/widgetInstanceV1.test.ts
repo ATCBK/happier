@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { projectWidgetBindingInputV1, resolveWidgetBindingsV1, WidgetInstanceV1Schema, type WidgetInstanceV1 } from './widgetInstanceV1.js';
+import { formatWidgetInstanceRefKeyV1, parseWidgetInstanceRefKeyV1, projectWidgetBindingInputV1, resolveWidgetBindingsV1, WidgetInstanceV1Schema, type WidgetInstanceV1 } from './widgetInstanceV1.js';
 import { InputHintsSchema } from '../inputs/inputFields.js';
 import { countWidgetInstancesV1, isSameWidgetDefinitionV1 } from './builtinWidgetDescriptorV1.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
@@ -13,6 +13,15 @@ const fields = InputHintsSchema.parse({ fields: [
   { path: 'connection', title: 'Connection', widget: 'json', required: true },
 ] }).fields;
 const valid = () => ({ status: 'valid' as const });
+
+it('round-trips qualified widget keys through the identity schema without merging surfaces', () => {
+  const ref = { surface: { serverId: 'home', accountId: 'owner', owner: { kind: 'project' as const, projectId: 'project', layoutId: 'overview' } }, instanceId: 'copy:/😀' };
+  const key = formatWidgetInstanceRefKeyV1(ref);
+  expect(parseWidgetInstanceRefKeyV1(key)).toEqual({ ...ref, surface: { ...ref.surface, owner: { kind: 'project', projectId: 'project' } } });
+  expect(formatWidgetInstanceRefKeyV1({ ...ref, surface: { ...ref.surface, serverId: 'other' } })).not.toBe(key);
+  expect(parseWidgetInstanceRefKeyV1('copy:/😀')).toBeNull();
+  expect(parseWidgetInstanceRefKeyV1(JSON.stringify({ ...ref, extra: true }))).toBeNull();
+});
 
 describe('configured widget bindings', () => {
   it('refuses explicit context bindings for own-value fields in admission and draft projection', () => {

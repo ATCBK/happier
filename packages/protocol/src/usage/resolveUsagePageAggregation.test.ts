@@ -9,7 +9,7 @@ import { projectUsagePlanInsights } from './usagePlanInsights.js';
 import { USAGE_COACH_DETECTOR_IDS } from './coach/coachDetectorIds.js';
 import { bundledUsageModelPriceCatalog } from './usageModelPriceCatalog.js';
 import { readUsageScopeOptions } from './usageFilterOptions.js';
-import { projectSessionUsageWorkEvidence } from './usageWorkEvidence.js';
+import { projectSessionUsageWorkEvidence, projectUsageQueryWorkEvidence } from './usageWorkEvidence.js';
 
 const tokens = { input: 12, output: 4, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 16 };
 const accounting = UsageAnalyticsQueryResponseSchema.parse({
@@ -17,6 +17,112 @@ const accounting = UsageAnalyticsQueryResponseSchema.parse({
 });
 
 describe('resolveUsagePageAggregation', () => {
+  it('withdraws retained public detail when its admitted accounting turns change without changing ordinary retention', () => {
+    for (const population of ['all_personal_history', 'public_eligible_personal'] as const) {
+      const query = normalizeUsageQuery({ population, period: { startMs: 100, endMs: 1_000 } });
+      const value = (turnIds: readonly string[]) => UsageAnalyticsQueryResponseSchema.parse({ ...accounting,
+        contributions: turnIds.map(turnId => ({ id: turnId, observedAtMs: 700, sessionId: 'mixed', turnId,
+          agentId: turnId === 'old' ? 'claude' : 'codex', modelId: null, machineId: null, projectKey: null,
+          workspaceId: null, source: 'runtime', tokens, cost: accounting.totals.cost })),
+      });
+      const initial = value(['old', 'new']);
+      const session = { id: 'mixed', metadata: null, agentState: null,
+        sessionTurns: { v: 1 as const, sessionId: 'mixed', updatedAt: 900, turns: [
+          { turnId: 'old', agentId: 'claude', status: 'completed' as const, startedAt: 100, terminalAt: 500, updatedAt: 500 },
+          { turnId: 'new', agentId: 'codex', status: 'completed' as const, startedAt: 600, terminalAt: 900, updatedAt: 900 },
+        ] } };
+      const previous = resolveUsagePageAggregation({ queries: [query],
+        accounting: [{ query, status: 'available', value: initial }], howYouWork: [{ query, asOfMs: 1_000,
+          detail: projectUsageQueryWorkEvidence({ query, sessions: [session], contributions: initial.contributions }),
+        }],
+      });
+      expect(previous.results[0]?.howYouWork?.runLengths?.sampleCount).toBe(2);
+      const unchangedMembership = resolveUsagePageAggregation({ queries: [query], previous,
+        accounting: [{ query, status: 'available', value: value(['new', 'old']) }],
+        sources: [{ source: 'how_you_work', status: 'pending' }],
+      });
+      expect(unchangedMembership.results[0]?.howYouWork).toEqual(previous.results[0]?.howYouWork);
+      const refreshed = resolveUsagePageAggregation({ queries: [query], previous,
+        accounting: [{ query, status: 'available', value: value(['new']) }],
+        sources: [{ source: 'how_you_work', status: 'pending' }],
+      });
+      if (population === 'public_eligible_personal') {
+        expect(refreshed.results[0]?.howYouWork).toMatchObject({ detailStatus: 'unknown', intervals: null, runLengths: null });
+      } else expect(refreshed.results[0]?.howYouWork).toEqual(previous.results[0]?.howYouWork);
+    }
+  });
+
+  it('carries shared chart summaries through the real query projection and withdraws refused detail', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, includeActivity: true });
+    const value = UsageAnalyticsQueryResponseSchema.parse({ ...accounting, contributions: [{
+      id: 'one', observedAtMs: 150, sessionId: 'session', turnId: 'turn', agentId: 'claude', modelId: null,
+      machineId: null, projectKey: null, workspaceId: null, source: 'runtime', tokens, cost: accounting.totals.cost,
+    }] });
+    const witness: UsageWorkEvidence = { sessionId: 'session', turnId: 'turn', repositoryKey: 'repo',
+      checkpointRef: 'checkpoint', checkpointCommitSha: 'a'.repeat(40), commitSha: 'b'.repeat(40),
+      attributionScope: 'no_happier_checkpoint_overlap_observed', pullRequest: {
+        provider: { id: 'forge', kind: 'github', displayName: 'Forge', baseUrl: 'https://github.com',
+          nameWithOwner: 'owner/repo', urlSafety: { allowedSchemes: ['https:'] } },
+        number: 1, title: 'Private title', url: 'https://github.com/owner/repo/pull/1',
+        baseBranch: 'main', headBranch: 'feature', state: 'merged',
+      } };
+    const project = () => resolveUsagePageAggregation({ queries: [query],
+      accounting: [{ query, status: 'available', value }], work: [{ query, status: 'partial', evidence: [witness] }],
+      howYouWork: [{ query, asOfMs: 200, detail: { status: 'partial',
+        facts: [{ workId: 'work', evidenceId: 'turn', agentId: 'claude', machineId: null, kind: 'busy', startMs: 110, endMs: 150 }],
+        closedTurns: [{ workId: 'work', agentId: 'claude', status: 'completed', startMs: 110, endMs: 150 }],
+        acceptedInputs: [{ inputId: 'steer', workId: 'work', turnId: 'turn', acceptedAtMs: 120, deliveryKind: 'steer' }],
+        collaboration: [{ evidenceId: 'child', workId: 'work', sourceSessionId: 'session', targetId: 'child',
+          sourceAgentId: 'claude', targetAgentId: 'codex', observedAtMs: 130, relation: 'native' }],
+      } }],
+    });
+    const first = project();
+    expect(first.results[0]?.howYouWork).toMatchObject({ runLengths: { sampleCount: 1 },
+      steering: { byAgent: [expect.objectContaining({ agentId: 'claude', steeringCount: 1 })] },
+      collaboration: { edges: [{ sourceAgentId: 'claude', targetAgentId: 'codex', relation: 'native', count: 1 }] },
+      agentCalendar: { days: [expect.objectContaining({ totals: expect.objectContaining({ tokens: 16 }) })] },
+    });
+    expect(first.results[0]?.mergedOutcomes).toMatchObject({ linkedMergedCount: 1, undatedMergedCount: 1 });
+    expect(UsageQueryBatchResultSchema.safeParse(first).success).toBe(true);
+    expect(UsageQueryBatchResultSchema.safeParse({ ...first, results: [{ ...first.results[0],
+      mergedOutcomes: { ...first.results[0]!.mergedOutcomes, undatedMergedCount: 99 },
+    }] }).success).toBe(false);
+    const refused = resolveUsagePageAggregation({ queries: [query], previous: first,
+      accounting: [{ query, status: 'available', value }], howYouWork: [{ query, detail: { status: 'unknown' } }],
+      work: [{ query, status: 'error', evidence: [], errorCode: 'permission_denied' }],
+    });
+    expect(refused.results[0]?.howYouWork).toMatchObject({ runLengths: null, steering: null, collaboration: null });
+    expect(refused.results[0]?.mergedOutcomes).toBeUndefined();
+    expect(UsageQueryBatchResultSchema.safeParse(refused).success).toBe(true);
+    expect(UsageQueryBatchResultSchema.safeParse({ ...refused, results: [{ ...refused.results[0],
+      howYouWork: { ...refused.results[0]!.howYouWork, agentCalendar: first.results[0]!.howYouWork!.agentCalendar },
+    }] }).success).toBe(false);
+    const calendar = first.results[0]!.howYouWork!.agentCalendar!;
+    const withoutPrivateMetrics = (metrics: typeof calendar.periodSummary.totals) => ({
+      ...metrics, busyMs: null, steeringCount: null, peakParallel: null,
+    });
+    const accountingPeriod = { ...calendar.periodSummary, totals: withoutPrivateMetrics(calendar.periodSummary.totals),
+      agents: calendar.periodSummary.agents.map(agent => ({ ...agent, metrics: withoutPrivateMetrics(agent.metrics) })),
+    };
+    expect(UsageQueryBatchResultSchema.safeParse({ ...refused, results: [{ ...refused.results[0],
+      howYouWork: { ...refused.results[0]!.howYouWork, agentCalendar: { ...calendar,
+        coverage: { ...calendar.coverage, busy: 'unavailable', steering: 'unavailable' },
+        periodSummary: accountingPeriod, days: [], weeks: [], hours: [], hourOfDayBuckets: [], weeklyPeakParallel: [],
+      } },
+    }] }).success).toBe(false);
+    expect(UsageQueryBatchResultSchema.safeParse({ ...refused, results: [{ ...refused.results[0],
+      howYouWork: { ...refused.results[0]!.howYouWork, agentCalendar: { ...calendar,
+        coverage: { ...calendar.coverage, busy: 'unavailable', steering: 'unavailable' },
+        periodSummary: accountingPeriod, days: [], weeks: [], hours: [], weekdayHourBuckets: [], weeklyPeakParallel: [],
+      } },
+    }] }).success).toBe(false);
+    expect(UsageQueryBatchResultSchema.safeParse({ ...refused, results: [{ ...refused.results[0],
+      howYouWork: { ...refused.results[0]!.howYouWork, agentCalendar: { ...calendar,
+        coverage: { ...calendar.coverage, busy: 'unavailable', steering: 'unavailable' },
+        days: [], weeks: [], hours: [], weekdayHourBuckets: [], hourOfDayBuckets: [], weeklyPeakParallel: [],
+      } },
+    }] }).success).toBe(false);
+  });
   it('publishes one answered-approval population from opened Session evidence to Coach and Human loop', () => {
     const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
     const completion = { tool: 'Bash', createdAt: 110, completedAt: 140, status: 'approved' };

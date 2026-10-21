@@ -925,6 +925,16 @@
       "types": "./dist/serverConfig/homeSettingsOwnership.d.ts",
       "default": "./dist/serverConfig/homeSettingsOwnership.js"
     },
+    "./usage/usageSourceSummary": {
+      "happier-source": "./src/usage/usageSourceSummary.ts",
+      "types": "./dist/usage/usageSourceSummary.d.ts",
+      "default": "./dist/usage/usageSourceSummary.js"
+    },
+    "./usage/usageActivitySummary": {
+      "happier-source": "./src/usage/usageActivitySummary.ts",
+      "types": "./dist/usage/usageActivitySummary.d.ts",
+      "default": "./dist/usage/usageActivitySummary.js"
+    },
     "./usage/usageCalendar": {
       "happier-source": "./src/usage/usageCalendar.ts",
       "types": "./dist/usage/usageCalendar.d.ts",

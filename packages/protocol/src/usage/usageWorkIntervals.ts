@@ -1,6 +1,105 @@
 import { resolveUsageBucketBounds, resolveUsageCalendarInstant } from './usageCalendar.js';
 import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import type { SessionTurnV1 } from '../sessions/turns/sessionTurnV1.js';
+
+/** Exact turn lifecycle observations; neither Session age nor clipped busy spans are run lengths. */
+export interface UsageClosedTurnFact {
+    workId: string;
+    agentId: string | null;
+    status: SessionTurnV1['status'];
+    startMs: number;
+    endMs: number | null;
+}
+
+const RunCountSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
+const RunDurationSchema = lazyZodSchema(() => z.number().check(z.nonnegative()));
+export const UsageRunLengthSummarySchema = lazyZodSchema(() => z.strictObject({
+    method: z.literal('closed_turn_wall_v1'),
+    coverage: z.enum(['complete_for_supplied_facts', 'partial']),
+    sampleCount: RunCountSchema, openCount: RunCountSchema, croppedCount: RunCountSchema, invalidCount: RunCountSchema,
+    byAgent: z.array(z.strictObject({ agentId: z.nullable(z.string()), sampleCount: RunCountSchema,
+        medianMs: RunDurationSchema, p90Ms: RunDurationSchema, durationsMs: z.array(RunDurationSchema) })),
+}));
+export type UsageRunLengthSummary = z.infer<typeof UsageRunLengthSummarySchema>;
+
+export interface UsageRunLengthObservation {
+    agentId: string | null;
+    durationMs: number;
+}
+export type UsageRunLengthObservationSummary = Pick<UsageRunLengthSummary, 'sampleCount' | 'byAgent'>;
+
+/** Aggregate admitted duration samples without lifecycle identities or private chronology.
+ * Equal values remain distinct observations; no sample deduplication is possible here.
+ */
+export function summarizeUsageRunLengthObservations(
+    observations: readonly UsageRunLengthObservation[],
+): UsageRunLengthObservationSummary {
+    const agents = new Map<string | null, number[]>();
+    for (const observation of observations) {
+        if (!Number.isFinite(observation.durationMs) || observation.durationMs < 0) {
+            throw new RangeError('Invalid usage run-length duration');
+        }
+        const durations = agents.get(observation.agentId) ?? [];
+        durations.push(observation.durationMs);
+        agents.set(observation.agentId, durations);
+    }
+    const byAgent = [...agents].sort(([left], [right]) => left === right ? 0 : left === null ? -1 : right === null ? 1
+        : left < right ? -1 : 1).map(([agentId, durationsMs]) => {
+        durationsMs.sort((a, b) => a - b);
+        const sampleCount = durationsMs.length;
+        const middle = Math.floor(sampleCount / 2);
+        return { agentId, sampleCount, durationsMs,
+            medianMs: sampleCount % 2 ? durationsMs[middle]!
+                : durationsMs[middle - 1]! + (durationsMs[middle]! - durationsMs[middle - 1]!) / 2,
+            // Empirical nearest rank: no interpolation manufactures a duration observation.
+            p90Ms: durationsMs[Math.ceil(sampleCount * 0.9) - 1]!,
+        };
+    });
+    return { sampleCount: observations.length, byAgent };
+}
+
+/** Actual observations in deterministic Agent/duration order, independent of private chronology. */
+export function projectUsageClosedTurns(input: Readonly<{
+    period: Readonly<{ startMs: number; endMs: number }>;
+    facts: readonly UsageClosedTurnFact[];
+    coverage: UsageRunLengthSummary['coverage'];
+}>): UsageRunLengthSummary {
+    const result: UsageRunLengthSummary = { method: 'closed_turn_wall_v1', coverage: input.coverage,
+        sampleCount: 0, openCount: 0, croppedCount: 0, invalidCount: 0, byAgent: [] };
+    const unique = new Map<string, UsageClosedTurnFact>();
+    const conflicts = new Set<string>();
+    for (const fact of input.facts) {
+        const previous = unique.get(fact.workId);
+        if (previous && (previous.startMs !== fact.startMs || previous.endMs !== fact.endMs
+            || previous.agentId !== fact.agentId || previous.status !== fact.status)) conflicts.add(fact.workId);
+        unique.set(fact.workId, fact);
+    }
+    const observations: UsageRunLengthObservation[] = [];
+    for (const fact of unique.values()) {
+        if (conflicts.has(fact.workId) || !Number.isSafeInteger(fact.startMs) || fact.startMs < 0
+            || fact.endMs !== null && (!Number.isSafeInteger(fact.endMs) || fact.endMs < fact.startMs)) {
+            result.invalidCount++;
+            continue;
+        }
+        if (fact.startMs >= input.period.endMs || fact.endMs !== null && fact.endMs <= input.period.startMs
+            && fact.startMs < input.period.startMs) continue;
+        if (fact.endMs === null || fact.status === 'in_progress' || fact.status === 'waiting') {
+            result.openCount++;
+            continue;
+        }
+        if (fact.startMs < input.period.startMs || fact.endMs > input.period.endMs) {
+            result.croppedCount++;
+            continue;
+        }
+        observations.push({ agentId: fact.agentId, durationMs: fact.endMs - fact.startMs });
+    }
+    const summary = summarizeUsageRunLengthObservations(observations);
+    result.sampleCount = summary.sampleCount;
+    result.byAgent = summary.byAgent;
+    if (result.openCount || result.croppedCount || result.invalidCount) result.coverage = 'partial';
+    return result;
+}
 
 export const UsageNightHoursV1Schema = lazyZodSchema(() => z.strictObject({ startHour: z.number().check(z.int(), z.minimum(0), z.maximum(23)), endHour: z.number().check(z.int(), z.minimum(0), z.maximum(23)) }).check(z.refine(value => value.startHour !== value.endHour)));
 
@@ -106,7 +205,7 @@ export const UsageWorkIntervalsProjectionSchema = lazyZodSchema(() => z.strictOb
         busyMs: DurationSchema, activityCount: z.nullable(z.number().check(z.int(), z.nonnegative())) }))),
 }));
 
-function mergeSegments(values: readonly UsageWorkIntervalSegment[]): UsageWorkIntervalSegment[] {
+export function mergeUsageWorkIntervalSegments(values: readonly UsageWorkIntervalSegment[]): UsageWorkIntervalSegment[] {
     const sorted = [...values].sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
     const result: UsageWorkIntervalSegment[] = [];
     for (const value of sorted) {
@@ -119,8 +218,8 @@ function mergeSegments(values: readonly UsageWorkIntervalSegment[]): UsageWorkIn
 
 function subtractSegments(busy: readonly UsageWorkIntervalSegment[], waits: readonly UsageWorkIntervalSegment[]) {
     const result: UsageWorkIntervalSegment[] = [];
-    const mergedWaits = mergeSegments(waits);
-    for (const interval of mergeSegments(busy)) {
+    const mergedWaits = mergeUsageWorkIntervalSegments(waits);
+    for (const interval of mergeUsageWorkIntervalSegments(busy)) {
         let startMs = interval.startMs;
         for (const wait of mergedWaits) {
             if (wait.endMs <= startMs) continue;
@@ -140,6 +239,26 @@ export function isUsageNightHour(hour: number, night: NonNullable<UsageWorkInter
     return night.startHour < night.endHour
         ? hour >= night.startHour && hour < night.endHour
         : hour >= night.startHour || hour < night.endHour;
+}
+
+/** Half-open lane spans share one boundary sweep for period and calendar peaks. */
+export function summarizeUsageConcurrency(segments: readonly UsageWorkIntervalSegment[]): { maxParallel: number; parallelBusyMs: number } {
+    const boundaries = new Map<number, number>();
+    for (const span of segments) {
+        boundaries.set(span.startMs, (boundaries.get(span.startMs) ?? 0) + 1);
+        boundaries.set(span.endMs, (boundaries.get(span.endMs) ?? 0) - 1);
+    }
+    let active = 0;
+    let previous: number | null = null;
+    let maxParallel = 0;
+    let parallelBusyMs = 0;
+    for (const [instant, change] of [...boundaries.entries()].sort((a, b) => a[0] - b[0])) {
+        if (previous !== null && active > 1) parallelBusyMs += instant - previous;
+        active += change;
+        maxParallel = Math.max(maxParallel, active);
+        previous = instant;
+    }
+    return { maxParallel, parallelBusyMs };
 }
 
 export function projectUsageWorkIntervals(input: UsageWorkIntervalsInput): UsageWorkIntervalsProjection {
@@ -192,28 +311,16 @@ export function projectUsageWorkIntervals(input: UsageWorkIntervalsInput): Usage
     result.lanes = [...lanes.values()].sort((a, b) => a.workId.localeCompare(b.workId));
     const busy: UsageWorkIntervalSegment[] = [];
     const waits: UsageWorkIntervalSegment[] = [];
-    const boundaries = new Map<number, number>();
     for (const lane of result.lanes) {
         lane.busy = subtractSegments(lane.busy, [...lane.waits, ...uncertainWaits.get(lane.workId) ?? []]);
         lane.waits.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs || a.evidenceId.localeCompare(b.evidenceId));
         result.agentTimeMs += duration(lane.busy);
         busy.push(...lane.busy);
         waits.push(...lane.waits);
-        for (const span of lane.busy) {
-            boundaries.set(span.startMs, (boundaries.get(span.startMs) ?? 0) + 1);
-            boundaries.set(span.endMs, (boundaries.get(span.endMs) ?? 0) - 1);
-        }
     }
-    let active = 0;
-    let previous: number | null = null;
-    for (const [instant, change] of [...boundaries.entries()].sort((a, b) => a[0] - b[0])) {
-        if (previous !== null && active > 1) result.parallelBusyMs += instant - previous;
-        active += change;
-        result.maxParallel = Math.max(result.maxParallel, active);
-        previous = instant;
-    }
-    const mergedBusy = mergeSegments(busy);
-    const mergedWaits = mergeSegments(waits);
+    Object.assign(result, summarizeUsageConcurrency(busy));
+    const mergedBusy = mergeUsageWorkIntervalSegments(busy);
+    const mergedWaits = mergeUsageWorkIntervalSegments(waits);
     result.elapsedBusyMs = duration(mergedBusy);
     result.elapsedWaitMs = duration(mergedWaits);
     if (result.unknownEndCount || result.invalidIntervalCount) result.coverage = 'partial';

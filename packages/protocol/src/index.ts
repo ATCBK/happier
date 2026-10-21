@@ -1,4 +1,9 @@
 export const HAPPY_PROTOCOL_PACKAGE = '@happier-dev/protocol';
+export * from './account/publicProfile.js';
+export * from './account/publicProfilePublication.js';
+export * from './account/publicProfileEmbeds.js';
+export * from './account/projectPublicProfile.js';
+export * from './widgets/widgetPublicSnapshotV1.js';
 export * from './machines/machineMetadataFieldV1.js';
 export * from './machines/resources/machineResourcesPolicyV1.js';
 export * from './machines/vitals/machineVitalsAlertsV1.js';
@@ -41,10 +46,16 @@ export { composeUsageRecap } from './usage/composeUsageRecap.js';
 export * from './usage/resolveUsagePageAggregation.js';
 export * from './inputs/usageQuery.js';
 export { resolveUsageBucketBounds, resolveUsageCalendarInstant, resolveUsageCalendarDateStart } from './usage/usageCalendar.js';
-export { allocateUsageOutcomes, UsageWorkProjectionSchema, type UsageWorkContribution, type UsageWorkEvidence,
+export { allocateUsageOutcomes, summarizeUsageMergedOutcomes, UsageMergedOutcomeSummarySchema, type UsageMergedOutcomeSummary, UsageWorkProjectionSchema, type UsageWorkContribution, type UsageWorkEvidence,
   type UsageWorkOutcome, type UsageWorkAllocation, type UsageWorkProjection } from './usage/usageOutcomeAllocation.js';
 export { isUsageNightHour, projectUsageWorkIntervals, type UsageWorkIntervalFact, type UsageWorkPermissionFact, type UsageWorkIntervalsInput, type UsageWorkIntervalsProjection } from './usage/usageWorkIntervals.js';
 export { resolveUsageHowYouWork, UsageHowYouWorkSchema, type UsageHowYouWork, type UsageHowYouWorkDetailInput, type UsageAcceptedInputFact } from './usage/resolveUsageHowYouWork.js';
+export { projectUsageAgentCalendar, UsageAgentCalendarSchema, type UsageAgentCalendar, type UsageAgentCalendarInput } from './usage/usageAgentCalendar.js';
+export { resolveUsageCollaboration, UsageCollaborationSummarySchema, type UsageCollaborationFact, type UsageCollaborationSummary } from './usage/usageCollaboration.js';
+export { projectUsageClosedTurns, summarizeUsageRunLengthObservations, UsageRunLengthSummarySchema,
+  type UsageClosedTurnFact, type UsageRunLengthSummary, type UsageRunLengthObservation,
+  type UsageRunLengthObservationSummary } from './usage/usageWorkIntervals.js';
+export { UsageSteeringSummarySchema, type UsageSteeringSummary } from './usage/usageSteering.js';
 export { projectUsageFootprint, UsageFootprintProjectionSchema, type UsageFootprintProjection } from './usage/usageFootprint.js';
 export * from './connect/connectedServicePoolSelection.js';
 export * from './sessions/context/sessionContextV1.js';

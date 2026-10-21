@@ -5,7 +5,7 @@ import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { getUsageQueryKey, normalizeUsageQuery, resolveUsageQueryPeriod, UsageQuerySchema, type UsageQuery } from '../inputs/usageQuery.js';
 import { UsageQueryAccountingSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
 import { UsageCostFactTotalSchema, projectUsageCostFactTotals } from './usageCostFactTotals.js';
-import { allocateUsageOutcomes, UsageWorkProjectionSchema, type UsageWorkEvidence } from './usageOutcomeAllocation.js';
+import { allocateUsageOutcomes, summarizeUsageMergedOutcomes, UsageMergedOutcomeSummarySchema, UsageWorkProjectionSchema, type UsageWorkEvidence } from './usageOutcomeAllocation.js';
 import type { ScmBranchWorkEvidence } from '../scm/branches.js';
 import { resolveUsageHowYouWork, UsageHowYouWorkSchema, type UsageHowYouWorkDetailInput, type UsageSessionEvidenceCoverage } from './resolveUsageHowYouWork.js';
 import type { UsageWorkIntervalsInput } from './usageWorkIntervals.js';
@@ -18,6 +18,7 @@ import { ConnectedServicePoolSelectionGetResponseV1Schema } from '../connect/con
 import { repriceUsageAnalyticsResponse } from './usageCost.js';
 import type { UsageModelPriceOverridesV1 } from './usageModelPriceCatalog.js';
 import { projectUsagePlanInsights, UsagePlanInsightsSchema } from './usagePlanInsights.js';
+import { hasSameUsageQueryWorkEvidenceMembership } from './usageWorkEvidence.js';
 export type { UsagePlanInsights } from './usagePlanInsights.js';
 
 /** Source transport currentness is separate from accounting completeness. */
@@ -72,6 +73,7 @@ export const UsageQueryResultSliceSchema = lazyZodSchema(() => z.strictObject({
     costFactTotals: z.optional(z.array(UsageCostFactTotalSchema)),
     source: UsageQuerySourceStateSchema })),
   work: z.optional(UsageWorkProjectionSchema),
+  mergedOutcomes: z.optional(UsageMergedOutcomeSummarySchema),
   howYouWork: z.optional(UsageHowYouWorkSchema),
   coach: z.optional(UsageCoachEvaluationSchema),
   sources: z.array(UsageQuerySourceStateSchema),
@@ -80,7 +82,7 @@ export const UsageQueryResultSliceSchema = lazyZodSchema(() => z.strictObject({
   if (slice.key !== getUsageQueryKey(slice.requestedQuery)) {
     context.addIssue({ code: 'custom', path: ['key'], message: 'Result key must identify the requested query' });
   }
-  if (!slice.requestedQuery.includeAccounting && (slice.accounting || slice.comparison || slice.costFactTotals || slice.work || slice.howYouWork || slice.coach)) {
+  if (!slice.requestedQuery.includeAccounting && (slice.accounting || slice.comparison || slice.costFactTotals || slice.work || slice.mergedOutcomes || slice.howYouWork || slice.coach)) {
     context.addIssue({ code: 'custom', path: ['accounting'], message: 'Quota-only demand cannot disclose accounting or Session evidence' });
   }
   // An Action snapshot names exactly what it queried. Previous-period display
@@ -121,6 +123,12 @@ export const UsageQueryResultSliceSchema = lazyZodSchema(() => z.strictObject({
   const witnessedPeriod = 'relative' in slice.shownQuery.period
     ? slice.coach?.period ?? accountingPeriod
     : slice.shownQuery.period;
+  if (slice.mergedOutcomes && (!slice.work || witnessedPeriod?.startMs === undefined || witnessedPeriod.endMs === undefined
+    || !slice.sources.some(source => source.source === 'work' && ['available', 'partial', 'stale', 'pending'].includes(source.status))
+    || !sameStrictJsonValue(slice.mergedOutcomes, summarizeUsageMergedOutcomes({ work: slice.work,
+      period: { startMs: witnessedPeriod.startMs, endMs: witnessedPeriod.endMs }, timeZoneOffsetMinutes: slice.shownQuery.timeZoneOffsetMinutes })))) {
+    context.addIssue({ code: 'custom', path: ['mergedOutcomes'], message: 'Merged outcomes must preserve the admitted Work, period and calendar' });
+  }
   if (week?.status === 'available' && (!slice.accounting?.activity
     || week.startMs !== accountingPeriod?.startMs || week.endMs !== accountingPeriod?.endMs
     || week.timeZoneOffsetMinutes !== slice.shownQuery.timeZoneOffsetMinutes)) {
@@ -138,6 +146,12 @@ export const UsageQueryResultSliceSchema = lazyZodSchema(() => z.strictObject({
   }
   if (intervals && !slice.sources.some(isUsageDetailSourceReadable)) {
     context.addIssue({ code: 'custom', path: ['howYouWork'], message: 'Unavailable detail cannot disclose private intervals' });
+  }
+  const agentCalendar = slice.howYouWork?.agentCalendar;
+  if (agentCalendar && (agentCalendar.timeZoneOffsetMinutes !== slice.shownQuery.timeZoneOffsetMinutes
+    || witnessedPeriod?.startMs !== undefined && agentCalendar.period.startMs !== witnessedPeriod.startMs
+    || witnessedPeriod?.endMs !== undefined && agentCalendar.period.endMs !== witnessedPeriod.endMs)) {
+    context.addIssue({ code: 'custom', path: ['howYouWork', 'agentCalendar'], message: 'Agent calendar must identify the shown period and fixed offset' });
   }
   if (slice.coach && (slice.coach.queryKey !== slice.key
     || (slice.shownQuery.period.startMs !== undefined && slice.coach.period.startMs !== slice.shownQuery.period.startMs)
@@ -467,7 +481,12 @@ export function resolveUsagePageAggregation(input: UsagePageAggregationInput): U
     // A failed replacement has no new admission. A supplied detail (including
     // an unknown/refused result) supersedes old facts even if another read failed.
     const failedDetail = detailSnapshot?.errorCode !== undefined && !detailSnapshot.detail && detailAuthorized;
-    const retainedDetail = pendingDetail || failedDetail ? prior : undefined;
+    // Public detail cannot retain turns that the current accounting population
+    // no longer admits. Ordinary personal-history refresh keeps its existing behavior.
+    const canRetainDetail = query.population !== 'public_eligible_personal' || hasSameUsageQueryWorkEvidenceMembership({
+      query, contributions: snapshot?.value?.contributions, previousContributions: prior?.accounting?.contributions,
+    });
+    const retainedDetail = canRetainDetail && (pendingDetail || failedDetail) ? prior : undefined;
     const retainedNightHours = retainedDetail?.howYouWork?.nightShift;
     // Missing evidence on an ordinary failed read is not a replacement. An
     // explicit empty admission/quarantine still withdraws the old witnesses.
@@ -489,6 +508,9 @@ export function resolveUsagePageAggregation(input: UsagePageAggregationInput): U
     const detailProjection = endMs === undefined || endMs < startMs ? undefined : resolveUsageHowYouWork({
       period: { startMs, endMs }, timeZoneOffsetMinutes: query.timeZoneOffsetMinutes,
       accounting: snapshot?.value, detail: observedDetail,
+      includeSteering: query.includeTranscriptEvidence,
+      includeAgentCalendar: query.includeActivity || query.includeModelTimeline,
+      costMode: query.costBasis,
       sessionCoverage: detailAuthorized ? detailSnapshot?.sessionCoverage : undefined,
       retained: retainedDetail?.howYouWork,
       nowMs: input.nowMs ?? detailSnapshot?.asOfMs,
@@ -553,6 +575,12 @@ export function resolveUsagePageAggregation(input: UsagePageAggregationInput): U
     // Inputs are admitted owner snapshots; this projection is not a wire boundary.
     // Parsing here clones the same full history for every widget on every source
     // revision. Keep its identity and validate the batch at the Action/Resource boundary.
+    const workProjection = !query.includeWorkEvidence || snapshot?.value?.contributions === undefined ? undefined : allocateUsageOutcomes({
+      contributions: snapshot.value.contributions, evidence: workEvidence, branchEvidence,
+    });
+    const mergedOutcomes = workProjection && endMs !== undefined && endMs >= startMs
+      && (retainWork || workSnapshot && ['available', 'partial', 'stale'].includes(workSnapshot.status))
+      ? summarizeUsageMergedOutcomes({ work: workProjection, period: { startMs, endMs }, timeZoneOffsetMinutes: query.timeZoneOffsetMinutes }) : undefined;
     const slice: UsageQueryResultSlice = {
       key, requestedQuery: query, shownQuery: query,
       ...(snapshot?.value === undefined ? {} : { accounting: projectSourceLocations(snapshot.value), costFactTotals: projectUsageCostFactTotals(snapshot.value.costFacts ?? []) }),
@@ -567,11 +595,8 @@ export function resolveUsagePageAggregation(input: UsagePageAggregationInput): U
       } }),
       ...(comparisonQuery ? { comparison: { query: comparisonQuery, source: comparisonSource,
         ...(comparisonSnapshot?.value === undefined ? {} : { accounting: projectSourceLocations(comparisonSnapshot.value), costFactTotals: projectUsageCostFactTotals(comparisonSnapshot.value.costFacts ?? []) }) } } : {}),
-      ...(!query.includeWorkEvidence || snapshot?.value?.contributions === undefined ? {} : { work: allocateUsageOutcomes({
-        contributions: snapshot.value.contributions,
-        evidence: workEvidence,
-        branchEvidence,
-      }) }),
+      ...(workProjection === undefined ? {} : { work: workProjection }),
+      ...(mergedOutcomes === undefined ? {} : { mergedOutcomes }),
       sources,
       pending: [...sources, ...(comparisonQuery ? [comparisonSource] : [])].some(source =>
         (source.status === 'pending' || source.status === 'not_loaded')

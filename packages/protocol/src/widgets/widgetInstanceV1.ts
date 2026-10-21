@@ -74,6 +74,18 @@ export const WidgetSurfaceRefV1Schema = lazyZodSchema(() => z.strictObject({
 export type WidgetSurfaceRefV1 = z.infer<typeof WidgetSurfaceRefV1Schema>;
 export const WidgetInstanceRefV1Schema = lazyZodSchema(() => z.strictObject({ surface: WidgetSurfaceRefV1Schema, instanceId: id }));
 export type WidgetInstanceRefV1 = z.infer<typeof WidgetInstanceRefV1Schema>;
+
+/** Opaque, qualified reference identity shared by composer writers and dispatch readers. */
+export function formatWidgetInstanceRefKeyV1(ref: WidgetInstanceRefV1): string {
+  return JSON.stringify(WidgetInstanceRefV1Schema.parse(ref));
+}
+
+export function parseWidgetInstanceRefKeyV1(key: string): WidgetInstanceRefV1 | null {
+  let value: unknown;
+  try { value = JSON.parse(key); } catch { return null; }
+  const parsed = WidgetInstanceRefV1Schema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
 export const WidgetDefinitionRefV1StoredSchema = createStoredReadSchema(WidgetDefinitionRefV1Schema);
 export const WidgetInputBindingV1StoredSchema = createStoredReadSchema(WidgetInputBindingV1Schema);
 export const WidgetInputBindingsV1StoredSchema = createStoredReadSchema(WidgetInputBindingsV1Schema);

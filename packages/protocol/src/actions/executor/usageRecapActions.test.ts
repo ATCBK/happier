@@ -7,6 +7,8 @@ import { createActionExecutor } from '../actionExecutor.js';
 import { getActionSpec } from '../actionSpecs.js';
 import type { ActionExecutorDeps } from './types.js';
 import { clientActionUnavailable } from '../clientDispatchV1.js';
+import { projectPublicProfile } from '../../account/projectPublicProfile.js';
+import { DEFAULT_PUBLIC_PROFILE_POLICY_V1 } from '../../account/publicProfile.js';
 
 const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 900 } });
 const response = UsageAnalyticsQueryResponseSchema.parse({ v: 1, totals: { eventCount: 1,
@@ -16,6 +18,85 @@ const response = UsageAnalyticsQueryResponseSchema.parse({ v: 1, totals: { event
 // Authenticated read/client renderer ports are the boundaries under test;
 // unrelated executor families are unreachable in these checked partial fixtures.
 describe('usage recap Action composition', () => {
+  it('composes an admitted public source without querying private Usage or accepting dollars and caller DTOs', async () => {
+    const view = projectPublicProfile({ context: { handle: 'owner', identity: {},
+      service: { displayName: 'Home', publicBaseUrl: 'https://home.test' },
+      urls: { page: 'https://home.test/@owner', json: 'https://home.test/v1/public/profiles/owner',
+        badgeBase: 'https://home.test/@owner/badge', card: 'https://home.test/@owner/card.svg', og: 'https://home.test/@owner/og.png', report: 'mailto:operator@home.test' } },
+      policy: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, tokens: false } },
+      metadata: {}, layout: { v: 1, items: [] }, appearance: { theme: 'auto', atmosphere: { source: 'none' } },
+      snapshot: { v: 1, computedAtMs: 900, period: { startMs: 100, endMs: 900, timeZoneOffsetMinutes: 0 },
+        coverage: { status: 'partial', method: 'runtime' }, fieldCoverage: {},
+        facts: { tokens: 987654321, activeDays: 3, highlights: [{ kind: 'active_days', count: 3 }], agentMix: [{ agentId: 'codex', share: 1, tokens: 987654321,
+          coverage: { status: 'partial', method: 'runtime' } }] } },
+    });
+    if (!view) throw new Error('Expected public fixture');
+    const deps: Partial<ActionExecutorDeps> = { usageActions: {
+      query: async () => { throw new Error('Public recap must never read private Usage'); },
+      readPublicProfile: async () => ({ kind: 'published', view }),
+    } };
+    const executor = createActionExecutor(deps as ActionExecutorDeps);
+    const input = { source: { kind: 'public_profile' }, selectedFields: ['tokens', 'activeDays', 'agentMix'] };
+    const result = await executor.execute('usage.recap.compose', input, { surface: 'ui' });
+    expect(result).toMatchObject({ ok: true, result: { kind: 'composed', source: 'public_profile', facts: {},
+      unavailableFields: ['tokens'], publicSnapshot: { facts: { activeDays: 3, agentMix: [{ share: 1 }] } } } });
+    expect(JSON.stringify(result)).not.toContain('987654321');
+    const highlights = await executor.execute('usage.recap.compose', { source: { kind: 'public_profile' },
+      selectedFields: ['highlights'] }, { surface: 'ui' });
+    expect(highlights).toMatchObject({ ok: true, result: { kind: 'composed', unavailableFields: [],
+      publicSnapshot: { facts: { highlights: [{ kind: 'active_days', count: 3 }] } } } });
+    expect(highlights).not.toHaveProperty('result.publicSnapshot.facts.activeDays');
+    expect(await executor.execute('usage.recap.compose', { ...input, selectedFields: ['dollars'] }, { surface: 'ui' }))
+      .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    expect(await executor.execute('usage.recap.compose', { ...input, source: { kind: 'public_profile', view } }, { surface: 'ui' }))
+      .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    const headless = createActionExecutor({ usageActions: { query: deps.usageActions!.query } } as ActionExecutorDeps);
+    expect(await headless.execute('usage.recap.compose', input, { surface: 'ui' }))
+      .toMatchObject({ ok: true, result: { kind: 'unavailable', reason: 'public_profile_source_unavailable' } });
+  });
+  it('delivers only a recap rendered from admitted facts and preserves platform cancellation', async () => {
+    const deps: Partial<ActionExecutorDeps> = {
+      isActionApprovalRequired: () => false,
+      isApprovalExecutionOriginCurrent: async () => true,
+      usageActions: {
+        query: async request => resolveUsagePageAggregation({ queries: request.queries,
+          accounting: [{ query: request.queries[0]!, value: response, status: 'available', asOfMs: 900 }] }),
+        renderRecap: async () => ({ kind: 'rendered', base64: 'iVBORw==' }),
+        deliverRecap: async (file, intent) => {
+          expect(file).toMatchObject({ mediaType: 'image/png', base64: 'iVBORw==', selectedFields: ['tokens'] });
+          expect(intent).toBe('share');
+          return { kind: 'cancelled' };
+        },
+      },
+    };
+    const executor = createActionExecutor(deps as ActionExecutorDeps);
+    const input = { query, selectedFields: ['tokens'], intent: 'share' };
+    const context = { surface: 'ui' as const, actionCaller: { kind: 'host' as const } };
+    expect(await executor.execute('usage.recap.deliver', input, context)).toMatchObject({ ok: true,
+      result: { kind: 'cancelled', compose: { kind: 'composed', facts: { tokens: { total: 12 } } } } });
+    expect(await executor.execute('usage.recap.deliver', { ...input, base64: 'forged' }, context))
+      .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    expect(await executor.execute('usage.recap.deliver', { ...input, path: '/private/file.png' }, context))
+      .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+  });
+
+  it('refuses delivery after render cancellation and reports headless unavailability with safe composed data', async () => {
+    const controller = new AbortController();
+    let effects = 0;
+    const ports = {
+      query: async (request: Parameters<NonNullable<ActionExecutorDeps['usageActions']>['query']>[0]) =>
+        resolveUsagePageAggregation({ queries: request.queries,
+          accounting: [{ query: request.queries[0]!, value: response, status: 'available' as const }] }),
+      renderRecap: async () => { controller.abort(); return { kind: 'rendered' as const, base64: 'iVBORw==' }; },
+      deliverRecap: async () => { effects += 1; return { kind: 'delivered' as const }; },
+    };
+    expect(await executeUsageAction('usage.recap.deliver', { query, intent: 'copy', selectedFields: ['tokens'] }, ports,
+      { signal: controller.signal })).toMatchObject({ ok: false, errorCode: 'cancelled' });
+    expect(effects).toBe(0);
+    expect(await executeUsageAction('usage.recap.deliver', { query, intent: 'save', selectedFields: ['tokens'] },
+      { query: ports.query }, {})).toMatchObject({ ok: true, result: { kind: 'unavailable', reason: 'render_target_unavailable',
+        compose: { kind: 'composed', facts: { tokens: { total: 12 } } } } });
+  });
   it('demands selected mix populations on an ordinary query without dropping existing breakdowns', async () => {
     const result = await executeUsageAction('usage.recap.compose', {
       query: { ...query, breakdown: ['source'] }, selectedFields: ['agentMix', 'modelMix'],

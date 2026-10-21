@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod/mini';
 import { getUsageQueryKey, normalizeUsageQuery, usageAnalyticsRequestToQuery, usageQueryToAnalyticsRequest, UsageQuerySchema, USAGE_QUERY_INPUT_FIELDS, readUsagePeriodOptions } from './usageQuery.js';
 import { UsageAnalyticsQueryRequestSchema } from '../usage/usageAnalyticsContracts.js';
 import { InputFieldHintSchema } from './inputFields.js';
@@ -6,6 +7,36 @@ import { resolveEffectiveInputFields } from './inputFieldRuntime.js';
 import { projectInputOptionsDependencies } from './inputOptionsDependencies.js';
 
 describe('shared UsageQuery', () => {
+  it('keys eligible public history separately and preserves the ordinary older-server request shape', () => {
+    const ordinary = normalizeUsageQuery({});
+    const explicitOrdinary = normalizeUsageQuery({ population: 'all_personal_history' });
+    const publicHistory = normalizeUsageQuery({ population: 'public_eligible_personal' });
+    expect(getUsageQueryKey(ordinary)).toBe(getUsageQueryKey(explicitOrdinary));
+    expect(getUsageQueryKey(publicHistory)).not.toBe(getUsageQueryKey(ordinary));
+    expect(usageQueryToAnalyticsRequest(ordinary)).not.toHaveProperty('population');
+    expect(usageQueryToAnalyticsRequest(explicitOrdinary)).not.toHaveProperty('population');
+    expect(usageQueryToAnalyticsRequest(publicHistory).population).toBe('public_eligible_personal');
+    expect(usageAnalyticsRequestToQuery(usageQueryToAnalyticsRequest(publicHistory)).population).toBe('public_eligible_personal');
+    // A predecessor's strict request parser must reject, not silently broaden, this new selection.
+    const predecessor = z.omit(UsageAnalyticsQueryRequestSchema, { population: true });
+    expect(predecessor.safeParse(usageQueryToAnalyticsRequest(publicHistory)).success).toBe(false);
+  });
+  it.each(['sessions', 'busy', 'steering', 'peakParallel'])('keeps %s presentation distinct without changing accounting transport', metric => {
+    const base = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, agents: ['claude'] });
+    const query = normalizeUsageQuery({ ...base, metric });
+    expect(query.metric).toBe(metric);
+    expect(getUsageQueryKey(query)).not.toBe(getUsageQueryKey(base));
+    expect(usageQueryToAnalyticsRequest(query)).toEqual(usageQueryToAnalyticsRequest(base));
+    expect(usageQueryToAnalyticsRequest(query)).not.toHaveProperty('metric');
+  });
+  it('keys current-only quota demand without forwarding it to accounting', () => {
+    expect(normalizeUsageQuery({}).includeQuotaHistory).toBe(true);
+    const head = normalizeUsageQuery({ includeQuotaHistory: false });
+    expect(getUsageQueryKey(head)).not.toBe(getUsageQueryKey({}));
+    expect(getUsageQueryKey({ includeQuotaHistory: true })).toBe(getUsageQueryKey({}));
+    expect(usageQueryToAnalyticsRequest(head)).not.toHaveProperty('includeQuotaHistory');
+    expect(usageQueryToAnalyticsRequest(head)).toEqual(usageQueryToAnalyticsRequest(normalizeUsageQuery({})));
+  });
   it('keeps quota-only demand distinct and out of the accounting transport', () => {
     const full = normalizeUsageQuery({});
     const quota = normalizeUsageQuery({ includeAccounting: false });

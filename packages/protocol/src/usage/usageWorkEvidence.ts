@@ -12,10 +12,19 @@ import { canonicalUsageModelPriceId } from '../usage/usageModelPriceSchemas.js';
 import { resolveToolMutationClassification } from '../tools/toolMutationClassification.js';
 import type { SessionTurnsProjectionV1 } from '../sessions/turns/sessionTurnV1.js';
 import type { SessionMessageAcceptedDeliveryFactsV1 } from '../sessions/messages/sessionMessageDeliveryResolutionV1.js';
+import type { SessionAwarenessOriginV1 } from '../sessions/awareness/projectionV1.js';
+import { projectSessionUsageCollaboration, resolveUsageCollaborationHistoricalSource, type UsageCollaborationToolEvidence } from './usageCollaboration.js';
 
 export type OpenedUsageSession = Readonly<{
     id: string;
-    metadata: Readonly<{ machineId?: string; actionConfirmationsV1?: unknown }> | null;
+    createdAt?: number;
+    origin?: SessionAwarenessOriginV1;
+    manager?: Readonly<{ sessionId: string }> | null;
+    metadata: Readonly<{ machineId?: string; actionConfirmationsV1?: unknown;
+        forkV1?: Readonly<{ parentSessionId: string; createdAtMs: number }>;
+        replaySeedV1?: Readonly<{ sourceSessionId: string; createdAtMs: number }>;
+        handoffV1?: Readonly<{ sourceMachineId: string; targetMachineId: string; agentId: string; completedAtMs: number }>;
+    }> | null;
     agentState: Readonly<{
         requests?: Readonly<Record<string, Readonly<{ tool: string; kind?: string; turnId?: string; createdAt?: number | null }>>> | null;
         completedRequests?: Readonly<Record<string, Readonly<{ tool: string; kind?: string; turnId?: string; createdAt?: number | null;
@@ -26,13 +35,16 @@ export type OpenedUsageSession = Readonly<{
 export type OpenedUsageMessage = Readonly<{ id: string; localId?: string | null; acceptedDelivery?: SessionMessageAcceptedDeliveryFactsV1 | null;
     content?: unknown; createdAt?: number }>;
 /** Content-free facts retained after opened transcript bodies have been released. */
-export type UsageSessionMessageEvidence = Pick<UsageHowYouWorkDetailInput, 'acceptedInputs' | 'phaseEvents' | 'coach'>;
+export type UsageSessionMessageEvidence = Pick<UsageHowYouWorkDetailInput, 'acceptedInputs' | 'phaseEvents' | 'coach' | 'collaboration'>;
+const storedEventSchema = createStoredReadSchema(TranscriptRawAgentEventV1Schema);
+const confirmationReadSchema = createStoredReadSchema(SessionActionConfirmationsV1Schema);
 
 function resolveAccountingWorkMembership(query: UsageQuery, contributions: readonly UsageAnalyticsContribution[] = []) {
     const selected = query.session === null ? null : new Set(typeof query.session === 'string' ? [query.session] : query.session);
-    // Session metadata cannot prove historical model/source/project membership.
+    // Session metadata cannot prove public-population or historical model/source/project membership.
     // Only the canonical scoped accounting contribution can admit those turns.
-    const needsAccountingMembership = query.projects.length > 0 || query.sources.length > 0 || query.modelIds.length > 0
+    const needsAccountingMembership = query.population === 'public_eligible_personal'
+        || query.projects.length > 0 || query.sources.length > 0 || query.modelIds.length > 0
         || query.workspaceIds.length > 0 || query.backendModes.length > 0;
     const matching = contributions.filter(row => row.sessionId !== null
         && (!selected || selected.has(row.sessionId))
@@ -53,6 +65,18 @@ function resolveAccountingWorkMembership(query: UsageQuery, contributions: reado
 export function usageQueryNeedsSessionCandidates(query: UsageQuery): boolean {
     const membership = resolveAccountingWorkMembership(query);
     return membership.selected === null && !membership.needsAccountingMembership;
+}
+
+/** Retained detail is reusable only for the same proved historical turn population. */
+export function hasSameUsageQueryWorkEvidenceMembership(input: Readonly<{
+    query: UsageQuery;
+    contributions?: readonly UsageAnalyticsContribution[];
+    previousContributions?: readonly UsageAnalyticsContribution[];
+}>): boolean {
+    if (input.contributions === undefined || input.previousContributions === undefined) return false;
+    const current = resolveAccountingWorkMembership(input.query, input.contributions).accountingWork;
+    const previous = resolveAccountingWorkMembership(input.query, input.previousContributions).accountingWork;
+    return current.size === previous.size && [...current].every(workId => previous.has(workId));
 }
 
 export function selectUsageQueryWorkEvidenceSessionIds(input: Readonly<{
@@ -78,6 +102,7 @@ export function projectUsageQueryWorkEvidence(input: Readonly<{
     if (needsAccountingMembership && accountingWork.size === 0) return unknown;
     const sessions = input.sessions.filter(session => (!selected || selected.has(session.id))
         && (!needsAccountingMembership || accountingSessions.has(session.id)));
+    const sessionsById = new Map(sessions.map(session => [session.id, session]));
     if (!sessions.length) return unknown;
     const opened = sessions.map(session => input.sessionEvidence?.get(session.id) ?? projectSessionUsageWorkEvidence(session, input.openedMessages?.get(session.id),
         { messagesComplete: input.completeMessageSessionIds?.has(session.id) === true }));
@@ -87,6 +112,11 @@ export function projectUsageQueryWorkEvidence(input: Readonly<{
     const knownWork = new Set([...accountingWork, ...facts.map(fact => fact.workId)]);
     const requiresWorkMembership = needsAccountingMembership || query.agents.length > 0 || query.machines.length > 0;
     const permissions = opened.flatMap(detail => detail.permissions ?? []).filter(fact => !requiresWorkMembership || knownWork.has(fact.workId));
+    const closedTurns = opened.flatMap(detail => detail.closedTurns ?? []).filter(fact => !requiresWorkMembership || knownWork.has(fact.workId));
+    const collaboration = opened.flatMap(detail => detail.collaboration ?? []).filter(fact => !requiresWorkMembership
+        || fact.workId !== null && knownWork.has(fact.workId)).map(fact => resolveUsageCollaborationHistoricalSource(fact,
+            fact.sourceSessionId === null ? undefined : sessionsById.get(fact.sourceSessionId),
+            needsAccountingMembership ? accountingWork : undefined));
     const acceptedInputs = opened.flatMap(detail => detail.acceptedInputs ?? []).filter(fact => !requiresWorkMembership || knownWork.has(fact.workId));
     const composition = opened.flatMap(detail => detail.coach?.composition ?? []).filter(record =>
         !requiresWorkMembership || record.turnId !== null && knownWork.has(JSON.stringify([record.sessionId, record.turnId])));
@@ -102,6 +132,8 @@ export function projectUsageQueryWorkEvidence(input: Readonly<{
     return { status: 'partial',
         ...(opened.some(detail => detail.facts !== undefined) ? { facts } : {}),
         ...(opened.some(detail => detail.permissions !== undefined) ? { permissions } : {}),
+        ...(opened.some(detail => detail.closedTurns !== undefined) ? { closedTurns } : {}),
+        ...(opened.some(detail => detail.collaboration !== undefined) ? { collaboration } : {}),
         ...(opened.some(detail => detail.acceptedInputs !== undefined) ? { acceptedInputs } : {}),
         ...(opened.some(detail => detail.phaseEvents !== undefined) ? { phaseEvents } : {}),
         ...(opened.some(detail => detail.coach !== undefined) ? { coach: { composition, compositionCoverage: 'partial' as const, detail: { coverage: 'partial' as const, compactions, mcpUsage, modelRequests } } } : {}),
@@ -125,7 +157,7 @@ export function projectSessionUsageWorkEvidence(
         facts.push({ workId: workId(turn.turnId), evidenceId: turn.turnId, agentId: turn.agentId ?? null,
             machineId, kind: 'busy', startMs: turn.startedAt, endMs: timestamp(turn.terminalAt) });
     }
-    const confirmations = createStoredReadSchema(SessionActionConfirmationsV1Schema).safeParse(session.metadata?.actionConfirmationsV1);
+    const confirmations = confirmationReadSchema.safeParse(session.metadata?.actionConfirmationsV1);
     const requests = { ...(confirmations.success ? confirmations.data.requests : {}), ...session.agentState?.requests };
     const completed = { ...(confirmations.success ? confirmations.data.completedRequests : {}), ...session.agentState?.completedRequests };
     for (const [requestId, entry] of Object.entries({ ...requests, ...completed })) {
@@ -152,7 +184,8 @@ export function projectSessionUsageWorkEvidence(
     const compactions = new Map<string, UsageCoachCompactionFact>(retained?.coach?.detail?.compactions?.map(row => [row.evidenceId, row]));
     const mcpUsage = new Map<string, UsageMcpBindingUsage>(retained?.coach?.detail?.mcpUsage?.map(row => [row.evidenceId, row]));
     const phaseEvents = new Map<string, NonNullable<UsageHowYouWorkDetailInput['phaseEvents']>[number]>(retained?.phaseEvents?.map(row => [row.evidenceId, row]));
-    const storedEventSchema = createStoredReadSchema(TranscriptRawAgentEventV1Schema);
+    const collaborationTools: UsageCollaborationToolEvidence[] = [];
+    const observedSidechainIds = new Set<string>();
     for (const message of messages ?? []) {
         const content = message.content;
         if (content && typeof content === 'object' && !Array.isArray(content) && 'role' in content
@@ -160,17 +193,36 @@ export function projectSessionUsageWorkEvidence(
             const record = TranscriptRawAgentRecordV1Schema.safeParse(content.content);
             if (record.success) {
                 const raw = record.data;
+                const nativeAgentId = raw.type === 'output' ? 'claude' : raw.type === 'codex' ? 'codex' : raw.type === 'acp' ? raw.agentId : null;
+                if ('sidechainId' in raw.data && typeof raw.data.sidechainId === 'string') observedSidechainIds.add(raw.data.sidechainId);
+                if (raw.type === 'output' && 'parent_tool_use_id' in raw.data && typeof raw.data.parent_tool_use_id === 'string') {
+                    observedSidechainIds.add(raw.data.parent_tool_use_id);
+                }
                 const tools: { id: string; name: string }[] = [];
                 if ((raw.type === 'codex' || raw.type === 'acp') && raw.data.type === 'tool-call'
                     && typeof raw.data.callId === 'string' && typeof raw.data.name === 'string') {
                     tools.push({ id: raw.data.callId, name: raw.data.name });
-                } else if (raw.type === 'output' && raw.data.type === 'assistant') {
+                    collaborationTools.push({ id: raw.data.callId, name: raw.data.name, input: raw.data.input,
+                        observedAtMs: timestamp(message.createdAt), nativeAgentId });
+                } else if ((raw.type === 'codex' || raw.type === 'acp') && (raw.data.type === 'tool-result' || raw.data.type === 'tool-call-result')
+                    && typeof raw.data.callId === 'string') {
+                    collaborationTools.push({ id: raw.data.callId, name: '', result: raw.data.output,
+                        observedAtMs: timestamp(message.createdAt), nativeAgentId });
+                } else if (raw.type === 'output' && (raw.data.type === 'assistant' || raw.data.type === 'user')) {
                     const assistant = 'message' in raw.data ? raw.data.message : null;
                     const blocks = assistant && typeof assistant === 'object' && !Array.isArray(assistant)
                         && 'content' in assistant && Array.isArray(assistant.content) ? assistant.content : [];
                     for (const block of blocks) {
                         if (block && typeof block === 'object' && block.type === 'tool_use' && 'id' in block && typeof block.id === 'string'
-                            && 'name' in block && typeof block.name === 'string') tools.push({ id: block.id, name: block.name });
+                            && 'name' in block && typeof block.name === 'string') {
+                            tools.push({ id: block.id, name: block.name });
+                            collaborationTools.push({ id: block.id, name: block.name, input: 'input' in block ? block.input : undefined,
+                                observedAtMs: timestamp(message.createdAt), nativeAgentId });
+                        } else if (block && typeof block === 'object' && block.type === 'tool_result' && 'tool_use_id' in block
+                            && typeof block.tool_use_id === 'string') {
+                            collaborationTools.push({ id: block.tool_use_id, name: '', result: 'content' in block ? block.content : undefined,
+                                observedAtMs: timestamp(message.createdAt), nativeAgentId });
+                        }
                     }
                 }
                 const observedAtMs = timestamp(message.createdAt);
@@ -239,8 +291,12 @@ export function projectSessionUsageWorkEvidence(
     const hasFacts = session.sessionTurns?.sessionId === session.id || facts.length > 0;
     const hasPermissions = session.agentState?.requests != null || session.agentState?.completedRequests != null || confirmations.success;
     const hasAcceptedInputs = retained?.acceptedInputs !== undefined || messages !== undefined && (messages.length === 0 || acceptedInputs.length > 0);
-    return { status: hasFacts || hasPermissions || hasMessages ? 'partial' : 'unknown',
+    const collaboration = projectSessionUsageCollaboration({ session, tools: collaborationTools, observedSidechainIds, retained: retained?.collaboration });
+    return { status: hasFacts || hasPermissions || hasMessages || collaboration.length > 0 ? 'partial' : 'unknown',
         ...(hasFacts ? { facts } : {}), ...(hasPermissions ? { permissions } : {}),
+        ...(hasFacts ? { closedTurns: turns.map(turn => ({ workId: workId(turn.turnId), agentId: turn.agentId ?? null,
+            startMs: turn.startedAt, endMs: timestamp(turn.terminalAt), status: turn.status })) } : {}),
+        ...(hasMessages || collaboration.length > 0 ? { collaboration } : {}),
         ...(hasAcceptedInputs ? { acceptedInputs } : {}),
         ...(hasMessages ? { phaseEvents: [...phaseEvents.values()] } : {}),
         ...(hasMessages ? { coach: { composition: [...composition.values()], compositionCoverage: 'partial' as const,

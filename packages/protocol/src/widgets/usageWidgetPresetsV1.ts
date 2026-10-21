@@ -8,12 +8,13 @@ import { USAGE_QUERY_INPUT_FIELDS, UsageQuerySchema, type UsageQuery } from '../
 import { PluginJsonSchemaV2Schema } from '../plugins/contributions/jsonSchema.js';
 import type { UsageAnalyticsBreakdownDimension } from '../usage/usageAnalyticsContracts.js';
 import type { WidgetSizeV1 } from './widgetPresentationV1.js';
+import { proposeWidgetInputDefaultBindingsV1 } from './widgetInputAdmissionV1.js';
 
-export const USAGE_WIDGET_PRESET_IDS = ['overview', 'costs', 'work', 'usage', 'plans', 'coach', 'how-you-work', 'sources'] as const;
+export const USAGE_WIDGET_PRESET_IDS = ['overview', 'costs', 'work', 'usage', 'plans', 'coach', 'how-you-work', 'sources', 'agents'] as const;
 export type UsageWidgetPresetId = typeof USAGE_WIDGET_PRESET_IDS[number];
 const defaultNames: Readonly<Record<UsageWidgetPresetId, string>> = {
     overview: 'Overview', costs: 'Costs', work: 'Work', usage: 'Usage', plans: 'Plans', coach: 'Coach',
-    'how-you-work': 'How you work', sources: 'Sources',
+    'how-you-work': 'How you work', sources: 'Sources', agents: 'Agents',
 };
 
 const scopes = USAGE_QUERY_INPUT_FIELDS.filter(field => field.contextMode === 'follow');
@@ -21,7 +22,7 @@ const scopeSchema = () => PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaOb
     period: true, agents: true, machines: true, projects: true, sources: true, session: true, costBasis: true,
 })), { target: 'draft-7' }));
 
-type PresetWidget = Readonly<{ id: string; size: WidgetSizeV1; metric?: 'tokens' | 'cost';
+type PresetWidget = Readonly<{ id: string; size: WidgetSizeV1; metric?: UsageQuery['metric']; style?: string;
     breakdown?: readonly UsageAnalyticsBreakdownDimension[] }>;
 type Arrangement = Readonly<{ width: 'half' | 'full'; widgets: readonly PresetWidget[] }>;
 const w = (id: string, size: WidgetSizeV1, extra?: Omit<PresetWidget, 'id' | 'size'>): PresetWidget => ({ id, size, ...extra });
@@ -53,9 +54,17 @@ const arrangements: Readonly<Record<UsageWidgetPresetId, readonly Arrangement[]>
     plans: [{ width: 'full', widgets: [w('usage_capacity', 'full'), w('usage_projections', 'medium'), w('usage_resets', 'tall'),
         w('usage_plan_fit', 'medium')] }],
     coach: [{ width: 'full', widgets: [w('usage_coach', 'large')] }],
-    'how-you-work': [{ width: 'full', widgets: [w('usage_rhythm', 'full'), w('usage_parallel', 'full'), w('usage_human_loop', 'medium'),
-        w('usage_night_shift', 'medium'), w('usage_recap', 'large')] }],
+    // Lab u3how: Sky of days leads, Steering by Agent takes its own band (its figures column needs the width), then A day in
+    // agents beside Your planet, Run length beside Personal records, and the typical week beside the typical day.
+    'how-you-work': [{ width: 'full', widgets: [w('usage_rhythm', 'full', { style: 'sky', metric: 'busy' }),
+        w('usage_human_loop', 'full', { style: 'tide' }), w('usage_parallel', 'medium', { style: 'lanes' }), w('usage_planet', 'medium'),
+        w('usage_run_length', 'medium'), w('usage_recap', 'medium', { style: 'personalRecords' }),
+        w('usage_rhythm', 'medium', { style: 'weekTide', metric: 'busy' }), w('usage_rhythm', 'medium', { style: 'daylight', metric: 'busy' })] }],
     sources: [{ width: 'full', widgets: [w('usage_sources', 'large'), w('usage_source_coverage', 'medium'), w('usage_unpriced', 'medium')] }],
+    // Lab u3ens: the week's Score leads, Orbit beside Crew, the Agent river, Constellation and Shipped as bands.
+    agents: [{ width: 'full', widgets: [w('usage_score', 'full'), w('usage_orbit', 'medium'),
+        w('usage_breakdowns', 'medium', { style: 'crew', breakdown: ['agent'] }), w('usage_flow', 'full', { style: 'agentRiver' }),
+        w('usage_constellation', 'full'), w('usage_outcomes', 'full', { style: 'shipped' })] }],
 };
 
 /** Portable fragments have no placement identities; the platform allocates each host occurrence. */
@@ -65,17 +74,24 @@ export function createUsageWidgetPresetFragments(names: Readonly<Record<UsageWid
     for (const id of USAGE_WIDGET_PRESET_IDS) fragments[id] = arrangements[id].map((arrangement): WidgetLayoutFragmentDraftV1 => {
         const group: WidgetLayoutFragmentGroupV1 = {
             width: arrangement.width, frameStyle: 'card', dividers: 'hairline',
-            children: arrangement.widgets.map(widget => ({ kind: 'widget', size: widget.size,
+            children: arrangement.widgets.map(widget => {
+                const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: widget.id })!;
+                const defaults = proposeWidgetInputDefaultBindingsV1(descriptor);
+                const metric = (id === 'overview' ? options?.initialMetric : undefined) ?? widget.metric;
+                return { kind: 'widget', size: widget.size,
                 frameStyle: 'plain', instance: { v: 1, definition: { kind: 'builtin', id: widget.id }, bindings: {
-                    ...Object.fromEntries(readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: widget.id })!.inputs!.fields
+                    ...Object.fromEntries(descriptor.inputs!.fields
                         .filter(field => field.contextMode === 'follow').map(field => [field.path, { kind: 'context' as const, slot: field.path }])),
                     // Legacy routes open Overview. Their presentation seed must
                     // not replace the independent defaults of other named views.
-                    ...Object.fromEntries(readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: widget.id })!.inputs!.fields
-                        .filter(field => field.contextMode === 'own').map(field => [field.path, { kind: 'value' as const,
-                            value: field.path === 'metric' ? (id === 'overview' ? options?.initialMetric : undefined) ?? widget.metric ?? 'tokens'
-                                : [...(widget.breakdown ?? [])] }])),
-                } } })),
+                    ...Object.fromEntries(descriptor.inputs!.fields.filter(field => field.contextMode === 'own').flatMap(field => {
+                        const override = field.path === 'metric' ? metric : field.path === 'breakdown' && widget.breakdown ? [...widget.breakdown]
+                            : field.path === 'style' ? widget.style : undefined;
+                        const binding = override === undefined ? defaults[field.path] : { kind: 'value' as const, value: override };
+                        return binding ? [[field.path, binding]] : [];
+                    })),
+                } } };
+            }),
         };
         const applicableScopes = scopes.filter(field => group.children.some(child => Object.hasOwn(child.instance.bindings, field.path)));
         return { name: names[id], inputs: { fields: applicableScopes.map(field => ({ ...field, required: true })) }, inputSchema: scopeSchema(), group };

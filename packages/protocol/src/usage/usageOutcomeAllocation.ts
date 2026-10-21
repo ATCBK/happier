@@ -5,6 +5,7 @@ import { UsageAnalyticsContributionSchema, type UsageAnalyticsContribution } fro
 import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
 import { projectNativeJsonValueForTransport, sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { ScmBranchWorkEvidenceSchema, ScmBranchWorkIdentitySchema, type ScmBranchWorkEvidence } from '../scm/branches.js';
+import { resolveUsageBucketBounds } from './usageCalendar.js';
 
 /** Resolved A inputs; this projection never ingests or reconciles accounting. */
 export type UsageWorkContribution = UsageAnalyticsContribution;
@@ -60,6 +61,78 @@ export const UsageWorkProjectionSchema = lazyZodSchema(() => z.strictObject({
   } catch { /* Invalid contribution identities are rejected at this public boundary. */ }
   context.addIssue({ code: 'custom', message: 'Work must identify the canonical witnessed allocation' });
 })));
+
+/** Private witnessed attribution; contribution count is not authorship or elapsed work. */
+export const UsageMergedOutcomeSummarySchema = lazyZodSchema(() => z.strictObject({
+  period: z.strictObject({
+    startMs: z.number().check(z.int(), z.nonnegative()), endMs: z.number().check(z.int(), z.nonnegative()),
+  }),
+  timeZoneOffsetMinutes: z.number().check(z.int()),
+  attributionBasis: z.literal('contribution_count'),
+  /** Merged outcomes linked to admitted work, regardless of when the merge occurred. */
+  linkedMergedCount: z.number().check(z.int(), z.nonnegative()),
+  /** Subset of linked outcomes with a witnessed merge inside the half-open period. */
+  mergedInPeriodCount: z.number().check(z.int(), z.nonnegative()),
+  outsidePeriodMergedCount: z.number().check(z.int(), z.nonnegative()),
+  undatedMergedCount: z.number().check(z.int(), z.nonnegative()),
+  mergeWeeks: z.array(z.strictObject({
+    bucketStartMs: z.number().check(z.int(), z.nonnegative()),
+    bucketEndMs: z.number().check(z.int(), z.nonnegative()), count: z.number().check(z.int(), z.positive()),
+  })),
+  outcomes: z.array(z.strictObject({
+    key: z.string().check(z.minLength(1)), mergedAtMs: z.nullable(z.number().check(z.int(), z.nonnegative())),
+    attribution: z.enum(['single', 'mixed', 'unknown']),
+    agentContributions: z.array(z.strictObject({
+      agentId: z.nullable(z.string().check(z.minLength(1))), contributionCount: z.number().check(z.int(), z.positive()),
+    })),
+    leadingAgentIds: z.array(z.nullable(z.string().check(z.minLength(1)))),
+  })),
+}));
+export type UsageMergedOutcomeSummary = z.infer<typeof UsageMergedOutcomeSummarySchema>;
+
+/** Consumes the canonical allocation; usage timestamps never stand in for merge dates. */
+export function summarizeUsageMergedOutcomes(input: Readonly<{
+  work: UsageWorkProjection; period: Readonly<{ startMs: number; endMs: number }>; timeZoneOffsetMinutes: number;
+}>): UsageMergedOutcomeSummary {
+  const countsByOutcome = new Map<string, Map<string | null, number>>();
+  for (const allocation of input.work.allocations) {
+    if (!allocation.outcome || allocation.outcome.pullRequest.state !== 'merged') continue;
+    const counts = countsByOutcome.get(allocation.outcome.key) ?? new Map<string | null, number>();
+    counts.set(allocation.contribution.agentId, (counts.get(allocation.contribution.agentId) ?? 0) + 1);
+    countsByOutcome.set(allocation.outcome.key, counts);
+  }
+  const summary: UsageMergedOutcomeSummary = {
+    period: { ...input.period }, timeZoneOffsetMinutes: input.timeZoneOffsetMinutes, attributionBasis: 'contribution_count',
+    linkedMergedCount: 0, mergedInPeriodCount: 0, outsidePeriodMergedCount: 0, undatedMergedCount: 0,
+    mergeWeeks: [], outcomes: [],
+  };
+  const weeks = new Map<number, UsageMergedOutcomeSummary['mergeWeeks'][number]>();
+  for (const outcome of input.work.outcomes) {
+    if (outcome.pullRequest.state !== 'merged') continue;
+    summary.linkedMergedCount += 1;
+    const mergedAtMs = outcome.pullRequest.mergedAtMs ?? null;
+    if (mergedAtMs === null) summary.undatedMergedCount += 1;
+    else if (mergedAtMs >= input.period.startMs && mergedAtMs < input.period.endMs) {
+      summary.mergedInPeriodCount += 1;
+      const bounds = resolveUsageBucketBounds('week', mergedAtMs, input.timeZoneOffsetMinutes);
+      const bucketStartMs = Math.max(bounds.bucketStartMs, input.period.startMs);
+      const week = weeks.get(bucketStartMs) ?? { bucketStartMs,
+        bucketEndMs: Math.min(bounds.bucketEndMs, input.period.endMs), count: 0 };
+      week.count += 1;
+      weeks.set(bucketStartMs, week);
+    } else summary.outsidePeriodMergedCount += 1;
+    const agentContributions = [...(countsByOutcome.get(outcome.key) ?? [])]
+      .map(([agentId, contributionCount]) => ({ agentId, contributionCount }))
+      .sort((left, right) => left.agentId === right.agentId ? 0 : left.agentId === null ? 1 : right.agentId === null ? -1
+        : left.agentId < right.agentId ? -1 : 1);
+    const leadingCount = agentContributions.reduce((maximum, row) => Math.max(maximum, row.contributionCount), 0);
+    summary.outcomes.push({ key: outcome.key, mergedAtMs,
+      attribution: agentContributions.length > 1 ? 'mixed' : agentContributions[0]?.agentId == null ? 'unknown' : 'single',
+      agentContributions, leadingAgentIds: agentContributions.filter(row => row.contributionCount === leadingCount).map(row => row.agentId) });
+  }
+  summary.mergeWeeks = [...weeks.values()].sort((left, right) => left.bucketStartMs - right.bucketStartMs);
+  return summary;
+}
 
 export function allocateUsageOutcomes(input: Readonly<{
   contributions: readonly UsageWorkContribution[]; evidence: readonly UsageWorkEvidence[];
