@@ -2963,6 +2963,7 @@ export async function runHostSessionRuntime(
     throw new Error('Host session runtime config must define createSessionRuntime');
   }
   if (await terminalizeBeforeAgentAdmission()) return;
+  startupPhase = 'agent_runtime_open';
   try {
     createdRuntime = await config.createSessionRuntime(sessionRuntimeParams);
     recordStartupPhase('agent_runtime_open');

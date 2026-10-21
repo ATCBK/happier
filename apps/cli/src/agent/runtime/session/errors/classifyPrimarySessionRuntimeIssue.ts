@@ -8,6 +8,7 @@ import type {
 import { readBuiltInLegacyConnectedAccountServiceKeyIngress } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { readConnectedServiceLimitCategoryV1 } from '@happier-dev/protocol/connect/connected-service-limit-category';
 import { ProviderBrokerAdmissionFailureCodeV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { ProviderErrorCodeV1Schema } from '@happier-dev/protocol/providers/errors';
 import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol/spawnSession';
 import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 import { HomeTargetResolutionError } from '@happier-dev/cli-common/homeTarget';
@@ -95,6 +96,7 @@ export function readSessionPreparationFailureDiagnostic(error: unknown): Readonl
 }
 
 const preparationDiagnosticCodes = new Set([
+  ...ProviderErrorCodeV1Schema.options,
   'account_role_overrides_unavailable',
   'context_source_unavailable', 'role_overrides_unavailable', 'role_source_incomplete',
   'role_target_unavailable', 'role_policy_unenforceable', 'preparation_pending', 'attachment_unavailable',

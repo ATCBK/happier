@@ -226,9 +226,9 @@ export async function openCurrentRunnerTeamCredentialProviderBinding(
   if (!response.ok) {
     const providerCode = ProviderErrorCodeV1Schema.safeParse(response.error.code);
     if (providerCode.success) {
-      throw createProviderErrorV1(providerCode.data, {
+      throw Object.assign(new Error(providerCode.data), createProviderErrorV1(providerCode.data, {
         connectionId: input.operation.resourceId,
-      });
+      }));
     }
     const teamCredentialCode = TeamCredentialErrorCodeV1Schema.safeParse(response.error.code);
     if (teamCredentialCode.success) {
