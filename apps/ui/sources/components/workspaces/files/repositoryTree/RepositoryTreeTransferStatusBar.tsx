@@ -11,6 +11,7 @@ import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import type { WorkspaceDownloadState, WorkspaceUploadState } from '@/hooks/workspaces/transfers/useWorkspaceFileTransfers';
 import { Icon } from '@/components/ui/icons/Icon';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { describeUploadFailure } from '@/components/transfers/describeUploadFailure';
 
 const BAR_HEIGHT = 4;
 const DOWNLOAD_CANCEL_BUTTON_SIZE = 28;
@@ -117,17 +118,6 @@ function DownloadRow(props: Readonly<{ state: Extract<WorkspaceDownloadState, { 
     );
 }
 
-function describeUploadFailureReason(reason: Extract<WorkspaceUploadState, { status: 'error' }>['reason'], machineName: string): string {
-    switch (reason) {
-        case 'unreachable': return t('projects.checkouts.notAnswering', { machine: machineName });
-        case 'declined': return t('files.transfers.failureReasons.declined');
-        case 'permission': return t('errors.permissionDenied');
-        case 'tooLarge': return t('files.transfers.failureReasons.tooLarge');
-        case 'unconfirmed': return t('files.transfers.failureReasons.unconfirmed');
-        case 'other': return t('files.transfers.failureReasons.other', { machine: machineName });
-    }
-}
-
 /**
  * A batch that ended in failure settles here, in words, and stays until dismissed: no dialog ever carries the
  * transport's own error text, and the line never says only that it failed. It says why: the Machine stopped
@@ -138,7 +128,7 @@ function UploadFailureRow(props: Readonly<{ state: Extract<WorkspaceUploadState,
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
-    const label = `${t('files.transfers.uploadFailed')} · ${describeUploadFailureReason(props.state.reason, props.machineName)}`;
+    const label = describeUploadFailure(props.state.reason, props.machineName);
     return (
         <View testID="repository-tree-upload-failure" style={styles.row}>
             <Icon name={props.state.reason === 'unreachable' ? 'wifi-slash' : 'warning'} size={16} color={theme.colors.text.secondary} />

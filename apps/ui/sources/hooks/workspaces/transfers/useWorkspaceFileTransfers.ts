@@ -11,7 +11,7 @@ import {
     downloadDaemonWorkspaceFileToDestination,
     uploadDaemonWorkspaceFileFromReader,
 } from '@/sync/domains/transfers/runtime/transferRuntime';
-import { isSafeWorkspaceRelativePath } from '@/utils/path/isSafeWorkspaceRelativePath';
+import { resolveUploadRelativePath } from '@/sync/domains/transfers/uploadRelativePath';
 import { resolveLocalUploadSourceSizeBytes } from '@/sync/runtime/files/localUploadSourceReader';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { createNativeCacheFileSink, shareNativeCacheFile, type NativeCacheFileSink } from '@/sync/runtime/files/nativeCacheFileSink';
@@ -77,14 +77,6 @@ export type WorkspaceFileDownloadInput = Readonly<{
 }>;
 
 export type WorkspaceTransferResult = { ok: true } | { ok: false; error: string; canceled?: true };
-
-function joinRepoPath(parentDir: string, relativePath: string): string {
-    const cleanParent = String(parentDir ?? '').trim().replace(/\\/g, '/').replace(/\/+$/g, '');
-    const cleanRel = String(relativePath ?? '').trim().replace(/\\/g, '/').replace(/^\/+/g, '');
-    if (!cleanParent) return cleanRel.replace(/\/+/g, '/');
-    if (!cleanRel) return cleanParent;
-    return `${cleanParent}/${cleanRel}`.replace(/\/+/g, '/');
-}
 
 type UploadPreflightAwait<T> = Readonly<{ status: 'ready'; value: T }> | Readonly<{ status: 'aborted' }>;
 
@@ -210,8 +202,8 @@ async function planUploadEntries(input: UploadEntryPlanInput): Promise<UploadEnt
     for (const entry of input.entries) {
         if (input.signal?.aborted) return uploadCanceledPlan();
         const relativePath = String(entry.relativePath ?? '').trim();
-        const targetPath = joinRepoPath(destinationDir, relativePath);
-        if (!targetPath || !isSafeWorkspaceRelativePath(targetPath)) {
+        const targetPath = resolveUploadRelativePath(destinationDir, relativePath);
+        if (!targetPath) {
             invalidPaths.push(relativePath || '(empty)');
             continue;
         }
