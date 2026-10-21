@@ -242,7 +242,7 @@ describe('MachineDetailScreen (execution runs section)', () => {
         await act(async () => { runRows(screen, 'run-1')[0]!.props.onPress(); });
         expect(routerPush).toHaveBeenCalledWith(`/session/sess-1/runs/run-1?serverId=${encodeURIComponent(serverA)}`);
     });
-    it('keeps detached daemon runs unlinked and without Session stop controls', async () => {
+    it('keeps detached daemon runs unlinked while offering their own Run Stop', async () => {
         runs = [createExecutionRun({ runId: 'run-detached', happySessionId: null })];
         const screen = await renderRuns();
         await flushHookEffects();
@@ -250,6 +250,6 @@ describe('MachineDetailScreen (execution runs section)', () => {
         expect(rows).toHaveLength(1);
         expect(screen.findAllByType(Item).filter(item => item.props.title === 'runs.sessionTitle')).toHaveLength(0);
         expect(rows[0]?.props.onPress).toBeUndefined();
-        expect(rows[0]?.props.rightAccessory).toBeFalsy();
+        expect(rows[0]?.props.rightAccessory).toBeTruthy();
     });
 });

@@ -200,7 +200,7 @@ describe('MachineDetailScreen canonical Stop fallback', () => {
                 expect(stopEffects).toEqual([]);
                 expect(stopDialogs.alert).toHaveBeenCalledWith('common.error', expect.stringContaining('action_disabled'));
             } else {
-                expect(stopEffects.map(request => ({ serverUrl: request.serverUrl, machineId: request.targetId })))
+                expect(stopEffects.map(request => ({ serverUrl: request.serverUrl, machineId: request.targetId })), JSON.stringify(stopDialogs.alert.mock.calls))
                     .toEqual([{ serverUrl: home.home.serverUrl, machineId: machine.id }]);
                 if (settlement === 'refused') expect(stopDialogs.alert).toHaveBeenCalledWith('common.error',
                     'Session stop incomplete: destroy_failed');

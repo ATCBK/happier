@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ExecutionRunStopRequestSchema, type DaemonExecutionRunEntry } from '@happier-dev/protocol';
+import { DaemonExecutionRunEntrySchema, DaemonExecutionRunListResponseSchema, ExecutionRunStopRequestSchema, type DaemonExecutionRunEntry } from '@happier-dev/protocol';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 import { MachinePublishedMetadataV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
@@ -39,10 +39,11 @@ vi.mock('socket.io-client', async importOriginal =>
 const daemonListRpc = vi.fn(async (..._args: [string, Record<string, unknown>?]): Promise<{ runs: DaemonExecutionRunEntry[] }> => ({ runs: [] }));
 const sessionStopRpc = vi.fn(async (..._args: [string, { runId: string }, { serverId: string }]) => ({ ok: true as const }));
 const machineStopRpc = vi.fn(async (..._args: [string, string, { serverId: string }]) => ({ ok: true as const }));
+const detachedStopRpc = vi.fn(async (..._args: [string, { runId: string }, { serverId: string }]) => ({ ok: true as const }));
 let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | undefined;
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
-installSessionActionRpcBoundary((request, context) => {
+installSessionActionRpcBoundary(async (request, context) => {
     const serverId = Object.keys(homeUrls).find(id => homeUrls[id] === context.serverUrl?.replace(/\/+$/, ''));
     if (!serverId) throw new Error('Unexpected execution Run Home');
     const separator = request.method.indexOf(':');
@@ -50,12 +51,17 @@ installSessionActionRpcBoundary((request, context) => {
     const method = request.method.slice(separator + 1);
     if (method === RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST) {
         expect(request.params).toEqual({});
-        return daemonListRpc(targetId, { serverId });
+        return DaemonExecutionRunListResponseSchema.parse(await daemonListRpc(targetId, { serverId }));
     }
     if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP) {
         const parsed = ExecutionRunStopRequestSchema.parse(request.params);
+        if (targetId === 'machine-1') return detachedStopRpc(targetId, parsed, { serverId });
         return sessionStopRpc(targetId, parsed, { serverId });
     }
+    if (method === RPC_METHODS.CAPABILITIES_DETECT) return {
+        protocolVersion: 1, results: { 'tool.executionRuns': { ok: true, checkedAt: 1,
+            data: { protocolVersion: 2, features: { detachedScope: true, startAndWait: true } } } },
+    };
     if (method === RPC_METHODS.STOP_SESSION) {
         if (!request.params || typeof request.params !== 'object' || !('sessionId' in request.params)
             || typeof request.params.sessionId !== 'string') throw new Error('Malformed daemon Session-stop request');
@@ -102,7 +108,7 @@ afterAll(() => disposeActionLoader());
 describe('Runs screen', () => {
     function createExecutionRun(overrides: Partial<DaemonExecutionRunEntry> & Pick<DaemonExecutionRunEntry, 'runId'>): DaemonExecutionRunEntry {
         const { runId, ...rest } = overrides;
-        return {
+        return DaemonExecutionRunEntrySchema.parse({
             happyHomeDir: '/tmp/happier-test-home',
             pid: 123,
             happySessionId: 'sess-1',
@@ -118,7 +124,7 @@ describe('Runs screen', () => {
             startedAtMs: 1_700_000_000_000,
             updatedAtMs: 1_700_000_000_000,
             ...rest,
-        };
+        });
     }
 
     beforeEach(async () => {
@@ -135,6 +141,8 @@ describe('Runs screen', () => {
         daemonListRpc.mockResolvedValue({ runs: [] });
         sessionStopRpc.mockClear();
         machineStopRpc.mockClear();
+        detachedStopRpc.mockReset();
+        detachedStopRpc.mockResolvedValue({ ok: true });
         scopesReady = false;
         const machine = createMachineFixture({ activeAt: Date.now(), metadata: {
             host: 'a.local', platform: 'darwin', happyCliVersion: '1.0.0', happyHomeDir: '/tmp', homeDir: '/tmp',
@@ -289,7 +297,7 @@ describe('Runs screen', () => {
 
         expect(rows).toHaveLength(1);
         expect(rows[0]?.props.run.runId).toBe('same-run');
-        expect(daemonListRpc).toHaveBeenCalledTimes(1);
+        expect(daemonListRpc.mock.calls.every(([machineId, options]) => machineId === 'machine-1' && options?.serverId === HOME_B)).toBe(true);
         expect(daemonListRpc).toHaveBeenCalledWith('machine-1', { serverId: 'srv_server-b' });
     });
 
@@ -314,7 +322,7 @@ describe('Runs screen', () => {
         expect(sessionStopRpc).toHaveBeenCalledWith('sess-1', { runId: 'run-associated' }, { serverId: 'srv_server-a' });
     });
 
-    it('keeps detached daemon runs factual without a Session route or Session stop controls', async () => {
+    it('stops a detached daemon run through its exact Machine without inventing a Session', async () => {
         daemonListRpc.mockResolvedValue({
             runs: [createExecutionRun({ runId: 'run-detached', happySessionId: null })],
         });
@@ -325,7 +333,45 @@ describe('Runs screen', () => {
         expect(row.props.run.happySessionId).toBeNull();
         expect(row.props.subtitle).not.toContain('runs.sessionTitle');
         expect(row.props.onPress).toBeUndefined();
-        expect(row.props.rightAccessory).toBeNull();
+        expect(row.props.rightAccessory).toBeTruthy();
+        const stopButton = row.findAll(node => typeof node.type === 'string' && node.props.accessibilityLabel === 'runs.stop.stopRunA11y')[0];
+        await pressTestInstanceAsync(stopButton);
+        await flushHookEffects({ cycles: 2 });
+        expect(detachedStopRpc).toHaveBeenCalledWith('machine-1', { runId: 'run-detached' }, { serverId: HOME_A });
+        expect(sessionStopRpc).not.toHaveBeenCalled();
+        expect(machineStopRpc).not.toHaveBeenCalled();
+    });
+
+    it('loads the exact background route after a prior Machine request failed', async () => {
+        recordMachineRequestFailed({ serverId: HOME_A, accountId: ACCOUNT, machineId: 'machine-1' });
+        routerMock.state.router.setParams({ serverId: HOME_A, machineId: 'machine-1', runId: 'background-idle' });
+        daemonListRpc.mockResolvedValue({ runs: [createExecutionRun({ runId: 'background-idle', happySessionId: null,
+            runClass: 'long_lived', retentionPolicy: 'resumable' })] });
+        const screen = await renderRunsScreen();
+        expect(screen.findAllByType(ExecutionRunRow).map(row => row.props.run.runId)).toEqual(['background-idle']);
+        expect(daemonListRpc).toHaveBeenCalledWith('machine-1', { serverId: HOME_A });
+    });
+
+    it('shows a failed list transport as an error rather than an empty run inventory', async () => {
+        daemonListRpc.mockRejectedValue(Object.assign(new Error('Fixture list route is not registered'), {
+            rpcErrorCode: 'RPC_METHOD_NOT_AVAILABLE',
+        }));
+        const screen = await renderRunsScreen();
+        expect(screen.findAllByType(Item).map(item => item.props.title)).toContain('common.error');
+        expect(screen.findAllByType(Item).map(item => item.props.title)).not.toContain('runs.empty');
+    });
+
+    it('never falls back to stopping a Session when detached Run Stop fails after issuance', async () => {
+        daemonListRpc.mockResolvedValue({ runs: [createExecutionRun({ runId: 'run-detached', happySessionId: null })] });
+        detachedStopRpc.mockRejectedValue(Object.assign(new Error('Detached Stop refused'), { rpcErrorCode: 'RPC_FORBIDDEN' }));
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.alertAsync).mockClear();
+        const screen = await renderRunsScreen();
+        const row = screen.findByType(ExecutionRunRow);
+        const stopButton = row.findAll(node => typeof node.type === 'string' && node.props.accessibilityLabel === 'runs.stop.stopRunA11y')[0];
+        await pressTestInstanceAsync(stopButton);
+        expect(detachedStopRpc).toHaveBeenCalled();
+        expect(Modal.alertAsync).not.toHaveBeenCalled();
         expect(sessionStopRpc).not.toHaveBeenCalled();
         expect(machineStopRpc).not.toHaveBeenCalled();
     });

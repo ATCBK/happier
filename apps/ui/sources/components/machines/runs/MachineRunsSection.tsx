@@ -164,15 +164,15 @@ export const MachineRunsSection = React.memo(function MachineRunsSection(props: 
                                 detailParts.push(t('runs.detail.memory', { megabytes: Math.round(memory / (1024 * 1024)) }));
                             }
 
-                            const canStop = run.status === 'running' && sessionId !== null;
+                            const canStop = run.status === 'running';
                             const onStop = async () => {
                                 if (!machineId) return;
-                                if (!sessionId) return;
                                 if (!canStop) return;
                                 setStoppingRunId(run.runId);
                                 let issued = false;
                                 let refreshRuns = false;
                                 const stopSessionProcess = async () => {
+                                    if (!sessionId) return;
                                     if (!stopExecution.isCurrent()) return;
                                     const stopResult = await stopExecution.execute('session.stop', { sessionId });
                                     if (!stopExecution.isCurrent() || isExecutionRunMutationCancelled(stopResult)) return;
@@ -202,7 +202,7 @@ export const MachineRunsSection = React.memo(function MachineRunsSection(props: 
                                 };
                                 const showStopFailure = async (error: string) => {
                                     if (!stopExecution.isCurrent()) return;
-                                    if (!issued) {
+                                    if (!issued || sessionId === null) {
                                         Modal.alert(t('common.error'), error);
                                         return;
                                     }
@@ -220,7 +220,8 @@ export const MachineRunsSection = React.memo(function MachineRunsSection(props: 
                                 };
                                 try {
                                     const res = await stopExecution.execute('execution.run.stop',
-                                        { sessionId, runId: run.runId }, { onTransportIssued: () => { issued = true; } });
+                                        { sessionId, runId: run.runId }, { ...(sessionId === null ? { executionRunTargetMachineId: machineId } : {}),
+                                            onTransportIssued: () => { issued = true; } });
                                     refreshRuns = res.ok || issued;
                                     if (!res.ok && !isExecutionRunMutationCancelled(res)) {
                                         await showStopFailure(res.error || t('runs.stop.failedToStopRun'));

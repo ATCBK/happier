@@ -63,9 +63,7 @@ export async function arrangeMachineDetailsHomeForTests(
     const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
     await prepareSessionDraftPersistenceStorage();
     const { storage } = await import('@/sync/domains/state/storage');
-    const { V2SessionByIdResponseSchema } = await import('@happier-dev/protocol/sessions/control/contract');
-    const { SessionCurrentProjectionRecordV1Schema } = await import('@happier-dev/protocol/sessions/listing/response');
-    const { projectLegacySessionAccessCapabilitiesV1 } = await import('@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1');
+    const { createSessionMetadataHttpBoundary } = await import('@/dev/testkit/harness/sessionMetadataHttpBoundary');
     const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
     const { resolveRoutineServerSelectionScope } = await import('@/sync/domains/server/selection/serverSelectionScope');
     const { Platform } = await import('react-native');
@@ -73,6 +71,9 @@ export async function arrangeMachineDetailsHomeForTests(
     const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
     const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
     const home = await network.addHome(options.serverUrl, 'machine-viewer');
+    const sessionHttp = createSessionMetadataHttpBoundary(() => Object.fromEntries(
+        (options.sessions ?? []).map(session => [session.id, session]),
+    ));
     const state = {
         machines: options.machines ?? [],
         machineListRequests: 0,
@@ -99,17 +100,9 @@ export async function arrangeMachineDetailsHomeForTests(
         const session = options.sessions?.find(candidate => url.pathname === `/v2/sessions/${encodeURIComponent(candidate.id)}`);
         if (session) {
             await state.beforeSessionRead?.();
-            // This Home advertises current sharing projections: owner records include the
-            // actual access decision and complete (unassigned) responsibility pair.
-            return Response.json(V2SessionByIdResponseSchema.parse({ session: SessionCurrentProjectionRecordV1Schema.parse({
-            id: session.id, seq: session.seq, createdAt: session.createdAt, updatedAt: session.updatedAt,
-            active: session.active, activeAt: session.activeAt, encryptionMode: 'plain', dataEncryptionKey: null,
-            metadata: JSON.stringify(session.metadata), metadataVersion: session.metadataVersion,
-            agentState: null, agentStateVersion: session.agentStateVersion,
-            share: null, responsibleAccountId: null, responsibleAccount: null,
-            effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
-                capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'owner', canApprovePermissions: true }) },
-            }) }));
+            // Stop first persists its explicit hold through the real tuple writer.
+            // Keep GET and PATCH on the canonical HTTP fixture instead of answering a PATCH with a GET record.
+            return sessionHttp.handle(input, init);
         }
         if (url.pathname === '/v1/machines') {
             state.machineListRequests += 1;

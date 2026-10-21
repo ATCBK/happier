@@ -176,10 +176,13 @@ export default function RunsScreen() {
             const machineId = String(machine?.id ?? '').trim();
             if (!machineId) return;
             if (!isMachineVisibleForLaunchSelection(machine) || machine.availability?.kind === 'locked') return;
-            if (intent !== 'retry' && !isMachineReachable(binding.scope, machine)) return;
+            // Opening one exact Run is a user-requested read, like Refresh.
+            // A previous request failure must not turn that navigation into an empty list.
+            if (intent !== 'retry' && requestedRunId === null && !isMachineReachable(binding.scope, machine)) return;
 
             const res = await machineExecutionRunsList(machineId, { serverId, accountId: binding.scope.accountId,
               signal: controller.signal });
+            if (!res.ok) throw new Error(res.error || t('runs.failedToLoad'));
             if (res.ok && !controller.signal.aborted && binding.isCurrent()) {
               runsByMachineAddressKey[executionRunMachineAddressKey(serverId, machineId)] = res.runs;
             }
@@ -193,7 +196,7 @@ export default function RunsScreen() {
     } finally {
       for (const retirement of retirements) retirement.dispose();
     }
-  }, [inventory, machineScopeBindings, serverEntries]);
+  }, [inventory, machineScopeBindings, requestedRunId, serverEntries]);
 
   React.useEffect(() => {
     void load();
@@ -304,15 +307,15 @@ export default function RunsScreen() {
                     ) : (
                       runs.slice(0, 50).map((run) => {
                         const sessionId = readExecutionRunSessionAssociation(run);
-                        const canStop = run.status === 'running' && sessionId !== null;
+                        const canStop = run.status === 'running';
                         const runAddressKey = executionRunRowAddressKey(serverId, machineId, run.runId);
                         const onStop = async (execution: ReturnType<typeof useMountedActionExecution>) => {
-                          if (!sessionId) return;
                           if (!canStop) return;
                           setStoppingRunAddressKey(runAddressKey);
                           let issued = false;
                           let refreshRuns = false;
                           const stopSessionProcess = async () => {
+                            if (!sessionId) return;
                             if (!execution.isCurrent()) return;
                             const stopResult = await execution.execute('session.stop', { sessionId });
                             if (!execution.isCurrent() || isExecutionRunMutationCancelled(stopResult)) return;
@@ -341,7 +344,7 @@ export default function RunsScreen() {
                           };
                           const showStopFailure = async (error: string) => {
                             if (!execution.isCurrent()) return;
-                            if (!issued) {
+                            if (!issued || sessionId === null) {
                               Modal.alert(t('common.error'), error);
                               return;
                             }
@@ -359,7 +362,8 @@ export default function RunsScreen() {
                           };
                           try {
                             const res = await execution.execute('execution.run.stop', { sessionId, runId: run.runId },
-                              { onTransportIssued: () => { issued = true; } });
+                              { ...(sessionId === null ? { executionRunTargetMachineId: machineId } : {}),
+                                onTransportIssued: () => { issued = true; } });
                             refreshRuns = res.ok || issued;
                                     if (!res.ok && !isExecutionRunMutationCancelled(res)) {
                               await showStopFailure(res.error || t('runs.stop.failedToStopRun'));
