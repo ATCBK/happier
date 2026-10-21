@@ -274,7 +274,11 @@ export function createDaemonManagedMachineActionAdapter(params: ManagedMachineAc
             const observed = await observe({ actionId, input, actionRequestId: context.actionRequestId,
                 execute: async operation => {
                     if (runId && !operation.operationAcceptance) throw Object.assign(new Error('admission_unavailable'), { code: 'admission_unavailable' });
-                    const lifetime = signal ? AbortSignal.any([operation.signal, signal]) : operation.signal;
+                    // A detached Ask replay is only the admission carrier. Once
+                    // the durable operation owns the accepted effect, ending the
+                    // approving HTTP request must not cancel native dispatch.
+                    // Explicit operation cancellation remains authoritative.
+                    const lifetime = operation.signal;
                     // The driver retains all native admission requirements,
                     // including acceptance for acquisition and lifecycle effects.
                     const result = await executeNativeAction({ ...request, context: { ...context, ...operation, signal: lifetime }, signal: lifetime });

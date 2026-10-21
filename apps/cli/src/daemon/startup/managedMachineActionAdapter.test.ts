@@ -1409,6 +1409,60 @@ describe('daemon managed Machine Action factory', () => {
         } });
     });
 
+    it('keeps detached Delete dispatch under the durable operation after the approving request ends', async () => {
+        const outer = new AbortController();
+        let destroys = 0;
+        const native = nativeFixture({ privateNative: true, supportedIntents: ['delete'],
+            onNativeRole: role => { if (role === 'destroy') destroys += 1; } });
+        let machine = ManagedMachineV1Schema.parse({ id: 'managed-delete', homeId: 'srv_home', custodianAccountId: 'account',
+            launch: { provider: { pluginId: 'acme.compute', localId: 'vm' }, schemaVersion: 1, name: 'guest', choices: {} },
+            controller: { machineId: 'controller', installationId: 'installation' }, allocation: 'bound',
+            resource: { contributionRef: { pluginId: 'acme.compute', localId: 'vm' }, schemaVersion: 1, value: {} },
+            creationState: 'active', desired: 'delete', desiredWhen: 'now', intentRevision: 1,
+            retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false });
+        vi.spyOn(axios, 'post').mockImplementation(async url => {
+            const path = new URL(String(url)).pathname;
+            if (path.endsWith('/admit-control')) return { status: 200, data: { machine, replayed: false } };
+            if (path.endsWith('/submit-intent')) {
+                machine = ManagedMachineV1Schema.parse({ ...machine, submittedNativeEffect: {
+                    intent: 'delete', intentRevision: machine.intentRevision, requestId: 'approved-delete', controller: machine.controller,
+                } });
+                return { status: 200, data: { machine, submitted: true } };
+            }
+            if (path.endsWith('/report-intent')) {
+                machine = ManagedMachineV1Schema.parse({ ...machine, allocation: 'confirmed-absent', resource: undefined,
+                    nativeOperationRef: undefined, submittedNativeEffect: undefined,
+                    observation: { observedAt: 2, availability: 'absent' } });
+            }
+            return { status: 200, data: { machine } };
+        });
+        const operations = createHostActionOperationRuntime({ machineId: 'controller', resolveAccountId: async () => 'account',
+            generateOperationId: () => 'durable-delete' });
+        const managed = createDaemonManagedMachineActionAdapter({ credentials, machineId: 'controller', serverBaseUrl: serverUrl,
+            serverId: configuration.activeServerId, installationIdentity: { installationId: 'installation', privateKey: nacl.sign.keyPair().secretKey },
+            managedProviderOperationAuthority: authority,
+            resolveCurrentMachineExecutionOriginContext: createCurrentMachineExecutionOriginContextResolver({
+                serverUrl, resolveCurrentMachineId: () => 'controller',
+            }),
+            acquireRuntimeRegistryLease: async () => ({ registry: native.runtimeRegistry, source: 'active', durableRevision: 1, release: async () => {} }),
+            observeActionExecution: request => operations.observeExecution({ ...request, execute: operation => request.execute({
+                ...operation,
+                operationAcceptance: { ...operation.operationAcceptance, accept: result => {
+                    operation.operationAcceptance?.accept(result);
+                    outer.abort();
+                } },
+            }) }),
+        });
+        await expect(managed({ actionId: 'machines.managed.delete', input: { homeId: machine.homeId, managedId: machine.id,
+            when: 'now', expectedRevision: 0, intent: 'delete', reviewedDependencies: true },
+            context: { actionRequestId: 'approved-delete', surface: 'ui', authority: 'present_user', serverId: configuration.activeServerId,
+                signal: outer.signal }, signal: outer.signal })).resolves.toMatchObject({ kind: 'accepted' });
+        await expect(operations.handlers.getV2({ operationId: 'durable-delete', waitForTerminal: true })).resolves.toMatchObject({
+            kind: 'found', operation: { state: 'succeeded' },
+        });
+        expect(destroys).toBe(1);
+    });
+
     it('refuses an unavailable managed-operation authority before admitting any compute', async () => {
         const post = vi.spyOn(axios, 'post');
         await expect(adapter(false)({ actionId: 'machines.provisioners.list', input: { homeId: 'srv_home' },
