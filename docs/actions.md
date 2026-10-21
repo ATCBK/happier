@@ -2668,6 +2668,13 @@ returns typed unavailable rather than trying to materialize Companion state. Bot
 `widgets.item.*` and widget mutations in `boards.apply` share configured-instance
 admission before their existing surface writers.
 
+Standalone CLI reads of a specific installed widget or plugin input type use the
+existing Account Machine selector and plugin availability census to choose a
+reachable Machine carrying that plugin. An explicit Machine selector or selected
+Session keeps its exact target. If no eligible Machine carries the plugin, the
+Action returns `widget_type_unavailable` naming the missing plugin; an incomplete
+or failed census remains unavailable and cannot establish absence.
+
 ### Entity drop effects (development)
 
 Entity dragging selects a semantic destination and calls its domain Action. There is no generic storage-mutating drag Action. Pointer release, staged keyboard, menus and agent requests consume the same current domain resolvers and writers: relation changes retain `session.manager.set`, organization uses `session.organization.move`, and navigation uses the workspace tab and split owners (`workspace.tabs.*`, `workspace.split` and `workspace.groups.*`), including Session destinations. Workflow binding edits only the mounted draft's conversation; composer transactions insert typed context without sending it. Pending and todo reorder retain exact recipient/current membership semantics. Widget movement delegates to the configured placement owners rather than a drag-owned store.
