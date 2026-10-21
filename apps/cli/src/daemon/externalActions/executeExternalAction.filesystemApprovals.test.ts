@@ -45,6 +45,78 @@ const repository = { provider: { id: 'github', kind: 'github' as const, displayN
   repository: { nameWithOwner: 'happier-dev/happier', cloneUrl: 'https://github.com/happier-dev/happier.git' }, protocol: 'https' as const };
 
 describe('Machine filesystem approval continuity from UI and paired terminal', () => {
+  it.each([false, true])('binds signed worker Service preparation to exact SOURCE and destination refs (protected=%s)', async protectedInput => {
+    const h = await createHarness('localServices.launcher.start', 'allowed', false, 'srv_portableHome', undefined, true);
+    try {
+      expect(await h.prepareSignedServiceStart(protectedInput ? { protectedInput: 'requester material' } : {})).toMatchObject({ ok: true });
+      expect(h.copies()).toBe(1);
+      expect(await readFile(join(h.workerRef.rootPath, 'original'))).toEqual(bytes);
+      expect(h.rpcOutcomes).toContainEqual(expect.objectContaining({ phase: 'installed.sourceDelivery',
+        method: 'source-machine:daemon.workspaceSync.prepareBetween.v1', originalEnvelopeVersion: protectedInput ? 2 : 1 }));
+    } finally { await h.close(); }
+  });
+  it.each(['other source', 'other target', 'other selected Machine', 'changed envelope', 'wrong requester key'] as const)(
+    'refuses signed worker Service preparation before copying: %s', async variant => {
+      const h = await createHarness('localServices.launcher.start', 'allowed', false, 'srv_portableHome', undefined, true);
+      try {
+        await expect(h.prepareSignedServiceStart({
+          ...(variant === 'other source' ? { sourceWorkspaceRefId: h.workerRef.id } : {}),
+          ...(variant === 'other target' ? { targetWorkspaceRefId: h.ref.id } : {}),
+          ...(variant === 'other selected Machine' ? { selectedMachineId: 'unreviewed-machine',
+            protectedInput: 'requester material' as const } : {}),
+          ...(variant === 'changed envelope' ? { changedEnvelope: true } : {}),
+          ...(variant === 'wrong requester key' ? { protectedInput: 'other material' as const } : {}),
+        })).rejects.toMatchObject({ code: variant === 'changed envelope'
+          ? 'project_requester_authority_unavailable' : 'project_workspace_changed' });
+        expect(h.copies()).toBe(0);
+        expect(h.serviceInstances()).toHaveLength(0);
+      } finally { await h.close(); }
+    });
+  it('refuses changed approved worker Service inputs before copy or Start', async () => {
+    const h = await createHarness('localServices.launcher.start', 'ask', false, 'srv_portableHome', undefined, true);
+    try {
+      await cp(h.rootPath, h.workerRef.rootPath, { recursive: true });
+      expect(await h.runOriginalCli(await h.serviceInput(), 'localServices.launcher.start')).toMatchObject({ ok: true,
+        result: { kind: 'approval_request_created' } });
+      const file = join(h.rootPath, '.happier/project.json');
+      const manifest = JSON.parse(await readFile(file, 'utf8'));
+      manifest.services.checked.source.command = 'echo changed';
+      await writeFile(file, JSON.stringify(manifest));
+      expect(await h.decide('approve')).toMatchObject({ ok: true });
+      expect((await h.approval()).execution).toMatchObject({ ok: true,
+        result: { status: 'denied', reasonCode: 'project_service_effect_changed' } });
+      expect(h.copies()).toBe(0);
+      expect(h.serviceInstances()).toHaveLength(0);
+    } finally { await h.close(); }
+  });
+  it('copies the approved signed worker Service Start through the authenticated SOURCE preparation corridor', async () => {
+    const h = await createHarness('localServices.launcher.start', 'ask', false, 'srv_portableHome', undefined, true);
+    try {
+      await cp(h.rootPath, h.workerRef.rootPath, { recursive: true });
+      const input = await h.serviceInput();
+      expect(await h.runOriginalCli(input, 'localServices.launcher.start')).toMatchObject({ ok: true,
+        result: { kind: 'approval_request_created' } });
+      expect(await h.approval()).toMatchObject({ actionArgs: input, preview: { serviceStartReview: {
+        request: input, target: { machineId: h.workerRef.machineId, rootPath: h.workerRef.rootPath },
+      } } });
+      expect(h.copies()).toBe(0);
+      expect(h.serviceInstances()).toHaveLength(0);
+      await writeFile(join(h.rootPath, 'original'), 'current SOURCE bytes');
+      expect(await h.decide('approve')).toMatchObject({ ok: true });
+      const execution = (await h.approval()).execution;
+      expect(execution, JSON.stringify({ execution, outcomes: h.rpcOutcomes })).toMatchObject({ ok: true,
+        result: { status: 'succeeded', currentTarget: { machineId: h.workerRef.machineId,
+          workspaceId: h.workerRef.id, cwd: h.workerRef.rootPath } } });
+      expect(h.copies()).toBe(1);
+      expect(await readFile(join(h.workerRef.rootPath, 'original'), 'utf8')).toBe('current SOURCE bytes');
+      expect(h.serviceInstances()).toHaveLength(1);
+      expect(h.rpcOutcomes).toContainEqual(expect.objectContaining({ phase: 'installed.sourceDelivery',
+        method: 'source-machine:daemon.workspaceSync.prepareBetween.v1' }));
+    } finally {
+      await Promise.all(h.serviceInstances().map(service => service.stop()));
+      await h.close();
+    }
+  });
   it.each(['retained', 'missing'] as const)('refuses Move before SOURCE Stop when destination setup needs consent (%s copy)', async copy => {
     const h = await createHarness('projects.service.relocate', 'allowed', true, 'srv_portableHome', undefined, true);
     const service = await h.seedMoveService();

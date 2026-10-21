@@ -163,10 +163,11 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
         kind: 'command', command: `${JSON.stringify(process.execPath)} -e "setInterval(() => {}, 1000)"` } } } } : {}) }));
   }
   if (actionId === 'localServices.launcher.start') {
-    await mkdir(join(rootPath, '.happier'));
+    await mkdir(join(rootPath, '.happier'), { recursive: true });
     await writeFile(join(rootPath, '.happier/project.json'), JSON.stringify({ version: 1,
       ...(setup ? { workspace: { setup: [{ kind: 'command', command: 'echo setup-reviewed' }] } } : {}),
-      services: { checked: { source: { kind: 'command', command: 'echo service-admitted' } } } }));
+      services: { checked: { ...(worker ? { execution: 'portable' } : {}),
+        source: { kind: 'command', command: 'echo service-admitted' } } } }));
   }
   await writeFile(join(directory, 'outside'), 'outside unchanged');
   const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL', 'HAPPIER_MACHINE_RPC_WORKING_DIRECTORY']);
@@ -230,6 +231,19 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
   const accountCurrentness = () => ({ mode: protectedMoveCredentials ? 'e2ee' as const : 'plain' as const,
     version: encryptionVersion, updatedAt: encryptionVersion, signingKeyFingerprint: null,
     contentKeyFingerprint: protectedMoveContentKeyFingerprint });
+  const protectRequester = async () => {
+    const material = { type: 'dataKey' as const, machineKey: tweetnacl.randomBytes(32) };
+    protectedMoveCredentials = { token: credentials.token, encryption: { ...material,
+      publicKey: new Uint8Array(tweetnacl.box.keyPair.fromSecretKey(material.machineKey).publicKey) } };
+    protectedMoveContentKeyFingerprint = computeAccountEncryptionMigrateKeyFingerprintV1(
+      tweetnacl.box.keyPair.fromSecretKey(material.machineKey).publicKey);
+    const plain = createProjectAccountRowCipherV1({ mode: 'plain', material: null, randomBytes: tweetnacl.randomBytes });
+    const encrypted = createProjectAccountRowCipherV1({ mode: 'e2ee', material, randomBytes: tweetnacl.randomBytes });
+    protectedMoveRows = rows.map(row => ({ ...row, content: row.content
+      ? encrypted.seal(plain.open(row.key, row.content)) : row.content }));
+    encryptionVersion++;
+    await currentnessChannel?.push('account', accountCurrentness());
+  };
   let copies = 0;
   let afterCopy: (() => Promise<void>) | undefined;
   const sourceHandlers = new Map<string, (input: unknown, context?: import('@/api/rpc/types').RpcHandlerContext) => Promise<unknown>>();
@@ -994,6 +1008,44 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
       encryptionVersion++;
       await currentnessChannel?.push('account', accountCurrentness());
     },
+    async prepareSignedServiceStart(options: Readonly<{ protectedInput?: 'requester material' | 'other material';
+      sourceWorkspaceRefId?: string; targetWorkspaceRefId?: string; selectedMachineId?: string;
+      changedEnvelope?: boolean }> = {}) {
+      if (!workerWorkspaceSync) throw new Error('Missing real Sync composition');
+      const input = { ...await harness.serviceInput(), choice: { kind: 'workers' as const,
+        destination: { kind: 'machine' as const, machineId: options.selectedMachineId ?? workerRef.machineId } } };
+      if (options.protectedInput) await protectRequester();
+      const requestId = randomUUID();
+      const envelope = protectedMoveCredentials ? sealExternalActionRequestV2({ binding: { serverIdentityId: homeId,
+        accountId: 'account', actionId: 'localServices.launcher.start', requestId, target,
+        authentication: { kind: 'account', tokenEpoch: 1 } }, input,
+        material: options.protectedInput === 'other material' ? { type: 'dataKey', machineKey: tweetnacl.randomBytes(32) }
+          : protectedMoveCredentials.encryption, randomBytes: tweetnacl.randomBytes })
+        : ExternalActionRequestEnvelopeV1Schema.parse({ v: 1, requestId, target, input });
+      const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'service-start-home-root', binding: {
+        accountId: 'account', custodianAccountId: 'account', authentication: { kind: 'account', tokenEpoch: 1 },
+        accountEncryptionMode: protectedMoveCredentials ? 'e2ee' : 'plain', serverIdentityId: homeId,
+        machineId: target.machineId, installationId: installation.installationId, actionId: 'localServices.launcher.start',
+        requestId, target, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
+      } });
+      const requester = await admitRequesterAccountActionContext({ authorization,
+        credentials: protectedMoveCredentials ?? credentials, serverId: 'srv_n2', serverIdentityId: homeId,
+        serverHttpBaseUrl: params.serverHttpBaseUrl, isCurrent: async () => true });
+      if (!requester) throw new Error('Service requester custody was not admitted');
+      try {
+        const projected = await projectExternalActionRequesterHttpAuthorization({ authorization: requester.authorization,
+          serverId: 'srv_n2', serverIdentityId: homeId, serverHttpBaseUrl: params.serverHttpBaseUrl,
+          target, installationId: installation.installationId, privateKey, isCurrent: requester.isCurrent });
+        if (!projected) throw new Error('Service requester HTTP ports were not admitted');
+        return await workerWorkspaceSync.handoffAdapter.prepareBetween({ sourceWorkspaceRefId: options.sourceWorkspaceRefId ?? ref.id,
+          targetWorkspaceRefId: options.targetWorkspaceRefId ?? workerRef.id }, undefined, {
+          signal: new AbortController().signal, machineAdmission: admission, callerAuthority: 'present_user',
+          callerInputAuthorization: projected,
+          originalActionEnvelope: options.changedEnvelope ? { ...envelope, requestId: randomUUID() } : envelope,
+          verifyMachineAdmissionCurrent: async () => true,
+        });
+      } finally { await requester.dispose(); }
+    },
     async prepareSignedMove(options: Readonly<{ sourceWorkspaceRefId?: string; targetWorkspaceRefId?: string;
       selectedMachineId?: string; protectedInput?: 'requester material' | 'other material';
       sourceCoordinator?: true; requesterToken?: string; activeMove?: true;
@@ -1015,17 +1067,7 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
           value: { runsOn: destination, unavailable: 'fail' },
         } });
       if (options.protectedInput) {
-        const material = { type: 'dataKey' as const, machineKey: tweetnacl.randomBytes(32) };
-        protectedMoveCredentials = { token: credentials.token, encryption: { ...material,
-          publicKey: new Uint8Array(tweetnacl.box.keyPair.fromSecretKey(material.machineKey).publicKey) } };
-        protectedMoveContentKeyFingerprint = computeAccountEncryptionMigrateKeyFingerprintV1(
-          tweetnacl.box.keyPair.fromSecretKey(material.machineKey).publicKey);
-        const plain = createProjectAccountRowCipherV1({ mode: 'plain', material: null, randomBytes: tweetnacl.randomBytes });
-        const encrypted = createProjectAccountRowCipherV1({ mode: 'e2ee', material, randomBytes: tweetnacl.randomBytes });
-        protectedMoveRows = rows.map(row => ({ ...row, content: row.content
-          ? encrypted.seal(plain.open(row.key, row.content)) : row.content }));
-        encryptionVersion++;
-        await currentnessChannel?.push('account', accountCurrentness());
+        await protectRequester();
       }
       const moveTarget = options.sourceCoordinator ? { kind: 'machine' as const, machineId: ref.machineId } : target;
       const moveInstallation = options.sourceCoordinator ? sourceInstallation : installation;
@@ -1259,6 +1301,11 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
       return () => { releaseTrustRead(); trustRead = Promise.resolve(); };
     },
     async serviceInput() {
+      if (worker) return { machineId: target.machineId,
+        targetId: createProjectServiceDeclarationTargetIdV1(ref, { kind: 'manifest', name: 'checked' }),
+        workspace: { serverId: homeId, workspaceId: ref.id, machineId: ref.machineId, rootPath },
+        declaration: { workspaceRefId: ref.id, selection: { kind: 'manifest' as const, name: 'checked' } },
+        choice: { kind: 'workers' as const, destination: { kind: 'machine' as const, machineId: workerRef.machineId } } };
       const result = await runtimeActionExecute({ actionId: 'localServices.launcher.snapshot',
         input: { machineId: target.machineId, scope: 'workspace', workspaceRoot: rootPath }, context: { serverId: 'srv_n2' } });
       expect(result, JSON.stringify(result)).not.toHaveProperty('errorCode');

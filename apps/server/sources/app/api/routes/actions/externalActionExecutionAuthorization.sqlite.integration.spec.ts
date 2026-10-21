@@ -104,6 +104,7 @@ import { WorkspaceExecutionConfigReadRequestV1Schema, WorkspaceExecutionConfigRe
 import { ProjectTrustReadResponseV1Schema } from '@happier-dev/protocol/workspaces/projectSetup/projectTrustRowV1';
 import { createLocalServiceActionConfirmationNonceV1, createProjectServiceDeclarationTargetIdV1 } from '@happier-dev/protocol/local/services/actions/v1';
 import { ProjectServiceRelocateInputV1Schema, ProjectServiceRelocateResultV1Schema } from '@happier-dev/protocol/workspaces/projectServiceRelocationV1';
+import { DaemonLocalServiceLauncherStartRequestV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 import { createProjectServiceRelocationRoute } from '../../../../../../cli/src/daemon/local/services/actions/projectServiceRelocationRoute';
 import { createLocalServicesDaemonRuntimeActionExecutor } from '../../../../../../cli/src/daemon/local/services/actions/runtimeActionExecutor';
@@ -3794,7 +3795,9 @@ describe("external Action execution authorization", () => {
     it.each([['projects.script.run', 1, 'source', 'account'], ['projects.script.run', 2, 'source', 'account'],
         ['projects.compute.exec', 1, 'source', 'account'], ['projects.compute.exec', 2, 'source', 'account'], ['projects.script.run', 1, 'hub', 'account'],
         ['projects.service.relocate', 1, 'source', 'account'], ['projects.service.relocate', 2, 'source', 'account'], ['projects.service.relocate', 1, 'hub', 'account'],
-        ['projects.script.run', 1, 'source', 'terminal'], ['projects.service.relocate', 1, 'source', 'terminal']] as const)(
+        ['projects.script.run', 1, 'source', 'terminal'], ['projects.service.relocate', 1, 'source', 'terminal'],
+        ['localServices.launcher.start', 1, 'source', 'account'], ['localServices.launcher.start', 2, 'source', 'account'],
+        ['localServices.launcher.start', 1, 'hub', 'account'], ['localServices.launcher.start', 1, 'source', 'terminal']] as const)(
         'retains the worker-bound %s root v%s through a %s controller from an installed %s with SOURCE Sync discovery, relay and receiver currentness', async (actionId, version, controllerKind, senderKind) => {
         const fixture = await createFixture({ qualifiedPat: false });
         const material = version === 2 ? { type: 'dataKey' as const, machineKey: tweetnacl.randomBytes(32) } : undefined;
@@ -3839,6 +3842,10 @@ describe("external Action execution authorization", () => {
                 workspace: { serverId: homeId, refId: workspace.workspaceId }, serviceName: 'web', expectedRevision: 0,
                 expected: { kind: 'absent' }, value: { runsOn: { kind: 'workers', destination: { kind: 'machine', machineId: fixture.machine.id } }, unavailable: 'fail' },
             },
+        }) : actionId === 'localServices.launcher.start' ? DaemonLocalServiceLauncherStartRequestV1Schema.parse({
+            machineId: fixture.machine.id, targetId: 'project-service:web', workspace,
+            declaration: { workspaceRefId: workspace.workspaceId, selection: { kind: 'manifest', name: 'web' } },
+            choice: { kind: 'workers', destination: { kind: 'machine', machineId: fixture.machine.id } },
         }) : PROJECT_ACTION_INPUT_SCHEMAS_V1[actionId].parse(actionId === 'projects.script.run'
             ? { workspace, selection: { kind: 'named', name: 'test' } }
             : { workspace, executable: 'git', argv: ['status'], cwd: workspace.rootPath });
@@ -3892,7 +3899,8 @@ describe("external Action execution authorization", () => {
             const receiver = { id: 'finite-source-controller', data: { clientType: 'machine-scoped', machineId: controller.id,
                 verifiedMachineInstallationId: controller.installationId }, timeout: () => ({ emitWithAck: delivered }) };
             qualifyCurrentAccountStoredContentSocket(receiver);
-            const rootMethod = `${fixture.machine.id}:${actionId === 'projects.service.relocate' ? actionId : PROJECT_FINITE_ACTION_RPC_METHODS_V1[actionId]}`;
+            const runtimeAction = actionId === 'projects.service.relocate' || actionId === 'localServices.launcher.start';
+            const rootMethod = `${fixture.machine.id}:${runtimeAction ? actionId : PROJECT_FINITE_ACTION_RPC_METHODS_V1[actionId]}`;
             const rootDelivered = vi.fn(async (_event: string, _request: unknown) => ({ kind: 'accepted' }));
             const rootReceiver = { id: 'finite-root-worker', data: { clientType: 'machine-scoped', machineId: fixture.machine.id,
                 verifiedMachineInstallationId: fixture.machine.installationId }, timeout: () => ({ emitWithAck: rootDelivered }) };
@@ -3916,7 +3924,7 @@ describe("external Action execution authorization", () => {
                 method: rootMethod, requestId, params: input, externalActionExecution: rootPacket, originalActionEnvelope }, callback);
             // Finite roots have their own canonical Machine RPC. Move enters
             // through the runtime Action front door, covered by its composed test.
-            if (actionId !== 'projects.service.relocate' && senderKind === 'account') {
+            if (!runtimeAction && senderKind === 'account') {
                 await callRoot();
                 expect(callback).toHaveBeenLastCalledWith({ ok: true, result: { kind: 'accepted' } });
                 expect(rootDelivered.mock.calls[0]?.[1]).toMatchObject({ callerInputAuthorization: root, originalActionEnvelope: envelope });
