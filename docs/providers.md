@@ -437,7 +437,7 @@ Custom-provider forms do not support arbitrary query-parameter credentials or in
 Endpoint validation rejects credentials in URLs, unsafe metadata destinations, ambiguous encodings, unsafe redirects, and oversized responses. Redirects are revalidated hop by hop, and credentials are not forwarded across an origin change. DNS is resolved on the daemon for probes, but the spawned Agent may resolve independently; endpoint-bound machine grants remain the authorization boundary for local/private endpoints.
 
 A catalog probe is bounded end to end, not per hop: one wall budget covers pre-dispatch resolution, request establishment and the complete response body across every redirect, and one idle budget bounds the gap between body chunks. Both apply identically to a public endpoint and to a Provider the daemon supervises — a managed probe reaches its service through that service's own supervised request handle, so a response that returns headers and never finishes its body cannot hold a Provider probe slot.
-In 0.3 development, the existing daemon RPC completion log identifies the stage where a saved probe's wall budget expires and records stage start/finish offsets and durations for catalog admission, purpose/group/account lookup, pre-effect revalidation, managed establishment and catalog dispatch, without logging request or credential contents.
+In 0.3 development, binding-status reads use that same canonical wall budget and carry the RPC caller's cancellation through Home/catalog reads, registry activation, DNS, Gateway purpose resolution and runtime catalog observation. A read that cannot finish returns the existing retryable `provider_catalog_unavailable`; the Session banner offers Retry rather than asserting model incompatibility. The existing daemon RPC completion log identifies the stage where a saved probe or binding-status read expires or is cancelled (`failedPhase`, `causeCode`, `phaseDurationsMs`, `phaseTimingsMs`). Stages cover catalog admission, registry, DNS, purpose/group/account lookup, pre-effect revalidation, managed establishment and catalog dispatch, without logging request or credential contents.
 
 In 0.3 development, native broker inference does not use the catalog-response
 byte ceiling. Its ingress retains the request bytes for policy parsing. The
@@ -447,9 +447,9 @@ size. The broker preserves that refusal as HTTP 413 with `request_too_large`.
 Relay frame limits govern individual chunks, not the complete inference body.
 
 In 0.3 development, connection descriptions and mutations, Profile migration
-admission, and binding-status reads follow their containing operation's lifetime.
+admission follow their containing operation's lifetime.
 The endpoint-probe budget does not expire a slow Home or registry read in those
-operations. A local command catalog fallback consumes the remaining catalog
+operations; binding-status reads use the bounded read lifetime described above. A local command catalog fallback consumes the remaining catalog
 deadline and cancellation, with the same canonical catalog-response byte bound
 as HTTP catalogs. Transport settlement during cancellation cannot publish a
 successful withdrawal as a completed operation.
