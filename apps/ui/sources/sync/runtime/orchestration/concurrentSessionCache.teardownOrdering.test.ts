@@ -74,13 +74,17 @@ describe('concurrent session cache teardown ordering', () => {
 
         let holdIncomingSecrets = false;
         const heldSecrets: { finish: (() => void) | null } = { finish: null };
+        let heldSecretReads: Promise<void> | null = null;
         const values = new Map<string, string>();
         vi.stubGlobal('__TAURI_INTERNALS__', {
             invoke: async (command: string, args?: Record<string, unknown>) => {
                 const key = String(args?.key);
                 if (command === 'desktop_secure_storage_read') {
                     if (key.startsWith('device-local-settings-secret-key:v1')) {
-                        if (holdIncomingSecrets) await new Promise<void>((resolve) => { heldSecrets.finish = resolve; });
+                        if (holdIncomingSecrets) {
+                            heldSecretReads ??= new Promise<void>(resolve => { heldSecrets.finish = resolve; });
+                            await heldSecretReads;
+                        }
                         return JSON.stringify({ v: 1, key: Buffer.from(new Uint8Array(32).fill(7)).toString('base64') });
                     }
                     return values.get(key) ?? null;

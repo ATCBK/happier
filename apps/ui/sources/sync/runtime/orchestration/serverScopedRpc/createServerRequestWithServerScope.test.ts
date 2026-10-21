@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -14,8 +14,11 @@ import {
     resolveServerRequestForServerAccountScope,
 } from './createServerRequestWithServerScope';
 
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 installDisconnectedServerSocketBoundary();
-beforeAll(loadSyncSingletonForTests);
+await loadSyncSingletonForTests();
 
 const credentials = new Map<string, { token: string }>();
 const requests: Array<{ url: string; init: RequestInit }> = [];
