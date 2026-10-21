@@ -82,7 +82,7 @@ describe('connectedAccountDescriptorProjection', () => {
     expect(projectConnectedServiceRegistryEntries(withdrawn)[0]).toMatchObject({ projectedTitle: 'Acme account', executable: false });
   });
 
-  it('publishes answering descriptors while another machine is still resolving without a read failure', () => {
+  it('settles answering descriptors while another machine is still resolving', () => {
     const projected = descriptor();
     const merged = mergeConnectedAccountDescriptorProjections([
       { kind: 'ready', descriptors: [projected] },
@@ -91,13 +91,17 @@ describe('connectedAccountDescriptorProjection', () => {
     const state = advanceConnectedAccountDescriptorProjectionState(
       createConnectedAccountDescriptorProjectionLoadingState('server-a'), merged,
     );
-    expect(state).toMatchObject({ status: 'loading', descriptors: [projected], errorReason: null });
+    expect(state).toMatchObject({ status: 'stale', descriptors: [projected], errorReason: 'partial_machine_failure' });
     expect(projectConnectedServiceRegistryEntries(state)[0]).toMatchObject({
       executable: true, supportsToken: true, projectionStatus: 'ready',
     });
+    expect(getConnectedAccountAuthentication({ pluginId: 'acme.accounts', localId: 'account' }, {
+      scopeKey: state.scopeKey, status: state.status, errorReason: state.errorReason,
+      entries: projectConnectedServiceRegistryEntries(state),
+    })).toEqual(projected.authentication);
   });
 
-  it('treats a retrying transport read beside an answering machine as partial loading', () => {
+  it('settles a retrying transport read beside an answering machine as degraded coverage', () => {
     const projected = descriptor();
     const merged = mergeConnectedAccountDescriptorProjections([
       { kind: 'ready', descriptors: [projected] },
@@ -105,7 +109,7 @@ describe('connectedAccountDescriptorProjection', () => {
     ]);
     expect(advanceConnectedAccountDescriptorProjectionState(
       createConnectedAccountDescriptorProjectionLoadingState('server-a'), merged,
-    )).toMatchObject({ status: 'loading', descriptors: [projected], errorReason: null });
+    )).toMatchObject({ status: 'stale', descriptors: [projected], errorReason: 'partial_machine_failure' });
   });
 
   it('refreshes answered identities and retains unanswered services until a complete read', () => {
@@ -119,7 +123,7 @@ describe('connectedAccountDescriptorProjection', () => {
     const partial = advanceConnectedAccountDescriptorProjectionState(previous, mergeConnectedAccountDescriptorProjections([
       { kind: 'ready', descriptors: [fresh] }, { kind: 'loading' },
     ]));
-    expect(partial.status).toBe('loading');
+    expect(partial.status).toBe('stale');
     expect(partial.descriptors).toEqual(expect.arrayContaining([fresh, unanswered]));
     expect(partial.descriptors).not.toContainEqual(old);
     expect(projectConnectedServiceRegistryEntries(partial).find(entry => entry.service?.localId === 'account'))

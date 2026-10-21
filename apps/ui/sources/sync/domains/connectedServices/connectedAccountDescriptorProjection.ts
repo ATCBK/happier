@@ -105,14 +105,15 @@ export function mergeConnectedAccountDescriptorProjections(
   projections: readonly ConnectedAccountDescriptorMachineProjection[],
 ): ConnectedAccountDescriptorProjectionResolution {
   const answering = projections.filter((projection) => projection.kind === 'ready');
-  // A pending read, or a retrying transport beside an answering machine, is
-  // incomplete knowledge. The per-machine reader owns retry and settlement.
+  // A pending or unavailable source cannot hold Account settings at loading
+  // after another machine answered. Partial coverage retains unanswered display
+  // facts without admitting them; the per-machine reader still owns recovery.
   const readState = resolveFleetReadState(projections.map((projection) => projection.kind === 'ready' ? 'current'
     : projection.kind === 'loading' ? 'resolving' : projection.reason === 'transport' ? 'transportFailure' : 'failed'));
-  if (readState === 'resolving') {
+  if (readState === 'resolving' && answering.length === 0) {
     return { ...unionReadyConnectedAccountDescriptorProjections(answering), kind: 'loading' };
   }
-  if (readState === 'failed') {
+  if (readState !== 'current') {
     if (answering.length === 0) {
       return {
         kind: 'error',
