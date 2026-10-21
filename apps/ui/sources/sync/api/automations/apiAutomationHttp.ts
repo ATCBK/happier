@@ -1,7 +1,9 @@
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { HappyError } from '@/utils/errors/errors';
-import type { ServerFetch, ServerFetchOptions } from '@/sync/http/client';
-import type { CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
+import { createServerFetchForActiveServer, StaleServerGenerationError, type ServerFetch, type ServerFetchOptions } from '@/sync/http/client';
+import { createCapturedServerReadTransport, type CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
+import { getActiveServerHomeCarrier, getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { resolveActiveServerRuntimeOrigin } from '@/sync/runtime/nativeLoopbackTunnels/runtimeOrigin';
 import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
@@ -19,8 +21,24 @@ export type AutomationRequestContext = Readonly<{
 // in the Automation/Workflow owners; no opened definition or Run is retained.
 const automationReads = createScopedResolutionSingleFlight<unknown>();
 
+/** The native HTTP owner has already captured this active generation; no profile/auth recapture. */
+export function captureNativeAutomationRequestContext(credentials: AuthCredentials): AutomationRequestContext {
+    const snapshot = getActiveServerSnapshot();
+    const homeCarrier = getActiveServerHomeCarrier();
+    const request = createServerFetchForActiveServer(snapshot);
+    return { serverId: snapshot.serverId, request,
+        readTransport: createCapturedServerReadTransport({ serverId: snapshot.serverId, credentials,
+            prepared: { endpointUrl: snapshot.serverUrl, runtimeOrigin: resolveActiveServerRuntimeOrigin(snapshot),
+                homeCarrier, generation: snapshot.generation, request } }),
+        assertCurrent: () => {
+            const current = getActiveServerSnapshot();
+            if (current.serverId !== snapshot.serverId || current.generation !== snapshot.generation) throw new StaleServerGenerationError();
+        } };
+}
+
 export async function readAutomationApiJson(path: string, init: RequestInit, options: ServerFetchOptions,
-    context: AutomationRequestContext | undefined, fallback: ServerFetch): Promise<unknown> {
+    context: AutomationRequestContext | undefined, fallback: ServerFetch, credentials?: AuthCredentials): Promise<unknown> {
+    context ??= credentials ? captureNativeAutomationRequestContext(credentials) : undefined;
     context?.assertCurrent?.();
     if (!context?.readTransport) return await readAutomationJsonOrThrow(await fallback(path, init, options));
     const transport = context.readTransport;

@@ -31,7 +31,7 @@ export async function listAutomationDefinitionRuns(params: Readonly<{
             ...(params.credentials ? { headers: getAutomationAuthHeaders(params.credentials) } : {}),
             ...(params.signal ? { signal: params.signal } : {}),
         },
-        { includeAuth: params.credentials === undefined }, params.requestContext, params.requestContext?.request ?? serverFetch,
+        { includeAuth: params.credentials === undefined }, params.requestContext, params.requestContext?.request ?? serverFetch, params.credentials,
     );
     return AutomationV3RunListResponseSchema.parse(raw);
 }

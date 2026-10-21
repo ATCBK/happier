@@ -37,6 +37,7 @@ import {
     readAutomationApiJson,
     invalidateAutomationReadAcquisitions,
     type AutomationRequestContext,
+    captureNativeAutomationRequestContext,
 } from './apiAutomationHttp';
 
 export { AutomationApiError, isAutomationApiErrorCode } from './apiAutomationHttp';
@@ -54,6 +55,7 @@ function requestAutomation(
     path: string,
     init?: RequestInit,
 ): Promise<Response> {
+    context ??= captureNativeAutomationRequestContext(credentials);
     const mutation = init?.method !== undefined && !['GET', 'HEAD'].includes(init.method.toUpperCase());
     if (mutation) invalidateAutomationReadAcquisitions(context);
     return (context?.request ?? serverFetch)(path, init, { includeAuth: false }).finally(() => {
@@ -89,7 +91,7 @@ export async function listAutomationDefinitions(
     if (query.scope !== undefined) search.set('scope', query.scope);
     const raw = await readAutomationApiJson(`/v3/automations?${search.toString()}`, {
         headers: getAutomationAuthHeaders(credentials),
-    }, { includeAuth: false }, context, context?.request ?? serverFetch);
+    }, { includeAuth: false }, context, context?.request ?? serverFetch, credentials);
     return AutomationDefinitionListResponseSchema.parse(raw);
 }
 
@@ -100,7 +102,7 @@ export async function getAutomationSettings(
 ): Promise<AutomationV3Settings> {
     const raw = await readAutomationApiJson('/v3/automations/settings', {
         headers: getAutomationAuthHeaders(credentials),
-    }, { includeAuth: false }, context, context?.request ?? serverFetch);
+    }, { includeAuth: false }, context, context?.request ?? serverFetch, credentials);
     return AutomationV3SettingsSchema.parse(raw);
 }
 
@@ -128,7 +130,7 @@ export async function getAutomationDefinition(
 ): Promise<AutomationDefinitionDetail> {
     const raw = await readAutomationApiJson(`/v3/automations/${encodeURIComponent(automationId)}`, {
         headers: getAutomationAuthHeaders(credentials),
-    }, { includeAuth: false }, context, context?.request ?? serverFetch);
+    }, { includeAuth: false }, context, context?.request ?? serverFetch, credentials);
     return AutomationDefinitionDetailSchema.parse(raw);
 }
 
@@ -249,7 +251,7 @@ export async function getAutomationRunDetail(
     const raw = await readAutomationApiJson(
         `/v3/automations/${encodeURIComponent(automationId)}/runs/${encodeURIComponent(runId)}`,
         { headers: getAutomationAuthHeaders(credentials) },
-        { includeAuth: false }, context, context?.request ?? serverFetch,
+        { includeAuth: false }, context, context?.request ?? serverFetch, credentials,
     );
     return AutomationV3RunDetailSchema.parse(raw);
 }
