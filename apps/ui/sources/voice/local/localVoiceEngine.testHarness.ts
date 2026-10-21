@@ -605,7 +605,14 @@ async function createLocalVoiceAccountHarness() {
                     }
                     const machineRows = Object.values(state.machines).map(value => {
                         const machine = createMachineFixture(value);
-                        return { ...createPlainMachineRowFixture({ id: machine.id, accountId: 'account-a' }), ...machine,
+                        return { ...createPlainMachineRowFixture({ id: machine.id, accountId: 'account-a' }),
+                            seq: machine.seq, createdAt: machine.createdAt, updatedAt: machine.updatedAt,
+                            active: machine.active, activeAt: machine.activeAt, metadataVersion: machine.metadataVersion,
+                            daemonStateVersion: machine.daemonStateVersion,
+                            revokedAt: machine.revokedAt ?? null, replacedByMachineId: machine.replacedByMachineId ?? null,
+                            ...(machine.installationId ? { installationId: machine.installationId } : {}),
+                            ...(machine.operationProtocolCapabilities ? { operationProtocolCapabilities: machine.operationProtocolCapabilities,
+                                operationProtocolCapabilitiesRevision: machine.operationProtocolCapabilitiesRevision } : {}),
                             metadata: machine.metadata ? encodePlainMachineStoredContent(machine.metadata) : null,
                             daemonState: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER };
                     });

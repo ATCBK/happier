@@ -45,12 +45,22 @@ const sourceExpectations: ReadonlyArray<SourceExpectation> = [
     {
         filePath: 'sources/components/sessions/shell/SessionView.tsx',
         requiredImports: [
-            '@/voice/binding/voiceSessionComposerRouting',
-            '@/voice/binding/sendVoiceSessionComposerText',
+            '@/components/sessions/composer/useSessionComposerController',
             '@/voice/persistence/voiceConversationSystemSessionLookup',
         ],
         forbiddenImports: [
             '@/voice/sessionBinding/voiceConversationSession',
+            '@/voice/sessionBinding/voiceSessionComposerRouting',
+            '@/voice/sessionBinding/sendVoiceSessionComposerText',
+        ],
+    },
+    {
+        filePath: 'sources/components/sessions/composer/useSessionComposerController.tsx',
+        requiredImports: [
+            '@/voice/binding/voiceSessionComposerRouting',
+            '@/voice/binding/sendVoiceSessionComposerText',
+        ],
+        forbiddenImports: [
             '@/voice/sessionBinding/voiceSessionComposerRouting',
             '@/voice/sessionBinding/sendVoiceSessionComposerText',
         ],

@@ -12,7 +12,8 @@ import type { BundledVoiceRuntimeContribution } from '@/voice/session/types';
 import { installVoiceWebRtcBrowserBoundary } from '@/dev/testkit/harness/voiceWebRtcHarness';
 import { createExistingSessionDirectoryPreflightResult, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -46,7 +47,7 @@ installDisconnectedServerSocketBoundary((socket, serverUrl) => {
   });
   // This cold external transport exists for its entire Socket lifetime. Keep
   // its native network methods installed after per-test spy restoration.
-  socket.timeout = vi.fn<typeof socket.timeout>(value => { timeoutMs = value; return socket; });
+  socket.timeout = vi.fn<typeof socket.timeout>(value => { timeoutMs = value ?? null; return socket; });
   socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload: unknown) => {
     if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
     if (!payload || typeof payload !== 'object' || !('method' in payload) || typeof payload.method !== 'string' || !('params' in payload)) {
@@ -224,7 +225,7 @@ describe('realtime_codex normal web composed gate', () => {
       serverUrl: getActiveServerSnapshot().serverUrl,
       accountId: 'codex-composed-account',
       credentialScope: 'restored-home',
-      request: async (input, init) => {
+      request: createSessionReadBatchFetchBoundary(async (input, init) => {
         const path = new URL(String(input)).pathname;
         if (path === '/health') return Response.json({});
         if (path === '/v1/account/profile') return Response.json(AccountProfileSchema.parse({
@@ -248,6 +249,8 @@ describe('realtime_codex normal web composed gate', () => {
         if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: settings }, version: settingsRevision });
         if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } } });
         if (path === '/v1/machines') return Response.json(Object.keys(storage.getState().machines).map(id => createPlainMachineRowFixture({ id, accountId: 'codex-composed-account' })));
+        if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+          id => createPlainMachineRowFixture({ id, accountId: 'codex-composed-account' }));
         const machine = /^\/v1\/machines\/([^/]+)$/.exec(path);
         if (machine) return Response.json({ machine: createPlainMachineRowFixture({ id: decodeURIComponent(machine[1]!), accountId: 'codex-composed-account' }) });
         const access = /^\/v1\/machines\/([^/]+)\/access$/.exec(path);
@@ -257,7 +260,7 @@ describe('realtime_codex normal web composed gate', () => {
           return Response.json({ machineId, custodian: row.access!.custodian, access: row.access, canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [] });
         }
         return await transcriptRequest(input, init);
-      },
+      }),
     });
     activeServerId = globalCreationAccount.home.id;
     transportHomes.set(globalCreationAccount.home.serverUrl, { serverId: activeServerId, token: globalCreationAccount.credentials.token });

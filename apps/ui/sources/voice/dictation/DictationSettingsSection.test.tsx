@@ -4,7 +4,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { createVoiceSettingsAccountTestHarness, withVoiceSettingsCredentialResource } from '@/voice/settings/panels/voiceSettingsAccountTestHarness';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
 import { storage } from '@/sync/domains/state/storage';
 import { DaemonVoiceClientRawCredentialAuthorizationInspectResponseV1Schema,
@@ -717,6 +717,8 @@ describe('DictationSettingsSection', () => {
       const machine = { ...createPlainMachineRowFixture({ id: 'machine-online', accountId: account.scope.accountId }),
         installationId: 'installation-1' };
       if (path === '/v1/machines') return Response.json([machine]);
+      if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+        id => id === machine.id ? machine : null);
       if (path === '/v1/machines/machine-online') return Response.json({ machine });
       if (path !== '/v1/plugins/permissions/grants/list') return originalRequest(url, init);
       expect(JSON.parse(String(init?.body))).toMatchObject({ pluginId: inspection.authorization.pluginId,

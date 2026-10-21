@@ -5,7 +5,7 @@ import { ManagedMachineActionInputSchemasV1, ManagedMachineActionOutputSchemasV1
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { socketRpcCodec } from '@happier-dev/sync-client';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -79,6 +79,8 @@ describe('Machines advertised UI and eligible Voice execution', () => {
       { key: 'focused', serverUrl: `https://par-focused-${journey}.test`, accountId: 'other' },
     ], route: request => request.path === '/v1/features' ? Response.json(features)
       : request.home === 'compute' && request.path === '/v1/machines' ? Response.json([machine])
+      : request.home === 'compute' && request.path === '/v1/machines/read-batch' && request.method === 'POST'
+        ? createMachineReadBatchResponseFixture(request.body, id => id === machine.id ? machine : null)
       : request.home === 'compute' && request.path === '/v1/machines/machine' ? Response.json({ machine }) : undefined });
     const previousSettings = storage.getState().settings;
     const requests: Array<{ serverUrl: string | undefined; method: string; input: unknown }> = [];
@@ -110,7 +112,7 @@ describe('Machines advertised UI and eligible Voice execution', () => {
       }
       expect(requests).toEqual([{ serverUrl: home.homes.compute!.serverUrl,
         method: `${machine.id}:${method}`, input: actionId === 'machines.work.summary.get' ? input : {} }]);
-      expect(home.requests.filter(request => request.path === '/v1/machines/machine').map(request => ({ home: request.home, accountId: request.accountId })))
+      expect(home.requests.filter(request => request.path === '/v1/machines/read-batch').map(request => ({ home: request.home, accountId: request.accountId })))
         .toEqual([{ home: 'compute', accountId: 'owner' }]);
     } finally {
       await serverScopedRpcSocketPool.stopAll();

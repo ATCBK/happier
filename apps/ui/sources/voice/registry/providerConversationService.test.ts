@@ -1,3 +1,4 @@
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   SessionMetadataTuplePatchV1Schema,
@@ -42,7 +43,7 @@ async function installProviderPersistence(seeds: readonly Readonly<{
   const attempts: Array<readonly [string, string | null]> = [];
   const commits: Array<readonly [string, string | null]> = [];
   let beforePatch: (() => Promise<void>) | null = null;
-  account.request.mockImplementation(async (input, init) => {
+  account.request.mockImplementation(createSessionReadBatchFetchBoundary(async (input, init) => {
     const url = new URL(String(input));
     if (url.pathname === '/v2/sessions/lookup-by-tags') {
       expect(SessionLookupByTagsRequestV2Schema.parse(JSON.parse(String(init?.body))).tags)
@@ -72,7 +73,7 @@ async function installProviderPersistence(seeds: readonly Readonly<{
     const response = sessionHttp.handle(input, init) ?? await request(input, init);
     if (attempted && response.ok) commits.push(attempted);
     return response;
-  });
+  }));
   storage.setState({ sessions });
   voiceSessionBindingStore.setState({ runtimeBindingsByConversationSessionId: {}, persistedBindingsByConversationSessionId: {} });
   const lease = createBundledConversationRuntimeHostLease();

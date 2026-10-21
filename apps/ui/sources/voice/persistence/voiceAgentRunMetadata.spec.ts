@@ -1,3 +1,4 @@
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createSessionFixture, createSessionListRenderableSessionFixture, standardCleanup } from '@/dev/testkit';
@@ -49,7 +50,7 @@ beforeEach(async () => {
   sessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
   const request = account.request.getMockImplementation();
   if (!request) throw new Error('Account HTTP boundary missing');
-  account.request.mockImplementation(async (input, init) => sessionHttp.handle(input, init) ?? request(input, init));
+  account.request.mockImplementation(createSessionReadBatchFetchBoundary(async (input, init) => sessionHttp.handle(input, init) ?? request(input, init)));
 });
 
 describe('voiceAgentRunMetadata through real storage and Sync', () => {

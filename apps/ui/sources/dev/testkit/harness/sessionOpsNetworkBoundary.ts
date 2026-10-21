@@ -2,6 +2,7 @@ import { vi } from 'vitest';
 import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { createPlainAccountEncryptionCurrentnessFixture } from '../fixtures/accountEncryptionCurrentness';
+import { createSessionReadBatchFetchBoundary } from './sessionReadBatchHttpBoundary';
 
 export type SessionOpsRpcRequest = Readonly<{
     serverUrl: string;
@@ -61,7 +62,7 @@ export async function installSessionOpsNetworkBoundary() {
         let timeoutMs: number | null = null;
         // Pooled sockets retain this transport across a test's spy restoration.
         socket.timeout = vi.fn((value: number) => {
-            timeoutMs = value;
+            timeoutMs = value ?? null;
             return { emitWithAck: socket.emitWithAck };
         });
         socket.emitWithAck = vi.fn(async (event: string, payload?: unknown): Promise<unknown> => {
@@ -134,7 +135,7 @@ export async function installSessionOpsNetworkBoundary() {
     // Observation only: the real credential owner admits every served and unserved Home.
     let credentialObserver = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(observeCredentialRead);
     const httpRequests: Array<{ url: string; token: string | null }> = [];
-    const runtimeFetchBoundary: RuntimeFetch = async (input, init) => {
+    const runtimeFetchBoundary: RuntimeFetch = createSessionReadBatchFetchBoundary(async (input, init) => {
         const url = new URL(String(input));
         const token = new Headers(init?.headers).get('authorization');
         httpRequests.push({ url: url.href, token });
@@ -161,7 +162,7 @@ export async function installSessionOpsNetworkBoundary() {
             id: decodeURIComponent(url.pathname.slice('/v1/machines/'.length)), accountId,
         }) });
         return Response.json({}, { status: 404 });
-    };
+    });
     setRuntimeFetch(runtimeFetchBoundary);
     return {
         requests,

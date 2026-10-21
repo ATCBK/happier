@@ -1,3 +1,4 @@
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol';
@@ -75,7 +76,7 @@ beforeEach(async () => {
     http = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
     const request = account.request.getMockImplementation();
     if (!request) throw new Error('Account HTTP boundary missing');
-    account.request.mockImplementation(async (url, init) => http.handle(url, init) ?? request(url, init));
+    account.request.mockImplementation(createSessionReadBatchFetchBoundary(async (url, init) => http.handle(url, init) ?? request(url, init)));
     store = createVoiceSessionBindingStore();
     // Real persisted-binding policy and Sync persistence; only Home HTTP and the clock are controlled.
     const resolver = createVoiceConversationBindingResolver({ store: createVoiceSessionBindingStore() });

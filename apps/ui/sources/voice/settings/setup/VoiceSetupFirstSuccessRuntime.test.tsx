@@ -1,3 +1,4 @@
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 /** @vitest-environment jsdom */
 import * as React from 'react';
 import { act } from 'react-test-renderer';
@@ -105,7 +106,7 @@ it.each([
     const transcriptWrites: z.infer<typeof messagePostSchema>[] = [];
     const httpEvents: string[] = [];
     const connection = await restoreServerAccountForTest({ serverUrl: `https://voice-completion-${++homeSequence}.example.test`,
-        accountId: 'completion-account', credentialScope: 'restored-home', request: async (input, init) => {
+        accountId: 'completion-account', credentialScope: 'restored-home', request: createSessionReadBatchFetchBoundary(async (input, init) => {
             const path = new URL(String(input)).pathname;
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
             if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: { voice: settings } }, version: 1 });
@@ -151,7 +152,7 @@ it.each([
             }
             const response = await artifact.request(input, init);
             return response.status === 404 ? await metadata.handle(input, init) : response;
-        } });
+        }) });
     const scope = { serverId: connection.home.id, accountId: 'completion-account' };
     const conversation = { serverId: connection.home.id, sessionId: 'conversation' };
     const binding = { adapterId: 'local_conversation', controlSessionId: 'control', conversationSessionId: conversation.sessionId,

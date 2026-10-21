@@ -3,7 +3,7 @@ import { VoiceProviderContributionSchema } from '@happier-dev/protocol';
 import { DaemonVoiceSpeechSynthesizeRequestSchema, DaemonVoiceSpeechTranscribeRequestSchema,
   DaemonVoiceSpeechTranscribeUploadChunkRequestSchema } from '@happier-dev/protocol/daemon/voiceSpeech';
 
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -156,12 +156,14 @@ describe('bundled speech selected-daemon client', () => {
     filesystem.close.mockClear();
     account = await restoreServerAccountForTest({
       serverUrl: 'https://voice-speech.test', accountId: 'account-a', credentialScope: 'restored-home',
-      request: async input => {
+      request: async (input, init) => {
         const path = new URL(String(input)).pathname;
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
         if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(relayFeatures);
         if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
         if (path === '/v1/machines') return Response.json(machineIds.map(id => createPlainMachineRowFixture({ id, accountId: 'account-a' })));
+        if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+          id => createPlainMachineRowFixture({ id, accountId: 'account-a' }));
         const machine = /^\/v1\/machines\/([^/]+)$/.exec(path);
         if (machine) return Response.json({ machine: createPlainMachineRowFixture({ id: machine[1]!, accountId: 'account-a' }) });
         return null;

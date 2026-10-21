@@ -54,7 +54,7 @@ export function createSocketIoBoundaryStub(options: Readonly<{ autoConnect?: boo
         }),
         emit: vi.fn((_event: string, ..._args: unknown[]) => {}),
         emitWithAck,
-        timeout: vi.fn((_ms: number) => ({ emitWithAck })),
+        timeout: vi.fn((_ms: number) => ({ emitWithAck: socket.emitWithAck })),
     };
     function trigger(event: string, ...args: unknown[]) {
         if (event === 'connect') { socket.connected = true; socket.active = true; }

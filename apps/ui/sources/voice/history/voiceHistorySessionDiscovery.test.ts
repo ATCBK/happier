@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createSessionFixture } from '@/dev/testkit';
 
@@ -52,7 +53,7 @@ beforeEach(async () => {
   await http.reset();
   installHomeGovernanceBoundaries(http);
   homeId = await http.addHome({ name: 'Discovery Home', serverUrl: 'https://history-discovery.test', accountId: 'discovery-account', currentAccount: true });
-  setRuntimeFetch(http.request);
+  setRuntimeFetch(createSessionReadBatchFetchBoundary(http.request));
   http.answer(homeId, '/v1/auth/ping', { body: {} });
   http.answer(homeId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
   await switchConnectionToActiveServer();

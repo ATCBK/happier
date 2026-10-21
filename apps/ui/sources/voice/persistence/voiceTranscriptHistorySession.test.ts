@@ -1,3 +1,4 @@
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createSessionFixture, standardCleanup } from '@/dev/testkit';
@@ -50,7 +51,7 @@ describe('voice transcript history session', () => {
         const sessionHttp = createSessionMetadataHttpBoundary(() => ({ [target.id]: target }));
         const request = account.request.getMockImplementation();
         if (!request) throw new Error('Account HTTP boundary missing');
-        account.request.mockImplementation(async (input, init) => sessionHttp.handle(input, init) ?? request(input, init));
+        account.request.mockImplementation(createSessionReadBatchFetchBoundary(async (input, init) => sessionHttp.handle(input, init) ?? request(input, init)));
         storage.setState({ sessions: {} });
 
         await expect(resolveDirectMediaTranscriptSession({
@@ -85,11 +86,11 @@ describe('voice transcript history session', () => {
         const sessionHttp = createSessionMetadataHttpBoundary(() => ({}));
         const request = account.request.getMockImplementation();
         if (!request) throw new Error('Account HTTP boundary missing');
-        account.request.mockImplementation(async (input, init) => {
+        account.request.mockImplementation(createSessionReadBatchFetchBoundary(async (input, init) => {
             const path = new URL(String(input)).pathname;
             if (path === '/v1/sessions' && init?.method === 'POST') return sessionHttp.createSessionFromPost(historySessionId, init);
             return sessionHttp.handle(input, init) ?? request(input, init);
-        });
+        }));
         storage.setState({ sessions: {} });
 
         await expect(resolveDirectMediaTranscriptSession({

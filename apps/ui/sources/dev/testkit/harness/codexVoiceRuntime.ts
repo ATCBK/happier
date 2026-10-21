@@ -1,4 +1,5 @@
 import { expect, vi } from 'vitest';
+import { createSessionReadBatchFetchBoundary } from './sessionReadBatchHttpBoundary';
 import type { PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { Machine, Session } from '@/sync/domains/state/storageTypes';
 import type { BundledRealtimeProviderRuntimeHost } from '@/voice/registry/bundledConversationRuntimeContract';
@@ -25,7 +26,7 @@ export async function createCodexVoiceRuntimeEnvironment() {
     const { SOCKET_RPC_EVENTS } = await import('@happier-dev/protocol/socketRpc');
     const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
     const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
-    const { createMachineFixture, createPlainMachineRowFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+    const { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
     const { createPlainAccountEncryptionCurrentnessFixture } = await import('@/dev/testkit/fixtures/accountEncryptionCurrentness');
     const { createSessionMetadataHttpBoundary } = await import('./sessionMetadataHttpBoundary');
     const { answerVoiceRealtimePreparationHttpRequest } = await import('./voiceRealtimePreparationHttpBoundary');
@@ -92,7 +93,7 @@ export async function createCodexVoiceRuntimeEnvironment() {
         metadataVersion: machine.metadataVersion, daemonState: machine.daemonState ? encodePlainMachineStoredContent(machine.daemonState) : null,
         daemonStateVersion: machine.daemonStateVersion,
     });
-    const request = async (input: URL | RequestInfo, init?: RequestInit): Promise<Response | null> => {
+    const request = createSessionReadBatchFetchBoundary(async (input: URL | RequestInfo, init?: RequestInit): Promise<Response | null> => {
         const response = await homeResponse(input, init);
         if (response) return response;
         const path = new URL(String(input)).pathname;
@@ -109,6 +110,8 @@ export async function createCodexVoiceRuntimeEnvironment() {
         if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: persistedSettings }, version: settingsVersion });
         if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } } });
         if (path === '/v1/machines') return Response.json(Object.values(serverMachines).map(readMachineRow));
+        if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+            id => serverMachines[id] ? readMachineRow(serverMachines[id]!) : null);
         const machineMatch = /^\/v1\/machines\/([^/]+)$/.exec(path);
         if (machineMatch) {
             const machine = serverMachines[decodeURIComponent(machineMatch[1]!)];
@@ -125,14 +128,14 @@ export async function createCodexVoiceRuntimeEnvironment() {
         const preparation = answerVoiceRealtimePreparationHttpRequest(input, persistedSettings);
         if (preparation) return preparation;
         return transcriptRequest(input, init);
-    };
+    });
     const configureSocket: NonNullable<Parameters<typeof restoreServerAccountForTest>[0]['configureSocket']> = (socket, serverUrl) => {
         let timeoutMs: number | null = null;
         socket.connect = vi.fn<typeof socket.connect>(() => {
             if (!socket.connected) { socket.connected = true; for (const listener of socket.listeners('connect')) listener(); }
             return socket;
         });
-        socket.timeout = vi.fn<typeof socket.timeout>(value => { timeoutMs = value; return socket; });
+        socket.timeout = vi.fn<typeof socket.timeout>(value => { timeoutMs = value ?? null; return socket; });
         socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload: unknown) => {
             if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
             if (!payload || typeof payload !== 'object' || !('method' in payload) || typeof payload.method !== 'string' || !('params' in payload)) throw new Error('Expected a framed Socket RPC');

@@ -19,7 +19,7 @@ type Execute = ReturnType<
 type ExecuteResult = Awaited<ReturnType<Execute>>;
 /** Filesystem execution lives on the remote daemon, outside this UI process. */
 type MachineFilesystemEffects = Pick<import('@happier-dev/protocol/actions/executor/types').ActionExecutorDeps,
-    'languageIntelligenceApply' | 'workspaceFilesReplace'>;
+    'languageIntelligenceApply' | 'workspaceFilesReplace' | 'workspaceFilesReplacePreview'>;
 
 /**
  * Creates the durable approval request a present-user UI invocation of one

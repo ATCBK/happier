@@ -1,3 +1,4 @@
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -179,7 +180,7 @@ beforeEach(async () => {
     storage.setState({ ...initialState, settings: settingsParse({ voice: { providerId: 'off' } }) }, true);
     const purposes = createConnectedPurposeCatalogHttpBoundary();
     const sessions = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
-    account = await restoreServerAccountForTest({ serverUrl: 'https://brief-account.example.test', credentialScope: 'restored-home', request: async (url, init) => {
+    account = await restoreServerAccountForTest({ serverUrl: 'https://brief-account.example.test', credentialScope: 'restored-home', request: createSessionReadBatchFetchBoundary(async (url, init) => {
         const path = new URL(String(url)).pathname;
         if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(buildServerFeaturesResponse({ voiceEnabled: true }));
         if (path === '/v1/account/profile') return Response.json(AccountProfileSchema.parse({ id: 'account-a' }));
@@ -196,7 +197,7 @@ beforeEach(async () => {
         if (sessionResponse) return sessionResponse;
         if (path === '/health') return Response.json({ status: 'ok' });
         return new Response('{}', { status: 404 });
-    } });
+    }) });
     // Cold restore starts Profile sync asynchronously; observe its real publication,
     // including after the preceding test deliberately retires the Account lifetime.
     await vi.waitFor(() => expect(getActiveServerAccountScope()).not.toBeNull());

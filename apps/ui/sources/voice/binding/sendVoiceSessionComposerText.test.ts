@@ -1,3 +1,4 @@
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { z } from 'zod/mini';
@@ -8,7 +9,7 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createRetainedVoiceAgentRpcBoundary } from '@/dev/testkit/harness/voiceAgentRpcBoundary';
 import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
 import { VOICE_CONVERSATION_SYSTEM_SESSION_KEY } from '@happier-dev/protocol/voice/sessionBinding';
@@ -124,13 +125,15 @@ async function restorePendingHttpAccount() {
         // Distinct real Home lifetimes keep outstanding bootstrap reads from a
         // preceding case from becoming this case's HTTP snapshot.
         serverUrl: `https://voice-composer-${++homeSequence}.example.test`, accountId: 'composer-account', credentialScope: 'restored-home',
-        request: async (input, init) => {
+        request: createSessionReadBatchFetchBoundary(async (input, init) => {
             const path = new URL(String(input)).pathname;
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 1 }));
             if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: { voice: composerVoiceSettings } }, version: 1 });
             if (path === '/v1/machines') return Response.json([machine]);
+            if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+              id => id === machine.id ? machine : null);
             if (path === '/v1/machines/machine-1') return Response.json({ machine });
             if (path.endsWith('/messages')) return Response.json({ messages: [], hasMore: false });
             const promptResponse = await promptCatalog.handle(path, init);
@@ -209,7 +212,7 @@ async function restorePendingHttpAccount() {
                 return Response.json({ success: true });
             }
             return metadata.handle(input, init);
-        },
+        }),
     });
     const session = createSessionFixture({ id: 'carrier-s1', serverId: account.home.id });
     if (!session.metadata) throw new Error('Expected canonical Session fixture metadata');

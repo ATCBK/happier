@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { log } from '@/log';
@@ -66,11 +66,13 @@ describe('createVoiceClientAccountOperationExecutor', () => {
     requests.length = 0;
     account = await restoreServerAccountForTest({
       serverUrl: 'https://voice-credential.test', accountId: 'account-a', credentialScope: 'restored-home',
-      request: async input => {
+      request: async (input, init) => {
         const path = new URL(String(input)).pathname;
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
         if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
         if (path === '/v1/machines') return Response.json(['machine-a', 'machine-b'].map(id => createPlainMachineRowFixture({ id, accountId: 'account-a' })));
+        if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+          id => createPlainMachineRowFixture({ id, accountId: 'account-a' }));
         const machine = /^\/v1\/machines\/([^/]+)$/.exec(path);
         if (machine) return Response.json({ machine: createPlainMachineRowFixture({ id: machine[1]!, accountId: 'account-a' }) });
         return null;

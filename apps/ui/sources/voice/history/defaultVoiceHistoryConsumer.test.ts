@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionFixture } from '@/dev/testkit';
@@ -41,7 +42,7 @@ async function captureHistoryAuthority(accountId: string) {
   await historyHttp.reset();
   const serverId = await historyHttp.addHome({ name: 'History authority Home',
     serverUrl: 'https://history-authority.test', accountId, currentAccount: true, active: false });
-  setRuntimeFetch(historyHttp.request);
+  setRuntimeFetch(createSessionReadBatchFetchBoundary(historyHttp.request));
   return await captureServerRequestAuthorityForServerAccountScope({
     scope: { serverId, accountId }, activeRequest: historyHttp.request,
   });
@@ -61,7 +62,7 @@ describe('canonical History Account boundary', () => {
     await historyHttp.reset();
     installHomeGovernanceBoundaries(historyHttp);
     const homeId = await historyHttp.addHome({ name: 'History Home', serverUrl: 'https://history-owner.test', accountId: 'history-account', currentAccount: true });
-    setRuntimeFetch(historyHttp.request);
+  setRuntimeFetch(createSessionReadBatchFetchBoundary(historyHttp.request));
     const sessionId = 'history-carrier';
     const session = createSessionFixture({ id: sessionId, serverId: homeId, seq: 20, active: false,
       metadata: { ...fixtureMetadata, ...buildVoiceTranscriptHistorySessionMetadata() },

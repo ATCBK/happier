@@ -1,3 +1,4 @@
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol';
@@ -49,13 +50,13 @@ describe('applyVoiceSessionTargetSelection', () => {
         let holdPatches = false;
         const request = account.request.getMockImplementation();
         if (!request) throw new Error('Account HTTP boundary missing');
-        account.request.mockImplementation(async (url, init) => {
+        account.request.mockImplementation(createSessionReadBatchFetchBoundary(async (url, init) => {
             if (holdPatches && init?.method === 'PATCH' && new URL(String(url)).pathname === '/v2/sessions/voice-carrier') {
                 patchObserved.resolve();
                 await releasePatch.promise;
             }
             return metadata.handle(url, init) ?? await request(url, init);
-        });
+        }));
         try {
             const previous = { serverId, sessionId: 'previous-target' };
             const target = { serverId, sessionId: 'next-target' };

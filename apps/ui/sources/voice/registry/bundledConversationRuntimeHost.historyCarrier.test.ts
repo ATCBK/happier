@@ -1,3 +1,4 @@
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import 'fake-indexeddb/auto';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createSessionFixture } from '@/dev/testkit';
@@ -26,7 +27,7 @@ describe('voice history carrier single ownership', () => {
     const sessionHttp = createSessionMetadataHttpBoundary(() => ({}));
     const request = account.request.getMockImplementation();
     if (!request) throw new Error('Account HTTP boundary missing');
-    account.request.mockImplementation(async (input, init) => {
+    account.request.mockImplementation(createSessionReadBatchFetchBoundary(async (input, init) => {
       const path = new URL(String(input)).pathname;
       if (path === '/v1/sessions' && init?.method === 'POST') {
         expect(JSON.parse(String(init.body))).toMatchObject({ tag: VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG });
@@ -42,7 +43,7 @@ describe('voice history carrier single ownership', () => {
         return Response.json(SessionLookupByTagsResponseV2Schema.parse({ sessions: [(await detail.json()).session] }));
       }
       return sessionHttp.handle(input, init) ?? request(input, init);
-    });
+    }));
     storage.setState({ sessions: {}, sessionMessages: {} });
     voiceSessionBindingStore.setState({ runtimeBindingsByConversationSessionId: {}, persistedBindingsByConversationSessionId: {} });
     const lease = createBundledConversationRuntimeHostLease();

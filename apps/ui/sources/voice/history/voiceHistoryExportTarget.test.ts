@@ -9,13 +9,19 @@ import {
 const platform = vi.hoisted(() => ({ OS: 'ios' }));
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return { ...await createReactNativeWebMock(), Platform: platform };
+    return { ...await createReactNativeWebMock({ Share: {
+      sharedAction: 'sharedAction', dismissedAction: 'dismissedAction',
+      share: async (content: { url: string }) => {
+        return nativeBoundary.iosShare(content);
+      },
+    } }), Platform: platform };
 });
 const fs = await vi.hoisted(async () => {
   const { createExpoFileSystemFileMock } = await import('@/dev/testkit/mocks/expoFileSystem');
   return createExpoFileSystemFileMock();
 });
 const nativeBoundary = vi.hoisted(() => ({
+  iosShare: vi.fn(async (_content: { url: string }) => ({ action: 'sharedAction' })),
   isAvailableAsync: vi.fn(async () => true),
   shareAsync: vi.fn(async (..._args: unknown[]) => undefined),
   androidShare: vi.fn(async (..._args: unknown[]) => undefined),
@@ -51,6 +57,7 @@ describe('Voice History export targets', () => {
     vi.clearAllMocks();
     nativeBoundary.isAvailableAsync.mockResolvedValue(true);
     nativeBoundary.shareAsync.mockReset();
+    nativeBoundary.iosShare.mockClear();
     nativeBoundary.androidShare.mockReset();
   });
 
@@ -164,10 +171,9 @@ describe('Voice History export targets', () => {
     expect(fs.writes.mock.calls.map(([, bytes]) => new TextDecoder().decode(bytes))).toEqual([
       `${chunks[0]}${chunks[1]}`, chunks[2],
     ]);
-    expect(nativeBoundary.shareAsync).toHaveBeenCalledWith(
-      expect.stringContaining('/happier-downloads/'),
-      expect.objectContaining({ mimeType: ARTIFACT.mimeType }),
-    );
+    expect(nativeBoundary.iosShare).toHaveBeenCalledWith({
+      url: expect.stringContaining('/happier-downloads/'),
+    });
     expect(fs.files.size).toBe(0);
   });
 
@@ -204,6 +210,7 @@ describe('Voice History export targets', () => {
     await expect(shareVoiceHistoryExportArtifactNative(ARTIFACT)).rejects.toThrow('write_failed');
 
     expect(nativeBoundary.shareAsync).not.toHaveBeenCalled();
+    expect(nativeBoundary.iosShare).not.toHaveBeenCalled();
     expect(fs.files.size).toBe(0);
   });
 
@@ -219,6 +226,7 @@ describe('Voice History export targets', () => {
     await expect(shareVoiceHistoryExportArtifactNative(artifact)).rejects.toThrow('producer_failed');
 
     expect(nativeBoundary.shareAsync).not.toHaveBeenCalled();
+    expect(nativeBoundary.iosShare).not.toHaveBeenCalled();
     expect(fs.files.size).toBe(0);
   });
   it('hands Android the completed history bytes without deleting recipient custody', async () => {

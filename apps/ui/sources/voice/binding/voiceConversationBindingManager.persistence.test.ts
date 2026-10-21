@@ -6,9 +6,10 @@ import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/con
 import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { SessionResumeRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionResumeRequestV1';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -101,7 +102,9 @@ beforeEach(async () => {
         if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: settings }, version: 1 });
         if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } } });
         if (path === '/v1/machines') return Response.json([machine]);
-        if (path === '/v1/machines/machine-1') return Response.json({ machine });
+            if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+              id => id === machine.id ? machine : null);
+            if (path === '/v1/machines/machine-1') return Response.json({ machine });
         if (path === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
         if (path === '/v2/changes') return Response.json({ changes: [], nextCursor: 0 });
         if (path === '/v2/sessions/metadata-upgrades') return Response.json({ sessionIds: [] });
@@ -109,7 +112,7 @@ beforeEach(async () => {
     };
     network.setHttpResponder(request);
     connection = await restoreServerAccountForTest({ serverUrl: home.serverUrl, accountId: 'account-binding',
-        credentialScope: 'restored-home', request });
+        credentialScope: 'restored-home', request: createSessionReadBatchFetchBoundary(request) });
     await sync.refreshMachines();
     const scope = { serverId: connection.home.id, accountId: 'account-binding' };
     const sessions = Object.fromEntries(['s1', 's2'].flatMap(rootId => [
@@ -161,7 +164,7 @@ describe('binding publication through actual resolver and HTTP persistence', () 
 
     it('publishes only after persistence succeeds and safely retries the failed binding', async () => {
         rejectNextBindingFor = 'carrier-s1';
-        await expect(voiceSessionBindingManager.ensureBound(input())).rejects.toThrow('Invalid Session metadata tuple response');
+        await expect(voiceSessionBindingManager.ensureBound(input())).rejects.toMatchObject({ status: 500 });
         expect(rejectNextBindingFor).toBeNull();
         expect(metadata.writes).toContain('carrier-s1');
         expect(voiceSessionBindingStore.getState().getByConversationSessionId('carrier-s1')).toBeNull();
@@ -186,7 +189,7 @@ describe('binding publication through actual resolver and HTTP persistence', () 
         await voiceSessionBindingManager.ensureBound(input());
         rejectNextBindingFor = 'carrier-s1';
         await expect(voiceSessionBindingManager.syncTargetSession({ controlSessionId: '__voice_agent__', targetSessionAddress: address('s2') }))
-            .rejects.toThrow('Invalid Session metadata tuple response');
+            .rejects.toMatchObject({ status: 500 });
         expect(rejectNextBindingFor).toBeNull();
         expect(voiceSessionBindingStore.getState().getByControlSessionId('__voice_agent__')?.targetSessionAddress).toEqual(address('s1'));
         expect(await persistedBinding('carrier-s1')).toMatchObject({ targetSessionAddress: address('s1') });
@@ -205,7 +208,7 @@ describe('binding publication through actual resolver and HTTP persistence', () 
         await expect(voiceSessionBindingManager.ensureBoundForOpenConversation({
             openConversationSessionId: 'carrier-s1', fallbackControlSessionId: '__voice_agent__', activeAdapterId: 'local_conversation',
             providerId: 'local_conversation', requestedTargetSessionId: 's2', requestedTargetServerId: connection.home.id,
-        })).rejects.toThrow('Invalid Session metadata tuple response');
+        })).rejects.toMatchObject({ status: 500 });
         expect(rejectNextBindingFor).toBeNull();
         expect(voiceSessionBindingStore.getState().getByConversationSessionId('carrier-s2')).toBeNull();
         expect(await persistedBinding('carrier-s2')).toBeNull();

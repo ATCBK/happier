@@ -3,7 +3,14 @@ import { createVoiceDiagnosticArtifactExportTarget } from './artifactExportTarge
 const platform = vi.hoisted(() => ({ OS: 'ios' }));
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return { ...await createReactNativeWebMock(), Platform: platform };
+    return { ...await createReactNativeWebMock({ Share: {
+        sharedAction: 'sharedAction', dismissedAction: 'dismissedAction',
+        share: async (content: { url: string }) => {
+            await sharing.observed(content.url);
+            if (sharing.failed) throw new Error('native_share_failed');
+            return { action: 'sharedAction' };
+        },
+    } }), Platform: platform };
 });
 
 const fs = await vi.hoisted(async () => {

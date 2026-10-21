@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Platform } from 'react-native';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { createMachineFixture, createPlainMachineRowFixture, createRootLayoutFeaturesResponse } from '@/dev/testkit';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createExpoFileSystemFileMock } from '@/dev/testkit/mocks/expoFileSystem';
@@ -111,7 +112,7 @@ features.capabilities.machines.liveStream.serverRouted = { disabledReason: null,
   caps: MachineLiveStreamRelayCapsV1Schema.parse({ maxBitrateBps: 64000, maxFramesPerSecond: 50,
     maxFrameBytes: 16000, maxDurationMs: 60000, maxTotalBytes: 1000000,
     maxConcurrentStreamsPerAccount: 2, maxConcurrentStreamsPerSocket: 1, maxConcurrentStreamsPerMachine: 1 }) };
-async function answerHome(url: RequestInfo | URL): Promise<Response> {
+async function answerHome(url: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const path = new URL(String(url)).pathname;
   if (path === '/health') return Response.json({ status: 'ok' });
   if (path === '/v1/account/encryption') return Response.json(AccountEncryptionModeResponseSchema.parse({ mode: 'plain', updatedAt: 0 }));
@@ -119,13 +120,15 @@ async function answerHome(url: RequestInfo | URL): Promise<Response> {
   if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
   const row = createPlainMachineRowFixture({ id: machineId, accountId: 'artifact-account' });
   if (path === '/v1/machines') return Response.json([row]);
+  if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+    id => id === machineId ? row : null);
   if (path === '/v1/machines/' + machineId) return Response.json({ machine: row });
   if (path === '/v1/machines/' + machineId + '/access') return Response.json({ machineId,
     custodian: row.access!.custodian, access: row.access, canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [] });
   return new Response('{}', { status: 404 });
 }
 function installRecordingFetch(fetchRecording: (input: string, init?: RequestInit) => Promise<Response>) {
-  setRuntimeFetch((url, init) => String(url).startsWith('blob:') ? fetchRecording(String(url), init) : answerHome(url));
+  setRuntimeFetch((url, init) => String(url).startsWith('blob:') ? fetchRecording(String(url), init) : answerHome(url, init));
 }
 beforeEach(async ({ task }) => {
   // Platform is a fixture input: admit credentials in its real SDK store before
@@ -140,7 +143,7 @@ beforeEach(async ({ task }) => {
   openedNativeUris.length = 0;
   rpcRequests.length = 0;
   account = await createPlainArtifactHomeFixture('https://recorded-capture.test', { serverFeatures: features,
-    handleRequest: path => answerHome(`https://recorded-capture.test${path}`) });
+    handleRequest: (path, init) => answerHome(`https://recorded-capture.test${path}`, init) });
   primeServerFeaturesSnapshot({ serverId: account.home.id, snapshot: { status: 'ready', features } });
   const machine = createMachineFixture({ id: machineId, active: true, activeAt: Date.now() });
   storage.setState({ machines: { [machineId]: machine }, machineListByServerId: { [account.home.id]: [machine] } });
