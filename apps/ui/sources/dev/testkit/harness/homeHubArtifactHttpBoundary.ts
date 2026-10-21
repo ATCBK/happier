@@ -42,6 +42,7 @@ export function createLayoutArtifactHttpBoundary<T>(accountId: string, definitio
     let callerAccess: ArtifactCallerAccessV1 | null = 'owner';
     let grants: readonly ArtifactAccessGrantRowV1[] = [];
     const writes: T[] = [];
+    let accountSettings: { content: unknown; version: number } = { content: { t: 'plain', v: {} }, version: 1 };
     /** The Account's Project rows census the Home serves; widget input admission checks checkouts against it. */
     let workspaceRefs: readonly WorkspaceRefV1[] = [];
     const layout = () => {
@@ -70,12 +71,28 @@ export function createLayoutArtifactHttpBoundary<T>(accountId: string, definitio
         if (path === '/health' || path === '/v1/auth/ping') return Response.json({});
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
-        if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+        if (path === '/v2/account/settings') {
+            // Account settings are a versioned compare-and-set document: a setting Action's write is
+            // acknowledged and read back, as the Home would.
+            if (init?.method === 'POST') {
+                const update = JSON.parse(String(init.body)) as { content: unknown; expectedVersion: number };
+                if (update.expectedVersion !== accountSettings.version) {
+                    return Response.json({ success: false, error: 'version-mismatch', currentVersion: accountSettings.version, currentContent: accountSettings.content });
+                }
+                accountSettings = { content: update.content, version: accountSettings.version + 1 };
+                return Response.json({ success: true, version: accountSettings.version });
+            }
+            return Response.json(accountSettings);
+        }
         if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return Response.json(workspaceRefs.length === 0
             ? ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', rows: [], coverage: 'complete' })
             : createPlainProjectAccountRowListFixture({ workspaceRefs }));
         if (path === AUTHORING_MEMORY_ROUTE_V1 && (!init?.method || init.method === 'GET')) return Response.json(AuthoringMemoryListResponseV1Schema.parse({ rows: [] }));
-        if (path === '/v1/artifacts' && init?.method !== 'POST') return Response.json(artifact ? [served(artifact)] : []);
+        if (path === '/v1/artifacts' && init?.method !== 'POST') {
+            const kind = new URL(String(input)).searchParams.get('kind');
+            const items = artifact ? [served(artifact)] : [];
+            return Response.json(kind === null ? items : { items: items.filter(row => row.kind === kind), hasUnclassified: false });
+        }
         if (path === `/v1/artifacts/${artifactId}/access/grants`) return artifact && (callerAccess === 'owner' || callerAccess === 'admin')
             ? Response.json({ artifactId, ownerAccountId: artifact.ownerAccountId, access: callerAccess, grants })
             : Response.json({ error: 'artifact_access_forbidden' }, { status: 403 });

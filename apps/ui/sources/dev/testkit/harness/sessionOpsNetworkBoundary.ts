@@ -104,7 +104,7 @@ export async function installSessionOpsNetworkBoundary() {
     });
 
     // This harness serves scoped saved Homes. It does not fabricate a focused Sync Account.
-    const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
+    const { upsertServerProfile, adoptHomeProfile } = await import('@/sync/domains/server/serverProfiles');
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
     const { createPlainMachineRowFixture } = await import('../fixtures/machineFixtures');
@@ -219,9 +219,14 @@ export async function installSessionOpsNetworkBoundary() {
         },
         async addHome(serverUrl: string, accountId: string, options: Readonly<{
             credentials?: AuthCredentials; encryptionMode?: 'plain' | 'e2ee';
+            /** Adopts the Home with its server identity and a present-user Account token, as Actions carried over the Account external-Action carrier require. */
+            serverIdentityId?: string;
         }> = {}) {
-            const profile = await upsertServerProfile({ serverUrl, name: accountId });
-            const credentials = options.credentials ?? { token: createAccountTokenForTests(accountId) };
+            const profile = options.serverIdentityId
+                ? await adoptHomeProfile({ descriptor: { serverUrl, homeServerIdentityId: options.serverIdentityId, displayName: accountId },
+                    source: 'manual', suggestedName: accountId })
+                : await upsertServerProfile({ serverUrl, name: accountId });
+            const credentials = options.credentials ?? { token: createAccountTokenForTests(accountId, { currentAccount: Boolean(options.serverIdentityId) }) };
             const write = await TokenStorage.setCredentialsForServerUrlWithRollback(profile.serverUrl, { serverId: profile.id }, credentials);
             if (!write) throw new Error(`Test Home credential publication was refused: ${profile.serverUrl}`);
             credentialWrites.push(write);

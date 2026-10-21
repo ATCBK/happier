@@ -68,7 +68,10 @@ export type MachineAdministrationTargetSelectionMockController = Readonly<{
 }>;
 
 type MachineAdministrationTargetSelectionMockModule = Readonly<{
-    useMachineAdministrationTargetSelection: (selectionKey: string) => MachineAdministrationTargetSelectionV1;
+    useMachineAdministrationTargetSelection: (
+        selectionKey: string,
+        options?: Readonly<{ initialTarget?: MachineAdministrationTargetV1 | null }>,
+    ) => MachineAdministrationTargetSelectionV1;
     useMachineAdministrationTargetPickerRows: () => MachineAdministrationTargetSelectionV1['pickerRows'];
     resolveFreshMachineAdministrationExecutionTarget: (
         target: MachineAdministrationTargetV1 | null,
@@ -278,13 +281,29 @@ export function createMachineAdministrationTargetSelectionMock(
             }, []);
             return currentRows();
         },
-        useMachineAdministrationTargetSelection: () => {
+        useMachineAdministrationTargetSelection: (_selectionKey, selectionOptions) => {
             const [, rerender] = React.useReducer((value: number) => value + 1, 0);
             React.useEffect(() => {
                 const listener = () => rerender();
                 listeners.add(listener);
                 return () => { listeners.delete(listener); };
             }, []);
+            // Like the owner: an explicit navigation target is selected once, when its candidate is known.
+            const initialTarget = selectionOptions?.initialTarget ?? null;
+            const appliedInitialTargetKey = React.useRef<string | null>(null);
+            React.useEffect(() => {
+                if (!initialTarget) return;
+                const key = `${initialTarget.serverIdentityId}\n${initialTarget.machineId}`;
+                if (appliedInitialTargetKey.current === key) return;
+                const known = currentRows().some(({ candidate }) => (
+                    candidate.target.serverIdentityId === initialTarget.serverIdentityId
+                    && candidate.target.machineId === initialTarget.machineId
+                ));
+                if (!known) return;
+                appliedInitialTargetKey.current = key;
+                state.selectedTargets.push(initialTarget);
+                controller.select(initialTarget.machineId, initialTarget.serverIdentityId);
+            });
             const rows = currentRows();
             const candidates = rows.map((row) => row.candidate);
             const target = currentTarget();

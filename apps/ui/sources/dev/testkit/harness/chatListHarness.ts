@@ -215,6 +215,7 @@ function createChatListHarnessMessagesSnapshot() {
         sessionActionDraftsByAddressKey: {
             [sessionAddressKey({ serverId: chatListHarnessState.sessionState?.serverId ?? 'test-server', sessionId })]: chatListHarnessState.sessionActionDraftsState,
         },
+        workflowRunListWindows: {},
         sessionCatchUpNewerInFlight: chatListHarnessState.sessionCatchingUpNewer ? { [sessionId]: 1 } : {},
         sessionMessages: {
             [sessionId]: {
