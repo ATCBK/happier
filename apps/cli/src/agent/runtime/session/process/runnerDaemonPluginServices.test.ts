@@ -1,4 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import type { AgentSessionGoalControlContext } from '@happier-dev/plugin-sdk/agents/runtime';
+import { withTempDir } from '@/testkit/fs/tempDir';
+import { authorizePluginExecLaunchForHost, createStablePluginExecService } from '@/plugins/runtime/invocation/services/exec';
+import { createCodexNativeAppServerClient } from '../../../../../../../packages/plugins/codex/src/agent/runtime/appServer/client';
+import { createCodexNativeSessionControls } from '../../../../../../../packages/plugins/codex/src/agent/runtime/controls';
 
 import { isPluginError, PluginError } from '@happier-dev/plugin-sdk';
 import type { PluginServices } from '@happier-dev/plugin-sdk';
@@ -186,6 +193,110 @@ function managedProviderBootstrap(
 }
 
 describe('runner daemon PluginServices proxy', () => {
+    it('keeps scoped Codex Goal controls in the runtime launch environment across profile bindings', async () => {
+        await withTempDir('runner-codex-goal-scope-', async root => {
+            const defaultHome = join(root, 'host-default');
+            await mkdir(defaultHome);
+            const script = join(root, 'codex.cjs');
+            // Third-party process boundary: native state is scoped by CODEX_HOME,
+            // with a distinct host default. Real Exec, RPC clients and Goal codecs run.
+            await writeFile(script, `
+                const fs = require('node:fs');
+                const path = require('node:path');
+                if (process.argv[2] === 'features') process.exit(0);
+                const file = path.join(process.env.CODEX_HOME || ${JSON.stringify(defaultHome)}, 'goal.json');
+                require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+                    const message = JSON.parse(line);
+                    if (message.id === undefined) return;
+                    let result = {};
+                    if (message.method === 'thread/goal/set') {
+                        const goal = { ...message.params, updatedAt: 1776272460, createdAt: 1776272400,
+                            tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0 };
+                        fs.writeFileSync(file, JSON.stringify(goal));
+                        result = { goal };
+                    }
+                    if (message.method === 'thread/goal/get') {
+                        result = { goal: fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null };
+                    }
+                    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }) + '\\n');
+                });
+            `);
+            const controller = new AbortController();
+            const unavailable = createUnavailablePluginServices();
+            const executable = { kind: 'systemTool' as const, id: 'codex-cli' };
+            const daemonExec = createStablePluginExecService({
+                signal: controller.signal, isOccurrenceCurrent: () => true,
+                allowedExecutables: [executable],
+                resolveExecutable: async () => ({ command: process.execPath, args: [script] }),
+                resolvePath: async () => root,
+            });
+            let launchEnvironment: Readonly<Record<string, string>> = {};
+            const services = await prepareRunnerDaemonPluginServices({
+                invocationId: 'invocation-goal-scope', signal: controller.signal,
+                readLaunchEnvironment: () => launchEnvironment,
+                local: unavailable,
+                // The daemon RPC is the boundary; authorization beneath it remains real.
+                dispatch: async operation => {
+                    RunnerDaemonPluginServiceOperationV1Schema.parse(operation);
+                    if (operation.kind === 'plugin_services.prepare_v1') return preparedSnapshot();
+                    if (operation.kind === 'plugin_exec.system_tools.resolve_v1') return {
+                        resolutionId: 'codex-resolution', result: { executable, executablePath: script },
+                    };
+                    if (operation.kind === 'plugin_exec.launch.authorize_v1') {
+                        const { stdin, ...request } = operation.request;
+                        const launch = await authorizePluginExecLaunchForHost(daemonExec, {
+                            ...request, ...(stdin === undefined ? {} : { stdin: new Uint8Array(Buffer.from(stdin, 'base64')) }),
+                        });
+                        return { authorizationId: operation.requestId,
+                            launch: { command: launch.command, args: launch.args, env: launch.env, cwd: launch.cwd } };
+                    }
+                    if (operation.kind === 'plugin_exec.launch.release_v1' || operation.kind === 'plugin_services.close_v1') return null;
+                    throw new Error(`Unexpected ${operation.kind}`);
+                },
+            });
+            try {
+                for (const profile of ['profile-a', 'profile-b']) {
+                    const home = join(root, profile);
+                    await mkdir(home);
+                    launchEnvironment = { CODEX_HOME: home };
+                    const runtimeClient = await createCodexNativeAppServerClient({
+                        exec: services.exec, processEnv: launchEnvironment,
+                    });
+                    try {
+                        await runtimeClient.request('thread/goal/set', { threadId: 'thread-1', objective: profile, status: 'paused' });
+                        const snapshots: unknown[] = [];
+                        const context = {
+                            signal: controller.signal, services,
+                            session: { id: 'session-1', cwd: root, activity: 'active',
+                                providerSessionId: 'thread-1', connectedAccounts: [] },
+                            goalSource: { publish: async (snapshot: unknown) => {
+                                snapshots.push(snapshot);
+                                return { status: 'applied', revision: 'scope', sourceSequence: snapshots.length };
+                            } },
+                        } as unknown as AgentSessionGoalControlContext;
+                        const controls = createCodexNativeSessionControls();
+                        await expect(controls.goals.get(context)).resolves.toMatchObject({ status: 'applied' });
+                        expect(snapshots.at(-1)).toMatchObject({ items: [{ title: profile, status: 'paused' }] });
+                        await expect(controls.goals.set({ objective: `${profile}-changed`, status: 'paused' }, {
+                            ...context, session: { ...context.session, activity: 'inactive' },
+                        })).resolves.toMatchObject({ status: 'applied' });
+                        await expect(runtimeClient.request('thread/goal/get', { threadId: 'thread-1' }))
+                            .resolves.toMatchObject({ goal: { objective: `${profile}-changed`, status: 'paused' } });
+                    } finally { await runtimeClient.dispose(); }
+                }
+                // Explicit native launch values win after the invocation moves
+                // to another profile, without changing the first profile's state.
+                const firstProfile = await createCodexNativeAppServerClient({
+                    exec: services.exec, processEnv: { CODEX_HOME: join(root, 'profile-a') },
+                });
+                try {
+                    await expect(firstProfile.request('thread/goal/get', { threadId: 'thread-1' }))
+                        .resolves.toMatchObject({ goal: { objective: 'profile-a-changed' } });
+                } finally { await firstProfile.dispose(); }
+            } finally { controller.abort(); }
+        });
+    });
+
     it('returns daemon CLI version facts only for the explicit readiness query', async () => {
         const unavailable = createUnavailablePluginServices();
         const services = await prepareRunnerDaemonPluginServices({

@@ -1371,6 +1371,7 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
         > | null = null;
     let preparedManagedProviderPluginServices:
         PluginServices | null = null;
+    let sessionLaunchEnvironment: Readonly<Record<string, string>> = Object.freeze({});
     const source: RunnerAgentSessionRuntimeSource = Object.freeze({
         agentContribution: verifiedAgentContribution,
         identity: Object.freeze({
@@ -1416,6 +1417,7 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
             return await runtimePromise;
         },
         async prepareManagedProviderBinding(params) {
+            sessionLaunchEnvironment = params.environment;
             if (!preparedManagedProviderBindingPromise) {
                 preparedManagedProviderBindingPromise = (async () => {
                 const seed = Object.freeze({
@@ -1469,6 +1471,7 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
                     await prepareRunnerDaemonPluginServices({
                     processOwner: { kind: 'session', sessionId: params.sessionId },
                     invocationId: params.sessionId,
+                    readLaunchEnvironment: () => sessionLaunchEnvironment,
                     signal: params.signal,
                     dispatch: async (operation, options) =>
                         await dispatchCurrentRunnerDaemonPluginService({
@@ -1619,6 +1622,9 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
             }
         },
         async createInvocationServices(params) {
+            if (params.processOwner?.kind !== 'run') {
+                sessionLaunchEnvironment = params.environment ?? Object.freeze({});
+            }
             const invocationWitnessReader =
                 params.readActiveTurnAdmissionWitness ?? null;
             readActiveTurnAdmissionWitness =
@@ -1696,6 +1702,9 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
             return await prepareRunnerDaemonPluginServices({
                 ...(params.processOwner ? { processOwner: params.processOwner } : {}),
                 invocationId: params.correlationId,
+                readLaunchEnvironment: params.processOwner?.kind === 'run'
+                    ? () => params.environment ?? Object.freeze({})
+                    : () => sessionLaunchEnvironment,
                 ...(input.executionRunSnapshot && params.processOwner?.kind === 'run'
                     ? { executionRunCwd: params.cwd } : {}),
                 signal: params.signal,

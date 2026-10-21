@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { buildScopedProcessEnv } from '@/utils/processEnv/buildScopedProcessEnv';
 
 import type { ZodMiniType as ZodType } from 'zod/mini';
 import type { $ZodIssue } from 'zod/v4/core';
@@ -437,6 +438,8 @@ function readDaemonWitness(
 export async function prepareRunnerDaemonPluginServices(
     input: Readonly<{
         invocationId: string;
+        /** Current host-resolved Session/Run scope, including late profile materialization. */
+        readLaunchEnvironment?(): Readonly<Record<string, string>>;
         /** Host-authored child cwd; only snapshot-backed Run invocations use it. */
         executionRunCwd?: string;
         processOwner?: import('@/processes/ownerTag').ProcessOwnerRef;
@@ -2620,6 +2623,9 @@ export async function prepareRunnerDaemonPluginServices(
             systemToolResolutionId?: string,
         ) {
             assertAvailable('exec');
+            const environment = input.readLaunchEnvironment
+                ? buildScopedProcessEnv({ baseEnv: input.readLaunchEnvironment(), explicitEnv: request.env })
+                : request.env;
             const raw = parseObjectResult(
                 await dispatch<unknown>({
                     kind:
@@ -2637,8 +2643,8 @@ export async function prepareRunnerDaemonPluginServices(
                         ...(request.cwd
                             ? { cwd: request.cwd }
                             : {}),
-                        ...(request.env
-                            ? { env: { ...request.env } }
+                        ...(environment
+                            ? { env: environment }
                             : {}),
                         ...(request.stdin
                             ? {

@@ -392,6 +392,26 @@ the existing platform-aware environment composer. Other ambient credentials and
 host controls remain private. Both Claude SDK and Codex isolated launches consume
 this environment; terminal hosts retain their existing environment owner.
 
+Runner-hosted plugin Exec requests also inherit this captured Session or Run
+environment before daemon launch authorization, using the same platform-aware
+composer. Explicit request values take precedence. Reused Session services read
+the final scope after late profile or Provider materialization; Run services keep
+their own scope. This applies to bundled and installed Agents. Runner-hosted
+Codex Goal, catalog, usage-limit and continuation control clients therefore use
+the Session's scoped `CODEX_HOME` even when their request supplies no environment.
+Fully resolved native launch tuples retain their already-composed environment.
+
+Inactive native Goal, catalog and usage controls obtain their scope from the
+daemon's admitted Session launch composition. The persisted Session snapshot
+selects its Launch Profile and Connected Account; the existing spawn Profile,
+Provider, Connected Account materializer and child-environment owners resolve
+the native scope. The control retains those resources through acknowledgement
+and cleanup. Missing admission, an unreadable binding or a different Account
+returns `inactive_agent_launch_scope_unavailable` before native execution;
+there is no fallback to the daemon's native account home. Bundled and installed
+Agents consume the same host boundary. This is development-source behavior;
+loaded-daemon replay remains separate verification.
+
 Session-owned bounded Runs whose Agent declares new-turn delivery keep the native
 Session available until the host's bounded loop settles. A first native turn can
 require the profile's structured-output repair turn; it does not complete the
