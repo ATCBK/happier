@@ -173,6 +173,9 @@ export function resolveWorkspaceFileViewerChoiceModel(input: Readonly<{
             matchingCandidates,
             selected,
             unavailablePreference,
+            // Open as text recovers bytes the built-in view doesn't show as text (FV2b); a text file's own
+            // view already is the text, so offering it there would only add a row to every page.
+            offerText: input.metadata.contentClass !== 'text' || selected.kind === 'text',
         }),
         preferenceSelector,
         selected,
@@ -216,8 +219,9 @@ function buildWorkspaceFileViewerChoices(input: Readonly<{
     matchingCandidates: readonly WorkspaceFileViewerMatch[];
     selected: WorkspaceFileViewerSelection;
     unavailablePreference?: WorkspaceFileViewerUnavailablePreference;
+    offerText: boolean;
 }>): readonly WorkspaceFileViewerChoice[] {
-    const choices: WorkspaceFileViewerChoice[] = [{ kind: 'builtin' }, { kind: 'text' }];
+    const choices: WorkspaceFileViewerChoice[] = input.offerText ? [{ kind: 'builtin' }, { kind: 'text' }] : [{ kind: 'builtin' }];
     if (input.unavailablePreference) {
         choices.push({ kind: 'unavailable', preference: input.unavailablePreference });
     }

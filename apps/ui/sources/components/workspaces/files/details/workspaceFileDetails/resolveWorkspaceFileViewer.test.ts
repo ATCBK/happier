@@ -101,6 +101,18 @@ describe('resolveWorkspaceFileViewer', () => {
         expect(model.selected).toEqual({ kind: 'text' });
         expect(stored.selections).toEqual({});
     });
+    it('offers Open as text only where the built-in view is not already the text', () => {
+        const text = resolveWorkspaceFileViewerChoiceModel({
+            metadata: markdownMetadata, preferences: preferences({}), availablePluginViewers: [],
+        });
+        // A text file's Default already reads as text (Source): a second text entry would be noise on every file.
+        expect(text.choices).toEqual([{ kind: 'builtin' }]);
+        const opaque = resolveWorkspaceFileViewerChoiceModel({
+            metadata: { contentClass: 'binary', mimeType: 'application/octet-stream', extension: '.bin' },
+            preferences: preferences({}), availablePluginViewers: [],
+        });
+        expect(opaque.choices).toEqual([{ kind: 'builtin' }, { kind: 'text' }]);
+    });
     it('excludes both live and first-hydration persisted editor scopes', () => {
         expect(isWorkspaceFileOpenableContentViewerEligible({
             isEditingFile: true,
@@ -132,7 +144,6 @@ describe('resolveWorkspaceFileViewer', () => {
         expect(model.selected).toEqual({ kind: 'builtin' });
         expect(model.choices).toMatchObject([
             { kind: 'builtin' },
-            { kind: 'text' },
             {
                 kind: 'plugin',
                 candidate: {
@@ -160,7 +171,6 @@ describe('resolveWorkspaceFileViewer', () => {
         expect(model.selected).toEqual({ kind: 'builtin' });
         expect(model.choices).toMatchObject([
             { kind: 'builtin' },
-            { kind: 'text' },
             { kind: 'plugin', candidate: { identity: { pluginId: 'plugin.alpha', localId: 'markdown' } } },
             { kind: 'plugin', candidate: { identity: { pluginId: 'plugin.beta', localId: 'markdown' } } },
         ]);
@@ -286,7 +296,6 @@ describe('resolveWorkspaceFileViewer', () => {
         expect(model.preferenceSelector).toEqual({ kind: 'mime', value: 'text/markdown' });
         expect(model.choices).toMatchObject([
             { kind: 'builtin' },
-            { kind: 'text' },
             { kind: 'plugin', candidate: { identity: { pluginId: 'plugin.alpha', localId: 'markdown' } } },
             { kind: 'plugin', candidate: { identity: { pluginId: 'plugin.beta', localId: 'extension' } } },
         ]);
@@ -310,9 +319,8 @@ describe('resolveWorkspaceFileViewer', () => {
         });
 
         expect(model.choices).toHaveLength(MAX_WORKSPACE_FILE_VIEWER_CHOICES);
-        expect(model.choices.slice(0, 3)).toMatchObject([
+        expect(model.choices.slice(0, 2)).toMatchObject([
             { kind: 'builtin' },
-            { kind: 'text' },
             {
                 kind: 'unavailable',
                 preference: { pluginId: 'plugin.retired', contributionLocalId: 'markdown' },
