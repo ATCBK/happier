@@ -77,6 +77,14 @@ export function ImageCompare(props: ImageCompareProps) {
   const [afterSize, setAfterSize] = React.useState<MediaPictureSize | null>(
     null,
   );
+  const onBeforeSize = React.useCallback((size: MediaPictureSize) => {
+    setBeforeSize(current => current?.width === size.width && current.height === size.height
+      ? current : { width: size.width, height: size.height });
+  }, []);
+  const onAfterSize = React.useCallback((size: MediaPictureSize) => {
+    setAfterSize(current => current?.width === size.width && current.height === size.height
+      ? current : { width: size.width, height: size.height });
+  }, []);
   const both =
     props.before.kind === 'present' && props.after.kind === 'present';
   const single =
@@ -123,12 +131,7 @@ export function ImageCompare(props: ImageCompareProps) {
         }
         alphaCapable={props.alphaCapable}
         layout="inline"
-        onImageInfo={(info) =>
-          (side === 'before' ? setBeforeSize : setAfterSize)({
-            width: info.width,
-            height: info.height,
-          })
-        }
+        onImageInfo={side === 'before' ? onBeforeSize : onAfterSize}
         {...(props.onOpenStage
           ? { onOpenStage: () => props.onOpenStage?.(side) }
           : {})}
@@ -250,8 +253,8 @@ export function ImageCompare(props: ImageCompareProps) {
           beforeUri={props.before.kind === 'present' ? props.before.uri : ''}
           afterUri={props.after.kind === 'present' ? props.after.uri : ''}
           size={beforeSize ?? afterSize}
-          onBeforeSize={setBeforeSize}
-          onAfterSize={setAfterSize}
+          onBeforeSize={onBeforeSize}
+          onAfterSize={onAfterSize}
         />
       )}
     </View>
