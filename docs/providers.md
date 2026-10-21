@@ -437,6 +437,7 @@ Custom-provider forms do not support arbitrary query-parameter credentials or in
 Endpoint validation rejects credentials in URLs, unsafe metadata destinations, ambiguous encodings, unsafe redirects, and oversized responses. Redirects are revalidated hop by hop, and credentials are not forwarded across an origin change. DNS is resolved on the daemon for probes, but the spawned Agent may resolve independently; endpoint-bound machine grants remain the authorization boundary for local/private endpoints.
 
 A catalog probe is bounded end to end, not per hop: one wall budget covers pre-dispatch resolution, request establishment and the complete response body across every redirect, and one idle budget bounds the gap between body chunks. Both apply identically to a public endpoint and to a Provider the daemon supervises — a managed probe reaches its service through that service's own supervised request handle, so a response that returns headers and never finishes its body cannot hold a Provider probe slot.
+In 0.3 development, the existing daemon RPC completion log identifies the stage where a saved probe's wall budget expires and records stage start/finish offsets and durations for catalog admission, purpose/group/account lookup, pre-effect revalidation, managed establishment and catalog dispatch, without logging request or credential contents.
 
 In 0.3 development, native broker inference does not use the catalog-response
 byte ceiling. Its ingress retains the request bytes for policy parsing. The
@@ -474,6 +475,12 @@ failure reports remain queued through temporary disconnection; resident key
 counts, elapsed queue age and per-drain batch counts do not discard them.
 The existing whole-operation retry, replay, refresh and maintenance policies
 retain their typed exhausted, paused or unavailable outcomes.
+
+In 0.3 development source, host launch reads require the canonical purpose-binding
+owner to classify an absent or retired subject, unauthorized purpose or service
+scope, unavailable target, or unselected binding. These refusals retain their
+reason in file diagnostics; none authorizes a durable-default or native-credential
+fallback. Ordinary plugin binding reads retain their nullable contract.
 
 In development source, transient Account catalog reads and an exhausted catalog
 admission or managed-establishment budget return retryable

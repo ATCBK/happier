@@ -160,6 +160,14 @@ from the Account's current enabled release or the host's trusted bundled
 declaration. Account scope alone does not select this placement. Daemon Actions
 retain their selected Machine occurrence; client Actions retain their UI target.
 
+A restricted agent process without Account credentials reaches that CLI host
+through its existing authenticated Session Action capability. The credentialed
+host checks the current Session owner and requester Home, resolves the actual
+current Action placement, and invokes the same Account executor. Account keys
+remain in that host; this is not execution in the restricted child process and
+does not add a transport, loader or Machine occurrence. Ordinary client and
+Machine Actions retain their existing authorization and transport.
+
 The existing Account Availability selection and executable registration index
 own custody and currentness. Explicit disablement and a selected release take
 precedence over bundled declarations. Replacement, disablement or Account
@@ -692,6 +700,12 @@ need Run-on. An unavailable explicit local target retains its Machine name in
 those states. Optional setup and contribution-point reads may be unavailable
 while the enclosing Account Collection remains interactive; renderer interaction
 and Account Data admission do not inherit Machine reachability.
+In 0.3 development source, Machine inventory retains the eligibility of its
+last opened live content while a newer content hint is pending. This preserves
+the selected producer and its in-flight targeted read through pending-to-opened
+updates when the origin and occurrence remain valid. Fresh invocation still
+requires current opened content; locked, missing, revoked, replaced or offline
+Machines do not gain eligibility from this presentation retention.
 A structurally supported native Host API method reaches that controller for its
 current unavailable result and target explanation; the renderer adapter does not
 replace that decision with an early generic refusal.
@@ -744,6 +758,19 @@ approval/terminal admission, and durable webhook endpoint exact-materialization
 contracts remain unchanged. Routing continuity does not automatically repair
 an endpoint's physical target; real placement/transport/credential/config changes
 retain Channels' transfer and endpoint-convergence owners.
+
+In unreleased 0.3 source, background services invoke provider Actions through
+the same host-stamped caller and currentness checks as other plugin callers,
+including installed plugins. Registry shutdown, occurrence retirement and
+invocation cancellation interrupt a checkpointed poll without persisting a
+connection block. The next daemon or eligible poll resumes normally. Existing
+stored blocks still use the connection's **Retry polling** Action; they are not
+cleared merely by restarting. If an approval decision was saved but its reread
+was temporarily unavailable, target Action settlement returns
+`approval_context_unavailable`. Replaying that same approved Artifact while its
+admitted source and authority remain current reuses the decision and claims
+execution before any effect; it does not create a new approval. An existing
+execution claim retains its unknown-outcome protection.
 
 In unreleased 0.3 source, Channels' existing testkit also owns the reusable
 `defineProviderConformanceJourneys` suite in
@@ -910,6 +937,14 @@ reset) permits a fresh claim; the hint grants no writer authority. Network and
 5xx failures retain the existing next-operation retry behavior. Dependency-owned
 JSON Schema changes use the same compatibility decision. Incompatible changes require a new schema version and the existing
 candidate-preparation/migration path.
+
+In 0.3 development source, both daemon and direct Account Collection clients
+preserve the Home's confirmed transaction rollback as
+`database_transaction_conflict_exhausted`. They consume the shared strict
+HTTP 503 rollback parser; a failed transport, malformed acknowledgement or
+unqualified database failure remains outcome-unknown. This acknowledgement
+classification does not retry the mutation or change Collection CAS or approval
+execution custody.
 
 In 0.3 development source, an app-bundled UI inventory retains the exact
 Collection reader references compiled from its manifest. Availability passes
@@ -3849,8 +3884,10 @@ In 0.3 development source, `SessionHandle.materializeAttachment` copies a
 trusted plugin-local file through the incumbent Session attachment upload
 owner. It requires admitted Session write access and a locally hosted Session;
 the host derives the destination from that Session's workspace, not the plugin
-filesystem scope. Its result contains the materialized path and exact source
-bytes. It does not transfer provider-local paths
+filesystem scope. The daemon binds this upload and composer-media staging to
+its host-private local Machine RPC entrypoint. The peer-mediation adapter
+requires a verified peer Account grant and cannot carry these host-local calls.
+Materialization returns the path and exact source bytes. It does not transfer provider-local paths
 across machines. Channels' declared `channel-file` attachment consumes this
 adapter through its ordinary dispatch callback with its required `bound-session`
 read+write grant; attachment observations hold descriptors rather than file

@@ -647,6 +647,19 @@ same Action policy and read the targeted Home's settings. Service Start/Restart
 effect review also follows the invoking Action's policy; waived review still
 captures and revalidates the current effect before launch. An explicitly supplied
 stale effect digest remains a refusal, not an approval that policy can waive.
+Declared Service Start approvals in development source retain a native-produced
+`preview.serviceStartReview` before publishing the ordinary approval Artifact.
+It binds the unchanged signed request to the exact Machine and checkout, copy
+effect, Start effect and any required setup review. Approved replay remeasures
+that effect at the same native owner and supplies reviewed setup through the
+existing one-time setup decision port; it writes no remembered trust. Missing
+native review, unavailable target bytes or changed placement/effect refuses
+without publishing an input-only approval or copying files during review.
+Worker/Auto requests retain their addressed Machine through approval and replay;
+pool membership is rechecked without reranking the approved destination.
+Issuers outside the daemon obtain this read-only native review through the
+existing launcher snapshot transport. A missing review response fails closed;
+the transport does not execute the copy, setup or Start.
 Admitted Local Services Actions supply the raw transport's
 acknowledgement or confirmation nonce after approval routing, including when
 the user waived approval; those fields are not another approval policy.
@@ -2663,9 +2676,17 @@ does not create a headless search engine in the CLI, daemon or Home.
 Accepted Session/Project file Find navigation uses `workspace.tabs.open` with a private,
 strictly qualified launch seed. The mounted Workspace Action validates the
 Session or Project destination, addressed file and current Home/Account authority, stages the seed in the
-existing one-shot file Find handoff, and only then opens the route. Query text is
+existing one-shot file Find handoff, and only then opens the file. Query text is
 never serialized into the URL or tab state. Session chat Find keeps the same
 private handoff and lifecycle under the same Workspace Action owner.
+
+The canonical file opener also accepts `present: false` for preview positioning
+in the foreground, exact Session and retained tab instance. It uses that
+Session's registered pane driver without presenting the pane, changing the
+foreground main tab, or pushing a native route. Existing Session pane URL
+mirroring still projects retained state. Normal Action policy and dirty
+guards still apply. A missing driver, different foreground Session/instance or
+Project target is refused; this option does not open a hidden destination.
 
 Monaco remains focus-addressable while its native widget owns physical Find
 shortcuts. Set, step and close use public editor actions. Its read projection

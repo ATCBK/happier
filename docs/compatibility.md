@@ -2706,6 +2706,14 @@ settlement after the `executing` claim records `true`. Existing development V2
 records without this presentation fact remain readable and do not gain inferred
 execution history.
 
+Canceling an approved but unclaimed V2 request preserves its approval decision
+and settles it as `failed`, with `approval_canceled` and `effectAttempted: false`.
+The same rule applies to development target/plugin approvals. Repeated cancel
+or approve decisions return that terminal receipt. The transition owner rejects
+this cancellation receipt once the request is `executing`; its Artifact CAS
+also refuses a claim that races the cancellation write. Open requests retain
+their existing `canceled` settlement, and released V1 history is unchanged.
+
 The Artifact header is an index, not authority. Current readers hydrate the
 body, validate its strict approval-family schema, and require every duplicated
 header field to agree before presenting or acting on it. A contradictory or
@@ -2865,7 +2873,12 @@ hydration, current-edge reconciliation, and accepted-effect acknowledgement.
 The Runner composition owns one exact-Machine receiver, one process-local source
 material resolver, edge-removal pruning, reconnect registration, and terminal
 disposal. It has no Runner engine, Runner store, durable source-key cache, or
-second Follow loop. The prospective `../0.2` source inspected at
+second Follow loop. The unreleased, closed V1 source projection requires each
+message's nullable `localId`: an existing stable id preserves original ordering,
+while explicit null identifies a legacy row. Omitting this field is invalid,
+not permission to consume an unadmitted original as terminal context. Current
+server and Runner readers move together under the 0.3 direct cut; no persisted
+format or database migration changes. The prospective `../0.2` source inspected at
 `7e1ce993c408c0f634b81267aac2bcd8e7859975` has no observed Runner or preparation
 method; new clients therefore fail closed against it instead of negotiating a
 parallel format. Refresh that dirty sibling's relevant bytes before activation.
@@ -3188,8 +3201,30 @@ owner at `../0.2` commit `9dd9c2580be619b4907257f94174e45ba5517976`.
 Those profile shapes contain no Iroh endpoint or descriptor revision fields.
 Once a Home has an exact descriptor, a revision-less manual update cannot replace
 its connection destination; an exact current Home descriptor is required.
+The CLI refreshes changed profile endpoints through authenticated publication.
+A port move with retained publisher continuity advances the descriptor revision.
+If publisher history is lost or disconnected, the CLI refuses a lower revision
+with `stale_home_descriptor`; different Home authority is `identity_mismatch`,
+and different content at the same revision is `home_descriptor_conflict`.
+Recovery restores that Home's own verified continuity before republishing; it
+does not lower the client's admitted frontier. A shared-database consumer's
+private continuity therefore belongs with that consumer when its server moves.
 Public privacy-reduced observations do not allocate a revision or erase private
 facts from the retained authenticated descriptor.
+
+In current 0.3 development, successful env-only CLI enrollment and seeded daemon
+authentication retain the exact Home descriptor on the existing credential
+scope. Its initial URL-derived profile id remains immutable; credentials and
+Machine state are not copied to another id. An endpoint move can then use the
+ordinary authenticated `server set --server-id <existing-id>` admission above.
+Daemon startup first materializes ordinary URL-only metadata at that same scope,
+so reconnect can read a saved profile even when exact publication is unavailable.
+This metadata does not establish Home identity authority.
+For an older env-only CLI home with no saved Home binding, explicitly retaining
+`HAPPIER_ACTIVE_SERVER_ID` selects its existing credential and Machine scope at
+the new user-configured destination. A bare changed `HAPPIER_SERVER_URL` still
+derives a different scope when no saved profile matches. Public Home identity
+alone does not authorize scanning or rebinding credentials across those scopes.
 
 The separate device-local Account Service endpoint accepts only `source: 'default'`
 or `source: 'user'` on both reads and writes. The abandoned `configured` source
