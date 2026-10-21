@@ -217,6 +217,17 @@ entry under `./happier-plugin-ui/<artifactId>`; it must not import host internal
 See the [SDK author reference](../packages/plugin-sdk/README.md#portable-account-actions-03-development)
 and [separately authored fixture](../packages/plugin-sdk/fixtures/account-actions/src/index.ts).
 
+In 0.3 development source, the UI's existing module registry retains evaluated
+CommonJS namespaces by plugin id, Artifact id, digest and the executable host's
+exact authority and activation target (including its contribution and export).
+Re-admission of unchanged code for that same scope reuses its namespace within
+the JavaScript realm (one browser document on web). Different concurrent
+authorities or activation targets receive separate namespaces: a plugin may
+capture its activation API in module-level state. Loads without an executable
+authority scope use a fresh namespace. Installed and bundled Artifacts share
+this loader. Byte admission, activation/currentness checks, registrations and
+cleanup retain their existing owners; module reuse grants no authority.
+
 In this unreleased UI path, Account Availability projects current page caller
 custody and standalone targeted renderer facts. The app projection merge admits
 Account Actions without a Machine. Mounted Account targets reuse SDK declaration
@@ -2295,6 +2306,17 @@ and loaded-runtime validation are separate from catalog admission.
 Batch normalization sorts and deduplicates complete resolved query identities.
 `usage.query` takes `{ queries: [query] }` and returns independently keyed current
 snapshot slices; a pending source does not delay available accounting.
+
+In 0.3 development source, `includeQuotaHistory` is a host projection clause,
+defaulting to `true` and included in the canonical query identity. It is omitted
+from accounting HTTP requests. Capacity widgets explicitly demand current quota
+without history; the Reset-start picker explicitly retains history because it
+needs the exact reset witness. Default, detail and Plans readers retain their
+history demand. Mixed batches derive the history range only from queries that
+request it. Current-only replies cannot settle a richer history demand or replace
+its retained history with an empty result. The existing authorized quota reader
+owns this acquisition choice; the server never removes encrypted/private fields
+from a stored history document. This is not a loaded byte-reduction claim.
 
 Best-available money resolves reported, API-priced, then estimated facts for each
 contribution through the shared cost owner. Buckets, rankings and Work sum those
