@@ -13,6 +13,7 @@ import { PluginProjectedActionV2Schema, QualifiedConnectedAccountProfileV4Schema
 import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixtures/pluginProviderDaemonProjection';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const route = vi.hoisted(() => ({ replace: vi.fn() }));
 const nativeBoundary = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -55,6 +56,8 @@ beforeEach(async () => {
     restorePopover = withPopoverWebGlobals();
     await harness.reset(); resetScopedHomeActionExecutorsForTests(); route.replace.mockReset(); nativeBoundary.rpc.mockReset();
     clearDaemonMergedProjectionCacheForTests(); resetMachineProjectionReadsForTests();
+    // An explicit controller choice is persisted through the sync singleton's settings writer.
+    await loadSyncSingletonForTests();
     const viewport = vi.spyOn(Dimensions, 'get').mockReturnValue({ width: 1280, height: 844, scale: 1, fontScale: 1 });
     restoreViewport = () => viewport.mockRestore();
     const action = PluginProjectedActionV2Schema.parse({ id: 'options', pluginId: contribution.pluginId, occurrenceId: 'options-occurrence',
