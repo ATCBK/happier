@@ -168,6 +168,7 @@ export class RpcHandlerManager {
     private activeHandlerExecutions = new Map<number, Readonly<{
         method: string;
         startedAtMs: number;
+        sessionEffect?: RpcHandlerActiveExecution['sessionEffect'];
     }>>();
     private readonly ownedHandlerMethodsByOwner = new Map<string, Set<string>>();
     private ownedHandlerRegistration: OwnedHandlerRegistrationContext | null = null;
@@ -944,6 +945,7 @@ export class RpcHandlerManager {
             );
             const result = await handler(decryptedParams, Object.freeze({
                 signal: controller.signal,
+                reportSessionEffect: (effect: NonNullable<RpcHandlerActiveExecution['sessionEffect']>) => this.reportSessionEffect(handlerExecutionId, effect),
                 reportOperationDiagnostics: (operation: RpcOperationDiagnostics) => this.reportOperationDiagnostics(diagnostic, operation),
                 requestStartedAtMs,
                 ...(deadlineAtMs === null ? {} : { deadlineAtMs }),
@@ -1106,6 +1108,7 @@ export class RpcHandlerManager {
                     ...(callerInputConstraints ? { callerInputConstraints } : {}),
                     signal,
                     requestStartedAtMs,
+                    reportSessionEffect: (effect: NonNullable<RpcHandlerActiveExecution['sessionEffect']>) => this.reportSessionEffect(handlerExecutionId, effect),
                     reportOperationDiagnostics: (operation: RpcOperationDiagnostics) => this.reportOperationDiagnostics(diagnostic, operation),
                     reportAdmissionDenial: (predicate: RpcAdmissionPredicate) => this.reportAdmissionDenial(diagnostic, predicate),
                     ...((options?.rpcContext?.callerAuthority ?? options?.verifiedPeerAuthority)
@@ -1293,6 +1296,7 @@ export class RpcHandlerManager {
         return Array.from(this.activeHandlerExecutions.values(), (execution) => ({
             method: execution.method,
             activeForMs: Math.max(0, Math.round(observedAtMs - execution.startedAtMs)),
+            ...(execution.sessionEffect ? { sessionEffect: execution.sessionEffect } : {}),
         }));
     }
 
@@ -1518,6 +1522,13 @@ export class RpcHandlerManager {
             startedAtMs: this.nowMs(),
         });
         return id;
+    }
+
+    private reportSessionEffect(id: number | null, effect: NonNullable<RpcHandlerActiveExecution['sessionEffect']>): void {
+        const execution = id === null ? undefined : this.activeHandlerExecutions.get(id);
+        if (execution && id !== null) this.activeHandlerExecutions.set(id, {
+            ...execution, sessionEffect: Object.freeze({ ...effect }),
+        });
     }
 
     private readServerOriginRpcFamily(request: RpcRequest) {

@@ -6645,7 +6645,8 @@ export async function startDaemonSessionControlRuntime(
       params.pidToTrackedSession.values(),
       sessionId,
     );
-    const trackedActivity = resolveTrackedSessionRunnerActivity(tracked);
+    const trackedActivity = resolveTrackedSessionRunnerActivity(tracked,
+      params.getApiMachineForSessions()?.getActiveRpcHandlerExecutions() ?? []);
     if (trackedActivity) return trackedActivity;
     return connectedServiceTurnDeferralQueue.isTurnInFlight(sessionId)
       ? busy('foreground_turn_queue')

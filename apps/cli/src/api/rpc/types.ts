@@ -64,6 +64,8 @@ export type RpcOperationDiagnostics = Readonly<{
 
 export type RpcHandlerContext = Readonly<{
     reportOperationDiagnostics?: (diagnostics: RpcOperationDiagnostics) => void;
+    /** Receiving Action adapter's effect target; activity only, never admission authority. */
+    reportSessionEffect?: (effect: Readonly<{ sessionId: string; actionId: string }>) => void;
     /** Exact present-person decision admitted by the installed Session transport owner. */
     requesterApprovalDecision?: ActionExecutorContext['requesterApprovalDecision'];
     signal: AbortSignal;
@@ -160,6 +162,7 @@ export type RpcAuthorizationResult =
 export type RpcHandlerActiveExecution = Readonly<{
     method: string;
     activeForMs: number;
+    sessionEffect?: Readonly<{ sessionId: string; actionId: string }>;
 }>;
 
 /**

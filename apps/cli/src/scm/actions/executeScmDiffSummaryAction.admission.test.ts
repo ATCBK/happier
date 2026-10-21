@@ -64,6 +64,10 @@ import { ExecutionRunListResponseSchema, ExecutionRunStartFailureDetailsV1Schema
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
 import { createSessionRunReportPolicyReader } from '@/api/sessionFollowCreationPreferences';
 import { SessionAutoFollowPreferencesResponseSchema } from '@happier-dev/protocol/sessions/follow/api';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { resolveTrackedSessionRunnerActivity } from '@/daemon/sessionRunnerRuntime/resolveRuntimeState';
+import { requestPlannedRunnerRestart } from '@/daemon/plannedRunnerRestart/requestPlannedRunnerRestart';
+import type { TrackedSession } from '@/daemon/types';
 // Reuse the composed journey's UI platform setup before loading the real producer.
 // Runtime URLs keep UI-only platform declarations out of CLI compilation.
 await import(new URL('../../../../ui/sources/dev/vitestSetup.ts', import.meta.url).href);
@@ -514,6 +518,22 @@ describe('SCM generation through real host admission', () => {
                         if (!method) throw new Error('Canonical Run Action RPC binding is unavailable');
                         const startRequest = ExecutionRunStartRequestSchema.parse(input);
                         const intentInput = ExecutionRunScmDiffSummaryInputV1Schema.parse(startRequest.intentInput);
+                        // The actual Machine Action is still awaiting its real
+                        // Socket.IO Start. No Run exists at this boundary yet.
+                        const tracked: TrackedSession = { pid: 4242, startedBy: 'daemon', happySessionId: sessionId,
+                            processStartTimeMs: 1, processCommandHash: 'fixture' };
+                        const signals: number[] = [];
+                        expect(await requestPlannedRunnerRestart({ sessionId, tracked, deferral: { kind: 'none' },
+                            restartRequestedPids: new Set(), pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+                            isProcessSafeToSignal: async () => true,
+                            canSignal: () => resolveTrackedSessionRunnerActivity(tracked, machine.manager.getActiveHandlerExecutions())?.reasonCode ?? true,
+                            requestSignal: async request => {
+                                if (!await request.shouldSignal()) return { status: 'skipped_stale_owner' };
+                                signals.push(tracked.pid);
+                                return { status: 'requested' };
+                            },
+                        })).toMatchObject({ signaled: false, notSignaledReason: 'turn_in_progress' });
+                        expect(signals).toEqual([]);
                         if (intentInput.expectedRevision === undefined) throw new Error('Generation must bind its saved revision');
                         if (!intentInput.resultId) throw new Error('Machine generation must save its result before Run admission');
                         expect(await scmDiffSummaryResultStore.readStoredScope({ cwd: fixture.rootPath, sessionId,
@@ -551,7 +571,16 @@ describe('SCM generation through real host admission', () => {
                     // the Session's Run. Observe only that genuine network boundary.
                     if (parentAvailable) assertBeforeStart = assertRunRefusals;
                     const savedBefore = await scmDiffSummaryResultStore.list();
-                    const generationOperations = createScmDiffSummaryOperations({ actionExecutor: machineExecutor });
+                    const generationOperations = createScmDiffSummaryOperations({ actionExecutor: createActionExecutor({
+                        ...createUnavailableActionTransportDeps(), isActionApprovalRequired: () => false,
+                        // Transport boundary: retain the receiving Machine's
+                        // real registration, executor and Run dispatch below it.
+                        scmActionExecute: async ({ actionId, input }) => {
+                            const method = getActionSpec(actionId).bindings?.rpcMethod;
+                            if (!method) throw new Error('SCM Action RPC binding is unavailable');
+                            return await machine.call(method, input);
+                        },
+                    }) });
                     if (disabledOnly) {
                         const previousSettings = getActiveAccountSettingsSnapshot();
                         try {

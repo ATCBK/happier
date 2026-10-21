@@ -33,6 +33,7 @@ import {
 export type ActionSpecRpcHandlerSpec = Readonly<{
     id: ActionId;
     operation?: unknown;
+    sideEffectClass?: ReturnType<typeof getActionSpec>['sideEffectClass'];
     surfaces?: Readonly<{ rpc?: boolean }>;
     bindings?: Readonly<{ rpcMethod?: string | null; rpcMethodAliases?: readonly string[] }>;
     surfaceBindings?: ActionSpecSurfaceBindings;
@@ -380,6 +381,10 @@ export function registerActionSpecRpcHandlers<TActionId extends ActionId = Actio
             const inputSessionId = readDefaultSessionIdFromRpcInput(semanticInput);
             if (envelopeDefaultSessionId && inputSessionId && inputSessionId !== envelopeDefaultSessionId) {
                 return unwrapActionResultForRpc(typedActionId, transportFailure(typedActionId, 'invalid_action_transport_input'));
+            }
+            const effectSessionId = inputSessionId ?? envelopeDefaultSessionId;
+            if (effectSessionId && spec.sideEffectClass && spec.sideEffectClass !== 'read' && spec.sideEffectClass !== 'none') {
+                context?.reportSessionEffect?.({ sessionId: effectSessionId, actionId: typedActionId });
             }
             const executor = await resolveActionExecutor<TActionId>(params, { actionId: typedActionId, method, isAlias, input,
                 ...(context ? { ingress: context } : {}) });

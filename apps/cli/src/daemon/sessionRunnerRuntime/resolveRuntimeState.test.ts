@@ -1,12 +1,26 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { TrackedSession } from '@/daemon/types';
-import { resolveSessionRunnerRuntimeState } from './resolveRuntimeState';
+import { resolveSessionRunnerRuntimeState, resolveTrackedSessionRunnerActivity } from './resolveRuntimeState';
 import { restartSessionRunnerOnCurrentRuntime } from '../plannedRunnerRestart/restartSessionRunnerOnCurrentRuntime';
 import { requestPlannedRunnerRestart } from '../plannedRunnerRestart/requestPlannedRunnerRestart';
 import { requestConnectedServiceSessionRestartSignal } from '../connectedServices/sessionAuthSwitch/requestConnectedServiceSessionRestartSignal';
 
 describe('resolveSessionRunnerRuntimeState', () => {
+  it('does not make a refresh hold itself or another Session effect', () => {
+    const tracked: TrackedSession = { pid: 123, startedBy: 'daemon', happySessionId: 'session' };
+    const operations = [
+      { method: 'session.runtime.refresh', activeForMs: 1,
+        sessionEffect: { sessionId: 'session', actionId: 'session.runtime.refresh' } },
+      { method: 'scm.diffSummary.generate', activeForMs: 1,
+        sessionEffect: { sessionId: 'other', actionId: 'scm.diffSummary.generate' } },
+      { method: 'scm.diffSummary.result.list', activeForMs: 1 },
+    ];
+    expect(resolveTrackedSessionRunnerActivity(tracked, operations)).toBeNull();
+    expect(resolveTrackedSessionRunnerActivity({ ...tracked, activeTurnId: 'turn' }, operations))
+      .toMatchObject({ reasonCode: 'turn_in_progress', diagnostics: { busySource: 'foreground_turn' } });
+  });
+
   it('keeps unattested freshness unknown while preflight and explicit refresh agree on eligibility', async () => {
     const input = {
       sessionId: 'sess-1',

@@ -33,6 +33,10 @@ import { ScmDiffSummaryProfile } from '@/agent/runtime/bridges/executionRun/kind
 import type { ExecutionRunProfileStartParams } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
 import { ScmComparisonCaptureOutputSchema, ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
 import { loadScmPullRequestDraftEvidence } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/loadScmDiffSummaryContext';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { resolveTrackedSessionRunnerActivity } from '@/daemon/sessionRunnerRuntime/resolveRuntimeState';
+import type { TrackedSession } from '@/daemon/types';
+import { requestPlannedRunnerRestart } from '@/daemon/plannedRunnerRestart/requestPlannedRunnerRestart';
 
 const BACKEND_TARGET = { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const };
 
@@ -361,6 +365,72 @@ describe('executeScmDiffSummaryAction', () => {
         const reason = output.success ? output.outputs?.summary?.reason : undefined;
         expect(reason).toContain('execution_run_profile_preparation_failed');
         expect(reason).toContain('Account settings could not be read');
+    });
+
+    it('keeps a typed unavailable-client reason on the saved pre-Start failure', async () => {
+        const fixture = await changedRepository();
+        const output = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath,
+            source: { kind: 'workingTree' }, modelSelector: { modelId: 'explicit' } },
+            machineId: 'machine', backendTarget: BACKEND_TARGET,
+            executeCanonicalAction: async () => ({ ok: false, errorCode: 'RPC_CLIENT_NOT_AVAILABLE',
+                error: 'RPC client temporarily unavailable', details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated') }),
+        });
+        expect(output).toMatchObject({ revision: 1, outputs: { summary: {
+            state: 'failed', reasonCode: 'RPC_CLIENT_NOT_AVAILABLE',
+        } } });
+        expect(output.runId).toBeUndefined();
+        expect(await scmDiffSummaryResultStore.read({ cwd: fixture.rootPath, resultId: output.resultId! }))
+            .toMatchObject({ success: true, result: { output } });
+    });
+
+    it.each(['local', 'transport'] as const)('refuses physical runner replacement while a registered Machine generation is awaiting Start (%s)', async ingress => {
+        const fixture = await changedRepository();
+        const sessionId = 'pending-generation-session';
+        let releaseStart!: () => void;
+        const startGate = new Promise<void>(resolve => { releaseStart = resolve; });
+        let startEntered!: () => void;
+        const entered = new Promise<void>(resolve => { startEntered = resolve; });
+        const rpc = new RpcHandlerManager({ scopePrefix: 'generation-machine', encryptionMode: 'plain', logger: () => {} });
+        const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), isActionApprovalRequired: () => false,
+            scmActionExecute: async ({ actionId, input }) => executeScmActionOperation({ actionId, input,
+                workingDirectory: fixture.rootPath, authorizeSession: async id => id === sessionId,
+                executeDiffSummary: ({ request }) => executeScmDiffSummaryAction({ request, backendTarget: BACKEND_TARGET,
+                    executeCanonicalAction: async () => {
+                        startEntered();
+                        await startGate;
+                        return { ok: false, errorCode: 'RPC_CLIENT_NOT_AVAILABLE', error: 'Receiver unavailable',
+                            details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated') };
+                    } }),
+            }),
+        });
+        registerScmHandlers(rpc, fixture.rootPath, { machineId: 'generation-machine', actionExecutor: executor });
+        const tracked: TrackedSession = { pid: 4242, startedBy: 'daemon', happySessionId: sessionId,
+            processStartTimeMs: 1, processCommandHash: 'fixture' };
+        const trackedSessions = new Map([[tracked.pid, tracked]]);
+        const signals: number[] = [];
+        const restart = () => requestPlannedRunnerRestart({ sessionId, tracked, deferral: { kind: 'none' },
+            restartRequestedPids: new Set(), pidToTrackedSession: trackedSessions,
+            isProcessSafeToSignal: async () => true,
+            canSignal: () => resolveTrackedSessionRunnerActivity(tracked, rpc.getActiveHandlerExecutions())?.reasonCode ?? true,
+            requestSignal: async request => {
+                if (!await request.shouldSignal()) return { status: 'skipped_stale_owner' };
+                signals.push(tracked.pid);
+                return { status: 'requested' };
+            },
+        });
+        const input = { cwd: fixture.rootPath, sessionId,
+            source: { kind: 'workingTree' }, modelSelector: { modelId: 'explicit' } };
+        const generating = ingress === 'local' ? rpc.invokeLocal('scm.diffSummary.generate', input)
+            : rpc.handleRequest({ method: 'generation-machine:scm.diffSummary.generate', params: input });
+        try {
+            await entered;
+            expect(resolveTrackedSessionRunnerActivity({ ...tracked, happySessionId: 'unrelated-session' }, rpc.getActiveHandlerExecutions())).toBeNull();
+            expect(await restart()).toMatchObject({ signaled: false, notSignaledReason: 'turn_in_progress' });
+            expect(signals).toEqual([]);
+        } finally { releaseStart(); await generating; }
+        expect(resolveTrackedSessionRunnerActivity(tracked, rpc.getActiveHandlerExecutions())).toBeNull();
+        expect(await restart()).toMatchObject({ signaled: true });
+        expect(signals).toEqual([tracked.pid]);
     });
 
     it('generates a workspace-native saved result through the existing detached Run without a Session', async () => {

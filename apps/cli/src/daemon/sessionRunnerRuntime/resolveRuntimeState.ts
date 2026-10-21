@@ -1,4 +1,5 @@
 import type { TrackedSession } from '@/daemon/types';
+import type { RpcHandlerActiveExecution } from '@/api/rpc/types';
 import type { SessionRunnerDaemonEntrypointSourceV1 } from '@happier-dev/protocol';
 
 import {
@@ -24,7 +25,16 @@ export type SessionRunnerActivityRefusal = Readonly<{
   diagnostics?: Record<string, unknown>;
 }>;
 
-export function resolveTrackedSessionRunnerActivity(tracked: TrackedSession | null | undefined): SessionRunnerActivityRefusal | null {
+export function resolveTrackedSessionRunnerActivity(
+  tracked: TrackedSession | null | undefined,
+  activeRpcOperations: readonly RpcHandlerActiveExecution[] = [],
+): SessionRunnerActivityRefusal | null {
+  const effect = activeRpcOperations.find(operation => operation.sessionEffect?.sessionId === tracked?.happySessionId
+    // Refresh is the observing operation itself, rather than work it must join.
+    && operation.sessionEffect?.actionId !== 'session.runtime.refresh');
+  if (effect?.sessionEffect) return { reasonCode: 'turn_in_progress', diagnostics: {
+    busySource: 'session_action', actionId: effect.sessionEffect.actionId,
+  } };
   const turnId = normalizeString(tracked?.activeTurnId)
     || normalizeString(tracked?.reattachedInterruptedTurnId);
   return turnId ? { reasonCode: 'turn_in_progress', diagnostics: {
