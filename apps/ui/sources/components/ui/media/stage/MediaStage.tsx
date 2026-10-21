@@ -15,6 +15,7 @@ import { announceAccessibilityMessage } from '@/components/ui/accessibility/anno
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { GlassPanel } from '@/components/ui/glass/GlassPanel';
+import { GlassLivePictureBackdropContext } from '@/components/ui/glass/livePictureBackdrop';
 import { Icon } from '@/components/ui/icons/Icon';
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
@@ -807,7 +808,10 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
 
   const topInset = phone ? insets.top + theme.space.s6 : theme.space.s12;
 
+  // The stage's capsules and strip float over the pictures and pages it shows (arbitrary pixels), so the glass
+  // takes the live-picture coat there: a white page under dark ink stays readable at the default.
   return (
+    <GlassLivePictureBackdropContext.Provider value>
     <View
       style={StyleSheet.absoluteFill}
       accessibilityViewIsModal
@@ -1047,6 +1051,7 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
         <StageImmersiveExit top={topInset} right={theme.space.s12} onPress={toggleImmersive} />
       ) : null}
     </View>
+    </GlassLivePictureBackdropContext.Provider>
   );
 }
 

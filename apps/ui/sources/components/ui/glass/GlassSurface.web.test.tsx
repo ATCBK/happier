@@ -544,6 +544,29 @@ describe('web glass material', () => {
         const over = renderGlassOver({ filter: style.backdropFilter!, coat: rgb(mix![1]!), opacity, backdrop: [0, 0, 0] });
         expect(Color.rgb(over).contrast(Color(lightTheme.colors.text.primary))).toBeGreaterThanOrEqual(4.5);
     });
+    it('keeps a floating bar over a document legible at the default: white paper under dark-theme ink takes the live-picture coat', async () => {
+        const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
+        const { glassPresetMaterials } = await import('./glassMaterial');
+        const { FloatingTabBarSurface } = await import('@/components/ui/navigation/FloatingTabBarSurface');
+        const { darkTheme } = await import('@/theme');
+        themeMode.dark = true;
+        const rgb = (value: string) => Color(value).rgb().array().slice(0, 3) as unknown as [number, number, number];
+        const contrastOverPaper = async (overPicture: boolean) => {
+            const screen = await renderScreen(<GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials('auto') }}>
+                <FloatingTabBarSurface bottomInset={0} stretch overPicture={overPicture}><DraftInput /></FloatingTabBarSurface>
+            </GlassMaterialSettingsProvider>);
+            const style = flattenTestStyle(screen.findAll(hasBackdrop)[0]!.props.style) as Record<string, string>;
+            standardCleanup();
+            const mix = /color-mix\(in srgb, (rgba?\([^)]*\)|#[0-9a-f]+) (\d+(?:\.\d+)?)%, transparent\)/i.exec(style.backgroundColor!);
+            const over = renderGlassOver({ filter: style.backdropFilter!, coat: mix ? rgb(mix[1]!) : [0, 0, 0], opacity: mix ? Number(mix[2]) / 100 : 0, backdrop: [255, 255, 255] });
+            return Color.rgb(over).contrast(Color(darkTheme.colors.text.primary));
+        };
+        // The PDF page (FV5p): a white page scrolls under the phone toolbar's "1 of 3".
+        expect(await contrastOverPaper(true)).toBeGreaterThanOrEqual(4.5);
+        // The plain bar keeps the hair of tint (the tab bars over lists and atmosphere), which is why the media page opts in.
+        expect(await contrastOverPaper(false)).toBeLessThan(4.5);
+        themeMode.dark = false;
+    });
     it('applies a customized tint exactly as set over a live picture, as it would anywhere else (only the shipped default takes the readable coat)', async () => {
         const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
         const { glassPresetMaterials } = await import('./glassMaterial');

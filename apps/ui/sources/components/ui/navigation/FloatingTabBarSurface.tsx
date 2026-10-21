@@ -3,6 +3,7 @@ import { Platform, View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { GlassPanel } from '@/components/ui/glass/GlassPanel';
+import { GlassLivePictureBackdropContext } from '@/components/ui/glass/livePictureBackdrop';
 import { layout } from '@/components/ui/layout/layout';
 import { resolveFloatingTabBarBottomPadding } from './floatingTabBarBottomInset';
 
@@ -128,6 +129,12 @@ export type FloatingTabBarSurfaceProps = Readonly<{
      * that sit at both ends (the File page's View | Changes … Find · Edit), not a row of equal tabs.
      */
     stretch?: boolean;
+    /**
+     * The bar floats over a picture or a document (a PDF page, an image), not over the app's own page: arbitrary
+     * pixels, so the default glass takes the live-picture coat and its ink holds over white paper in dark and
+     * black footage in light. Over the plain page that coat lands on the same paint; customized glass stays as set.
+     */
+    overPicture?: boolean;
     testID?: string;
 }>;
 
@@ -141,17 +148,22 @@ export const FloatingTabBarSurface = React.memo(function FloatingTabBarSurface(p
     }, []);
     const accessoryFootprint = barHeightPx ? { width: barHeightPx } : styles.accessoryFootprintUnmeasured;
 
-    const bar = (
+    const panel = (
         <GlassPanel
             testID={props.testID}
             radius={TAB_BAR_RADIUS}
             maxWidth={layout.maxWidth}
             softShadow={props.opaqueBand === true}
-            style={props.stretch ? [styles.pill, styles.pillStretch] : styles.pill}
+            style={styles.pill}
+            // The outer box sizes the capsule (GlassPanel `frameStyle`); width on `style` only reached the inner surface.
+            frameStyle={props.stretch ? styles.pillStretch : undefined}
         >
             {props.children}
         </GlassPanel>
     );
+    const bar = props.overPicture === true
+        ? <GlassLivePictureBackdropContext.Provider value>{panel}</GlassLivePictureBackdropContext.Provider>
+        : panel;
 
     return (
         <View
