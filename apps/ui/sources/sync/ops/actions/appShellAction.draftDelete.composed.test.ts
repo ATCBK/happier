@@ -25,6 +25,8 @@ import { listCompiledActionCliCommands } from '../../../../../cli/src/cli/action
 import { runCompiledActionCliCommand } from '../../../../../cli/src/cli/actions/executeCommand';
 import { captureConsoleJsonOutput } from '../../../../../cli/src/testkit/logger/captureOutput';
 import { resolvePublishedMachineContentCodec } from '../../../../../cli/src/api/machine/machineDataEncryptionKey';
+import { sessionUiActionClientRpcMethod } from '@happier-dev/protocol/actions/clientDispatchV1';
+import { selectRpcTarget } from '../../../../../server/sources/app/api/socket/rpc/rpcTargetSelection';
 
 vi.mock('socket.io-client', async (original) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 installDisconnectedServerSocketBoundary();
@@ -56,7 +58,7 @@ afterEach(async () => {
     process.exitCode = 0;
 });
 
-async function setup(mode: 'plain' | 'e2ee', connected = true, synchronized = true) {
+async function setup(mode: 'plain' | 'e2ee', connected = true, synchronized = true, viewedSessionId?: string) {
     const features = createRootLayoutFeaturesResponse();
     if (!tryWriteServerEnabledBitInPlace(features, 'sessions.drafts', synchronized)) throw new Error('Missing draft feature');
     features.capabilities.serverIdentity.serverIdentityId = 'srv_draft_delete';
@@ -126,8 +128,26 @@ async function setup(mode: 'plain' | 'e2ee', connected = true, synchronized = tr
     axios.defaults.adapter = adapter;
     vi.stubGlobal('fetch', owner.request);
     const receive = createUiClientActionReverseHandler({ serverId, accountId, isCurrent: () => true });
+    const selectedMethods: string[] = [];
+    let foreignEffects = 0;
     const reverse = createClientActionReverseDispatcher(() => ({ hasConnectedClientRpcHandler: () => connected,
-        callConnectedClientRpc: async (_method, payload, options) => {
+        callConnectedClientRpc: async (method, payload, options) => {
+            selectedMethods.push(method);
+            if (viewedSessionId) {
+                // Socket membership/ACKs are the boundary; selection and the app's
+                // actual Action receiver stay real, including the other client.
+                const foreign = { id: 'a-settings-client', timeout: () => ({ emitWithAck: async () => {
+                    foreignEffects++;
+                    return { v: 1, execution: { ok: true, result: { status: 'noMountedSurface' } } };
+                } }) };
+                const viewed = { id: 'z-session-client', timeout: () => ({ emitWithAck: async () =>
+                    receive(JSON.parse(JSON.stringify(payload)), { signal: new AbortController().signal }) }) };
+                const targets = method === sessionUiActionClientRpcMethod(viewedSessionId) ? [viewed] : [foreign, viewed];
+                const selection = selectRpcTarget({ targets, answeringClient: options.answeringClient });
+                if (selection.type !== 'target') return { ok: false, errorCode: 'RPC_CLIENT_AMBIGUOUS' };
+                options.onIssued();
+                return { ok: true, result: await selection.target.timeout(0).emitWithAck(SOCKET_RPC_EVENTS.REQUEST, payload) };
+            }
             options.onIssued();
             return { ok: true, result: await receive(JSON.parse(JSON.stringify(payload)), { signal: new AbortController().signal }) };
         } }));
@@ -160,10 +180,47 @@ async function setup(mode: 'plain' | 'e2ee', connected = true, synchronized = tr
     const standaloneCli = createCliActionExecutorFromCredentials(options);
     const { actionsSettingsProvider: _reviewedPolicy, ...accountOptions } = options;
     const standaloneAccountCli = createCliActionExecutorFromCredentials(accountOptions);
-    return { cli, standaloneCli, standaloneAccountCli, credentials, serverId, accountId, address };
+    return { cli, standaloneCli, standaloneAccountCli, credentials, serverId, accountId, address, selectedMethods,
+        readForeignEffects: () => foreignEffects };
 }
 
 describe('CLI approved draft delete through the executing app', () => {
+    it.each(['plain', 'e2ee'] as const)('replays an approved Session Find from a standalone %s operator CLI on the client viewing that Session', async mode => {
+        const sessionId = 'viewed-session';
+        const { cli, standaloneCli, serverId, accountId, selectedMethods, readForeignEffects } = await setup(mode, true, true, sessionId);
+        const { createFindSurfaceRegistry } = await import('@/keyboard/findSurfaceRegistry');
+        const { registerFindActionRuntime } = await import('@/keyboard/findActionRuntime');
+        const { createFileViewerFindModel } = await import('@/components/workspaces/files/details/useFileViewerFind');
+        const find = createFindSurfaceRegistry();
+        const model = createFileViewerFindModel(() => ({ path: 'notes.md', mode: 'file', text: 'needle\nneedle' }));
+        const releaseRuntime = registerFindActionRuntime(find);
+        const releaseSurface = find.register({ surfaceId: 'file:notes', controller: model, open: model.open,
+            containsFocus: () => true, isOpen: () => model.getSnapshot().open, isInputFocused: () => true });
+        try {
+            const proposed = await cli.execute('approval.request.create', { actionId: 'ui.find',
+                actionArgs: { op: 'set', query: 'needle', target: 'file:notes' }, summary: 'Find in my Session',
+                createdBy: { surface: 'agent', sessionId } }, {
+                surface: 'agent', authority: 'account_automation', serverId, runtimeAccountId: accountId,
+                defaultSessionId: sessionId, defaultSessionMachineId: 'fix73-machine',
+                actionCaller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 }, actionRequestId: `find-${mode}`,
+            });
+            if (!proposed.ok || !proposed.result || typeof proposed.result !== 'object'
+                || !('artifactId' in proposed.result) || typeof proposed.result.artifactId !== 'string') {
+                throw new Error(JSON.stringify(proposed));
+            }
+            const { artifactId } = proposed.result;
+            expect(model.getSnapshot().open).toBe(false);
+            const result = await standaloneCli.execute('approval.request.decide', { artifactId, decision: 'approve' },
+                { surface: 'cli', authority: 'present_user' });
+            expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: {
+                status: 'executed', execution: { ok: true, result: { status: 'results', current: 1, total: 2 } },
+            } });
+            expect(model.getSnapshot()).toMatchObject({ open: true, query: 'needle' });
+            expect(selectedMethods).toEqual([sessionUiActionClientRpcMethod(sessionId)]);
+            expect(replayRpcRequests).toEqual([`fix73-machine:${RPC_METHODS.APPROVAL_REQUEST_REPLAY_APPROVED}`]);
+            expect(readForeignEffects()).toBe(0);
+        } finally { releaseSurface(); releaseRuntime(); }
+    });
     it.each(['plain', 'e2ee'] as const)('forwards a standalone %s CLI approval to its original daemon and executing app', async mode => {
         const { standaloneCli } = await setup(mode);
         const created = await standaloneCli.execute('session.draft.delete', { draftId },
