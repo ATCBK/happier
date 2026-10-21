@@ -4,13 +4,48 @@ import { join } from 'node:path';
 import { PluginError } from '@happier-dev/plugin-sdk';
 
 import { authorizePluginExecLaunchForHost, authorizeResolvedAgentNativeExecLaunchForHost,
-    createStablePluginExecService, issueAgentNativeLaunchQualifierForHost,
+    createStablePluginExecService, createStableRunnerPluginExecService, issueAgentNativeLaunchQualifierForHost,
     type HostAgentNativeLaunchPreparation } from './exec';
 import { withTempDir } from '@/testkit/fs/tempDir';
 
 const executable = Object.freeze({ kind: 'systemTool', id: 'fixture.node' } as const);
 
 describe('host-issued Agent native launch qualifier', () => {
+    it.each(['host', 'runner'] as const)('preserves typed system-tool resolution refusals from the %s authority', async kind => {
+        const refusal = new PluginError({ code: 'fixture_resolution_denied', message: 'Tool resolution refused', retryable: true });
+        const common = { signal: new AbortController().signal, isOccurrenceCurrent: () => true };
+        const service = kind === 'host' ? createStablePluginExecService({
+            ...common, allowedExecutables: [], resolveExecutable: async () => ({ command: process.execPath }),
+            resolvePath: async () => process.cwd(), systemTools: { resolve: async () => { throw refusal; } },
+        }) : createStableRunnerPluginExecService({
+            ...common, agentCli: { checkReadiness: async () => ({ launchable: [] }) },
+            resolveSystemTool: async () => { throw refusal; },
+            authorizeLaunch: async () => { throw new Error('Resolution must refuse before launch'); },
+        });
+        await expect(service.systemTools.resolve({ toolId: 'fixture.agent', purpose: 'Start native Agent' }))
+            .rejects.toMatchObject({ code: 'fixture_resolution_denied', retryable: true,
+                execLaunch: 'notStarted', data: { execLaunch: 'notStarted' } });
+    });
+
+    it.each(['currentness', 'environment'] as const)('retains prelaunch evidence when %s fails after authorization', async phase => {
+        const release = vi.fn();
+        let current = true;
+        const service = createStablePluginExecService({
+            allowedExecutables: [], signal: new AbortController().signal,
+            isOccurrenceCurrent: () => current, resolveExecutable: async () => ({ command: process.execPath, release }),
+            resolvePath: async () => process.cwd(),
+            transformAgentChildLaunchEnvironment: () => {
+                if (phase === 'environment') throw new Error('Invalid child environment');
+                current = false;
+                return {};
+            },
+        });
+        await expect(service.spawn({ executable }))
+            .rejects.toMatchObject({ code: phase === 'currentness' ? 'plugin_generation_stale' : 'plugin_exec_spawn_failed',
+                execLaunch: 'notStarted', data: { execLaunch: 'notStarted' } });
+        expect(release).toHaveBeenCalledOnce();
+    });
+
     it('refuses a forged native launch qualifier before resolving or launching a process', async () => {
         const resolveExecutable = vi.fn(async () => ({ command: process.execPath }));
         const service = createStablePluginExecService({
@@ -131,7 +166,7 @@ describe('host-issued Agent native launch qualifier', () => {
         expect(release).toHaveBeenCalledOnce();
     });
 
-    it('refuses changed reviewed inputs after native evaluation and releases the original executable', async () => {
+    it.each(['declared', 'resolved'] as const)('refuses changed reviewed inputs before a %s native launch and releases the original executable', async kind => {
         await withTempDir('native qualifier currentness ', async root => {
             await writeFile(join(root, 'mise.toml'), '[env]\nKEEP = "native"\n');
             let current = true;
@@ -147,9 +182,11 @@ describe('host-issued Agent native launch qualifier', () => {
                             run: async () => { current = false; return { exitCode: 0, stdout: 'KEEP=native\0' }; } } },
                 } }),
             });
-            await expect(authorizePluginExecLaunchForHost(service, { executable, cwd: { root: 'workspace', relativePath: '' } },
-                { nativeLaunch: issueAgentNativeLaunchQualifierForHost(service) }))
-                .rejects.toMatchObject({ code: 'project_setup_effect_changed' });
+            const nativeLaunch = issueAgentNativeLaunchQualifierForHost(service);
+            await expect(kind === 'declared'
+                ? authorizePluginExecLaunchForHost(service, { executable, cwd: { root: 'workspace', relativePath: '' } }, { nativeLaunch })
+                : authorizeResolvedAgentNativeExecLaunchForHost(service, { command: process.execPath, args: [], env: {}, cwd: root, release }, undefined, nativeLaunch))
+                .rejects.toMatchObject({ code: 'project_setup_effect_changed', execLaunch: 'notStarted', data: { execLaunch: 'notStarted' } });
             expect(release).toHaveBeenCalledOnce();
         });
     });
