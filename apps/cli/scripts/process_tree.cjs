@@ -122,11 +122,12 @@ async function killProcessTree(proc, opts, enumerate = psList) {
   if (!pid || rootHasExited()) return { rootObservedAlive: false };
 
   const graceMs = Math.max(1, opts?.graceMs ?? 1000);
+  let probeFailed = false;
   let signallingFailed = false;
   const onSignalFailure = () => { signallingFailed = true; };
   // An observed child exit revokes authority over its numeric PID, including after a wait.
   const isAlive = (targetPid) => !(targetPid === pid && rootHasExited())
-    && isPidAliveBySignal(targetPid, onSignalFailure);
+    && isPidAliveBySignal(targetPid, () => { probeFailed = true; });
   const kill = (targetPid, signal) => {
     if (targetPid !== pid || !rootHasExited()) bestEffortKillPid(targetPid, signal, onSignalFailure);
   };
@@ -169,15 +170,19 @@ async function killProcessTree(proc, opts, enumerate = psList) {
   await waitForAllGone(all, graceMs, isAlive);
 
   const remaining = all.filter((p) => isAlive(p));
-  if (remaining.length === 0 && !discoveryFailed && !signallingFailed) return { rootObservedAlive };
+  if (remaining.length === 0 && !discoveryFailed && !probeFailed && !signallingFailed) return { rootObservedAlive };
 
   for (const targetPid of remaining) kill(targetPid, 'SIGKILL');
   await waitForAllGone(remaining, Math.min(250, graceMs), isAlive);
   // A signalable PID alone may be a defunct child. Preserve the existing reap semantics;
   // only actual OS failures make this best-effort cleanup explicitly incomplete.
-  if (discoveryFailed || signallingFailed) {
+  if (discoveryFailed || probeFailed || signallingFailed) {
     throw Object.assign(new Error('Process-tree termination could not be verified'), {
       code: 'process_tree_termination_incomplete',
+      // Keep only failure categories: native errors can contain private paths or command lines.
+      discoveryFailed,
+      probeFailed,
+      signallingFailed,
     });
   }
   return { rootObservedAlive };

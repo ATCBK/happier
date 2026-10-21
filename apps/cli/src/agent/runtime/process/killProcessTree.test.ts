@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { once } from 'node:events';
+import { existsSync, readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import psList from 'ps-list';
@@ -13,6 +14,7 @@ vi.mock('ps-list', async importOriginal => {
 
 import { isPidAlive, spawnInlineNodeParentWithChild, spawnInlineNodeTestProcess, waitForProcessExit } from '@/testkit/process/spawn';
 import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { logger } from '@/ui/logger';
 
 describe('killProcessTree', () => {
   it.runIf(process.platform !== 'win32').each(['lost', 'captured'] as const)('does not signal an exited root while cleaning %s descendants discovered across its exit', async discovery => {
@@ -100,18 +102,31 @@ describe('killProcessTree', () => {
     }
   });
 
-  it('rejects unverified termination when the OS denies signalling and probing the known root', async () => {
+  it.each(['probe', 'signal', 'both'] as const)('records %s failures separately when the OS denies access to the known root', async failure => {
     const child = spawnInlineNodeTestProcess('setInterval(() => {}, 1000)');
     const signal = process.kill.bind(process);
+    logger.flushSync();
+    const before = existsSync(logger.getLogPath()) ? readFileSync(logger.getLogPath(), 'utf8') : '';
     // Genuine OS signal/probe denial, restricted to this test's real owned root.
     const denied = vi.spyOn(process, 'kill').mockImplementation((pid, requestedSignal) => {
-      if (pid === child.pid) throw Object.assign(new Error('private-native-value'), { code: 'EPERM' });
+      if (pid === child.pid && (failure === 'both' || (requestedSignal === 0 ? failure === 'probe' : failure === 'signal'))) {
+        throw Object.assign(new Error('private-native-value'), { code: 'EPERM' });
+      }
       return signal(pid, requestedSignal);
     });
     try {
       await expect(killProcessTree(child, { graceMs: 25 })).rejects.toMatchObject({
         code: 'process_tree_termination_incomplete',
+        discoveryFailed: false,
+        probeFailed: failure !== 'signal',
+        signallingFailed: failure !== 'probe',
       });
+      logger.flushSync();
+      const diagnostic = readFileSync(logger.getLogPath(), 'utf8').slice(before.length);
+      expect(diagnostic).toMatch(/"discoveryFailed":\s*false/);
+      expect(diagnostic).toMatch(new RegExp(`"probeFailed":\\s*${failure !== 'signal'}`));
+      expect(diagnostic).toMatch(new RegExp(`"signallingFailed":\\s*${failure !== 'probe'}`));
+      expect(diagnostic).not.toContain('private-native-value');
     } finally {
       denied.mockRestore();
       child.kill('SIGKILL');
