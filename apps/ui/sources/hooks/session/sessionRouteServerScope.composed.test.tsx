@@ -4,6 +4,8 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/
 import { installSessionActionFixture, installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -23,9 +25,11 @@ beforeEach(async () => {
     const identified = await setServerProfileIdentityForUrl('https://session-route.test', 'srv_session_route');
     expect(identified).not.toBeNull();
     alias = localId;
+    const request = createSessionReadBatchFetchBoundary(homes.request);
     connection = await restoreServerAccountForTest({ serverUrl: 'https://session-route.test',
-        serverIdentityId: 'srv_session_route', accountId: 'account', request: homes.request });
+        serverIdentityId: 'srv_session_route', accountId: 'account', request });
     installHomeGovernanceBoundaries(homes);
+    setRuntimeFetch(request);
     serverId = resolveServerProfileScopeIdForIdentifier(connection.home.id);
     expect(getServerProfileById(alias)?.id).toBe(connection.home.id);
     expect(resolveServerProfileScopeIdForIdentifier(alias)).toBe(serverId);

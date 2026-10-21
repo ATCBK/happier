@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { StyleSheet } from 'react-native';
+import { Platform, StyleSheet } from 'react-native';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 
@@ -10,7 +10,29 @@ import { createSessionFileNativeTransferBoundary } from '@/components/sessions/f
 import { createSessionFilesViewFixture, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
 import { transferMachine } from '@/components/sessions/files/sessionFileTransferTestkit';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { SessionMediaInlineImages } from './SessionMediaInlineImages';
+import { TranscriptListShell } from '@/components/sessions/transcript/viewport/shell/TranscriptListShell';
+import { resolveMainTranscriptListShellFrame } from '@/components/sessions/transcript/viewport/shell/transcriptListShellCapabilities';
+import { createWebDomScrollObservation } from '@/components/sessions/transcript/viewport/driver/webDomObservation';
+
+const legendBoundary = vi.hoisted(() => ({ rowHost: {}, scrollToIndex: vi.fn() }));
+vi.mock('@legendapp/list/react-native', async () => {
+    const React = await import('react');
+    return {
+        LegendList: React.forwardRef((props: {
+            data: readonly { id: string }[];
+            renderItem: (info: { item: { id: string }; index: number }) => React.ReactNode;
+        }, ref) => {
+            React.useImperativeHandle(ref, () => ({
+                cancelScroll: vi.fn(),
+                getState: () => ({ elementAtIndex: (index: number) => index === 0 ? legendBoundary.rowHost : null }),
+                scrollToIndex: legendBoundary.scrollToIndex,
+            }), []);
+            return <>{props.data.map((item, index) => <React.Fragment key={item.id}>{props.renderItem({ item, index })}</React.Fragment>)}</>;
+        }),
+    };
+});
 
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -56,7 +78,7 @@ beforeEach(async () => {
             if (target.kind !== 'machine') throw new Error('Expected a preview Machine');
             return rejectDownloads ? { success: false, error: 'not_found' }
                 : transfer.rpc({ targetId: target.machineId,
-                    method: getActionSpec('daemon.filesystem.download').bindings!.rpcMethod!, payload: { input } });
+                    method: getActionSpec('daemon.filesystem.download').bindings!.rpcMethod!, payload: input });
         },
     });
     const machine = transferMachine({ id: 'm1', storageMode: 'plain', installationId: boundary.machine.installationId,
@@ -69,6 +91,8 @@ beforeEach(async () => {
         machineCarrierOrigin: transfer.origin, rpc: transfer.rpc, request: async (url, init) => {
             const parsed = new URL(String(url));
             if (parsed.pathname === '/v1/machines') return Response.json([row]);
+            if (parsed.pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                id => id === row.id ? row : null);
             if (parsed.pathname === '/v1/machines/m1') return Response.json({ machine: row });
             if (parsed.pathname.startsWith('/v1/actions/')) {
                 const response = await boundary.handle(parsed, init);
@@ -85,6 +109,119 @@ afterEach(async () => {
 });
 
 describe('SessionMediaInlineImages', () => {
+    it('reveals a ringed native thumbnail through its measured transcript row', async () => {
+        const path = '.happier/uploads/attachments/focus.png';
+        const onRevealNativeItem = vi.fn();
+        const measureLayout = vi.fn((relativeTo: unknown, onSuccess: (x: number, y: number, width: number, height: number) => void) => {
+            expect(relativeTo).toBe(legendBoundary.rowHost);
+            onSuccess(0, 28, 160, 90);
+        });
+        await renderScreen(
+            <TranscriptListShell
+                data={[{ id: 'other-message' }, { id: 'message-1' }]}
+                dataKey="image-focus"
+                keyExtractor={item => item.id}
+                frame={resolveMainTranscriptListShellFrame({ legendInitialScrollAtEnd: false, platformOS: 'ios' })}
+                webDomObservation={createWebDomScrollObservation()}
+                onRevealNativeItem={onRevealNativeItem}
+                renderItem={({ item }) => item.id === 'message-1' ? <SessionMediaInlineImages
+                    sessionId="s1"
+                    media={[{ id: 'focus-image', status: 'available', name: 'focus.png', path,
+                        mimeType: 'image/png', sizeBytes: 42, category: 'attachment', role: 'input' }]}
+                    onOpenPath={() => { throw new Error('Image focus must not open the file'); }}
+                    fileOpenEnabled
+                    mediaPreviewEnabled
+                    ringedPath={path}
+                /> : null}
+            />,
+            { createNodeMock: element => element.props.collapsable === false ? { measureLayout } : null },
+        );
+        expect(onRevealNativeItem).toHaveBeenCalledWith({ index: 1, itemOffsetPx: -28 });
+    });
+
+    it('ignores a native focus measurement after its image focus was cleared', async () => {
+        const path = '.happier/uploads/attachments/focus-cancelled.png';
+        const onRevealNativeItem = vi.fn();
+        const measurement: { complete?: (x: number, y: number, width: number, height: number) => void } = {};
+        const render = (ringedPath: string | null) => <TranscriptListShell
+            data={[{ id: 'message-1' }]}
+            dataKey="cancelled-image-focus"
+            keyExtractor={item => item.id}
+            frame={resolveMainTranscriptListShellFrame({ legendInitialScrollAtEnd: false, platformOS: 'ios' })}
+            webDomObservation={createWebDomScrollObservation()}
+            onRevealNativeItem={onRevealNativeItem}
+            renderItem={() => <SessionMediaInlineImages
+                sessionId="s1"
+                media={[{ id: 'focus-cancelled', status: 'available', name: 'focus-cancelled.png', path,
+                    mimeType: 'image/png', sizeBytes: 42, category: 'attachment', role: 'input' }]}
+                onOpenPath={() => {}}
+                fileOpenEnabled
+                mediaPreviewEnabled
+                ringedPath={ringedPath}
+            />}
+        />;
+        const screen = await renderScreen(render(path), {
+            createNodeMock: element => element.props.collapsable === false ? {
+                measureLayout: (_relativeTo: unknown, onSuccess: NonNullable<typeof measurement.complete>) => { measurement.complete = onSuccess; },
+            } : null,
+        });
+        expect(measurement.complete).toBeDefined();
+        await act(async () => { screen.update(render(null)); });
+        measurement.complete?.(0, 28, 160, 90);
+        expect(onRevealNativeItem).not.toHaveBeenCalled();
+    });
+
+    it('reveals native images in bounded transcript shells through the renderer scroll owner', async () => {
+        const path = '.happier/uploads/attachments/bounded-focus.png';
+        legendBoundary.scrollToIndex.mockClear();
+        await renderScreen(
+            <TranscriptListShell
+                data={[{ id: 'bounded-message' }]}
+                dataKey="bounded-image-focus"
+                keyExtractor={item => item.id}
+                frame={resolveMainTranscriptListShellFrame({ legendInitialScrollAtEnd: false, platformOS: 'ios' })}
+                webDomObservation={createWebDomScrollObservation()}
+                renderItem={() => <SessionMediaInlineImages
+                    sessionId="s1"
+                    media={[{ id: 'bounded-focus', status: 'available', name: 'bounded-focus.png', path,
+                        mimeType: 'image/png', sizeBytes: 42, category: 'attachment', role: 'input' }]}
+                    onOpenPath={() => {}}
+                    fileOpenEnabled
+                    mediaPreviewEnabled
+                    ringedPath={path}
+                />}
+            />,
+            { createNodeMock: element => element.props.collapsable === false ? {
+                measureLayout: (_relativeTo: unknown, onSuccess: (x: number, y: number, width: number, height: number) => void) => onSuccess(0, 40, 160, 90),
+            } : null },
+        );
+        expect(legendBoundary.scrollToIndex).toHaveBeenCalledWith({ index: 0, viewOffset: -40, animated: false });
+    });
+
+    it('keeps browser thumbnail reveal on the existing nearest scroll path', async () => {
+        const path = '.happier/uploads/attachments/focus-web.png';
+        const scrollIntoView = vi.fn();
+        const originalPlatform = Platform.OS;
+        Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
+        try {
+            await renderScreen(
+                <SessionMediaInlineImages
+                    sessionId="s1"
+                    media={[{ id: 'focus-web', status: 'available', name: 'focus-web.png', path,
+                        mimeType: 'image/png', sizeBytes: 42, category: 'attachment', role: 'input' }]}
+                    onOpenPath={() => {}}
+                    fileOpenEnabled
+                    mediaPreviewEnabled
+                    ringedPath={path}
+                />,
+                { createNodeMock: element => element.props.collapsable === false ? { scrollIntoView } : null },
+            );
+            expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
+        } finally {
+            Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatform });
+        }
+    });
+
     it('renders public media as inert metadata without invoking a preview resolver', async () => {
         const path = '.happier/uploads/generated/public.png';
         const screen = await renderScreen(

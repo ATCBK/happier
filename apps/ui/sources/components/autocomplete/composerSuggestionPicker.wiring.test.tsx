@@ -4,6 +4,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS, type PluginProjectionV2 } from '@happier-dev/protocol';
+import { formatInlineReferenceTokenV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 
 import { createDeferred, flushHookEffects, renderHook } from '@/dev/testkit';
 import { publishDaemonMergedProjectionInputs } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
@@ -291,7 +292,7 @@ describe('composer suggestion picker — host wiring', () => {
 
         expect(hook.getCurrent().commandMenuOpen).toBe(true);
         expect(labelsByGroup(hook.getCurrent().items)).toEqual({
-            'agentInput.suggestionGroups.files': ['@README.md'],
+            'agentInput.suggestionGroups.files': [formatInlineReferenceTokenV1({ label: 'README.md', ref: 'file:README.md' })],
         });
     });
 
@@ -310,7 +311,7 @@ describe('composer suggestion picker — host wiring', () => {
 
         expect(hook.getCurrent().commandMenuOpen).toBe(true);
         expect(labelsByGroup(hook.getCurrent().items)).toEqual({
-            'agentInput.suggestionGroups.files': ['@README.md'],
+            'agentInput.suggestionGroups.files': [formatInlineReferenceTokenV1({ label: 'README.md', ref: 'file:README.md' })],
         });
         // There is no session to resolve a workspace from, so the scope the host picked is
         // the only thing that can address the search.
@@ -456,7 +457,7 @@ describe('composer suggestion picker — host wiring', () => {
 
         expect(hook.getCurrent().commandMenuOpen).toBe(true);
         expect(labelsByGroup(hook.getCurrent().items)).toEqual({
-            'agentInput.suggestionGroups.files': ['@src/issues.ts'],
+            'agentInput.suggestionGroups.files': [formatInlineReferenceTokenV1({ label: 'issues.ts', ref: 'file:src/issues.ts' })],
             Issues: ['Issue 42'],
         });
         expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
@@ -502,7 +503,7 @@ describe('composer suggestion picker — host wiring', () => {
 
         expect(hook.getCurrent().commandMenuOpen).toBe(true);
         expect(labelsByGroup(hook.getCurrent().items)).toEqual({
-            'agentInput.suggestionGroups.files': ['@README.md'],
+            'agentInput.suggestionGroups.files': [formatInlineReferenceTokenV1({ label: 'README.md', ref: 'file:README.md' })],
         });
     });
 
@@ -522,7 +523,7 @@ describe('composer suggestion picker — host wiring', () => {
 
         expect(hook.getCurrent().commandMenuOpen).toBe(true);
         expect(labelsByGroup(hook.getCurrent().items)).toEqual({
-            'agentInput.suggestionGroups.files': ['@README.md'],
+            'agentInput.suggestionGroups.files': [formatInlineReferenceTokenV1({ label: 'README.md', ref: 'file:README.md' })],
         });
     });
 

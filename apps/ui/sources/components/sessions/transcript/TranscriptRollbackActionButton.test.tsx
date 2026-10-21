@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createReducer } from '@happier-dev/session-core/reducer';
 import { MessageMetaSchema, type UserTextMessage } from '@happier-dev/session-core/messages';
+import type { StorageState } from '@/sync/store/types';
 import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import {
     getTranscriptModalMockRef,
@@ -17,6 +18,7 @@ import {
 const executeSpy = vi.fn();
 let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | null = null;
 const writeExistingSessionDraftSpy = vi.fn();
+const rollbackStorageState = vi.hoisted(() => ({ value: {} as Partial<StorageState> }));
 const createDefaultActionExecutorSpy = vi.fn((_: Readonly<{
     resolveServerIdForSessionId?: (sessionId: string) => string | null;
 }> | undefined) => ({
@@ -55,7 +57,7 @@ function flattenStyle(style: unknown): Record<string, unknown> {
 
 installTranscriptCommonModuleMocks({
     storage: async (importOriginal) => {
-        const { createStorageModuleMock, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
+        const { createStorageModuleMock, createLiveStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
         return createStorageModuleMock({
             importOriginal,
             overrides: {
@@ -64,7 +66,7 @@ installTranscriptCommonModuleMocks({
                     serverId: 'server-explicit',
                     metadata: { machineId: 'm1' },
                 } as any),
-                storage: createStorageStoreMock({}),
+                storage: createLiveStorageStoreMock(() => rollbackStorageState.value),
             },
         });
     },
@@ -105,6 +107,16 @@ vi.mock('@/components/sessions/model/resolveSessionTargetServerId', () => ({
         resolveSessionTargetServerIdSpy(sessionId) ?? fallbackServerId ?? null,
 }));
 
+// Cold production imports belong to collection, before the renderer/test lifetime starts.
+// Import-time consumers observe the same touch-primary browser as the test renders.
+const collectionBrowser = await installBrowserRuntimeForTests({ url: 'https://rollback-target.test' });
+Object.defineProperty(collectionBrowser.window.navigator, 'maxTouchPoints', { configurable: true, value: 1 });
+try {
+    await import('./TranscriptRollbackActionButton');
+} finally {
+    collectionBrowser.restore();
+}
+
 describe('TranscriptRollbackActionButton', () => {
     afterEach(() => {
         standardCleanup();
@@ -117,6 +129,7 @@ describe('TranscriptRollbackActionButton', () => {
         // This regression covers a touch-primary web host, not a precise desktop pointer.
         Object.defineProperty(browser.window.navigator, 'maxTouchPoints', { configurable: true, value: 1 });
         executeSpy.mockReset();
+        rollbackStorageState.value = {};
         writeExistingSessionDraftSpy.mockReset();
         createDefaultActionExecutorSpy.mockClear();
         resolveSessionTargetServerIdSpy.mockReset();
@@ -247,11 +260,10 @@ describe('TranscriptRollbackActionButton', () => {
             meta: MessageMetaSchema.parse({ happierStructuredInputV1: { v: 1, mentions: [
                 { kind: 'happier.session', ref: 'session:auth', token, label: 'Auth fix' },
             ], composerAttachments: [attachment] } }) };
-        const { storage } = await import('@/sync/domains/state/storage');
         const messagesById = { source: message };
-        storage.setState({ sessionMessages: { 'session-1': { messagesById, messagesMap: messagesById,
+        rollbackStorageState.value = { sessionMessages: { 'session-1': { messagesById, messagesMap: messagesById,
             messageIdsOldestFirst: ['source'], messagesVersion: 1, reducerState: createReducer(),
-            latestThinkingMessageId: null, latestThinkingMessageActivityAtMs: null, isLoaded: true } } });
+            latestThinkingMessageId: null, latestThinkingMessageActivityAtMs: null, isLoaded: true } } };
 
         const { TranscriptRollbackActionButton } = await import('./TranscriptRollbackActionButton');
         const screen = await renderScreen(

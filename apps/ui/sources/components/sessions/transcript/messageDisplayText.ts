@@ -77,7 +77,7 @@ export function readableMessageText(text: string, meta?: unknown): string {
     const chunks: string[] = [];
     let cursor = 0;
     for (const token of tokens) {
-        const reference = resolveInlineMessageReference(inline, token.ref, text.slice(token.start, token.end));
+        const reference = resolveInlineMessageReference(inline, token.ref, text.slice(token.start, token.end), token.start);
         chunks.push(text.slice(cursor, token.start), reference?.marker ?? token.label);
         cursor = token.end;
     }

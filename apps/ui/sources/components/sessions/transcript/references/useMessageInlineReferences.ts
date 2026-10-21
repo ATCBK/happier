@@ -77,7 +77,7 @@ export function useMessageInlineReferences(
     if (inline.size === 0) return undefined;
     const background = referenceChipFill(ink);
     return {
-      resolve: (ref, sourceToken) => {
+      resolve: (ref: string, sourceToken?: string) => {
         const reference = resolveInlineMessageReference(inline, ref, sourceToken);
         if (!reference) return null;
         const picturePath =

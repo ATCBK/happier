@@ -145,7 +145,8 @@ function resolveInlineReferenceLink(
     if (!prefixed && (!references.scheme || !destination.startsWith(`${references.scheme}:`))) return null;
     if (references.scheme && !ref.startsWith(`${references.scheme}:`)) return null;
     const target = references.scheme ? ref.slice(references.scheme.length + 1) : ref;
-    const reference = target ? references.resolve(target, sourceToken) : null;
+    const resolve: (target: string, sourceToken?: string) => MarkdownInlineReference | null = references.resolve;
+    const reference = target ? resolve(target, sourceToken) : null;
     if (!reference) return null;
     const href = `${INLINE_REFERENCE_HREF_PREFIX_V1}${ref}`;
     resolved.set(href, reference);

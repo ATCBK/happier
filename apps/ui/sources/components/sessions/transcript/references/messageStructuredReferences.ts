@@ -9,6 +9,7 @@ import type { MarkdownInlineReference } from '@/components/markdown/markdownInli
 import { parseHappierMetaEnvelope, readTranscriptAttachmentsMeta } from '../structured/happierMetaEnvelope';
 import { parseSessionMediaMessageMeta } from '@/sync/domains/session/media/sessionMediaMessageMeta';
 import { resolveSessionMediaInlineRenderableImageMimeType } from '@/components/sessions/media/presentation';
+import { parseMarkdownSyntax } from '@/components/markdown/streaming/splitMarkdownIntoBlockSources';
 
 import { extractWorkspaceFileMentions } from '@/components/sessions/linkedFiles/extractWorkspaceFileMentions';
 import { isSafeWorkspaceRelativePath } from '@/utils/path/isSafeWorkspaceRelativePath';
@@ -36,6 +37,8 @@ export type InlineMessageReference = Readonly<{
     marker: string;
     /** Mention bindings require this exact authored token; attachment labels remain advisory. */
     token?: string;
+    /** Eligible occurrences in this projection's source, excluding Markdown code. */
+    tokenStarts?: ReadonlySet<number>;
     glyph: NonNullable<MarkdownInlineReference['glyph']>;
     path?: string;
     sessionId?: string;
@@ -56,10 +59,11 @@ const NO_PROJECTION: MessageStructuredReferences = Object.freeze({ inline: new M
 
 /** Eligibility stays with the typed projection even when multiple tokens share one destination. */
 export function resolveInlineMessageReference(
-    inline: MessageStructuredReferences['inline'], ref: string, sourceToken?: string,
+    inline: MessageStructuredReferences['inline'], ref: string, sourceToken?: string, sourceStart?: number,
 ): InlineMessageReference | null {
     const reference = inline.get(ref);
     return reference && (sourceToken === undefined || reference.token === undefined || reference.token === sourceToken)
+        && (sourceStart === undefined || reference.tokenStarts === undefined || reference.tokenStarts.has(sourceStart))
         ? reference : null;
 }
 
@@ -112,7 +116,13 @@ export function resolveMessageStructuredReferences(
     // and meta-root aliases are ignored entirely.
     const { mentions } = readStructuredInputMentionSourcesV1(envelope);
     const tokens = scanInlineReferenceTokensV1(input.text);
-    const inline = new Map<string, InlineMessageReference>();
+    const inline = new Map<string, InlineMessageReference & { tokenStarts: Set<number> }>();
+    const codeRanges: Array<Readonly<{ start: number; end: number }>> = [];
+    if (tokens.length > 0) parseMarkdownSyntax(input.text).iterate({ enter(node) {
+        if (node.name !== 'InlineCode' && node.name !== 'FencedCode' && node.name !== 'CodeBlock') return;
+        codeRanges.push({ start: node.from, end: node.to });
+        return false;
+    } });
     const attachments = readTranscriptAttachmentsMeta(input.meta)?.attachments ?? [];
     const primary = parseHappierMetaEnvelope(input.meta);
     const media = parseSessionMediaMessageMeta(primary?.kind === 'session_media.v1' ? primary : parseHappierMetaEnvelope(input.meta, 'happierMedia'));
@@ -152,9 +162,14 @@ export function resolveMessageStructuredReferences(
         });
     }
     for (const token of tokens) {
+        if (codeRanges.some(range => token.start >= range.start && token.end <= range.end)) continue;
         const mention = mentions.find((entry) => entry.ref === token.ref && entry.token === input.text.slice(token.start, token.end));
         const reference = mention ? projectMention(mention, token.label) : attachmentReferences.get(token.ref);
-        if (reference) inline.set(token.ref, reference);
+        if (reference) {
+            const previous = inline.get(token.ref);
+            if (previous) previous.tokenStarts.add(token.start);
+            else inline.set(token.ref, { ...reference, tokenStarts: new Set([token.start]) });
+        }
     }
 
     const references: TranscriptStructuredReference[] = [];

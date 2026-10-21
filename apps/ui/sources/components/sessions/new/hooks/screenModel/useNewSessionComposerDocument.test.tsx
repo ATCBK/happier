@@ -34,6 +34,7 @@ import {
 
 import { createNewSessionPromptStore } from './newSessionPromptStore';
 import { useNewSessionComposerDocument } from './useNewSessionComposerDocument';
+import { formatInlineReferenceTokenV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 import { seedAndOpenNewSession } from '../../newSessionSeedComposer';
 import { readNewSessionDraftFromRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { buildComposerSnapshotStructuredInputMetaOverrides } from '@/components/sessions/composer/composerScopeAdapters';
@@ -135,6 +136,7 @@ const newSessionRegion = {
     definition: {
         id: 'new-session-region',
         placement: 'beforeComposer',
+        renderer: { renderer: 'new-session-region-renderer' },
         scopes: ['newSession'],
     },
 };
@@ -829,8 +831,8 @@ describe('useNewSessionComposerDocument', () => {
         });
         expect(getSessionComposerDraftSnapshot(durableScope, { kind: 'newSession', draftId })?.composer)
             .toMatchObject({
-                text: { value: localText },
-                mentions: { value: [expect.objectContaining({ tokenText: sessionMention.token })] },
+                text: { value: localText.replace(sessionMention.token, formatInlineReferenceTokenV1(sessionMention)) },
+                mentions: { value: [expect.objectContaining({ tokenText: formatInlineReferenceTokenV1(sessionMention) })] },
                 attachments: { value: [expect.objectContaining({ instanceId: issueAttachment.instanceId })] },
             });
 
