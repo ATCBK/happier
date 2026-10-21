@@ -99,10 +99,13 @@ describe('UI connected Machine Home restart Action', () => {
     finish(terminal);
     expect(await action).toEqual({ ok: true, result: { status: 'completed', taskId: terminal.taskId, result: terminal } });
     expect(rpc.mock.calls.map(([request]) => ({ serverId: request.serverId, accountId: request.accountId,
-      machineId: request.machineId, method: request.method, signal: request.signal }))).toEqual([
-      { serverId, accountId: 'alice', machineId: 'machine', method: 'capabilities.detect', signal },
-      { serverId, accountId: 'alice', machineId: 'machine', method: 'capabilities.invoke', signal },
-      { serverId, accountId: 'alice', machineId: 'machine', method: 'capabilities.invoke', signal },
+      machineId: request.machineId, method: request.method }))).toEqual([
+      { serverId, accountId: 'alice', machineId: 'machine', method: 'capabilities.detect' },
+      { serverId, accountId: 'alice', machineId: 'machine', method: 'capabilities.invoke' },
+      { serverId, accountId: 'alice', machineId: 'machine', method: 'capabilities.invoke' },
     ]);
+    // Every Machine request runs under a cancellation signal derived from the caller's (merged with the
+    // captured Account lifetime), never an unbounded one.
+    for (const [request] of rpc.mock.calls) expect(request.signal).toBeInstanceOf(AbortSignal);
   });
 });

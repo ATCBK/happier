@@ -4,6 +4,7 @@ import {
 } from '@happier-dev/protocol/actions/clientDispatchV1';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { projectKnownAccountAuthorityRetirementReceipt } from '@happier-dev/protocol/actions/accountAuthorityRetirement';
+import { readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { createDefaultActionExecutor } from './defaultActionExecutor';
 
 /** Only the server-authenticated exact Machine may enter this admitted continuation. */
@@ -39,8 +40,15 @@ export function createUiClientActionReverseHandler(binding: Readonly<{
             }
             const result = parseClientActionDispatchResult(actionId, { v: 1, execution: safeExecution });
             return result ? { v: 1 as const, execution: result } : failure('invalid_action_output');
-        } catch {
-            return failure(readOnly ? 'action_failed' : 'outcome_uncertain');
+        } catch (error) {
+            // Preserve the known receipt classification, but don't erase the
+            // receiver's safe cause. Messages, payloads and stack paths stay
+            // local; the shared sanitizer admits only code/class/status facts.
+            const { errorClass, errorCode, httpStatus } = readUnexpectedActionErrorDiagnosticV1(error);
+            return { v: 1 as const, execution: {
+                ...failure(readOnly ? 'action_failed' : 'outcome_uncertain').execution,
+                details: { reason: 'client_execution_exception', errorClass, errorCode, httpStatus },
+            } };
         }
     };
 }

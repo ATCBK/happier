@@ -54,7 +54,7 @@ describe('Socket transport boundary installation', () => {
         const locks = installWebLockManagerMock();
         const { AccountProfileSchema } = await import('@happier-dev/protocol/account/profile');
         const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-        const { createPlainMachineRowFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+        const { createPlainMachineRowFixture, createMachineReadBatchResponseFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
         const { storage } = await import('@/sync/domains/state/storage');
         const { runtimeFetch } = await import('@/utils/system/runtimeFetch');
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
@@ -68,7 +68,7 @@ describe('Socket transport boundary installation', () => {
         const createAccount = (account: string, serverUrl: string, activation?: 'switch') => restoreServerAccountForTest({
             serverUrl, accountId: account, activation,
             additionalRequestOrigins: ['https://socket-owner-a.test', 'https://socket-owner-b.test'],
-            request: async input => {
+            request: async (input, init) => {
                 const requestUrl = new URL(String(input));
                 const path = requestUrl.pathname;
                 const requestAccount = requestUrl.hostname === 'socket-owner-a.test' ? 'socket-account-a' : 'socket-account-b';
@@ -76,6 +76,8 @@ describe('Socket transport boundary installation', () => {
                 if (path === '/v1/account/profile') return Response.json(AccountProfileSchema.parse({ id: requestAccount }));
                 if (path === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain', v: settingsDefaults } });
                 if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+                if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                    id => id === 'machine-1' ? createPlainMachineRowFixture({ id, accountId: requestAccount }) : null);
                 if (path === '/v1/machines/machine-1') return Response.json({ machine: createPlainMachineRowFixture({ id: 'machine-1', accountId: requestAccount }) });
                 if (path === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'machine-1', accountId: requestAccount })]);
                 return null;

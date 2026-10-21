@@ -147,7 +147,7 @@ describe('Plugin Settings through the default Account Action host', () => {
         const { settingsParse } = await import('@/sync/domains/settings/settings');
         const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
         const { normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
-        const { unionPluginUiProjections, readPluginUiExecutionOriginCandidates } = await import('@/sync/domains/plugins/ui/projectionUnion');
+        const { createPluginUiExecutionOriginCandidatePublication, unionPluginUiProjections, readPluginUiExecutionOriginCandidates } = await import('@/sync/domains/plugins/ui/projectionUnion');
         const { publishCommittedAppShellPluginUiProjection } = await import('@/components/appShell/plugins/committedPluginUiProjection');
         const { readPluginAccountAvailability } = await import('@/sync/domains/plugins/availability/projection');
         const { resolveFreshPluginMachineExecutionOrigin } = await import('@/sync/domains/machines/administration/usePluginExecutionOriginSelection');
@@ -163,7 +163,10 @@ describe('Plugin Settings through the default Account Action host', () => {
         const model = unionPluginUiProjections([{ machineId, serverId: connection.home.id, serverIdentityId: identity,
             phase: 'current', interactionEnabled: true, projection: normalizePluginUiProjection(projection) }]).pluginUiProjection;
         let currentModel = model;
-        const unpublish = publishCommittedAppShellPluginUiProjection(() => currentModel);
+        const candidates = createPluginUiExecutionOriginCandidatePublication();
+        candidates.publish(model, [], [pluginId]);
+        const unpublish = publishCommittedAppShellPluginUiProjection(() => currentModel,
+            id => currentModel ? candidates.getSnapshot().get(id) ?? null : null);
         try {
             const reader = readPluginAccountAvailability(lifetime.scope);
             expect(reader.readCurrentSettingsDeclaration({ pluginId })).toMatchObject({ kind: 'unavailable' });

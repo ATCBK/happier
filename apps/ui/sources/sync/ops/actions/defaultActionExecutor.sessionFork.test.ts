@@ -576,7 +576,9 @@ describe('default Action executor Session lifecycle contracts', () => {
     const sessionCapabilities = grok.capabilities.sessions;
     if (!sessionCapabilities) throw new Error('Grok declaration has no Session capabilities');
     const externalPlugin = definePlugin({ id: 'acme.lifecycle', version: '1.0.0', agents: { lifecycle: {
-      declaration: { title: 'External Grok adapter', runtime: { kind: 'custom' }, primary: 'sessions', capabilities: { ...grok.capabilities, sessions: sessionCapabilities } },
+      declaration: { title: 'External Grok adapter', runtime: { kind: 'custom' }, primary: 'sessions', capabilities: { ...grok.capabilities, sessions: sessionCapabilities,
+        // Lifecycle support is the subject; the External Sessions surface would require its own source descriptor and contribution.
+        surfaces: grok.capabilities.surfaces?.filter(surface => surface !== 'externalSessions') } },
       factory: registered.factory, sessionRunnerFactory: registered.sessionRunnerFactory,
     } } });
     const contributed = await createPluginTestkit({ manifest: externalPlugin.manifest, module: externalPlugin });

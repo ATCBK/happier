@@ -174,7 +174,9 @@ describe('default Action Computer Account publication', () => {
                 if (payload.actionId === 'computer.control.status') {
                     (isA ? readyA : readyB).resolve();
                     return { protocolVersion: 1, result: { target, sourceId: selected.sourceId,
-                        controller: 'human', controlEpoch: 1, stopping: false, uncertain: false } };
+                        controller: 'human', controlEpoch: 1, stopping: false, uncertain: false,
+                        // Native status carries the OS grants the viewer reads (not the targets list).
+                        grants: { capture: 'granted', input: 'granted' } } };
                 }
                 throw new Error(`Unexpected Computer effect: ${payload.actionId}`);
             });

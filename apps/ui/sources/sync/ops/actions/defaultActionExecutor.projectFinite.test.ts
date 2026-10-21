@@ -381,8 +381,10 @@ describe('Project finite delivery through the default UI Action host', () => {
                 byteOffset: 0, byteLength: bytes.length, encoding: 'base64', data: encodeTerminalStreamBytes(bytes) }],
             nextByteOffset: bytes.length, availableByteOffset: bytes.length, droppedBeforeByteOffset: 0, done: true,
         });
-        const screen = await renderScreen(React.createElement(ProjectCommandOutputPane, { operation: { serverId, snapshot: operation.operation,
-            observation: 'available', isUnavailableProjection: false }, title: 'Check' }));
+        // The retained terminal view offers Ask about a selection, which resolves its pane through the shell's pane owner.
+        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+        const screen = await renderScreen(React.createElement(AppPaneProvider, null, React.createElement(ProjectCommandOutputPane, { operation: { serverId, snapshot: operation.operation,
+            observation: 'available', isUnavailableProjection: false }, title: 'Check' })));
         try {
             expect(screen.findByTestId('project-command-output.copy')).not.toBeNull();
             await screen.pressByTestIdAsync('project-command-output.copy');

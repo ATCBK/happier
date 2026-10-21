@@ -29,9 +29,15 @@ it.each([
     ['session.stop', RPC_METHODS.STOP_SESSION],
     ['session.runtime.refresh', RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_V2_GET],
 ] as const)('retires a signal-free lifecycle Action %s with its Account', async (actionId, method) => {
-    boundary.setHttpResponder(async input => {
+    boundary.setHttpResponder(async (input, init) => {
         const path = new URL(String(input)).pathname;
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+        if (path === '/v2/sessions/session-1' && init?.method === 'PATCH') {
+            // Stop first persists its explicit hold through the owner metadata tuple.
+            const patch = JSON.parse(String(init.body)) as { sharedMetadata: { expectedVersion: number }; agentState: { expectedVersion: number } };
+            return Response.json({ success: true, metadataLayoutVersion: 1, sharedMetadata: { version: patch.sharedMetadata.expectedVersion + 1 },
+                agentState: { version: patch.agentState.expectedVersion + 1 } });
+        }
         return path === '/v2/sessions/session-1'
             ? Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id: 'session-1',
                 metadata: { path: '/repo', host: 'tester.local', machineId: 'machine-1' } }) }) : null;

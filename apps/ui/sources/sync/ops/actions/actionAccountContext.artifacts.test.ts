@@ -43,6 +43,8 @@ import { sealSessionStoredContent } from '@happier-dev/sync-client';
 import { executeDiscussionActionInAccountContext } from '@/sync/api/discussions/discussionActions';
 import { createArtifactActionsClient } from '@/components/artifacts/artifactActionsClient';
 import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { createDeferred } from '@/dev/testkit';
+import { createArtifactReadBatchHttpResponse } from '@/dev/testkit/harness/artifactStoreBoundary';
 
 // HTTP, device credential storage and the native theme runtime are substituted boundaries.
 const runtimeFetch = vi.hoisted(() => vi.fn());
@@ -73,6 +75,49 @@ function installSessionBatchHttpFixture(accountId: string, route: (url: unknown,
 afterEach(() => { runtimeFetch.mockReset(); vi.restoreAllMocks(); });
 
 describe('scoped Account workflow Artifact operations', () => {
+    it('shares neutral Artifact acquisition across captured invocations without borrowing caller cancellation', async () => {
+        const home = await upsertAndActivateServer({ serverUrl: 'https://artifact-shared-captured-read.test', scope: 'tab' });
+        const token = `header.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: 'artifact-account' })), 'base64url')}.signature`;
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
+        const release = createDeferred<void>();
+        const started = createDeferred<void>();
+        const artifactId = '11111111-1111-4111-8111-111111111111';
+        let reads = 0;
+        runtimeFetch.mockImplementation(async (url: unknown) => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/health' || path === '/v1/auth/ping') return json({});
+            if (path === '/v1/features') return json({ features: {}, capabilities: { accountStoredContentCompatibility: {
+                v: 1, minimumProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
+                currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, declarationTransport: 'http-header-and-socket-auth-v1',
+            } } });
+            if (path === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
+            if (path !== `/v1/artifacts/${artifactId}`) throw new Error(`Unexpected route ${path}`);
+            reads++;
+            started.resolve();
+            await release.promise;
+            return json({ id: artifactId, ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: 'plain',
+                dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, publicAudience: 'none',
+                header: encodePlainArtifactStoredContent({ title: 'Shared document' }),
+                body: encodePlainArtifactStoredContent({ body: 'Current content' }),
+                headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+        });
+        const caller = new AbortController();
+        const first = await captureLazyActionAccountContext(home.id, caller.signal);
+        const sibling = await captureLazyActionAccountContext(home.id);
+        try {
+            await Promise.all([first.resolveAccountMode(), sibling.resolveAccountMode()]);
+            const abandoned = first.readArtifact(artifactId);
+            const rejected = expect(abandoned).rejects.toMatchObject({ name: 'AbortError' });
+            const surviving = sibling.readArtifact(artifactId);
+            await started.promise;
+            caller.abort();
+            release.resolve();
+            await rejected;
+            await expect(surviving).resolves.toMatchObject({ id: artifactId, body: 'Current content' });
+            expect(reads).toBe(1);
+        } finally { release.resolve(); first.dispose(); sibling.dispose(); }
+    });
+
     it.each([{ mode: 'plain', accountMode: 'plain' }, { mode: 'e2ee', accountMode: 'e2ee' },
         { mode: 'plain', accountMode: 'e2ee' }] as const)('applies a reviewed $mode Doc proposal for a $accountMode Account through the existing codec and rejoins authoritative decisions', async ({ mode, accountMode }) => {
         const home = await upsertAndActivateServer({ serverUrl: `https://doc-decision-${mode}-${accountMode}.test`, scope: 'tab' });
@@ -827,7 +872,11 @@ describe('scoped Account workflow Artifact operations', () => {
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue(callerMode === 'plain' ? { token }
             : { token, secret: encodeBase64(new Uint8Array(32).fill(24), 'base64url') });
         const body = { blobId: '11111111-1111-4111-8111-111111111111', mime: 'image/png', sizeBytes: 4, sha256: 'a'.repeat(64) };
-        runtimeFetch.mockImplementation(async (url: unknown) => {
+        const artifact = { id: 'binary-artifact',
+            ownerAccountId: 'source-owner', access: 'edit', encryptionMode: 'plain', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            publicAudience: 'none', header: encodePlainArtifactStoredContent({ title: 'Image', kind: 'published.v1' }), body: encodePlainArtifactStoredContent({ body }),
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+        runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
             const target = new URL(String(url));
             if (target.pathname === '/health' || target.pathname === '/v1/auth/ping') return json({});
             if (target.pathname === '/v1/features') return json({ features: {}, capabilities: { accountStoredContentCompatibility: {
@@ -835,10 +884,10 @@ describe('scoped Account workflow Artifact operations', () => {
                 declarationTransport: 'http-header-and-socket-auth-v1',
             } } });
             if (target.pathname === '/v1/account/encryption') return json({ mode: callerMode, updatedAt: 0 });
-            if (target.pathname === '/v1/artifacts/binary-artifact') return json({ id: 'binary-artifact',
-                ownerAccountId: 'source-owner', access: 'edit', encryptionMode: 'plain', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
-                header: encodePlainArtifactStoredContent({ title: 'Image', kind: 'published.v1' }), body: encodePlainArtifactStoredContent({ body }),
-                headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+            if (target.pathname === '/v1/artifacts/binary-artifact') return json(artifact);
+            if (target.pathname === '/v1/artifacts/read') return createArtifactReadBatchHttpResponse(JSON.parse(String(init?.body)),
+                artifactId => artifactId === artifact.id ? { artifactId, ok: true, artifact, recipientCensus: null }
+                    : { artifactId, ok: false, error: 'artifact_not_found', status: 404, retryable: false });
             return json({ error: 'unexpected_route' }, 404);
         });
         const account = await captureLazyActionAccountContext(home.id);
@@ -994,6 +1043,13 @@ describe('scoped Account workflow Artifact operations', () => {
             : { token, secret: encodeBase64(new Uint8Array(32).fill(24), 'base64url') });
         const artifactId = '11111111-1111-4111-8111-111111111111';
         let stored: Artifact | undefined;
+        const recipientCensus = () => {
+            if (!stored) throw new Error('Expected stored Artifact');
+            return { artifactId: stored.id, ownerAccountId: stored.ownerAccountId, access: stored.access, encryptionMode: mode,
+                dataEncryptionKey: stored.dataEncryptionKey, callerDataEncryptionKey: stored.dataEncryptionKey,
+                provenanceDataEncryptionKey: stored.provenanceDataEncryptionKey,
+                callerProvenanceDataEncryptionKey: stored.provenanceDataEncryptionKey, recipients: [] };
+        };
         runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
             const target = new URL(String(url));
             if (target.pathname === '/health' || target.pathname === '/v1/auth/ping') return json({});
@@ -1011,21 +1067,21 @@ describe('scoped Account workflow Artifact operations', () => {
                 if (metadata.kind !== 'create') throw new Error('Expected publication create');
                 stored = { id: metadata.artifactId, header: metadata.header, body: metadata.body, dataEncryptionKey: metadata.dataEncryptionKey,
                     provenance: metadata.provenance, provenanceDataEncryptionKey: metadata.provenanceDataEncryptionKey,
-                    ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: mode,
+                    ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: mode, publicAudience: 'none',
                     seq: 1, headerVersion: 1, bodyVersion: 1, createdAt: 1, updatedAt: 1 };
                 return json(stored);
             }
             if (target.pathname === '/v1/artifacts' && init?.method === 'POST') {
                 const write = JSON.parse(String(init.body)) as ArtifactCreateRequest;
-                stored = { ...write, ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: mode,
+                stored = { ...write, ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: mode, publicAudience: 'none',
                     seq: 1, headerVersion: 1, bodyVersion: 1, createdAt: 1, updatedAt: 1 };
                 return json(stored);
             }
             if (target.pathname === '/v1/artifacts') return json(stored ? [stored] : []);
-            if (stored && target.pathname.endsWith('/recipients')) return json({ artifactId: stored.id,
-                ownerAccountId: stored.ownerAccountId, access: stored.access, encryptionMode: mode, dataEncryptionKey: stored.dataEncryptionKey,
-                callerDataEncryptionKey: stored.dataEncryptionKey, provenanceDataEncryptionKey: stored.provenanceDataEncryptionKey,
-                callerProvenanceDataEncryptionKey: stored.provenanceDataEncryptionKey, recipients: [] });
+            if (target.pathname === '/v1/artifacts/read') return createArtifactReadBatchHttpResponse(JSON.parse(String(init?.body)),
+                id => stored?.id === id ? { artifactId: id, ok: true, artifact: stored, recipientCensus: mode === 'plain' ? null : recipientCensus() }
+                    : { artifactId: id, ok: false, error: 'artifact_not_found', status: 404, retryable: false });
+            if (stored && target.pathname.endsWith('/recipients')) return json(recipientCensus());
             if (stored && target.pathname === `/v1/artifacts/${stored.id}/html-preview`) return json({ url: `https://artifact-isolated.test/a/${stored.id}` });
             if (stored && init?.method === 'DELETE' && target.pathname === `/v1/artifacts/${stored.id}/revision/2/2`) {
                 stored = undefined; return new Response(null, { status: 204 });
@@ -1307,6 +1363,13 @@ describe('scoped Account workflow Artifact operations', () => {
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue(mode === 'plain'
             ? { token } : { token, secret: encodeBase64(new Uint8Array(32).fill(24), 'base64url') });
         let stored: Artifact | undefined;
+        const recipientCensus = () => {
+            if (!stored) throw new Error('Expected stored Artifact');
+            return { artifactId: stored.id, ownerAccountId: stored.ownerAccountId, access: stored.access, encryptionMode: stored.encryptionMode,
+                dataEncryptionKey: stored.dataEncryptionKey, callerDataEncryptionKey: stored.dataEncryptionKey,
+                provenanceDataEncryptionKey: stored.provenanceDataEncryptionKey,
+                callerProvenanceDataEncryptionKey: stored.provenanceDataEncryptionKey, recipients: [] };
+        };
         const requests: URL[] = [];
         runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
             const target = new URL(String(url));
@@ -1322,17 +1385,19 @@ describe('scoped Account workflow Artifact operations', () => {
             if (target.pathname === '/v1/account/encryption') return json({ mode, updatedAt: 0 });
             if (target.pathname === '/v1/artifacts' && init?.method === 'POST') {
                 const body = JSON.parse(String(init.body)) as ArtifactCreateRequest;
-                stored = { ...body, ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: mode, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 9 };
+                stored = { ...body, ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: mode, publicAudience: 'none', headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 9 };
                 return json(stored);
             }
             if (target.pathname === '/v1/artifacts') return json(stored ? [stored] : []);
+            if (target.pathname === '/v1/artifacts/read') return createArtifactReadBatchHttpResponse(JSON.parse(String(init?.body)), id => {
+                if (id === 'transport-error') return { artifactId: id, ok: false, error: 'artifact_access_forbidden', status: 403, retryable: false };
+                if (id === 'locked') return { artifactId: id, ok: false, error: 'artifact_content_unavailable', status: 409, retryable: false };
+                return stored?.id === id ? { artifactId: id, ok: true, artifact: stored, recipientCensus: mode === 'plain' ? null : recipientCensus() }
+                    : { artifactId: id, ok: false, error: 'artifact_not_found', status: 404, retryable: false };
+            });
             if (target.pathname.endsWith('/transport-error')) return json({ error: 'denied' }, 403);
             if (target.pathname.endsWith('/locked')) return json({ ...stored, id: 'locked', encryptionMode: 'e2ee', header: 'broken', dataEncryptionKey: 'unopenable' });
-            if (stored && target.pathname.endsWith('/recipients')) return json({ artifactId: stored.id,
-                ownerAccountId: stored.ownerAccountId, access: stored.access, encryptionMode: stored.encryptionMode,
-                dataEncryptionKey: stored.dataEncryptionKey, callerDataEncryptionKey: stored.dataEncryptionKey,
-                provenanceDataEncryptionKey: stored.provenanceDataEncryptionKey,
-                callerProvenanceDataEncryptionKey: stored.provenanceDataEncryptionKey, recipients: [] });
+            if (stored && target.pathname.endsWith('/recipients')) return json(recipientCensus());
             if (!stored || target.pathname !== `/v1/artifacts/${stored.id}`) return json({ error: 'missing' }, 404);
             if (init?.method === 'DELETE') { stored = undefined; return new Response(null, { status: 204 }); }
             if (init?.method !== 'POST') return json(stored);
@@ -1363,7 +1428,7 @@ describe('scoped Account workflow Artifact operations', () => {
                 : await new ArtifactEncryption(key!).decryptHeaderRaw(stored!.header);
             const expectedHeader = withArtifactExcerptV1({ ...header, previewSteps: ['Review'] }, body);
             expect(storedHeader).toEqual(expectedHeader);
-            expect(await port.read(artifactId)).toEqual({ artifactId, ownerAccountId: 'artifact-account', access: 'owner', publicAudience: 'unknown', header: expectedHeader, body,
+            expect(await port.read(artifactId)).toEqual({ artifactId, ownerAccountId: 'artifact-account', access: 'owner', publicAudience: 'none', header: expectedHeader, body,
                 provenance: { savedBy: { kind: 'person', accountId: 'artifact-account' } }, revision: { headerVersion: 1, bodyVersion: 1 } });
             const page = await port.list({ limit: 1, cursor: 'incoming-cursor' });
             expect(page.items[0]).toMatchObject({ artifactId, ownerAccountId: 'artifact-account', access: 'owner', header: expectedHeader, headerVersion: 1, updatedAt: 9 });
@@ -1384,7 +1449,7 @@ describe('scoped Account workflow Artifact operations', () => {
             expect(await port.update({ artifactId, expectedRevision: header.revision, header: nextHeader, body })).toEqual({ ok: true, revision: nextHeader.revision });
             expect(await port.update({ artifactId, expectedRevision: header.revision, header: nextHeader, body: workflowBody('Overwrite') })).toMatchObject({ ok: false, errorCode: 'version_mismatch' });
             await expect(port.read('transport-error')).rejects.toMatchObject({ status: 403 });
-            await expect(port.read('locked')).rejects.toMatchObject({ code: 'content_unavailable' });
+            await expect(port.read('locked')).rejects.toMatchObject({ code: mode === 'e2ee' ? 'artifact_content_unavailable' : 'content_unavailable' });
             expect(await port.delete(artifactId)).toEqual({ ok: true });
             expect(await port.read(artifactId)).toBeNull();
         } finally { context.dispose(); }

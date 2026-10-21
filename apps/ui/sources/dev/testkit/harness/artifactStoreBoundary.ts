@@ -71,6 +71,12 @@ function parseBody(init: RequestInit | undefined): Record<string, unknown> | nul
     }
 }
 
+/** Strict batch framing over the fixture's existing complete row/census facts. */
+export function createArtifactReadBatchHttpResponse(body: unknown, readItem: (artifactId: string) => unknown): Response {
+    const input = ArtifactReadBatchInputV1Schema.parse(body);
+    return json(ArtifactReadBatchResponseV1Schema.parse({ items: input.artifactIds.map(readItem) }));
+}
+
 function isVersion(value: unknown): value is number {
     return typeof value === 'number' && Number.isInteger(value) && value >= 0;
 }
@@ -232,7 +238,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
             if (url.pathname === `${ARTIFACTS_PATH}/read` && method === 'POST') {
                 const input = ArtifactReadBatchInputV1Schema.safeParse(parseBody(init));
                 if (!input.success) return Promise.resolve(json({ error: 'Invalid parameters' }, 400));
-                const items = input.data.artifactIds.map(artifactId => {
+                return Promise.resolve(createArtifactReadBatchHttpResponse(input.data, artifactId => {
                     const row = rows.get(artifactId);
                     if (!row || !accessFor(row, callerAccountId)) return {
                         artifactId, ok: false, error: 'artifact_not_found', status: 404, retryable: false,
@@ -243,8 +249,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
                     };
                     return { artifactId, ok: true, artifact: readable,
                         recipientCensus: readable.encryptionMode === 'plain' ? null : recipientCensus(readable, readable.access) };
-                });
-                return Promise.resolve(json(ArtifactReadBatchResponseV1Schema.parse({ items })));
+                }));
             }
             if (url.pathname === ARTIFACTS_PATH && method === 'GET') {
                 const limit = Number(url.searchParams.get('limit') ?? 500);

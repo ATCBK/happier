@@ -689,7 +689,7 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
 
     it('lists external plugin skills through executor B while retaining supplier A provenance for read and local copy', async () => {
         const { normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
-        const { unionPluginUiProjections, readPluginUiContributionSupplies } = await import('@/sync/domains/plugins/ui/projectionUnion');
+        const { createPluginUiExecutionOriginCandidatePublication, unionPluginUiProjections, readPluginUiContributionSupplies } = await import('@/sync/domains/plugins/ui/projectionUnion');
         const { publishCommittedAppShellPluginUiProjection } = await import('@/components/appShell/plugins/committedPluginUiProjection');
         const { readSkillInLibrary } = await import('@happier-dev/protocol/prompts/library/promptLibraryActionOperations');
         const { SkillReadInputV1Schema } = await import('@happier-dev/protocol/prompts/library/skills/skillReadV1');
@@ -742,7 +742,10 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         const installedProjection = unionPluginUiProjections([{ machineId: sourceMachineId, serverId: account.serverId, projection,
             phase: 'current', interactionEnabled: true }]).pluginUiProjection;
         let projected = installedProjection;
-        const stop = publishCommittedAppShellPluginUiProjection(() => projected);
+        const candidates = createPluginUiExecutionOriginCandidatePublication();
+        candidates.publish(installedProjection, [], [pluginId]);
+        const stop = publishCommittedAppShellPluginUiProjection(() => projected,
+            id => projected ? candidates.getSnapshot().get(id) ?? null : null);
         let miswired = false;
         let missingSkill = false;
         let sourceUnavailable = false;

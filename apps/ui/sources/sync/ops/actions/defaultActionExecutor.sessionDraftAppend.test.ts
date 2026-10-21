@@ -31,8 +31,13 @@ beforeEach(async () => {
     await storage.getState().activateSettingsScope({ serverId, accountId: 'alice' });
     homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
     installSessionActionFixture({ homes, storage, serverId, session: { id: 'lead' } });
-    homes.answer(serverId, 'PATCH /v2/sessions/lead', { body: {
-        success: true, metadataLayoutVersion: 1, sharedMetadata: { version: 1 }, agentState: { version: 1 },
+    // The Home acknowledges the tuple it was asked to commit: each version advances by exactly one.
+    homes.answer(serverId, 'PATCH /v2/sessions/lead', { select: input => {
+        const patch = input as { mode: string; source?: { metadata: { version: number }; agentState: { version: number } };
+            sharedMetadata?: { expectedVersion: number }; agentState?: { expectedVersion: number } };
+        const metadata = patch.mode === 'owner_migration' ? patch.source!.metadata.version : patch.sharedMetadata!.expectedVersion;
+        const agentState = patch.mode === 'owner_migration' ? patch.source!.agentState.version : patch.agentState!.expectedVersion;
+        return { body: { success: true, metadataLayoutVersion: 1, sharedMetadata: { version: metadata + 1 }, agentState: { version: agentState + 1 } } };
     } });
 });
 afterEach(async () => {

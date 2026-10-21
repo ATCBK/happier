@@ -196,7 +196,9 @@ describe('UI MCP per-Agent tool facts', () => {
         const state = getStorage().getState();
         const machines = [...Object.values(state.machines), selected];
         getStorage().setState({ machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
-            machineListByServerId: { [home.id]: machines }, machineListStatusByServerId: { [home.id]: 'error' },
+            // A failed read retains admitted rows; an unobserved scoped inventory
+            // cannot resolve the saved preference until the recovery below.
+            machineListByServerId: { [home.id]: machines }, machineListStatusByServerId: {},
             settings: { ...state.settings, machineAdministrationTargetsLocalV1: {} } });
         const { captureLazyActionAccountContext } = await import('./actionAccountContext');
         const { createUiMcpServerActionExecuteV1 } = await import('./mcpServerActionDeps');
@@ -220,6 +222,10 @@ describe('UI MCP per-Agent tool facts', () => {
             getStorage().setState({ machineListStatusByServerId: { [home.id]: 'idle' } });
             expect(await execute(request)).toMatchObject({ ok: false, errorCode: 'mcp_sign_in_not_supported' });
             expect(projectionRpc.mock.calls.map(([request]) => request.machineId)).toEqual([selected.id]);
+            projectionRpc.mockClear();
+            getStorage().setState({ machines: {}, machineListByServerId: { [home.id]: [] } });
+            expect(await execute(request)).toMatchObject({ ok: false, errorCode: 'no_machine_online' });
+            expect(projectionRpc).not.toHaveBeenCalled();
         } finally { account.dispose(); }
     });
 

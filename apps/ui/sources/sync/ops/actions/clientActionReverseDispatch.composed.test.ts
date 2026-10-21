@@ -208,6 +208,22 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       expect(model.status).toMatchObject({ current: 2 });
       expect(foreignEffects).toBe(0);
       alsoViewing = false;
+      // Secure storage is an external boundary. A delivered request can fail
+      // there before its mounted owner runs; retain a content-free cause in
+      // the receipt instead of erasing it as a generic Action failure.
+      const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+      const credentials = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl');
+      const diagnostic = { reason: 'client_execution_exception', errorClass: 'TypeError', errorCode: null, httpStatus: null };
+      try {
+        credentials.mockRejectedValueOnce(new TypeError('private credential-store detail'));
+        expect(await caller.execute('search.conversations', { query: { v: 1, query: 'needle', scope: { type: 'global' }, mode: 'deep' }, mode: 'indexed' }, context))
+          .toMatchObject({ ok: false, errorCode: 'action_failed', details: diagnostic });
+        credentials.mockRejectedValueOnce(new TypeError('private credential-store detail'));
+        expect(await caller.execute('composer.transaction.apply', { scope: { serverId, accountId: 'relay-account' }, ref: draft.ref,
+          transaction: { expectedRevision: draft.revision, operations: [{ kind: 'text.insert', position: { offset: 0 }, text: 'unapplied ' }] } }, context))
+          .toMatchObject({ ok: false, errorCode: 'outcome_uncertain', details: diagnostic });
+        expect(draft.text).toBe('needle draft');
+      } finally { credentials.mockRestore(); }
       nextReceiptOrder.length = 0;
       expect(await caller.execute('session.pending.next', {}, context))
         .toEqual({ ok: true, result: { status: 'opened' } });

@@ -117,7 +117,9 @@ describe('captured UI ACP Agent Actions', () => {
             result: { items: expect.arrayContaining([expect.objectContaining({ backendId: 'row-review', label: 'Row review', enabled: true })]) } });
         expect(await executor.execute('agents.acp.backends.get', { backendId: 'row-review' }, context)).toMatchObject({ ok: true,
             result: { backend: expect.objectContaining(backend), revision: 1 } });
-        expect(await executor.execute('agents.acp.backends.delete', { backendId: 'row-review' }, context)).toMatchObject({ ok: true });
+        // Deleting a custom agent is a danger Action: its UI confirmation policy asks before the Account catalog row is removed.
+        expect(await executor.execute('agents.acp.backends.delete', { backendId: 'row-review' },
+            { ...context, presentUserConfirmation: { actionId: 'agents.acp.backends.delete' } })).toMatchObject({ ok: true });
         expect(content).toMatchObject({ t: 'plain', v: { v: 1, definitions: [] } });
         expect(mutations).toHaveLength(2);
         expect(settings).toEqual({ futurePreference: { preserve: true }, backendEnabledByTargetKey: { [targetKey]: true } });

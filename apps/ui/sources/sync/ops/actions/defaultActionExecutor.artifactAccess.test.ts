@@ -29,6 +29,7 @@ import { captureLazyActionAccountContext } from './actionAccountContext';
 import { createDefaultActionExecutor } from './defaultActionExecutor';
 import { buildHomeHubArtifactIdV1, HOME_HUB_ARTIFACT_KIND_V1 } from '@happier-dev/protocol/home';
 import { buildWidgetDefinitionArtifactHeaderV1, type WidgetDefinitionV1 } from '@happier-dev/protocol/widgets';
+import { createArtifactReadBatchHttpResponse } from '@/dev/testkit/harness/artifactStoreBoundary';
 
 // Only HTTP, device credentials and native UI modules are substituted. Account,
 // Artifact, Action, kind-policy and cryptographic owners execute their real logic.
@@ -75,6 +76,21 @@ async function fixture(mode: 'plain' | 'e2ee', document?: Readonly<{ header: Rec
     });
     const fingerprint = verifyAccountContentKeyBindingV1({ accountSigningPublicKey: signingPublic, contentPublicKey, signature })!.contentPublicKeyFingerprint;
     const projection = () => ({ artifactId: 'document', ownerAccountId: 'owner', access, grants });
+    const recipientCensus = () => {
+        if (!stored) throw new Error('Expected stored Artifact');
+        return {
+            artifactId: 'document', ownerAccountId: 'owner', access, encryptionMode: mode,
+            dataEncryptionKey: stored.dataEncryptionKey, callerDataEncryptionKey: censusCallerEnvelope ?? stored.dataEncryptionKey,
+            provenanceDataEncryptionKey: stored.provenanceDataEncryptionKey ?? null,
+            callerProvenanceDataEncryptionKey: stored.provenanceDataEncryptionKey ?? null,
+            recipients: grants.length ? [{ recipientAccountId: 'recipient',
+                contentKey: { status: 'available', accountSigningPublicKey: encodeHex(signingPublic),
+                    contentPublicKey: encodeBase64(contentPublicKey), contentPublicKeySignature: encodeBase64(signature) },
+                contentPublicKeyFingerprint: fingerprint, encryptedDataKey: null, encryptedProvenanceDataKey: null,
+                recipientContentPublicKeyFingerprint: null,
+            }] : [],
+        };
+    };
     setRuntimeFetch(async (url, init) => {
         const target = new URL(String(url));
         if (target.pathname === '/health' || target.pathname === '/v1/auth/ping') return Response.json({});
@@ -96,9 +112,15 @@ async function fixture(mode: 'plain' | 'e2ee', document?: Readonly<{ header: Rec
             documentLimitBytes: null, revisionRetentionCount: 10 });
         if (target.pathname === '/v1/artifacts' && init?.method === 'POST') {
             const input = JSON.parse(String(init.body)) as ArtifactCreateRequest;
-            stored = { ...input, ownerAccountId: 'owner', access, encryptionMode: mode,
+            stored = { ...input, ownerAccountId: 'owner', access, encryptionMode: mode, publicAudience: 'none',
                 headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
             return Response.json(stored);
+        }
+        if (target.pathname === '/v1/artifacts/read' && init?.method === 'POST') {
+            return createArtifactReadBatchHttpResponse(JSON.parse(String(init.body)), artifactId => !stored || artifactId !== stored.id
+                ? { artifactId, ok: false, error: 'artifact_not_found', status: 404, retryable: false }
+                : { artifactId, ok: true, artifact: { ...stored, ownerAccountId: 'owner', access, encryptionMode: mode },
+                    recipientCensus: mode === 'plain' ? null : recipientCensus() });
         }
         if (stored && target.pathname === '/v1/artifacts/document') {
             if (init?.method === 'POST') {
@@ -142,18 +164,7 @@ async function fixture(mode: 'plain' | 'e2ee', document?: Readonly<{ header: Rec
             if (init?.method === 'DELETE') grants = [];
             return Response.json({ ...projection(), ...(init?.method === 'PUT' || init?.method === 'DELETE' ? { changed: true } : {}) });
         }
-        if (stored && target.pathname === '/v1/artifacts/document/access/recipients') return Response.json({
-            artifactId: 'document', ownerAccountId: 'owner', access, encryptionMode: mode,
-            dataEncryptionKey: stored.dataEncryptionKey, callerDataEncryptionKey: censusCallerEnvelope ?? stored.dataEncryptionKey,
-            provenanceDataEncryptionKey: stored.provenanceDataEncryptionKey ?? null,
-            callerProvenanceDataEncryptionKey: stored.provenanceDataEncryptionKey ?? null,
-            recipients: grants.length ? [{ recipientAccountId: 'recipient',
-                contentKey: { status: 'available', accountSigningPublicKey: encodeHex(signingPublic),
-                    contentPublicKey: encodeBase64(contentPublicKey), contentPublicKeySignature: encodeBase64(signature) },
-                contentPublicKeyFingerprint: fingerprint, encryptedDataKey: null, encryptedProvenanceDataKey: null,
-                recipientContentPublicKeyFingerprint: null,
-            }] : [],
-        });
+        if (stored && target.pathname === '/v1/artifacts/document/access/recipients') return Response.json(recipientCensus());
         if (target.pathname === '/v1/artifacts/document/access/key-envelopes') {
             const input = JSON.parse(String(init?.body)) as ArtifactRecipientKeyEnvelopeCommitInputV1;
             envelopes.push(input);
@@ -166,7 +177,7 @@ async function fixture(mode: 'plain' | 'e2ee', document?: Readonly<{ header: Rec
     const body = document?.body ?? 'note';
     // Seed the HTTP store with canonical bytes; creation compatibility is tested
     // by the existing Artifact tests, independently of the sharing front door.
-    if (mode === 'plain') stored = { id: 'document', ownerAccountId: 'owner', access, encryptionMode: mode,
+    if (mode === 'plain') stored = { id: 'document', ownerAccountId: 'owner', access, encryptionMode: mode, publicAudience: 'none',
         header: encodePlainArtifactStoredContent(header), body: encodePlainArtifactStoredContent({ body }),
         dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
     else await account.workflowArtifacts.create({ artifactId: 'document', header, body });

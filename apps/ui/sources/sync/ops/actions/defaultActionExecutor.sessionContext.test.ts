@@ -67,7 +67,15 @@ describe('reviewed Session context through the default UI Action host', () => {
             await act(async () => { screen.findByTestId(control)?.props.onValueChange(false); });
             await vi.waitFor(() => expect(homes.requests.some(request => request.path === path && request.input !== null
                 && typeof request.input === 'object' && 'ownerMetadata' in request.input)).toBe(true));
-            expect(screen.findByTestId(control)?.props.disabled).toBe(true);
+            if (field === 'memory') {
+                // The memory row owns its switch, so a save in flight is not "disabled": it takes no second choice.
+                expect(screen.findByTestId(control)?.props.disabled).toBeFalsy();
+                await act(async () => { screen.findByTestId(control)?.props.onValueChange(true); });
+                expect(homes.requests.filter(request => request.path === path && request.input !== null
+                    && typeof request.input === 'object' && 'ownerMetadata' in request.input)).toHaveLength(1);
+            } else {
+                expect(screen.findByTestId(control)?.props.disabled).toBe(true);
+            }
             // A terminal refusal with unchanged canonical metadata must release the switch.
             await act(async () => { pending.resolve(); });
             await vi.waitFor(() => expect(Boolean(screen.findByTestId(control)?.props.disabled)).toBe(false));
