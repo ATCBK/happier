@@ -12,7 +12,8 @@ import { createSessionFixture, flushHookEffects, renderHook, standardCleanup } f
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { getStorage } from '@/sync/domains/state/storage';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
@@ -41,7 +42,7 @@ let releaseTurnAck: (() => void) | undefined;
 // Only the daemon transport is synthetic. Adapter, engine, execution transport,
 // transcript acceptance and Sync pending custody run through their real owners.
 installDisconnectedServerSocketBoundary(socket => {
-  socket.connected = true;
+  configureConnectedServerSocketBoundary(socket);
   socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload) => {
     if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
     if (!payload || typeof payload !== 'object' || !('method' in payload) || typeof payload.method !== 'string' || !('params' in payload)) {
@@ -129,7 +130,7 @@ describe('foreground Voice text-turn QA bridge', () => {
         providers: { local_conversation: { schemaVersion: 1, config: { conversationMode: 'agent',
           agent: { agentSource: 'session', prewarmOnConnect: false }, tts: { autoSpeakReplies: false }, streaming: { enabled: false } } } },
       } },
-    }], route: request => {
+    }], route: createSessionReadBatchHttpBoundary(request => {
       if (request.path === '/v1/features' || request.path === '/v1/features/authenticated') return Response.json(features);
       if (/^\/v2\/sessions\/[^/]+\/pending$/.test(request.path)) {
         if (request.method !== 'POST') return Response.json({ pending: [], discarded: [], pendingVersion: 0 });
@@ -141,7 +142,7 @@ describe('foreground Voice text-turn QA bridge', () => {
       if (request.method === 'POST' && /\/pending\/[^/]+\/delivery\/handled$/.test(request.path)) return Response.json({});
       if (/^\/v1\/sessions\/[^/]+\/messages$/.test(request.path)) return Response.json({ messages: [], hasMore: false });
       return sessionHttp.handle(request.url, { method: request.method, body: request.body === undefined ? undefined : JSON.stringify(request.body) }) ?? undefined;
-    } });
+    }).handle });
     serverId = home.homes.voice!.id;
     await loadSyncSingletonForTests();
     const { switchConnectionToActiveServer, disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');

@@ -8,21 +8,14 @@ import { SessionListActionResultV1Schema } from '@happier-dev/protocol/sessions/
 import { PluginUiJsonValueV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { createDeferred, createSessionFixture, createSessionListRenderableSessionFixture, createSessionMessagesFixture } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 vi.mock('socket.io-client', async original =>
   (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
-installDisconnectedServerSocketBoundary(socket => {
-  socket.connected = true;
-  vi.mocked(socket.connect).mockImplementation(() => {
-    socket.connected = true;
-    for (const listener of socket.listeners('connect')) listener();
-    return socket;
-  });
-});
+installDisconnectedServerSocketBoundary(configureConnectedServerSocketBoundary);
 await loadSyncSingletonForTests();
 const { storage } = await import('@/sync/domains/state/storage');
 const { settingsDefaults } = await import('@/sync/domains/settings/settings');

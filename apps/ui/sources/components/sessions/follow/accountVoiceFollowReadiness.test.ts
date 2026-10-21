@@ -2,7 +2,8 @@ import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMachineFixture, createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { ExecutionRunEnsureOrStartResponseSchema, ExecutionRunListResponseSchema } from '@happier-dev/protocol/execution/runs/index';
 import { ExecutionRunStopResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -13,7 +14,7 @@ import { SessionMessagesPageV1Schema } from '@happier-dev/protocol/sessions/mess
 vi.mock('socket.io-client', async original =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 installDisconnectedServerSocketBoundary(socket => {
-    socket.connected = true;
+    configureConnectedServerSocketBoundary(socket);
     socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload) => {
         if (event !== 'rpc-call') return { v: 1, ok: true, admittedSessionIds: [] };
         if (!payload || typeof payload !== 'object' || !('method' in payload) || typeof payload.method !== 'string') {
@@ -75,12 +76,12 @@ describe('useAccountVoiceFollowReadiness', () => {
         const sessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
         const request = account.request.getMockImplementation();
         if (!request) throw new Error('Account HTTP boundary missing');
-        account.request.mockImplementation(async (input, init) => {
+        account.request.mockImplementation(createSessionReadBatchFetchBoundary(async (input, init) => {
             if (new URL(String(input)).pathname.endsWith('/messages')) {
                 return Response.json(SessionMessagesPageV1Schema.parse({ messages: [], hasMore: false }));
             }
             return sessionHttp.handle(input, init) ?? request(input, init);
-        });
+        }));
         registerVoiceAdapters([createLocalConversationVoiceAdapter()]);
         voiceSessionBindingStore.getState().bind({ adapterId: 'local_conversation',
             controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID, conversationSessionId: carrier.id,

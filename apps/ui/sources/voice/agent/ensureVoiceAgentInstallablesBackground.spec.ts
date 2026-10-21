@@ -4,6 +4,7 @@ import { buildQualifiedPluginContributionKey, createPluginContributionIdentity, 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { createMachineFixture, createPlainMachineRowFixture, createSessionFixture, standardCleanup } from '@/dev/testkit';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const fixtureMetadata = (() => {
     const metadata = createSessionFixture().metadata;
@@ -39,9 +40,9 @@ const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, agentsB
 beforeEach(async () => {
     requests.length = 0;
     installs.length = 0;
-    const { installDisconnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+    const { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
     installDisconnectedServerSocketBoundary(socket => {
-        socket.connected = true;
+        configureConnectedServerSocketBoundary(socket);
         socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload) => {
             if (event !== 'rpc-call') throw new Error('Unexpected Machine RPC event');
             const input = payload as { method: string; params: unknown };
@@ -75,6 +76,10 @@ beforeEach(async () => {
     if (!fallback) throw new Error('Expected canonical Account HTTP boundary');
     account.request.mockImplementation(async (input, init) => {
         const path = new URL(String(input)).pathname;
+        if (path === '/v1/machines/read-batch' && init?.method === 'POST') {
+            return createMachineReadBatchResponseFixture(init.body,
+                id => createPlainMachineRowFixture({ id, accountId: account.scope.accountId }));
+        }
         const match = /^\/v1\/machines\/([^/]+)(\/access)?$/.exec(path);
         if (match) {
             const machineId = decodeURIComponent(match[1]);

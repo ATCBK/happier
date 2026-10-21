@@ -9,7 +9,9 @@ import { SessionResumeRequestV1Schema } from '@happier-dev/protocol/sessions/con
 import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createExistingSessionDirectoryPreflightResult, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -119,13 +121,15 @@ async function respondToServerRequest(input: RequestInfo | URL, init?: RequestIn
     schemaVersion: 1, version: 0, pins: [], folders: [], folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [],
   } }));
   const machineDetail = /^\/v1\/machines\/([^/]+)$/.exec(path);
-  if (path === '/v1/machines' || machineDetail) {
+  if (path === '/v1/machines' || path === '/v1/machines/read-batch' || machineDetail) {
     const machines = { ...Object.fromEntries((state.machineListByServerId[homeId] ?? []).map((machine: ReturnType<typeof createMachineFixture>) => [machine.id, machine])), ...state.machines };
     const rows = Object.entries(machines).map(([id, partial]) => ({ ...createPlainMachineRowFixture({ id, accountId: 'voice-account' }),
       ...partial as Parameters<typeof createMachineFixture>[0],
       activeAt: (partial as ReturnType<typeof createMachineFixture>).activeAt ?? ((partial as ReturnType<typeof createMachineFixture>).active === false ? 0 : Date.now()),
       metadata: (partial as ReturnType<typeof createMachineFixture>).metadata === null ? null : encodePlainMachineStoredContent({ ...createMachineFixture().metadata, ...(partial as ReturnType<typeof createMachineFixture>).metadata }),
     }));
+    if (path === '/v1/machines/read-batch') return createMachineReadBatchResponseFixture(init?.body,
+      id => rows.find(machine => machine.id === id) ?? null);
     return Response.json(machineDetail ? { machine: rows.find(machine => machine.id === decodeURIComponent(machineDetail[1])) } : rows);
   }
   const machineAccess = /^\/v1\/machines\/([^/]+)\/access$/.exec(path);
@@ -166,7 +170,7 @@ async function respondToServerRequest(input: RequestInfo | URL, init?: RequestIn
   return new Response('{}', { status: 404 });
 }
 installDisconnectedServerSocketBoundary(socket => {
-  socket.connected = true;
+  configureConnectedServerSocketBoundary(socket);
   // A scoped Socket may be pooled across Account restores. Keep its external
   // ACK boundary cold for its full lifetime, including restoreAllMocks teardown.
   socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload) => {
@@ -216,7 +220,7 @@ describe('voiceConversationSession', () => {
     const { useVoiceTargetStore } = await import('@/voice/runtime/voiceTargetStore');
     useVoiceTargetStore.setState({ autoTargetMachineByScope: {}, scope: 'global', primaryActionSessionAddress: null, voiceLiveContextSessionAddresses: [], lastFocusedSessionAddress: null });
     state = { settings: {} };
-    account = await restoreServerAccountForTest({ serverUrl: 'https://voice-carrier.example.test', accountId: 'voice-account', credentialScope: 'restored-home', request: respondToServerRequest });
+    account = await restoreServerAccountForTest({ serverUrl: 'https://voice-carrier.example.test', accountId: 'voice-account', credentialScope: 'restored-home', request: createSessionReadBatchFetchBoundary(respondToServerRequest) });
     homeId = account.home.id;
     state = { sessions: {}, machines: {}, machineListByServerId: {}, authoringMemory: {}, settings: {} };
     storage.setState({ sessionListIndexByServerId: {}, sessionListRowsByServerId: {}, ordinarySessionListMembershipByServerId: {} });

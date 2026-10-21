@@ -48,7 +48,8 @@ import { storage } from '@/sync/domains/state/storage';
 import { createSessionFixture, renderScreen } from '@/dev/testkit';
 import { ModalProvider } from '@/modal/ModalProvider';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createVoiceSettingsAccountTestHarness } from '@/voice/settings/panels/voiceSettingsAccountTestHarness';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
@@ -139,7 +140,7 @@ async function installAgentBindingAccount() {
   const inspected: Array<Readonly<{ method: string; payload: unknown }>> = [];
   let reply = AgentSessionRealtimeInspectResultV1Schema.parse({ ok: true, status: 'available', transport: 'webrtc' });
   installDisconnectedServerSocketBoundary(socket => {
-    socket.connected = true;
+    configureConnectedServerSocketBoundary(socket);
     socket.timeout = vi.fn<typeof socket.timeout>(() => socket);
     socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload) => {
       if (event !== 'rpc-call') return { v: 1, ok: true, admittedSessionIds: [] };
@@ -158,7 +159,7 @@ async function installAgentBindingAccount() {
   const sessionHttp = createSessionMetadataHttpBoundary(() => ({ [session.id]: session }));
   const request = account.request.getMockImplementation();
   if (!request) throw new Error('Account HTTP boundary missing');
-  account.request.mockImplementation(async (input, init) => sessionHttp.handle(input, init) ?? request(input, init));
+  account.request.mockImplementation(createSessionReadBatchFetchBoundary(async (input, init) => sessionHttp.handle(input, init) ?? request(input, init)));
   storage.setState({ sessions: { [session.id]: session } });
   return { account, session, inspected, setReply(next: unknown) { reply = AgentSessionRealtimeInspectResultV1Schema.parse(next); } };
 }
@@ -1230,7 +1231,7 @@ describe('external Voice provider activation', () => {
     const sessionHttp = createSessionMetadataHttpBoundary(() => ({ [history.id]: history }));
     const request = account.request.getMockImplementation();
     if (!request) throw new Error('Account HTTP boundary missing');
-    account.request.mockImplementation(async (input, init) => {
+    account.request.mockImplementation(createSessionReadBatchFetchBoundary(async (input, init) => {
       if (new URL(String(input)).pathname === '/v2/sessions/lookup-by-tags') {
         const { SessionLookupByTagsRequestV2Schema } = await import('@happier-dev/protocol');
         expect(SessionLookupByTagsRequestV2Schema.parse(JSON.parse(String(init?.body))).tags)
@@ -1241,7 +1242,7 @@ describe('external Voice provider activation', () => {
         return Response.json(SessionLookupByTagsResponseV2Schema.parse({ sessions: [(await detail.json()).session] }));
       }
       return sessionHttp.handle(input, init) ?? request(input, init);
-    });
+    }));
     storage.setState({ sessions: { [history.id]: history } });
     registerVoiceAdapters([]);
     const hostLease = createBundledConversationRuntimeHostLease();
