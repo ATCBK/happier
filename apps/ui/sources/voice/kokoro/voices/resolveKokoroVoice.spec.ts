@@ -10,8 +10,16 @@ describe('resolveKokoroWebVoiceId', () => {
     expect(resolveKokoroWebVoiceId(null, ['af_heart'])).toBe(KOKORO_WEB_DEFAULT_VOICE_ID);
   });
 
-  it('uses the same default voice as the vendored web worker, which cannot import this module', () => {
-    const workerSource = fs.readFileSync(new URL('../../../../public/vendor/kokoro/kokoroTtsWorker.js', import.meta.url), 'utf8');
-    expect(workerSource).toContain(`const KOKORO_WEB_DEFAULT_VOICE_ID = '${KOKORO_WEB_DEFAULT_VOICE_ID}'`);
+  it('shares its voice selection policy with the vendored web worker', async () => {
+    const workerUrl = new URL('../../../../public/vendor/kokoro/kokoroTtsWorker.js', import.meta.url);
+    const workerSource = fs.readFileSync(workerUrl, 'utf8');
+    const sharedImport = workerSource.match(/import\s*\{\s*resolveKokoroWebVoiceId\s*\}\s*from\s*['"]([^'"]+)['"]/);
+    expect(sharedImport).not.toBeNull();
+    if (!sharedImport) return;
+
+    // Follow the worker's actual dependency, rather than accepting a second matching default.
+    const sharedUrl = new URL(sharedImport[1]!, workerUrl);
+    const sharedPolicy: Pick<typeof import('./resolveKokoroVoice'), 'resolveKokoroWebVoiceId'> = await import(/* @vite-ignore */ sharedUrl.href);
+    expect(sharedPolicy.resolveKokoroWebVoiceId).toBe(resolveKokoroWebVoiceId);
   });
 });

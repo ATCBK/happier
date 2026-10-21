@@ -4,17 +4,7 @@
  * against its own catalog at speak time and falls back to its own default.
  */
 
-/** kokoro-js default voice (Kokoro-82M-v1.0); also mirrored by public/vendor/kokoro/kokoroTtsWorker.js. */
-export const KOKORO_WEB_DEFAULT_VOICE_ID = 'af_heart';
-
-export function resolveKokoroWebVoiceId(voiceId: string | null | undefined, catalogVoiceIds: Iterable<string>): string {
-  const requested = typeof voiceId === 'string' ? voiceId.trim() : '';
-  if (!requested) return KOKORO_WEB_DEFAULT_VOICE_ID;
-  for (const id of catalogVoiceIds) {
-    if (id === requested) return requested;
-  }
-  return KOKORO_WEB_DEFAULT_VOICE_ID;
-}
+export { KOKORO_WEB_DEFAULT_VOICE_ID, resolveKokoroWebVoiceId } from '../../../../public/vendor/kokoro/resolveKokoroVoice.js';
 
 type ManifestVoiceCatalog = Readonly<{
   voices?: ReadonlyArray<Readonly<{ id: string; sid?: number }>> | null;

@@ -1,4 +1,5 @@
 import { KokoroTTS, TextSplitterStream, env } from './kokoro.web.js'
+import { resolveKokoroWebVoiceId } from './resolveKokoroVoice.js'
 
 function clampSample(x) {
     if (x > 1) return 1
@@ -92,16 +93,6 @@ async function getTts(cfg, progressCallback) {
     return await cachedTtsPromise
 }
 
-// Mirrors resolveKokoroWebVoiceId (sources/voice/kokoro/voices/resolveKokoroVoice.ts): the synced
-// voice id may come from a native model pack, so ids outside the kokoro-js catalog use its default.
-const KOKORO_WEB_DEFAULT_VOICE_ID = 'af_heart'
-
-function resolveVoiceId(tts, voiceId) {
-    const requested = typeof voiceId === 'string' ? voiceId.trim() : ''
-    const voices = tts?.voices ?? {}
-    return requested && Object.prototype.hasOwnProperty.call(voices, requested) ? requested : KOKORO_WEB_DEFAULT_VOICE_ID
-}
-
 const canceledRequestIds = new Set()
 const activeSplittersByRequestId = new Map()
 
@@ -151,7 +142,7 @@ async function handleGenerate(message) {
     if (canceledRequestIds.has(message.id)) return
 
     const audioObj = await tts.generate(message.text, {
-        voice: resolveVoiceId(tts, message.voiceId),
+        voice: resolveKokoroWebVoiceId(message.voiceId, Object.keys(tts.voices ?? {})),
         speed: message.speed,
     })
     if (canceledRequestIds.has(message.id)) return
@@ -176,7 +167,7 @@ async function handleStream(message) {
 
     try {
         const stream = tts.stream(splitter, {
-            voice: resolveVoiceId(tts, message.voiceId),
+            voice: resolveKokoroWebVoiceId(message.voiceId, Object.keys(tts.voices ?? {})),
             speed: message.speed,
         })
 
