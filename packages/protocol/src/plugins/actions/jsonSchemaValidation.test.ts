@@ -47,6 +47,25 @@ function deepSortObjectKeys(value: unknown): unknown {
 }
 
 describe('plugin JSON Schema validation policy', () => {
+  it('reuses executable semantics for unchanged normalized schemas without retaining mutable input semantics', () => {
+    const mutable = JSON.parse(JSON.stringify(defineProtocolObject({
+      authority: defineProtocolLiteral('first'),
+    }, { policy: 'closed' }).jsonSchema)) as { properties: { authority: { const: string } } };
+    const first = rehydrateCanonicalProtocolComposableSchema(mutable);
+    expect(first?.safeParse({ authority: 'first' }).success).toBe(true);
+    // A warm admission retains one parser tree rather than reconstructing all
+    // of its child schemas at each operation-currentness checkpoint.
+    expect(rehydrateCanonicalProtocolComposableSchema(mutable)).toBe(first);
+    expect(rehydrateCanonicalProtocolComposableSchema(normalizePluginJsonSchema(mutable))).toBe(first);
+
+    mutable.properties.authority.const = 'replacement';
+    const replacement = rehydrateCanonicalProtocolComposableSchema(mutable);
+    expect(replacement).not.toBe(first);
+    expect(replacement?.safeParse({ authority: 'first' }).success).toBe(false);
+    expect(replacement?.safeParse({ authority: 'replacement' }).success).toBe(true);
+    expect(first?.safeParse({ authority: 'first' }).success).toBe(true);
+  });
+
   it('shares one compiled validator across preparations of an admitted immutable schema', () => {
     const schema = {
       type: 'object', properties: { authority: { type: 'integer', minimum: 1 } },

@@ -1270,6 +1270,8 @@ function readCanonicalComposableSchemaProjection(
   return null;
 }
 
+const rehydratedCanonicalSchemas = new WeakMap<object, CanonicalComposableSchema | null>();
+
 /**
  * Rehydrates only the exact JSON Schema grammar emitted by this module's
  * composable-schema constructors. It is deliberately not a general JSON
@@ -1284,10 +1286,17 @@ export function rehydrateCanonicalProtocolComposableSchema(
   } catch {
     return null;
   }
+  // Normalization still observes mutable caller input on every read. Only its
+  // canonical, recursively immutable snapshot owns a reusable parser tree;
+  // changed declarations receive a new identity and retired ones stay weak.
+  const cached = rehydratedCanonicalSchemas.get(normalized);
+  if (cached !== undefined) return cached;
   if (normalized.$schema !== CANONICAL_PLUGIN_JSON_SCHEMA_DIALECT) return null;
   const { $schema: _dialect, ...projection } = normalized;
   const rehydrated = readCanonicalComposableSchemaProjection(projection);
-  return rehydrated && pluginJsonValuesEqual(rehydrated.jsonSchema, normalized)
+  const result = rehydrated && pluginJsonValuesEqual(rehydrated.jsonSchema, normalized)
     ? rehydrated
     : null;
+  rehydratedCanonicalSchemas.set(normalized, result);
+  return result;
 }
