@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 
 import { mergeSessionMetadataForStartup } from './mergeSessionMetadataForStartup';
+import { createStartupMetadataOverrides } from './createStartupMetadataOverrides';
 import { createSessionOwnerMetadataV1, SessionOwnerMetadataV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { SessionRunnerRuntimeStateV1Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRuntimeV1';
 import { readCapabilityLaunchRestartFromMetadataV1, resolveCapabilityApplyTimingV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
@@ -318,17 +319,18 @@ describe('mergeSessionMetadataForStartup', () => {
         expect(merged.permissionModeUpdatedAt).toBe(25);
     });
 
-    it('ensures permissionModeUpdatedAt is monotonic when an override is provided with an older timestamp', () => {
+    it.each(['start', 'attach'] as const)('preserves newer person permission intent over a stale runtime override on %s', mode => {
         const nowMs = 50;
         const merged = mergeSessionMetadataForStartup({
-            current: { permissionMode: 'read-only', permissionModeUpdatedAt: 100 } as any,
-            next: {} as any,
+            current: createTestMetadata({ permissionMode: 'read-only', permissionModeUpdatedAt: 100 }),
+            next: createTestMetadata(),
             nowMs,
-            permissionModeOverride: { mode: 'default', updatedAt: 1 },
+            mode,
+            ...createStartupMetadataOverrides({ permissionMode: 'default', permissionModeUpdatedAt: 1 }),
         });
 
-        expect(merged.permissionMode).toBe('default');
-        expect(merged.permissionModeUpdatedAt).toBe(101);
+        expect(merged.permissionMode).toBe('read-only');
+        expect(merged.permissionModeUpdatedAt).toBe(100);
     });
 
     it('does not seed canonical session-mode override metadata from next metadata when attaching', () => {

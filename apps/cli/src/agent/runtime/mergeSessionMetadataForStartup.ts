@@ -140,16 +140,12 @@ function resolvePermissionModeForStartup(opts: {
     if (override) {
         const overrideAt = typeof override.updatedAt === 'number' ? override.updatedAt : opts.nowMs;
         const baselineAt = updatedAt ?? 0;
-        const nextAt = overrideAt > baselineAt
-            ? overrideAt
-            : override.mode === mode
-                ? null
-                : baselineAt + 1;
-        if (nextAt === null) {
-            if (!mode) return null;
+        // A startup/recovery seed is an existing intent, not a new person edit.
+        // Never promote its stale timestamp over a choice made while it starts.
+        if (mode && overrideAt <= baselineAt) {
             return { mode, updatedAt };
         }
-        return { mode: override.mode, updatedAt: nextAt };
+        return { mode: override.mode, updatedAt: overrideAt };
     }
 
     if (!mode) return null;

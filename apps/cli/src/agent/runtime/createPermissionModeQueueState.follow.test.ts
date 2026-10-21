@@ -62,6 +62,27 @@ function createFollowHarness(overrides?: Partial<ApiSessionClient>) {
 }
 
 describe('protected Follow queue intake', () => {
+  it('adopts the published Session permission and its timestamp together before resumed input', async () => {
+    let receive: ((message: UserMessage) => boolean | void) | undefined;
+    const session = createMutableApiSessionClientFixture({ sessionId: 'resumed-session',
+      metadata: createTestMetadata({ permissionMode: 'read-only', permissionModeUpdatedAt: 300 }),
+      overrides: { onUserMessage: handler => { receive = handler; } },
+    });
+    const state = createPermissionModeQueueState({ session, agentTargetKey: 'agent:happier.agent.codex/codex',
+      initialPermissionMode: 'default' });
+    const emit = (message: UserMessage) => {
+      if (!receive) throw new Error('Missing input transport');
+      return receive(message);
+    };
+    try {
+      expect({ mode: state.getCurrentPermissionMode(), updatedAt: state.getCurrentPermissionModeUpdatedAt() })
+        .toEqual({ mode: 'read-only', updatedAt: 300 });
+      emit({ role: 'user', localId: 'resumed-input', content: { type: 'text', text: 'continue' }, meta: {} });
+      const batch = await state.messageQueue.waitForMessagesAndGetAsString();
+      expect(batch?.mode.permissionMode).toBe('read-only');
+    } finally { state.messageQueue.close(); }
+  });
+
   it('refuses a Follow marker without the actual native admission receipt', () => {
     const harness = createFollowHarness();
     harness.emitFollow('everything', false);

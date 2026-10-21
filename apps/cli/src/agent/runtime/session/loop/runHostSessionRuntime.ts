@@ -2225,8 +2225,6 @@ export async function runHostSessionRuntime(
       ? { isMediatorContributionCurrent: config.isMediatorContributionCurrent }
       : {}),
   });
-  permissionHandler.setPermissionMode(initialPermissionMode);
-
   const { registerProviderAcceptedEffect, observeProviderInputOutcome, clearAcceptedEffects } = createSessionProviderInputOutcomeBinding({
     getTarget: () => session,
     takeAppliedModel: (localId) => {
@@ -2360,6 +2358,7 @@ export async function runHostSessionRuntime(
     inFlightSteer: inFlightSteerController,
     resolvePermissionModeQueueKey: config.resolvePermissionModeQueueKey,
   });
+  permissionHandler.setPermissionMode(permissionModeState.getCurrentPermissionMode() ?? initialPermissionMode);
   rebindPermissionModeQueueSession = permissionModeState.rebindSession;
   if (pendingPermissionModeQueueSessionSwap) {
     rebindPermissionModeQueueSession(pendingPermissionModeQueueSessionSwap);

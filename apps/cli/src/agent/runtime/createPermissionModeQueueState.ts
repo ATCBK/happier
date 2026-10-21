@@ -8,7 +8,7 @@ import {
   type UnsettledReplaySeedRetirement,
 } from '@/agent/runtime/replaySeed/unsettledReplaySeedRetirement';
 import { resolveAppendSystemPromptQueueKeyValue } from '@/agent/runtime/permissions/appendSystemPrompt';
-import { readPermissionModeUpdatedAtFromMetadataSnapshot } from '@/agent/runtime/permissions/modeStateSync';
+import { resolvePermissionIntentFromMetadataSnapshot } from '@/agent/runtime/permissions/modeFromMetadata';
 import {
   combinePermissionModeQueuedPrompts,
   appendNextTurnContextToQueuedPrompt,
@@ -72,10 +72,9 @@ export function createPermissionModeQueueState(opts: {
     },
   );
 
-  let currentPermissionMode: PermissionMode | undefined = opts.initialPermissionMode;
-  let currentPermissionModeUpdatedAt = readPermissionModeUpdatedAtFromMetadataSnapshot(
-    opts.session.getMetadataSnapshot(),
-  );
+  const currentPermissionIntent = resolvePermissionIntentFromMetadataSnapshot({ metadata: opts.session.getMetadataSnapshot() });
+  let currentPermissionMode: PermissionMode | undefined = currentPermissionIntent?.intent ?? opts.initialPermissionMode;
+  let currentPermissionModeUpdatedAt = currentPermissionIntent?.updatedAt ?? 0;
 
   const replaySeedRetirement = createUnsettledReplaySeedRetirement();
 
