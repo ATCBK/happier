@@ -2,12 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { readRpcRequestDisposition } from '@happier-dev/sync-client';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createSocketIoBoundaryStub } from '@/dev/testkit/mocks/socketIo';
 import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { machineRpcWithServerScope } from './serverScopedMachineRpc';
 import { resetScopedMachineTransportCacheForTests } from './serverScopedRpcPool';
 import { serverScopedRpcSocketPool } from './serverScopedRpcSocketPool';
-import { machineWorkspaceFileReplaceApply } from '@/sync/ops/machineWorkspaceFileReplace';
 import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const HOME_URL = 'https://signal-home.example.test';
@@ -120,15 +120,16 @@ describe('machineRpcWithServerScope signal', () => {
         expect(runtimeFetchSpy).not.toHaveBeenCalled();
     });
 
-    it('returns replace apply inverse edits after sending cooperative cancellation', async () => {
+    it('retains an issued scoped reply after sending cooperative cancellation', async () => {
         let acknowledge!: (value: unknown) => void;
         boundary.socket.emitWithAck.mockImplementation(() => new Promise(resolve => { acknowledge = resolve; }));
         const controller = new AbortController();
-        const pending = machineWorkspaceFileReplaceApply('machine-1', {
+        const pending = machineRpcWithServerScope({ serverId, machineId: 'machine-1',
+            method: RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_APPLY, payload: {
             rootPath: '/workspace', operation: { kind: 'replace', matcher: {
                 query: 'old', replacement: 'new', matchCase: true, regex: false,
             }, files: [{ path: 'a.txt', expectedHash: 'a'.repeat(64) }, { path: 'b.txt', expectedHash: 'b'.repeat(64) }] },
-        }, { serverId, signal: controller.signal });
+        }, signal: controller.signal, waitForResultOnCancel: true });
         let resultBeforeAcknowledgement: Awaited<typeof pending> | undefined;
         void pending.then(result => { resultBeforeAcknowledgement = result; });
         await vi.waitFor(() => {

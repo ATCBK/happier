@@ -3113,6 +3113,8 @@ const filesPaneTranslations = { ca: {
             changesInFiles: ({ changes, files }) => String(changes) + " " + (changes === 1 ? "canvi" : "canvis") + " en " + String(files) + " " + (files === 1 ? "fitxer" : "fitxers"),
             renameInFiles: ({ files }) => "Canvia el nom en " + String(files) + " " + (files === 1 ? "fitxer" : "fitxers"),
             renameOnly: "Només canvia el nom",
+            applyDeclined: "El canvi no s’ha aprovat. No s’ha escrit res.",
+            undoDeclined: "Desfer no s’ha aprovat. Els fitxers mantenen el canvi.",
             renameAndUpdateImports: "Canvia el nom i actualitza les importacions",
             fileRenamed: ({ name }) => "Nom canviat a " + name,
             applyFix: "Aplica la correcció",

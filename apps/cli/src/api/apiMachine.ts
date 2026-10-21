@@ -1958,13 +1958,32 @@ export class ApiMachineClient {
         });
     }
 
+    /** Device-local profile ids can differ on an approved replay of this same Home. */
+    private async isNativeWorkspaceHomeCurrent(serverId: string, context: RpcActionExecutorContext): Promise<boolean> {
+        const owner = this.externalActionIngressOwner;
+        if (!owner || this.projectionSchedulingClosed || owner.currentServerId !== serverId) return false;
+        context.signal?.throwIfAborted();
+        if (context.serverId === serverId) return true;
+        if (!context.serverIdentityId || !owner.resolvePluginExecutionOriginContext) return false;
+        try {
+            // Reuse the ingress owner's canonical fresh Home/Machine witness,
+            // not the requesting device's profile id or an approval flag.
+            const current = await owner.resolvePluginExecutionOriginContext();
+            context.signal?.throwIfAborted();
+            return this.externalActionIngressOwner === owner && !this.projectionSchedulingClosed
+                && current?.serverIdentityId === context.serverIdentityId && current.machineId === this.machine.id;
+        } catch (error) {
+            if (context.signal?.aborted) throw error;
+            return false;
+        }
+    }
+
     /** Preview reads locally after admission rather than re-entering its registered RPC. */
     createWorkspaceFileReplacePreviewActionExecutor(serverId: string): NonNullable<ActionExecutorDeps['workspaceFilesReplacePreview']> {
         return async ({ machineId, ...request }, context) => {
             const target = context.externalActionTarget;
-            if (!this.externalActionIngressOwner || this.projectionSchedulingClosed
-                || context.serverId !== serverId || machineId !== this.machine.id
-                || target?.kind !== 'machine' || target.machineId !== machineId) {
+            if (machineId !== this.machine.id || target?.kind !== 'machine' || target.machineId !== machineId
+                || !await this.isNativeWorkspaceHomeCurrent(serverId, context)) {
                 return { ok: false, errorCode: 'target_unavailable', error: 'Workspace replacement target is unavailable' };
             }
             return previewWorkspaceFileReplace(request, this.machineRpcWorkingDirectory, this.filesystemAccessPolicy,
@@ -1976,9 +1995,8 @@ export class ApiMachineClient {
     createWorkspaceFileReplaceActionExecutor(serverId: string): NonNullable<ActionExecutorDeps['workspaceFilesReplace']> {
         return async ({ machineId, ...request }, context) => {
             const target = context.externalActionTarget;
-            if (!this.externalActionIngressOwner || this.projectionSchedulingClosed
-                || context.serverId !== serverId || machineId !== this.machine.id
-                || target?.kind !== 'machine' || target.machineId !== machineId) {
+            if (machineId !== this.machine.id || target?.kind !== 'machine' || target.machineId !== machineId
+                || !await this.isNativeWorkspaceHomeCurrent(serverId, context)) {
                 return { ok: false, errorCode: 'target_unavailable', error: 'Workspace replacement target is unavailable' };
             }
             if (context.operationAcceptance?.actionId === 'workspace.files.replace') {
@@ -1992,8 +2010,8 @@ export class ApiMachineClient {
     createLanguageIntelligenceApplyActionExecutor(serverId: string): NonNullable<ActionExecutorDeps['languageIntelligenceApply']> {
         return async ({ machineId, request }, context) => {
             const target = context.externalActionTarget;
-            if (!this.externalActionIngressOwner || this.projectionSchedulingClosed || context.serverId !== serverId || machineId !== this.machine.id
-                || target?.kind !== 'machine' || target.machineId !== machineId) {
+            if (machineId !== this.machine.id || target?.kind !== 'machine' || target.machineId !== machineId
+                || !await this.isNativeWorkspaceHomeCurrent(serverId, context)) {
                 return { ok: false, errorCode: 'target_unavailable', error: 'Language Action target is unavailable' };
             }
             const { getLanguageServerHost } = await import('@/lsp/languageServerHost');
@@ -2070,9 +2088,12 @@ export class ApiMachineClient {
                 return { ok: false, errorCode: 'filesystem_action_owner_unavailable', error: 'The current filesystem Action owner is unavailable' };
             }
             const target = request.context.externalActionTarget;
-            if (request.context.serverId !== serverId || target?.kind !== 'machine' || target.machineId !== this.machine.id) {
+            if (target?.kind !== 'machine' || target.machineId !== this.machine.id
+                || !await this.isNativeWorkspaceHomeCurrent(serverId, request.context)) {
                 return { ok: false, errorCode: 'target_unavailable', error: 'Filesystem target is unavailable' };
             }
+            // The immutable invocation's Home was checked above. Each physical
+            // phase retains its owner/target checks without a Home read per file.
             const assertCurrentAuthority = async () => {
                 request.context.signal?.throwIfAborted();
                 const projection = request.context.externalActionExecutionAuthorization?.requesterAccountProjection;
@@ -2082,7 +2103,7 @@ export class ApiMachineClient {
                     throw Object.assign(new Error('The admitted filesystem Action owner is no longer current'), { code: 'filesystem_action_owner_unavailable' });
                 }
                 const currentTarget = request.context.externalActionTarget;
-                if (request.context.serverId !== serverId || currentTarget?.kind !== 'machine' || currentTarget.machineId !== this.machine.id) {
+                if (currentTarget?.kind !== 'machine' || currentTarget.machineId !== this.machine.id) {
                     throw new Error('Filesystem target is no longer current');
                 }
             };

@@ -6,7 +6,10 @@ import type {
 } from '@happier-dev/protocol/machines/workspaceFiles';
 import { ActionApprovalRequestCreatedResultSchema, type ActionApprovalRequestCreatedResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 
+import type { ActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import {
   machineWorkspaceFileReplaceApply,
@@ -79,6 +82,8 @@ export type WorkspaceReplaceErrorCode =
   | 'update_required'
   | 'failed'
   | 'approval_required'
+  /** The approval was declined or withdrawn; nothing ran. */
+  | 'declined'
   /** The apply request left but its answer never came back: what was written is unknown. */
   | 'outcome_unknown';
 
@@ -297,6 +302,10 @@ export type WorkspaceReplaceUndoOutcome = Readonly<{
 
 export type WorkspaceReplaceApproval = Readonly<{
   operation: 'preview' | 'replace' | 'restore';
+  /** The Home the request was created on (its Inbox). */
+  serverId: string;
+  /** `approved` once the person approved it and it runs; the surface then shows the operation's own progress. */
+  status: 'waiting' | 'approved';
   request: ActionApprovalRequestCreatedResult;
 }>;
 
@@ -366,6 +375,21 @@ export type WorkspaceReplaceModel = Readonly<{
 const NO_EXCLUSIONS: WorkspaceReplaceExclusions = new Map();
 const NO_FILES: readonly WorkspaceReplacePreviewFile[] = [];
 
+/** The person said no (or withdrew) at the approval this Machine write waited on: nothing ran. */
+export function isDeclinedApproval(errorCode: string): boolean {
+  return errorCode === 'approval_rejected' || errorCode === 'approval_canceled';
+}
+
+function replaceWriteActionError(errorCode: string): WorkspaceReplaceErrorCode {
+  // This family's native target refusal precedes operation acceptance and all
+  // filesystem effects. Other failures do not establish that nothing was written.
+  return errorCode === 'target_unavailable' ? 'unavailable' : 'outcome_unknown';
+}
+
+function createdApproval(registration: ActionApprovalContinuation, actionId: string): ActionApprovalRequestCreatedResult {
+  return { kind: 'approval_request_created', artifactId: registration.artifactId, actionId };
+}
+
 function readReplaceApproval(response: unknown): ActionApprovalRequestCreatedResult | null {
   if (!response || typeof response !== 'object' || !('errorCode' in response)
     || response.errorCode !== 'approval_required' || !('details' in response)) return null;
@@ -387,7 +411,7 @@ function previewError(
   if ('errorCode' in response)
     return response.errorCode === 'method_unavailable' || response.errorCode === 'update_required'
       ? 'update_required'
-      : 'unavailable';
+      : isDeclinedApproval(response.errorCode) ? 'declined' : 'unavailable';
   if (
     response.code === 'invalid_pattern' ||
     response.code === 'root_not_allowed' ||
@@ -411,6 +435,12 @@ export function useWorkspaceReplace(
 ): WorkspaceReplaceModel {
   const { scope, accountLifetime, matcher } = input;
   const accountId = accountLifetime?.scope.accountId ?? null;
+  // The mounted Account owner's approval custody: a request the person approves continues to its own
+  // answer here (preview, replace or Undo) instead of being retried. Closing the surface releases only
+  // this interest; the durable request stays in the Inbox.
+  const author = useMountedActionExecution(accountLifetime?.scope ?? null);
+  const authorRef = React.useRef(author);
+  authorRef.current = author;
   const targetKey =
     scope && accountId
       ? JSON.stringify([scope.serverId, scope.machineId, scope.rootPath, accountId])
@@ -471,9 +501,15 @@ export function useWorkspaceReplace(
     && accountLifetime.scope.accountId === resultState.options.accountId
     && accountLifetime.scope.serverId === resultState.options.serverId;
   const [approvalState, setApproval] = React.useState<Readonly<{ key: string; approval: WorkspaceReplaceApproval }> | null>(null);
-  const approval = approvalState && (approvalState.key === key
+  const storedApproval = approvalState && (approvalState.key === key
     || approvalState.approval.operation === 'restore' && approvalState.key === resultState?.key && resultAccountIsCurrent)
     ? approvalState.approval : null;
+  const approvalDecided = storedApproval !== null && author.approval.approvalId === storedApproval.request.artifactId
+    && (author.approval.approvalStatus === 'approved' || author.approval.approvalStatus === 'executing');
+  const approval = React.useMemo<WorkspaceReplaceApproval | null>(
+    () => storedApproval && approvalDecided ? { ...storedApproval, status: 'approved' } : storedApproval,
+    [approvalDecided, storedApproval],
+  );
   const applyController = React.useRef<AbortController | null>(null);
   const options = React.useMemo(
     () => (scope && accountId ? { serverId: scope.serverId, accountId } : null),
@@ -489,6 +525,7 @@ export function useWorkspaceReplace(
     }
     const controller = new AbortController();
     let current = true;
+    const interest = mergeAbortSignals([controller.signal, authorRef.current.getSignal()]);
     void machineWorkspaceFileReplacePreview(
       scope.machineId,
       {
@@ -499,14 +536,22 @@ export function useWorkspaceReplace(
         regex: matcher.regex,
         contextLines: 2,
       },
-      { ...options, signal: controller.signal },
+      { ...options, signal: controller.signal, continuationSignal: interest.signal,
+        onApprovalPending: (registration) => {
+          if (!current) return;
+          authorRef.current.approval.requestApproval(registration);
+          // A retried preview that now waits replaces the line its earlier answer left.
+          setError(null);
+          setApproval({ key, approval: { operation: 'preview', serverId: options.serverId, status: 'waiting',
+            request: createdApproval(registration, 'workspace.files.replace.preview') } });
+        } },
     ).then(
       (response) => {
         if (!current) return;
         setLoadedKey(key);
         const pendingApproval = readReplaceApproval(response);
         if (pendingApproval) {
-          setApproval({ key, approval: { operation: 'preview', request: pendingApproval } });
+          setApproval({ key, approval: { operation: 'preview', serverId: options.serverId, status: 'waiting', request: pendingApproval } });
           setError(null);
           return;
         }
@@ -538,6 +583,7 @@ export function useWorkspaceReplace(
     return () => {
       current = false;
       controller.abort();
+      interest.dispose();
     };
     // `matcher` and `scope` are captured through `key`, which names every field the request reads.
   }, [key, retryVersion, options]);
@@ -557,14 +603,20 @@ export function useWorkspaceReplace(
         contextLines: 2,
         cursor,
       },
-      options,
+      { ...options, continuationSignal: authorRef.current.getSignal(),
+        onApprovalPending: (registration) => {
+          authorRef.current.approval.requestApproval(registration);
+          setApproval({ key: previewKey, approval: { operation: 'preview', serverId: options.serverId, status: 'waiting',
+            request: createdApproval(registration, 'workspace.files.replace.preview') } });
+        } },
     )
       .then((response) => {
         const pendingApproval = readReplaceApproval(response);
         if (pendingApproval) {
-          setApproval({ key: previewKey, approval: { operation: 'preview', request: pendingApproval } });
+          setApproval({ key: previewKey, approval: { operation: 'preview', serverId: options.serverId, status: 'waiting', request: pendingApproval } });
           return;
         }
+        setApproval(previous => previous?.key === previewKey && previous.approval.operation === 'preview' ? null : previous);
         if (!response.ok) return;
         setPreview((previous) =>
           previous && previous.key === previewKey
@@ -663,6 +715,8 @@ export function useWorkspaceReplace(
     setApplyFailure(null);
     setApproval(null);
     pendingRestoreApproval.current = null;
+    // Set by the continuation, so the settled answer knows an approval stood between request and effect.
+    const awaited = { approval: null as WorkspaceReplaceApproval | null };
     const completion = (async (): Promise<ApplySettlement> => {
     try {
       const response = await machineWorkspaceFileReplaceApply(
@@ -675,18 +729,36 @@ export function useWorkspaceReplace(
             files: selection,
           },
         },
-        { ...options, signal: controller.signal },
+        { ...options, signal: controller.signal, continuationSignal: authorRef.current.getSignal(),
+          onApprovalPending: (registration) => {
+            authorRef.current.approval.requestApproval(registration);
+            awaited.approval = { operation: 'replace', serverId: options.serverId, status: 'waiting',
+              request: createdApproval(registration, 'workspace.files.replace') };
+            setApproval({ key: preview.key, approval: awaited.approval });
+          } },
       );
+      const settled = awaited.approval;
+      if (settled) {
+        setApproval(previous => previous?.approval === settled ? null : previous);
+      }
       if (!response.ok) {
         const pendingApproval = readReplaceApproval(response);
         if (pendingApproval) {
-          const approval: WorkspaceReplaceApproval = { operation: 'replace', request: pendingApproval };
+          const approval: WorkspaceReplaceApproval = { operation: 'replace', serverId: options.serverId, status: 'waiting', request: pendingApproval };
           setApproval({ key: preview.key, approval });
           return { error: null, approval };
         }
-        // The request may have reached the Machine: never claim nothing happened, never replay.
+        if (settled && 'errorCode' in response) {
+          if (isDeclinedApproval(response.errorCode)) {
+            setApplyFailure({ key: preview.key, code: 'declined' });
+            return { error: 'declined', approval: null };
+          }
+          // The surface let go of the request (closed, Account changed): it is still in the Inbox, not an unknown write.
+          if (response.errorCode === 'action_account_scope_changed') return { error: null, approval: settled };
+        }
+        // A known native refusal differs from an unconfirmed Machine outcome; never replay either.
         const code: WorkspaceReplaceErrorCode = 'errorCode' in response
-            ? 'outcome_unknown'
+            ? replaceWriteActionError(response.errorCode)
             : response.code === 'invalid_pattern'
               ? 'invalid_pattern'
               : response.code === 'root_not_allowed'
@@ -740,7 +812,7 @@ export function useWorkspaceReplace(
   const canRestore = undoable.length > 0 && !undoing && !applying && !approval && resultAccountIsCurrent;
   const canUndo = results !== null && canRestore;
   const restore = React.useCallback(
-    async (path?: string): Promise<WorkspaceReplaceUndoOutcome | null> => {
+    async (path?: string, inSurface = false): Promise<WorkspaceReplaceUndoOutcome | null> => {
       const resultState = retainedResult.current;
       const account = currentAccount.current;
       if (!resultState || restoring.current || applyController.current || pendingRestoreApproval.current === resultState.key
@@ -752,6 +824,9 @@ export function useWorkspaceReplace(
       if (!targets.length) return null;
       restoring.current = true;
       setUndoing(true);
+      setApplyFailure(null);
+      // Only the open surface waits on an approval; after close the notice's Undo leaves it to the Inbox.
+      const awaited = { approval: null as WorkspaceReplaceApproval | null };
       try {
         const response = await machineWorkspaceFileReplaceApply(
           resultState.scope.machineId,
@@ -759,17 +834,38 @@ export function useWorkspaceReplace(
             rootPath: resultState.scope.rootPath,
             operation: buildWorkspaceFileRestoreOperation(targets),
           },
-          resultState.options,
+          inSurface && authorRef.current.isCurrent() ? { ...resultState.options, continuationSignal: authorRef.current.getSignal(),
+            onApprovalPending: (registration) => {
+              authorRef.current.approval.requestApproval(registration);
+              pendingRestoreApproval.current = resultState.key;
+              awaited.approval = { operation: 'restore', serverId: resultState.options.serverId, status: 'waiting',
+                request: createdApproval(registration, 'workspace.files.replace') };
+              setApproval({ key: resultState.key, approval: awaited.approval });
+            } } : resultState.options,
         );
+        const settled = awaited.approval;
+        if (settled) {
+          if (pendingRestoreApproval.current === resultState.key) pendingRestoreApproval.current = null;
+          setApproval(previous => previous?.approval === settled ? null : previous);
+        }
         if (!response.ok) {
           const pendingApproval = readReplaceApproval(response);
           if (pendingApproval) {
             pendingRestoreApproval.current = resultState.key;
-            setApproval({ key: resultState.key, approval: { operation: 'restore', request: pendingApproval } });
+            setApproval({ key: resultState.key, approval: { operation: 'restore', serverId: resultState.options.serverId,
+              status: 'waiting', request: pendingApproval } });
             setApplyFailure(null);
             return { restored: 0, changed: 0, error: 'approval_required', approval: pendingApproval };
           }
-          const error = 'errorCode' in response ? 'outcome_unknown' : 'failed';
+          if (settled && 'errorCode' in response) {
+            if (isDeclinedApproval(response.errorCode)) {
+              setApplyFailure({ key: resultState.key, code: 'declined' });
+              return { restored: 0, changed: 0, error: 'declined' };
+            }
+            if (response.errorCode === 'action_account_scope_changed')
+              return { restored: 0, changed: 0, error: 'approval_required', approval: settled.request };
+          }
+          const error = 'errorCode' in response ? replaceWriteActionError(response.errorCode) : 'failed';
           setApplyFailure({ key: resultState.key, code: error });
           return { restored: 0, changed: 0, error };
         }
@@ -824,7 +920,7 @@ export function useWorkspaceReplace(
     [setResultState],
   );
   const undo = React.useCallback(
-    (path?: string) => canUndo ? restore(path) : Promise.resolve(null),
+    (path?: string) => canUndo ? restore(path, true) : Promise.resolve(null),
     [canUndo, restore],
   );
   const undoOnClose = React.useMemo(() => canRestore && resultState ? {

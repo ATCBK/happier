@@ -14,12 +14,15 @@ import type {
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
+import { decideApprovalAsInbox, installOwnMachineApprovalReplayBoundary } from '@/dev/testkit/harness/approvalInbox';
+import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 installDisconnectedServerSocketBoundary();
 // Load the real Action graph during collection, outside an individual operation's test deadline.
 await import('@/sync/ops/actions/defaultActionExecutor');
+const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
 const {
   buildReplaceApplyFiles,
   buildReplacePreviewUnifiedDiff,
@@ -301,15 +304,87 @@ describe('useWorkspaceReplace', () => {
         expect(hook.getCurrent().canApply).toBe(true);
     });
 
-    it('keeps the created approval request instead of claiming an unknown write outcome', async () => {
+    it('keeps the created approval request instead of claiming an unknown write outcome, then settles the approved replace with Undo', async () => {
+        rpc.call.mockResolvedValueOnce(previewOk);
+        await homes.requireUiApproval(scope.serverId, 'workspace.files.replace');
+        const edits = [{ startUtf16: 4, deleteLength: 19, insertText: 'useSettingsModalKey', originalText: 'useSettingsRouteKey' }];
+        let effects = 0;
+        await installOwnMachineApprovalReplayBoundary({ harness: homes, serverId: scope.serverId, accountId: 'acct', machineId: 'mac',
+            machineFilesystemEffects: { workspaceFilesReplace: async () => {
+                effects++;
+                return { ok: true, results: [{ path: doc.path, status: 'replaced', hash: hash('e'), matchCount: 1, edits }] };
+            } } });
+        const hook = await renderHook(() => useWorkspaceReplace({ scope, accountLifetime: account, matcher, unsavedPaths: [] }));
+        let applying: Promise<void> = Promise.resolve();
+        await act(async () => { applying = hook.getCurrent().apply(); });
+        await waitForHomeGovernance(() => expect(hook.getCurrent()).toMatchObject({
+            applyError: null, results: null, canApply: false, canUndo: false,
+            approval: { operation: 'replace', status: 'waiting', serverId: scope.serverId,
+                request: { kind: 'approval_request_created', actionId: 'workspace.files.replace', artifactId: expect.any(String) } },
+        }));
+        expect(effects).toBe(0);
+        const artifactId = hook.getCurrent().approval!.request.artifactId;
+        expect(await decideApprovalAsInbox(scope.serverId, artifactId, 'approve')).toMatchObject({ ok: true, result: { status: 'executed' } });
+        await act(async () => { publishHomeAccountChange(scope.serverId, [artifactId]); });
+        await act(async () => { await applying; });
+        expect(effects).toBe(1);
+        expect(hook.getCurrent()).toMatchObject({ approval: null, applyError: null, canUndo: true });
+        expect(hook.getCurrent().results?.map((entry) => [entry.path, entry.status])).toEqual([[doc.path, 'replaced']]);
+    });
+
+    it.each([
+        { operation: 'replace', errorCode: 'target_unavailable', expectedError: 'unavailable' },
+        { operation: 'restore', errorCode: 'target_unavailable', expectedError: 'unavailable' },
+        { operation: 'replace', errorCode: 'action_outcome_unknown', expectedError: 'outcome_unknown' },
+        { operation: 'restore', errorCode: 'action_outcome_unknown', expectedError: 'outcome_unknown' },
+    ] as const)('settles approved $operation / $errorCode without inventing effect certainty', async ({ operation, errorCode, expectedError }) => {
+        const edits = [{ startUtf16: 4, deleteLength: 19, insertText: 'useSettingsModalKey', originalText: 'useSettingsRouteKey' }];
+        rpc.call.mockResolvedValueOnce(previewOk)
+            .mockResolvedValueOnce({ ok: true, results: [{ path: doc.path, status: 'replaced', hash: hash('e'), matchCount: 1, edits }] });
+        const hook = await renderHook(() => {
+            // The mounted author needs the real credential lifetime, including
+            // Home-profile promotion, rather than the pure model fixtures' fixed scope.
+            const { binding } = useServerCredentialAccountScopeBinding(scope.serverId);
+            return useWorkspaceReplace({ scope: binding ? { ...scope, serverId: binding.scope.serverId } : null,
+                accountLifetime: binding ?? null, matcher, unsavedPaths: [] });
+        });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().canApply).toBe(true));
+        if (operation === 'restore') await act(async () => { await hook.getCurrent().apply(); });
+        await homes.requireUiApproval(scope.serverId, 'workspace.files.replace');
+        // The daemon is an external boundary. It can report a native pre-effect
+        // refusal or lost confirmation; the approval lifecycle stays real.
+        await installOwnMachineApprovalReplayBoundary({ harness: homes, serverId: scope.serverId, accountId: 'acct', machineId: 'mac',
+            machineFilesystemEffects: { workspaceFilesReplace: async () => ({
+                ok: false, errorCode, error: errorCode,
+            }) } });
+        let completing: Promise<unknown> = Promise.resolve();
+        await act(async () => { completing = operation === 'replace' ? hook.getCurrent().apply() : hook.getCurrent().undo(); });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().approval?.status).toBe('waiting'));
+        const artifactId = hook.getCurrent().approval!.request.artifactId;
+        expect(await decideApprovalAsInbox(scope.serverId, artifactId, 'approve')).toMatchObject({
+            ok: true, result: { status: 'failed', execution: { ok: false, errorCode } },
+        });
+        await act(async () => { publishHomeAccountChange(scope.serverId, [artifactId]); });
+        await act(async () => { await completing; });
+        expect(hook.getCurrent()).toMatchObject({ approval: null, applyError: expectedError });
+        expect(hook.getCurrent().results).toEqual(operation === 'replace' ? null : [
+            expect.objectContaining({ path: doc.path, status: 'replaced' }),
+        ]);
+        expect(hook.getCurrent().canUndo).toBe(operation === 'restore');
+    });
+
+    it('returns a declined replace to its review without claiming a write', async () => {
         rpc.call.mockResolvedValueOnce(previewOk);
         await homes.requireUiApproval(scope.serverId, 'workspace.files.replace');
         const hook = await renderHook(() => useWorkspaceReplace({ scope, accountLifetime: account, matcher, unsavedPaths: [] }));
-        await act(async () => { await hook.getCurrent().apply(); });
-        expect(hook.getCurrent()).toMatchObject({
-            applyError: null, results: null, canApply: false,
-            approval: { operation: 'replace', request: { kind: 'approval_request_created', actionId: 'workspace.files.replace', artifactId: expect.any(String) } },
-        });
+        let applying: Promise<void> = Promise.resolve();
+        await act(async () => { applying = hook.getCurrent().apply(); });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().approval?.status).toBe('waiting'));
+        const artifactId = hook.getCurrent().approval!.request.artifactId;
+        await decideApprovalAsInbox(scope.serverId, artifactId, 'reject');
+        await act(async () => { publishHomeAccountChange(scope.serverId, [artifactId]); });
+        await act(async () => { await applying; });
+        expect(hook.getCurrent()).toMatchObject({ approval: null, results: null, applyError: 'declined', canApply: true });
         expect(rpc.call).toHaveBeenCalledTimes(1);
     });
 

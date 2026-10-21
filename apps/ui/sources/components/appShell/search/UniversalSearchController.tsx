@@ -991,7 +991,8 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         model: replaceModel, matcher: replaceMatcher, scopeLabel: fileContentFolderLabel ?? t('universalSearch.content.textInFiles'),
         machineLabel, available: Boolean(workspaceScope && workspaceSearchAvailable && selectedCredentialBinding),
         reachable: workspaceScopeReachable, commitOpen: commitReplaceOpen, compact: deviceType === 'phone',
-    }) : null, [commitReplaceOpen, deviceType, fileContentFolderLabel, machineLabel, replaceMatcher, replaceModel, selectedCredentialBinding, workspaceScope, workspaceScopeReachable, workspaceSearchAvailable]);
+        ...(props.presentation === 'modal' ? { onLeaveForApproval: requestClose } : {}),
+    }) : null, [props.presentation, requestClose, commitReplaceOpen, deviceType, fileContentFolderLabel, machineLabel, replaceMatcher, replaceModel, selectedCredentialBinding, workspaceScope, workspaceScopeReachable, workspaceSearchAvailable]);
     const searchSections = React.useMemo(() => buildUniversalSearchSections({
         query,
         commands: props.commands,
@@ -1305,7 +1306,8 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     const replaceFooter = reviewActive && (replaceModel.preview || replaceModel.applying || replaceModel.results)
         ? <ReplaceFooterAction model={replaceModel} compact={deviceType === 'phone'} onDone={requestClose} />
         : null;
-    const replaceSummary = reviewActive ? <ReplaceResultSummary model={replaceModel} machineLabel={machineLabel} /> : null;
+    const replaceSummary = reviewActive ? <ReplaceResultSummary model={replaceModel} machineLabel={machineLabel}
+        onLeaveForApproval={props.presentation === 'modal' ? requestClose : undefined} /> : null;
     // Full-screen on a phone-width browser (the command surface's phone presentation): the band ends with
     // its way out, as the native Search plane's close does (lab G1sp "Cancel").
     const phoneCancel = Platform.OS === 'web' && props.presentation === 'modal' && deviceType === 'phone'

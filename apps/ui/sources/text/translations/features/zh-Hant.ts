@@ -3106,6 +3106,8 @@ const filesPaneTranslations = { 'zh-Hant': {
             changesInFiles: ({ changes, files }) => String(files) + " 個檔案中的 " + String(changes) + " 處變更",
             renameInFiles: ({ files }) => "在 " + String(files) + " 個檔案中重新命名",
             renameOnly: "僅重新命名",
+            applyDeclined: "變更未獲核准，沒有寫入任何內容。",
+            undoDeclined: "復原未獲核准，檔案保留變更。",
             renameAndUpdateImports: "重新命名並更新匯入",
             fileRenamed: ({ name }) => "已重新命名為 " + name,
             applyFix: "套用修復",

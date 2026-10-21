@@ -29,8 +29,18 @@ export async function machineWorkspaceFileReplacePreview(machineId: string, inpu
         });
         if (!execution.ok) return execution;
         const approval = ActionApprovalRequestCreatedResultSchema.safeParse(execution.result);
-        if (approval.success) return { ok: false, errorCode: 'approval_required', error: 'approval_required', details: approval.data };
-        const parsed = DaemonWorkspaceFileReplacePreviewResponseSchema.safeParse(execution.result);
+        let result: unknown = execution.result;
+        if (approval.success) {
+            if (!options?.onApprovalPending || !options.serverId || !options.accountId)
+                return { ok: false, errorCode: 'approval_required', error: 'approval_required', details: approval.data };
+            // A read the person asked to approve answers once approved, through the same continuation as writes.
+            const resumed = await resumeActionExecutionResult({ result: execution, actionId: 'workspace.files.replace.preview',
+                actionInput: { machineId, ...payload }, scope: { serverId: options.serverId, accountId: options.accountId },
+                signal: options.continuationSignal, onApprovalPending: options.onApprovalPending });
+            if (!resumed.ok) return resumed;
+            result = resumed.result;
+        }
+        const parsed = DaemonWorkspaceFileReplacePreviewResponseSchema.safeParse(result);
         return parsed.success ? parsed.data : { ok: false, errorCode: 'transport_failed' };
     } catch (error) {
         if (options?.signal?.aborted) throw error;

@@ -3105,6 +3105,8 @@ const filesPaneTranslations = { de: {
             changesInFiles: ({ changes, files }) => String(changes) + " " + (changes === 1 ? "Änderung" : "Änderungen") + " in " + String(files) + " " + (files === 1 ? "Datei" : "Dateien"),
             renameInFiles: ({ files }) => "In " + String(files) + " " + (files === 1 ? "Datei" : "Dateien") + " umbenennen",
             renameOnly: "Nur umbenennen",
+            applyDeclined: "Die Änderung wurde nicht freigegeben. Nichts wurde geschrieben.",
+            undoDeclined: "Rückgängig wurde nicht freigegeben. Die Dateien behalten die Änderung.",
             renameAndUpdateImports: "Umbenennen und Importe anpassen",
             fileRenamed: ({ name }) => "Umbenannt in " + name,
             applyFix: "Korrektur anwenden",

@@ -3133,6 +3133,8 @@ const filesPaneTranslations = { ru: {
             changesInFiles: ({ changes, files }) => "Изменений: " + String(changes) + ", файлов: " + String(files),
             renameInFiles: ({ files }) => "Переименовать (файлов: " + String(files) + ")",
             renameOnly: "Только переименовать",
+            applyDeclined: "Изменение не одобрено. Ничего не записано.",
+            undoDeclined: "Отмена не одобрена. Файлы сохраняют изменение.",
             renameAndUpdateImports: "Переименовать и обновить импорты",
             fileRenamed: ({ name }) => "Переименовано в " + name,
             applyFix: "Применить исправление",

@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
 import * as filesystem from 'node:fs/promises';
-import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createActionExecutor } from '@happier-dev/protocol';
+import fastify from 'fastify';
+import { accountSettingsParse, createActionExecutor, decodePlainArtifactStoredContent, getActionSpec, StoredApprovalRequestSchema } from '@happier-dev/protocol';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { callSocketRpc } from '@happier-dev/sync-client';
@@ -17,6 +18,14 @@ import { applyWorkspaceFileReplace, previewWorkspaceFileReplace, registerWorkspa
 import { registerSessionHandlers } from './registerSessionHandlers';
 import { ApiMachineClient } from '@/api/apiMachine';
 import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
+import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
+import { configuration } from '@/configuration';
+import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
+import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
+import { registerAccountHomeHttp, registerPlainArtifactRoutes } from '@/session/actions/widgetApproval.testkit';
+import { createDaemonApprovalExecutionOriginCurrentnessFromCredentials } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
+import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
 
 // Keep the filesystem real while exposing its write boundary as a configurable spy.
 vi.mock('node:fs/promises', async () => {
@@ -232,6 +241,161 @@ describe('registered workspace replace transport', () => {
       if (previousWorkingDirectory == null) delete process.env.HAPPIER_MACHINE_RPC_WORKING_DIRECTORY;
       else process.env.HAPPIER_MACHINE_RPC_WORKING_DIRECTORY = previousWorkingDirectory;
     }
+  });
+
+  it.each([
+    ['preview', 'current'], ['replace', 'current'], ['restore', 'current'], ['rename', 'current'], ['directory', 'current'],
+    ['fileRename', 'current'], ['codeAction', 'current'], ['replace', 'implicit-target'], ['rename', 'implicit-target'],
+    ['preview', 'foreign-home'], ['preview', 'foreign-input'], ['preview', 'missing-witness'], ['preview', 'retired'],
+    ['preview', 'unreachable-witness'], ['preview', 'retired-during-witness'],
+  ] as const)('replays approved %s through the native Machine dependency (%s)', async (kind, scenario) => {
+    const origin = 'http://replace-approval.test';
+    await withConfiguredDaemonTestHome({ prefix: 'happier-replace-approval-', env: {
+      HAPPIER_SERVER_URL: origin, HAPPIER_WEBAPP_URL: origin, HAPPIER_MACHINE_RPC_WORKING_DIRECTORY: root,
+    } }, async () => {
+      const app = fastify();
+      const restore = installAxiosFastifyAdapter({ app, origin });
+      const accountId = 'replace-owner';
+      const serverIdentityId = 'srv_replace_approval';
+      const serverId = configuration.activeServerId;
+      const machineId = 'machine';
+      const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+      const credentials = { token, encryption: null };
+      const actionId = kind === 'preview' ? 'workspace.files.replace.preview'
+        : kind === 'rename' ? 'code.rename.apply' : kind === 'fileRename' ? 'code.file.rename.apply'
+          : kind === 'codeAction' ? 'code.codeAction.apply'
+            : kind === 'directory' ? 'daemon.filesystem.createDirectory' : 'workspace.files.replace';
+      const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: {
+        [actionId]: { approvalRequiredSurfaces: ['ui'] },
+      } });
+      const accountSettings = accountSettingsParse({ actionsSettingsV1: actionsSettings });
+      const features = registerAccountHomeHttp(app, { accountId, serverId: serverIdentityId, settings: accountSettings });
+      let readingNativeWitness = false;
+      let nativeWitnessRequests = 0;
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        if (readingNativeWitness) nativeWitnessRequests += 1;
+        if (readingNativeWitness && scenario === 'unreachable-witness') return Response.json({}, { status: 503 });
+        if (readingNativeWitness && scenario === 'retired-during-witness') client.setRPCHandlers({
+          spawnSession: async () => ({ type: 'error', errorCode: 'SPAWN_FAILED', errorMessage: 'unused' }),
+          stopSession: async () => true, requestShutdown: () => {},
+        });
+        return Response.json(features);
+      });
+      const artifacts = registerPlainArtifactRoutes(app, accountId);
+      const readApproval = (artifactId: string) => {
+        const storedBody = decodePlainArtifactStoredContent(artifacts.read(artifactId)!.body);
+        if (typeof storedBody !== 'object' || storedBody === null || !('body' in storedBody) || typeof storedBody.body !== 'string')
+          throw new Error('Missing approval Artifact body');
+        return StoredApprovalRequestSchema.parse(JSON.parse(storedBody.body));
+      };
+      const client = new ApiMachineClient(token, { id: machineId, encryptionKey: new Uint8Array(32).fill(7),
+        encryptionVariant: 'legacy', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
+      const resolveCurrentMachineExecutionOriginContext = createCurrentMachineExecutionOriginContextResolver({
+        serverUrl: origin, resolveCurrentMachineId: () => machineId,
+      });
+      const { executor, deps } = createCliActionExecutorHarness({ token, credentials, sessionId: 'cli-global', mode: 'plain', ctx: null,
+        serverId, serverIdentityId, serverHttpBaseUrl: origin,
+        actionsSettingsProvider: createActionSettingsProvider({ accountSettings, allowEnvironmentOverride: false }),
+      }, {
+        workspaceFilesReplacePreview: client.createWorkspaceFileReplacePreviewActionExecutor(serverId),
+        workspaceFilesReplace: client.createWorkspaceFileReplaceActionExecutor(serverId),
+        languageIntelligenceApply: client.createLanguageIntelligenceApplyActionExecutor(serverId),
+        filesystemActionExecute: client.createFilesystemActionExecutor(serverId),
+        isApprovalExecutionOriginCurrent: createDaemonApprovalExecutionOriginCurrentnessFromCredentials({ credentials,
+          serverId, machineId, serverApiUrl: origin, resolveCurrentMachineExecutionOriginContext,
+        }),
+      });
+      client.setRPCHandlers({ spawnSession: async () => ({ type: 'error', errorCode: 'SPAWN_FAILED', errorMessage: 'unused' }),
+        stopSession: async () => true, requestShutdown: () => {} }, { externalActionIngressOwner: {
+        currentServerId: serverId, executor, resolveTarget: async () => ({ kind: 'machine', machineId }),
+        ...(scenario === 'missing-witness' ? {} : { resolvePluginExecutionOriginContext: async () => {
+          readingNativeWitness = true;
+          try { return await resolveCurrentMachineExecutionOriginContext(); }
+          finally { readingNativeWitness = false; }
+        } }),
+      } });
+      await writeFile(join(root, 'a.txt'), Buffer.from('\uFEFFold\r\n'));
+      let bytes = await readFile(join(root, 'a.txt'));
+      const replaced = kind === 'restore' ? await apply({ kind: 'replace', matcher,
+        files: [{ path: 'a.txt', expectedHash: hash(bytes) }] }) : null;
+      if (replaced && !replaced.ok) throw new Error('Cannot prepare real inverse');
+      const restoreOperation = replaced?.ok ? buildWorkspaceFileRestoreOperation(replaced.results) : null;
+      if (restoreOperation) bytes = await readFile(join(root, 'a.txt'));
+      const inputMachineId = scenario === 'foreign-input' ? 'another-machine' : machineId;
+      const input = kind === 'preview' ? { machineId: inputMachineId, rootPath: root, ...matcher }
+        : kind === 'directory' ? { rootPath: root, path: 'approved-directory' }
+          : kind === 'rename' || kind === 'fileRename' ? getActionSpec(actionId).inputSchema.parse({ machineId, rootPath: root, path: 'a.txt', files: [{
+            path: 'a.txt', expectedHash: hash(bytes), ...(kind === 'fileRename' ? { renameTo: 'approved-renamed.txt' } : {}),
+            edits: kind === 'fileRename' ? [] : [{ range: { start: { line: 0, character: 1 }, end: { line: 0, character: 4 } }, text: 'new' }],
+          }] }) : kind === 'codeAction' ? getActionSpec(actionId).inputSchema.parse({ machineId, rootPath: root, path: 'a.txt',
+            operation: { kind: 'codeAction', expectedHash: hash(Buffer.from('stale query')), action: {
+              serverId: 'fixture/server', title: 'Reviewed stale fix', hasCommand: false, files: [],
+              range: { start: { line: 0, character: 1 }, end: { line: 0, character: 4 } },
+            } },
+          })
+            : { machineId, rootPath: root, operation: restoreOperation
+              ?? { kind: 'replace', matcher, files: [{ path: 'a.txt', expectedHash: hash(bytes) }] } };
+      try {
+        // A different device owns the proposing UI profile. Do not run that
+        // proposal through the deciding daemon's fixed-Home context wrapper.
+        const proposal = await createActionExecutor(deps).execute(actionId, input, { surface: 'ui', authority: 'present_user',
+          actionCaller: { kind: 'host' }, serverId: 'ui-home-profile', serverIdentityId, runtimeAccountId: accountId,
+          actionRequestId: 'replace-proposal', ...(scenario === 'implicit-target' ? {}
+            : { externalActionTarget: { kind: 'machine', machineId } as const }) });
+        if (scenario === 'foreign-input') {
+          expect(proposal).toMatchObject({ ok: false, errorCode: 'approval_origin_unavailable' });
+          expect(await readFile(join(root, 'a.txt'))).toEqual(bytes);
+          return;
+        }
+        expect(proposal, JSON.stringify(proposal)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+        if (!proposal.ok || typeof proposal.result !== 'object' || proposal.result === null || !('artifactId' in proposal.result)
+          || typeof proposal.result.artifactId !== 'string') throw new Error('Missing real approval request');
+        const original = readApproval(proposal.result.artifactId);
+        expect(original).toMatchObject({ v: 2, executionOriginV1: {
+          serverId: 'ui-home-profile', serverIdentityId, machineId,
+          ...(scenario === 'implicit-target' ? {} : { target: { kind: 'machine', machineId } }),
+        } });
+        if (scenario === 'implicit-target' && original.v === 2) expect(original.executionOriginV1).not.toHaveProperty('target');
+        expect(await readFile(join(root, 'a.txt'))).toEqual(bytes);
+        if (scenario === 'foreign-home') features.capabilities.serverIdentity.serverIdentityId = 'srv_another_home';
+        if (scenario === 'retired') client.setRPCHandlers({
+          spawnSession: async () => ({ type: 'error', errorCode: 'SPAWN_FAILED', errorMessage: 'unused' }),
+          stopSession: async () => true, requestShutdown: () => {},
+        });
+        const decision = await executor.execute('approval.request.decide', { artifactId: proposal.result.artifactId, decision: 'approve' },
+          { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId, serverIdentityId,
+            runtimeAccountId: accountId, actionRequestId: 'replace-decision' });
+        if (scenario !== 'current' && scenario !== 'implicit-target') {
+          expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true, result: { status: 'failed', execution: {
+            ok: false, errorCode: scenario === 'foreign-home' ? 'approval_stale' : 'target_unavailable',
+          } } });
+          expect(await readFile(join(root, 'a.txt'))).toEqual(bytes);
+          return;
+        }
+        expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+        const request = readApproval(proposal.result.artifactId);
+        expect(request).toMatchObject({ status: 'executed', execution: { ok: true, result: kind === 'preview'
+          ? { files: [{ path: 'a.txt', hash: hash(bytes) }] }
+          : kind === 'directory' ? { success: true }
+            : kind === 'codeAction' ? { status: 'error', errorCode: 'stale_query' }
+            : { results: [{ path: 'a.txt', status: kind === 'restore' ? 'restored' : 'replaced',
+              ...(kind === 'fileRename' ? { renameTo: 'approved-renamed.txt', edits: [] }
+                : kind === 'restore' ? {} : { edits: [{ originalText: 'old', insertText: 'new' }] }),
+            }] } } });
+        if (kind === 'directory') {
+          await expect(access(join(root, 'approved-directory'))).resolves.toBeUndefined();
+          // The physical phase rechecks its owner, not the Home over HTTP again.
+          expect(nativeWitnessRequests).toBe(1);
+        }
+        if (kind === 'fileRename') {
+          await expect(access(join(root, 'a.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+          expect(await readFile(join(root, 'approved-renamed.txt'))).toEqual(bytes);
+          return;
+        }
+        expect(await readFile(join(root, 'a.txt'))).toEqual(kind === 'preview' || kind === 'directory' || kind === 'codeAction' ? bytes
+          : Buffer.from(kind === 'restore' ? '\uFEFFold\r\n' : '\uFEFFnew\r\n'));
+      } finally { await client.shutdown(); restore(); await app.close(); }
+    });
   });
 
   it('restores only when the post-hash and inserted-text assertions both hold', async () => {

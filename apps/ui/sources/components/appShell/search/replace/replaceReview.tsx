@@ -2,6 +2,9 @@ import * as React from 'react';
 import { ScrollView, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
@@ -23,6 +26,7 @@ import {
   replaceFileSelection,
   replaceMatchKey,
   summarizeReplaceResults,
+  type WorkspaceReplaceApproval,
   type WorkspaceReplaceFileResult,
   type WorkspaceReplaceMatch,
   type WorkspaceReplaceMatcher,
@@ -273,6 +277,47 @@ function QuietLine({
   );
 }
 
+/** What waits, in the surface's own words: the replace, its preview, or its Undo. */
+function approvalSubject(approval: WorkspaceReplaceApproval, files: number): string {
+  return approval.operation === 'preview'
+    ? t('universalSearch.replace.previewApprovalSubject')
+    : approval.operation === 'restore'
+      ? t('universalSearch.replace.undo')
+      : t('universalSearch.replace.apply', { files: Math.max(files, 0) });
+}
+
+/**
+ * A step waiting on the person's approval (their Settings › Actions ask for it): the shared pending line,
+ * whose Review opens that request in the Inbox. Nothing here assumes it ran; once approved, the same
+ * operation continues in the surface (progress, then the result and its Undo).
+ */
+function ReplaceApprovalLine({
+  approval,
+  files,
+  onLeave,
+}: Readonly<{ approval: WorkspaceReplaceApproval; files: number; onLeave?: () => void }>) {
+  const router = useRouter();
+  const { artifactId } = approval.request;
+  const { serverId } = approval;
+  const open = React.useCallback(() => {
+    // An overlay can't stay above the page it opens: it steps aside (the request stays in the Inbox).
+    onLeave?.();
+    router.pushRetainingCurrent(buildApprovalHref(artifactId, serverId));
+  }, [artifactId, onLeave, router, serverId]);
+  // On the list's own line metrics, so its glyph starts where the list's text does.
+  return (
+    <View style={{ paddingHorizontal: MENU_ROW_METRICS.paddingHorizontalPx, paddingVertical: MENU_ROW_METRICS.paddingVerticalPx }}>
+      <ActionApprovalPendingNotice
+        testID="replace-approval"
+        presentation="line"
+        summary={approvalSubject(approval, files)}
+        message={t('approvals.waitingForYou')}
+        onOpenApproval={open}
+      />
+    </View>
+  );
+}
+
 function StatusHeading({
   label,
   trailing,
@@ -425,6 +470,8 @@ export type ReplaceReviewContext = Readonly<{
   commitOpen: (path: string, line: number) => void;
   /** No detail column beside the list (phone): each file offers its diff as a pushed step instead. */
   compact: boolean;
+  /** The surface is an overlay: opening an approval request closes it first. */
+  onLeaveForApproval?: () => void;
 }>;
 
 function matchOptionId(path: string, match: WorkspaceReplaceMatch): string {
@@ -480,6 +527,12 @@ function reviewSections(
       },
     ];
   }
+  if (model.error === 'declined') {
+    // Nothing failed: the person said no. The review can ask again.
+    const label = t('universalSearch.replace.previewDeclined');
+    return [{ kind: 'static', id: 'replace:state', options: [staticLine('declined', label, <QuietLine icon="info" label={label}
+      action={<TextLinkButton tone="strong" size="meta" label={t('universalSearch.replace.retry')} onPress={model.retry} />} />)] }];
+  }
   if (model.error) {
     const label =
       model.error === 'invalid_pattern'
@@ -518,6 +571,12 @@ function reviewSections(
         ],
       },
     ];
+  }
+  if (!preview && model.approval?.operation === 'preview' && model.approval.status === 'waiting') {
+    const label = t('approvals.waitingForYou');
+    return [{ kind: 'static', id: 'replace:state', options: [
+      staticLine('approval', label, <ReplaceApprovalLine approval={model.approval} files={0} onLeave={context.onLeaveForApproval} />),
+    ] }];
   }
   if (!preview) {
     // First preview on its way: skeleton-free, the list keeps the search's own loading row.
@@ -910,33 +969,56 @@ export function buildReplaceReviewSections(
 export function ReplaceResultSummary({
   model,
   machineLabel,
-}: Readonly<{ model: WorkspaceReplaceModel; machineLabel: string }>) {
+  onLeaveForApproval,
+}: Readonly<{ model: WorkspaceReplaceModel; machineLabel: string; onLeaveForApproval?: () => void }>) {
   const { theme } = useUnistyles();
-  if (!model.results && !model.applyError) return null;
+  // Waiting replaces nothing on screen: the review (or its result, for Undo) stays where it was, and this
+  // line sits where the result will land. A preview that has nothing on screen yet waits in the list.
+  const waiting = model.approval?.status === 'waiting' && (model.preview || model.results) ? model.approval : null;
+  const approvalLine = waiting
+    ? <ReplaceApprovalLine approval={waiting} files={model.totals.selectedFiles} onLeave={onLeaveForApproval} />
+    : null;
+  if (!model.results && !model.applyError) {
+    return approvalLine ? (
+      <View style={{ paddingHorizontal: MENU_ROW_METRICS.insetPx, paddingTop: theme.space.s4 }}>{approvalLine}</View>
+    ) : null;
+  }
   if (!model.results) {
+    const declined = model.applyError === 'declined';
     return (
       <View
         style={{
-          paddingHorizontal: theme.space.s8,
-          paddingTop: theme.space.s8,
+          // The slot sits on the list's inset, so its lines start where the list's rows do.
+          paddingHorizontal: MENU_ROW_METRICS.insetPx,
+          paddingTop: theme.space.s4,
         }}
       >
         <QuietLine
-          icon="warning"
-          tone="danger"
+          icon={declined ? 'info' : 'warning'}
+          tone={declined ? 'secondary' : 'danger'}
           label={
-            model.applyError === 'outcome_unknown'
-              ? t('universalSearch.replace.outcomeUnknown', {
-                  machine: machineLabel,
-                })
-              : t('universalSearch.replace.applyFailed', {
-                  machine: machineLabel,
-                })
+            declined
+              ? t('universalSearch.replace.replaceDeclined')
+              : model.applyError === 'outcome_unknown'
+                ? t('universalSearch.replace.outcomeUnknown', {
+                    machine: machineLabel,
+                  })
+                : t('universalSearch.replace.applyFailed', {
+                    machine: machineLabel,
+                  })
           }
         />
       </View>
     );
   }
+  // An Undo that didn't finish says why under the result it would have changed.
+  const undoNote = model.applyError === 'declined'
+    ? <QuietLine icon="info" label={t('universalSearch.replace.undoDeclined')} />
+    : model.applyError === 'outcome_unknown'
+      ? <QuietLine icon="warning" tone="danger" label={t('universalSearch.replace.outcomeUnknown', { machine: machineLabel })} />
+      : model.applyError
+        ? <QuietLine icon="warning" tone="danger" label={t('universalSearch.replace.undoFailed', { machine: machineLabel })} />
+        : null;
   const summary = summarizeReplaceResults(model.results);
   const allUndone = summary.replacedFiles === 0 && summary.restored > 0;
   const title = allUndone
@@ -967,7 +1049,7 @@ export function ReplaceResultSummary({
     .join(' ');
   return (
     <View
-      style={{ paddingHorizontal: theme.space.s8, paddingTop: theme.space.s8 }}
+      style={{ paddingHorizontal: MENU_ROW_METRICS.insetPx, paddingTop: theme.space.s4 }}
     >
       <View
         testID="replace-result-summary"
@@ -1015,7 +1097,7 @@ export function ReplaceResultSummary({
             </Text>
           ) : null}
         </View>
-        {model.canUndo || model.undoing ? (
+        {(model.canUndo || model.undoing) && !waiting ? (
           <RoundButton
             size="small"
             display="secondary"
@@ -1035,6 +1117,8 @@ export function ReplaceResultSummary({
           />
         ) : null}
       </View>
+      {undoNote}
+      {approvalLine}
     </View>
   );
 }
@@ -1062,7 +1146,12 @@ export function ReplaceFooterAction({
     );
   }
   const files = model.totals.selectedFiles;
-  const status = model.applying
+  // While an approval is pending the header line says so; the footer neither spins nor offers Stop.
+  const waiting = model.approval?.status === 'waiting';
+  const applying = model.applying && !waiting;
+  const status = waiting
+    ? null
+    : applying
     ? t('universalSearch.replace.applying', { files })
     : model.loading || model.stale
       ? t('universalSearch.replace.updating')
@@ -1096,7 +1185,7 @@ export function ReplaceFooterAction({
           {status}
         </Text>
       ) : null}
-      {model.applying ? (
+      {applying ? (
         <RoundButton
           size="small"
           display="secondary"
@@ -1112,7 +1201,7 @@ export function ReplaceFooterAction({
           files: Math.max(files, 0),
         })}
         disabled={!model.canApply}
-        loading={model.applying}
+        loading={applying}
         onPress={() => {
           void model.apply();
         }}

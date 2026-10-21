@@ -3111,6 +3111,8 @@ const filesPaneTranslations = { ja: {
             changesInFiles: ({ changes, files }) => String(files) + " ファイルで " + String(changes) + " 件の変更",
             renameInFiles: ({ files }) => String(files) + " ファイルで名前を変更",
             renameOnly: "名前だけ変更",
+            applyDeclined: "変更は承認されませんでした。何も書き込まれていません。",
+            undoDeclined: "元に戻す操作は承認されませんでした。ファイルは変更されたままです。",
             renameAndUpdateImports: "名前を変更してインポートを更新",
             fileRenamed: ({ name }) => name + " に名前を変更しました",
             applyFix: "修正を適用",

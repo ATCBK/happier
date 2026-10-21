@@ -22,9 +22,13 @@ import {
   machineLanguageIntelligencePreviewAction,
 } from '@/sync/ops/machineLanguageIntelligence';
 import { machineWorkspaceFileReplaceApply } from '@/sync/ops/machineWorkspaceFileReplace';
+import { isDeclinedApproval } from '@/sync/domains/workspaces/files/workspaceFileReplace';
 import { workspaceReadFile } from '@/sync/ops/workspaceFileSystem/fileReadWrite';
 import { t } from '@/text';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { ESCAPE_LAYER_PRIORITIES, useEscapeLayer } from '@/keyboard/escape';
 
@@ -102,6 +106,8 @@ type Stage =
       fileHash?: string;
       back?: Stage;
       applying: boolean;
+      /** The person declined the last apply at its approval; the review stays, nothing was written. */
+      declined?: boolean;
     }>
   | Readonly<{
       kind: 'result';
@@ -111,6 +117,8 @@ type Stage =
         | 'idle'
         | 'running'
         | Readonly<{ restored: number; changed: number; failed: boolean }>;
+      /** The person declined the last Undo at its approval; the files keep the change. */
+      undoDeclined?: boolean;
     }>
   /** `page`: said where the review was (an apply that failed), not at the name. */
   | Readonly<{ kind: 'note'; text: string; page?: boolean }>;
@@ -186,7 +194,7 @@ function useEditSetCommit(params: Readonly<{
   currentScopeKey.current = scopeKey;
   const apply = React.useCallback(async () => {
     if (stage.kind !== 'review' || stage.applying) return;
-    setStage({ ...stage, applying: true });
+    setStage({ ...stage, applying: true, declined: false });
     const current = latest.current;
     const target = { machineId: current.scope.machineId, rootPath: current.scope.rootPath, scopeKey,
       options: { serverId: options.serverId ?? current.scope.serverId, accountId: options.accountId ?? author.binding?.scope.accountId } };
@@ -231,6 +239,10 @@ function useEditSetCommit(params: Readonly<{
       setStage({ kind: 'result', target, receipts: response.results, undo: 'idle' });
       return;
     }
+    if ('errorCode' in response && isDeclinedApproval(response.errorCode)) {
+      setStage({ ...stage, applying: false, declined: true });
+      return;
+    }
     // A request that may have reached the Machine never claims nothing happened.
     const unknown = 'errorCode' in response
       && (response.errorCode === 'outcome_unknown' || response.errorCode === 'outcome_uncertain' || response.errorCode === 'transport_failed');
@@ -251,6 +263,10 @@ function useEditSetCommit(params: Readonly<{
       { ...target.options, continuationSignal, onApprovalPending: author.approval.requestApproval },
     ).catch(() => null);
     if (!alive.current || continuationSignal.aborted || !author.isCurrent() || currentScopeKey.current !== scopeKey) return;
+    if (response && !response.ok && 'errorCode' in response && isDeclinedApproval(response.errorCode)) {
+      setStage({ kind: 'result', target, receipts, undo: 'idle', undoDeclined: true });
+      return;
+    }
     if (!response || !response.ok) {
       setStage({
         kind: 'result',
@@ -270,7 +286,35 @@ function useEditSetCommit(params: Readonly<{
     }
     setStage({ kind: 'result', target, receipts, undo: { restored, changed, failed } });
   }, [alive, author.approval.requestApproval, author.getSignal, author.isCurrent, scopeKey, setStage, stage]);
-  return { apply, undo, release: author.cancel };
+  // An apply or Undo the person's Settings › Actions ask about waits here: the review (or result) stays,
+  // and its band names the wait with the way to the request (the Inbox owns the decision).
+  const router = useRouter();
+  const approvalId = author.approval.approvalPending ? author.approval.approvalId : null;
+  const approvalServerId = options.serverId ?? latest.current.scope.serverId;
+  const committing = (stage.kind === 'review' && stage.applying) || (stage.kind === 'result' && stage.undo === 'running');
+  const waiting = React.useMemo<EditSetWaiting | null>(() => approvalId && committing
+    ? { open: () => router.pushRetainingCurrent(buildApprovalHref(approvalId, approvalServerId)) }
+    : null, [approvalId, approvalServerId, committing, router]);
+  return { apply, undo, release: author.cancel, waiting };
+}
+
+type EditSetWaiting = Readonly<{ open: () => void }>;
+
+/** What the person's "no" at the approval left: said once, quietly, in the same status slot. */
+function EditSetDeclinedLine(props: Readonly<{ text: string }>) {
+  return (
+    <Text variant="meta" numberOfLines={1} style={[styles.secondaryText, styles.footerStatus]} testID="code-edit-set-declined">
+      {props.text}
+    </Text>
+  );
+}
+
+/** The shared pending-approval line, in the band's (or the sheet footer's) status slot. */
+function EditSetWaitingLine(props: Readonly<{ waiting: EditSetWaiting }>) {
+  return (
+    <ActionApprovalPendingNotice presentation="line" message={t('approvals.waitingForYou')}
+      onOpenApproval={props.waiting.open} testID="code-edit-set-approval" />
+  );
 }
 
 /**
@@ -469,7 +513,7 @@ export function CodeEditSetPopover(
     [loadTexts],
   );
 
-  const { apply, undo, release } = useEditSetCommit({ op: request.op, stage, setStage, latest, alive, options });
+  const { apply, undo, release, waiting } = useEditSetCommit({ op: request.op, stage, setStage, latest, alive, options });
   const close = React.useCallback(() => { release(); props.onRequestClose(); }, [release, props.onRequestClose]);
 
   const saveFirst = React.useCallback(async () => {
@@ -528,6 +572,7 @@ export function CodeEditSetPopover(
       onUndo={undo}
       onSave={saveFirst}
       onClose={close}
+      waiting={waiting}
     />
   );
   if (!phone && (stage.kind === 'review' || stage.kind === 'result' || (stage.kind === 'note' && stage.page)))
@@ -541,6 +586,7 @@ export function CodeEditSetPopover(
         onBack={back}
         onUndo={undo}
         onClose={close}
+        waiting={waiting}
       />
     );
   return (
@@ -632,7 +678,7 @@ export function FileRenameEditSet(
     // The reviewed files are fixed for this review.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const { apply, undo, release } = useEditSetCommit({ op: 'fileRename', stage, setStage, latest, alive, options });
+  const { apply, undo, release, waiting } = useEditSetCommit({ op: 'fileRename', stage, setStage, latest, alive, options });
   const close = React.useCallback(() => { release(); props.onRequestClose(); }, [release, props.onRequestClose]);
   if (stage.kind !== 'review' && stage.kind !== 'result' && stage.kind !== 'note') return <></>;
   return (
@@ -646,6 +692,7 @@ export function FileRenameEditSet(
       onUndo={undo}
       onClose={close}
       onRenameOnly={() => { release(); props.onRenameOnly(); }}
+      waiting={waiting}
     />
   );
 }
@@ -671,6 +718,7 @@ function CodeEditSetPage(
     onClose: () => void;
     /** The tree's review also offers the plain move, without the server's edits. */
     onRenameOnly?: () => void;
+    waiting: EditSetWaiting | null;
   }>,
 ) {
   const { theme } = useUnistyles();
@@ -736,7 +784,9 @@ function CodeEditSetPage(
                   ? t('files.pane.intelligence.renameTo', { from: props.filePath, to: fileRename.newPath })
                   : t('files.pane.intelligence.renameTo', { from: request.op === 'fileRename' ? '' : request.symbol, to: stage.newName ?? '' })}
             </Text>
-            {commandOnly || empty ? null : (
+            {props.waiting ? <EditSetWaitingLine waiting={props.waiting} />
+              : stage.declined ? <EditSetDeclinedLine text={t('files.pane.intelligence.applyDeclined')} />
+              : commandOnly || empty ? null : (
               <Text variant="meta" numberOfLines={1} style={[styles.tertiaryText, styles.tabular]}>
                 {t('files.pane.intelligence.changesInFiles', counts)}
               </Text>
@@ -795,9 +845,13 @@ function CodeEditSetPage(
       <View style={styles.band} testID="code-edit-set-result">
         <Icon name={written.length ? 'check' : 'warning'} size={ICON_SIZE.sm}
           color={written.length ? theme.colors.text.secondary : theme.colors.state.warning.foreground} />
-        <Text variant="label" emphasis="semiBold" numberOfLines={1} style={[styles.primaryText, styles.bandText]}>
-          {title}
-        </Text>
+        <View style={styles.bandText}>
+          <Text variant="label" emphasis="semiBold" numberOfLines={1} style={styles.primaryText}>
+            {title}
+          </Text>
+          {props.waiting ? <EditSetWaitingLine waiting={props.waiting} />
+            : stage.undoDeclined ? <EditSetDeclinedLine text={t('files.pane.intelligence.undoDeclined')} /> : null}
+        </View>
         {written.length && !undone ? (
           <RoundButton size="small" display="secondary" title={t('common.undo')} loading={undo === 'running'}
             onPress={props.onUndo} testID="code-edit-set-undo" />
@@ -881,6 +935,7 @@ function CodeEditSetBody(
     onUndo: () => void;
     onSave: () => void;
     onClose: () => void;
+    waiting: EditSetWaiting | null;
   }>,
 ) {
   const { theme } = useUnistyles();
@@ -1103,15 +1158,21 @@ function CodeEditSetBody(
           ) : null}
         </ScrollView>
         <Footer>
-          <Text
-            variant="meta"
-            numberOfLines={1}
-            style={[styles.secondaryText, styles.tabular, styles.footerStatus]}
-          >
-            {commandOnly || empty
-              ? ''
-              : t('files.pane.intelligence.changesInFiles', counts)}
-          </Text>
+          {props.waiting ? (
+            <View style={styles.footerStatus}><EditSetWaitingLine waiting={props.waiting} /></View>
+          ) : stage.declined ? (
+            <EditSetDeclinedLine text={t('files.pane.intelligence.applyDeclined')} />
+          ) : (
+            <Text
+              variant="meta"
+              numberOfLines={1}
+              style={[styles.secondaryText, styles.tabular, styles.footerStatus]}
+            >
+              {commandOnly || empty
+                ? ''
+                : t('files.pane.intelligence.changesInFiles', counts)}
+            </Text>
+          )}
           {stage.back ? (
             <RoundButton
               size="small"
@@ -1192,6 +1253,11 @@ function CodeEditSetBody(
         ) : null}
       </View>
       <Footer>
+        {props.waiting ? (
+          <View style={styles.footerStatus}><EditSetWaitingLine waiting={props.waiting} /></View>
+        ) : stage.undoDeclined ? (
+          <EditSetDeclinedLine text={t('files.pane.intelligence.undoDeclined')} />
+        ) : null}
         {written.length && typeof undo !== 'object' ? (
           <RoundButton
             size="small"

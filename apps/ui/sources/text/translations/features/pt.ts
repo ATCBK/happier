@@ -3113,6 +3113,8 @@ const filesPaneTranslations = { pt: {
             changesInFiles: ({ changes, files }) => String(changes) + " " + (changes === 1 ? "alteração" : "alterações") + " em " + String(files) + " " + (files === 1 ? "arquivo" : "arquivos"),
             renameInFiles: ({ files }) => "Renomear em " + String(files) + " " + (files === 1 ? "arquivo" : "arquivos"),
             renameOnly: "Só renomear",
+            applyDeclined: "A alteração não foi aprovada. Nada foi escrito.",
+            undoDeclined: "Desfazer não foi aprovado. Os ficheiros mantêm a alteração.",
             renameAndUpdateImports: "Renomear e atualizar importações",
             fileRenamed: ({ name }) => "Renomeado para " + name,
             applyFix: "Aplicar correção",

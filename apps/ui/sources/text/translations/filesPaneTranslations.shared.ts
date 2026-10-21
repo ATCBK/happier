@@ -149,6 +149,8 @@ export type FilesPaneTranslations = Readonly<{
         changesInFiles: (params: Readonly<{ changes: number; files: number }>) => string;
         renameInFiles: (params: Readonly<{ files: number }>) => string;
         renameOnly: string;
+        applyDeclined: string;
+        undoDeclined: string;
         renameAndUpdateImports: string;
         fileRenamed: (params: Readonly<{ name: string }>) => string;
         applyFix: string;
@@ -321,6 +323,8 @@ export const filesPaneTranslationsEnglish = { en: {
             changesInFiles: ({ changes, files }) => String(changes) + " " + (changes === 1 ? "change" : "changes") + " in " + String(files) + " " + (files === 1 ? "file" : "files"),
             renameInFiles: ({ files }) => "Rename in " + String(files) + " " + (files === 1 ? "file" : "files"),
             renameOnly: "Rename only",
+            applyDeclined: "The change wasn’t approved. Nothing was written.",
+            undoDeclined: "Undo wasn’t approved. The files keep the change.",
             renameAndUpdateImports: "Rename and update imports",
             fileRenamed: ({ name }) => "Renamed to " + name,
             applyFix: "Apply fix",
