@@ -21,6 +21,9 @@ import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixture
 import { MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 import { parseMcpServerImportV1 } from '@happier-dev/protocol/mcp/servers/import/parseMcpServerImportV1';
 import { act } from 'react-test-renderer';
+import { ConnectedAccountDaemonControlResponseSchema, ConnectedAccountAttemptResponseSchema } from '@happier-dev/protocol/connect/connectedAccountDaemonRpcV1';
+import { QualifiedConnectedAccountProfileV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { MCP_SIGN_IN_CONNECTED_SERVICE_REF_V1 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthClientIdentityV1';
 
 const projectionRpc = vi.hoisted(() => vi.fn());
 // The daemon RPC is the boundary; projection admission, adaptation and the Action remain real.
@@ -124,6 +127,88 @@ async function prepareToolFactsHome(includeMachine = true, installedAgentIds = O
 }
 
 describe('UI MCP per-Agent tool facts', () => {
+    it('retains the client refusal across a configuration-only grant echo', async () => {
+        const server = { id: 'server', name: 'server', transport: 'http' as const,
+            remote: { url: 'https://mcp.fixture.test/mcp', headers: {}, auth: { kind: 'oauth' as const } },
+            env: {}, createdAt: 1, updatedAt: 1 };
+        const home = await prepareToolFactsHome(true, [], undefined, undefined,
+            { catalog: () => ({ v: 1, bindings: [], servers: [server] }) });
+        const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+        const scope = { serverId: resolveServerProfileScopeIdForIdentifier(home.id), accountId: 'tool-owner' };
+        const profile = (configurationRevision: string) => QualifiedConnectedAccountProfileV4Schema.parse({
+            ref: { service: MCP_SIGN_IN_CONNECTED_SERVICE_REF_V1, accountId: server.id }, status: 'connected',
+            kind: 'oauth', authenticationModeId: 'oauth', configurationReady: true, configurationRevision,
+            revisionSemantics: 'revisioned', credentialRevision: 'csr_1234567890123456789012', scopes: ['read'],
+        });
+        let configurationRevision = 'configuration-1';
+        const publishGrant = () => getStorage().setState({ profileScope: scope, profile: {
+            ...getStorage().getState().profile, connectedAccountsV4: [profile(configurationRevision)],
+        } });
+        publishGrant();
+        getStorage().setState({ settingsScope: scope, settings: { ...getStorage().getState().settings,
+            machineAdministrationTargetsLocalV1: { 'mcpServers.settings': {
+                serverIdentityId: home.serverIdentityId!, machineId: 'facts-machine',
+            } } } });
+        const provider = createDeferred<unknown>();
+        let providerPending = false;
+        const service = MCP_SIGN_IN_CONNECTED_SERVICE_REF_V1;
+        const mode = { id: 'oauth', kind: 'oauthAuthorizationCode' as const,
+            callbackUrl: 'https://app.happier.dev/oauth/mcp/callback', pkce: 'required' as const,
+            outcomeReconciliation: 'none' as const };
+        const custody = { occurrenceId: 'host-occurrence', sourceCustody: { kind: 'host' as const } };
+        // The daemon RPC is the external producer. Keep the mounted Action,
+        // Connected Services CAS orchestration, real store and sign-in hook real.
+        projectionRpc.mockImplementation(async request => {
+            const command = request.payload.command;
+            if (command.operation === 'describeService') return ConnectedAccountDaemonControlResponseSchema.parse({
+                status: 'described', service, descriptor: { id: service.localId, title: 'MCP sign-in',
+                    authentication: { defaultModeId: 'oauth', modes: [mode] } },
+                accounts: [{ ref: profile(configurationRevision).ref, status: 'connected',
+                    authenticationModeId: 'oauth', configurationReady: true, configurationRevision,
+                    scopes: ['read'], revisionSemantics: 'revisioned', credentialRevision: profile(configurationRevision).credentialRevision }],
+                ...(command.requiredOperation ? { operationTransport: { kind: 'v4' } } : {}), ...custody,
+            });
+            if (command.operation === 'readConfiguration' || command.operation === 'replaceConfiguration') {
+                if (command.operation === 'replaceConfiguration') configurationRevision = 'configuration-2';
+                return ConnectedAccountDaemonControlResponseSchema.parse({
+                    status: command.operation === 'readConfiguration' ? 'configuration' : 'configurationCommitted',
+                    target: { kind: 'account', account: profile(configurationRevision).ref, modeId: 'oauth' }, mode, ...custody,
+                    configuration: { status: 'ready', revision: configurationRevision,
+                        values: { serverId: server.id, resource: server.remote.url, registrations: {}, grantedScopes: ['read'] },
+                        configuredSecretFieldIds: [], missingFieldIds: [] },
+                });
+            }
+            if (command.operation === 'beginReconnect') return ConnectedAccountAttemptResponseSchema.parse({ status: 'starting', attemptId: 'attempt-remove' });
+            if (command.operation === 'read') { providerPending = true; return provider.promise; }
+            throw new Error(`Unexpected daemon command: ${command.operation}`);
+        });
+        const { installRealActionExecutorModuleLoader } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
+        const disposeLoader = await installRealActionExecutorModuleLoader();
+        const { useMcpServerSignIn } = await import('@/components/settings/mcpServers/signIn/useMcpServerSignIn');
+        const hook = await renderHook(() => useMcpServerSignIn(server,
+            [{ machineId: 'facts-machine', name: 'QA Machine', online: true }], { scope }));
+        let removing: Promise<void> | undefined;
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent().view?.state).toBe('connected'));
+            await act(async () => { removing = hook.getCurrent().start({ client: null }); });
+            await vi.waitFor(() => expect(providerPending).toBe(true));
+            // A real configuration CAS changes the profile's configuration basis
+            // before provider admission replies; it has not replaced the credential.
+            await act(async () => { publishGrant(); });
+            await act(async () => {
+                provider.resolve(ConnectedAccountAttemptResponseSchema.parse({ status: 'rejected', attemptId: 'attempt-remove',
+                    code: 'client_refused', diagnostic: { code: 'client_refused', severity: 'error' } }));
+                await removing;
+            });
+            expect(hook.getCurrent().view?.state).toBe('client_refused');
+        } finally {
+            provider.resolve({ status: 'cancelled', attemptId: 'attempt-remove' });
+            await removing;
+            await hook.unmount();
+            disposeLoader();
+        }
+    });
+
     it.each([false, true])('reads plugin declarations from the MCP Administration target (explicit=%s)', async explicit => {
         const home = await prepareToolFactsHome();
         const selected = createMachineFixture({ id: 'mcp-machine', active: true, activeAt: Date.now() });

@@ -106,9 +106,9 @@ export function useMcpServerSignIn(
   const profiles = getStorage()((state) => areServerAccountScopesEqual(scope, state.profileScope) ? state.profile.connectedAccountsV4 : null);
   const grant = server ? findMcpSignInGrant(profiles, server.id) : null;
   const diagnostics = useMcpSignInGrantDiagnostics(profiles, scope, machines.find(machine => machine.online)?.machineId ?? machines[0]?.machineId ?? null);
-  const fingerprint = grant
-    ? `${grant.status}:${grant.credentialRevision ?? ''}:${grant.configurationRevision ?? ''}`
-    : null;
+  // A configuration CAS can precede a provider refusal. Only a new credential
+  // receipt, not configuration or health changes, proves that this flow connected.
+  const fingerprint = grant ? grant.credentialRevision ?? '' : null;
   const targetKey = JSON.stringify([scope?.serverId, scope?.accountId, server?.id]);
   const target = React.useMemo(() => ({ key: targetKey }), [targetKey]);
   const [localState, setLocalState] = React.useState<Readonly<{ target: typeof target; value: Local }>>({ target, value: IDLE });
@@ -135,7 +135,7 @@ export function useMcpServerSignIn(
   }> | null>(null);
   const anyOnline = machines.some((machine) => machine.online);
 
-  // An attempt ends when the grant it waited for lands (from this page, the callback page or another device).
+  // An attempt ends when its connected credential lands (from this page, the callback page or another device).
   React.useEffect(() => {
     if (
       local.kind !== 'idle' &&
