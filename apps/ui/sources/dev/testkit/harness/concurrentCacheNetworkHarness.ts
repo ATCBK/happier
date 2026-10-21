@@ -8,6 +8,7 @@ import { loadSyncSingletonForTests } from './syncSingletonLoader';
 import { seedPersistedHomeProfilesForTests } from '../fixtures/persistedHomeProfiles';
 import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
 import { createEmptyAccountBootstrapHttpResponse } from '../fixtures/accountBootstrapHttpBoundary';
+import { createSessionReadBatchFetchBoundary } from './sessionReadBatchHttpBoundary';
 
 type SessionRow = ReturnType<typeof createPlainSessionCurrentProjectionRecordFixture>;
 type MachineRow = ReturnType<typeof createPlainMachineRowFixture>;
@@ -61,9 +62,8 @@ export async function createConcurrentCacheNetworkHarness(suite: string) {
             activeTargetKind: 'group', activeTargetId: suite,
         }));
     }
-    const serve: HttpResponder = async (input, init) => {
+    const respond: HttpResponder = async (input, init) => {
         const url = new URL(String(input));
-        httpRequests.push({ url, init });
         if (responder) {
             const answer = await responder(input, init);
             if (answer) return answer;
@@ -100,6 +100,11 @@ export async function createConcurrentCacheNetworkHarness(suite: string) {
             return createEmptyAccountBootstrapHttpResponse(url.pathname, init);
         }
         return null;
+    };
+    const sessionReads = createSessionReadBatchFetchBoundary(respond);
+    const serve: HttpResponder = async (input, init) => {
+        httpRequests.push({ url: new URL(String(input)), init });
+        return sessionReads(input, init);
     };
     async function cleanup() {
         readGate?.release(); readGate = null;

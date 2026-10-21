@@ -1,6 +1,7 @@
 import { SessionReadBatchRequestV1Schema } from '@happier-dev/protocol/sessions/read/sessionReadBatchV1';
 import { buildSessionMessagesPath } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
 import type { ServedHomeRequest } from './actionHomesHttpHarness';
+import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
 
 /** HTTP fixture adapter: single and batch transports use the same external Session facts. */
 export function createSessionReadBatchHttpBoundary(route: (request: ServedHomeRequest) => Response | undefined | Promise<Response | undefined>) {
@@ -16,7 +17,9 @@ export function createSessionReadBatchHttpBoundary(route: (request: ServedHomeRe
                 const component = { ...request, path: url.pathname, url, method: 'GET', body: undefined };
                 componentRequests.push(component);
                 const response = await route(component) ?? Response.json({ error: 'not_found' }, { status: 404 });
-                return { status: response.status, body: await response.json() };
+                // A malformed external fixture stays malformed for the real
+                // component parser; it must not throw away sibling outcomes.
+                return { status: response.status, body: await response.json().catch(() => null) };
             };
             const results = await Promise.all(input.sessionIds.map(async sessionId => {
                 const detail = input.includeSnapshot ? await read(`/v2/sessions/${encodeURIComponent(sessionId)}${input.accessProjectionVersion === 1 ? '?accessProjectionVersion=1' : ''}`) : undefined;
@@ -27,5 +30,23 @@ export function createSessionReadBatchHttpBoundary(route: (request: ServedHomeRe
             }));
             return Response.json({ results });
         },
+    };
+}
+
+/** Keep existing external per-Session facts beneath the current batch wire. */
+export function createSessionReadBatchFetchBoundary<TResult extends Response | null | undefined>(
+    request: (...args: Parameters<RuntimeFetch>) => Promise<TResult>,
+): (...args: Parameters<RuntimeFetch>) => Promise<TResult | Response> {
+    return async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname !== '/v2/sessions/read-batch' || init?.method !== 'POST') return request(input, init);
+        const boundary = createSessionReadBatchHttpBoundary(async component => {
+            if (component.path === '/v2/sessions/read-batch') return undefined;
+            return await request(component.url.href, { ...init, method: component.method, headers: component.headers,
+                signal: component.signal, body: undefined }) ?? undefined;
+        });
+        return (await boundary.handle({ home: url.origin, accountId: null, url, path: url.pathname,
+            method: init.method, headers: new Headers(init.headers), signal: init.signal,
+            body: init.body ? JSON.parse(String(init.body)) : undefined }))!;
     };
 }

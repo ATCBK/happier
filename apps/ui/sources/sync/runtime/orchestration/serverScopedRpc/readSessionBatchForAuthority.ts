@@ -14,6 +14,11 @@ export class SessionPartsHttpError extends Error {
     }
 }
 
+/** A response arrived, but cannot supply the exact Session parts requested. */
+export class SessionPartsInvalidResponseError extends Error {
+    constructor() { super('Invalid Session batch response'); }
+}
+
 export type SessionPartsReadOptions = Readonly<{
     request: (path: string, init: RequestInit) => Promise<Response>;
     readTransport?: CapturedServerReadTransport;
@@ -68,7 +73,9 @@ export async function readSessionParts(params: SessionPartsReadOptions): Promise
                 const consume = async (response: Response) => {
                     const payload: unknown = await response.json().catch(() => null);
                     if (!response.ok) throw new SessionPartsHttpError(response.status, payload);
-                    return SessionReadBatchResponseV1Schema.parse(payload);
+                    const parsed = SessionReadBatchResponseV1Schema.safeParse(payload);
+                    if (!parsed.success) throw new SessionPartsInvalidResponseError();
+                    return parsed.data;
                 };
                 const body = transport
                     ? await transport.read('/v2/sessions/read-batch', init, params.retry ? { retry: params.retry } : undefined, consume)
@@ -79,11 +86,11 @@ export async function readSessionParts(params: SessionPartsReadOptions): Promise
                         || (params.includeSnapshot && !row.detail)
                         || (includeTurns && row.detail?.status === 200 && !row.turns)
                         || (params.includeMessages && (!params.includeSnapshot || row.detail?.status === 200) && !row.messages)) {
-                        throw new Error('Invalid Session batch response');
+                        throw new SessionPartsInvalidResponseError();
                     }
                     result.set(row.sessionId, row);
                 }
-                if (expected.size) throw new Error('Incomplete Session batch response');
+                if (expected.size) throw new SessionPartsInvalidResponseError();
             }
             return result;
         }, { scope, signal: params.signal, fresh: params.fresh || !transport });

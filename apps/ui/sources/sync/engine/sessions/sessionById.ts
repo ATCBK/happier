@@ -22,6 +22,7 @@ import {
   isTerminalAuthError,
 } from '@/sync/runtime/connectivity/authErrors';
 import { isTransientConnectivityError, RetryableServerResponseError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
+import { SessionPartsInvalidResponseError } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionBatchForAuthority';
 
 import {
   parseDecryptedSessionMetadata,
@@ -362,6 +363,9 @@ export async function fetchAndApplySessionById(params: Readonly<{
     if (isTerminalAuthError(err)) {
       throw err;
     }
+    if (err instanceof SessionPartsInvalidResponseError) {
+      return { ok: false, session: null, errorCode: 'invalid_response' };
+    }
     params.log.log(`[sessionById] Failed to fetch session ${sessionId}: ${err instanceof Error ? err.message : 'unknown error'}`);
     return { ok: false, session: null, errorCode: isTransientConnectivityError(err) ? 'network_error' : 'request_failed' };
   }
@@ -375,6 +379,11 @@ export async function fetchAndApplySessionById(params: Readonly<{
     }
     if (isAuthenticationResponseStatus(responseStatus)) {
       throw createNotAuthenticatedError(responseStatus);
+    }
+    // A transient detail refusal is not a legacy-route negotiation witness.
+    // In particular, a structured batch refusal must not re-admit a retained list row.
+    if (responseStatus === 503) {
+      return { ok: false, session: null, errorCode: 'http_error', httpStatus: responseStatus };
     }
     if (responseStatus === 404) {
       if (looksLikeCurrentV2SessionNotFound404(body)) {

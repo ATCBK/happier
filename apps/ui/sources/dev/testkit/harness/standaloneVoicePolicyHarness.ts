@@ -7,6 +7,7 @@ import { installVitestRnShim } from '@/dev/vitestRnShim';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from './serverAccountConnectionHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '../fixtures/accountEncryptionCurrentness';
 import { createSessionFixture } from '../fixtures/sessionFixtures';
+import { createSessionReadBatchFetchBoundary } from './sessionReadBatchHttpBoundary';
 import type { SettingsWriteDelta } from '@/sync/domains/settings/settings';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { installLocalStorageMock, installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
@@ -129,7 +130,7 @@ export async function createStandaloneVoicePolicyHarness(params: Readonly<{
         const connection = await restoreServerAccountForTest({
             serverUrl: `https://voice-policy-${params.mode}.example.test`,
             activation: 'switch', credentialScope: 'restored-home',
-            request: async (url, init) => {
+            request: createSessionReadBatchFetchBoundary(async (url, init) => {
                 const path = new URL(String(url)).pathname;
                 if (path === '/health') return Response.json({ status: 'ok' });
                 if (path === '/v2/cursor') return Response.json(CurrentCursorResponseSchema.parse({ cursor: 0, changesFloor: 0 }));
@@ -146,7 +147,7 @@ export async function createStandaloneVoicePolicyHarness(params: Readonly<{
                 const additionalResponse = await params.handleRequest?.(`${path}${new URL(String(url)).search}`, init);
                 if (additionalResponse) return additionalResponse;
                 return new Response('{}', { status: 404 });
-            },
+            }),
         });
         teardownConnection = connection.dispose;
         const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');

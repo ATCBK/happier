@@ -17,7 +17,7 @@ import { Encryption } from '@/sync/encryption/encryption';
 import { SessionEncryption } from '@/sync/encryption/sessionEncryption';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { storage } from '@/sync/domains/state/storage';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionFixture, createPlainSessionByIdResponseFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { voiceHooks } from '@/voice/context/voiceHooks';
 import { createCapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
@@ -2643,6 +2643,47 @@ describe('fetchAndApplySessionById', () => {
 
     expect(result.ok).toBe(true);
     expect(request.mock.calls.map((call) => call[0])).toEqual(['/v2/sessions/s_shell_only']);
+  });
+
+  it.each(['batch', 'opaque'] as const)('does not replace a %s transient detail refusal with a stale legacy listing', async transportKind => {
+    const session = createSessionFixture({ id: 'unavailable', encryptionMode: 'plain' });
+    const row = createPlainSessionByIdResponseFixture(session).session;
+    const reads: string[] = [];
+    const request = async (path: string, _init: RequestInit) => {
+      reads.push(path);
+      if (path === '/v2/sessions/unavailable') return transportKind === 'batch'
+        ? Response.json({ error: 'session_read_unavailable' }, { status: 503 })
+        : new Response(null, { status: 503 });
+      return Response.json({ sessions: [row], nextCursor: null, hasNext: false });
+    };
+    const applySessions = vi.fn();
+    const result = await fetchAndApplySessionById({
+      sessionId: session.id, credentials: { token: 't' }, accountCurrentness: PLAIN_ACCOUNT_CURRENTNESS,
+      encryption: PLAINTEXT_ACCOUNT_SESSION_ENCRYPTION, sessionDataKeys: new Map(), request,
+      ...(transportKind === 'batch' ? { readTransport: capturedSessionHttp(request) } : {}),
+      contentDemand: 'list-projection', includeTurnsProjection: false, applySessions, log: { log() {} },
+    });
+    expect(result).toMatchObject({ ok: false, session: null, errorCode: 'http_error', httpStatus: 503 });
+    expect(reads).toEqual(['/v2/sessions/unavailable']);
+    expect(applySessions).not.toHaveBeenCalled();
+  });
+
+  it('classifies a malformed admitted batch as an invalid response without accepting a legacy list row', async () => {
+    const reads: string[] = [];
+    const request = async (path: string, _init: RequestInit) => {
+      reads.push(path);
+      if (path === '/v2/sessions/malformed') return Response.json({});
+      return Response.json({ sessions: [createPlainSessionByIdResponseFixture(
+        createSessionFixture({ id: 'malformed', encryptionMode: 'plain' })).session], nextCursor: null, hasNext: false });
+    };
+    const applySessions = vi.fn();
+    const result = await fetchAndApplySessionById({ sessionId: 'malformed', credentials: { token: 't' },
+      accountCurrentness: PLAIN_ACCOUNT_CURRENTNESS, encryption: PLAINTEXT_ACCOUNT_SESSION_ENCRYPTION,
+      sessionDataKeys: new Map(), request, readTransport: capturedSessionHttp(request),
+      contentDemand: 'list-projection', includeTurnsProjection: false, applySessions, log: { log() {} } });
+    expect(result).toMatchObject({ ok: false, session: null, errorCode: 'invalid_response' });
+    expect(reads).toEqual(['/v2/sessions/malformed']);
+    expect(applySessions).not.toHaveBeenCalled();
   });
 
   it('uses browser-CORS-safe headers for targeted session detail reads', async () => {

@@ -81,7 +81,8 @@ export async function createOpenAiVoiceRuntimeEnvironment(options: Readonly<{
   const { PLUGIN_MANIFEST: OPENAI_SOURCE_MANIFEST } = await import('../../../../../../packages/plugins/openai/src/manifest');
   const { activate: activateOpenAiVoice } = await import('../../../../../../packages/plugins/openai/src/ui/voice/runtime');
   const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
-  const { createMachineFixture, createPlainMachineRowFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+  const { createMachineFixture, createPlainMachineRowFixture, createMachineReadBatchResponseFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+  const { createSessionReadBatchFetchBoundary } = await import('@/dev/testkit/harness/sessionReadBatchHttpBoundary');
   const { createSessionMetadataHttpBoundary } = await import('@/dev/testkit/harness/sessionMetadataHttpBoundary');
   const { answerVoiceRealtimePreparationHttpRequest } = await import('@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary');
   const { createConnectedPurposeCatalogHttpBoundary } = await import('@/dev/testkit/harness/connectedAccountCatalogBoundary');
@@ -507,13 +508,15 @@ export async function createOpenAiVoiceRuntimeEnvironment(options: Readonly<{
       transcriptMessageUrl(OPENAI_HISTORY_SESSION_ID),
     ]);
     let nextTranscriptSeq = 0;
-    homeRequest = async (input: URL | RequestInfo, init?: RequestInit) => {
+    homeRequest = createSessionReadBatchFetchBoundary(async (input: URL | RequestInfo, init?: RequestInit) => {
       const url = String(input);
       if (new URL(url).pathname === '/v1/account/profile') return Response.json(accountProfile);
       if (new URL(url).pathname === '/v2/account/settings') return Response.json({ version: accountSettingsVersion, content: { t: 'plain',
         v: normalizeAccountSettingsForServerStorage({ raw: persistedAccountSettings, mode: 'plain',
           settingsSecretsKey: null, normalizeServerRaw: normalizeVoiceSettingsServerDelta }).value } });
       if (new URL(url).pathname === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: OPENAI_CREDENTIAL_MACHINE_ID, accountId: 'openai-composed-account' })]);
+      if (new URL(url).pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+        id => id === OPENAI_CREDENTIAL_MACHINE_ID ? createPlainMachineRowFixture({ id, accountId: 'openai-composed-account' }) : null);
       if (new URL(url).pathname === `/v1/machines/${OPENAI_CREDENTIAL_MACHINE_ID}`) return Response.json({ machine: createPlainMachineRowFixture({ id: OPENAI_CREDENTIAL_MACHINE_ID, accountId: 'openai-composed-account' }) });
       if (/^\/v[123]\/sessions\/[^/]+\/messages$/.test(new URL(url).pathname) && (init?.method ?? 'GET') === 'GET') return Response.json({ messages: [], hasMore: false });
       if (new URL(url).pathname === '/v1/sessions' && init?.method === 'POST') return historySessionPost(init);
@@ -532,7 +535,7 @@ export async function createOpenAiVoiceRuntimeEnvironment(options: Readonly<{
       const preparation = answerVoiceRealtimePreparationHttpRequest(input, persistedAccountSettings);
       if (preparation) return preparation;
       return null;
-    };
+    });
     transcriptRequest = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
       const homeResponse = await homeRequest(input, init);
       if (homeResponse) return homeResponse;

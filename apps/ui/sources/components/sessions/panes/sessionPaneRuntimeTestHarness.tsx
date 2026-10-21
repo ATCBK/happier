@@ -25,6 +25,7 @@ import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountS
 import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import {
     SESSION_HUMAN_PRESENCE_VISIBLE_REPLACE_EVENT,
     SessionHumanPresenceVisibleReplaceV1Schema,
@@ -117,6 +118,28 @@ export function installSessionPaneRuntimeTestHarness(params: Readonly<{
         const realmIdentityId = realm.serverIdentityId ?? serverIdentityId;
         const authoringMemory = createAuthoringMemoryHttpBoundary();
         const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => realm.accountId, encryptionMode: 'plain' });
+        const readSession = (path: string): Response | undefined => {
+            const turns = /^\/v1\/sessions\/([^/]+)\/turns$/.exec(path);
+            if (turns && decodeURIComponent(turns[1]!) === sessionId) {
+                // The registered Home Session exists before a cold client has hydrated it.
+                const session = createSessionFixture({ id: sessionId, serverId: account.serverId });
+                return Response.json(buildSessionTurnsProjectionV1({
+                    sessionId: session.id, updatedAt: session.updatedAt, turns: [],
+                }));
+            }
+            const exact = /^\/v2\/sessions\/([^/]+)$/.exec(path);
+            if (!exact) return undefined;
+            const session = storage.getState().sessions[decodeURIComponent(exact[1]!)];
+            if (!session || !areServerProfileIdentifiersEquivalent(session.serverId, account?.serverId)) return Response.json(
+                V2SessionByIdNotFoundSchema.parse({ error: 'Session not found' }), { status: 404 },
+            );
+            return Response.json(createPlainSessionByIdResponseFixture(session));
+        };
+        const sessionBoundary = createSessionReadBatchHttpBoundary(async request => {
+            if (request.path === '/v2/sessions/read-batch') return undefined;
+            return await params.request?.(request.url, { method: request.method, headers: request.headers,
+                signal: request.signal }) ?? readSession(request.path);
+        });
         account = await restoreServerAccountForTest({
             serverUrl: realm.serverUrl ?? 'https://session-pane.test',
             serverIdentityId: realmIdentityId,
@@ -147,25 +170,15 @@ export function installSessionPaneRuntimeTestHarness(params: Readonly<{
                 const bootstrapResponse = createEmptyAccountBootstrapHttpResponse(path, init);
                 if (bootstrapResponse) return bootstrapResponse;
                 if ((init?.method ?? 'GET') === 'GET' && path === AUTHORING_MEMORY_ROUTE_V1) return json(AuthoringMemoryListResponseV1Schema.parse({ rows: [] }));
-                const sessionTurnsRead = /^\/v1\/sessions\/([^/]+)\/turns$/.exec(path);
-                if ((init?.method ?? 'GET') === 'GET' && sessionTurnsRead) {
-                    const requestedSessionId = decodeURIComponent(sessionTurnsRead[1]!);
-                    // The Home's registered fixture exists before a cold client has hydrated it.
-                    if (requestedSessionId === sessionId) {
-                        const session = createSessionFixture({ id: sessionId, serverId: account.serverId });
-                        return json(buildSessionTurnsProjectionV1({
-                            sessionId: session.id, updatedAt: session.updatedAt, turns: [],
-                        }));
-                    }
+                if (path === '/v2/sessions/read-batch' && init?.method === 'POST') {
+                    return await sessionBoundary.handle({ home: realmIdentityId, accountId: realm.accountId,
+                        url: new URL(String(url)), path, method: init.method, headers: new Headers(init.headers),
+                        signal: init.signal, body: init.body ? JSON.parse(String(init.body)) : undefined })
+                        ?? new Response('{}', { status: 404 });
                 }
-                const sessionRead = /^\/v2\/sessions\/([^/]+)$/.exec(path);
-                if ((init?.method ?? 'GET') === 'GET' && sessionRead) {
-                    const requestedSessionId = decodeURIComponent(sessionRead[1]!);
-                    const session = storage.getState().sessions[requestedSessionId];
-                    if (!session || !areServerProfileIdentifiersEquivalent(session.serverId, account?.serverId)) return Response.json(
-                        V2SessionByIdNotFoundSchema.parse({ error: 'Session not found' }), { status: 404 },
-                    );
-                    return json(createPlainSessionByIdResponseFixture(session));
+                if ((init?.method ?? 'GET') === 'GET') {
+                    const sessionResponse = readSession(path);
+                    if (sessionResponse) return sessionResponse;
                 }
                 if ((init?.method ?? 'GET') === 'GET' && path.startsWith('/v1/machines/')) {
                     const machineId = decodeURIComponent(path.slice('/v1/machines/'.length));
