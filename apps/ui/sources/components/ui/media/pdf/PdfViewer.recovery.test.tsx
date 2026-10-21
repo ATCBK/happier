@@ -12,6 +12,7 @@ import { createSessionFileNativeTransferBoundary } from '@/components/sessions/f
 import { createSessionFilesViewFixture, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
 import { transferMachine } from '@/components/sessions/files/sessionFileTransferTestkit';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPdfSliceAssembler } from './pdfNativeBridge';
 import { PdfViewer as NativePdfViewer } from './PdfViewer';
 import { PdfViewer as WebPdfViewer } from './PdfViewer.web';
@@ -112,7 +113,7 @@ describe('PDF rendered recovery', () => {
             execute: (input, { target }) => {
                 if (target.kind !== 'machine') throw new Error('Expected the preview Machine target');
                 return transfer.rpc({ targetId: target.machineId,
-                    method: getActionSpec('daemon.filesystem.download').bindings!.rpcMethod!, payload: { input } });
+                    method: getActionSpec('daemon.filesystem.download').bindings!.rpcMethod!, payload: input });
             },
         });
         const machine = transferMachine({ id: 'm1', storageMode: 'plain', installationId: boundary.machine.installationId,
@@ -125,6 +126,8 @@ describe('PDF rendered recovery', () => {
             machineCarrierOrigin: transfer.origin, rpc: transfer.rpc, request: async (url, init) => {
                 const parsed = new URL(String(url));
                 if (parsed.pathname === '/v1/machines') return Response.json([row]);
+                if (parsed.pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                    id => id === row.id ? row : null);
                 if (parsed.pathname === '/v1/machines/m1') return Response.json({ machine: row });
                 if (parsed.pathname.startsWith('/v1/actions/')) {
                     const response = await boundary.handle(parsed, init);

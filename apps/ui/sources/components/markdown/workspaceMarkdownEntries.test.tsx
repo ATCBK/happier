@@ -8,6 +8,7 @@ import { createSessionFileNativeTransferBoundary } from '@/components/sessions/f
 import { createSessionFilesViewFixture, prepareSessionFilesViewTestkit, type FileViewRpcRequest } from '@/components/sessions/files/views/sessionFilesViewTestkit';
 import { transferMachine } from '@/components/sessions/files/sessionFileTransferTestkit';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -62,7 +63,7 @@ describe('workspace Markdown entry points', () => {
             createExternalActionAccountHttpBoundary({ serverUrl, serverIdentityId, accountId: 'alice', machineId: 'm1', actionId, tokenEpoch: 0,
                 execute: (input, { target }) => {
                     if (target.kind !== 'machine') throw new Error('The Markdown fixture requires its admitted Machine target');
-                    return rpc({ targetId: target.machineId, method: getActionSpec(actionId).bindings!.rpcMethod!, payload: { input } });
+                    return rpc({ targetId: target.machineId, method: getActionSpec(actionId).bindings!.rpcMethod!, payload: input });
                 },
             })));
         const machine = transferMachine({ id: 'm1', storageMode: 'plain', installationId: boundaries[0]!.machine.installationId,
@@ -78,6 +79,8 @@ describe('workspace Markdown entry points', () => {
                     id: 'markdown-checkout', serverId: serverIdentityId, machineId: 'm1', rootPath: '/repo', createdAtMs: 1,
                 }] }));
                 if (parsed.pathname === '/v1/machines') return Response.json([row]);
+                if (parsed.pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                    id => id === row.id ? row : null);
                 if (parsed.pathname === '/v1/machines/m1') return Response.json({ machine: row });
                 if (parsed.pathname.startsWith('/v1/actions/')) {
                     for (const boundary of boundaries) {
@@ -106,8 +109,8 @@ describe('workspace Markdown entry points', () => {
             : <CodeReadmeCard scope={fixture.scope} path="docs/README.md" />);
         await waitForImage(screen, 2);
         expect(transfer.prepares.map(request => request.payload)).toEqual(expect.arrayContaining([
-            expect.objectContaining({ input: expect.objectContaining({ rootPath: '/repo', path: '/repo/docs/shot.png' }) }),
-            expect.objectContaining({ input: expect.objectContaining({ rootPath: '/repo', path: '/repo/docs/second.png' }) }),
+            expect.objectContaining({ rootPath: '/repo', path: '/repo/docs/shot.png' }),
+            expect.objectContaining({ rootPath: '/repo', path: '/repo/docs/second.png' }),
         ]));
         expect(screen.findAllByTestId('markdown-remote-images').length).toBeGreaterThan(0);
         expect(fixture.storage.getState().localSettings.remoteImageConsentV1).toEqual([]);
@@ -139,7 +142,7 @@ describe('workspace Markdown entry points', () => {
         </PluginUiPresentationHostProviderInternal>);
         await waitForImage(screen);
         expect(transfer.prepares.map(request => request.payload)).toEqual(expect.arrayContaining([
-            expect.objectContaining({ input: expect.objectContaining({ rootPath: '/repo', path: '/repo/docs/shot.png' }) }),
+            expect.objectContaining({ rootPath: '/repo', path: '/repo/docs/shot.png' }),
         ]));
         expect(screen.findAllByType('NativeImage').some(image => image.props.source.uri.startsWith('file:///markdown-preview/'))).toBe(true);
         const image = screen.findAllByType('NativeImage').find(node => node.props.source.uri.startsWith('file:///markdown-preview/'))!;
