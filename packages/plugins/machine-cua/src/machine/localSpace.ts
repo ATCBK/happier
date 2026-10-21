@@ -70,8 +70,8 @@ export function createCuaLocalSpace(native: CuaNativeClient) {
             // null image for VMs; the registry row then names the image the Space
             // was created from.
             const inspected = await sandbox.inspect(resource, signal);
-            const actualImage = inspected.imageId ?? parsed.data.spaces[0].image;
-            return inspected.existence === 'present' && actualImage === launch.imageId
+            return inspected.existence === 'present'
+                && (inspected.imageId ?? parsed.data.spaces[0].image) === launch.imageId
                 ? { kind: 'bound', resource }
                 : { kind: 'unknown', recovery: resource };
         },
