@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { RpcError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import tweetnacl from 'tweetnacl';
 import {
   callSocketRpc,
@@ -105,7 +106,8 @@ export async function callSessionRpc(params: CallSessionRpcParams): Promise<unkn
       } });
     });
   } catch (error) {
-    if (isSocketIoAckTimeoutError(error)) throw markRpcRequestDisposition(new Error('RPC call timeout'), 'outcomeUnknown');
+    if (isSocketIoAckTimeoutError(error)) throw markRpcRequestDisposition(
+      new RpcError('RPC call timeout', RPC_ERROR_CODES.OUTCOME_UNKNOWN), 'outcomeUnknown');
     throw readRpcRequestDisposition(error) === null ? markRpcRequestDisposition(error, 'notSent') : error;
   }
 }

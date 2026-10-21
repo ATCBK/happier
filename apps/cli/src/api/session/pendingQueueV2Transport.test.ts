@@ -50,6 +50,25 @@ vi.mock('axios', () => ({
 }));
 
 describe('pendingQueueV2Transport', () => {
+    it('allows Pending admission beyond ten seconds under the containing admission budget', async () => {
+        vi.useFakeTimers();
+        const replyAfterMs = 11_000;
+        // HTTP is the boundary: the Home replies after the former phase-local
+        // cutoff, while Axios still enforces the deadline supplied by its caller.
+        mockPost.mockImplementationOnce((_url: string, _body: unknown, config: { timeout?: number }) => new Promise((resolve, reject) => {
+            const response = setTimeout(() => { clearTimeout(deadline); resolve({ data: { didWrite: true } }); }, replyAfterMs);
+            const deadline = setTimeout(() => { clearTimeout(response); reject(new Error('HTTP admission timeout')); }, config.timeout);
+        }));
+        try {
+            const result = enqueuePendingQueueV2MessageViaHttp({ token: 'token', sessionId: 'session',
+                body: { localId: 'retained-original', content: { t: 'plain', v: { role: 'user' } } } });
+            const observed = result.then(value => ({ value }), error => ({ error }));
+            await vi.advanceTimersByTimeAsync(replyAfterMs);
+            expect(await observed).toMatchObject({ value: { didWrite: true } });
+        } finally {
+            vi.useRealTimers();
+        }
+    });
     it('keeps admission settlement pending beyond the generic ACK deadline and cancels on disposal', async () => {
         vi.useFakeTimers();
         try {

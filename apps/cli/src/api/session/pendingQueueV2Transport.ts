@@ -8,6 +8,7 @@ import { isAuthenticationError } from '@/api/client/httpStatusError';
 import type { ClientToServerEvents, ServerToClientEvents } from '../types';
 import { resolveServerHttpBaseUrl } from '../client/serverHttpBaseUrl';
 import { emitSocketWithAck } from '@/session/transport/shared/socketAck';
+import { resolveSessionMessageAdmissionTimeoutMs } from '@/session/transport/shared/sessionTimeouts';
 import { ACCEPTED_PENDING_SETTLEMENT_EVENT_V1, AcceptedPendingSettlementRequestV1Schema, AcceptedPendingSettlementResponseV1Schema } from '@happier-dev/protocol/sessions/pending/acceptedPendingSettlementV1';
 import { normalizePendingDeliveryBlockedReason } from '@happier-dev/protocol/sessions/messages/pendingDeliveryBlockedReason';
 import { normalizePendingDeliveryStatusV1, parsePendingDeliveryStatusV1 } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
@@ -1068,6 +1069,7 @@ export async function enqueuePendingQueueV2MessageViaHttp(params: {
     token: string;
     sessionId: string;
     body: PendingQueueWriteBody;
+    timeoutMs?: number;
     signal?: AbortSignal;
     resolveAuthorizationHeaders?: ResolvePendingQueueAuthorizationHeaders;
 }): Promise<Readonly<{ didWrite: boolean | null; terminal: boolean; suppressed: boolean; acceptedLocalId?: string }>> {
@@ -1082,6 +1084,7 @@ export async function enqueuePendingExecutionRunMessageViaHttp(params: {
     sessionId: string;
     recipient: SessionPendingExecutionRunMaterializeNextRequestV2['recipient'];
     body: SessionExecutionRunPendingEnqueueRequestV1;
+    timeoutMs?: number;
     signal?: AbortSignal;
     resolveAuthorizationHeaders?: ResolvePendingQueueAuthorizationHeaders;
 }): Promise<Readonly<{ didWrite: boolean | null; terminal: boolean; suppressed: boolean; acceptedLocalId?: string }>> {
@@ -1097,6 +1100,7 @@ async function postPendingQueueMessageViaHttp(params: {
     token: string;
     path: string;
     body: PendingQueueWriteBody | SessionExecutionRunPendingEnqueueRequestV1;
+    timeoutMs?: number;
     signal?: AbortSignal;
     resolveAuthorizationHeaders?: ResolvePendingQueueAuthorizationHeaders;
 }): Promise<Readonly<{ didWrite: boolean | null; terminal: boolean; suppressed: boolean; acceptedLocalId?: string }>> {
@@ -1116,7 +1120,9 @@ async function postPendingQueueMessageViaHttp(params: {
                         ...authorizationHeaders,
                         'Content-Type': 'application/json',
                     },
-                    timeout: 10_000,
+                    // Pending custody uses its containing admission budget;
+                    // this HTTP phase must not impose an earlier cutoff.
+                    timeout: params.timeoutMs ?? resolveSessionMessageAdmissionTimeoutMs(),
                     ...(params.signal ? { signal: params.signal } : {}),
                 },
             );

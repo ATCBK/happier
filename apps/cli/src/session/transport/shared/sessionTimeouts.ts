@@ -41,10 +41,10 @@ export function resolveSessionControlStopTimeoutMs(): number {
  * how long admission waits, and lowering it must not truncate admission, so
  * this is its own boundary with its own override.
  *
- * When it fires the message is not in custody: the caller reports that
- * truthfully (the Agent transition returns `input_admission_failed`, whose
- * recovery is an idempotent re-admission by the same `localId`) rather than
- * assuming either outcome.
+ * Expiry means custody was not confirmed; the write may already have committed.
+ * Retain that unknown outcome (the Agent transition returns
+ * `input_admission_failed`) and recover through the same `localId`, rather than
+ * assuming the input was absent or creating a replacement.
  */
 export function resolveSessionMessageAdmissionTimeoutMs(): number {
   return readPositiveIntEnvMs(

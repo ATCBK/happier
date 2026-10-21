@@ -1095,6 +1095,7 @@ describe('callSessionRpc (plaintext sessions)', () => {
     const error = await errorPromise;
     expect(error).toMatchObject({ message: 'RPC call timeout' });
     expect(readSessionRpcRequestDisposition(error)).toBe('outcomeUnknown');
+    expect(readRpcErrorCode(error)).toBe(RPC_ERROR_CODES.OUTCOME_UNKNOWN);
     expect(nextSocket?.disconnectCalls).toBe(1);
     expect(nextSocket?.closeCalls).toBe(1);
   });

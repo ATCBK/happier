@@ -1759,6 +1759,7 @@ export async function sendSessionMessage(
       }
       enqueueResult = await enqueuePendingExecutionRunMessageViaHttp({
         token: params.credentials.token, sessionId, recipient: executionRunRecipient,
+        timeoutMs: params.timeoutMs,
         body: { v: 1, localId, targetMachineId, content, messageRole: 'user', requestedAction,
           ...(replyAdmission ? { reply: replyAdmission } : {}) },
         ...(params.resolveAuthorizationHeaders
@@ -1775,6 +1776,7 @@ export async function sendSessionMessage(
       enqueueResult = await enqueuePendingQueueV2MessageViaHttp({
         token: params.credentials.token,
         sessionId,
+        timeoutMs: params.timeoutMs,
         body: content.t === 'encrypted'
           ? {
               localId,

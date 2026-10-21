@@ -18,6 +18,41 @@ import {
 } from '@happier-dev/protocol';
 
 describe('sendSessionMessage', () => {
+    it('keeps a slow Pending acknowledgement within the caller admission budget', async () => {
+        vi.doUnmock('@/api/session/pendingQueueV2Transport');
+        const { createSessionRecordFixture, createAccountEncryptionCurrentnessFixture } = await import('@/testkit/backends/sessionFixtures');
+        const { runWithServerHttpBaseUrl } = await import('@/api/client/serverHttpBaseUrl');
+        const { sendSessionMessage } = await import('./sendSessionMessage');
+        const sessionId = 'c111111111111111111111111';
+        const serverUrl = 'https://slow-admission.test';
+        const session = createSessionRecordFixture({ id: sessionId, active: true, encryptionMode: 'plain', metadataLayoutVersion: 1,
+            metadata: JSON.stringify({ v: 1 }), share: null,
+            ownerMetadata: { t: 'plain', v: { v: 1, workspace: { path: '/repo', machineId: 'machine-session' } } } });
+        vi.spyOn(axios, 'get').mockImplementation(async url => {
+            if (String(url).endsWith('/v1/account/encryption/currentness')) return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
+            if (String(url) === `${serverUrl}/v2/sessions/${sessionId}`) return { status: 200, data: { session } };
+            throw new Error(`Unexpected Home read: ${String(url)}`);
+        });
+        let postStarted!: () => void;
+        const started = new Promise<void>(resolve => { postStarted = resolve; });
+        vi.spyOn(axios, 'post').mockImplementation((_url, _body, config) => new Promise((resolve, reject) => {
+            const response = setTimeout(() => { clearTimeout(deadline); resolve({ status: 200, data: { didWrite: true } }); }, 35_000);
+            const deadline = setTimeout(() => { clearTimeout(response); reject(new Error('HTTP admission timeout')); }, config?.timeout);
+            postStarted();
+        }));
+        vi.useFakeTimers();
+        try {
+            const result = runWithServerHttpBaseUrl(serverUrl, () => sendSessionMessage({
+                credentials: { token: 'token', encryption: null }, idOrPrefix: sessionId,
+                message: 'Retained original', localId: 'slow-original', wait: false, timeoutMs: 45_000,
+            }));
+            await started;
+            await vi.advanceTimersByTimeAsync(35_000);
+            expect(await result).toMatchObject({ ok: true, localId: 'slow-original', waited: false });
+        } finally {
+            vi.useRealTimers();
+        }
+    });
     it.each([false, true])('leaves a file review note for the next turn without resuming or materializing (active=%s)', async active => {
         vi.doUnmock('@/api/session/pendingQueueV2Transport');
         const { createSessionRecordFixture, createAccountEncryptionCurrentnessFixture } = await import('@/testkit/backends/sessionFixtures');
@@ -2185,6 +2220,7 @@ describe('sendSessionMessage', () => {
         expect(enqueuePendingQueueV2MessageViaHttp).toHaveBeenCalledWith({
             token: 'token',
             sessionId: 'sess-1',
+            timeoutMs: 1,
             body: expect.objectContaining({
                 localId: ' connected-service-continuation:test ',
                 messageRole: 'user',
