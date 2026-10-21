@@ -518,10 +518,10 @@ it('reads the target Account mode for approval preview without using focused Acc
     };
     runtimeFetchSpy.mockClear();
     const forgedHook = await renderHook(() => useConnectTerminal({ approvalRequest: forgedRequest }), { wrapper: focusedAccount });
+    // The explicit destination is kept for a fresh sign-in; no saved bearer is sent anywhere.
     await vi.waitFor(() => expect(forgedHook.getCurrent().approvalDetails).toEqual({
-        kind: 'ready', homeUrl: descriptor.canonicalServerUrl, storageMode: 'plain',
+        kind: 'needs_sign_in', homeUrl: forgedUrl,
     }));
-    expect(runtimeFetchSpy.mock.calls.filter((args) => String(args[0]).endsWith('/v1/account/encryption/currentness'))
-        .map((args) => String(args[0]))).toEqual([`${descriptor.canonicalServerUrl}/v1/account/encryption/currentness`]);
+    expect(runtimeFetchSpy.mock.calls.filter((args) => String(args[0]).endsWith('/v1/account/encryption/currentness'))).toEqual([]);
     await forgedHook.unmount();
 });

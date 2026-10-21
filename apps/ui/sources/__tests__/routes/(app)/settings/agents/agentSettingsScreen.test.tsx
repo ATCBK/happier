@@ -672,8 +672,8 @@ vi.mock('@/sync/domains/machines/administration/useTargetSelection', () => ({
     useMachineAdministrationTargetPickerRows: () => administrationSelection.module.useMachineAdministrationTargetPickerRows(),
     resolveFreshMachineAdministrationExecutionTarget: (target: Parameters<typeof administrationSelection.module.resolveFreshMachineAdministrationExecutionTarget>[0]) =>
         administrationSelection.module.resolveFreshMachineAdministrationExecutionTarget(target),
-    useMachineAdministrationTargetSelection: (key: string) => {
-        const selection = administrationSelection.module.useMachineAdministrationTargetSelection(key);
+    useMachineAdministrationTargetSelection: (key: string, options?: { initialTarget?: { serverIdentityId: string; machineId: string } | null }) => {
+        const selection = administrationSelection.module.useMachineAdministrationTargetSelection(key, options);
         return {
             ...selection,
             selectedTargetServerMatchesActiveAccount: selection.selectedTarget?.serverIdentityId
@@ -1980,13 +1980,18 @@ describe('PluginAgentSettingsScreen', () => {
     });
 
     it('addresses the recovery handoff to its exact portable target', async () => {
+        // A route handoff admits only a canonical `srv_…` server identity.
+        administrationSelection.controller.setMachines([...administrationMachines, {
+            machineId: 'm2', displayName: 'Machine Two', homeDir: '/Users/m2', daemonStateVersion: 0,
+            serverIdentityId: 'srv_portable', serverId: 'srv_portable',
+        }]);
         mockRecoveryMachineId = 'm2';
-        mockRecoveryServerIdentityId = 'server1';
+        mockRecoveryServerIdentityId = 'srv_portable';
         mockInstallIntent = 'update';
         await renderPluginAgentSettingsScreen();
         await flushHookEffects();
-        expect(administrationSelection.controller.selectedTargets).toEqual([{ serverIdentityId: 'server1', machineId: 'm2' }]);
-        expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('m2', expect.objectContaining({ serverId: 'server1' }));
+        expect(administrationSelection.controller.selectedTargets).toEqual([{ serverIdentityId: 'srv_portable', machineId: 'm2' }]);
+        expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('m2', expect.objectContaining({ serverId: 'srv_portable' }));
     });
 
     it('rejects a device-local profile id in the recovery handoff as non-portable selection authority', async () => {
@@ -2160,7 +2165,11 @@ describe('PluginAgentSettingsScreen', () => {
             sessionDefaultPermissionModeByTargetKey: { [buildCanonicalBackendTargetKey('codex')]: 'yolo' },
         })));
         expect(findAgentHeader(screen)).toBeTruthy();
-        expect(machineContributionRegistryProjectionDescribeMock).not.toHaveBeenCalled();
+        // No selected-target projection is read; the Account-wide Machine inventory
+        // (AgentMachinesSection) reads each listed Machine's own projection.
+        for (const [machineId] of machineContributionRegistryProjectionDescribeMock.mock.calls) {
+            expect(administrationMachines.map(row => row.machineId)).toContain(machineId);
+        }
     });
 
     it('shows account-level settings immediately while the machine projection is still loading', async () => {

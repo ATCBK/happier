@@ -10,6 +10,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 const testState = vi.hoisted(() => ({
     alert: vi.fn(),
+    confirm: vi.fn(async () => true),
     invoke: vi.fn(),
     online: true,
     projection: null as unknown,
@@ -19,7 +20,7 @@ const routerParamsRef = vi.hoisted(() => ({ current: { id: 'machine-1' } as Reco
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock({
-        spies: { alert: testState.alert },
+        spies: { alert: testState.alert, confirm: testState.confirm },
     }).module;
 });
 
@@ -85,6 +86,8 @@ describe('machine managed installables projection', () => {
     beforeEach(async () => {
 
         testState.alert.mockReset();
+        testState.confirm.mockReset();
+        testState.confirm.mockResolvedValue(true);
         testState.invoke.mockReset();
         testState.online = true;
         testState.invoke.mockResolvedValue({
@@ -178,13 +181,10 @@ describe('machine managed installables projection', () => {
             await act(async () => {
                 screen.pressRowByTitle('common.install');
             });
-            const confirmButtons = testState.alert.mock.calls.find((call) => Array.isArray(call[2]))?.[2];
-            if (!Array.isArray(confirmButtons) || typeof confirmButtons[1]?.onPress !== 'function') {
-                throw new Error('Expected the existing install confirmation action');
-            }
-            // Confirming installs through the front-door `machines.capabilities.install` Action; that path, its Account
-            // scope and the machine RPC are proven in machineDetails.revokeMachine ("installs from the mounted machine row").
-            expect(testState.invoke).not.toHaveBeenCalled();
+            // Install runs through the front-door `machines.capabilities.install` Action, which asks for
+            // its confirmation first and then reaches the machine RPC.
+            await vi.waitFor(() => expect(testState.invoke).toHaveBeenCalled());
+            expect(testState.confirm).toHaveBeenCalledTimes(1);
 
             await screen.unmount();
         });
@@ -225,8 +225,13 @@ describe('machine managed installables projection', () => {
             }
         });
         testState.online = false;
+        // Presence is the heartbeat's grace, so the machine goes offline when its last heartbeat ages out
+        // and the daemon then reports inactive. A late older heartbeat never rewinds newer presence.
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(Date.now() + 120_000);
+        try {
         await act(async () => {
-            machine = { ...machine, active: false, activeAt: Date.now() - 86400000 };
+            machine = { ...machine, active: false };
             home!.storage.getState().applyMachines([machine], true, {
                 sourceServerId: home!.home.id, sourceAccountId: home!.home.accountId,
             });
@@ -237,6 +242,7 @@ describe('machine managed installables projection', () => {
                 expect(screen.findRowByTitle('common.install')?.props.disabled).toBe(true);
             });
 
+            } finally { vi.useRealTimers(); }
             await screen.unmount();
         });
 });

@@ -47,6 +47,7 @@ const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 const { CommandPaletteProvider } = await import('@/components/appShell/commandPalette/CommandPaletteProvider');
 const { useSessionListLayoutChoice } = await import('@/hooks/session/sessionListLayoutIntent');
 const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
 const { default: LegacyRecentSessionsRoute } = await import('../../../../app/(app)/session/recent');
 
 let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | undefined;
@@ -61,6 +62,8 @@ describe('legacy Recent Sessions route', () => {
             sessionListSectionModeV1: 'single', sessionListActiveGroupingV1: 'project',
         }), sharedEnabled: false });
         replace.mockClear();
+        // App boot prepares browser draft storage before any route renders the New Session drafts.
+        await prepareSessionDraftPersistenceStorage();
     });
 
     afterEach(async () => {

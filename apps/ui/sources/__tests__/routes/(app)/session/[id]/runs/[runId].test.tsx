@@ -33,6 +33,8 @@ vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).creat
 
 let hydrateReady = true;
 let hydratedServerId: string | undefined;
+// A Run whose tool marker is not in the loaded transcript window offers a route to it instead of rendering it inline.
+let transcriptHoldsToolMarker = true;
 // Observe both released and current run-input ports at the Socket boundary.
 const sendRunSpy = vi.fn();
 const pendingHydrationReads = new Set<() => void>();
@@ -109,7 +111,7 @@ async function applyRouteFixture() {
         machineListStatusByServerId: { [runtime.serverId]: 'idle' },
     });
     if (hydrateReady) {
-        store.getState().applyMessages('session-1', [{ id: 'tool-message-side-1', localId: null, createdAt: 1, seq: 1,
+        if (transcriptHoldsToolMarker) store.getState().applyMessages('session-1', [{ id: 'tool-message-side-1', localId: null, createdAt: 1, seq: 1,
             role: 'agent', isSidechain: false, content: [{ type: 'tool-call', id: 'side_1', name: 'SubAgentRun', description: null,
                 uuid: 'run-marker', parentUUID: null, input: { runId: 'run_1' } }],
         }]);
@@ -134,6 +136,7 @@ describe('Session Run Details Screen', () => {
         route.params = { id: 'session-1', runId: 'run_1' };
         hydrateReady = true;
         hydratedServerId = undefined;
+        transcriptHoldsToolMarker = true;
     });
 
     afterEach(async () => {
@@ -218,7 +221,7 @@ describe('Session Run Details Screen', () => {
         expect(getRunSpy).toHaveBeenCalledWith(
             'session-1',
             expect.objectContaining({ runId: 'run_1' }),
-            { serverId: "srv_run_details_hydrated" },
+            expect.objectContaining({ serverId: "srv_run_details_hydrated" }),
         );
 
         const stackOptions = stackScreenSpy.mock.calls.at(-1)?.[0]?.options;
@@ -243,17 +246,18 @@ describe('Session Run Details Screen', () => {
         expect(getRunSpy).not.toHaveBeenCalled();
     });
 
-    it('keeps the loading state visible while route hydration is pending even if params are not ready yet', async () => {
+    it('reads a route without a Session id as an invalid link instead of a pending hydration', async () => {
+        // The hydration owner settles an empty Session id as not found at once (there is nothing to wait for).
         hydrateReady = false;
         route.params = {};
         const screen = await renderRunDetailsScreen();
-        expect(screen.findAllByType(ActivitySpinner)).toHaveLength(1);
-        expect(screen.findAllByTestId('session-invalid-link')).toHaveLength(0);
+        expect(screen.findAllByType(ActivitySpinner)).toHaveLength(0);
+        expect(screen.findAllByTestId('session-invalid-link')).toHaveLength(1);
     });
 
     it('loads run details via session execution run get', async () => {
         const screen = await renderRunDetailsScreen();
-        expect(getRunSpy).toHaveBeenCalledWith('session-1', expect.objectContaining({ runId: 'run_1' }), { serverId: runtime.serverId });
+        expect(getRunSpy).toHaveBeenCalledWith('session-1', expect.objectContaining({ runId: 'run_1' }), expect.objectContaining({ serverId: runtime.serverId }));
         expect(screen.findByType(SessionExecutionRunInfoCard).props.run?.runId).toBe('run_1');
     });
 
@@ -328,13 +332,14 @@ describe('Session Run Details Screen', () => {
     });
 
     it('opens the owning tool details when the run sidechain maps to a transcript tool message', async () => {
+        transcriptHoldsToolMarker = false;
         const screen = await renderRunDetailsScreen();
         expect(screen.findByTestId('session-run-details-open-tool-message')).toBeTruthy();
 
         await screen.pressByTestIdAsync('session-run-details-open-tool-message');
 
         expect(navigateWithBlurOnWebSpy).toHaveBeenCalledTimes(1);
-        expect(routerPushSpy).toHaveBeenCalledWith('/session/session-1/message/tool%3Aside_1');
+        expect(routerPushSpy).toHaveBeenCalledWith(`/session/session-1/message/tool%3Aside_1?serverId=${runtime.serverId}`);
     });
 
     it('stops a running bounded run without ever offering it a direct send box', async () => {

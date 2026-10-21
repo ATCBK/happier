@@ -972,16 +972,24 @@ describe('Account encryption current Home authority', () => {
             await currentTokens.clearPendingExternalAuth();
             home.rejectNextCredentialWrite();
             const control = home.screen.findByTestId('settings-account-encryption-mode-switch');
-            await act(async () => { await control?.props.onValueChange(true); });
-            expect(home.migrations, home.requests.map(({ method, path }) => `${method} ${path}`).join('\n')).toHaveLength(1);
-            expect(home.credentialWrites).toHaveLength(1);
-            expect(home.alert).toHaveBeenCalled();
+            await act(async () => {
+                await control?.props.onValueChange(true);
+                // The rendered Switch dispatches a native event; its return value does not await the
+                // migration request, the rejected credential write or the failure alert.
+                await vi.waitFor(() => {
+                    expect(home.migrations, home.requests.map(({ method, path }) => `${method} ${path}`).join('\n')).toHaveLength(1);
+                    expect(home.credentialWrites).toHaveLength(1);
+                    expect(home.alert).toHaveBeenCalled();
+                });
+            });
             const retained = await currentTokens.readPendingExternalAuthStateForServerUrl(home.account.home.serverUrl, { serverId: home.account.serverId });
             expect(retained.value?.accountEncryptionFirstKey?.migrationSubmissionAttempted).toBe(true);
             expect(retained.value?.provider).toBe('mtls');
-            await act(async () => { await control?.props.onValueChange(true); });
+            await act(async () => {
+                await control?.props.onValueChange(true);
+                await vi.waitFor(() => expect(home.migrations).toHaveLength(2));
+            });
             expect(home.requests.filter(row => row.path === '/v1/auth/mtls' && row.method === 'POST')).toHaveLength(1);
-            expect(home.migrations).toHaveLength(2);
             expect(home.migrations[1]).toEqual(home.migrations[0]);
             expect(home.migrations[0].externalAuthProof).toMatchObject({ provider: 'mtls', pending: 'mtls-pending', proof: expect.any(String) });
             const challenge = home.requests.find(row => row.path === '/v1/auth/mtls')?.body;
@@ -1107,7 +1115,12 @@ describe('Account encryption recovery through the current Home boundary', () => 
             const { renderSettingsView: renderCurrentSettings } = await import('@/dev/testkit');
             screen = await renderCurrentSettings(<InjectedAuthProvider credentials={credentials}><AccountEncryptionSettingsSection /></InjectedAuthProvider>);
             await vi.waitFor(() => expect(screen!.findByTestId('settings-account-encryption-recovery')).not.toBeNull());
-            expect(screen.findByTestId('settings-account-encryption-mode-switch')).toBeNull();
+            // Recovery is the only usable control: with the Account mode unreadable the mode Switch is absent
+            // (opt-out hidden) or rendered disabled (opt-out shown), never an actionable E2EE toggle.
+            await vi.waitFor(() => {
+                const modeSwitch = screen!.findByTestId('settings-account-encryption-mode-switch');
+                expect(modeSwitch === null || modeSwitch.props.disabled === true).toBe(true);
+            });
             await screen.pressByTestIdAsync('settings-account-encryption-recovery');
             expect(routerMockRef.current.spies.push).toHaveBeenCalledWith('/restore/manual');
             expect(requests.some(({ path, method }) => path === '/v1/account/encryption/migrate' && method === 'POST')).toBe(false);

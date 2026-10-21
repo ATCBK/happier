@@ -815,7 +815,7 @@ describe('app/_layout init resilience', () => {
         await flushHookEffects({ cycles: 1 });
 
         expect(loadAsyncMock).toHaveBeenCalledTimes(0);
-        expect(fontLoadMock).toHaveBeenCalledTimes(10);
+        expect(fontLoadMock).toHaveBeenCalledTimes(11);
         expect(fontLoadMock).toHaveBeenCalledWith('1em "Inter-Regular"');
         expect(fontLoadMock).toHaveBeenCalledWith('1em "IBMPlexMono-Regular"');
         expect(screen.findAllByType(components.SidebarNavigator)).toHaveLength(1);
@@ -829,8 +829,9 @@ describe('app/_layout init resilience', () => {
         fontLoadResolvers.at(-1)?.();
         await flushHookEffects();
 
-        // We inject a <style> for @font-face rules and also add a <style> for UI font scaling overrides.
-        expect(appendChild).toHaveBeenCalledTimes(2);
+        // We inject a <style> for @font-face rules and also add a <style> for UI font scaling overrides
+        // (other head additions are not this contract).
+        expect(appended.map((n) => (n as Element).id)).toEqual(expect.arrayContaining(['happier-web-font-faces', 'happier-ui-font-scale-overrides']));
         const texts = appended.map((n) => String(n?.textContent ?? ''));
         expect(texts.some((t) => t.includes('@font-face'))).toBe(true);
         expect(texts.some((t) => t.includes('Inter-Regular'))).toBe(true);
@@ -852,7 +853,7 @@ describe('app/_layout init resilience', () => {
 
         const screen = await renderSettledRootLayout();
 
-        expect(fontLoadMock).toHaveBeenCalledTimes(10);
+        expect(fontLoadMock).toHaveBeenCalledTimes(11);
         expect(screen.findAllByType(components.SidebarNavigator)).toHaveLength(1);
     });
 

@@ -119,7 +119,10 @@ describe('MachineDetailScreen canonical Stop fallback', () => {
                 }
                 expect(account.accountLifetime.isCurrent()).toBe(false);
                 released.resolve();
-                if (interruption === 'abort') await expect(stopped).rejects.toMatchObject({ name: 'AbortError' });
+                // The explicit-stop hold fails before any physical Stop, so an aborted caller gets the typed
+                // "Stop control unavailable" refusal (sessionStopWithServerScope) rather than a rejection.
+                if (interruption === 'abort') expect(await stopped).toMatchObject({ ok: true,
+                    result: { success: false, stopped: false, code: 'session_stop_control_unavailable' } });
                 else expect(await stopped).toMatchObject({ success: false, reason: 'failed', errorCode: 'action_account_scope_changed' });
                 expect(network.requests.filter(request => request.method === RPC_METHODS.STOP_SESSION
                     || request.method === 'killSession')).toEqual([]);

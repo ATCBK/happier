@@ -346,19 +346,23 @@ describe('Settings › Profiles detail: machine scope and unsaved navigation', (
     });
 
     it('keeps legacy profile preview selection explicit', async () => {
-        const { DEFAULT_PROFILES } = await import('@/sync/domains/profiles/profileUtils');
-        const builtInDefinition = DEFAULT_PROFILES[0];
-        if (!builtInDefinition) throw new Error('Expected a legacy profile fixture');
+        // A stored pre-V2 custom Profile opens in the legacy editor. Built-in presets no longer do:
+        // creating from a legacy API-key preset is refused and routed to Provider migration.
+        const { AIBackendProfileSchema } = await import('@happier-dev/protocol');
+        const legacy = AIBackendProfileSchema.parse({ id: 'legacy-custom', name: 'Legacy custom', isBuiltIn: false, createdAt: 1, updatedAt: 1 });
+        profileFixture.profiles = [legacy as never];
+        await seedFocusedAccount();
 
-        await renderDetail({ kind: 'profile', profileId: builtInDefinition.id });
+        const screen = await renderDetail({ kind: 'profile', profileId: legacy.id });
+        const { MachineAdministrationTargetSelector } = await import('@/components/settings/machines/MachineAdministrationTargetSelector');
 
-        expect(capturedEditFormProps?.profile).toMatchObject({ id: builtInDefinition.id });
+        expect(capturedEditFormProps?.profile).toMatchObject({ id: legacy.id });
         expect(capturedEditFormProps).toMatchObject({
             machineId: null,
             serverId: null,
         });
-        expect(React.isValidElement(capturedEditFormProps?.header)
-            && (capturedEditFormProps?.header as React.ReactElement<{ showMachineChip: boolean }>).props.showMachineChip).toBe(false);
+        // Only machine-scoped (V2) profiles carry the machine chip in their header.
+        expect(screen.findAllByType(MachineAdministrationTargetSelector)).toHaveLength(0);
     });
 
     it('serializes repeated navigator exits while the first decision is pending', async () => {
@@ -572,7 +576,9 @@ async function seedFocusedAccount(artifacts: Record<string, DecryptedArtifact> =
             profileId = source.id;
         }
         const record = ProfileRecordV1Schema.parse({ v: 1, id: profileId,
-            definition: artifactId ? { kind: 'artifact', artifactId } : { kind: 'inline', profile: source },
+            // A pre-V2 definition is stored as a legacy row; only V2 bodies are inline definitions.
+            definition: artifactId ? { kind: 'artifact', artifactId }
+                : 'v' in source && source.v === 2 ? { kind: 'inline', profile: source } : { kind: 'legacy', profile: source },
             enabled: true, secretBindings: {}, promptStack: [], skillSeeds: [] });
         profileRows.set(record.id, { record, revision: profileRevision });
     }
@@ -680,8 +686,10 @@ describe('Settings › Profiles detail: Share…', () => {
 
     it('offers no Share on a built-in profile or a draft', async () => {
         const { DEFAULT_PROFILES } = await import('@/sync/domains/profiles/profileUtils');
+        // A legacy built-in preset opens Provider migration, which has no Profile action menu at all.
         let screen = await renderDetail({ kind: 'profile', profileId: DEFAULT_PROFILES[0]!.id });
-        expect(headerMenuActions(screen).map((action) => action.id)).not.toContain('share');
+        expect(screen.findAllByTestId('settings.profiles.detail.menu')).toHaveLength(0);
+        expect(hasEditor(screen)).toBe(false);
         screen = await renderDetail({ kind: 'draft', cloneFrom: null });
         expect(headerMenuActions(screen).map((action) => action.id)).not.toContain('share');
     });

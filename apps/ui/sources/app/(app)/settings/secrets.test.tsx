@@ -241,7 +241,9 @@ describe('SecretsSettingsScreen shared feature decision', () => {
                 catalogs: { mcp: 'absent', acp: 'absent', providerConnections: 'absent', connectedConfigurations: 'absent', connectedPurposes: 'absent', registrySources: 'absent' },
                 remoteHosts: { revision: 'absent', resourceRefs: [] }, notificationChannels: { revision: 'absent', resourceRefs: [] } },
         }]));
-        expect(Modal.confirm).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ destructive: true }));
+        // The confirmation is the shared-secret delete Action's approval, not a caller-owned destructive dialog.
+        expect(Modal.confirm).toHaveBeenCalledTimes(1);
+        expect(Modal.confirm).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ confirmText: expect.any(String) }));
         expect(account.resources).toHaveLength(1);
         expect(account.resources[0].entry.relationship).toBe('recipient');
     });
