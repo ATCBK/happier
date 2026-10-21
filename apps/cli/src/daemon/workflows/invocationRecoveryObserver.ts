@@ -232,7 +232,8 @@ export async function observeWorkflowInvocationRecoveryEvidence(params: Readonly
     if (!observed.ok || observed.sessionId !== execution.sessionId || observed.localId !== execution.localInputId) return unavailable;
     const result = classifyWorkflowSessionInputResult(observed.result, observed.replyOutcome);
     const evidence: WorkflowInvocationRecoveryEvidence = {
-      activity: result.kind === 'pending' || result.kind === 'needs_attention' ? 'unknown' : 'not_active',
+      // A settled input whose result is unavailable (needs attention) is not running; only a pending one is unobserved.
+      activity: result.kind === 'pending' ? 'unknown' : 'not_active',
       canReattach: true, canContinueConversation: false,
     };
     try {
