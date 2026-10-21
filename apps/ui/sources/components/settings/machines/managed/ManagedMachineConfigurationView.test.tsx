@@ -15,6 +15,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixtures/pluginProviderDaemonProjection';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { Dimensions } from 'react-native';
+import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
 
 const route = vi.hoisted(() => ({ replace: vi.fn() }));
 const nativeBoundary = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -135,6 +136,103 @@ describe('mounted managed configurator', () => {
         expect(screen.findByTestId('managed-config.create')?.props.disabled).toBe(true);
         expect(harness.requestsFor('/v1/actions/machines.provisioners.options')).toEqual([]);
         expect(harness.requestsFor('/v1/actions/machines.managed.acquire')).toEqual([]);
+        await screen.unmount();
+    });
+    it('settles an options schema read that never answers at the RPC deadline, then reads again from the same error card', async () => {
+        const serverId = await harness.addHome({ name: 'Compute', serverUrl: 'https://silent-options-schema.example',
+            serverIdentityId: 'srv_silent_options_schema', accountId: 'owner', currentAccount: true });
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'host', installationId: 'installation' })] } });
+        const read = nativeBoundary.rpc.getMockImplementation();
+        let schemaReads = 0;
+        // The daemon takes the schema request and never answers it (a host under load).
+        nativeBoundary.rpc.mockImplementation(async (request: { method: string }) => {
+            if (request.method !== RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ) return read?.(request);
+            schemaReads++;
+            return new Promise(() => {});
+        });
+        let checks = 0;
+        for (const [actionId, result] of [['machines.provisioners.list', { controller: defaultController, provisioners: [provisioner] }],
+            ['machines.provisioners.check', { available: true }], ['machines.provisioners.options', { choices: [] }]] as const)
+            harness.answer(serverId, `/v1/actions/${actionId}`, { select: async value => {
+                const request = ExternalActionRequestEnvelopeV1Schema.parse(value);
+                // The first check answers; a retry meets a host that has gone quiet again.
+                if (actionId === 'machines.provisioners.check' && checks++ > 0) await new Promise(() => {});
+                return { body: { v: 1, actionId, requestId: request.requestId, execution: { ok: true, result } } };
+            } });
+        const { ManagedMachineConfigurationView } = await import('./ManagedMachineConfigurationView');
+        const { t } = await import('@/text');
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        try {
+            const screen = await renderScreen(<ManagedMachineConfigurationView serverId={serverId}
+                provisioner={buildQualifiedPluginContributionKey(provisioner.contribution)} initialController={defaultController} />);
+            await act(async () => { await vi.advanceTimersByTimeAsync(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS / 2); });
+            expect(schemaReads).toBe(1);
+            expect(screen.getTextContent()).toContain(t('managedMachines.options.loading', { provider: 'Virtual machine' }));
+            expect(screen.findByTestId('managed-config.error')).toBeNull();
+            await act(async () => { await vi.advanceTimersByTimeAsync(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS / 2); });
+            expect(screen.findByTestId('managed-config.error')).not.toBeNull();
+            expect(screen.getTextContent()).not.toContain(t('managedMachines.options.loading', { provider: 'Virtual machine' }));
+            // Retry reads again: while it runs the page says it is checking, with the last failure withdrawn.
+            await act(async () => { screen.pressByTestId('managed-config.error-action'); });
+            await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+            expect(schemaReads).toBe(2);
+            expect(screen.findByTestId('managed-config.error')).toBeNull();
+            expect(screen.getTextContent()).toContain(t('managedMachines.options.loading', { provider: 'Virtual machine' }));
+            await act(async () => { await vi.advanceTimersByTimeAsync(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS); });
+            expect(screen.findByTestId('managed-config.error')).not.toBeNull();
+            await screen.unmount();
+        } finally { vi.useRealTimers(); }
+    });
+    it('stops saying it is checking choices once the check and the options schema both ran out their budget', async () => {
+        const serverId = await harness.addHome({ name: 'Compute', serverUrl: 'https://silent-everything.example',
+            serverIdentityId: 'srv_silent_everything', accountId: 'owner', currentAccount: true });
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'host', installationId: 'installation' })] } });
+        const read = nativeBoundary.rpc.getMockImplementation();
+        nativeBoundary.rpc.mockImplementation(async (request: { method: string }) => request.method === RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ
+            ? new Promise(() => {}) : read?.(request));
+        harness.answer(serverId, '/v1/actions/machines.provisioners.list', { select: value => {
+            const request = ExternalActionRequestEnvelopeV1Schema.parse(value);
+            return { body: { v: 1, actionId: 'machines.provisioners.list', requestId: request.requestId,
+                execution: { ok: true, result: { controller: defaultController, provisioners: [provisioner] } } } };
+        } });
+        // A loaded host answers neither the check nor the schema read.
+        harness.answer(serverId, '/v1/actions/machines.provisioners.check', { respondAfter: new Promise<void>(() => {}) });
+        const { ManagedMachineConfigurationView } = await import('./ManagedMachineConfigurationView');
+        const { t } = await import('@/text');
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        try {
+            const screen = await renderScreen(<ManagedMachineConfigurationView serverId={serverId}
+                provisioner={buildQualifiedPluginContributionKey(provisioner.contribution)} initialController={defaultController} />);
+            // One budget in, nothing is left to wait for: the page already says so, not "checking" beside it.
+            await act(async () => { await vi.advanceTimersByTimeAsync(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS + 1_000); });
+            expect(screen.findByTestId('managed-config.error')).not.toBeNull();
+            expect(screen.getTextContent()).not.toContain(t('managedMachines.options.loading', { provider: 'Virtual machine' }));
+            await screen.unmount();
+        } finally { vi.useRealTimers(); }
+    });
+    it('does not keep checking choices once the controller\u2019s plugin projection has failed', async () => {
+        const serverId = await harness.addHome({ name: 'Compute', serverUrl: 'https://failed-projection.example',
+            serverIdentityId: 'srv_failed_projection', accountId: 'owner', currentAccount: true });
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'host', installationId: 'installation' })] } });
+        const read = nativeBoundary.rpc.getMockImplementation();
+        nativeBoundary.rpc.mockImplementation(async (request: { method: string }) => {
+            if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) throw new Error('rpc_failed');
+            return read?.(request);
+        });
+        for (const [actionId, result] of [['machines.provisioners.list', { controller: defaultController, provisioners: [provisioner] }],
+            ['machines.provisioners.check', { available: true }], ['machines.provisioners.options', { choices: [] }]] as const)
+            harness.answer(serverId, `/v1/actions/${actionId}`, { select: value => {
+                const request = ExternalActionRequestEnvelopeV1Schema.parse(value);
+                return { body: { v: 1, actionId, requestId: request.requestId, execution: { ok: true, result } } };
+            } });
+        const { ManagedMachineConfigurationView } = await import('./ManagedMachineConfigurationView');
+        const screen = await renderScreen(<ManagedMachineConfigurationView serverId={serverId}
+            provisioner={buildQualifiedPluginContributionKey(provisioner.contribution)} initialController={defaultController} />);
+        await waitForHomeGovernance(() => expect(screen.findByTestId('managed-config.error')).not.toBeNull());
+        expect(screen.findByTestId('managed-config.error-action')).not.toBeNull();
         await screen.unmount();
     });
     it('offers retained wake for a resume-only provisioner and preserves the choice in composer intent', async () => {

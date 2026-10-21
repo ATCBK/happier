@@ -15,6 +15,7 @@ import { resolveThemeRaisedEdge } from '@/components/ui/surfaces/themeRaisedEdge
 import { shadowLevelStyle } from '@/shadowElevation';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { ItemList } from '@/components/ui/lists/ItemList';
+import { useFloatingChromeClearance } from '@/components/ui/layout/useFloatingChromeClearance';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
@@ -110,10 +111,14 @@ function SummaryBar(
 ) {
   const insets = useSafeAreaInsets();
   const { theme } = useUnistyles();
+  // The phone's floating tab bar covers the page's bottom by its measured height: the bar stands above it,
+  // as a pinned page bar does, and above the system safe area where no such chrome overlays the page.
+  const chromeClearance = useFloatingChromeClearance();
+  const bottomClearance = chromeClearance > 0 ? theme.space.s12 + chromeClearance : Math.max(insets.bottom, 12);
   // A floating, inset bar (lab m-config Ap): it stands on the floating material and rim, like every
   // surface that floats over the page, and its summary says it opens the receipt.
   return (
-    <View style={[styles.barFrame, { marginBottom: Math.max(insets.bottom, 12) }]}>
+    <View testID={`${props.testID}.frame`} style={[styles.barFrame, { marginBottom: bottomClearance }]}>
       <GlassSurface surfaceGroup="floating" style={styles.bar}>
         <HappierPressable
           testID={props.testID}

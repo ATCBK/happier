@@ -203,7 +203,8 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
             action={{ label: t('managedMachines.add.setUpThisComputer'), onPress: setUpThisComputer }} />
             : cards.length > 0 ? <>
                 {scopeRow}
-                {scopeState}
+                {/* The line is page content like the sections beneath it: an edge-only section gives it the page column. */}
+                {scopeState ? <ItemGroup surface="none">{scopeState}</ItemGroup> : null}
                 <MachineProvisionerSections cards={cards} compact={compact} testID="managed-picker.provisioners" scope={pageSections && chip ? chip : undefined}
                     localTitle={t('managedMachines.add.onThisComputer')} localDescription={localDescription} />
             </> : pageSections ? <ItemGroup title={chip ? t('managedMachines.config.managedFrom') : undefined} action={chip ?? undefined} surface="none">{scopeState}</ItemGroup>

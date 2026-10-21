@@ -64,7 +64,7 @@ function MachinePresetViewBody(props: Readonly<{ serverId: string; presetId: str
     const provisioner = catalog.provisioners.find(row => buildQualifiedPluginContributionKey(row.contribution) === providerKey);
     const presentation = useManagedProvisionerPresentation({ serverId: props.serverId, controller: preset?.controller, provisioner });
     const optionsInput = useManagedProvisionerOptionsInput({ binding: catalog.binding, controller: preset?.controller, provisioner,
-        projection: presentation.projection, projectionReady: presentation.projectionReady });
+        projection: presentation.projection, projectionReady: presentation.projectionReady, projectionFailed: presentation.projectionFailed });
     const team = useTeamBinding(props.serverId, preset?.owner.kind === 'team' ? preset.owner.teamId : '');
     const teamState = team.kind === 'bound' && team.state.kind === 'ready' ? team.state : null;
     const controllerRow = useServerScopedMachine(props.serverId, preset?.controller.machineId ?? '');

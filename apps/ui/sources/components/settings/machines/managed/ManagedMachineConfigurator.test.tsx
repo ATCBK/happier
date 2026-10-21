@@ -25,10 +25,12 @@ afterEach(() => {
   modal.hide.mockClear();
 });
 
-async function renderConfigurator(onCreate: () => void, primaryLabel = 'Create server', primaryTestID?: string) {
+async function renderConfigurator(onCreate: () => void, primaryLabel = 'Create server', primaryTestID?: string, tabBarHeight = 0) {
   const { ManagedMachineConfigurator } =
     await import('./ManagedMachineConfigurator');
+  const { SessionCockpitBottomChromeHeightContext } = await import('@/components/workspaceCockpit/session/SessionCockpitChromeRegistry');
   return renderScreen(
+    <SessionCockpitBottomChromeHeightContext.Provider value={tabBarHeight}>
     <ManagedMachineConfigurator
       testID="cfg"
       title="New Hetzner server"
@@ -51,7 +53,8 @@ async function renderConfigurator(onCreate: () => void, primaryLabel = 'Create s
       }}
     >
       {null}
-    </ManagedMachineConfigurator>,
+    </ManagedMachineConfigurator>
+    </SessionCockpitBottomChromeHeightContext.Provider>,
   );
 }
 
@@ -74,6 +77,12 @@ describe('ManagedMachineConfigurator on a phone', () => {
     const screen = await renderConfigurator(vi.fn(), 'Use');
     const actions = screen.tree.findAll(node => node.props.testID === 'cfg.summary.create' && typeof node.props.title === 'string');
     expect(actions.map(node => node.props.title)).toContain('Use');
+    await screen.unmount();
+  });
+  it('stands above the phone\u2019s floating tab bar instead of partly under it', async () => {
+    const { StyleSheet } = await import('react-native');
+    const screen = await renderConfigurator(vi.fn(), 'Create', undefined, 84);
+    expect(Number(StyleSheet.flatten(screen.findByTestId('cfg.summary.frame')!.props.style)?.marginBottom)).toBeGreaterThanOrEqual(84);
     await screen.unmount();
   });
   it('opens the receipt as a sheet from the summary bar without creating anything', async () => {

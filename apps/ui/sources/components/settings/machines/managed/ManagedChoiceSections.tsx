@@ -21,6 +21,7 @@ import { t } from '@/text';
 
 import {
   countryFlag,
+  managedImageLabel,
   type ManagedImageOption,
   type ManagedLocationOption,
   type ManagedSizeOption,
@@ -223,7 +224,7 @@ export const ManagedImageTiles = React.memo(function ManagedImageTiles(
       testIdPrefix={props.testID}
       options={props.images.map((image) => ({
         id: image.id,
-        title: image.name,
+        title: managedImageLabel(image.name),
         subtitle: image.description,
         disabled: !(image.selectable ?? image.unavailableReason === undefined),
         preview: image.preview,

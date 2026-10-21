@@ -172,6 +172,31 @@ describe('managed location choice', () => {
     await screen.unmount();
   });
 
+  it('names an image by its name and tag, not its registry host, so a phone tile does not truncate to the host', async () => {
+    const { ManagedImageTiles } = await import('./ManagedChoiceSections');
+    const screen = await renderScreen(
+      <ManagedImageTiles
+        value={null}
+        onChange={vi.fn()}
+        testID="images"
+        images={[
+          { id: 'ghcr.io/trycua/linux:24.04-disk', name: 'ghcr.io/trycua/linux:24.04-disk', description: '' },
+          { id: 'ubuntu', name: 'Ubuntu 24.04', description: '' },
+        ]}
+      />,
+    );
+    const radios = screen.tree.findAll(
+      (node) =>
+        node.props.accessibilityRole === 'radio' &&
+        typeof node.props.onPress === 'function' &&
+        String(node.props.testID).startsWith('images:'),
+    );
+    expect(radios.map((node) => node.props.accessibilityLabel)).toEqual(
+      expect.arrayContaining(['linux:24.04-disk', 'Ubuntu 24.04']),
+    );
+    await screen.unmount();
+  });
+
   it('draws the regions as one sheet of radio cells rather than separate cards (lab m-config location grid)', async () => {
     const { ManagedLocationGroup } = await import('./ManagedChoiceSections');
     const screen = await renderScreen(

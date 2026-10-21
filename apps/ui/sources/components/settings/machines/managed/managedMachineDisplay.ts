@@ -151,6 +151,15 @@ export function countryName(countryCode: string | undefined, locale: string): st
   }
 }
 
+/**
+ * An image reference reads by its name and tag ("linux:24.04-disk"), not by the registry host and
+ * namespace that lead it; a title that is not a reference ("Ubuntu 24.04") is left as it is.
+ */
+export function managedImageLabel(title: string): string {
+  if (/\s/.test(title) || !title.includes('/')) return title;
+  return title.slice(title.lastIndexOf('/') + 1) || title;
+}
+
 /** A flag from a country code (regional-indicator letters); nothing for a code that is not two letters. */
 export function countryFlag(countryCode: string | undefined): string {
   const code = countryCode?.trim().toUpperCase() ?? '';

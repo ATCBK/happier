@@ -64,8 +64,11 @@ export function useManagedProvisionerPresentation(input: Readonly<{
     serverId: string; controller?: ManagedControllerV1;
     provisioner?: MachineProvisionersListResultV1['provisioners'][number];
     provider?: Provisioner['contribution']; schemaVersion?: number;
+    /** Changes when the person asks to read again: the projection is read anew. */
+    refreshKey?: number;
 }>) {
-    const projection = useDaemonMergedProjectionInputs({ serverId: input.serverId, machineId: input.controller?.machineId, enabled: !!input.controller });
+    const projection = useDaemonMergedProjectionInputs({ serverId: input.serverId, machineId: input.controller?.machineId, enabled: !!input.controller,
+        ...(input.refreshKey === undefined ? {} : { refreshKey: input.refreshKey }) });
     const uiProjection = React.useMemo(() => normalizePluginUiProjection(projection.inputs?.pluginProjectionV2 ?? null), [projection.inputs?.pluginProjectionV2]);
     const locale = getPreferredLanguage();
     const projected = input.provider ? projection.inputs?.pluginProjectionV2?.familiesById.machineProvisioners?.entriesById[
@@ -108,7 +111,8 @@ export function useManagedProvisionerPresentation(input: Readonly<{
         description: provisioner?.descriptor.description ? localized(provisioner.contribution.pluginId, provisioner.descriptor.description) : null,
         resourceIdPath: provisioner?.descriptor.resourceIdPath ?? null,
         mark: markFor(markedProvisioner), markAt: (size: number) => markFor(markedProvisioner, size), markFor,
-        projection: uiProjection, projectionReady: projection.phase === 'ready', repair };
+        projection: uiProjection, projectionReady: projection.phase === 'ready',
+        projectionFailed: projection.phase === 'error' || projection.phase === 'unsupported', repair };
 }
 
 /**

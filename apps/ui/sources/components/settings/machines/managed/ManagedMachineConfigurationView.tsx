@@ -165,9 +165,9 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     // A retained draft describes what was reviewed; only the current catalog admits new reads or mutations.
     const provisioner = catalogProvisioner ?? draft?.provisioner;
     const controller = requestedController;
-    const presentation = useManagedProvisionerPresentation({ serverId: props.serverId, controller: catalogController, provisioner });
+    const presentation = useManagedProvisionerPresentation({ serverId: props.serverId, controller: catalogController, provisioner, refreshKey: readRevision });
     const optionsInput = useManagedProvisionerOptionsInput({ binding: catalog.binding, controller: catalogController, provisioner: catalogProvisioner,
-        projection: presentation.projection, projectionReady: presentation.projectionReady });
+        projection: presentation.projection, projectionReady: presentation.projectionReady, projectionFailed: presentation.projectionFailed, refreshKey: readRevision });
     const optionHints = React.useMemo(() => optionsInput.kind === 'ready'
         ? resolvePluginProjectedActionPresentation({ pluginId: optionsInput.action.pluginId,
             presentation: optionsInput.action, projection: presentation.projection }).inputHints ?? undefined : undefined,
@@ -307,7 +307,10 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
         if (!draft || draft.provisioner !== catalogProvisioner) return;
         const abort = new AbortController();
         optionsAbort.current = abort;
-        setDraft(current => current ? { ...current, optionStatus: 'loading' } : current);
+        // A read in flight withdraws the last read's failure, as its answer would; options that cannot be read
+        // (their input settled unavailable) are not "loading" while the check still runs.
+        setError(optionsInput.kind === 'unavailable' ? optionsInput.error : null);
+        setDraft(current => current ? { ...current, optionStatus: optionsInput.kind === 'unavailable' ? 'unavailable' : 'loading' } : current);
         const credentials = credentialSelections;
         const input = { homeId: catalog.homeId, controller, contribution: catalogProvisioner.contribution, ...(credentials.length ? { credentials } : {}) };
         void Promise.all([
