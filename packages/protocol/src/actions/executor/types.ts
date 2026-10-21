@@ -1755,8 +1755,8 @@ export type ActionExecutorDeps = Readonly<{
     includeProviderProjection?: true;
     signal?: AbortSignal;
   }>, context?: ActionExecutorContext) => Promise<unknown>;
-  agentsConfigOptionsList?: (args: Readonly<{ agentId?: string; machineId?: string; serverId?: string; limit?: number; backendTargetKey?: string; modelId?: string; probe?: AgentInventoryProbeInput }>) => Promise<unknown>;
-  agentsSessionModesList?: (args: Readonly<{ agentId?: string; machineId?: string; serverId?: string; limit?: number; backendTargetKey?: string; probe?: AgentInventoryProbeInput }>) => Promise<unknown>;
+  agentsConfigOptionsList?: (args: Readonly<{ agentId?: string; machineId?: string; serverId?: string; limit?: number; backendTargetKey?: string; modelId?: string; probe?: AgentInventoryProbeInput; signal?: AbortSignal }>) => Promise<unknown>;
+  agentsSessionModesList?: (args: Readonly<{ agentId?: string; machineId?: string; serverId?: string; limit?: number; backendTargetKey?: string; probe?: AgentInventoryProbeInput; signal?: AbortSignal }>) => Promise<unknown>;
   spawnProfilesList?: (args: Readonly<{ agentId?: string; backendTargetKey?: string; limit?: number }>) => Promise<unknown>;
   spawnConnectedServicesList?: (args: Readonly<{ agentId?: string; backendTargetKey?: string; machineId?: string; serverId?: string; includeUnavailable?: boolean }>, context?: ActionExecutorContext) => Promise<unknown>;
   spawnMcpServersPreview?: (args: Readonly<{

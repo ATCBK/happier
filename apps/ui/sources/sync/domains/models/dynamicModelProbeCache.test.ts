@@ -8,6 +8,9 @@ import {
     resetDynamicModelProbeCacheForTests,
     writeDynamicModelProbeCacheSuccess,
     writeDynamicModelProbeCacheUnavailable,
+    writeDynamicModelProbeCacheError,
+    dynamicModelProbeRetryAt,
+    isDynamicModelProbeCacheFresh,
 } from './dynamicModelProbeCache';
 
 // Native MMKV data survives new instances and module reloads; only this persistence boundary is mocked.
@@ -24,6 +27,22 @@ describe('dynamic model probe cache', () => {
     afterEach(() => {
         vi.useRealTimers();
         persistedValues.clear();
+    });
+
+    it.each([false, true])('never schedules unknown outcomes after cooldown (retained data: %s)', (retainGood) => {
+        vi.useFakeTimers();
+        vi.setSystemTime(2_500);
+        resetDynamicModelProbeCacheForTests();
+        if (retainGood) writeDynamicModelProbeCacheSuccess('unknown', {
+            availableModels: [{ id: 'native', name: 'Native' }], supportsFreeform: false,
+        }, 1_000);
+        writeDynamicModelProbeCacheError('unknown', 2_000, undefined, { reason: 'outcomeUnknown', requestDisposition: 'outcomeUnknown' });
+        vi.setSystemTime(100_000_000);
+        const entry = readDynamicModelProbeCache('unknown');
+        expect(entry).toMatchObject({ reason: 'outcomeUnknown', requestDisposition: 'outcomeUnknown' });
+        expect(dynamicModelProbeRetryAt(entry)).toBeNull();
+        expect(isDynamicModelProbeCacheFresh(entry)).toBe(true);
+        if (retainGood) expect(entry).toMatchObject({ updatedAt: 1_000, value: { availableModels: [{ id: 'native' }] } });
     });
 
     it('keeps a previous successful model list visible during a transient unavailable cooldown', () => {

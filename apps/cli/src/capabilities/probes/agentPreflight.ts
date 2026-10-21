@@ -474,6 +474,8 @@ export async function invokeCliPreflightMethod(
             accountSettings: probeContext.accountSettings,
             env,
             ...(requestContext.signal ? { signal: requestContext.signal } : {}),
+            ...(requestContext.deadlineSignal ? { deadlineSignal: requestContext.deadlineSignal } : {}),
+            ...(requestContext.cleanupScope ? { cleanupScope: requestContext.cleanupScope } : {}),
           });
           const parsed = CodexPassiveRealtimeSetupResultV1Schema.safeParse(raw);
           return parsed.success ? parsed.data : { v: 1, status: 'unavailable' } as const;

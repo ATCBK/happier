@@ -1,11 +1,11 @@
 import type { PreflightSessionModeList } from '@/sync/domains/sessionModes/sessionModeOptions';
 import type { ProbedResourceSnapshot } from '@happier-dev/protocol';
 
-import { createPersistentProbedResourceCache } from '@/sync/runtime/probedResources/createPersistentProbedResourceCache';
+import { createPersistentProbedResourceCache, ProbedResourceError, type ProbedResourceFailure } from '@/sync/runtime/probedResources/createPersistentProbedResourceCache';
 
-export type DynamicSessionModeProbeCacheEntry =
+export type DynamicSessionModeProbeCacheEntry = ProbedResourceFailure & (
     | Readonly<{ kind: 'success'; updatedAt: number; expiresAt: number; value: PreflightSessionModeList }>
-    | Readonly<{ kind: 'error'; updatedAt: number; expiresAt: number }>;
+    | Readonly<{ kind: 'error'; updatedAt: number; expiresAt: number }>);
 
 export const DYNAMIC_SESSION_MODE_PROBE_SUCCESS_TTL_MS = 24 * 60 * 60_000;
 export const DYNAMIC_SESSION_MODE_PROBE_ERROR_BACKOFF_MS = 60_000;
@@ -72,12 +72,14 @@ export function readDynamicSessionModeProbeCache(key: string): DynamicSessionMod
     const transientUnavailable = readTransientUnavailable(key);
     if (transientUnavailable) return transientUnavailable;
     const snap: ProbedResourceSnapshot<PreflightSessionModeList> = persistedCache.getSnapshot(key);
+    const failure = snap.error instanceof ProbedResourceError ? snap.error.failure : undefined;
     if (snap.dataUpdatedAt !== null && snap.data) {
         return {
             kind: 'success',
             updatedAt: snap.dataUpdatedAt,
             expiresAt: snap.dataUpdatedAt + DYNAMIC_SESSION_MODE_PROBE_SUCCESS_TTL_MS,
             value: snap.data,
+            ...failure,
         };
     }
     if (snap.errorUpdatedAt !== null) {
@@ -85,6 +87,7 @@ export function readDynamicSessionModeProbeCache(key: string): DynamicSessionMod
             kind: 'error',
             updatedAt: snap.errorUpdatedAt,
             expiresAt: snap.errorUpdatedAt + DYNAMIC_SESSION_MODE_PROBE_ERROR_BACKOFF_MS,
+            ...failure,
         };
     }
     return null;
@@ -95,9 +98,9 @@ export function writeDynamicSessionModeProbeCacheSuccess(key: string, value: Pre
     persistedCache.writeSuccess(key, value, nowMs);
 }
 
-export function writeDynamicSessionModeProbeCacheError(key: string, nowMs = Date.now()): void {
+export function writeDynamicSessionModeProbeCacheError(key: string, nowMs = Date.now(), failure?: ProbedResourceFailure): void {
     transientUnavailableByKey.delete(key);
-    persistedCache.writeError(key, new Error('dynamic-session-mode-probe-failed'), nowMs);
+    persistedCache.writeError(key, new ProbedResourceError('dynamic-session-mode-probe-failed', failure), nowMs);
 }
 
 export function writeDynamicSessionModeProbeCacheUnavailable(
@@ -115,7 +118,8 @@ export function writeDynamicSessionModeProbeCacheUnavailable(
 
 export async function runDynamicSessionModeProbeDedupe<T>(
     key: string,
-    run: () => Promise<T>,
+    run: (signal: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
 ): Promise<T> {
-    return await persistedCache.runDedupe(key, run);
+    return await persistedCache.runDedupe(key, run, signal);
 }

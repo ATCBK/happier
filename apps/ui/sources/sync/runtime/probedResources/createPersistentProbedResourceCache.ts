@@ -1,10 +1,22 @@
 import { ProbedResourceCache, type ProbedResourceSnapshot } from '@happier-dev/protocol/common/probedResourceCache';
 import { MMKV } from 'react-native-mmkv';
+import type { RpcRequestDisposition } from '@happier-dev/sync-client';
 
 import { readStorageScopeFromEnv, scopedStorageId } from '@/utils/system/storageScope';
 
 type PersistedEntry<T> = Readonly<{ updatedAt: number; value: T }>;
 type PersistedState<T> = Readonly<{ version: number; entries: Record<string, PersistedEntry<T>> }>;
+
+export type ProbedResourceFailure = Readonly<{
+    reason?: 'error' | 'not-supported' | 'outcomeUnknown';
+    requestDisposition?: RpcRequestDisposition;
+}>;
+
+export class ProbedResourceError extends Error {
+    constructor(message: string, readonly failure?: ProbedResourceFailure) {
+        super(message);
+    }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -24,7 +36,7 @@ export function createPersistentProbedResourceCache<T>(params: Readonly<{
     getSnapshot: (key: string) => ProbedResourceSnapshot<T>;
     writeSuccess: (key: string, value: T, nowMs?: number) => void;
     writeError: (key: string, error: Error, nowMs?: number) => void;
-    runDedupe: <R>(key: string, run: () => Promise<R>) => Promise<R>;
+    runDedupe: <R>(key: string, run: (signal: AbortSignal) => Promise<R>, signal?: AbortSignal) => Promise<R>;
     resetForTests: () => void;
 }> {
     const cache = new ProbedResourceCache<T>({
@@ -39,7 +51,7 @@ export function createPersistentProbedResourceCache<T>(params: Readonly<{
         : (storageScope ? new MMKV({ id: scopedStorageId(params.cacheId, storageScope) }) : new MMKV());
 
     let persistedState: PersistedState<T> | null = null;
-    const inflight = new Map<string, Promise<unknown>>();
+    const inflight = new Map<string, { promise: Promise<unknown>; controller: AbortController; consumers: number }>();
 
     function readPersistedString(): string | null {
         if (isWebRuntime) {
@@ -172,22 +184,47 @@ export function createPersistentProbedResourceCache<T>(params: Readonly<{
             ensureHydrated();
             cache.setError(key, error, nowMs);
         },
-        runDedupe: async <R,>(key: string, run: () => Promise<R>): Promise<R> => {
+        runDedupe: <R,>(key: string, run: (signal: AbortSignal) => Promise<R>, signal?: AbortSignal): Promise<R> => {
             ensureHydrated();
-            const pending = inflight.get(key) as Promise<R> | undefined;
-            if (pending) return await pending;
-
-            const p = (async () => {
-                try {
-                    return await run();
-                } finally {
+            const abortError = () => Object.assign(new Error('Probe consumer cancelled'), { name: 'AbortError' });
+            if (signal?.aborted) return Promise.reject(abortError());
+            let flight = inflight.get(key);
+            if (!flight) {
+                const created = { promise: Promise.resolve<unknown>(undefined), controller: new AbortController(), consumers: 0 };
+                inflight.set(key, created);
+                created.promise = (async () => await run(created.controller.signal))().finally(() => {
+                    if (inflight.get(key) === created) inflight.delete(key);
+                });
+                flight = created;
+            }
+            const owned = flight;
+            owned.consumers += 1;
+            return new Promise<R>((resolve, reject) => {
+                let settled = false;
+                const finish = (commit: () => void) => {
+                    if (settled) return;
+                    settled = true;
+                    signal?.removeEventListener('abort', cancel);
+                    owned.consumers -= 1;
+                    commit();
+                };
+                const cancel = () => {
+                    finish(() => reject(abortError()));
+                    if (owned.consumers !== 0 || inflight.get(key) !== owned) return;
                     inflight.delete(key);
-                }
-            })();
-            inflight.set(key, p);
-            return await p;
+                    owned.controller.abort();
+                };
+                signal?.addEventListener('abort', cancel, { once: true });
+                if (signal?.aborted) cancel();
+                void owned.promise.then(
+                    (value) => finish(() => resolve(value as R)),
+                    (error: unknown) => finish(() => reject(error)),
+                );
+            });
         },
         resetForTests: () => {
+            for (const flight of inflight.values()) flight.controller.abort();
+            inflight.clear();
             cache.clear();
             persistedState = null;
             deletePersistedString();

@@ -5,6 +5,7 @@ import type { AgentExecutionTargetV1, BackendTargetRefV2, PluginProjectionV2 } f
 import type { AgentInventoryProbeInput } from '@happier-dev/protocol/actions/actionSpecs';
 import { AgentModelsProbeObservationSchema, AgentSessionModesProbeObservationSchema, AgentConfigOptionsProbeObservationSchema, type AgentModelsProbeObservation } from '@happier-dev/protocol/capabilities';
 import type { ConnectedServicesProfileOption } from '@happier-dev/agents';
+import { projectUnexpectedActionFailureV1, type ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { getAgentCore, isBundledAgentId } from '@/agents/catalog/catalog';
 import { buildProviderCliCapabilityId } from '@/capabilities/cliCapabilityId';
@@ -133,7 +134,8 @@ async function probeAgentInventory(
     method: 'probeModels' | 'probeModes' | 'probeConfigOptions',
     requestedServerId?: string,
     probe?: AgentInventoryProbeInput,
-): Promise<Readonly<{ ok: true; result: Record<string, unknown> }> | Readonly<{ ok: false }>> {
+    signal?: AbortSignal,
+): Promise<Readonly<{ ok: true; result: Record<string, unknown> }> | Readonly<{ ok: false; failure: ActionExecuteFailure }>> {
     const serverId = normalizeId(requestedServerId) || normalizeId(getActiveServerSnapshot()?.serverId);
     const { transportTimeoutMs, ...capabilityParams } = probe ?? {};
     const res = await machineCapabilitiesInvoke(
@@ -147,15 +149,25 @@ async function probeAgentInventory(
                 ...(target.backendTargetParam ? { backendTarget: target.backendTargetParam } : {}),
             },
         },
-        { ...(serverId ? { serverId } : {}), ...(transportTimeoutMs ? { timeoutMs: transportTimeoutMs } : {}) },
+        { ...(serverId ? { serverId } : {}), ...(transportTimeoutMs ? { timeoutMs: transportTimeoutMs } : {}), signal },
     );
-    if (!res.supported || !res.response.ok) return { ok: false };
+    if (!res.supported) return { ok: false, failure: {
+        ...(res.reason === 'outcomeUnknown' ? projectUnexpectedActionFailureV1(true) : {
+            ok: false as const,
+            errorCode: res.reason === 'not-supported' ? 'unsupported_method' : 'agent_inventory_probe_failed',
+            error: res.reason === 'not-supported' ? 'unsupported_method' : 'agent_inventory_probe_failed',
+        }),
+        details: { reason: res.reason, ...(res.requestDisposition ? { requestDisposition: res.requestDisposition } : {}) },
+    } };
+    const failed = (): Readonly<{ ok: false; failure: ActionExecuteFailure }> => ({ ok: false,
+        failure: { ok: false, errorCode: 'agent_inventory_probe_failed', error: 'agent_inventory_probe_failed' } });
+    if (!res.response.ok) return failed();
     const result = res.response.result;
-    if (!result || typeof result !== 'object' || Array.isArray(result)) return { ok: false };
+    if (!result || typeof result !== 'object' || Array.isArray(result)) return failed();
     if (probe) {
         const parsed = (method === 'probeModels' ? AgentModelsProbeObservationSchema
             : method === 'probeModes' ? AgentSessionModesProbeObservationSchema : AgentConfigOptionsProbeObservationSchema).safeParse(result);
-        return parsed.success ? { ok: true, result: parsed.data } : { ok: false };
+        return parsed.success ? { ok: true, result: parsed.data } : failed();
     }
     return { ok: true, result: result as Record<string, unknown> };
 }
@@ -169,6 +181,7 @@ export async function invokeAgentInventoryProbeAction(params: Readonly<{
     capabilityParams: Readonly<Record<string, unknown>>;
     bypassCache?: boolean;
     transportTimeoutMs?: number;
+    signal?: AbortSignal;
 }>, method: 'probeModels' | 'probeModes' | 'probeConfigOptions'): Promise<MachineCapabilitiesInvokeResult> {
     try {
         const target = params.backendTarget ? readBackendTargetRefV2(params.backendTarget) : null;
@@ -180,27 +193,38 @@ export async function invokeAgentInventoryProbeAction(params: Readonly<{
             machineId: params.machineId,
             probe: { ...params.capabilityParams, ...(params.bypassCache ? { bypassCache: true } : {}),
                 ...(params.transportTimeoutMs ? { transportTimeoutMs: params.transportTimeoutMs } : {}) },
-        }, { surface: 'ui', ...(params.serverId ? { serverId: params.serverId } : {}) });
-        if (!result.ok || !result.result || typeof result.result !== 'object' || Array.isArray(result.result)) return { supported: false, reason: 'error' };
+        }, { surface: 'ui', ...(params.serverId ? { serverId: params.serverId } : {}), signal: params.signal });
+        params.signal?.throwIfAborted();
+        if (!result.ok) {
+            const details = result.details && typeof result.details === 'object' && !Array.isArray(result.details)
+                ? result.details as Record<string, unknown> : null;
+            return { supported: false,
+                reason: result.errorCode === 'action_outcome_unknown' ? 'outcomeUnknown'
+                    : details?.reason === 'not-supported' ? 'not-supported' : 'error',
+                ...(details?.requestDisposition === 'outcomeUnknown' || details?.requestDisposition === 'notSent'
+                    ? { requestDisposition: details.requestDisposition } : {}) };
+        }
+        if (!result.result || typeof result.result !== 'object' || Array.isArray(result.result)) return { supported: false, reason: 'error' };
         const observation = (method === 'probeModels' ? AgentModelsProbeObservationSchema
             : method === 'probeModes' ? AgentSessionModesProbeObservationSchema : AgentConfigOptionsProbeObservationSchema)
             .safeParse((result.result as Record<string, unknown>).probeObservation);
         return observation.success ? { supported: true, response: { ok: true, result: observation.data } } : { supported: false, reason: 'error' };
-    } catch {
+    } catch (error) {
+        if (params.signal?.aborted) throw error;
         return { supported: false, reason: 'error' };
     }
 }
 
 /** Admitted native model transport, below the Action executor and shared cache. */
-export async function probeAgentModelsForActions(args: Readonly<{ machineId: string; serverId?: string; probe: AgentInventoryProbeInput }>, target: AgentInventoryProbeTarget): Promise<Readonly<{
+export async function probeAgentModelsForActions(args: Readonly<{ machineId: string; serverId?: string; signal?: AbortSignal; probe: AgentInventoryProbeInput }>, target: AgentInventoryProbeTarget): Promise<Readonly<{
     agentId: string;
     items: readonly Readonly<{ modelId: string; label: string; description?: string }>[];
     supportsFreeform?: boolean;
     source: 'dynamic' | 'static' | 'unavailable' | 'preflight';
     probeObservation?: AgentModelsProbeObservation;
-}>> {
-    const probe = await probeAgentInventory(args.machineId, target, 'probeModels', args.serverId, args.probe);
-    if (!probe.ok) return { agentId: target.agentId, items: [], source: 'unavailable' };
+}> | ActionExecuteFailure> {
+    const probe = await probeAgentInventory(args.machineId, target, 'probeModels', args.serverId, args.probe, args.signal);
+    if (!probe.ok) return probe.failure;
     const parsed = AgentModelsProbeObservationSchema.parse(probe.result);
     return {
         agentId: target.agentId,
@@ -250,6 +274,7 @@ export type AgentSessionModesListArgs = Readonly<{
     limit?: number;
     backendTargetKey?: string;
     probe?: AgentInventoryProbeInput;
+    signal?: AbortSignal;
 }>;
 
 /**
@@ -267,14 +292,9 @@ export async function listAgentSessionModesForActions(args: AgentSessionModesLis
         // honest answer and no bundled stand-in.
         return { ok: false, errorCode: 'invalid_parameters', errorMessage: 'invalid_parameters' };
     }
-    const probe = await probeAgentInventory(machineId, target.target, 'probeModes', args.serverId, args.probe);
+    const probe = await probeAgentInventory(machineId, target.target, 'probeModes', args.serverId, args.probe, args.signal);
     if (!probe.ok) {
-        return inventoryListResult({
-            agentId: target.target.agentId,
-            items: [],
-            source: 'unavailable',
-            limit: readInventoryLimit(args.limit),
-        });
+        return probe.failure;
     }
     const source = readProbeSource(probe.result);
     const modesRaw = probe.result.availableModes;
@@ -319,6 +339,7 @@ export type AgentConfigOptionsListArgs = Readonly<{
     backendTargetKey?: string;
     modelId?: string;
     probe?: AgentInventoryProbeInput;
+    signal?: AbortSignal;
 }>;
 
 /**
@@ -334,14 +355,9 @@ export async function listAgentConfigOptionsForActions(args: AgentConfigOptionsL
     if (!machineId) {
         return { ok: false, errorCode: 'invalid_parameters', errorMessage: 'invalid_parameters' };
     }
-    const probe = await probeAgentInventory(machineId, target.target, 'probeConfigOptions', args.serverId, args.probe);
+    const probe = await probeAgentInventory(machineId, target.target, 'probeConfigOptions', args.serverId, args.probe, args.signal);
     if (!probe.ok) {
-        return inventoryListResult({
-            agentId: target.target.agentId,
-            items: [],
-            source: 'unavailable',
-            limit: readInventoryLimit(args.limit),
-        });
+        return probe.failure;
     }
     const source = readProbeSource(probe.result);
     const optionsRaw = probe.result.configOptions;

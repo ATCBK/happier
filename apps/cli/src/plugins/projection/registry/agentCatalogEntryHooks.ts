@@ -1261,11 +1261,42 @@ export function projectAgentPreflightSessionControlsCatalogEntry(params: Readonl
     };
     const acpDeclaration = contribution.catalogs && 'kind' in contribution.catalogs && contribution.catalogs.kind === 'acp'
         ? contribution.catalogs : null;
+    const withProbeLifetime = async <T>(
+        probeParams: PreflightSessionControlsProbeParams,
+        run: (scopedParams: PreflightSessionControlsProbeParams) => Promise<T>,
+    ): Promise<T> => {
+        const cleanupScope = probeParams.cleanupScope ?? createPreflightCatalogCleanupScope();
+        const deadline = new AbortController();
+        const timer = probeParams.deadlineSignal ? undefined
+            : setTimeout(() => deadline.abort(new Error('Agent preflight timed out')), probeParams.timeoutMs);
+        const deadlineSignal = probeParams.deadlineSignal ?? deadline.signal;
+        const signal = createPreflightProbeSignal(
+            probeParams.signal ? AbortSignal.any([probeParams.signal, deadlineSignal]) : deadlineSignal,
+            params.retirementSignal,
+        );
+        let rejectAbort: (() => void) | undefined;
+        const aborted = new Promise<never>((_resolve, reject) => {
+            rejectAbort = () => reject(signal.reason ?? new Error('Agent preflight aborted'));
+            signal.addEventListener('abort', rejectAbort, { once: true });
+        });
+        try {
+            signal.throwIfAborted();
+            const result = await Promise.race([run({ ...probeParams, signal, cleanupScope }), aborted]);
+            if (!params.isCurrent() || signal.aborted) throw new Error('Agent preflight belongs to a retired or cancelled generation');
+            return result;
+        } finally {
+            if (rejectAbort) signal.removeEventListener('abort', rejectAbort);
+            clearTimeout(timer);
+            // A containing operation may make another admitted probe attempt.
+            // Its owner closes a borrowed scope after the whole operation.
+            if (!probeParams.cleanupScope) await cleanupScope.dispose();
+        }
+    };
     const invoke = <T>(
         callback: ((context: AgentPreflightSessionControlsProbeContextV1) => Promise<T> | T) | undefined,
         probeParams: PreflightSessionControlsProbeParams,
     ): Promise<T | null> => callback
-        ? Promise.resolve(createContext(probeParams)).then(callback).catch(() => null)
+        ? withProbeLifetime(probeParams, async (scopedParams) => callback(await createContext(scopedParams))).catch(() => null)
         : Promise.resolve(null);
     return Object.freeze({
         ...(params.resolvePluginSettings ? { resolveProbePluginSettings: params.resolvePluginSettings } : {}),
@@ -1320,59 +1351,28 @@ export function projectAgentPreflightSessionControlsCatalogEntry(params: Readonl
                 ? { failureCacheStrategy: 'retry' as const }
                 : {}),
             ...(contribution.catalogs || contribution.probeCatalogs ? {
-                probeCatalogsRaw: async (probeParams: PreflightSessionControlsProbeParams) => {
-                    const cleanupScope = probeParams.cleanupScope ?? createPreflightCatalogCleanupScope();
-                    const deadline = new AbortController();
-                    const timer = probeParams.deadlineSignal ? undefined
-                        : setTimeout(() => deadline.abort(new Error('Agent catalog preflight timed out')), probeParams.timeoutMs);
-                    const signal = createPreflightProbeSignal(
-                        probeParams.deadlineSignal ?? (probeParams.signal ? AbortSignal.any([probeParams.signal, deadline.signal]) : deadline.signal),
-                        params.retirementSignal,
-                    );
-                    let rejectAbort: (() => void) | undefined;
-                    const aborted = new Promise<never>((_resolve, reject) => {
-                        rejectAbort = () => reject(signal.reason ?? new Error('Agent catalog preflight aborted'));
-                        signal.addEventListener('abort', rejectAbort, { once: true });
-                    });
-                    try {
-                        signal.throwIfAborted();
-                        return await Promise.race([
-                            (async () => {
-                                const context = await createContext({ ...probeParams, signal, cleanupScope });
-                                if (contribution.probeCatalogs) {
-                                    const catalogs = await contribution.probeCatalogs(context);
-                                    if (!params.isCurrent() || signal.aborted) throw new Error('Agent preflight belongs to a retired or cancelled generation');
-                                    return catalogs;
-                                }
-                                const catalogs = contribution.catalogs!;
-                                if ('kind' in catalogs && catalogs.kind === 'acp') {
-                                    return await withDeclaredAcpPreflight(context, catalogs, probeAcpCatalogs);
-                                }
-                                const toolId = catalogs.resolveCommandToolId
-                                    ? resolveSettingsSelectedSystemToolId({
-                                        commandToolIds: catalogs.commandToolIds ?? [],
-                                        resolveCommandToolId: catalogs.resolveCommandToolId,
-                                        accountSettings: context.accountSettings,
-                                        pluginSettings: context.pluginSettings,
-                                    })
-                                    : catalogs.command.toolId;
-                                if (catalogs.resolveCommandToolId && !toolId) throw new Error('Agent catalog preflight tool is unavailable');
-                                if (!toolId) throw new Error('Agent catalog preflight tool is unavailable');
-                                const result = await context.runDeclaredSystemToolCommand({ toolId, args: catalogs.command.args });
-                                if (!result.ok) throw new Error('Agent catalog preflight command failed');
-                                if (!('parseOutput' in catalogs)) throw new Error('Agent catalog preflight parser is unavailable');
-                                const parsed = await catalogs.parseOutput(result);
-                                if (!params.isCurrent() || signal.aborted) throw new Error('Agent preflight belongs to a retired or cancelled generation');
-                                return parsed;
-                            })(),
-                            aborted,
-                        ]);
-                    } finally {
-                        if (rejectAbort) signal.removeEventListener('abort', rejectAbort);
-                        clearTimeout(timer);
-                        await cleanupScope.dispose();
+                probeCatalogsRaw: async (probeParams: PreflightSessionControlsProbeParams) => await withProbeLifetime(probeParams, async (scopedParams) => {
+                    const context = await createContext(scopedParams);
+                    if (contribution.probeCatalogs) return await contribution.probeCatalogs(context);
+                    const catalogs = contribution.catalogs!;
+                    if ('kind' in catalogs && catalogs.kind === 'acp') {
+                        return await withDeclaredAcpPreflight(context, catalogs, probeAcpCatalogs);
                     }
-                },
+                    const toolId = catalogs.resolveCommandToolId
+                        ? resolveSettingsSelectedSystemToolId({
+                            commandToolIds: catalogs.commandToolIds ?? [],
+                            resolveCommandToolId: catalogs.resolveCommandToolId,
+                            accountSettings: context.accountSettings,
+                            pluginSettings: context.pluginSettings,
+                        })
+                        : catalogs.command.toolId;
+                    if (catalogs.resolveCommandToolId && !toolId) throw new Error('Agent catalog preflight tool is unavailable');
+                    if (!toolId) throw new Error('Agent catalog preflight tool is unavailable');
+                    const result = await context.runDeclaredSystemToolCommand({ toolId, args: catalogs.command.args });
+                    if (!result.ok) throw new Error('Agent catalog preflight command failed');
+                    if (!('parseOutput' in catalogs)) throw new Error('Agent catalog preflight parser is unavailable');
+                    return await catalogs.parseOutput(result);
+                }),
             } : {}),
             ...(acpDeclaration ? {
                 probeModelsRaw: async (probeParams: PreflightSessionControlsProbeParams) => await invoke(async (context) => {
@@ -1393,7 +1393,7 @@ export function projectAgentPreflightSessionControlsCatalogEntry(params: Readonl
             } : {}),
             ...(contribution.models
                 ? {
-                    probeModelsRaw: async (probeParams: PreflightSessionControlsProbeParams) => {
+                    probeModelsRaw: async (probeParams: PreflightSessionControlsProbeParams) => await withProbeLifetime(probeParams, async (probeParams) => {
                         const deadlineMs = Date.now() + Math.max(1, probeParams.timeoutMs);
                         const withRemainingTimeout = (): PreflightSessionControlsProbeParams | null => {
                             const timeoutMs = deadlineMs - Date.now();
@@ -1431,7 +1431,7 @@ export function projectAgentPreflightSessionControlsCatalogEntry(params: Readonl
                         return fallback.parseOutput
                             ? await fallback.parseOutput(fallbackResult)
                             : fallbackResult.stdout;
-                    },
+                    }).catch(() => null),
                 }
                 : {}),
             ...(contribution.probeModels

@@ -5,6 +5,7 @@ import {
     type AccountApiTokenSummaryV1, type ApprovalRequest,
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { PENDING_INPUT_PROTOCOL_VERSION_V4 } from '@happier-dev/protocol/clientCompatibility/primitives';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import tweetnacl from 'tweetnacl';
@@ -45,6 +46,7 @@ installHomeGovernanceBoundaries(homes);
 const { Modal } = await import('@/modal');
 const outgoing: SocketRpcRequestPayload[] = [];
 let rpcResult: unknown = { ok: true };
+let rpcAcknowledgement: unknown;
 let decisionReceiver: ((input: unknown) => Promise<unknown>) | null = null;
 installDisconnectedServerSocketBoundary((socket) => {
     socket.connected = true;
@@ -52,6 +54,7 @@ installDisconnectedServerSocketBoundary((socket) => {
     vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event: string, payload: SocketRpcRequestPayload) => {
         // Sync also acknowledges subscriptions; only RPC envelopes are Action effects.
         if (event === SOCKET_RPC_EVENTS.CALL) outgoing.push(payload);
+        if (event === SOCKET_RPC_EVENTS.CALL && rpcAcknowledgement !== undefined) return rpcAcknowledgement;
         return { ok: true, result: decisionReceiver && payload.method.endsWith(':' + RPC_METHODS.APPROVAL_REQUEST_DECIDE)
             ? await decisionReceiver(payload.params) : rpcResult };
     });
@@ -545,6 +548,7 @@ describe('createDefaultActionExecutor approvals', () => {
         homes.requests.length = 0;
         outgoing.length = 0;
         rpcResult = { ok: true };
+        rpcAcknowledgement = undefined;
         decisionReceiver = null;
     });
     afterEach(async () => {
@@ -1177,6 +1181,41 @@ describe('createDefaultActionExecutor approvals', () => {
         rpcResult = undefined;
         await expect(executor.execute('session.permission.respond', { sessionId: 's1', requestId: 'req-1', decision: 'allow' }, context()))
             .resolves.toEqual({ ok: true, result: { ok: true } });
+    });
+    it.each(['permission', 'user-action'] as const)('retains an unconfirmed %s answer when the transport loses its typed reply', async family => {
+        await connectPermissionTransport();
+        // An untyped failed acknowledgement cannot establish whether the responder applied the answer.
+        rpcAcknowledgement = { ok: false, error: 'Reply unavailable' };
+        const result = family === 'permission'
+            ? executor.execute('session.permission.respond', {
+                sessionId: 's1', requestId: 'req-1', turnId: 'turn-1', decision: 'approved',
+            }, context())
+            : executor.execute('session.user_action.answer', {
+                sessionId: 's1', requestId: 'req-1', answers: [{ question: 'Continue?', values: ['Yes'] }],
+            }, context());
+        await expect(result).resolves.toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+        expect(outgoing.filter(request => request.method === 's1:' + (family === 'permission'
+            ? RPC_METHODS.SESSION_PERMISSION_RESPOND : RPC_METHODS.SESSION_USER_ACTION_ANSWER)))
+            .toHaveLength(1);
+    });
+    it('preserves a permission transport refusal that proves the answer was not applied', async () => {
+        await connectPermissionTransport();
+        rpcAcknowledgement = { ok: false, error: 'No responder', errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE };
+        await expect(executor.execute('session.permission.respond', {
+            sessionId: 's1', requestId: 'req-1', decision: 'approved',
+        }, context())).resolves.toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
+    });
+    it('keeps an applied permission receipt when its Account retires as the reply is admitted', async () => {
+        await connectPermissionTransport();
+        const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        // Retire the real Account at the network reply's admission checkpoint,
+        // after the transport received it, rather than mocking a currentness owner.
+        rpcResult = { get ok() { retireActiveServerAccountScopeLifetime(); return true; } };
+        await expect(executor.execute('session.permission.respond', {
+            sessionId: 's1', requestId: 'req-1', decision: 'approved', mode: 'acceptEdits',
+        }, context())).resolves.toEqual({ ok: true, result: { ok: true } });
+        const { getStorage } = await import('@/sync/domains/state/storage');
+        expect(getStorage().getState().sessions.s1?.permissionMode).not.toBe('acceptEdits');
     });
     it('routes owner remote grant management through the canonical session Action transport', async () => {
         rpcResult = { grants: [], nextCursor: null };

@@ -16,6 +16,7 @@ import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import { invokeAgentInventoryProbeAction } from './actions/agentInventoryActionDeps';
 import type { MachineCapabilitiesInvokeResult } from './capabilities';
 import { SpawnFailureV1Schema, type SpawnFailureV1 } from '@happier-dev/protocol/machines/processes/spawnFailureV1';
+import type { ProbedResourceFailure } from '@/sync/runtime/probedResources/createPersistentProbedResourceCache';
 
 /** Shared discovery lifecycle for model pickers and voice catalog requests. */
 type MachineModelDiscoveryParams = Readonly<{
@@ -28,35 +29,43 @@ type MachineModelDiscoveryParams = Readonly<{
     timeoutMs?: number;
     capabilityParams: Readonly<Record<string, unknown>>;
     bypassCache?: boolean;
+    signal?: AbortSignal;
 }>;
 
 export async function discoverMachineModels(params: MachineModelDiscoveryParams): Promise<DynamicModelProbeCacheEntry | null> {
-    return discoverMachineModelsWithTransport(params, () => invokeAgentInventoryProbeAction({
+    return discoverMachineModelsWithTransport(params, (signal) => invokeAgentInventoryProbeAction({
         agentId: params.agentType, machineId: params.machineId, serverId: params.serverId,
         backendTarget: params.backendTarget,
         capabilityParams: params.capabilityParams,
         transportTimeoutMs: params.timeoutMs,
         bypassCache: params.bypassCache,
+        signal,
     }, 'probeModels'));
 }
 
 /** The inventory Action is already admitted; do not recurse into its own front door. */
 export async function discoverMachineModelsForActions(params: MachineModelDiscoveryParams): Promise<DynamicModelProbeCacheEntry | null> {
-    return discoverMachineModelsWithTransport(params, () => machineCapabilitiesInvoke(params.machineId, {
+    return discoverMachineModelsWithTransport(params, (signal) => machineCapabilitiesInvoke(params.machineId, {
         id: buildProviderCliCapabilityId(params.agentType), method: 'probeModels',
         params: { ...params.capabilityParams, ...(params.backendTarget ? { backendTarget: params.backendTarget } : {}),
             ...(params.bypassCache ? { bypassCache: true } : {}) },
-    }, { ...(params.serverId ? { serverId: params.serverId } : {}), ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}) }));
+    }, { ...(params.serverId ? { serverId: params.serverId } : {}), ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}), signal }));
 }
 
-async function discoverMachineModelsWithTransport(params: MachineModelDiscoveryParams, invoke: () => Promise<MachineCapabilitiesInvokeResult>): Promise<DynamicModelProbeCacheEntry | null> {
+async function discoverMachineModelsWithTransport(params: MachineModelDiscoveryParams, invoke: (signal: AbortSignal) => Promise<MachineCapabilitiesInvokeResult>): Promise<DynamicModelProbeCacheEntry | null> {
     const cached = readDynamicModelProbeCache(params.cacheKey, params.successMaxAgeMs);
     if (!params.bypassCache && isDynamicModelProbeCacheFresh(cached)) return cached;
 
-    return runDynamicModelProbeDedupe(params.cacheKey, async () => {
+    return runDynamicModelProbeDedupe(params.cacheKey, async (signal) => {
         let spawnFailure: SpawnFailureV1 | undefined;
+        let failure: ProbedResourceFailure | undefined;
         try {
-            const response = await invoke();
+            const response = await invoke(signal);
+            if (signal.aborted) return readDynamicModelProbeCache(params.cacheKey, params.successMaxAgeMs);
+            if (!response.supported) failure = {
+                reason: response.reason,
+                ...(response.requestDisposition ? { requestDisposition: response.requestDisposition } : {}),
+            };
             if (response.supported && response.response.ok) {
                 const result = response.response.result;
                 const record = result && typeof result === 'object' && !Array.isArray(result)
@@ -98,7 +107,8 @@ async function discoverMachineModelsWithTransport(params: MachineModelDiscoveryP
         } catch {
             // Transport failures are visible through the resource error state, including retained data.
         }
-        writeDynamicModelProbeCacheError(params.cacheKey, Date.now(), spawnFailure);
+        if (signal.aborted) return readDynamicModelProbeCache(params.cacheKey, params.successMaxAgeMs);
+        writeDynamicModelProbeCacheError(params.cacheKey, Date.now(), spawnFailure, failure);
         return readDynamicModelProbeCache(params.cacheKey, params.successMaxAgeMs);
-    });
+    }, params.signal);
 }

@@ -4,7 +4,7 @@
 
 import { isPlainObject } from './_shared';
 import { RPC_METHODS, isRpcMethodNotFoundResult } from '@happier-dev/protocol/rpc';
-import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { isRpcMethodNotFoundError, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import {
     parseCapabilitiesDescribeResponse,
     parseCapabilitiesDetectResponse,
@@ -152,6 +152,7 @@ export async function machineCapabilitiesInvoke(
         return { supported: true, response: parsed };
     } catch (error) {
         if (options?.signal?.aborted) throw error;
+        if (isRpcMethodNotFoundError(error)) return { supported: false, reason: 'not-supported' };
         const requestDisposition = readRpcRequestDisposition(error);
         return { supported: false, reason: preflightOwnsOperation && requestDisposition === 'outcomeUnknown' ? 'outcomeUnknown' : 'error',
             ...(requestDisposition ? { requestDisposition } : {}) };

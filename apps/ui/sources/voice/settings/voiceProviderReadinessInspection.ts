@@ -101,7 +101,7 @@ export async function inspectVoiceProviderReadiness(input: Readonly<{
 }>) {
     const passiveResult = input.machineId && input.passiveSetup && input.connectedServices && input.isCurrent()
         ? machineCapabilitiesInvoke(input.machineId, { id: input.passiveSetup.capabilityId, method: 'probePassiveRealtimeSetup',
-            params: { connectedServices: input.connectedServices } }, { timeoutMs: 30_000 }).then(outcome =>
+            params: { connectedServices: input.connectedServices } }, { timeoutMs: 30_000, signal: input.signal }).then(outcome =>
                 outcome.supported && outcome.response.ok ? readVoiceProviderPassiveRealtimeSetupResult(outcome.response.result) : null, () => null)
         : Promise.resolve(null);
     const rawResult = input.rawTargets === null ? Promise.resolve(null) : Promise.all(input.rawTargets.map(async target => {

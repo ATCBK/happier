@@ -39,7 +39,7 @@ import { forgetHistoricalEncryptionKey } from '@/sync/ops/account/forgetHistoric
 import { recoverHistoricalAutomationTemplates } from '@/sync/ops/account/recoverHistoricalAutomationTemplates';
 import { startAgentSignInRpc, checkAgentSignInRpc } from '@/agents/machineAgents/signIn/api';
 import { buildSessionPermissionRespondRpcParamsV1 } from '@happier-dev/protocol/sessions/permissions/respondRpcParamsV1';
-import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { readRpcErrorCode, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { buildMachineAgentsDetectRequest, projectMachineAgentsDetectResponse, projectAcpCatalogForMachineInventory, MachineAgentInventoryUnavailableError } from '@happier-dev/protocol/capabilities/machineAgentInventory';
 import { approvalArtifactBodyMatchesHeaderV1, buildApprovalRequestArtifactHeaderV1, listApprovalArtifactsV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { StoredApprovalRequestSchema, requiresExactDaemonApprovalReplay, isMountedPluginBlockingApprovalEligibleForLiveClient, type ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
@@ -471,6 +471,15 @@ function projectSessionInteractionRpcResult(result: unknown): unknown {
   return result === undefined || result === null ? { ok: true } : result;
 }
 
+function projectSessionInteractionRpcFailure(error: unknown) {
+  // The transport's issuance evidence survives Action serialization. A lost
+  // answer must not become a retryable failure merely because it has no code.
+  const errorCode = readRpcErrorCode(error) ?? (readRpcRequestDisposition(error) === 'outcomeUnknown'
+    ? RPC_ERROR_CODES.OUTCOME_UNKNOWN : null);
+  if (!errorCode) throw error;
+  return { ok: false, errorCode, errorMessage: error instanceof Error ? error.message : errorCode };
+}
+
 export type ApprovalReplayRoute = Readonly<{
   serverId: string;
   serverIdentityId: string;
@@ -878,19 +887,19 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
   };
     type AgentsBackendsListArgs = Readonly<{ includeDisabled?: boolean; limit?: number; machineId?: string }>;
   const resolveNativeInventoryProbeTarget = async (args: Readonly<{
-    agentId?: string; machineId?: string; serverId?: string; backendTargetKey?: string;
+    agentId?: string; machineId?: string; serverId?: string; backendTargetKey?: string; signal?: AbortSignal;
   }>): Promise<AgentInventoryProbeTarget | null> => {
     const selected = resolveActionBackendTargetSelection(args);
     if (!selected.ok) return null;
     const target = selected.selection.canonicalBackendTarget;
     if (target?.configuredBackendId || target?.sourceKind === 'configured') {
       if (!accountContext || !args.machineId) return null;
-      const { catalog } = await readAcpCatalogInContext(accountContext);
+      const { catalog } = await readAcpCatalogInContext(accountContext, args.signal);
       accountContext.assertCurrent();
       if (catalog.status !== 'ready') return null;
       const projection = await loadDaemonMergedProjectionInputs({
         machineId: args.machineId, serverId: accountContext.serverId, accountLifetime: accountContext.accountLifetime,
-        signal: accountContext.invocationSignal,
+        signal: args.signal ?? accountContext.invocationSignal,
       });
       accountContext.assertCurrent();
       if (!projection) return null;
@@ -3129,6 +3138,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         if (!target || !args.machineId) return { items: [], source: 'unavailable' };
         const result = await probeAgentModelsForActions({ ...args, machineId: args.machineId, probe: args.probe }, target);
         accountContext?.assertCurrent();
+        if ('ok' in result && result.ok === false) return result;
         if (args.includeProviderProjection && args.backendTargetKey) {
           const { describeProviderModels } = await import('@/providers/actions/client');
           const projection = await describeProviderModels({ machineId: args.machineId, serverId: args.serverId ?? accountContext?.serverId ?? null,
@@ -3139,8 +3149,8 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         }
         return result;
       }
-      const { agentId, machineId, serverId, limit, backendTargetKey } = args;
-      return await listAgentModelsForVoiceTool({ agentId, machineId, serverId, limit, backendTargetKey });
+      const { agentId, machineId, serverId, limit, backendTargetKey, signal } = args;
+      return await listAgentModelsForVoiceTool({ agentId, machineId, serverId, limit, backendTargetKey, signal });
     },
     agentsConfigOptionsList: async (args) => {
       const target = args.probe ? await resolveNativeInventoryProbeTarget(args) : undefined;
@@ -3395,11 +3405,11 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       try {
         await withAccountLifetime(signal, ownedSignal => sessionRespondToPermission(sessionId, request, { serverId: serverId ?? undefined, signal: ownedSignal }));
       } catch (error) {
-        const errorCode = readRpcErrorCode(error);
-        if (!errorCode) throw error;
-        return { ok: false, errorCode, errorMessage: error instanceof Error ? error.message : errorCode };
+        return projectSessionInteractionRpcFailure(error);
       }
-      accountContext?.assertCurrent();
+      // A received effect receipt stays true for its invoker after retirement;
+      // only the local feedback belongs to the still-current Account.
+      if (accountContext?.accountLifetime.isCurrent() === false) return { ok: true };
       // Feedback follows the applied response, including approved replay. A
       // deferred approval request must not look like a completed permission edit.
       if (serverId && !areServerProfileIdentifiersEquivalent(serverId, getActiveServerSnapshot().serverId)) return { ok: true };
@@ -3412,7 +3422,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
           agentId: resolveAgentIdForPermissionUi({ metadata, flavor: metadata?.flavor, toolName: '' }), metadata,
           accountScope: resolution?.kind === 'bound' ? resolution.scope : serverId ? null : undefined,
         });
-        accountContext?.assertCurrent();
+        if (accountContext?.accountLifetime.isCurrent() === false) return { ok: true };
         if (behavior?.footer?.forceReadOnlyAfterStop) storage.getState().updateSessionPermissionMode(sessionId, 'read-only');
       }
       return { ok: true };
@@ -3459,7 +3469,8 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         return { ok: false, errorCode: 'invalid_parameters', errorMessage: 'invalid_parameters', sessionId };
       }
       const approved = decision ? decision === 'approve' : true;
-      return projectSessionInteractionRpcResult(await withAccountLifetime(signal, ownedSignal => sessionRespondToUserAction(sessionId, disposition === 'pass_up' ? {
+      try {
+        return projectSessionInteractionRpcResult(await withAccountLifetime(signal, ownedSignal => sessionRespondToUserAction(sessionId, disposition === 'pass_up' ? {
           id: reqId, disposition,
           ...(typeof reason === 'string' && reason.trim().length > 0 ? { reason: reason.trim() } : {}),
         } : {
@@ -3469,6 +3480,9 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
           ...(typeof reason === 'string' && reason.trim().length > 0 ? { reason: reason.trim() } : {}),
           ...(typeof updatedPermissions !== 'undefined' ? { updatedPermissions } : {}),
         }, { serverId: serverId ?? undefined, signal: ownedSignal })));
+      } catch (error) {
+        return projectSessionInteractionRpcFailure(error);
+      }
     },
     sessionModeSet: async ({ sessionId, modeId }) => {
       const session = (storage.getState() as any)?.sessions?.[sessionId] ?? null;

@@ -133,14 +133,11 @@ async function invokeCliProbeOrInstallMethod(
         return null;
     }
 
-    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-    if (method === 'probeCatalogs') {
-        const { timeoutMs } = resolveCliProbeInvokeParams(params);
-        const deadline = new AbortController();
-        const signal = requestContext.signal ? AbortSignal.any([requestContext.signal, deadline.signal]) : deadline.signal;
-        requestContext = { signal, deadlineSignal: signal, deadlineAtMs: Date.now() + timeoutMs, cleanupScope: createPreflightCatalogCleanupScope() };
-        deadlineTimer = setTimeout(() => deadline.abort(new Error('Agent catalog preflight timed out')), timeoutMs);
-    }
+    const { timeoutMs } = resolveCliProbeInvokeParams(params);
+    const deadline = new AbortController();
+    const signal = requestContext.signal ? AbortSignal.any([requestContext.signal, deadline.signal]) : deadline.signal;
+    requestContext = { signal, deadlineSignal: signal, deadlineAtMs: Date.now() + timeoutMs, cleanupScope: createPreflightCatalogCleanupScope() };
+    const deadlineTimer = setTimeout(() => deadline.abort(new Error('Agent preflight timed out')), timeoutMs);
     try {
       return await withAgentPreflightCatalog({
         agentId,

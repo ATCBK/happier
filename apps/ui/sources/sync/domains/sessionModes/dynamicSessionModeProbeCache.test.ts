@@ -5,11 +5,26 @@ import {
     resetDynamicSessionModeProbeCacheForTests,
     writeDynamicSessionModeProbeCacheSuccess,
     writeDynamicSessionModeProbeCacheUnavailable,
+    writeDynamicSessionModeProbeCacheError,
 } from './dynamicSessionModeProbeCache';
 
 describe('dynamic session mode probe cache', () => {
     afterEach(() => {
         vi.useRealTimers();
+    });
+
+    it('retains unresolved disposition and last-good modes after the ordinary cooldown', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(2_500);
+        resetDynamicSessionModeProbeCacheForTests();
+        const modes = { availableModes: [{ id: 'plan', name: 'Plan' }] };
+        writeDynamicSessionModeProbeCacheSuccess('unknown', modes, 1_000);
+        writeDynamicSessionModeProbeCacheError('unknown', 2_000, { reason: 'outcomeUnknown', requestDisposition: 'outcomeUnknown' });
+        vi.setSystemTime(100_000_000);
+        expect(readDynamicSessionModeProbeCache('unknown')).toMatchObject({
+            kind: 'success', updatedAt: 1_000, value: modes,
+            reason: 'outcomeUnknown', requestDisposition: 'outcomeUnknown',
+        });
     });
 
     it('lets explicit unavailable results override a previous successful mode list during cooldown', () => {

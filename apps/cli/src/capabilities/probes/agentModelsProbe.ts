@@ -21,6 +21,7 @@ import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
 import { readAgentStructuredOutputCapabilities } from '@/plugins/projection/registry/agentContributionDefinition';
 import type { StoredCredentials } from '@/persistence';
 import { buildAgentProbeCacheKey } from './buildAgentProbeCacheKey';
+import type { PreflightCatalogCleanupScope } from './preflightCatalogCleanupScope';
 import {
   normalizeProbedCatalogOption,
   type ProbedCatalogOption,
@@ -478,6 +479,8 @@ async function probeAgentModels(params: {
   registrySnapshot?: ResolvedContributionRegistry;
   runtimeCacheKey?: string;
   signal?: AbortSignal;
+  deadlineSignal?: AbortSignal;
+  cleanupScope?: PreflightCatalogCleanupScope;
   backendTarget?: BackendTargetRefV1;
   runtimeDescriptorV1?: RuntimeDescriptorV1;
   runtimeKindOverride?: string;
@@ -565,6 +568,8 @@ async function probeAgentModels(params: {
         acpCatalogSnapshot: params.acpCatalogSnapshot,
         savedSecretOperationContext: params.savedSecretOperationContext,
         processEnv: params.env,
+        signal: params.signal,
+        cleanupScope: params.cleanupScope,
         onBackend: async (backend) => await probeModelsFromAcpBackend({ backend, timeoutMs }),
       });
       if (configuredAcpProbe.kind === 'present') {
@@ -590,6 +595,8 @@ async function probeAgentModels(params: {
           }, async ({ env }) => await probeModelsRaw({
             backendTarget: params.backendTarget,
             ...(params.signal ? { signal: params.signal } : {}),
+            ...(params.deadlineSignal ? { deadlineSignal: params.deadlineSignal } : {}),
+            ...(params.cleanupScope ? { cleanupScope: params.cleanupScope } : {}),
             runtimeDescriptorV1: params.runtimeDescriptorV1,
             runtimeKindOverride: params.runtimeKindOverride,
             probeKind: 'models',

@@ -17,6 +17,8 @@ import { withTempDir } from '@/testkit/fs/tempDir';
 import { createConfiguredAcpProbeBackend } from './configuredAcpProbeBackend';
 import { probeAgentModelsBestEffort, resetAgentModelsProbeCacheForTests } from './agentModelsProbe';
 import { probeAgentModesBestEffort } from './agentModesProbe';
+import { createPreflightCatalogCleanupScope } from './preflightCatalogCleanupScope';
+import { withAgentPreflightCatalog } from './withAgentPreflightCatalog';
 
 // Exercise the real constructor without charging cold module loading to a probe test.
 await import('@/agent/acp/catalog/configured/createConfiguredAcpBackend');
@@ -66,6 +68,56 @@ function probeSnapshot(command: string, args: string[], home: string) {
 }
 
 describe('createConfiguredAcpProbeBackend', () => {
+  it.each(['models', 'modes'] as const)('disposes a configured %s child before its containing preflight reports cancellation', async kind => {
+    await withTempDir('happier-configured-cancel-', async directory => {
+      const capture = join(directory, 'pending-pid');
+      const script = writeAcpTestAgentScript({ dir: directory, fileName: 'pending-agent.mjs', source: `
+        import { writeFileSync } from 'node:fs';
+        let buffer = '';
+        process.stdin.on('data', chunk => {
+          buffer += chunk.toString();
+          const lines = buffer.split('\\n'); buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const request = JSON.parse(line);
+            if (request.method === 'initialize') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id,
+              result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] } }) + '\\n');
+            if (request.method === 'session/new') writeFileSync(${JSON.stringify(capture)}, String(process.pid));
+          }
+        });
+      ` });
+      const settings = accountSettingsParse({});
+      setActiveAccountSettingsSnapshot({ source: 'network', settings, settingsVersion: 1, loadedAtMs: 1,
+        settingsSecretsReadKeys: [], scopeKey, acpCatalog: { status: 'ready', revision: 1,
+          record: AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{ id: 'review-bot', name: 'review-bot', title: 'Review bot',
+            launch: { kind: 'command', command: process.execPath, args: [script] }, env: {}, createdAt: 1, updatedAt: 1,
+          }] }),
+        } });
+      const controller = new AbortController();
+      const cleanupScope = createPreflightCatalogCleanupScope();
+      const params = { agentId: 'customAcp' as const,
+        backendTarget: { kind: 'configuredAcpBackend' as const, backendId: 'review-bot' }, cwd: directory,
+        accountSettings: settings, signal: controller.signal, cleanupScope, timeoutMs: 30_000 };
+      const native = kind === 'models' ? probeAgentModelsBestEffort(params) : probeAgentModesBestEffort(params);
+      const containing = withAgentPreflightCatalog(params, async () => await native);
+      void containing.catch(() => undefined);
+      let pid: number | undefined;
+      try {
+        await expect.poll(() => Number(readFileSync(capture, 'utf8'))).toBeGreaterThan(0);
+        pid = Number(readFileSync(capture, 'utf8'));
+        controller.abort(new Error('Containing preflight cancelled'));
+        await expect(containing).rejects.toThrow('Containing preflight cancelled');
+        expect(() => process.kill(pid!, 0)).toThrow();
+      } finally {
+        controller.abort();
+        // The RED implementation does not retain this test-owned child.
+        if (pid) { try { process.kill(pid, 'SIGTERM'); } catch {} }
+        await cleanupScope.dispose();
+        await native.catch(() => undefined);
+      }
+    });
+  }, 60_000);
+
   it.each(['models', 'modes'] as const)('probes configured %s through the current catalog and refreshes after its launch environment changes', async kind => {
     await withTempDir('happier-configured-controls-', async directory => {
       const script = writeAcpTestAgentScript({ dir: directory, fileName: 'controls-agent.mjs', source: `

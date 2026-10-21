@@ -3,6 +3,7 @@ import { listExecutableAgentUniverseIds } from '@/agents/catalog/agentUniverse';
 import { AgentsBackendsListOutputSchema, type AgentsBackendsListOutput } from '@happier-dev/protocol/actions/agentBackendInventory';
 import { readLegacyConfiguredAcpBackendId } from '@happier-dev/protocol/backends/targets/compat/customAcp';
 import { resolveActionBackendTargetSelection } from '@happier-dev/protocol/actions/resolveActionBackendTargetSelection';
+import { projectUnexpectedActionFailureV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { providerCatalogPermitsUnlistedModelIdV1 } from '@happier-dev/protocol/providers/catalog/merge';
 import { composeProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import type { BackendTargetRefV1 } from '@happier-dev/protocol/backends/targets/backendTargetRef';
@@ -371,6 +372,7 @@ export async function listAgentModelsForVoiceTool(params: Readonly<{
   serverId?: string;
   limit?: number;
   backendTargetKey?: string;
+  signal?: AbortSignal;
 }>): Promise<unknown> {
   const backendTargetKey = normalizeId(params.backendTargetKey);
   const selection = resolveActionBackendTargetSelection({
@@ -460,7 +462,12 @@ export async function listAgentModelsForVoiceTool(params: Readonly<{
         serverId,
         backendTarget,
         capabilityParams: { timeoutMs: 15_000 },
+        signal: params.signal,
       });
+      if (entry?.reason === 'outcomeUnknown') return {
+        ...projectUnexpectedActionFailureV1(true),
+        details: { reason: entry.reason, requestDisposition: entry.requestDisposition },
+      };
       const failed = entry?.kind === 'error' || (entry?.kind === 'success' && entry.errorUpdatedAt !== undefined);
       const list = entry?.kind === 'success' ? entry.value : createUnavailablePreflightModelList();
       return await withProviderProjection({

@@ -18,7 +18,7 @@ export type PreflightSessionControlsProbeParams = Readonly<{
   pluginSettings?: AgentCliSessionCommandPluginSettingsV1;
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
-  /** Existing containing catalog operation owns this deadline; direct callers retain the local budget. */
+  /** The containing preflight operation owns this deadline; direct callers retain the local budget. */
   deadlineSignal?: AbortSignal;
   cleanupScope?: PreflightCatalogCleanupScope;
 }>;

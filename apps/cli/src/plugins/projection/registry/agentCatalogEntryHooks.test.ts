@@ -11,16 +11,19 @@ import type {
   AgentCliSessionCommandBuildInputV1,
   AgentConnectedAccountRuntimeAuthAdapterV1,
   AgentPreflightSessionControlsContributionV1,
+  AgentPreflightSessionControlsProbeContextV1,
   AgentSessionRuntimeAuthApplyResult,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
 import { writeAcpTestAgentScript } from '@/agent/acp/testkit/subprocessHarness';
-import { COPILOT_PLUGIN } from '@happier-dev/plugins-copilot';
+import { COPILOT_PREFLIGHT_SESSION_CONTROLS } from '../../../../../../packages/plugins/copilot/src/agent/acp/preflight';
 import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
 import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { createConnectedServiceRuntimeAuthNativeHome } from '@/daemon/connectedServices/runtimeAuth/createRuntimeAuthNativeHome';
+import { createPreflightCatalogCleanupScope } from '@/capabilities/probes/preflightCatalogCleanupScope';
+import { runPreflightSessionControlsProbe } from '@/capabilities/probes/runPreflightSessionControlsProbe';
 
 import {
   createCliSessionCommandHandler,
@@ -50,7 +53,37 @@ function writePreflightFixtureExecutable(dir: string): string {
 }
 
 describe('Agent registration catalog projections', () => {
-  it('closes the native JSON-RPC process and prepared artifact when its catalog inspector ignores cancellation', async () => {
+  it('keeps the containing cleanup scope open across the existing native probe retry', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-preflight-retry-'));
+    const script = join(root, 'inventory.cjs');
+    await writeFile(script, `require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const request=JSON.parse(line);if('id' in request)process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:request.id,result:[]})+'\\n');});`);
+    const command = { toolId: 'native-cli', args: [script] };
+    let attempt = 0;
+    const models = [{ id: 'native-model', name: 'Native model' }];
+    const projected = projectAgentPreflightSessionControlsCatalogEntry({
+      agentId: 'fixture.native',
+      systemTools: [{ id: 'native-cli', title: 'Native fixture', executableNames: [writePreflightFixtureExecutable(root)] }],
+      preflightSessionControls: { jsonRpcCommands: [command], probeModels: context => (
+        context.withDeclaredJsonRpcClient(command, async client => {
+          await client.request('inventory');
+          return ++attempt === 1 ? null : models;
+        })
+      ) },
+      retirementSignal: new AbortController().signal, isCurrent: () => true,
+    });
+    const cleanupScope = createPreflightCatalogCleanupScope();
+    try {
+      const adapter = (await projected.getPreflightSessionControlsProbeAdapter!())!;
+      await expect(runPreflightSessionControlsProbe({ adapter,
+        probeOnce: async () => await adapter.probeModelsRaw!({ cwd: root, timeoutMs: 10_000, cleanupScope }),
+      })).resolves.toEqual({ kind: 'success', value: models });
+    } finally {
+      await cleanupScope.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['probeCatalogsRaw', 'probeModesRaw'] as const)('closes the native JSON-RPC process and prepared artifact when the %s inspector ignores cancellation', async (method) => {
     const root = await mkdtemp(join(tmpdir(), 'happier-catalog-native-cleanup-'));
     const capture = join(root, 'pid.json');
     const controller = new AbortController();
@@ -61,22 +94,24 @@ describe('Agent registration catalog projections', () => {
       kind: 'temporaryTextFile' as const, suffix: '.cjs',
       contents: `require('node:fs').writeFileSync(${JSON.stringify(capture)},JSON.stringify({pid:process.pid,path:__filename}));setInterval(()=>{},1000);`,
     }] }) };
+    const inspect = async (context: AgentPreflightSessionControlsProbeContextV1) => (
+      context.withDeclaredJsonRpcClient(command, async () => { await inspected; return { commands: [], skills: null }; })
+    );
     const projected = projectAgentPreflightSessionControlsCatalogEntry({
       agentId: 'fixture.native',
       systemTools: [{ id: 'native-cli', title: 'Native fixture', executableNames: [executable] }],
-      preflightSessionControls: { jsonRpcCommands: [command], probeCatalogs: async (context) => (
-        context.withDeclaredJsonRpcClient(command, async () => { await inspected; return { commands: [], skills: null }; })
-      ) },
+      preflightSessionControls: { jsonRpcCommands: [command], probeCatalogs: inspect, probeModes: inspect },
       retirementSignal: new AbortController().signal, isCurrent: () => true,
     });
     const adapter = (await projected.getPreflightSessionControlsProbeAdapter!())!;
-    const discovery = adapter.probeCatalogsRaw!({ cwd: root, timeoutMs: 10_000, signal: controller.signal });
+    const discovery = adapter[method]!({ cwd: root, timeoutMs: 10_000, signal: controller.signal });
     void discovery.catch(() => undefined);
     let observation: {pid:number;path:string} | undefined;
     try {
       await vi.waitFor(async () => { observation = JSON.parse(await readFile(capture, 'utf8')); });
       controller.abort(new Error('Caller cancelled the catalog'));
-      await expect(discovery).rejects.toThrow();
+      if (method === 'probeCatalogsRaw') await expect(discovery).rejects.toThrow();
+      else await expect(discovery).resolves.toBeNull();
       expect(() => process.kill(observation!.pid, 0)).toThrow();
       await expect(access(observation!.path)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
@@ -130,6 +165,40 @@ describe('Agent registration catalog projections', () => {
     }
   });
 
+  it.each(['probeModelsRaw', 'probeModesRaw', 'probeConfigOptionsRaw', 'probePassiveRealtimeSetupRaw'] as const)(
+    'uses the containing deadline for %s even when its external callback ignores cancellation', async (method) => {
+      vi.useFakeTimers();
+      const deadline = new AbortController();
+      let blocked = true;
+      const result: unknown[] = [];
+      const callback = () => blocked ? new Promise<never>(() => {}) : result;
+      const projected = projectAgentPreflightSessionControlsCatalogEntry({
+        agentId: 'fixture.native', systemTools: [],
+        preflightSessionControls: {
+          probeModels: callback, probeModes: callback, probeConfigOptions: callback, probePassiveRealtimeSetup: callback,
+        },
+        retirementSignal: new AbortController().signal, isCurrent: () => true,
+      });
+      const adapter = (await projected.getPreflightSessionControlsProbeAdapter!())!;
+      try {
+        let settled = false;
+        const discovery = adapter[method]!({ cwd: process.cwd(), timeoutMs: 100, deadlineSignal: deadline.signal });
+        void discovery.then(() => { settled = true; });
+        await vi.advanceTimersByTimeAsync(100);
+        expect(settled).toBe(false);
+        deadline.abort(new Error('Containing operation ended'));
+        await expect(discovery).resolves.toBeNull();
+        const caller = new AbortController();
+        const cancelled = adapter[method]!({ cwd: process.cwd(), timeoutMs: 100,
+          signal: caller.signal, deadlineSignal: new AbortController().signal });
+        caller.abort(new Error('Caller left before the containing deadline'));
+        await expect(cancelled).resolves.toBeNull();
+        blocked = false;
+        await expect(adapter[method]!({ cwd: process.cwd(), timeoutMs: 100 })).resolves.toEqual(result);
+      } finally { vi.useRealTimers(); }
+    },
+  );
+
   it.each(['callback', 'settings'] as const)('rejects native catalog completion after its plugin generation retires during %s', async (stage) => {
     const retirement = new AbortController();
     let complete!: () => void;
@@ -180,10 +249,6 @@ describe('Agent registration catalog projections', () => {
   }, 90_000);
 
   it('runs the Copilot preflight with the host working directory and observed effort controls', async () => {
-    const register = vi.fn();
-    await COPILOT_PLUGIN.activate({ agents: { register } } as never);
-    const preflightSessionControls: AgentPreflightSessionControlsContributionV1 | undefined = register.mock.calls[0]?.[2]?.preflightSessionControls;
-    expect(preflightSessionControls).toBeDefined();
     const toolRoot = await realpath(await mkdtemp(join(tmpdir(), 'happier-copilot-preflight-')));
     const script = writeAcpTestAgentScript({ dir: toolRoot, fileName: 'copilot-fixture.mjs', source: `
       let buffer = '';
@@ -209,7 +274,7 @@ describe('Agent registration catalog projections', () => {
     });
     try {
       const projected = projectAgentPreflightSessionControlsCatalogEntry({
-        agentId: 'copilot', preflightSessionControls: preflightSessionControls!,
+        agentId: 'copilot', preflightSessionControls: COPILOT_PREFLIGHT_SESSION_CONTROLS,
         systemTools: [{ id: 'copilot-cli', title: 'Copilot', executableNames: [executable] }],
         retirementSignal: new AbortController().signal, isCurrent: () => true,
       });

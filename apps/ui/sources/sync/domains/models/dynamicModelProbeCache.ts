@@ -5,9 +5,9 @@ import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSch
 import type { ProbedResourceSnapshot } from '@happier-dev/protocol/common/probedResourceCache';
 import type { SpawnFailureV1 } from '@happier-dev/protocol/machines/processes/spawnFailureV1';
 
-import { createPersistentProbedResourceCache } from '@/sync/runtime/probedResources/createPersistentProbedResourceCache';
+import { createPersistentProbedResourceCache, ProbedResourceError, type ProbedResourceFailure } from '@/sync/runtime/probedResources/createPersistentProbedResourceCache';
 
-export type DynamicModelProbeCacheEntry =
+export type DynamicModelProbeCacheEntry = ProbedResourceFailure & (
     | Readonly<{
         kind: 'success';
         updatedAt: number;
@@ -18,12 +18,12 @@ export type DynamicModelProbeCacheEntry =
         errorUpdatedAt?: number;
         spawnFailure?: SpawnFailureV1;
     }>
-    | Readonly<{ kind: 'error'; updatedAt: number; expiresAt: number; spawnFailure?: SpawnFailureV1 }>;
+    | Readonly<{ kind: 'error'; updatedAt: number; expiresAt: number; spawnFailure?: SpawnFailureV1 }>);
 
 // Launch diagnostics belong to the transient error, never the persisted last-good catalog.
-class DynamicModelProbeError extends Error {
-    constructor(readonly spawnFailure?: SpawnFailureV1) {
-        super('dynamic-model-probe-failed');
+class DynamicModelProbeError extends ProbedResourceError {
+    constructor(readonly spawnFailure?: SpawnFailureV1, failure?: ProbedResourceFailure) {
+        super('dynamic-model-probe-failed', failure);
     }
 }
 
@@ -173,9 +173,10 @@ export function readDynamicModelProbeCache(
 ): DynamicModelProbeCacheEntry | null {
     const snap: ProbedResourceSnapshot<PreflightModelList> = persistedCache.getSnapshot(key);
     const failure = snap.error instanceof DynamicModelProbeError ? snap.error.spawnFailure : undefined;
-    const diagnostic = failure ? { spawnFailure: failure } : {};
+    const diagnostic = { ...(failure ? { spawnFailure: failure } : {}),
+        ...(snap.error instanceof ProbedResourceError ? snap.error.failure : {}) };
     const transient = readTransientSuccess(key, Date.now(), successMaxAgeMs);
-    if (transient) return failure && transient.kind === 'success' && transient.errorUpdatedAt !== undefined
+    if (transient) return transient.kind === 'success' && transient.errorUpdatedAt !== undefined
         ? { ...transient, ...diagnostic } : transient;
     if (snap.dataUpdatedAt !== null && snap.data) {
         return {
@@ -225,11 +226,11 @@ export function writeDynamicModelProbeCacheTransientSuccess(
     notifyDynamicModelProbeCache(key);
 }
 
-export function writeDynamicModelProbeCacheError(key: string, nowMs = Date.now(), spawnFailure?: SpawnFailureV1): void {
+export function writeDynamicModelProbeCacheError(key: string, nowMs = Date.now(), spawnFailure?: SpawnFailureV1, failure?: ProbedResourceFailure): void {
     const transient = transientSuccessByKey.get(key);
     if (transient) transientSuccessByKey.set(key, { ...transient, errorUpdatedAt: nowMs });
     transientUnavailableByKey.delete(key);
-    persistedCache.writeError(key, new DynamicModelProbeError(spawnFailure), nowMs);
+    persistedCache.writeError(key, new DynamicModelProbeError(spawnFailure, failure), nowMs);
     notifyDynamicModelProbeCache(key);
 }
 
@@ -251,14 +252,16 @@ export function writeDynamicModelProbeCacheUnavailable(key: string, nowMs = Date
 
 export async function runDynamicModelProbeDedupe<T>(
     key: string,
-    run: () => Promise<T>,
+    run: (signal: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
 ): Promise<T> {
-    return await persistedCache.runDedupe(key, run);
+    return await persistedCache.runDedupe(key, run, signal);
 }
 
 /** Retry failures without renewing the timestamp of the last successful observation. */
 export function dynamicModelProbeRetryAt(entry: DynamicModelProbeCacheEntry | null): number | null {
     if (!entry) return null;
+    if (entry.reason === 'outcomeUnknown') return null;
     if (entry.kind === 'error') return entry.expiresAt;
     if (entry.value.unavailable) return entry.expiresAt;
     if (entry.staticFallback) return (entry.errorUpdatedAt ?? entry.updatedAt) + DYNAMIC_MODEL_PROBE_STATIC_FALLBACK_RETRY_MS;
@@ -267,6 +270,7 @@ export function dynamicModelProbeRetryAt(entry: DynamicModelProbeCacheEntry | nu
 
 export function isDynamicModelProbeCacheFresh(entry: DynamicModelProbeCacheEntry | null, nowMs = Date.now()): boolean {
     if (!entry) return false;
+    if (entry.reason === 'outcomeUnknown') return true;
     const retryAt = dynamicModelProbeRetryAt(entry);
     return nowMs < (retryAt ?? entry.expiresAt);
 }

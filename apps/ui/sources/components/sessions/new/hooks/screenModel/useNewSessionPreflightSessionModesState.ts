@@ -26,6 +26,7 @@ import {
     type NewSessionCapabilityProbeContext,
 } from '@/components/sessions/new/modules/newSessionCapabilityProbeContext';
 import { NEW_SESSION_CAPABILITY_PROBE_TIMEOUT_MS } from '@/components/sessions/new/modules/newSessionCapabilityProbeTimeoutMs';
+import type { ProbedResourceFailure } from '@/sync/runtime/probedResources/createPersistentProbedResourceCache';
 import {
     scheduleProbedResourceRetryAfterDelay,
     scheduleProbedResourceRetryAfterExpiry,
@@ -45,12 +46,15 @@ export function useNewSessionPreflightSessionModesState(params: Readonly<{
     probe: Readonly<{
         phase: 'idle' | 'loading' | 'refreshing';
         refreshedAt: number | null;
+        reason?: ProbedResourceFailure['reason'];
+        requestDisposition?: ProbedResourceFailure['requestDisposition'];
         onRefresh?: () => void;
     }>;
 }> {
     const [preflightModes, setPreflightModes] = React.useState<PreflightSessionModeList | null>(null);
     const [probePhase, setProbePhase] = React.useState<'idle' | 'loading' | 'refreshing'>('idle');
     const [refreshedAt, setRefreshedAt] = React.useState<number | null>(null);
+    const [failure, setFailure] = React.useState<ProbedResourceFailure>({});
     const [refreshNonce, setRefreshNonce] = React.useState(0);
     const lastHandledRefreshNonceRef = React.useRef(0);
     const preflightModesRef = React.useRef<PreflightSessionModeList | null>(null);
@@ -170,7 +174,8 @@ export function useNewSessionPreflightSessionModesState(params: Readonly<{
     }, [preflightModes, refreshedAt]);
 
     React.useEffect(() => {
-        if (params.enabled === false) {
+        if (params.enabled === false || !agentType || !supportsPreflightModeProbe) {
+            setFailure({});
             setPreflightModes(null);
             preflightModesRef.current = null;
             setProbePhase('idle');
@@ -180,6 +185,7 @@ export function useNewSessionPreflightSessionModesState(params: Readonly<{
             return;
         }
         if (!preflightModesKey) {
+            setFailure({});
             setPreflightModes(null);
             preflightModesRef.current = null;
             setProbePhase('idle');
@@ -196,6 +202,7 @@ export function useNewSessionPreflightSessionModesState(params: Readonly<{
         }
 
         const cacheEntry = readDynamicSessionModeProbeCache(preflightModesKey);
+        setFailure({ reason: cacheEntry?.reason, requestDisposition: cacheEntry?.requestDisposition });
         const cached = cacheEntry?.kind === 'success' ? cacheEntry.value : null;
         const scopeStable = lastScopeKeyRef.current !== null && probeScopeKey !== null && lastScopeKeyRef.current === probeScopeKey;
         lastScopeKeyRef.current = probeScopeKey;
@@ -212,9 +219,9 @@ export function useNewSessionPreflightSessionModesState(params: Readonly<{
         }
 
         const nowMs = Date.now();
-        if (!shouldForceProbe && cacheEntry && nowMs >= 0 && nowMs < cacheEntry.expiresAt) {
+        if (!shouldForceProbe && cacheEntry && (cacheEntry.reason === 'outcomeUnknown' || (nowMs >= 0 && nowMs < cacheEntry.expiresAt))) {
             setProbePhase('idle');
-            retryTimeout = scheduleProbedResourceRetryAfterExpiry(cacheEntry, nowMs, () => {
+            retryTimeout = cacheEntry.reason === 'outcomeUnknown' ? null : scheduleProbedResourceRetryAfterExpiry(cacheEntry, nowMs, () => {
                 setRefreshNonce((n) => n + 1);
             });
             return () => {
@@ -223,6 +230,7 @@ export function useNewSessionPreflightSessionModesState(params: Readonly<{
         }
 
         let cancelled = false;
+        const controller = new AbortController();
         const run = async () => {
             const probeAgentType = agentType;
             if (!probeAgentType || !supportsPreflightModeProbe) return;
@@ -231,14 +239,16 @@ export function useNewSessionPreflightSessionModesState(params: Readonly<{
 
             setProbePhase(preflightModesRef.current ? 'refreshing' : 'loading');
             const attempt = await runDynamicSessionModeProbeDedupe<Readonly<{
-                list: PreflightSessionModeList;
-                cacheable: boolean;
-            }> | null>(preflightModesKey, async () => {
+                list?: PreflightSessionModeList;
+                cacheable?: boolean;
+                failure?: ProbedResourceFailure;
+            }> | null>(preflightModesKey, async (signal) => {
                 const res = await invokeAgentInventoryProbeAction({
                     agentId: probeAgentType,
                     machineId: params.selectedMachineId!,
                     serverId: params.capabilityServerId,
                     backendTarget: backendTargetForProbe,
+                    signal,
                     capabilityParams: {
                             timeoutMs: NEW_SESSION_CAPABILITY_PROBE_TIMEOUT_MS,
                             ...(probeContextCapabilityParams ? probeContextCapabilityParams : {}),
@@ -246,7 +256,10 @@ export function useNewSessionPreflightSessionModesState(params: Readonly<{
                     },
                 }, 'probeModes');
 
-                if (!res.supported) return null;
+                if (!res.supported) return { failure: {
+                    reason: res.reason,
+                    ...(res.requestDisposition ? { requestDisposition: res.requestDisposition } : {}),
+                } };
                 if (!res.response.ok) return null;
 
                 const result = res.response.result;
@@ -271,10 +284,17 @@ export function useNewSessionPreflightSessionModesState(params: Readonly<{
                 };
                 const cacheable = source !== 'static' && source !== 'unavailable';
                 return { list: parsed, cacheable };
-            });
+            }, controller.signal);
 
             if (cancelled) return;
             const commitNowMs = Date.now();
+            const probeFailure = attempt?.failure;
+            setFailure(probeFailure ?? {});
+            if (probeFailure?.reason === 'outcomeUnknown') {
+                writeDynamicSessionModeProbeCacheError(preflightModesKey, commitNowMs, probeFailure);
+                setProbePhase('idle');
+                return;
+            }
             const list = attempt?.list ?? null;
             if (list && attempt?.cacheable !== false) {
                 writeDynamicSessionModeProbeCacheSuccess(preflightModesKey, list, commitNowMs);
@@ -324,16 +344,19 @@ export function useNewSessionPreflightSessionModesState(params: Readonly<{
                 return;
             }
 
-            writeDynamicSessionModeProbeCacheError(preflightModesKey, commitNowMs);
+            writeDynamicSessionModeProbeCacheError(preflightModesKey, commitNowMs, probeFailure);
             setProbePhase('idle');
             retryTimeout = setTimeout(() => {
                 setRefreshNonce((n) => n + 1);
             }, DYNAMIC_SESSION_MODE_PROBE_ERROR_BACKOFF_MS);
         };
 
-        void run();
+        void run().catch(() => {
+            if (!cancelled) setProbePhase('idle');
+        });
         return () => {
             cancelled = true;
+            controller.abort();
             if (retryTimeout) clearTimeout(retryTimeout);
         };
     }, [agentType, backendTargetForProbe, preflightModesKey, params.enabled, params.selectedMachineId, params.capabilityServerId, params.cwd, probeContextKey, probeContextCapabilityParams, probeScopeKey, refreshNonce, supportsPreflightModeProbe]);
@@ -356,6 +379,7 @@ export function useNewSessionPreflightSessionModesState(params: Readonly<{
         probe: {
             phase: probePhase,
             refreshedAt,
+            ...failure,
             ...(supportsPreflightModeProbe ? { onRefresh } : {}),
         },
     };

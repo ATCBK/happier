@@ -1,6 +1,7 @@
 import { act } from 'react-test-renderer';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RpcError } from '@happier-dev/protocol/rpcErrors';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
 import type { ActionOperationDeclarationV1 } from '@happier-dev/protocol';
 import { createDeferred, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
@@ -577,9 +578,21 @@ describe('useDaemonMergedProjectionInputs', () => {
     });
     it('retains the last ready projection as stale metadata when an invalidation refresh fails', async () => {
         const hook = await settledHook();
-        daemonDescribe.mockRejectedValueOnce(new Error('Transport unavailable'));
+        daemonDescribe.mockRejectedValueOnce(new RpcError('Private transport details', RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE));
         await act(async () => publishMachineContributionRegistryProjectionInvalidation({ machineId: 'machine-1', serverId }));
-        await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ phase: 'error', failureReason: 'error', inputs: { pluginProjectionV2: { generation: 1 } } }));
+        await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ phase: 'error', failureReason: 'transport-unavailable', inputs: { pluginProjectionV2: { generation: 1 } } }));
+    });
+    it('exposes a cold transport failure without empty projection facts and clears it after recovery', async () => {
+        daemonDescribe.mockRejectedValueOnce(new RpcError('Private transport details', RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE));
+        const hook = await renderHook(() => useDaemonMergedProjectionInputs({ machineId: 'machine-1', serverId }));
+        await vi.waitFor(() => expect(hook.getCurrent()).toEqual({
+            phase: 'error', inputs: null, failureReason: 'transport-unavailable',
+        }));
+
+        await act(async () => publishMachineContributionRegistryProjectionInvalidation({ machineId: 'machine-1', serverId }));
+        await vi.waitFor(() => expect(hook.getCurrent().phase).toBe('ready'));
+        expect(hook.getCurrent().failureReason).toBeUndefined();
+        expect(hook.getCurrent().inputs?.pluginProjectionV2?.generation).toBe(1);
     });
     it('serves only the cached projection and never asks the machine when loading is off', async () => {
         await primeCache(4);

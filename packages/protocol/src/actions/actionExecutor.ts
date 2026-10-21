@@ -9228,6 +9228,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ...(typeof data.limit === 'number' ? { limit: data.limit } : {}),
             ...(backendTargetKey ? { backendTargetKey } : {}),
             ...(data.probe === undefined ? {} : { probe: AgentInventoryProbeInputSchema.parse(data.probe) }),
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
           }, ctx);
           return completeActionResult(res);
         }
@@ -9245,6 +9246,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ...((data.modelId) ? { modelId: String(data.modelId) } : {}),
             ...(typeof data.limit === 'number' ? { limit: data.limit } : {}),
             ...(data.probe === undefined ? {} : { probe: AgentInventoryProbeInputSchema.parse(data.probe) }),
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
           return completeActionResult(res);
         }
@@ -9261,6 +9263,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ...((ctx.serverId) ? { serverId: String(ctx.serverId) } : {}),
             ...(typeof data.limit === 'number' ? { limit: data.limit } : {}),
             ...(data.probe === undefined ? {} : { probe: AgentInventoryProbeInputSchema.parse(data.probe) }),
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
           return completeActionResult(res);
         }

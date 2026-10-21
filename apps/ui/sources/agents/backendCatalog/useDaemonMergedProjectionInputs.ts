@@ -26,9 +26,9 @@ import {
 } from './loadDaemonMergedProjectionInputs';
 
 /**
- * Why the merged projection is not currently authoritative. `unsupported` and
- * `error` are daemon-side answers, not transport state: a consumer must not
- * report them as a disconnected machine.
+ * Why the merged projection is not currently authoritative. `unsupported` is
+ * a daemon fact; `error` includes read/transport failures. Neither phase alone
+ * establishes that the Machine is disconnected or has no integrations.
  */
 export type DaemonMergedProjectionPhase = 'idle' | 'loading' | 'ready' | 'unsupported' | 'error';
 

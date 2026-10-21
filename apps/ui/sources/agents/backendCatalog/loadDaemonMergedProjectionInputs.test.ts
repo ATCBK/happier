@@ -4,6 +4,7 @@ import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/acti
 import { createMachineFixture } from '@/dev/testkit';
 import { createPluginDeclarativeModelFixture } from '@/dev/testkit/fixtures/pluginDeclarativeModelFixture';
 import { RPC_METHODS, RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
+import { RpcError } from '@happier-dev/protocol/rpcErrors';
 import { createPluginContributionIdentity, buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -280,10 +281,7 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
                 supported: true,
                 projection: daemonProjection(7),
             })
-            .mockResolvedValueOnce({
-                supported: false,
-                reason: 'error',
-            });
+            .mockRejectedValueOnce(new RpcError('Private transport details', RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE));
         const {
             loadDaemonMergedProjectionCacheEntry,
             readCachedDaemonMergedProjectionCacheEntry,
@@ -303,7 +301,7 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
             serverId: 'server-1',
         })).toMatchObject({
             kind: 'error',
-            reason: 'error',
+            reason: 'transport-unavailable',
             inputs: {
                 pluginProjectionV2: {
                     generation: 7,

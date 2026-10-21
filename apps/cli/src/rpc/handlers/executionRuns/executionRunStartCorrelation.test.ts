@@ -3,6 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { accountSettingsParse } from '@happier-dev/protocol';
+import { createActionExecutor } from '@happier-dev/protocol';
+import { SESSION_RPC_METHODS, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import axios from 'axios';
+import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { buildActionExecutorContextForRpc } from '../_actionDispatchAdapter';
+import { deriveExecutionRunIdFromActionRequestId } from '@/agent/runtime/bridges/executionRun/startExecutionRun';
 
 import type { AgentMessage } from '@/agent/core/AgentMessage';
 import { resolveExecutionRunPolicy } from '@/agent/executionRuns/policy/executionRunPolicy';
@@ -122,9 +129,79 @@ describe('execution.run.start correlation freedom', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     reloadConfiguration();
     await rm(happyHomeDir, { recursive: true, force: true });
+  });
+
+  it.each([false, true])('keeps admitted Workflow native custody through direct Action transport (miswired=%s)', async miswired => {
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
+      if (path === '/v1/artifacts') return { status: 200, data: [] };
+      if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
+      if (path.includes('/acp/')) return { status: 200, data: { status: 'absent' } };
+      throw new Error(`Unexpected HTTP read: ${path}`);
+    });
+    const { manager, executor: nativeExecutor } = createDetachedStartHarness();
+    let releaseTurn!: () => void;
+    const turn = new Promise<void>(resolve => { releaseTurn = resolve; });
+    runtimeFactoryMock.createExecutionRunBridgeRuntime.mockImplementation(() => createTestExecutionRunHostRuntime({
+      onWaitForTurnCompletion: () => turn,
+      onCancel: () => releaseTurn(),
+      onDispose: () => releaseTurn(),
+    }));
+    const actionRequestId = 'workflow-input-v2:reclaim-owned-input:execution-run-start';
+    const expectedRunId = deriveExecutionRunIdFromActionRequestId(actionRequestId);
+    const deps = createCliActionDeps({ token: 'token', credentials: { token: 'token', encryption: null },
+      sessionId: 'cli-global', mode: 'plain', ctx: null,
+      machineActionDirectTargetTransport: { machineId: 'machine-1', invoke: async (method, input, options) => {
+        if (method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 2, results: {
+          'tool.executionRuns': { ok: true, data: { protocolVersion: 2, features: {
+            detachedScope: true, startAndWait: true, exactInputResults: true, runScopedAgentBindings: true,
+          } } },
+        } };
+        const localActionContext = { ...options?.localActionContext };
+        // Removing this actual in-process binding must reproduce the custody
+        // split: the native owner must never trust a same-named public field.
+        if (miswired) delete localActionContext.actionCaller;
+        const context = buildActionExecutorContextForRpc({ localActionContext });
+        const actionId = method === SESSION_RPC_METHODS.EXECUTION_RUN_START ? 'execution.run.start'
+          : method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP ? 'execution.run.stop' : 'execution.run.get';
+        const result = await nativeExecutor.execute(actionId, input, context);
+        return result.ok ? result.result : result;
+      } } });
+    const executor = createActionExecutor({ ...deps, isActionEnabled: () => true, isActionApprovalRequired: () => false });
+    const workflowContext = { surface: 'rpc' as const, authority: 'account_automation' as const,
+      actionRequestId, executionRunTargetMachineId: 'machine-1',
+      actionCaller: { kind: 'workflowRun' as const, runId: 'workflow-1', authorization: {
+        admittedPermissionCeiling: 'read-only' as const, principal: { kind: 'host' as const },
+      } },
+      callerPermissionMode: 'read-only',
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'read-only' as const },
+    };
+    try {
+      const started = await executor.execute('execution.run.start', createDetachedTaskStartInput({ instructions: 'Keep exact input custody.' }), workflowContext);
+      expect(started).toMatchObject({ ok: true });
+      const actualRunId = manager.listPublic()[0]!.runId;
+      expect(actualRunId === expectedRunId).toBe(!miswired);
+      expect(manager.get(actualRunId)?.status).toBe('running');
+      const reclaimed = await executor.execute('execution.run.get', { sessionId: null, runId: expectedRunId }, workflowContext);
+      if (miswired) {
+        expect(reclaimed).toMatchObject({ ok: false, errorCode: 'execution_run_not_found' });
+        expect(manager.get(actualRunId)).not.toBeNull();
+      } else {
+        expect(reclaimed).toMatchObject({ ok: true, result: { run: { runId: actualRunId } } });
+        await expect(executor.execute('execution.run.start', createDetachedTaskStartInput({ instructions: 'Keep exact input custody.' }), workflowContext))
+          .resolves.toMatchObject({ ok: true, result: { runId: actualRunId } });
+        expect(manager.listPublic()).toHaveLength(1);
+        await expect(executor.execute('execution.run.stop', { sessionId: null, runId: expectedRunId }, workflowContext))
+          .resolves.toMatchObject({ ok: true });
+        expect(manager.get(actualRunId)?.status).toBe('cancelled');
+        expect(manager.listPublic()).toHaveLength(1);
+      }
+    } finally { releaseTurn(); await manager.dispose(); }
   });
 
   it('treats raw parent refs as correlation and keeps a human start at depth zero', async () => {
@@ -230,6 +307,7 @@ describe('execution.run.start correlation freedom', () => {
       sendAcp: async () => {},
       executionRunProfileCatalog: buildExecutionRunProfileCatalog(),
       resolveAccountSettingsSnapshot,
+      resolveRunReportPolicy: async () => ({ preset: 'important' }),
       onManagerCreated: (created: ExecutionRunHostBridge) => {
         managers.push(created);
       },

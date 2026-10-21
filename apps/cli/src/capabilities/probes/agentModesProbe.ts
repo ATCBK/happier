@@ -12,6 +12,7 @@ import { AsyncTtlCache } from '@happier-dev/protocol/common/asyncTtlCache';
 import type { BackendTargetRefV1 } from '@happier-dev/protocol';
 import type { StoredCredentials } from '@/persistence';
 import { buildAgentProbeCacheKey } from './buildAgentProbeCacheKey';
+import type { PreflightCatalogCleanupScope } from './preflightCatalogCleanupScope';
 import { resolveAgentProbeVariant } from './resolveAgentProbeVariant';
 import { probeConfiguredAcpBackend } from './probeConfiguredAcpBackend';
 import { resolveProviderOwnedPreflightControlsProbeDecision } from './providerOwnedPreflightControlsProbePolicy';
@@ -174,6 +175,8 @@ export async function probeAgentModesBestEffort(params: {
   catalogEntry?: AgentCatalogEntry | null;
   runtimeCacheKey?: string;
   signal?: AbortSignal;
+  deadlineSignal?: AbortSignal;
+  cleanupScope?: PreflightCatalogCleanupScope;
   backendTarget?: BackendTargetRefV1;
   runtimeDescriptorV1?: RuntimeDescriptorV1;
   runtimeKindOverride?: string;
@@ -242,6 +245,8 @@ export async function probeAgentModesBestEffort(params: {
         }, async ({ env }) => await preflightAdapter.probeModesRaw!({
           backendTarget: params.backendTarget,
           ...(params.signal ? { signal: params.signal } : {}),
+          ...(params.deadlineSignal ? { deadlineSignal: params.deadlineSignal } : {}),
+          ...(params.cleanupScope ? { cleanupScope: params.cleanupScope } : {}),
           runtimeDescriptorV1: params.runtimeDescriptorV1,
           runtimeKindOverride: params.runtimeKindOverride,
           probeKind: 'modes',
@@ -282,6 +287,8 @@ export async function probeAgentModesBestEffort(params: {
         acpCatalogSnapshot: params.acpCatalogSnapshot,
         savedSecretOperationContext: params.savedSecretOperationContext,
         processEnv: params.env,
+        signal: params.signal,
+        cleanupScope: params.cleanupScope,
         onBackend: async (backend) => await probeModesFromAcpBackend({ backend, timeoutMs }).catch(() => null),
       });
       if (configuredAcpProbe.kind === 'present') {
