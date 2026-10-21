@@ -10,10 +10,18 @@ const range = {start:{line:0,character:0},end:{line:0,character:1}};
 const answer = message => {
   const uri = message.params?.textDocument?.uri;
   const document = documents.get(uri);
+  if (options.requiredLanguageId && document?.languageId !== options.requiredLanguageId) {
+    send({id:message.id,error:{code:-32602,message:'The document language id is unsupported'}});return;
+  }
   if (message.method === 'textDocument/hover') reply(message.id, {contents:{kind:'markdown',value:document?.text || ''},range});
   if (message.method === 'textDocument/definition') reply(message.id, [{uri,range}]);
   if (message.method === 'textDocument/references') reply(message.id, options.referenceCount ? Array.from({length:options.referenceCount},(_,line)=>({uri,range:{start:{line,character:0},end:{line,character:1}}})) : [{uri,range}]);
   if (message.method === 'textDocument/documentSymbol') reply(message.id, [{name:'fixture',kind:12,range,selectionRange:range}]);
+  if (message.method === 'textDocument/rename') {
+    const edit={range:{start:{line:0,character:0},end:{line:0,character:3}},newText:message.params.newName};
+    const target=message.params.newName==='outside'?new URL('../outside.ts',uri).href:new URL('b.ts',uri).href;
+    reply(message.id,{documentChanges:[{textDocument:{uri,version:null},edits:[edit]}, {textDocument:{uri:target,version:null},edits:message.params.newName==='overlap'?[edit,edit]:[edit]}]});
+  }
   if (message.method === 'textDocument/diagnostic') {
     if (externalDiagnosticMessage && options.failRefreshDiagnosticPath && uri?.endsWith('/'+options.failRefreshDiagnosticPath)) send({id:message.id,error:{code:-32000,message:'fixture refresh failed'}});
     else reply(message.id, {kind:'full',items:externalDiagnosticMessage || document?.text.includes('broken') ? [{range,severity:1,message:externalDiagnosticMessage || document.text,code:2322,source:'fixture'}] : []});
@@ -29,7 +37,7 @@ const receive = (message, fromQueue = false) => {
   if (message.method === 'initialize') {
     if (options.stallInitialize) return;
     if (options.failInitialize) { send({id:message.id,error:{code:-32000,message:'fixture initialization failed'}}); return; }
-    reply(message.id,{capabilities:{positionEncoding:'utf-16',textDocumentSync:{openClose:true,change:options.syncKind ?? 2},hoverProvider:true,definitionProvider:true,referencesProvider:true,documentSymbolProvider:true,...(options.diagnosticsMode === 'push' ? {} : {diagnosticProvider:{interFileDependencies:true,workspaceDiagnostics:false}})}}); return;
+    reply(message.id,{capabilities:{positionEncoding:'utf-16',textDocumentSync:{openClose:true,change:options.syncKind ?? 2},hoverProvider:true,definitionProvider:true,referencesProvider:true,documentSymbolProvider:true,...(options.semanticEdits ? {renameProvider:{prepareProvider:true},codeActionProvider:true,workspace:{fileOperations:{willRename:{filters:[]},didRename:{filters:[]}}}}:{}),...(options.diagnosticsMode === 'push' ? {} : {diagnosticProvider:{interFileDependencies:true,workspaceDiagnostics:false}})}}); return;
   }
   if (message.method === 'initialized') { send({id:'registration',method:'client/registerCapability',params:{registrations:options.watching === false ? [] : [{id:'files',method:'workspace/didChangeWatchedFiles',registerOptions:{watchers:[{globPattern:'**/*'}]}}]}}); return; }
   if (message.method === 'shutdown') {
@@ -46,7 +54,7 @@ const receive = (message, fromQueue = false) => {
   }
   if (message.method === 'workspace/didChangeWatchedFiles') {externalDiagnosticMessage=options.externalDiagnosticMessage;send({id:'refresh',method:'workspace/diagnostic/refresh'});}
   if (message.method === '$/cancelRequest') {const request=pending.get(message.params.id);if(request){pending.delete(message.params.id);send({id:request.id,error:{code:-32800,message:'RequestCancelled'}});}}
-  if (message.method === 'fixture/release') {for(const request of pending.values())answer(request);pending.clear();}
+  if (message.method === 'fixture/release') {for(const [id,request] of pending){if(!message.params?.method||request.method===message.params.method){answer(request);pending.delete(id);}}}
   if (message.method === 'fixture/publishDiagnostics') send({method:'textDocument/publishDiagnostics',params:message.params});
   if (message.method === 'fixture/progress') {
     if (message.params.kind === 'begin') {progressRequest={id:message.id,token:message.params.token};send({id:'progress-create',method:'window/workDoneProgress/create',params:{token:message.params.token}});}

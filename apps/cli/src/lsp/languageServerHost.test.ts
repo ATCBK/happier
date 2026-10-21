@@ -46,6 +46,69 @@ async function fixture(rootPath: string, count = 1, behavior: Record<string, unk
     return { host, open, query, call, protocolHandles, setDefinitionCount: (definitionCount: number) => { registry = registryFor(definitionCount); }, messages: async () => String(await readFile(log, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>) };
 }
 describe('language intelligence composed host', () => {
+    it('previews semantic edits from the real server without writing and rejects unsafe edit sets', async () => {
+        await withTempDir('happier-lsp-rename-', async rootPath => {
+            const source = Buffer.from('old\r\n');
+            await writeFile(join(rootPath, 'a.ts'), source);
+            await writeFile(join(rootPath, 'b.ts'), 'old');
+            const f = await fixture(rootPath, 1, { semanticEdits: true });
+            try {
+                const result = DaemonLspQueryResponseSchema.parse(await f.query('rename', 'a.ts', {
+                    text: 'disk', position: { line: 0, symbol: 'old' }, newName: 'renamed',
+                }));
+                expect(result).toMatchObject({ status: 'ok', kind: 'rename', files: [
+                    { path: 'a.ts', expectedHash: createHash('sha256').update(source).digest('hex'), edits: [{ text: 'renamed' }] },
+                    { path: 'b.ts', edits: [{ text: 'renamed' }] },
+                ] });
+                expect(await readFile(join(rootPath, 'a.ts'))).toEqual(source);
+                expect(await readFile(join(rootPath, 'b.ts'), 'utf8')).toBe('old');
+                expect(await f.query('rename', 'a.ts', { text: 'disk', position: { line: 0, character: 0 }, newName: 'outside' }))
+                    .toMatchObject({ status: 'error', errorCode: 'path_not_allowed' });
+                expect(await f.query('rename', 'a.ts', { text: 'disk', position: { line: 0, character: 0 }, newName: 'overlap' }))
+                    .toMatchObject({ status: 'error', errorCode: 'invalid_request' });
+                await f.open('b.ts', 'dirty', 1, true);
+                expect(await f.query('rename', 'a.ts', { text: 'disk', position: { line: 0, character: 0 }, newName: 'next' }))
+                    .toMatchObject({ status: 'error', errorCode: 'unsaved_editor_changes' });
+            } finally { await f.host.dispose(); }
+        });
+    });
+    it.each(['cancelled', 'completed'] as const)('retains an overlapping transient query after its sibling is %s', async settlement => {
+        await withTempDir('happier-lsp-transient-overlap-', async rootPath => {
+            await writeFile(join(rootPath, 'a.ts'), 'shared');
+            const f = await fixture(rootPath, 1, { delayHover: true, delayDiagnostic: true });
+            try {
+                const abort = new AbortController();
+                const first = f.call(RPC_METHODS.DAEMON_LSP_QUERY, { rootPath, path: 'a.ts', kind: 'diagnostics', text: 'disk' }, abort.signal);
+                await vi.waitFor(async () => expect((await f.messages()).some(m => m.method === 'textDocument/diagnostic')).toBe(true));
+                const second = f.query('hover', 'a.ts', { text: 'disk', position: { line: 0, character: 0 } });
+                await vi.waitFor(async () => expect((await f.messages()).some(m => m.method === 'textDocument/hover')).toBe(true));
+                if (settlement === 'cancelled') abort.abort();
+                else await f.protocolHandles[0].client.notify('fixture/release', { method: 'textDocument/diagnostic' });
+                expect(await first).toMatchObject(settlement === 'cancelled' ? { status: 'error', errorCode: 'cancelled' } : { status: 'ok' });
+                await f.protocolHandles[0].client.notify('fixture/release', { method: 'textDocument/hover' });
+                expect(await second).toMatchObject({ status: 'ok', sections: [{ markdown: 'shared' }] });
+                await expect(f.protocolHandles[0].wait()).resolves.toBeDefined();
+                expect(f.protocolHandles).toHaveLength(1);
+            } finally { await f.host.dispose(); }
+        });
+    });
+    it.each([1, 2])('forgets idle-reaped holder memberships before reopening %i definitions', async definitionCount => {
+        await withTempDir('happier-lsp-idle-reopen-', async rootPath => {
+            const policy = MachineResourcesPolicyGetResultV1Schema.parse({ status: 'ready', policy: { v: 1, processes: { toolIdleCloseMs: 1000 } }, revision: 0, source: 'stored' });
+            await writeFile(join(rootPath, 'a.ts'), 'shared');
+            const f = await fixture(rootPath, definitionCount, {}, undefined, () => policy);
+            try {
+                await f.open('a.ts', 'shared');
+                await Promise.all(f.protocolHandles.map(handle => handle.wait()));
+                await vi.waitFor(async () => expect(await f.call(RPC_METHODS.DAEMON_LSP_WATCH, { rootPath })).toMatchObject({ status: 'ok', servers: [] }));
+                await f.open('a.ts', 'shared');
+                const closed = await f.call(RPC_METHODS.DAEMON_LSP_SYNC, { rootPath, op: { op: 'close', path: 'a.ts' } });
+                expect(closed).toMatchObject({ status: 'ok', servers: [] });
+                await Promise.all(f.protocolHandles.map(handle => handle.wait()));
+                expect(f.protocolHandles).toHaveLength(definitionCount * 2);
+            } finally { await f.host.dispose(); }
+        });
+    });
     it('honors a valid idle policy beyond the native timer delay without overflowing or replacing the child', async () => {
         await withTempDir('happier-lsp-long-idle-policy-', async rootPath => {
             const disabledPolicy = MachineResourcesPolicyGetResultV1Schema.parse({ status: 'ready', policy: { v: 1, processes: { toolIdleCloseMs: null } }, revision: 0, source: 'stored' });

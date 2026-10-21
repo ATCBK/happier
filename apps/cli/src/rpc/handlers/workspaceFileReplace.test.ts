@@ -93,6 +93,60 @@ describe('registered workspace replace transport', () => {
     expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('new');
   });
 
+  it('applies one semantic edit set through the guarded writer and restores exact multiline bytes', async () => {
+    const bytes = Buffer.from('\uFEFFconst old = 1;\r\nold();\r\n');
+    await writeFile(join(root, 'a.ts'), bytes);
+    await writeFile(join(root, 'b.ts'), 'old\n');
+    const result = await apply({ kind: 'editSet', files: [
+      { path: 'a.ts', expectedHash: hash(bytes), edits: [
+        { range: { start: { line: 0, character: 7 }, end: { line: 0, character: 10 } }, text: 'renamed' },
+        { range: { start: { line: 1, character: 0 }, end: { line: 1, character: 3 } }, text: 'renamed' },
+      ] },
+      { path: 'b.ts', expectedHash: hash(Buffer.from('old\n')), edits: [
+        { range: { start: { line: 0, character: 0 }, end: { line: 1, character: 0 } }, text: 'renamed\n// done\n' },
+      ] },
+    ] });
+    expect(result).toMatchObject({ ok: true, results: [{ status: 'replaced' }, { status: 'replaced' }] });
+    expect(await readFile(join(root, 'a.ts'), 'utf8')).toBe('\uFEFFconst renamed = 1;\r\nrenamed();\r\n');
+    if (!result.ok) return;
+    expect(await apply({ kind: 'restore', files: result.results.map(file => ({ path: file.path, expectedHash: file.hash, edits: file.edits })) }))
+      .toMatchObject({ results: [{ status: 'restored' }, { status: 'restored' }] });
+    expect(await readFile(join(root, 'a.ts'))).toEqual(bytes);
+    expect(await readFile(join(root, 'b.ts'), 'utf8')).toBe('old\n');
+  });
+
+  it('rejects overlapping semantic edits and stale edit sets without writing', async () => {
+    await writeFile(join(root, 'a.ts'), 'old();\n');
+    const edit = { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }, text: 'new' };
+    expect(await apply({ kind: 'editSet', files: [{ path: 'a.ts', expectedHash: hash(Buffer.from('old();\n')), edits: [edit, edit] }] }))
+      .toMatchObject({ results: [{ status: 'failed', reason: 'overlapping_edits' }] });
+    expect(await apply({ kind: 'editSet', files: [{ path: 'a.ts', expectedHash: hash(Buffer.from('older')), edits: [edit] }] }))
+      .toMatchObject({ results: [{ status: 'changed' }] });
+    expect(await readFile(join(root, 'a.ts'), 'utf8')).toBe('old();\n');
+  });
+
+  it('renames a semantic source with importer edits and guarded inverse rename without overwriting a destination', async () => {
+    await writeFile(join(root, 'a.ts'), 'export const value = 1;\n');
+    await writeFile(join(root, 'b.ts'), "import './a';\n");
+    const originalHash = hash(Buffer.from('export const value = 1;\n'));
+    const source = { path: 'a.ts', expectedHash: originalHash, edits: [], renameTo: 'renamed.ts' };
+    const result = await apply({ kind: 'editSet', files: [source, { path: 'b.ts', expectedHash: hash(Buffer.from("import './a';\n")), edits: [
+      { range: { start: { line: 0, character: 10 }, end: { line: 0, character: 11 } }, text: 'renamed' },
+    ] }] });
+    expect(result).toMatchObject({ results: [{ status: 'replaced', renameTo: 'renamed.ts' }, { status: 'replaced' }] });
+    await expect(readFile(join(root, 'a.ts'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(join(root, 'b.ts'), 'utf8')).toBe("import './renamed';\n");
+    if (!result.ok) return;
+    expect(await apply({ kind: 'restore', files: result.results.map(file => ({
+      path: file.renameTo ?? file.path, expectedHash: file.hash, edits: file.edits,
+      ...(file.renameTo ? { renameTo: file.path } : {}),
+    })) })).toMatchObject({ results: [{ status: 'restored' }, { status: 'restored' }] });
+    expect(await readFile(join(root, 'a.ts'), 'utf8')).toBe('export const value = 1;\n');
+    await writeFile(join(root, 'renamed.ts'), 'user destination');
+    expect(await apply({ kind: 'editSet', files: [source] })).toMatchObject({ results: [{ status: 'changed', reason: 'expected_file_absent' }] });
+    expect(await readFile(join(root, 'renamed.ts'), 'utf8')).toBe('user destination');
+  });
+
   it('maps an agent write during staging to changed through the real guarded writer', async () => {
     const dest = join(root, 'a.txt');
     await writeFile(dest, 'old');
