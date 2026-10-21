@@ -31,30 +31,19 @@ export async function releaseModelPackEngines(overrides: InstallerOverrides, dir
   }
 }
 
-// The backup flag persists on the directory, so each dir is marked once per process (per native module) instead
-// of on every pack use. A failed attempt is forgotten so the next use retries it.
-const excludedDirsByNative = new WeakMap<InstallerSherpaNative, Set<string>>();
-
 async function excludeFromBackup(native: InstallerSherpaNative, dirUri: string): Promise<void> {
   if (!native.excludeFromBackup) return;
-  let excluded = excludedDirsByNative.get(native);
-  if (!excluded) {
-    excluded = new Set();
-    excludedDirsByNative.set(native, excluded);
-  }
-  if (excluded.has(dirUri)) return;
-  excluded.add(dirUri);
   try {
     await native.excludeFromBackup({ path: fileUriToNativePath(dirUri) });
   } catch (error) {
-    excluded.delete(dirUri);
     console.warn('[modelPacks] Failed to exclude model pack from backup', error instanceof Error ? error.name : 'unknown');
   }
 }
 
 /**
- * Packs are large and re-downloadable, so they stay out of device backups. Runs in the background: pack use
- * never waits on it, and a failure is only logged.
+ * Packs are large and re-downloadable, so they stay out of device backups. Mark each directory on use:
+ * removal and cancellation can recreate the same path without its former backup flag. Runs in the
+ * background: pack use never waits on it, and a failure is only logged.
  */
 export function excludeModelPackDirFromBackup(overrides: InstallerOverrides, dirUri: string): void {
   void getSherpaNative(overrides).then((native) => (native ? excludeFromBackup(native, dirUri) : undefined));

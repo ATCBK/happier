@@ -27,6 +27,8 @@ function createFs(files = new Map<string, Uint8Array>(), options: {
   openHandles?: Set<object>;
 } = {}) {
   const directories = new Set<string>();
+  // The OS backup flag belongs to a directory instance and disappears when that directory is deleted.
+  const backupExcludedDirectories = new Set<string>();
   function joinUri(parts: Array<string | { uri: string }>) {
     return parts.map((part) => (typeof part === 'string' ? part : part.uri).replace(/\/$/, '')).join('/');
   }
@@ -49,6 +51,7 @@ function createFs(files = new Map<string, Uint8Array>(), options: {
     }
     delete() {
       for (const dir of directories) if (dir === this.uri || dir.startsWith(`${this.uri}/`)) directories.delete(dir);
+      for (const dir of backupExcludedDirectories) if (dir === this.uri || dir.startsWith(`${this.uri}/`)) backupExcludedDirectories.delete(dir);
       for (const key of files.keys()) if (key.startsWith(`${this.uri}/`)) files.delete(key);
     }
   }
@@ -103,7 +106,7 @@ function createFs(files = new Map<string, Uint8Array>(), options: {
       };
     }
   }
-  return { Directory, File, Paths: { document: 'file:///docs/' }, files };
+  return { Directory, File, Paths: { document: 'file:///docs/' }, files, backupExcludedDirectories };
 }
 
 function useNativeDownloads(fs: ReturnType<typeof createFs>, data: (url: string) => Uint8Array, requested: string[] = [], transfer: {
@@ -1005,15 +1008,15 @@ describe('native speech engine lifecycle', () => {
   const PACK_PATH = '/docs/happier/voice/modelPacks/example';
 
   // The sherpa native module is a platform boundary: it caches engines that hold the pack's model files.
-  function createSherpaNative(onRelease: () => void = () => {}) {
+  function createSherpaNative(onRelease: () => void = () => {}, fs?: ReturnType<typeof createFs>) {
     const released: string[] = [];
-    const excluded: string[] = [];
     return {
       released,
-      excluded,
       module: {
         async release({ assetsDir }: { assetsDir: string }) { onRelease(); released.push(assetsDir); },
-        async excludeFromBackup({ path }: { path: string }) { excluded.push(path); },
+        async excludeFromBackup({ path }: { path: string }) {
+          fs?.backupExcludedDirectories.add(`file://${path}`);
+        },
       },
     };
   }
@@ -1029,14 +1032,58 @@ describe('native speech engine lifecycle', () => {
 
   beforeEach(() => { nativeDownload.mockReset(); });
 
-  it('excludes a pack from device backup once, not on every use', async () => {
+  it('keeps an installed pack excluded from device backup when it is reused', async () => {
     const fs = createFs();
-    const native = createSherpaNative();
+    const native = createSherpaNative(undefined, fs);
     await installSingleFilePack(fs, native.module);
     await ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal, mode: 'require_installed' }, {
       fs, sherpaNative: native.module,
     });
-    expect(native.excluded.filter((path) => path === PACK_PATH)).toEqual([PACK_PATH]);
+    expect(fs.backupExcludedDirectories.has(PACK_URI)).toBe(true);
+  });
+
+  it('excludes a recreated pack directory after removing and reinstalling it', async () => {
+    const fs = createFs();
+    const native = createSherpaNative(undefined, fs);
+    await installSingleFilePack(fs, native.module);
+    expect(fs.backupExcludedDirectories.has(PACK_URI)).toBe(true);
+    await removeModelPack({ packId: 'example' }, { fs, sherpaNative: native.module });
+    expect(fs.backupExcludedDirectories.has(PACK_URI)).toBe(false);
+
+    await installSingleFilePack(fs, native.module);
+    expect(fs.backupExcludedDirectories.has(PACK_URI)).toBe(true);
+  });
+
+  it.each(['install', 'update'] as const)('excludes a recreated %s directory when retrying after cancellation', async (operation) => {
+    const fs = createFs();
+    const native = createSherpaNative(undefined, fs);
+    if (operation === 'update') await installSingleFilePack(fs, native.module);
+    const directoryUri = operation === 'update' ? 'file:///docs/happier/voice/modelPackUpdates/example' : PACK_URI;
+    const bytes = new Uint8Array([8]);
+    const remote = manifest([
+      { path: 'model.onnx', url: 'https://example.com/model.onnx?rev=2', sha256: await sha256Hex(bytes), sizeBytes: bytes.length },
+    ], 'v2');
+    const controller = new AbortController();
+    let excludedBeforeCancellation = false;
+    useNativeDownloads(fs, () => bytes, [], { inFlight: async () => {
+      excludedBeforeCancellation = fs.backupExcludedDirectories.has(directoryUri);
+      controller.abort();
+    } });
+    const options = { ...installOptions, ...(operation === 'update' ? { updatePolicy: 'manual_update_if_available' as const } : {}) };
+    await expect(ensureModelPackInstalled({ ...options, signal: controller.signal }, {
+      fs, fetch: fetchManifest(remote), sherpaNative: native.module,
+    })).rejects.toThrow('aborted');
+    expect(excludedBeforeCancellation).toBe(true);
+    expect(fs.backupExcludedDirectories.has(directoryUri)).toBe(false);
+
+    let excludedDuringRetry = false;
+    useNativeDownloads(fs, () => bytes, [], { inFlight: async () => {
+      excludedDuringRetry = fs.backupExcludedDirectories.has(directoryUri);
+    } });
+    await ensureModelPackInstalled({ ...options, signal: new AbortController().signal }, {
+      fs, fetch: fetchManifest(remote), sherpaNative: native.module,
+    });
+    expect(excludedDuringRetry).toBe(true);
   });
 
   it('still installs when the platform rejects the backup exclusion', async () => {
