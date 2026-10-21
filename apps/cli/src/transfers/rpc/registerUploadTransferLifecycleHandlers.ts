@@ -1,4 +1,4 @@
-import type { RpcHandlerRegistrar } from '@/api/rpc/types';
+import type { RpcHandlerInvoker, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { configuration } from '@/configuration';
 import { createTransferRecipientKeyPair } from '@happier-dev/transfers/node';
 import { logger } from '@/ui/logger';
@@ -19,17 +19,8 @@ import {
 
 type UploadSessionHandle = NonNullable<ReturnType<TransferSessionStore['getUploadSession']>>;
 
-type UploadChunkRequest = Readonly<{
-  uploadId: string;
-  index: number;
-  contentBase64?: string;
-  payloadBase64?: string;
-  encryptedDataKeyEnvelopeBase64?: string;
-}>;
-
 type UploadChunkResponse = Readonly<{ success: true } | { success: false; error: string }>;
 
-type UploadAbortRequest = Readonly<{ uploadId: string }>;
 type UploadAbortResponse = Readonly<{ success: true } | { success: false; error: string }>;
 
 type UploadTransferSessionTarget<TFinalizeResult> = UploadTransferTarget<TFinalizeResult> & Readonly<{
@@ -71,13 +62,13 @@ export function registerUploadTransferLifecycleHandlers<TInitResponse, TFinalize
   }>) => TFinalizeResponse;
   enableChunkEncryption?: boolean;
   maxEncryptedDataKeyEnvelopeBytes?: number;
-}>): void {
+}>): RpcHandlerInvoker {
   const lifecycle = createTransferSessionLifecycle({
     store: params.store,
     chunkSizeBytes: configuration.filesTransferChunkBytes,
   });
 
-  params.rpcHandlerManager.registerHandler(params.methods.init, async (data: unknown): Promise<TInitResponse> => {
+  const init = async (data: unknown): Promise<TInitResponse> => {
     params.store.cleanupExpiredBestEffort();
     const resolved = await params.resolveInit(data);
     if (resolved.kind === 'rejected') {
@@ -107,9 +98,10 @@ export function registerUploadTransferLifecycleHandlers<TInitResponse, TFinalize
     });
 
     return params.buildInitSuccessResponse({ session });
-  });
+  };
 
-  params.rpcHandlerManager.registerHandler<UploadChunkRequest, UploadChunkResponse>(params.methods.chunk, async (data) => {
+  const chunk = async (raw: unknown): Promise<UploadChunkResponse> => {
+    const data = raw && typeof raw === 'object' ? raw as Record<string, unknown> : null;
     return await writeUploadTransferChunk({
       lifecycle,
       uploadId: typeof data?.uploadId === 'string' ? data.uploadId : '',
@@ -120,9 +112,9 @@ export function registerUploadTransferLifecycleHandlers<TInitResponse, TFinalize
         ? data.encryptedDataKeyEnvelopeBase64
         : undefined,
     });
-  });
+  };
 
-  params.rpcHandlerManager.registerHandler(params.methods.finalize, async (data: unknown): Promise<TFinalizeResponse> => {
+  const finalize = async (data: unknown): Promise<TFinalizeResponse> => {
     const uploadId = typeof (data as { uploadId?: unknown } | null)?.uploadId === 'string'
       ? (data as { uploadId: string }).uploadId
       : '';
@@ -152,12 +144,31 @@ export function registerUploadTransferLifecycleHandlers<TInitResponse, TFinalize
       sha256: finalized.sha256,
       uploadId,
     });
-  });
+  };
 
-  params.rpcHandlerManager.registerHandler<UploadAbortRequest, UploadAbortResponse>(params.methods.abort, async (data) => {
-    const uploadId = typeof data?.uploadId === 'string' ? data.uploadId : '';
+  const abort = async (data: unknown): Promise<UploadAbortResponse> => {
+    const uploadId = data && typeof data === 'object' && 'uploadId' in data && typeof data.uploadId === 'string'
+      ? data.uploadId : '';
     if (!uploadId) return { success: false, error: 'Missing uploadId' };
     await abortUploadTransferSession({ lifecycle, uploadId });
     return { success: true };
-  });
+  };
+
+  params.rpcHandlerManager.registerHandler(params.methods.init, init);
+  params.rpcHandlerManager.registerHandler(params.methods.chunk, chunk);
+  params.rpcHandlerManager.registerHandler(params.methods.finalize, finalize);
+  params.rpcHandlerManager.registerHandler(params.methods.abort, abort);
+
+  // Host callers retain this same lifecycle, not the public Machine method
+  // table: daemon startup binds prepared-transfer envelopes to those method ids.
+  return {
+    async invokeLocal(method, data, options) {
+      options?.signal?.throwIfAborted();
+      if (method === params.methods.init) return await init(data);
+      if (method === params.methods.chunk) return await chunk(data);
+      if (method === params.methods.finalize) return await finalize(data);
+      if (method === params.methods.abort) return await abort(data);
+      throw new Error('Unknown local upload lifecycle method');
+    },
+  };
 }

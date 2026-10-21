@@ -22,7 +22,7 @@ function isRetryableWindowsRenameError(error: unknown): boolean {
   return code === 'EBUSY' || code === 'EEXIST' || code === 'EPERM';
 }
 
-async function renameWithWindowsRetries(
+export async function renameWithWindowsRetries(
   sourcePath: string,
   destinationPath: string,
   beforeAttempt?: () => void,

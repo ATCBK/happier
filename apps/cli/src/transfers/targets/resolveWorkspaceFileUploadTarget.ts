@@ -52,7 +52,7 @@ export function resolveWorkspaceFileUploadTarget(input: Readonly<{
     const path = typeof input.path === 'string' ? input.path : '';
     const sizeBytes = normalizeSizeBytes(input.sizeBytes);
     const expectedHash = input.expectedHash === null ? null
-        : typeof input.expectedHash === 'string' && input.expectedHash.trim() ? input.expectedHash.trim() : undefined;
+        : typeof input.expectedHash === 'string' ? input.expectedHash : undefined;
     const overwrite = expectedHash === null ? false : typeof expectedHash === 'string' || Boolean(input.overwrite);
 
     if (!path) {

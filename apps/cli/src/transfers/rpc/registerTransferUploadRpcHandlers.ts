@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import type { RpcHandlerRegistrar } from '@/api/rpc/types';
+import type { RpcHandlerInvoker, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import type { SessionAttachmentHandleV1 } from '@happier-dev/protocol';
 import { sanitizeAttachmentFileName } from '../targets/resolveAttachmentTransferTarget';
@@ -38,10 +38,10 @@ export function registerTransferUploadRpcHandlers(
     /** Immutable Session namespace: only attachments are accepted, never caller paths. */
     sessionAttachment?: Readonly<{ sessionId: string }>;
   }>,
-): void {
+): RpcHandlerInvoker {
   const tempUploadRoot = join(tmpdir(), 'happier', 'uploads', randomUUID());
 
-  registerUploadTransferLifecycleHandlers<TransferUploadInitResponse, TransferUploadFinalizeResponse, unknown>({
+  return registerUploadTransferLifecycleHandlers<TransferUploadInitResponse, TransferUploadFinalizeResponse, unknown>({
     rpcHandlerManager,
     store: deps.store,
     methods: {

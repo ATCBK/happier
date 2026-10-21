@@ -84,7 +84,7 @@ import { WorkspaceSyncHandoffSourcePhaseRequestV1Schema, WorkspaceSyncHandoffSou
     WorkspaceSyncTargetBootstrapReleaseResultV1Schema,
     type WorkspaceSyncHandoffSourcePhaseRequestV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import { WorkspaceSyncSeedExportPrepareV1Schema, type WorkspaceSyncSeedExportPrepareV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
-import { buildActionExecutorContextForRpc, projectWorkspaceSyncPhysicalContextFromActionContext, type RpcActionExecutorContext } from '@/rpc/handlers/_actionDispatchAdapter';
+import { buildActionExecutorContextForRpc, projectWorkspaceSyncPhysicalContextFromActionContext, type RpcActionExecutor, type RpcActionExecutorContext } from '@/rpc/handlers/_actionDispatchAdapter';
 import { ExternalActionRequestEnvelopeSchema } from '@happier-dev/protocol/actions/externalActionApi';
 import { isExternalActionAuthorizationBoundToEnvelope } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { OpenProjectInputV1Schema, OpenProjectResultV1Schema, ProjectOpenSyncMaterializationResultV1Schema, type OpenProjectInputV1, type OpenProjectResultV1 } from '@happier-dev/protocol/projects/openProjectV1';
@@ -95,7 +95,9 @@ import { resolveWorkspaceSyncTransportAddress } from '@happier-dev/protocol/work
 import { readWorkspaceSyncChildMachineFacts } from '@/workspaces/sync/workspaceSyncTargetAuthority';
 import type { WorkspaceSyncTargetPhaseDescriptor } from '@/workspaces/sync/workspaceSyncTargetAuthority';
 import { registerSessionHandlers } from '@/rpc/handlers/registerSessionHandlers';
+import { applyWorkspaceFileReplace } from '@/rpc/handlers/workspaceFileReplace';
 import { registerLanguageIntelligenceHandlers } from '@/rpc/handlers/languageIntelligence';
+import { authorizeFilesystemPath } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemPathAuthorization';
 import { registerAutomationReplyHandoffRpcHandler } from '@/rpc/handlers/automationReplyHandoff';
 import { createWorkflowRunStorageClient } from '@/daemon/workflows/workflowRunStorageClient';
 import {
@@ -623,6 +625,7 @@ export class ApiMachineClient {
     private additionalAllowedWriteDirs: string[] = [];
     private readonly transientSessionMediaReadAllowance = createTransientSessionMediaReadAllowance();
     private readonly fileSystemTransferRelayOwner: TransferRelayV2DownloadSessionOwner;
+    private readonly hostLocalUploadRpc: import('./rpc/types').RpcHandlerInvoker;
     private readonly rpcLifecycleRegistrations: MachineRpcLifecycleRegistration[] = [];
     private executionRunAccountSnapshots: ReturnType<typeof createExecutionRunAccountSettingsSnapshotResolver> | null = null;
     private readonly executionBudgetRegistry = createExecutionBudgetRegistry();
@@ -1310,7 +1313,27 @@ export class ApiMachineClient {
             serverUrl: resolveServerHttpBaseUrl(),
             resolveCurrentMachineId: () => this.machine.id,
         });
+        const resolveWorkspaceMutationActionExecutor = (): RpcActionExecutor | null => this.externalActionIngressOwner && !this.projectionSchedulingClosed ? {
+                execute: async (actionId, input, context) => {
+                    const owner = this.externalActionIngressOwner;
+                    if (!owner || this.projectionSchedulingClosed) return {
+                        ok: false, errorCode: 'workspace_file_replace_action_owner_unavailable', error: 'Workspace replacement Action admission is unavailable',
+                    };
+                    if (context?.serverId && context.serverId !== owner.currentServerId) return {
+                        ok: false, errorCode: 'target_unavailable', error: 'Workspace replacement target is unavailable',
+                    };
+                    const requesterAccountId = context?.runtimeAccountId?.trim()
+                        || context?.externalActionCredential?.accountId.trim();
+                    if (!requesterAccountId) return {
+                        ok: false, errorCode: 'workspace_file_replace_requester_unavailable', error: 'The verified workspace replacement requester is unavailable',
+                    };
+                    return await owner.executor.execute(actionId, input, { ...context, serverId: owner.currentServerId,
+                        externalActionTarget: { kind: 'machine', machineId: this.machine.id }, runtimeAccountId: requesterAccountId });
+                },
+            } : null;
         registerSessionHandlers(this.rpcHandlerManager, this.machineRpcWorkingDirectory, {
+            workspaceFileReplaceMachineId: this.machine.id,
+            resolveWorkspaceFileReplaceActionExecutor: resolveWorkspaceMutationActionExecutor,
             executionBudgetRegistry: this.executionBudgetRegistry,
             admissionDrain: this.lifecycleDependencies.managedActivity?.admissionDrain,
             accessPolicy: this.filesystemAccessPolicy,
@@ -1408,6 +1431,7 @@ export class ApiMachineClient {
         });
         registerLanguageIntelligenceHandlers(this.rpcHandlerManager, this.machineRpcWorkingDirectory, {
             accessPolicy: this.filesystemAccessPolicy,
+            machineId: this.machine.id, resolveActionExecutor: resolveWorkspaceMutationActionExecutor,
         });
         registerAutomationReplyHandoffRpcHandler(this.rpcHandlerManager, {
             machineId: this.machine.id,
@@ -1489,6 +1513,7 @@ export class ApiMachineClient {
                 store: composerMediaStageStore,
             },
         });
+        this.hostLocalUploadRpc = fileSystemHandlers.localUploadRpc;
         this.fileSystemTransferRelayOwner = {
             store: fileSystemHandlers.transferSessionStore,
             lifecycle: createTransferSessionLifecycle({
@@ -1929,6 +1954,37 @@ export class ApiMachineClient {
         });
     }
 
+    /** Replacement and Undo share this native effect after canonical Action admission. */
+    createWorkspaceFileReplaceActionExecutor(serverId: string): NonNullable<ActionExecutorDeps['workspaceFilesReplace']> {
+        return async ({ machineId, ...request }, context) => {
+            const target = context.externalActionTarget;
+            if (!this.externalActionIngressOwner || this.projectionSchedulingClosed
+                || context.serverId !== serverId || machineId !== this.machine.id
+                || target?.kind !== 'machine' || target.machineId !== machineId) {
+                return { ok: false, errorCode: 'target_unavailable', error: 'Workspace replacement target is unavailable' };
+            }
+            if (context.operationAcceptance?.actionId === 'workspace.files.replace') {
+                context.operationAcceptance.accept({ operation: { operationId: context.operationAcceptance.operationId } });
+            }
+            return await applyWorkspaceFileReplace(request, this.machineRpcWorkingDirectory, this.filesystemAccessPolicy,
+                context.signal ? { signal: context.signal } : undefined);
+        };
+    }
+
+    createLanguageIntelligenceApplyActionExecutor(serverId: string): NonNullable<ActionExecutorDeps['languageIntelligenceApply']> {
+        return async ({ machineId, request }, context) => {
+            const target = context.externalActionTarget;
+            if (!this.externalActionIngressOwner || this.projectionSchedulingClosed || context.serverId !== serverId || machineId !== this.machine.id
+                || target?.kind !== 'machine' || target.machineId !== machineId) {
+                return { ok: false, errorCode: 'target_unavailable', error: 'Language Action target is unavailable' };
+            }
+            const { getLanguageServerHost } = await import('@/lsp/languageServerHost');
+            const root = authorizeFilesystemPath({ targetPath: request.rootPath, defaultDirectory: this.machineRpcWorkingDirectory, accessPolicy: this.filesystemAccessPolicy });
+            if (!root.valid) return { status: 'error', errorCode: 'path_not_allowed' };
+            return getLanguageServerHost().apply({ ...request, rootPath: root.resolvedPath }, context.signal ? { signal: context.signal } : undefined);
+        };
+    }
+
     /** Effect dependency reached only after the canonical Action admission. */
     createMachineSkillActionExecutor(params: Readonly<{ credentials: StoredCredentials;
         operationContext?: import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationContextV1;
@@ -2078,6 +2134,24 @@ export class ApiMachineClient {
 
     registerMachineAccessLossReceiver(options: Omit<Parameters<typeof registerMachineAccessLossReceiver>[1], 'machineId'>): void {
         registerMachineAccessLossReceiver(this.rpcHandlerManager, { ...options, machineId: this.machine.id });
+    }
+
+    /** Host uploads share the filesystem lifecycle independently of public prepared RPC registration. */
+    getHostLocalTransferRpcHandler(): import('./rpc/types').RpcHandlerInvoker {
+        return {
+            invokeLocal: (method, input, options) => {
+                switch (method) {
+                    case RPC_METHODS.DAEMON_TRANSFER_UPLOAD_INIT:
+                    case RPC_METHODS.DAEMON_TRANSFER_UPLOAD_CHUNK:
+                    case RPC_METHODS.DAEMON_TRANSFER_UPLOAD_FINALIZE:
+                    case RPC_METHODS.DAEMON_TRANSFER_UPLOAD_ABORT:
+                        return this.rpcHandlerManager.invokeLocalHandler(method, input,
+                            () => this.hostLocalUploadRpc.invokeLocal(method, input, options), options);
+                    default:
+                        return this.invokeLocalMachineAction(method, input, options);
+                }
+            },
+        };
     }
 
     /** Host-private exact-daemon Action transport; local context never reaches Socket.IO. */

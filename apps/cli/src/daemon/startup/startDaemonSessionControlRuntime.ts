@@ -8,6 +8,7 @@ import { runTracedExternalActionStage } from '../externalActions/externalActionP
 import { timeWebLatencyPhase, withWebLatencyTrace } from '../externalActions/webLatencyTrace';
 import { resolveExistingSessionAttachContext } from '../sessionEncryption/resolveExistingSessionAttachContext';
 import { createProcessOwnershipRuntime } from '../processes/ownership/processOwnershipRuntime';
+import { readLanguageServerProcessRoots } from '@/lsp/languageServerHost';
 import { createEndOwnerRemainder } from '../processes/endOwnerRemainder';
 import { createSessionProcessActionLifecycle, type SessionProcessActionLifecycle } from '../sessions/sessionProcessActionLifecycle';
 import { clearSessionExplicitStopIntentAfterResume, recordSessionExplicitStopIntent, resolveSessionExplicitControlIntent, resolveSessionResumeControlIntent } from '@/session/services/sessionExplicitStopIntent';
@@ -4257,7 +4258,7 @@ export async function startDaemonSessionControlRuntime(
           requesterWorkAttributionV1: session.requesterWorkAttributionV1 ?? session.spawnOptions?.requesterWorkAttributionV1
             ?? (session.happySessionId ? markerBySession.get(session.happySessionId)?.requesterWorkAttributionV1 : undefined),
           ownerCreatedAtMs: session.happySessionId ? markerBySession.get(session.happySessionId)?.createdAt : undefined })),
-        terminalRegistry: getSharedTerminalProcessRegistry(), managedServices,
+        terminalRegistry: getSharedTerminalProcessRegistry(), managedServices: [...managedServices, ...readLanguageServerProcessRoots()],
         terminalRequesterAttribution: params.readTerminalRequesterAttribution,
         helperProcesses: [...(guardBrowserResourceOwner?.readResourceTargets
           ? guardBrowserResourceOwner.readResourceTargets().map(target => processActionOwnerAdapters?.captureBrowserRoot(target) ?? target.root)
@@ -8479,17 +8480,21 @@ export async function startDaemonSessionControlRuntime(
             operationWitness: typeof witness,
             options?: Readonly<{
               requireActiveTurn?: boolean;
+              recordRefusal?: boolean;
             }>,
           ): boolean =>
-            (!runSnapshot || runnerExecutionRunSnapshots.read(executionRunSnapshotId!, {
-              sessionId, runner, retainedAgent: admittedRunnerAgent }) === runSnapshot)
-            && authorizeTrackedRunnerAgentDaemonServiceOperation({
+            authorizeTrackedRunnerAgentDaemonServiceOperation({
+              runSnapshotCurrent: !runSnapshot || runnerExecutionRunSnapshots.read(executionRunSnapshotId!, {
+                sessionId, runner, retainedAgent: admittedRunnerAgent }) === runSnapshot,
               tracked,
               sessionId,
               runner,
               retainedAgent: admittedRunnerAgent,
               witness: runSnapshot ? undefined : operationWitness,
               allowIdleCurrentGeneration: runSnapshot ? true : options?.requireActiveTurn !== true,
+              ...(options?.recordRefusal ? { onRefused: predicate => logger.debug(
+                '[PluginExec] Native launch runner authority refusal', { predicate, sessionId,
+                  ...(runSnapshot ? { executionRunId: invocationId } : {}) }) } : {}),
             });
           preparationStage = 'turn_authority';
           if (!authorizeOperation(witness)) {
@@ -9925,7 +9930,7 @@ export async function startDaemonSessionControlRuntime(
                     ...(invocationContext.profileId ? { profileId: invocationContext.profileId } : {}),
                     ...(invocationContext.secretReferenceOverlay ? { secretReferenceOverlay: invocationContext.secretReferenceOverlay } : {}),
                   },
-                  isCurrent: () => authorizeOperation(undefined),
+                  isCurrent: () => authorizeOperation(undefined, { recordRefusal: true }),
                   resolveRuntime: async ingress => {
                     const machine = params.getApiMachineForSessions();
                     if (!machine) {
@@ -15639,6 +15644,8 @@ export async function startDaemonSessionControlRuntime(
                 apiMachineForSessions.createFilesystemActionExecutor(
                   params.serverId,
                 ),
+              workspaceFilesReplace: apiMachineForSessions.createWorkspaceFileReplaceActionExecutor(params.serverId),
+              languageIntelligenceApply: apiMachineForSessions.createLanguageIntelligenceApplyActionExecutor(params.serverId),
               skillMachineActionExecute: apiMachineForSessions.createMachineSkillActionExecutor({ credentials,
                 ...(requesterAccountContext ? { operationContext: requesterAccountContext.savedSecretOperationContext } : {}) }),
             }

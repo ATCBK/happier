@@ -82,6 +82,7 @@ type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>
     projectWorkerAction?: ActionExecutorDeps['projectWorkerAction'];
     /** The canonical prepared filesystem owner installed by the daemon. */
     filesystemActionExecute?: ActionExecutorDeps['filesystemActionExecute'];
+    workspaceFilesReplace?: ActionExecutorDeps['workspaceFilesReplace'];
     skillMachineActionExecute?: ActionExecutorDeps['skillMachineActionExecute'];
     sessionFollowActionDeps?: Pick<ActionExecutorDeps, 'sessionFollowAction' | 'readSessionFollowRules'>;
     sessionTrackedTargetCompatibilityDeps?: Pick<ActionExecutorDeps, 'sessionTargetTrackedSet'>;
@@ -205,6 +206,7 @@ export function createCliActionExecutor(
         return denied ?? await params.filesystemActionExecute!(request);
       } } : {}),
       ...(params.skillMachineActionExecute ? { skillMachineActionExecute: params.skillMachineActionExecute } : {}),
+      ...(params.workspaceFilesReplace ? { workspaceFilesReplace: params.workspaceFilesReplace } : {}),
       ...(params.sessionFollowActionDeps ?? createSessionFollowActionDeps({
         token: params.token,
         ...(params.credentials ? { credentials: params.credentials } : {}),

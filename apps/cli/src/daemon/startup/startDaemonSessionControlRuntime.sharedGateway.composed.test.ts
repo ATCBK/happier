@@ -1,17 +1,22 @@
 import { join } from 'node:path';
 
 import { expect, it, vi } from 'vitest';
-import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
+import { ProviderConnectionIdSchema, ProviderSettingsV1Schema, splitProviderSettingsV1 } from '@happier-dev/protocol';
+import { DaemonProviderModelProjectionRequestV1Schema } from '@happier-dev/protocol/rpc/providers';
+import { createRuntimeProviderModelManagementServices } from '@/providers/modelManagement/runtimeServices';
+import { resolveProviderConnectionForMachine } from '@/providers/registry';
+import type { callExactMachineRpc } from '@/session/transport/rpc/machineRpc';
 
 import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
 import type { TrackedSession } from '@/daemon/types';
 import { createManagedRunLaunchFixture } from '@/providers/lifecycle/managedRunLaunch.testkit';
 import { createRuntimeProviderSpawnAuthorizationAttempt } from '@/providers/spawn/authorize';
-import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { createPluginReloadController } from '@/plugins/runtime/reload/controller';
 import { attestRetainedManagedProvider } from '@/plugins/runtime/composition/retainedProviderAssembly';
 import { resolvePluginStorePaths } from '@/plugins/store/paths';
 import { configuration } from '@/configuration';
-import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests,
+  commitActiveProviderConnectionsCatalog, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { AgentRuntimeDaemonServiceRequestV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import { RunnerDaemonManagedProviderBootstrapV1Schema, decodeRunnerDaemonPluginServiceWireValueV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonPluginServicesProtocol';
@@ -21,7 +26,9 @@ import { startDaemonSessionControlRuntime } from './startDaemonSessionControlRun
 
 const boundary = vi.hoisted(() => ({
   controlInput: null as Parameters<typeof startDaemonControlServer>[0] | null,
+  machineRpc: vi.fn<typeof callExactMachineRpc>(),
 }));
+vi.mock('@/session/transport/rpc/machineRpc', () => ({ callExactMachineRpc: boundary.machineRpc }));
 
 // Replace only the loopback HTTP listener. The production dispatcher, runner
 // authority, Provider admission, registry and connected-account custody stay real.
@@ -32,17 +39,46 @@ vi.mock('@/daemon/controlServer', () => ({
   },
 }));
 
-it('prepares a titled shared gateway through runner services and refuses changed runtime authority', async () => {
+it.each(['local', 'peer'] as const)('prepares a titled %s shared gateway through runner services and refuses changed runtime authority', async placement => {
   await withConfiguredDaemonTestHome({ prefix: 'runner-shared-gateway-', env: {
     HAPPIER_ACCOUNT_SETTINGS_MODE: 'never',
   } }, async ({ homeDir }) => {
     const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'),
-      happyHomeDir: homeDir, controller: pluginReloadController, physicalGateway: true });
+      happyHomeDir: homeDir, controller: createPluginReloadController(), physicalGateway: true, probeCatalog: placement === 'peer' });
     let runtime: Awaited<ReturnType<typeof startDaemonSessionControlRuntime>> | undefined;
+    let brokerAttempted = false;
     try {
       const token = `fixture.${Buffer.from(JSON.stringify({ sub: 'account' })).toString('base64url')}.fixture`;
-      const snapshot = { ...fixture.snapshot, scopeKey: resolveAccountSettingsScopeKeyForToken(token) };
+      const machineId = placement === 'peer' ? 'peer-worker' : fixture.machineId;
+      const base = ProviderSettingsV1Schema.parse({ ...fixture.providerSettings, machineGrants: [],
+        connections: fixture.providerSettings.connections.map(connection => ({ ...connection,
+          gatewayPlacement: { kind: 'machine', machineId: fixture.machineId } })),
+      });
+      const resolved = resolveProviderConnectionForMachine({ connectionId: 'run-gateway', machineId,
+        providerSettings: base, registry: fixture.contributes, dnsEvidenceByEndpointUrl: new Map() });
+      if (resolved.status !== 'resolved') throw new Error('Expected Gateway configuration');
+      const settings = ProviderSettingsV1Schema.parse({ ...base, machineGrants: [...new Set([machineId, fixture.machineId])].map(id => ({
+        v: 1, connectionId: 'run-gateway', machineId: id, confirmedAt: 1,
+        connectionSecurityFingerprint: resolved.record.connectionSecurityFingerprint,
+        endpointSetFingerprint: resolved.record.endpointSetFingerprint,
+      })) });
+      const snapshot = { ...fixture.snapshot, scopeKey: resolveAccountSettingsScopeKeyForToken(token),
+        providerConnectionsCatalog: { status: 'ready' as const, revision: 2, catalog: splitProviderSettingsV1(settings).catalog } };
       setActiveAccountSettingsSnapshot(snapshot);
+      const hubModels = createRuntimeProviderModelManagementServices({ machineId: fixture.machineId,
+        happyHomeDir: homeDir, featureGate: { isEnabled: () => true }, getAccountSettingsSnapshot: () => snapshot,
+        acquireRuntimeLease: async () => {
+          const lease = fixture.gateway!.controller.tryAcquireRuntimeRegistry();
+          if (!lease) throw new Error('Expected real Gateway registry');
+          return lease;
+        },
+        resolveManagedPurposeBindingIntent: fixture.gateway!.purposeBindingOwner.resolveBindingIntent,
+        modelSettingsMutation: async (): Promise<never> => { throw new Error('Unexpected model mutation'); },
+      });
+      boundary.machineRpc.mockImplementation(async request => {
+        expect(request.machineId).toBe(fixture.machineId);
+        return await hubModels.projectModels(DaemonProviderModelProjectionRequestV1Schema.parse(request.request));
+      });
       // Live c22 rejected scope.operationClaimId:too_big: the producer embedded
       // source custody and shared placement in JSON. A valid Session id must not
       // make that opaque claim exceed the strict runner protocol's ID boundary.
@@ -51,7 +87,8 @@ it('prepares a titled shared gateway through runner services and refuses changed
         providerConnectionId: ProviderConnectionIdSchema.parse('run-gateway'), modelId: 'example' };
       const authorized = await createRuntimeProviderSpawnAuthorizationAttempt({
         selection: { v: 1, updatedAt: 1, ref: selection }, runtimeModelDescriptor: { id: 'example', name: 'Example' },
-        machineId: fixture.machineId, agentTargetKey: fixture.agentTargetKey, agentId: fixture.agentId,
+        machineId, agentTargetKey: fixture.agentTargetKey, agentId: fixture.agentId,
+        readModelProjection: request => hubModels.projectModels(request),
         lease: fixture.lease, getAccountSettingsSnapshot: () => snapshot,
         materializationBaseDir: join(homeDir, 'providers'), sessionId,
         managedPurposeBindingSnapshot: fixture.gateway!.purposeBindings,
@@ -93,7 +130,8 @@ it('prepares a titled shared gateway through runner services and refuses changed
           modelSelection: { v: 1, updatedAt: 1, ref: selection }, providerBindingMetadataV1: metadata },
       };
       runtime = await startDaemonSessionControlRuntime({
-        machineId: fixture.machineId, serverId: configuration.activeServerId,
+        machineId, serverId: configuration.activeServerId,
+        pluginRuntimeController: fixture.gateway!.controller,
         serverBaseUrl: configuration.apiServerUrl, externalActionAccountId: 'account',
         credentials: { token, encryption: null }, api: {} as never,
         daemonSessionMutationCustody: {
@@ -107,6 +145,10 @@ it('prepares a titled shared gateway through runner services and refuses changed
         spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(), connectedServicesRestartRequestedPids: new Set(),
         beforeShutdown: () => {}, onHappySessionWebhook: async () => {}, requestShutdown: () => {}, processEnv: {},
         resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'home', machineId: fixture.machineId }),
+        ...(placement === 'peer' ? { openAccountConnectionProviderBrokerAccess: async () => {
+          brokerAttempted = true;
+          throw new Error('No broker effect during preparation');
+        } } : {}),
       });
       const services = boundary.controlInput?.agentRuntimeDaemonServices;
       if (!services) throw new Error('Expected production runner service dispatcher');
@@ -114,6 +156,14 @@ it('prepares a titled shared gateway through runner services and refuses changed
         context: { token: 'c'.repeat(43), sessionId },
         operation: { kind: 'plugin_services.prepare_v1', requestId: 'gateway-prepare', invocationId: 'gateway-invocation' },
       });
+      if (placement === 'peer') {
+        // Missing the real hub forwarding must refuse preparation. A following
+        // delivery uses the restored transport and must not retain that failure.
+        boundary.machineRpc.mockRejectedValueOnce(Object.assign(new Error('RPC_METHOD_NOT_FOUND'), { code: 'RPC_METHOD_NOT_FOUND' }));
+        const miswired = await services.dispatch(request, { sessionId, runner, retainedAgent,
+          invocationContext: tracked.runnerAgentInvocationContext!, trackedSession: tracked, isCurrent: async () => true });
+        expect(miswired).toMatchObject({ ok: false, error: { cause: { stage: 'managed_provider' } } });
+      }
       const prepared = await services.dispatch(request, { sessionId, runner, retainedAgent,
         invocationContext: tracked.runnerAgentInvocationContext!, trackedSession: tracked, isCurrent: async () => true });
       expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true });
@@ -136,6 +186,25 @@ it('prepares a titled shared gateway through runner services and refuses changed
       expect(wrongClaim).toMatchObject({ ok: false, error: {
         code: 'plugin_services_managed_provider_retention_mismatch',
         cause: { code: 'managed_provider_retention_scope_operation_claim_id', stage: 'dispatch' } } });
+      if (placement === 'peer') {
+        expect(commitActiveProviderConnectionsCatalog({ scopeKey: snapshot.scopeKey,
+          lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), catalog: {
+          status: 'ready', revision: 3, catalog: splitProviderSettingsV1(ProviderSettingsV1Schema.parse({
+            ...settings, machineGrants: settings.machineGrants.filter(grant => grant.machineId !== machineId),
+          })).catalog,
+        } })).toBe(true);
+        const revoked = await services.dispatch(AgentRuntimeDaemonServiceRequestV1Schema.parse({
+          v: 1, context: request.context,
+          operation: { kind: 'plugin_services.managed_provider.start_v1', requestId: 'gateway-revoked',
+            invocationId: 'gateway-invocation', retained: { v: 1, scope: bootstrap.scope, custody: bootstrap.custody,
+              providerPluginHardRevocationRevisionAtAdmission: bootstrap.providerPluginHardRevocationRevisionAtAdmission } },
+        }), { sessionId, runner, retainedAgent, invocationContext: tracked.runnerAgentInvocationContext!,
+          trackedSession: tracked, isCurrent: async () => true });
+        // Observe the policy effect, independently of diagnostic presentation.
+        expect(revoked, JSON.stringify(revoked)).toMatchObject({ ok: false });
+        expect(brokerAttempted).toBe(false);
+        return;
+      }
       const started = await services.dispatch(AgentRuntimeDaemonServiceRequestV1Schema.parse({
         v: 1, context: request.context,
         operation: { kind: 'plugin_services.managed_provider.start_v1', requestId: 'gateway-start',
@@ -156,6 +225,7 @@ it('prepares a titled shared gateway through runner services and refuses changed
       await runtime?.stopControlServer();
       resetActiveAccountSettingsSnapshotForTests();
       boundary.controlInput = null;
+      boundary.machineRpc.mockReset();
       await fixture.cleanup();
     }
   });

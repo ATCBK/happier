@@ -1038,13 +1038,22 @@ export class RpcHandlerManager {
         rpcContext?: Pick<RpcHandlerContext, 'machineAdmission' | 'verifyMachineAdmissionCurrent' | 'callerInputAuthorization'
             | 'callerAuthority' | 'callerInputConstraints' | 'sessionActionOrigin' | 'originalActionEnvelope' | 'requesterSessionBootstrap'>;
     }>): Promise<unknown> {
+        return await this.invokeLocalHandler(method, params, this.handlers.get(this.getPrefixedMethod(method)), options);
+    }
+
+    /** Retain an owning lifecycle's local handler while sharing RPC admission, diagnostics and idle draining. */
+    async invokeLocalHandler(
+        method: string,
+        params: unknown,
+        handler: RpcHandler<unknown, unknown> | undefined,
+        options?: Parameters<RpcHandlerManager['invokeLocal']>[2],
+    ): Promise<unknown> {
         const prefixedMethod = this.getPrefixedMethod(method);
         const requestStartedAtMs = Date.now();
         const callerInputConstraints = options?.rpcContext?.callerInputConstraints
             ?? options?.localActionContext?.callerInputConstraints;
         return this.observeRequest(prefixedMethod, undefined, async diagnostic => {
             diagnostic.admissionPredicate = 'handler_admission';
-            const handler = this.handlers.get(prefixedMethod);
             if (!handler) {
                 return { error: RPC_ERROR_MESSAGES.METHOD_NOT_FOUND, errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
             }

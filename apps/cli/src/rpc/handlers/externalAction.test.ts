@@ -18,6 +18,14 @@ import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportD
 import { createDaemonExternalActionTargetResolver } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
 
 import type { RpcHandler, RpcHandlerContext, RpcHandlerRegistrar } from '@/api/rpc/types';
+import { createAccountProviderActionExecuteV1 } from '@happier-dev/protocol/providers/connections/accountProviderActionV1';
+import { createProviderActionExecuteV1 } from '@happier-dev/protocol/providers/executeProviderActionV1';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, type ProviderConnectionsCatalogV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { ProviderConnectionV1Schema } from '@happier-dev/protocol/providers/connections/v1';
+import { ApprovalRequestV2Schema, type ApprovalRequestV2 } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { decideApprovalRequestTransition } from '@happier-dev/protocol/approvals/approvalRequestTransition';
+import { sealExternalActionRequestV2, openExternalActionResponseV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
+import { parseExternalActionDaemonDispatchResult } from '@happier-dev/protocol/actions/externalActionApi';
 
 import {
   registerExternalActionRpcHandler,
@@ -85,6 +93,76 @@ function expectPreparedRelayResponse(raw: unknown, response: unknown): void {
 }
 
 describe('registerExternalActionRpcHandler', () => {
+  it.each(['plain', 'e2ee'] as const)('creates and reads recipient confirmation on a non-hub Machine over %s Action RPC', async mode => {
+    const { handlers, registrar } = registerHandlerForTest();
+    const peer = 'peer-machine';
+    const connection = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_peer', role: 'named', displayName: 'Gateway',
+      displayNameMode: 'custom', source: { kind: 'contribution', contributionKey: 'happier.provider.cliproxyapi/cliproxyapi' },
+      deployment: { kind: 'managedLocal' }, gatewayPlacement: { kind: 'machine', machineId: 'hub-machine' },
+      revision: 2, createdAt: 1, updatedAt: 1 });
+    let catalog: ProviderConnectionsCatalogV1 = { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [connection] };
+    let catalogRevision = 1;
+    let approval: ApprovalRequestV2 | null = null;
+    // Account-row and Artifact persistence plus Home proof verification are the
+    // boundaries. RPC registration, ingress, policy, crypto and semantics stay real.
+    const account = createAccountProviderActionExecuteV1({ assertCurrent() {}, now: () => 100,
+      readCatalog: async () => ({ status: 'ready', catalog, revision: catalogRevision }), readDefinitions: async () => [],
+      writeCatalog: async write => { expect(write.expectedRevision).toBe(catalogRevision);
+        catalog = write.catalog; catalogRevision++; return { status: 'updated' }; },
+    });
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+      isApprovalExecutionOriginCurrent: async () => true,
+      approvalsCreate: async ({ request }) => { approval = ApprovalRequestV2Schema.parse(request); return { artifactId: 'peer-approval' }; },
+      approvalsGet: async () => approval && structuredClone(approval),
+      approvalsUpdate: async ({ request }) => {
+        if (!approval) throw new Error('Missing approval');
+        const next = ApprovalRequestV2Schema.parse(request);
+        const transition = decideApprovalRequestTransition(approval, next);
+        if (!transition.ok) return transition;
+        approval = next; return { ok: true }; },
+      providerActionExecute: createProviderActionExecuteV1({ assertCurrent() {}, account,
+        rpc: async () => { throw new Error('Consent is Account-owned; hub RPC must not execute it'); },
+        setDefault: async () => ({ status: 'applied' }) }),
+    });
+    const target = { kind: 'machine' as const, machineId: peer };
+    const actionId = 'providers.models.experimental.confirm';
+    const input = { action: 'confirmExperimental', machineId: peer, connectionId: connection.id, expectedConnectionRevision: 2,
+      agentTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-5.6-luna', compatibilityFingerprint: 'compatibility:v1:worker' };
+    const authentication = { kind: 'account' as const, tokenEpoch: 1 };
+    const binding = { serverIdentityId: 'srv_peer_confirmation', accountId: 'account-1', authentication,
+      actionId, requestId: 'peer-confirm', target };
+    const material = { type: 'dataKey' as const, machineKey: new Uint8Array(32).fill(24) };
+    const envelope = mode === 'e2ee' ? sealExternalActionRequestV2({ binding, material, input, randomBytes: tweetnacl.randomBytes })
+      : { v: 1 as const, requestId: binding.requestId, target, input };
+    const admittedDispatch = authorizedDispatch({ actionId, envelope,
+      principal: { accountId: 'account-1', authentication, authority: 'account_automation' },
+      placement: { machineId: peer, target: { kind: 'machine', machineId: peer } },
+    });
+    const dispatch = { ...admittedDispatch, executionAuthorization: { ...admittedDispatch.executionAuthorization,
+      binding: { ...admittedDispatch.executionAuthorization.binding, serverIdentityId: binding.serverIdentityId,
+        accountEncryptionMode: mode } } };
+    registerExternalActionRpcHandler(registrar, { machineId: peer, currentServerId: 'home-profile',
+      resolveAccountId: async () => 'account-1', ...currentInstallationBoundary,
+      externalActionMachineRequestPrivateKey: installationIdentity.secretKey,
+      resolveEncryption: async () => ({ serverIdentityId: binding.serverIdentityId, material }),
+      resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'fixture', encryption: null } }), executor,
+    });
+    const response = parseExternalActionDaemonDispatchResult(await handlers.get(EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1)!(dispatch,
+      { authorization: ACTION_API_SERVER_ORIGIN, signal: new AbortController().signal }));
+    expect(response?.kind).toBe('response');
+    if (!response || response.kind !== 'response') throw new Error('Missing peer RPC response');
+    const opened = envelope.v === 2 ? openExternalActionResponseV2({ envelope: response.prepared.response, binding, request: envelope, material })
+      : response.prepared.response.v === 1 ? response.prepared.response.execution : null;
+    expect(opened).toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'peer-approval', actionId } });
+    expect(catalog.experimentalBindingConfirmations).toHaveLength(0);
+    const decided = await executor.execute('approval.request.decide', { artifactId: 'peer-approval', decision: 'approve' },
+      { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: 'home-profile' });
+    expect(decided).toMatchObject({ ok: true, result: { status: 'executed' } });
+    expect(catalog.experimentalBindingConfirmations).toEqual([expect.objectContaining({ connectionId: connection.id,
+      modelId: input.modelId, agentTargetKey: input.agentTargetKey, compatibilityFingerprint: input.compatibilityFingerprint })]);
+    expect(ApprovalRequestV2Schema.parse(approval).execution).toMatchObject({ ok: true,
+      result: { status: 'success', action: 'confirmExperimental' } });
+  });
   it('refuses a replaced installation during the final awaited Home check', async () => {
     const { handlers, registrar } = registerHandlerForTest();
     const sessionSpawnNew = vi.fn(async () => SESSION_SPAWN_PENDING_RESULT);

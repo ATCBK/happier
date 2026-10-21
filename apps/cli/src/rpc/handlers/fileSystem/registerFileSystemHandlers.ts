@@ -1,4 +1,4 @@
-import type { RpcHandlerRegistrar } from '@/api/rpc/types';
+import type { RpcHandlerInvoker, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { configuration } from '@/configuration';
 
 import { registerReadFileHandler } from './readFileHandler';
@@ -51,6 +51,7 @@ export function registerFileSystemHandlers(
   }>,
 ): Readonly<{
   transferSessionStore: TransferSessionStore;
+  localUploadRpc: RpcHandlerInvoker;
   dispose: () => Promise<void>;
 }> {
   const getAdditionalAllowedReadDirs = opts?.getAdditionalAllowedReadDirs;
@@ -107,7 +108,7 @@ export function registerFileSystemHandlers(
   });
   const transferSessionStore = new TransferSessionStore({ ttlMs: configuration.filesTransferSessionTtlMs });
 
-  registerTransferUploadRpcHandlers(rpcHandlerManager, {
+  const localUploadRpc = registerTransferUploadRpcHandlers(rpcHandlerManager, {
     workingDirectory,
     accessPolicy,
     getAdditionalAllowedWriteDirs: resolveWriteDirs,
@@ -136,6 +137,7 @@ export function registerFileSystemHandlers(
 
   return {
     transferSessionStore,
+    localUploadRpc,
     dispose: () => transferSessionStore.dispose(),
   };
 }

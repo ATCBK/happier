@@ -42,21 +42,26 @@ import { createCliActionExecutorFromCredentials } from '@/session/actions/create
 import { buildActionExecutorContextForRpc } from '@/rpc/handlers/_actionDispatchAdapter';
 import { readExecutionRunStartRunCreation, withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
 
-it('closes selected receiving admission while existing creation drains, then reopens on release', async () => {
+it.each(['registered', 'retained'] as const)('closes selected receiving admission while existing creation drains, then reopens on release (%s handler)', async binding => {
   const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {} });
   let releaseCreation!: () => void;
   const held = new Promise<void>(resolve => { releaseCreation = resolve; });
   let starts = 0;
-  rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, async () => { starts++; await held; return { runId: 'run' }; });
+  const handler = async () => { starts++; await held; return { runId: 'run' }; };
+  rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, binding === 'registered' ? handler : async () => ({ runId: 'public' }));
+  const invoke = () => binding === 'registered'
+    ? rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {})
+    : rpc.invokeLocalHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, {}, handler);
   rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_LIST, async () => ({ runs: [] }));
-  const creating = rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {});
+  const creating = invoke();
   const reopen = rpc.pauseRequestAdmission([SESSION_RPC_METHODS.EXECUTION_RUN_START], {
     details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated'),
   });
   const idle = rpc.waitForIdle(undefined, [SESSION_RPC_METHODS.EXECUTION_RUN_START]);
   try {
-    const late = rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {});
+    const late = invoke();
     expect(starts).toBe(1);
+    expect(rpc.getInFlightRequestCount()).toBe(1);
     const transported = await rpc.handleRequest({ method: `session:${SESSION_RPC_METHODS.EXECUTION_RUN_START}`, params: {} });
     expect(transported).toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
     expect(readExecutionRunStartRunCreation(transported.details)).toBe('noRunCreated');
@@ -68,7 +73,7 @@ it('closes selected receiving admission while existing creation drains, then reo
     expect(readExecutionRunStartRunCreation(refused.details)).toBe('noRunCreated');
     await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_LIST, {})).resolves.toEqual({ runs: [] });
     reopen();
-    await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {})).resolves.toEqual({ runId: 'run' });
+    await expect(invoke()).resolves.toEqual({ runId: 'run' });
   } finally { releaseCreation(); reopen(); await creating; }
 });
 
