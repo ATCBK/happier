@@ -15,6 +15,8 @@ import {
     AutomationEventStoredDefinitionsReadResultV1Schema,
     AutomationEventActionHttpPathsV1,
     AutomationEventActionHttpRequestSchemasV1,
+    AutomationConversationActionHttpPathsV1,
+    AutomationConversationActionHttpRequestSchemasV1,
 } from '@happier-dev/protocol/automations/event';
 
 import * as persistence from '@/persistence';
@@ -38,6 +40,88 @@ function httpResponse<T>(data: T): AxiosResponse<T> {
 afterEach(() => vi.restoreAllMocks());
 
 describe('admitted Automation Event background caller composition', () => {
+    it('admits current Conversation callers but never borrows replacement or retired occurrence authority', async () => {
+        const conversationPluginId = 'example.conversation-caller';
+        vi.spyOn(persistence, 'readSettings').mockResolvedValue({ schemaVersion: 6, machineId });
+        const callers: Array<ReturnType<typeof AutomationConversationActionHttpRequestSchemasV1['automation.conversation.targets.list']['parse']>['caller']> = [];
+        const post = vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+            if (!String(url).endsWith(AutomationConversationActionHttpPathsV1['automation.conversation.targets.list'])) {
+                throw new Error(`Unexpected POST ${url}`);
+            }
+            callers.push(AutomationConversationActionHttpRequestSchemasV1['automation.conversation.targets.list'].parse(body).caller);
+            return httpResponse({ items: [], nextCursor: null });
+        });
+        const get = vi.spyOn(axios, 'get').mockImplementation(async url => { throw new Error(`Unexpected GET ${url}`); });
+        const createOccurrence = async (predecessor?: Awaited<ReturnType<typeof createAuthoredAdmittedPluginRuntimeFixture>>) => {
+            const observed: { actions?: PluginServices['actions']; result?: unknown; error?: unknown } = {};
+            const plugin = definePlugin({
+                id: conversationPluginId, version: '1.0.0', entrypoints: { daemon: './daemon.mjs' },
+                backgroundServices: [{ declaration: { id: 'conversation', title: 'Conversation caller' }, runner: async context => {
+                    observed.actions = context.services.actions;
+                    try { observed.result = await context.services.actions.execute('automation.conversation.targets.list', { limit: 2 }); }
+                    catch (error) { observed.error = error; }
+                } }],
+            });
+            const fixture = await createAuthoredAdmittedPluginRuntimeFixture({
+                ...(predecessor ? { happyHomeDir: predecessor.happyHomeDir, controller: predecessor.controller } : {}),
+                plugins: [{ manifest: plugin.manifest,
+                    files: { 'daemon.mjs': `export function activate() {} // ${predecessor ? 'successor' : 'incumbent'}` },
+                    replaceExisting: predecessor !== undefined,
+                    instantiateCommittedModule: () => ({ activate: plugin.activate }),
+                }],
+                async resolveContributes(happyHomeDir) {
+                    return createResolvedContributionRegistry(projectLoadedPluginContributes({
+                        loadResult: await loadInstalledPlugins({ happyHomeDir }), provenance: 'builtin',
+                    }));
+                },
+                runtimeOptions: {
+                    scopedActionRuntime: { credentials: { token: 'fixture-conversation-token', encryption: null },
+                        actionsSettingsProvider: createActionSettingsProvider({
+                            getAccountSettings: () => accountSettingsParse({}), allowEnvironmentOverride: false,
+                        }) },
+                    resolveCurrentMachineId: () => machineId,
+                    resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'server-observer', machineId }),
+                },
+            });
+            return { fixture, observed };
+        };
+        const incumbent = await createOccurrence();
+        let successor: Awaited<ReturnType<typeof createOccurrence>> | undefined;
+        try {
+            incumbent.fixture.registry.startAdoptedBackgroundServices?.();
+            await vi.waitFor(() => {
+                if (incumbent.observed.error) throw incumbent.observed.error;
+                expect(incumbent.observed.result).toEqual({ items: [], nextCursor: null });
+            });
+            expect(callers[0]).toMatchObject({ pluginId: conversationPluginId, occurrenceId: expect.any(String),
+                sourceCustody: { kind: 'managed' },
+                materialization: incumbent.fixture.registry.resolveCurrentPluginMaterializationRef?.(conversationPluginId) });
+            successor = await createOccurrence(incumbent.fixture);
+            await vi.waitFor(() => {
+                if (successor?.observed.error) throw successor.observed.error;
+                expect(successor?.observed.result).toEqual({ items: [], nextCursor: null });
+            });
+            expect(callers).toHaveLength(2);
+            expect(callers[1]?.occurrenceId).not.toBe(callers[0]?.occurrenceId);
+            const before = { get: get.mock.calls.length, post: post.mock.calls.length };
+            const invoke = (actions: PluginServices['actions']) => actions.execute('automation.conversation.targets.list',
+                { limit: 2 }, { signal: new AbortController().signal });
+            await expect(invoke(incumbent.observed.actions!)).rejects.toMatchObject({ code: 'plugin_action_generation_retired' });
+            expect({ get: get.mock.calls.length, post: post.mock.calls.length }).toEqual(before);
+            await successor.fixture.lease.release();
+            await incumbent.fixture.lease.release();
+            await incumbent.fixture.controller.shutdown();
+            await expect(invoke(successor.observed.actions!)).rejects.toMatchObject({ code: 'plugin_action_generation_retired' });
+            expect({ get: get.mock.calls.length, post: post.mock.calls.length }).toEqual(before);
+        } finally {
+            await successor?.fixture.lease.release();
+            await incumbent.fixture.lease.release();
+            await incumbent.fixture.controller.shutdown();
+            await successor?.fixture.dispose();
+            await incumbent.fixture.dispose();
+        }
+    });
+
     it('adopts an empty catalog with authorized status writes and parks, without lending successor authority', async () => {
         // HTTP and OS persistence are boundaries; signing, source admission,
         // caller stamping, Action execution and definition adoption stay real.
