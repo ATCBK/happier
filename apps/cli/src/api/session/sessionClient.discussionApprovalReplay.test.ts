@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, onTestFailed, vi } from 'vitest';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
-import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { ApprovalRequestV2Schema, requiresExactDaemonApprovalReplay } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentPostRequestV1Schema, DiscussionAgentCreateRequestV1Schema,
   DiscussionAgentPostPublicationV1Schema, DiscussionAgentApprovedReplayPublicationV1Schema,
@@ -68,8 +68,10 @@ it.each([
   { mode: 'plain', scope: 'pending explicit' }, { mode: 'e2ee', scope: 'pending explicit' },
   { mode: 'plain', scope: 'inactive private Post' }, { mode: 'e2ee', scope: 'inactive private Post' },
   { mode: 'plain', scope: 'inactive host private Post' },
+  { mode: 'plain', scope: 'unsigned native startup private Post' },
 ] as const)('Discussion $scope ($mode)', async ({ mode, scope }) => {
-  const inactivePost = scope === 'inactive private Post' || scope === 'inactive host private Post';
+  const startupPost = scope === 'inactive host private Post' || scope === 'unsigned native startup private Post';
+  const inactivePost = scope === 'inactive private Post' || startupPost;
   let phase = 'initialization';
   let failedPhase: string | undefined;
   onTestFailed(() => console.error('Discussion approval replay failed during:', mode, failedPhase ?? phase));
@@ -299,7 +301,7 @@ it.each([
     let startupFixture: Awaited<ReturnType<typeof createRequesterSessionControlRuntimeFixture>> | undefined;
     let startupDirectory: string | undefined;
     try {
-      if (scope === 'inactive host private Post') {
+      if (startupPost) {
         startupDirectory = await mkdtemp(join(tmpdir(), 'happier-inactive-discussion-post-'));
         const { createRequesterSessionControlRuntimeFixture } = await import('@/daemon/testkit/requesterSessionControlRuntimeFixture');
         const { ConnectedServiceRuntimeRegistry } = await import('@/daemon/connectedServices/runtimeRegistry/registry');
@@ -393,11 +395,17 @@ it.each([
             discussionReplyReturn: { serverId: 'srv_fixture_home', requestLocalId: source.sourceInputId, acceptedTurnId: source.sourceTurnId } },
           actionArgs: { content: privateContent } });
         if (captured?.v !== 2) throw new Error('Missing actual private draft');
+        if (scope === 'unsigned native startup private Post') {
+          expect(captured.executionOriginV1.caller.kind).toBe('session');
+          expect(captured.executionOriginV1.externalActionExecutionAuthorization).toBeUndefined();
+          expect(captured.requesterConfirmation).toBeUndefined();
+          expect(requiresExactDaemonApprovalReplay(captured)).toBe(true);
+        }
         expect(await store.approvalsUpdate({ artifactId, serverId, request: { ...captured, status: 'approved',
           updatedAtMs: captured.updatedAtMs + 1, decision: { kind: 'approve',
             decidedAtMs: captured.updatedAtMs + 1, authority: 'present_user' } } })).toMatchObject({ ok: true });
         const replay = () => {
-          if (scope !== 'inactive host private Post')
+          if (!startupPost)
             return executor.replayApprovedApprovalRequest({ artifactId, callerAuthority: 'present_user' });
           const ingress = startupFixture?.runtime.externalActionIngressOwner;
           if (!ingress) throw new Error('Missing startup-composed approval executor');
@@ -405,7 +413,7 @@ it.each([
         };
         const result = await replay();
         expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'executed' } });
-        expect(refused).toEqual(Array.from({ length: scope === 'inactive host private Post' ? 0 : mode === 'plain' ? 3 : 2 },
+        expect(refused).toEqual(Array.from({ length: startupPost ? 0 : mode === 'plain' ? 3 : 2 },
           () => ({ v: 1, ok: false, error: 'discussion_post_denied' })));
         expect(absentSessionCalls).toEqual([]);
         expect(machinePublications).toHaveLength(1);

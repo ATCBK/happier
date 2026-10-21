@@ -11,6 +11,7 @@ import { admitRequesterSessionBootstrap } from '../../sessionEncryption/requeste
 import { createCliNotificationChannelStore } from '@/settings/notifications/notificationChannelStore';
 import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { ACCOUNT_NOTICE_ARTIFACT_KIND_V1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 import { sealNotificationChannelCatalogContentV1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -1986,6 +1987,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
         let current = true;
         const writes: Array<{ url: string; token: unknown; data: Record<string, unknown> }> = [];
         const pushes: string[] = [];
+        const noticeFailures: string[] = [];
         const catalogContent = sealNotificationChannelCatalogContentV1({ mode: 'plain', material: null,
           record: { v: 1, channels: [ExpoPushNotificationChannelRecordV1Schema.parse({ v: 1,
             id: 'bob-push', kind: 'expo_push', topics: { connectedServiceUsage: true } })] } });
@@ -2003,6 +2005,8 @@ describe('ConnectedServiceQuotasCoordinator', () => {
           if (path.endsWith('/qualified/groups')) return { status: 200, data: { groups: [] } };
           if (path.endsWith('/qualified/quotas')) return { status: 404, data: {} };
           if (path === '/v1/artifacts') return { status: 200, data: [] };
+          // The canonical notice writer checks its private occurrence before creation.
+          if (/^\/v1\/artifacts\/[^/]+$/.test(path)) return { status: 404, data: {} };
           throw new Error(`Unexpected requester notice GET ${path}`);
         });
         const post = vi.spyOn(axios, 'post').mockImplementation(async (url, data, config) => {
@@ -2041,7 +2045,11 @@ describe('ConnectedServiceQuotasCoordinator', () => {
               accountSettingsSnapshot: operation.readSnapshot, isAccountRuntimeCurrent: async () => current && await operation.isCurrent(),
               runAccountOperation: work => runWithServerHttpBaseUrl('https://bob-home.test', work),
               activeServerDir: happyHomeDir, happyHomeDir, machineId: 'machine', machineIdProvider: () => 'machine', runtimeId: 'runtime',
-              logger: { debug: () => {}, info: () => {}, warn: () => {} },
+              logger: { debug: (message, error) => {
+                if (message === '[DAEMON RUN] Connected-service usage notification failed (non-fatal)') {
+                  noticeFailures.push(error instanceof Error ? error.message : 'unknown_notice_failure');
+                }
+              }, info: () => {}, warn: () => {} },
               processEnv: { HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED: '0' }, pidToTrackedSession: new Map(),
               connectedServiceRuntimeRegistry: new ConnectedServiceRuntimeRegistry(),
               connectedServiceAuthGroupPreTurnSwitchCoordinator: host!.runtime.connectedServiceAuthGroupPreTurnSwitchCoordinator,
@@ -2062,9 +2070,10 @@ describe('ConnectedServiceQuotasCoordinator', () => {
           expect(writes.filter(row => row.url.endsWith('/provider-account-usage')).at(-1)?.data)
             .toMatchObject({ snapshot: { observedAtMs: 600_000 } });
           const notices = writes.filter(row => row.url.endsWith('/artifacts'));
-          expect(notices).toHaveLength(1);
+          expect(notices, JSON.stringify({ noticeFailures,
+            artifactReads: get.mock.calls.map(([url]) => new URL(url).pathname).filter(path => path.startsWith('/v1/artifacts')) })).toHaveLength(1);
           expect(notices[0]).toMatchObject({ url: 'https://bob-home.test/v1/artifacts', token: `Bearer ${credentials.token}` });
-          expect(decodePlainArtifactStoredContent(String(notices[0].data.header))).toMatchObject({ kind: 'usage_notice.v1', notice: { kind: 'pace' } });
+          expect(decodePlainArtifactStoredContent(String(notices[0].data.header))).toMatchObject({ kind: ACCOUNT_NOTICE_ARTIFACT_KIND_V1, notice: { kind: 'pace' } });
           expect(pushes).toEqual(['connected_service_usage']);
           expect(writes.findIndex(row => row.url.endsWith('/provider-account-usage'))).toBeLessThan(writes.findIndex(row => row.url.endsWith('/artifacts')));
           expect(getActiveAccountSettingsSnapshot()?.settings).toBe(notificationSettings);
