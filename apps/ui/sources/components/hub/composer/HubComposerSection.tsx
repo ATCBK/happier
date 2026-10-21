@@ -7,6 +7,8 @@ import { NewSessionScreen } from '@/components/sessions/new/NewSessionScreen';
 import { NewSessionEmbeddedHostProvider } from '@/components/sessions/new/navigation/newSessionHost';
 import { useNewSessionEmbeddedHostState } from '@/components/sessions/new/navigation/useNewSessionEmbeddedHostState';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { useDestinationVisibility } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { useOptionalScreenIsFocused } from '@/utils/navigation/useOptionalScreenIsFocused';
 
 import { HubComposerSuggestions, type HomeComposerSuggestionFill } from './suggestions/HubComposerSuggestions';
 
@@ -22,7 +24,7 @@ import { HubComposerSuggestions, type HomeComposerSuggestionFill } from './sugge
  * The composer's chips issue no machine RPCs until the person shows intent (focus, hover, touch or
  * a suggestion); until then they show cached state.
  */
-export const HubComposerSection = React.memo(function HubComposerSection(props: Readonly<{
+type HubComposerSectionProps = Readonly<{
     /**
      * How the suggestions stand: `tiles` on the plain page; under Home's atmosphere they step back to
      * links or pills, wherever the composer sits (Home decides this once for both of its paths).
@@ -37,7 +39,18 @@ export const HubComposerSection = React.memo(function HubComposerSection(props: 
         suggestionsRef: React.Ref<View>;
         onLayout: () => void;
     }>;
-}>) {
+}>;
+
+export const HubComposerSection = React.memo(function HubComposerSection(props: HubComposerSectionProps) {
+    const destinationVisible = useDestinationVisibility();
+    const screenFocused = useOptionalScreenIsFocused();
+    // Home shares the ordinary draft with /new. A retained pane or a covered
+    // native screen must release its composer, including its local attachment
+    // controller, before the visible route takes that draft.
+    return destinationVisible && screenFocused ? <HubComposerSectionContent {...props} /> : null;
+});
+
+function HubComposerSectionContent(props: HubComposerSectionProps) {
     const { host, markDemanded } = useNewSessionEmbeddedHostState();
     const draftId = typeof host.params.draftId === 'string' ? host.params.draftId : 'home-composer';
     const setHostParams = host.setParams;
@@ -92,7 +105,7 @@ export const HubComposerSection = React.memo(function HubComposerSection(props: 
             </View>
         </ItemGroup>
     );
-});
+}
 
 const styles = StyleSheet.create(() => ({
     stack: {
