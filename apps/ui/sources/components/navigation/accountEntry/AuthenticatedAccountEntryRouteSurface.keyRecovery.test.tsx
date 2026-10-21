@@ -195,7 +195,7 @@ it.each(['route', 'wizard', 'cancel'])('%s retains service-key continuation unti
     expect(prematureFocus).toEqual([]);
     expect(getActiveServerId()).toBe(originalFocus);
     if (surface === 'wizard') {
-        expect(onPostAuth, JSON.stringify(boundary.request.mock.calls.map(([endpoint, path]) => ({ endpoint, path })))).toHaveBeenCalledWith(expect.objectContaining({ kind: 'home_material_required' }));
+        await vi.waitFor(() => expect(onPostAuth, JSON.stringify(boundary.request.mock.calls.map(([endpoint, path]) => ({ endpoint, path })))).toHaveBeenCalledWith(expect.objectContaining({ kind: 'home_material_required' })));
         expect(screen.findByTestId('restore-manual-secret-input')).not.toBeNull();
         expect(getActiveServerSnapshot().serverId).toBe(originalFocus);
     }
@@ -231,10 +231,10 @@ it.each(['route', 'wizard', 'cancel'])('%s retains service-key continuation unti
     } else {
         await submitKey();
     }
-    expect(await TokenStorage.getCredentialsForServerUrl(homeB.serverUrl, { serverId: fixture.home.homeServerIdentityId })).toEqual({
+    await vi.waitFor(async () => expect(await TokenStorage.getCredentialsForServerUrl(homeB.serverUrl, { serverId: fixture.home.homeServerIdentityId })).toEqual({
         token: fixture.token,
         ...(surface === 'wizard' ? { secret: encodeBase64(fixture.homeRecoverySecret, 'base64url') } : {}),
-    });
+    }));
     await vi.waitFor(() => expect(onExit).toHaveBeenCalledWith('/', ...(surface === 'wizard' ? [] : [{
         kind: 'home_entered', homeServerIdentityId: fixture.home.homeServerIdentityId, selection: 'explicit',
     }])));

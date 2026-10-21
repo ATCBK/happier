@@ -36,19 +36,14 @@ vi.mock('@/components/navigation/desktopWindowChrome/DesktopWindowDragRegion', (
     useDesktopWindowDragMouseProps: () => ({}),
 }));
 
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleMock({
-        importOriginal,
-        overrides: {
-            useLocalSetting: ((key: string) => {
-                if (key === 'uiContentWidthMode') return shared.contentWidthMode;
-                if (key === 'uiFontScale') return 1;
-                return undefined;
-            }) as typeof import('@/sync/domains/state/storage')['useLocalSetting'],
-        },
-    });
-});
+vi.mock('@/sync/store/settingsReadHooks', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/sync/store/settingsReadHooks')>(),
+    useLocalSetting: ((key: string) => {
+        if (key === 'uiContentWidthMode') return shared.contentWidthMode;
+        if (key === 'uiFontScale') return 1;
+        return undefined;
+    }) as typeof import('@/sync/store/settingsReadHooks')['useLocalSetting'],
+}));
 
 vi.mock('@/sync/domains/state/storageStore', () => ({
     getStorage: () => ({

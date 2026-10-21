@@ -12,6 +12,16 @@ import { parseDecryptedSessionMetadata } from '@/sync/engine/sessions/parsePlain
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
+// A pin is written through the declared Settings Action; its admission (writer) is the boundary.
+const settingWrites = vi.hoisted(() => ({ calls: [] as Array<{ address: unknown; value: unknown }> }));
+vi.mock('@/components/settings/catalog/useSettingActionWriter', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/components/settings/catalog/useSettingActionWriter')>(),
+    useSettingActionWriter: () => async (address: unknown, value: unknown) => {
+        settingWrites.calls.push({ address, value });
+        return { ok: true, result: {} };
+    },
+}));
+
 let translationPrefix = 'en';
 let fixtureSessionServerId: string | undefined;
 const sessionMetadataState = vi.hoisted(() => ({
@@ -810,6 +820,7 @@ describe('cockpit tab bars', () => {
     it('renders plugin pinning as a focusable Android-minimum effective target with explicit toggle state', async () => {
         const { Platform } = await import('react-native');
         const { resolveMinimumInteractiveTargetSize } = await import('@/components/ui/interactiveTargetSize');
+        settingWrites.calls = [];
         const originalPlatform = Platform.OS;
         Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
 
@@ -852,11 +863,15 @@ describe('cockpit tab bars', () => {
                 pin?.props.onPress?.({ stopPropagation });
             });
             expect(stopPropagation).toHaveBeenCalledTimes(1);
-            // The first change starts from the host defaults, then adds the plugin at the end.
-            expect((await import('@/sync/domains/state/storageStore')).storage.getState().localSettings.navigationSurfacePlacementsV1)
-                .toMatchObject({
-                    sessionTabBar: { placements: { 'plugin:acme.review:review-panel': 'pinned' } },
-                });
+            // The pin asks the declared Settings Action to store the placement, starting from the host defaults.
+            await vi.waitFor(() => expect(settingWrites.calls).toEqual([{
+                address: { anchor: 'appearance.navigationPlacements' },
+                value: expect.objectContaining({
+                    sessionTabBar: expect.objectContaining({
+                        placements: expect.objectContaining({ 'plugin:acme.review:review-panel': 'pinned' }),
+                    }),
+                }),
+            }]));
             expect(onSurfacePress).not.toHaveBeenCalled();
 
             await act(async () => {

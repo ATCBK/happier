@@ -197,6 +197,11 @@ vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createT
 vi.mock('expo-image', () => ({ Image: 'Image' }));
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 vi.mock('@/track/tracking', () => ({ tracking: null }));
+// The sync runtime is the network boundary: a visible Session row demands its content through it.
+vi.mock('@/sync/sync', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/sync/sync')>(),
+    sync: { hydrateSessionListRows: vi.fn(async () => undefined) },
+}));
 
 // Load the source dependency closure outside the interaction tests' timeout budget.
 await import('./InboxView');

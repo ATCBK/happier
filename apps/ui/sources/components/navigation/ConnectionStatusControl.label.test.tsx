@@ -210,6 +210,9 @@ function flattenStyle(style: unknown): Record<string, unknown> {
 // The first import transforms the control's whole module graph, which alone can take most of a
 // test's timeout on a loaded host. Load it once up front so each test measures only its behaviour.
 beforeAll(async () => {
+    // The phone/tablet header target is the touch floor; a precise pointer keeps the dense 24px frame.
+    // The primary pointer is a browser boundary, so the tests run as a touch device.
+    vi.stubGlobal('navigator', { maxTouchPoints: 1 });
     await import('./ConnectionStatusControl');
 }, 240_000);
 

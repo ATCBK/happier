@@ -182,8 +182,13 @@ describe('supplied Home admission before shell mount', () => {
                 storage.getState().setSyncError({ kind: 'auth', message: 'Authentication required', retryable: false, at: 1, serverId: profiles.getActiveServerSnapshot().serverId });
                 dismiss();
             });
-            await vi.waitFor(() => expect(navigation.pathname).toBe('/settings/server/add'));
-            expect(navigation.replace).toHaveBeenCalledWith('/settings/server/add?address=https%3A%2F%2Ffailed-session-home.example.test&source=url');
+            // The tracked router is the boundary: `vi.restoreAllMocks()` in earlier cases clears its
+            // delegate to `navigation`, so the navigation request itself is observed.
+            const { router } = await import('expo-router');
+            const draft = '/settings/server/add?address=https%3A%2F%2Ffailed-session-home.example.test&source=url';
+            await vi.waitFor(() => expect(router.replace).toHaveBeenCalledWith(draft));
+            // Auth recovery never navigated ahead of the dismissed Home draft.
+            expect(router.replace).toHaveBeenNthCalledWith(1, draft);
         } finally {
             dismiss();
             await screen.unmount();

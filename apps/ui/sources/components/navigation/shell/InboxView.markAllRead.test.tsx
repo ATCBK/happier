@@ -206,7 +206,8 @@ describe('InboxView mark as read', () => {
             viewer: {
                 ...unread.viewer,
                 readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
-                attention: { needsAttention: true, reasons: ['manual'], primary: 'manual', presentation: 'full' },
+                // Manual attention reads under Updates; a blocked delivery is a genuine Needs-you item.
+                attention: { needsAttention: true, reasons: ['pending_blocked'], primary: 'pending_blocked', presentation: 'full' },
             },
         });
         storage.getState().applySessions([focused]);

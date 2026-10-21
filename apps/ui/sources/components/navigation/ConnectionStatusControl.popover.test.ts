@@ -355,6 +355,12 @@ installConnectionStatusControlCommonModuleMocks({
     },
 });
 
+// Account settings are read through the leaf read hooks; the Home-view legacy fallback reads them here.
+vi.mock('@/sync/store/settingsReadHooks', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/sync/store/settingsReadHooks')>(),
+    useSetting: ((key: keyof typeof settingsState) => settingsState[key]) as typeof import('@/sync/store/settingsReadHooks')['useSetting'],
+}));
+
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
 }));
@@ -585,9 +591,32 @@ async function importConnectionStatusControl() {
     return module.ConnectionStatusControl;
 }
 
+/**
+ * These tests run the control as a web page (`Platform.OS === 'web'`), where a routine Home switch is
+ * a tab selection kept in `sessionStorage`; the Home owner treats only a page with a window and
+ * document as web. The browser page is the boundary stubbed here, the selection stays real.
+ */
+function stubBrowserPage(): () => void {
+    const names = ['window', 'document'] as const;
+    const prior = names.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
+    Object.defineProperties(globalThis, {
+        window: { configurable: true, writable: true, value: {} },
+        document: { configurable: true, writable: true, value: { getElementById: () => null } },
+    });
+    return () => {
+        for (const [name, descriptor] of prior) {
+            if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+            else delete (globalThis as Record<string, unknown>)[name];
+        }
+    };
+}
+
 // The first import transforms the control's whole module graph, which alone can take most of a
 // test's timeout on a loaded host. Load it once up front so each test measures only its behaviour.
 beforeAll(async () => {
+    // The phone/tablet header target is the touch floor; a precise pointer keeps the dense 24px frame.
+    // The primary pointer is a browser boundary, so the tests run as a touch device.
+    vi.stubGlobal('navigator', { maxTouchPoints: 1 });
     await import('./ConnectionStatusControl');
 }, 240_000);
 
@@ -1547,6 +1576,7 @@ describe('ConnectionStatusControl (native popover config)', () => {
         const scope = `test_${Date.now()}_${Math.random().toString(16).slice(2)}`;
         process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = scope;
 
+        let restoreBrowserPage = () => {};
         try {
             (await import('@/sync/domains/server/serverProfiles')).resetServerProfilesRuntimeForTests();
             const profiles = await import('@/sync/domains/server/serverProfiles');
@@ -1566,17 +1596,20 @@ describe('ConnectionStatusControl (native popover config)', () => {
             const companyItem = findAction('target-use-server-srv_identity_company');
             expect(companyItem).toBeTruthy();
 
+            restoreBrowserPage = stubBrowserPage();
             await act(async () => {
                 companyItem?.onPress?.();
             });
 
-            expect(connectionMocks.switchConnectionToActiveServer).toHaveBeenCalledTimes(1);
-            expect(authMocks.refreshFromActiveServer).toHaveBeenCalledTimes(1);
+            // The switch is serialized behind the persisted Home selection write.
+            await vi.waitFor(() => expect(connectionMocks.switchConnectionToActiveServer).toHaveBeenCalledTimes(1));
+            await vi.waitFor(() => expect(authMocks.refreshFromActiveServer).toHaveBeenCalledTimes(1));
 
             await act(async () => {
                 tree?.unmount();
             });
         } finally {
+            restoreBrowserPage();
             if (previousScope === undefined) {
                 delete process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE;
             } else {
@@ -1631,6 +1664,7 @@ describe('ConnectionStatusControl (native popover config)', () => {
         const scope = `test_${Date.now()}_${Math.random().toString(16).slice(2)}`;
         process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = scope;
 
+        let restoreBrowserPage = () => {};
         try {
             (await import('@/sync/domains/server/serverProfiles')).resetServerProfilesRuntimeForTests();
             const profiles = await import('@/sync/domains/server/serverProfiles');
@@ -1656,17 +1690,19 @@ describe('ConnectionStatusControl (native popover config)', () => {
             expect(companyItem).toBeTruthy();
 
             // The inline Sign in is the row's own fix: it starts the same target-specific sign-in.
+            restoreBrowserPage = stubBrowserPage();
             await pressRowButton(`target-use-server-${company.id}`);
 
             expect(modalMocks.confirm).not.toHaveBeenCalled();
-            expect(connectionMocks.switchConnectionToActiveServer).toHaveBeenCalledTimes(1);
-            expect(authMocks.refreshFromActiveServer).toHaveBeenCalledTimes(1);
-            expect(routerMocks.replace).toHaveBeenCalledWith('/');
+            await vi.waitFor(() => expect(connectionMocks.switchConnectionToActiveServer).toHaveBeenCalledTimes(1));
+            await vi.waitFor(() => expect(authMocks.refreshFromActiveServer).toHaveBeenCalledTimes(1));
+            await vi.waitFor(() => expect(routerMocks.replace).toHaveBeenCalledWith('/'));
 
             await act(async () => {
                 tree?.unmount();
             });
         } finally {
+            restoreBrowserPage();
             if (previousScope === undefined) {
                 delete process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE;
             } else {

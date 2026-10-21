@@ -58,6 +58,8 @@ describe('InboxView scroll owner stability', () => {
         const scrollViews = () => findAllHostTestInstances(screen.tree.root, node => node.type === 'ScrollView');
         expect(scrollViews()).toHaveLength(1);
         expect(scrollOwner.mounts).toBe(1);
+        // Usage notices are updates; the Inbox opens on Needs you.
+        await screen.pressByTestIdAsync('inbox.view:updates');
         expect(screen.findByTestId(`inbox.usage-notice.${notice.id}`)).not.toBeNull();
         scrollOwner.offset = 240;
 

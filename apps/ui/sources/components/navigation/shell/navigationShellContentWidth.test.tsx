@@ -55,7 +55,6 @@ installNavigationShellCommonModuleMocks({
         });
     },
     storage: async () => {
-        const ReactModule = await import('react');
         const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
         const storage = Object.assign(
             (selector: (value: typeof storageState) => unknown) => selector(storageState),
@@ -72,17 +71,24 @@ installNavigationShellCommonModuleMocks({
             useAllSessions: () => [],
             useAllSessionsForAttention: () => [],
             useAllSessionListAttentionRows: () => [],
-            useLocalSetting: ((key: string) => {
-                const mode = ReactModule.useSyncExternalStore(
-                    contentWidthSetting.subscribe,
-                    () => contentWidthSetting.state.mode,
-                );
-                return key === 'uiContentWidthMode' ? mode : undefined;
-            }) as any,
             storage,
             getStorage: () => storage,
         });
     },
+});
+
+vi.mock('@/sync/store/settingsReadHooks', async (importOriginal) => {
+    const ReactModule = await import('react');
+    return {
+        ...await importOriginal<typeof import('@/sync/store/settingsReadHooks')>(),
+        useLocalSetting: ((key: string) => {
+            const mode = ReactModule.useSyncExternalStore(
+                contentWidthSetting.subscribe,
+                () => contentWidthSetting.state.mode,
+            );
+            return key === 'uiContentWidthMode' ? mode : undefined;
+        }) as typeof import('@/sync/store/settingsReadHooks')['useLocalSetting'],
+    };
 });
 
 vi.mock('@/sync/domains/state/storageStore', async () => {
@@ -152,14 +158,14 @@ describe('navigation shell surfaces follow the content-width setting', () => {
         const tree = (await renderScreen(<InboxView />)).tree;
         const readColumnWidth = () => tree.root.findByType(HappierPageHeader).props.columnMaxWidthPx;
         // ItemList lets the scroll owner fill the screen; its page children own the measure. The Inbox
-        // is a page of work rows with inline answers (lab `inbox-I1`), so it takes the wide column,
-        // which the person's content-width preference can only narrow.
+        // is a page of work rows with inline answers (lab `inbox-I1`), so it takes the wide column. A
+        // page column is a fixed role: the content-width preference neither narrows nor widens it.
         const wide = PAGE_COLUMN_MAX_WIDTH_PX.wide;
-        expect(readColumnWidth()).toBe(Math.min(CONTENT_WIDTH_PX_BY_MODE.compact, wide));
+        expect(readColumnWidth()).toBe(wide);
         expect(scrollOwner.mounts).toBe(1);
 
         await setContentWidthMode('medium');
-        expect(readColumnWidth()).toBe(Math.min(CONTENT_WIDTH_PX_BY_MODE.medium, wide));
+        expect(readColumnWidth()).toBe(wide);
 
         await setContentWidthMode('full');
         expect(readColumnWidth()).toBe(wide);
