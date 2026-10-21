@@ -174,6 +174,7 @@ function normalizePlanBoundedCompletion(params: Readonly<{
 
 export const PlanProfile: ExecutionRunIntentProfile = {
   intent: 'plan',
+  supportsDetached: true,
   transcriptMaterialization: 'full',
   buildPrompt: (params) => `${params.instructions}\n\n${buildPlanGuidanceBlock()}`,
   computeSidechainStreamText: ({ fullText }) => stripTrailingJsonObjectFromText(fullText),

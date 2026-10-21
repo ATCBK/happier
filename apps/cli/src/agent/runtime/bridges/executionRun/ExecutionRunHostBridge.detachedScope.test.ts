@@ -28,8 +28,16 @@ import { createWorkflowInteractionCapacityError } from '@/agent/permissions/inte
 import { buildRunScopedExecutionPermissionRequestId } from '@/agent/executionRuns/policy/runScopedExecutionPermissionHandler';
 import { AgentStateRequestStore } from '@/agent/permissions/agentStateRequestStore';
 import type { AgentState } from '@/api/types';
-import { waitForExecutionRunTerminal } from '@happier-dev/protocol';
-import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { createActionExecutor, type ActionExecutorDeps, StrictJsonValueSchema, waitForExecutionRunTerminal } from '@happier-dev/protocol';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { freezeActionCompletionContractV1 } from '@happier-dev/protocol/actions/actionCompletion';
+import { zodSchemaToJsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
+import { normalizePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
+import { materializeWorkflowAcceptedSnapshotV1, type WorkflowDefinitionV1 } from '@happier-dev/protocol/workflows';
+import { createWorkflowCoordinator } from '@/daemon/workflows/coordinator';
+import { createInMemoryWorkflowCoordinatorStore } from '@/daemon/workflows/workflowCoordinator.testkit';
+import { buildBackendTargetKeyV2, convertBackendTargetRefV2ToV1, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { ExecutionRunStartRequestSchema } from '@happier-dev/protocol/execution/runs/startRequest';
 import type { ExecutionRunPermissionRequestStore, ExecutionRunPermissionRequestStoreProvider } from './executionRunPermissionResponseTarget';
 import { buildExecutionRunPermissionRequestEnvelope } from '@/agent/executionRuns/policy/executionRunPermissionInteractionPolicy';
 
@@ -57,6 +65,102 @@ describe('ExecutionRunHostBridge detached task scope', () => {
     vi.stubEnv('HAPPIER_HOME_DIR', directory);
     reloadConfiguration();
     runtimeFactoryMock.createExecutionRunBridgeRuntime.mockReset();
+  });
+
+  it('admits a detached plan at the profile owner and retains its structured result without Session facts', async () => {
+    const runtime = createTestExecutionRunHostRuntime({
+      onSendPrompt: async () => runtime.emitMessage({ type: 'model-output',
+        fullText: JSON.stringify({ summary: 'Plan ready', sections: [{ title: 'Steps', items: ['Verify the result'] }] }),
+      } as AgentMessage),
+      onWaitForTurnCompletion: async () => {},
+    });
+    runtimeFactoryMock.createExecutionRunBridgeRuntime.mockReturnValue(runtime);
+    const manager = new ExecutionRunHostBridge({ parentProvider: TEST_BACKEND_ID, cwd: process.cwd(), sendAcp: async () => {} });
+    try {
+      const started = await manager.start({ sessionId: null, intent: 'plan', modelSelection: null,
+        backendTarget: { kind: 'builtInAgent', agentId: TEST_BACKEND_ID }, instructions: 'Plan this work',
+        permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response' });
+      await manager.waitForTerminal(started.runId);
+      expect(manager.get(started.runId)).toMatchObject({ sessionId: null, intent: 'plan', status: 'succeeded',
+        structuredMeta: { kind: 'plan_output.v1', payload: { summary: 'Plan ready' } } });
+      expect(await listExecutionRunMarkers()).toEqual(expect.arrayContaining([expect.objectContaining({
+        runId: started.runId, happySessionId: null,
+      })]));
+    } finally { await manager.dispose(); }
+  });
+
+  it.each([true, false])('runs an originless Workflow plan through the real Action and profile (detached target wired=%s)', async (detached) => {
+    const runtime = createTestExecutionRunHostRuntime({
+      onSendPrompt: async () => runtime.emitMessage({ type: 'model-output',
+        fullText: JSON.stringify({ summary: 'External workflow plan', sections: [{ title: 'Steps', items: ['Ship the plan'] }] }),
+      } as AgentMessage),
+      onWaitForTurnCompletion: async () => {},
+    });
+    runtimeFactoryMock.createExecutionRunBridgeRuntime.mockReturnValue(runtime);
+    const manager = new ExecutionRunHostBridge({ parentProvider: TEST_BACKEND_ID, cwd: process.cwd(), sendAcp: async () => {} });
+    const workspace = { machineId: 'machine', directory: process.cwd(), checkoutRootPath: process.cwd() };
+    const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [{
+      kind: 'action', id: 'member', actionId: 'subagents.plan.start', input: {
+        ...(detached ? { target: { kind: 'literal' as const, value: { kind: 'detached' } } } : {}),
+        backendTargetKeys: { kind: 'literal', value: ['agent:happier.agent.codex/codex'] },
+        instructions: { kind: 'literal', value: 'Plan this work' },
+      },
+    }] };
+    const spec = getActionSpec('subagents.plan.start');
+    const outputSchema = spec.completion?.terminalOutputSchema;
+    if (!outputSchema || !spec.completion) throw new Error('Missing plan completion contract');
+    const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition, context: {
+      source: { kind: 'catalog', ref: 'plugin:acme.workflows/panel', version: '1.0.0' }, inputs: {}, machineId: workspace.machineId,
+      executionTarget: { kind: 'detached_run' }, workspaceTarget: { project: workspace }, origin: { kind: 'direct' },
+      authorization: { principal: { kind: 'host' } },
+    }, admission: { kind: 'user' }, effects: {
+      resolveTargetAvailability: async () => true, // installed-Agent inventory boundary
+      readActionContract: async () => ({
+        inputSchema: normalizePluginJsonSchema(zodSchemaToJsonSchemaObject(spec.inputSchema, { target: 'draft-7' })),
+        outputSchema: normalizePluginJsonSchema(zodSchemaToJsonSchemaObject(outputSchema, { target: 'draft-7' })),
+        completion: freezeActionCompletionContractV1(spec.completion!),
+      }),
+    } });
+    if (!accepted.ok) throw new Error(JSON.stringify(accepted.error));
+    // This replaces only the machine transport/native runtime. Action admission,
+    // profile capability, completion and Workflow result validation remain real.
+    const executor = createActionExecutor({
+      executionRunCheckProtocolV2: async () => ({ ok: true }),
+      executionRunStart: async (sessionId, request) => {
+        const parsed = ExecutionRunStartRequestSchema.parse(request);
+        return manager.start({ ...parsed, sessionId: sessionId ?? null, modelSelection: null,
+          backendTarget: convertBackendTargetRefV2ToV1(readBackendTargetRefV2(parsed.backendTarget)) });
+      },
+    } as ActionExecutorDeps);
+    const store = createInMemoryWorkflowCoordinatorStore();
+    const coordinator = createWorkflowCoordinator({ store, executeStep: async () => { throw new Error('Unexpected Agent leaf'); },
+      allocateInvocationRecordId: () => `invocation-${store.list().length}`,
+      resolveWorkspace: async () => ({ ok: true, workspace }), isAcceptedAuthorizationCurrent: async () => true,
+      action: { executor, buildContext: async ({ runId, authorization }) => ({ surface: 'cli',
+        authority: 'account_automation', actionCaller: { kind: 'workflowRun', runId, authorization },
+        externalActionTarget: { kind: 'machine', machineId: workspace.machineId, project: workspace } }),
+        observeRun: async ({ runId }) => {
+          await manager.waitForTerminal(runId);
+          const run = manager.get(runId);
+          if (run?.status !== 'succeeded') throw new Error('Plan did not succeed');
+          return { kind: 'completed', result: StrictJsonValueSchema.parse(run.latestToolResult) };
+        },
+      },
+    });
+    try {
+      const outcome = await coordinator.run({ ...accepted.snapshot, runId: 'external-workflow' });
+      if (detached) {
+        expect(outcome).toMatchObject({ state: 'succeeded' });
+        expect(store.list().find(row => row.blockId === 'member')).toMatchObject({ lifecycle: 'completed',
+          result: { perEngineOutcome: [expect.objectContaining({ key: 'agent:happier.agent.codex/codex', outcome: 'completed' })] } });
+        const markers = await listExecutionRunMarkers();
+        expect(markers).toHaveLength(1);
+        expect(markers[0]).toMatchObject({ happySessionId: null });
+      } else {
+        expect(outcome).toMatchObject({ state: 'outcome_uncertain', reason: 'session_not_selected' });
+        expect(await listExecutionRunMarkers()).toEqual([]);
+      }
+    } finally { await manager.dispose(); }
   });
 
   it('observes persisted permission attention and its removal at the live run owner without settling terminal waiters', async () => {
