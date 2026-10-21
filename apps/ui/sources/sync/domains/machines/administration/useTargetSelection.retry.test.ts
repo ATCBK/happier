@@ -17,7 +17,7 @@ describe('explicit Administration Retry', () => {
         const target = { serverIdentityId: 'srv_administration_retry', machineId: 'retry-machine' };
         const machine = createMachineFixture({ id: target.machineId, active: false, activeAt: 0 });
         const options = { accountScope, intent: 'retry' as const };
-        const publish = (row = machine, status: 'idle' | 'error' = 'idle') => storage.setState({
+        const publish = (row = machine, status: 'idle' | 'error' | 'signedOut' = 'idle') => storage.setState({
             machines: {}, machineListByServerId: { [profile.id]: [row] }, machineListStatusByServerId: { [profile.id]: status },
         });
         try {
@@ -35,7 +35,10 @@ describe('explicit Administration Retry', () => {
             expect(resolveFreshMachineAdministrationExecutionTarget(target, options)).toBeNull();
             publish({ ...machine, replacedByMachineId: 'replacement' });
             expect(resolveFreshMachineAdministrationExecutionTarget(target, options)).toBeNull();
+            // A failed list read never proves the row gone; a signed-out Home does.
             publish(machine, 'error');
+            expect(resolveFreshMachineAdministrationExecutionTarget(target, options)?.machine).toBe(machine);
+            publish(machine, 'signedOut');
             expect(resolveFreshMachineAdministrationExecutionTarget(target, options)).toBeNull();
             publish();
             expect(resolveFreshMachineAdministrationExecutionTarget(target, { ...options,

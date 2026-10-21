@@ -46,9 +46,11 @@ describe('resolveServerScopedMachines', () => {
         expect(readLiveMachineInventoryRows({ ...context, machineListByServerId: {} }).size).toBe(0);
         expect(readLiveMachineInventoryRows({ ...context,
             machineListByServerId: { [identity]: [], [profile.id]: [fallback] } }).size).toBe(0);
-        for (const status of [undefined, 'error', 'signedOut'] as const) {
+        for (const status of [undefined, 'signedOut'] as const) {
             expect(readLiveMachineInventoryRows({ ...context, machineListStatusByServerId: { [identity]: status } }).size).toBe(0);
         }
+        // A failed list read never proves the admitted row gone.
+        expect([...readLiveMachineInventoryRows({ ...context, machineListStatusByServerId: { [identity]: 'error' } })]).toEqual([ready]);
     });
 
     it('lists Voice inventory through equivalent Home keys without disclosing settled stale or foreign rows', async () => {

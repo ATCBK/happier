@@ -420,7 +420,7 @@ describe('resolvePluginMachineExecutionOriginState', () => {
         })[0]?.validation).toEqual({ kind: 'rejected', reason: 'untrusted' });
     });
 
-    it('keeps a stored origin selected through its Home\'s machine-list refresh and fails it closed once the read failed', () => {
+    it('keeps a stored origin selected through its Home\'s machine-list refresh, including a failed one', () => {
         const base = candidate({ serverIdentityId: 'srv_one', machineId: 'machine-a', materializationId: 'mat-a' }).materialization;
         const stored = composePluginMachineExecutionOriginV1(base);
         const row = createMachineFixture({ id: 'machine-a', active: true, activeAt: Date.now() });
@@ -440,7 +440,8 @@ describe('resolvePluginMachineExecutionOriginState', () => {
         });
         expect(stateWhen('idle')).toMatchObject({ kind: 'selected' });
         expect(stateWhen('loading')).toMatchObject({ kind: 'selected' });
-        expect(stateWhen('error')).toMatchObject({ kind: 'unavailable', reasons: ['stale'] });
+        // A failed list read never proves the stored origin's Machine gone.
+        expect(stateWhen('error')).toMatchObject({ kind: 'selected' });
     });
 
     it('does not call a materialization\'s machine missing while its Home\'s machine list is unread', () => {

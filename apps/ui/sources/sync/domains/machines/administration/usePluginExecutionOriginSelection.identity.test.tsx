@@ -318,10 +318,13 @@ describe('execution-origin plugin identity with real Account and machine owners'
         for (const status of ['error', 'signedOut'] as const) {
             await act(async () => { storage.setState({ machines: { [machine.id]: machine },
                 machineListByServerId: { [home.id]: [machine] }, machineListStatusByServerId: { [home.id]: status } }); });
+            // A failed read keeps the admitted, presence-fresh row executable; a signed-out Home does not.
             expect(snapshot()).toMatchObject({ inventoryStatus: status,
-                machines: [expect.objectContaining({ id: machine.id })], executionEligibleMachineIds: [] });
+                machines: [expect.objectContaining({ id: machine.id })],
+                executionEligibleMachineIds: status === 'error' ? [machine.id] : [] });
             expect(snapshot()).not.toHaveProperty('settled');
-            expect(resolveFreshMachineAdministrationExecutionTarget({ serverIdentityId, machineId: machine.id })).toBeNull();
+            const fresh = resolveFreshMachineAdministrationExecutionTarget({ serverIdentityId, machineId: machine.id });
+            if (status === 'error') expect(fresh?.machine).toBe(machine); else expect(fresh).toBeNull();
         }
         await act(async () => { storage.setState({ isDataReady: false, machineListStatusByServerId: { [home.id]: 'idle' } }); });
         expect(snapshot()).toMatchObject({ settled: true, executionEligibleMachineIds: [machine.id] });
@@ -592,7 +595,8 @@ describe('execution-origin plugin identity with real Account and machine owners'
         expect(hook.getCurrent().loading).toBe(false);
         for (const status of ['error', 'signedOut'] as const) {
             await act(async () => { storage.setState({ machineListStatusByServerId: { [home.id]: status } }); });
-            expect(hook.getCurrent().canExecute).toBe(false);
+            // Only a signed-out Home withdraws execution; a failed list read proves nothing.
+            expect(hook.getCurrent().canExecute).toBe(status === 'error');
             expect(hook.getCurrent().loading).toBe(false);
         }
         await act(async () => { storage.setState({ machineListStatusByServerId: { [home.id]: 'idle' } }); });
@@ -675,16 +679,25 @@ describe('execution-origin plugin identity with real Account and machine owners'
         const stringify = vi.spyOn(JSON, 'stringify');
         const machineFactsSerializations = () => stringify.mock.calls.filter(([value]) => Array.isArray(value)
             && value.some(row => Array.isArray(row) && row[0] === serverIdentityId && row[1] === machine.id)).length;
+        // The shell reporter and open surface retain their own candidate
+        // projections. Different declaration references need the same Machine facts.
+        const detailedCandidates = candidates.map(candidate => ({ ...candidate, source: { ...candidate.source } }));
         const detailedHook = await renderHook(() => usePluginMachineExecutionOriginSelection({ pluginId: 'acme.presence',
-            classifyRelease: useActivePluginAccountAvailabilityReleaseClassifier(), sourceCandidates: candidates,
+            classifyRelease: useActivePluginAccountAvailabilityReleaseClassifier(), sourceCandidates: detailedCandidates,
             declaredDefaultOrigins: defaults }));
         expect(detailedHook.getCurrent().canExecute).toBe(true);
         await hook.rerender();
         const settledSerializations = machineFactsSerializations();
+        const settledFactCalls = serializeFacts.mock.calls.length;
         for (let index = 0; index < 5; index++) {
             await hook.rerender();
             await detailedHook.rerender();
         }
+        console.info('execution-origin equal targets: 5 rerenders of 2 consumers', {
+            factCalls: serializeFacts.mock.calls.length - settledFactCalls,
+            serializations: machineFactsSerializations() - settledSerializations,
+        });
+        expect(serializeFacts.mock.calls.length - settledFactCalls).toBe(0);
         expect(machineFactsSerializations()).toBe(settledSerializations);
         await detailedHook.unmount();
 

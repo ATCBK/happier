@@ -114,17 +114,27 @@ export function getPluginExecutionOriginCandidateVersion(candidate: PluginExecut
     return 'source' in candidate ? candidate.source.version : candidate.materialization.version;
 }
 
+/** Only target coordinates determine which Machine facts a plugin consumes. */
+export function readPluginExecutionOriginMachineTargets(params: Readonly<{
+    pluginId: string;
+    materializations: readonly PluginMachineMaterializationV1[];
+    sources: readonly PluginMachineSourceExecutionOriginCandidateV1[];
+}>): readonly PluginExecutionOriginContextualTarget[] {
+    return [
+        ...params.materializations.filter((entry) => entry.pluginId === params.pluginId)
+            .map(({ serverIdentityId, machineId }) => ({ serverIdentityId, machineId })),
+        ...params.sources.filter((entry) => entry.source.origin.sourceRef.pluginId === params.pluginId)
+            .map((entry) => ({ serverIdentityId: entry.source.origin.serverIdentityId, machineId: entry.source.origin.sourceRef.machineId })),
+    ].sort((left, right) => left.serverIdentityId.localeCompare(right.serverIdentityId) || left.machineId.localeCompare(right.machineId));
+}
+
 /** Selection consumes eligibility and activity order, not raw heartbeat timestamps or labels. */
 export function serializePluginMachineExecutionOriginMachineFacts(params: MachineFactInputs & Readonly<{
     pluginId: string;
     materializations: readonly PluginMachineMaterializationV1[];
     sources: readonly PluginMachineSourceExecutionOriginCandidateV1[];
 }>): Readonly<{ eligibilityKey: string; activityKey: string }> {
-    const targets = [
-        ...params.materializations.filter((entry) => entry.pluginId === params.pluginId),
-        ...params.sources.filter((entry) => entry.source.origin.sourceRef.pluginId === params.pluginId)
-            .map((entry) => ({ serverIdentityId: entry.source.origin.serverIdentityId, machineId: entry.source.origin.sourceRef.machineId })),
-    ];
+    const targets = readPluginExecutionOriginMachineTargets(params);
     // Capture activity once per target. Sorting used to rescan the whole fleet
     // twice per comparison for every mounted plugin during census hydration.
     const facts = targets.map(target => ({ target, ...readMachineFact(params, target) }));
