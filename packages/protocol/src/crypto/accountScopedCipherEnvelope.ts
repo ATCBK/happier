@@ -137,8 +137,10 @@ export function getAccountScopedBlobKindByte(kind: AccountScopedBlobKind): numbe
   return ACCOUNT_SCOPED_KIND_BYTE[kind];
 }
 
+/** Canonical admission shares the length scan; retained callers default to lenient decoding. */
 export function readAccountScopedCiphertextKindByte(
   ciphertext: string,
+  base64: 'permissive' | 'canonical' = 'permissive',
 ): number | null {
   const minimumBytes = ACCOUNT_SCOPED_BLOB_V1_PREFIX_BYTES
     + ACCOUNT_SCOPED_SECRETBOX_NONCE_BYTES
@@ -157,8 +159,9 @@ export function readAccountScopedCiphertextKindByte(
     if (((first << 2) | (second >> 4)) !== ACCOUNT_SCOPED_BLOB_V1_MAGIC) return null;
     return ((second & 15) << 4) | (third >> 2);
   }
+  if (base64 === 'canonical') return null;
   // This reader historically accepts lenient Base64. Preserve that contract
-  // for noncanonical spellings; strict envelope callers validate separately.
+  // for noncanonical spellings when canonical admission was not requested.
   let bytes: Uint8Array;
   try {
     bytes = decodeBase64(ciphertext, 'base64');

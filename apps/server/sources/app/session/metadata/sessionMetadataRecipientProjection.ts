@@ -1,4 +1,4 @@
-import { parseSessionOwnerMetadataEnvelopeV1, SESSION_METADATA_LAYOUT_VERSION_V1, SessionSharedMetadataV1Schema, validateSessionOwnerMetadataEnvelopeForAccountModeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { parseSessionOwnerMetadataEnvelopeV1, SESSION_METADATA_LAYOUT_VERSION_V1, SessionSharedMetadataV1Schema, StoredSessionOwnerMetadataEnvelopeV1Schema, validateSessionOwnerMetadataEnvelopeForAccountModeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import type { SessionMetadataRecipientProjectionV1, SessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import type { Prisma } from "@prisma/client";
 
@@ -53,17 +53,21 @@ export type SessionMetadataRecipientProjection =
 export type SessionMetadataOwnerAccountMode =
     SessionOwnerMetadataAccountMode;
 
-/** Revalidate a captured owner envelope against the current Account authority. */
+/** Admit the captured envelope against current Account authority, retaining its structural proof. */
 export function assertSessionOwnerMetadataCurrentness(params: Readonly<{
-    metadataLayoutVersion: number; ownerMetadata: string | null;
+    metadataLayoutVersion: number; ownerMetadata: unknown;
     accountMode: SessionMetadataOwnerAccountMode; isOwner: boolean;
 }>): SessionOwnerMetadataEnvelopeV1 {
     if (params.metadataLayoutVersion !== SESSION_METADATA_LAYOUT_VERSION_V1) {
         throw new SessionMetadataPrivacyUpgradeRequiredError();
     }
-    const envelope = params.isOwner
-        ? parsePersistedSessionOwnerMetadataEnvelopeV1({ ...params, allowRetainedDevelopmentCiphertext: true })
-        : params.ownerMetadata === null ? null : parseSessionOwnerMetadataEnvelopeV1(params.ownerMetadata);
+    const parsed = typeof params.ownerMetadata === "string"
+        ? null : StoredSessionOwnerMetadataEnvelopeV1Schema.safeParse(params.ownerMetadata);
+    const envelope = typeof params.ownerMetadata === "string"
+        ? params.isOwner
+            ? parsePersistedSessionOwnerMetadataEnvelopeV1({ ...params, ownerMetadata: params.ownerMetadata, allowRetainedDevelopmentCiphertext: true })
+            : parseSessionOwnerMetadataEnvelopeV1(params.ownerMetadata)
+        : parsed?.success ? parsed.data : null;
     if (envelope === null || !validateSessionOwnerMetadataEnvelopeForAccountModeV1({
         accountMode: params.accountMode, envelope,
     }).ok) throw new SessionMetadataPrivacyUpgradeRequiredError();

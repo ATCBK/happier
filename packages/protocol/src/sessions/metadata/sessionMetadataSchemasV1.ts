@@ -11,7 +11,6 @@ import { SessionUserActionRequiredOccurrenceV1Schema } from '../userActionRequir
 
 import type { AccountEncryptionMode } from '../../features/payload/capabilities/encryptionCapabilities.js';
 import { readAccountScopedCiphertextKindByte } from '../../crypto/accountScopedCipherEnvelope.js';
-import { readCanonicalPaddedBase64DecodedLength } from '../../crypto/base64.js';
 import { AgentModelOptionOverrideRuleSchema } from '../../models/descriptor.js';
 import { AgentNativeResumeIdentityV1Schema } from '../../agents/nativeResumeIdentityV1.js';
 import {
@@ -128,7 +127,7 @@ export type SessionOwnerMetadataCiphertextV1 = z.infer<
   typeof SessionOwnerMetadataCiphertextV1Schema
 >;
 
-export const SessionOwnerMetadataEnvelopeV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
+const SessionOwnerMetadataEnvelopeStructureV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
   z.strictObject({
     t: z.literal('plain'),
     v: z.lazy(() => SessionOwnerMetadataV1Schema),
@@ -142,6 +141,23 @@ export const SessionOwnerMetadataEnvelopeV1Schema = lazyZodSchema(() => z.discri
     return true;
   }, { path: ['c'], message: 'Expected canonical Session owner-metadata ciphertext' })),
 ]));
+
+// Keep the ordinary strict parser and its JSON-schema identity. Only the
+// expensive ciphertext check borrows proof from this exact input object;
+// object keys, the plain branch and all refinements still run on every read.
+function reuseOwnerMetadataCiphertextProof<T extends z.core.$ZodType>(schema: T): T {
+  const reader = z.core.clone(schema);
+  const run = reader._zod.run;
+  reader._zod.run = (payload, context) => withSessionOwnerMetadataCiphertextValidationReuseV1(
+    [payload.value], () => ({ result: run(payload, context) }),
+  ).result;
+  return reader;
+}
+
+export const SessionOwnerMetadataEnvelopeV1Schema = lazyZodSchema(() =>
+  reuseOwnerMetadataCiphertextProof(SessionOwnerMetadataEnvelopeStructureV1Schema));
+defineStoredReadProjection(SessionOwnerMetadataEnvelopeV1Schema, () =>
+  reuseOwnerMetadataCiphertextProof(createStoredReadSchema(SessionOwnerMetadataEnvelopeStructureV1Schema)));
 export type SessionOwnerMetadataEnvelopeV1 = z.infer<
   typeof SessionOwnerMetadataEnvelopeV1Schema
 >;
@@ -2741,8 +2757,7 @@ export function isSessionOwnerMetadataCiphertextV1(
   if (typeof ciphertext !== 'string') return false;
   const retained = ownerMetadataCiphertextValidationScope?.get(ciphertext);
   if (retained !== undefined) return retained;
-  const valid = readCanonicalPaddedBase64DecodedLength(ciphertext) !== null
-    && readAccountScopedCiphertextKindByte(ciphertext) === SESSION_OWNER_METADATA_ACCOUNT_SCOPED_KIND_BYTE_V1;
+  const valid = readAccountScopedCiphertextKindByte(ciphertext, 'canonical') === SESSION_OWNER_METADATA_ACCOUNT_SCOPED_KIND_BYTE_V1;
   ownerMetadataCiphertextValidationScope?.set(ciphertext, valid);
   return valid;
 }

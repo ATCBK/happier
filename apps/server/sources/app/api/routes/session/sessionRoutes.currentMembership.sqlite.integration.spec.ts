@@ -416,14 +416,17 @@ describe("sessionRoutes current shared-participant reads (integration)", () => {
         } finally { for (const restore of restores) restore(); }
     });
 
-    it('confirms owner session detail with one fresh Session or Account delegate read', async () => {
+    it.each(['plain', 'e2ee'] as const)('confirms %s owner session detail with one fresh Session or Account delegate read and one ciphertext scan', async (accountMode) => {
         const fixture = await createSharedSessionFixture();
         await db.account.update({ where: { id: fixture.ownerId }, data: {
-            ...createSignedAccountContentBinding(), encryptionMode: 'plain',
+            ...createSignedAccountContentBinding(), encryptionMode: accountMode,
         } });
+        const ciphertext = 'oRoBAgMEBQYHCAkKCwwNDg8QERITFBUWFxh8aC0+8+YDECLScN6uQTItPyWVR7XbQA==';
+        const ownerMetadata = accountMode === 'plain'
+            ? { t: 'plain', v: { v: 1 } } : { t: 'encrypted', c: ciphertext };
         await db.session.update({ where: { id: fixture.sessionId }, data: {
             metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }),
-            ownerMetadata: JSON.stringify({ t: 'plain', v: { v: 1 } }),
+            ownerMetadata: JSON.stringify(ownerMetadata),
         } });
         await withAuthenticatedTestApp(app => sessionRoutes(app), async app => {
             const reader = await withSqliteReadSnapshot(async tx => tx);
@@ -461,16 +464,20 @@ describe("sessionRoutes current shared-participant reads (integration)", () => {
                     if (phase === 1) confirmationReads.push('account.findMany');
                     return await findAccounts(...args);
                 } });
+            const scan = vi.spyOn(String.prototype, 'charCodeAt');
             try {
                 const result = await app.inject({ method: 'GET',
                     url: `/v2/sessions/${fixture.sessionId}?accessProjectionVersion=1`,
                     headers: { 'x-test-user-id': fixture.ownerId, 'x-happier-account-stored-content-protocol': '4' } });
                 expect(result.statusCode).toBe(200);
                 expect(result.json().session).toMatchObject({ id: fixture.sessionId,
-                    effectiveAccess: { level: 'owner' } });
+                    effectiveAccess: { level: 'owner' }, ownerMetadata });
                 expect(confirmationReads).toHaveLength(1);
                 expect(phase).toBe(1);
+                expect(scan.mock.contexts.filter(value => value === ciphertext).length)
+                    .toBe(accountMode === 'e2ee' ? ciphertext.length - 2 : 0);
             } finally {
+                scan.mockRestore();
                 Object.defineProperty(reader, '$executeRawUnsafe', { configurable: true, writable: true, value: execute });
                 Object.defineProperty(reader.session, 'findUnique', { configurable: true, writable: true, value: findUnique });
                 Object.defineProperty(reader.session, 'findMany', { configurable: true, writable: true, value: findMany });

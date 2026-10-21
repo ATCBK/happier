@@ -935,9 +935,34 @@ describe('session metadata privacy envelopes v1', () => {
         throw new Error('Abort synchronous parse');
       })).toThrow('Abort synchronous parse');
       expect(validate).not.toHaveBeenCalled();
-      expect(read(retained).success).toBe(true);
+      expect(read({ ...retained }).success).toBe(true);
       expect(validate).toHaveBeenCalled();
     } finally { validate.mockRestore(); }
+  });
+
+  it('carries ciphertext validation through Account-mode checks and subsequent schema reads', () => {
+    const ciphertext = 'oRoBAgMEBQYHCAkKCwwNDg8QERITFBUWFxh8aC0+8+YDECLScN6uQTItPyWVR7XbQA==';
+    // Observe the actual payload scan without replacing any validation logic.
+    const scan = vi.spyOn(String.prototype, 'charCodeAt');
+    try {
+      const parsed = parseSessionOwnerMetadataEnvelopeV1(JSON.stringify({ t: 'encrypted', c: ciphertext }));
+      const admitted = validateSessionOwnerMetadataEnvelopeForAccountModeV1({ accountMode: 'e2ee', envelope: parsed });
+      expect(admitted.ok).toBe(true);
+      if (!admitted.ok) throw new Error('Expected admitted encrypted envelope');
+      const reread = SessionOwnerMetadataEnvelopeV1Schema.parse(admitted.envelope);
+      expect(reread).toEqual(parsed);
+      expect(scan.mock.contexts.filter(value => value === ciphertext).length).toBe(ciphertext.length - 2);
+      expect(validateSessionOwnerMetadataEnvelopeForAccountModeV1({ accountMode: 'plain', envelope: reread }))
+        .toEqual({ ok: false, reason: 'account_mode_mismatch' });
+      // Proof is tied to the exact parsed object and bytes, never an arbitrary lookalike.
+      scan.mockClear();
+      expect(SessionOwnerMetadataEnvelopeV1Schema.safeParse({ ...reread }).success).toBe(true);
+      expect(scan.mock.contexts.filter(value => value === ciphertext).length).toBe(ciphertext.length - 2);
+      if (reread.t !== 'encrypted') throw new Error('Expected encrypted envelope');
+      reread.c = `${ciphertext}\n`;
+      expect(SessionOwnerMetadataEnvelopeV1Schema.safeParse(reread).success).toBe(false);
+      expect(SessionOwnerMetadataEnvelopeV1Schema.safeParse({ ...admitted.envelope, forgedAuthority: true }).success).toBe(false);
+    } finally { scan.mockRestore(); }
   });
 
   it.each(['plain', 'e2ee'] as const)('round-trips a Replay seed above the old field clamp through an admitted %s envelope', (accountMode) => {

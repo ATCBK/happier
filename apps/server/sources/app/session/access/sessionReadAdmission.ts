@@ -78,7 +78,7 @@ export async function readmitSessionRowsWithAdmissionInTx<T extends CapturedSess
         }
         if (row.metadataLayoutVersion === 1) {
             const capturedOwnerMetadata = row.ownerMetadata === undefined ? fresh.ownerMetadata
-                : typeof row.ownerMetadata === "string" ? row.ownerMetadata : JSON.stringify(row.ownerMetadata);
+                : row.ownerMetadata;
             assertSessionOwnerMetadataCurrentness({ metadataLayoutVersion: row.metadataLayoutVersion,
                 ownerMetadata: capturedOwnerMetadata ?? null, accountMode: ownerModes.get(fresh.accountId)!,
                 isOwner: fresh.accountId === input.accountId && !input.authentication.sessionRuntimePrincipal });

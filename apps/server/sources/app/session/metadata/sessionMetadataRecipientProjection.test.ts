@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Tx } from "@/storage/inTx";
 
 import {
+    assertSessionOwnerMetadataCurrentness,
     projectSessionMetadataForRecipient,
     readSessionMetadataOwnerAccountMode,
     readSessionMetadataOwnerAccountModes,
@@ -11,6 +12,7 @@ import {
 import {
     parsePersistedSessionOwnerMetadataEnvelopeV1,
 } from "./sessionOwnerMetadataPersistence";
+import { V2SessionRecordSchema } from '@happier-dev/protocol/sessions/control/contract';
 
 const OWNER_CIPHERTEXT =
     "oRoBAgMEBQYHCAkKCwwNDg8QERITFBUWFxh8aC0+8+YDECLScN6uQTItPyWVR7XbQA==";
@@ -32,6 +34,25 @@ const base = {
 };
 
 describe("projectSessionMetadataForRecipient", () => {
+    it("carries the parsed persisted envelope through readmission and response serialization with one ciphertext scan", () => {
+        const scan = vi.spyOn(String.prototype, 'charCodeAt');
+        try {
+            const projection = projectSessionMetadataForRecipient({ session: base,
+                recipient: { type: "owner", accountId: "owner", accountMode: "e2ee" } });
+            if (!('ownerMetadata' in projection)) throw new Error('Expected owner projection');
+            assertSessionOwnerMetadataCurrentness({ metadataLayoutVersion: 1,
+                ownerMetadata: projection.ownerMetadata, accountMode: "e2ee", isOwner: true });
+            const row = { ...projection, id: "session", seq: 0, createdAt: 1, updatedAt: 1,
+                active: false, activeAt: 1, encryptionMode: "e2ee", share: null, dataEncryptionKey: null };
+            const response = V2SessionRecordSchema.parse(row);
+            expect(V2SessionRecordSchema.parse(response).ownerMetadata).toEqual(OWNER_ENVELOPE);
+            expect(scan.mock.contexts.filter(value => value === OWNER_CIPHERTEXT).length)
+                .toBe(OWNER_CIPHERTEXT.length - 2);
+            expect(() => assertSessionOwnerMetadataCurrentness({ metadataLayoutVersion: 1,
+                ownerMetadata: response.ownerMetadata, accountMode: "plain", isOwner: true }))
+                .toThrow(SessionMetadataPrivacyUpgradeRequiredError);
+        } finally { scan.mockRestore(); }
+    });
     it("projects strict plaintext shared metadata without changing its stored bytes", () => {
         const metadata = JSON.stringify({ v: 1 });
         const session = {

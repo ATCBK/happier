@@ -1456,11 +1456,15 @@ the failed call's remaining queue before fallback. Later calls retry the Worker;
 diagnostic `require` mode retains its errors. JSON-content operations
 retain their existing implementation and native adapters retain their own routing.
 
-Repeated Session-list parsing can reuse structural owner-metadata ciphertext
-validation from a canonically parsed retained envelope. The Protocol validator
-ties that proof to the envelope object and its exact ciphertext, with reuse scoped
-to one synchronous parse. New bytes still pass the canonical validator; this proof
-does not authorize access, open content, or replace Account-mode admission.
+In 0.3 development, repeated Session-list parsing reuses structural owner-metadata ciphertext
+validation from a canonically parsed envelope. The Protocol envelope schema carries
+that proof with the parsed object and its exact ciphertext, borrowing it only
+during each synchronous parse. Server readmission carries the parsed envelope
+instead of stringifying and reparsing it. New objects or changed bytes still pass
+the canonical validator; object structure and Account-mode agreement are checked
+on every read. This proof does not authorize access, open content, or replace
+Account-mode admission. Canonical Account ciphertext admission validates Base64
+and reads its domain header in one pass without decoding the payload.
 
 Those sizes are owned by pure format leaves that import no crypto implementation:
 `crypto/boxBundleFormat.ts`, `crypto/encryptedDataKeyEnvelopeFormatV1.ts`, and
