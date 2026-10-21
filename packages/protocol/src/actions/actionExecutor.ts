@@ -11189,7 +11189,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ...(returned.acceptedTurnId ? { acceptedTurnId: returned.acceptedTurnId } : {}) } satisfies Extract<SessionMessageReplyAccountMutationV1, { kind: 'discussion_review' }>;
           settleDiscussionReview = async () => {
             const response = await settleOriginal({ context: ctx, sessionId, requestLocalId: returned.requestLocalId,
-              serverId: executionOrigin.serverId, reviewDecision, ...(ctx.signal ? { signal: ctx.signal } : {}) });
+              serverId: executionOrigin.serverIdentityId ?? executionOrigin.serverId, reviewDecision, ...(ctx.signal ? { signal: ctx.signal } : {}) });
             const failure = readActionFailureEnvelope(response);
             if (failure) return failure;
             const settled = SessionMessageReplyMutationResultV1Schema.safeParse(response);

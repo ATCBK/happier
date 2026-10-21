@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AccountSettingsV2UpdateRequestSchema, ApprovalRequestSchema, BUILT_IN_ROLES_V1 } from '@happier-dev/protocol';
+import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { SessionMessageReplyProgressV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { PROJECT_TRUST_ROUTE_V1, ProjectTrustMutationRequestV1Schema, ProjectTrustReadResponseV1Schema } from '@happier-dev/protocol/workspaces/projectSetup/projectTrustRowV1';
@@ -23,6 +26,61 @@ describe('present-user UI approval origin at the Action host', () => {
         vi.mocked(Modal.confirm).mockClear().mockResolvedValue(false);
     });
     afterEach(() => { setPreferredLanguageFromSettings('en'); standardCleanup(); });
+
+    it.each(['portable', 'foreign'] as const)(
+        'settles a rejected private Discussion original through its immutable Home (%s)', async binding => {
+        const serverIdentityId = 'srv_discussion_review_home';
+        const serverId = await harness.addHome({ name: 'Review Home', serverUrl: 'https://discussion-review.test',
+            accountId: 'alice', serverIdentityId });
+        const sessionId = 'reviewer-session';
+        const requestLocalId = 'discussion-follow-v1:private-question';
+        const acceptedTurnId = 'native-turn-private-question';
+        const discussion = { discussionId: 'private-discussion', messageId: 'private-question', throughSeq: 7,
+            participantSessionId: sessionId };
+        let progress = SessionMessageReplyProgressV1Schema.parse({ v: 1, mode: 'return', discussion, acceptedTurnId,
+            disposition: 'return_pending', outcome: { kind: 'answer', result: { sessionId, messageId: 'private-answer' } } });
+        const replyPath = `/v2/sessions/${sessionId}/messages/by-local-id/${encodeURIComponent(requestLocalId)}/reply`;
+        harness.answer(serverId, `POST ${replyPath}`, { select: input => {
+            expect(input).toEqual({ kind: 'discussion_review', discussionId: discussion.discussionId,
+                messageId: discussion.messageId, decision: 'reject', acceptedTurnId });
+            progress = SessionMessageReplyProgressV1Schema.parse({ ...progress, disposition: 'released', outcome: { kind: 'declined' } });
+            return { body: { v: 1, ok: true, progress } };
+        } });
+        const originServerId = 'creator-device-local-home';
+        const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+            createdBy: { surface: 'agent', sessionId }, requestedSurface: 'agent', discussionDraftReview: true,
+            executionOriginV1: { v: 1, authority: 'account_automation', surface: 'agent', caller: { kind: 'host' },
+                serverId: originServerId, serverIdentityId: binding === 'foreign' ? 'srv_different_home' : serverIdentityId,
+                accountId: 'alice', sessionId, machineId: 'reviewer-machine', actionId: 'discussion.reply', requestId: 'private-answer',
+                discussionReplyReturn: { serverId: originServerId, requestLocalId, acceptedTurnId } },
+            actionId: 'discussion.reply', actionArgs: { discussionId: discussion.discussionId, localId: 'private-answer',
+                content: { v: 1, parts: [{ t: 'text', text: 'Private draft' }] },
+                replyTarget: { kind: 'message', messageId: discussion.messageId } }, summary: 'Reply in a discussion.' });
+        // This models the persisted source-device Artifact at the Home boundary;
+        // its client codec, transition/CAS owner and captured-Home checks stay live.
+        const { captureLazyActionAccountContext } = await import('./actionAccountContext');
+        const account = await captureLazyActionAccountContext(serverId);
+        let artifactId: string;
+        try { artifactId = await account.createArtifact(buildApprovalRequestArtifactHeaderV1(request), JSON.stringify(request)); }
+        finally { account.dispose(); }
+        const { useApprovalDecisionHandler } = await import('@/components/tools/shell/approvals/useApprovalDecisionHandler');
+        const hook = await renderHook(() => useApprovalDecisionHandler({ id: artifactId, header: null }, request, sessionId, serverId));
+        const outcome: unknown = await hook.getCurrent()('reject').catch((error: unknown) => error);
+        const stored = ApprovalRequestV2Schema.parse(JSON.parse(harness.artifacts(serverId).readPlainBody(artifactId) ?? 'null'));
+        expect(stored.executionOriginV1).toEqual(request.executionOriginV1);
+        expect(stored.execution).toBeUndefined();
+        if (binding === 'foreign') {
+            expect(stored.status).toBe('open');
+            expect(outcome).toMatchObject({ code: 'approval_origin_unavailable' });
+            expect(progress.disposition).toBe('return_pending');
+            expect(harness.requestsFor(replyPath)).toEqual([]);
+        } else {
+            expect(stored).toMatchObject({ status: 'rejected', decision: { kind: 'reject' } });
+            expect(outcome).toBe(true);
+            expect(progress).toMatchObject({ disposition: 'released', outcome: { kind: 'declined' } });
+            expect(harness.requestsFor(replyPath)).toHaveLength(1);
+        }
+    });
 
     it('opens a generic confirmation with no repeated title body and declines without deleting', async () => {
         const serverId = await harness.addHome({ name: 'Drafts', serverUrl: 'https://draft-confirmation.test', accountId: 'alice' });
