@@ -22,7 +22,7 @@ import {
   requireConnectedAccountCryptoMaterial as requireCryptoMaterial,
   resolveConnectedAccountCryptoMaterial as resolveCryptoMaterial,
 } from './accountScopedCryptoMaterial';
-import type { ConnectedServiceAccountEncryptionMode } from '@/api/client/connectedServiceCredentialApi';
+import type { AccountEncryptionModeReadOptions, ConnectedServiceAccountEncryptionMode } from '@/api/client/connectedServiceCredentialApi';
 import type { StoredCredentials } from '@/persistence';
 import {
   createConnectedAccountConfigurationOwner,
@@ -180,9 +180,10 @@ export type QualifiedConnectedAccountEstablishedInvocationBasis = Readonly<{
   occurrenceId: string;
   sourceCustody: ConnectedAccountSourceCustodyV1;
   isCurrent(): boolean;
+  /** Freshly admits the captured Account mode before sealing a staged replacement. */
   prepareCredentialReplacement(
     mutation: QualifiedConnectedAccountCredentialMutationPreparationInput,
-  ): QualifiedConnectedAccountCredentialReplacementPreparation;
+  ): MaybePromise<QualifiedConnectedAccountCredentialReplacementPreparation>;
 }>;
 
 export type QualifiedConnectedAccountCredentialMutationPreparationInput =
@@ -425,7 +426,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
     credentials: StoredCredentials;
     isAccountRuntimeCurrent?: (signal?: AbortSignal) => Promise<boolean>;
     runAccountOperation?: <T>(operation: () => Promise<T>) => Promise<T>;
-    getAccountEncryptionMode(signal?: AbortSignal): Promise<ConnectedServiceAccountEncryptionMode>;
+    getAccountEncryptionMode(signal?: AbortSignal, options?: AccountEncryptionModeReadOptions): Promise<ConnectedServiceAccountEncryptionMode>;
     readCredential?: CredentialSnapshotReader;
     readConfiguration?: ConfigurationSnapshotReader;
     configuration: Pick<
@@ -1003,7 +1004,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
             occurrenceId: runtimeLease.occurrenceId,
             sourceCustody: runtimeLease.sourceCustody,
             isCurrent,
-            prepareCredentialReplacement(
+            async prepareCredentialReplacement(
               mutation: QualifiedConnectedAccountCredentialMutationPreparationInput,
             ) {
               if (!isCurrent()) {
@@ -1077,6 +1078,11 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
                   metadata,
                   now: Date.now(),
                 });
+              const currentMode = await runCurrentAccountRead(() => params.getAccountEncryptionMode(input.signal, { usage: 'fresh-authority' }));
+              assertNotAborted(input.signal);
+              if (currentMode !== accountMode || !isCurrent()) {
+                throw new Error('Connected-account credential mutation basis is no longer current');
+              }
               const content = accountMode === 'plain'
                 ? sealQualifiedConnectedAccountContentEnvelope({
                     kind: 'credential',
@@ -1267,7 +1273,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
     const materialSnapshot = await readMaterialSnapshot({ account: input.account });
     if (materialSnapshot.credentialRevision !== input.credentialRevision
       || materialSnapshot.configurationRevision !== input.configurationRevision
-      || await params.getAccountEncryptionMode() !== input.accountMode) return null;
+      || await params.getAccountEncryptionMode(undefined, { usage: 'fresh-authority' }) !== input.accountMode) return null;
     const lease = await params.reloadController.acquireRuntimeRegistry();
     try {
       const runtimeLease = await lease.registry.resolveConnectedAccountRuntime?.(input.account.service);
@@ -1277,7 +1283,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
       const isCurrent = async () => {
         if (!await materialSnapshot.isCurrent()
           || (params.isAccountRuntimeCurrent && !await params.isAccountRuntimeCurrent())
-          || await params.getAccountEncryptionMode() !== input.accountMode) return false;
+          || await params.getAccountEncryptionMode(undefined, { usage: 'fresh-authority' }) !== input.accountMode) return false;
         // Recheck the synchronous generation fence after every asynchronous read.
         return params.reloadController.isRuntimeRegistryCurrent(lease.registry)
           && runtimeLease.isCurrent();

@@ -1,30 +1,15 @@
-import type { ConnectedServiceCredentialApi } from '@/api/client/connectedServiceCredentialApi';
-import { createConnectedServiceAccountModeCache } from './createConnectedServiceAccountModeCache';
-import type { ConnectedServiceAccountMode } from './createConnectedServiceAccountModeCache';
+import type { ConnectedServiceCredentialApi, ConnectedServiceAccountEncryptionMode } from '@/api/client/connectedServiceCredentialApi';
 
-export type { ConnectedServiceAccountMode } from './createConnectedServiceAccountModeCache';
-
-const ACCOUNT_MODE_ERROR_BACKOFF_MS = 30_000;
-
-const accountModeCache = createConnectedServiceAccountModeCache({
-  errorTtlMs: ACCOUNT_MODE_ERROR_BACKOFF_MS,
-});
+export type ConnectedServiceAccountMode = ConnectedServiceAccountEncryptionMode;
 
 export async function resolveConnectedServiceAccountMode(
   api: Partial<Pick<ConnectedServiceCredentialApi, 'getAccountEncryptionMode'>>,
   options?: Readonly<{ refresh?: boolean; signal?: AbortSignal }>,
 ): Promise<ConnectedServiceAccountMode> {
-  if (options?.signal) return await api.getAccountEncryptionMode?.(options) ?? 'unknown';
-  if (options?.refresh) return await accountModeCache.refresh(api);
-  return await accountModeCache.resolve(api);
-}
-
-export function invalidateConnectedServiceAccountMode(
-  api?: Partial<Pick<ConnectedServiceCredentialApi, 'getAccountEncryptionMode'>>,
-): void {
-  if (api) {
-    accountModeCache.invalidate(api);
-    return;
+  try {
+    return await api.getAccountEncryptionMode?.(options) ?? 'unknown';
+  } catch (error) {
+    if (options?.signal) throw error;
+    return 'unknown';
   }
-  accountModeCache.clear();
 }

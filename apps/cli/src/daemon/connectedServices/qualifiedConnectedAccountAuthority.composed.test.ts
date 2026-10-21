@@ -3,7 +3,8 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, expect, it, vi } from 'vitest';
 import { PluginConnectedAccountDescriptorContributionV2Schema } from '@happier-dev/protocol/connect/plugin-connected-account-authentication-v2';
 import { HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
-import { sealQualifiedConnectedAccountContentEnvelope } from '@happier-dev/protocol/connect/qualifiedConnectedAccountContentEnvelope';
+import { openQualifiedConnectedAccountContentEnvelope, sealQualifiedConnectedAccountContentEnvelope } from '@happier-dev/protocol/connect/qualifiedConnectedAccountContentEnvelope';
+import { StoredJsonContentEnvelopeSchema } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
 import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import { ConnectedServiceCredentialHttpClient } from '@/api/client/connectedServiceCredentialApi';
@@ -15,25 +16,34 @@ import { createConnectedAccountHostRuntimeInvoker } from '@/plugins/runtime/conn
 import type { HostConnectedAccountReadContext } from '@/plugins/runtime/connectedAccounts/hostRuntime';
 import { createLoggerAndEventsAvailablePluginInvocationServiceBinding } from '@/plugins/runtime/invocation/services/factory';
 import type { PluginReloadController } from '@/plugins/runtime/reload/controller';
+import type { StoredCredentials } from '@/persistence';
 import { createQualifiedConnectedAccountDaemonPersistence } from './qualifiedConnectedAccountDaemonPersistence';
 import { createQualifiedConnectedAccountAttemptTransactionAdapters } from './qualifiedConnectedAccountAttemptTransactionAdapters';
 import { createQualifiedConnectedAccountEstablishedRuntimeOwner } from './qualifiedConnectedAccountEstablishedRuntimeOwner';
 
 afterEach(() => vi.restoreAllMocks());
 
-async function authorityFixture() {
+async function authorityFixture(initialMode: 'plain' | 'e2ee' = 'plain') {
   const channel = await createRequesterCurrentnessSocketHarness();
   const accountId = 'qualified-authority-account';
-  const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`, encryption: null };
+  const machineKey = new Uint8Array(32).fill(17);
+  const material = { type: 'dataKey' as const, machineKey };
+  const credentials: StoredCredentials = { token: `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`,
+    encryption: initialMode === 'plain' ? null : { type: 'dataKey', publicKey: new Uint8Array(32), machineKey } };
   const account = { service: HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1, accountId: 'connected-1' };
-  let currentness: AccountEncryptionCurrentnessResponse = { mode: 'plain', version: 1, updatedAt: 1,
-    signingKeyFingerprint: null, contentKeyFingerprint: null };
+  let currentness: AccountEncryptionCurrentnessResponse = { mode: initialMode, version: 1, updatedAt: 1,
+    signingKeyFingerprint: initialMode === 'plain' ? null : 'current-signing', contentKeyFingerprint: initialMode === 'plain' ? null : 'current-content' };
   let currentnessReads = 0;
   const mutations: string[] = [];
   const credential = { ref: account, authenticationModeId: 'token', revisionSemantics: 'revisioned',
     credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS', configurationRevision: null,
-    content: sealQualifiedConnectedAccountContentEnvelope({ kind: 'credential', accountMode: 'plain',
-      payload: { v: 1, values: { token: 'private-token' } }, randomBytes: length => new Uint8Array(length) }), metadata: { scopes: [] } };
+    content: initialMode === 'plain'
+      ? sealQualifiedConnectedAccountContentEnvelope({ kind: 'credential', accountMode: 'plain',
+        payload: { v: 1, values: { token: 'private-token' } }, randomBytes: length => new Uint8Array(length) })
+      : sealQualifiedConnectedAccountContentEnvelope({ kind: 'credential', accountMode: 'e2ee', material,
+        payload: { v: 1, values: { token: 'private-token' } }, randomBytes: length => new Uint8Array(length) }), metadata: { scopes: [] } };
+  let attemptContent: unknown;
+  let attemptExpiresAtMs = 0;
   const server = createServer(async (request, response) => {
     response.setHeader('Content-Type', 'application/json');
     const path = request.url?.split('?')[0];
@@ -46,6 +56,18 @@ async function authorityFixture() {
     } else if (request.method === 'GET' && path === '/v4/connect/qualified/configuration') {
       response.statusCode = 404;
       response.end(JSON.stringify({ error: 'not-found' }));
+    } else if (request.method === 'GET' && path?.startsWith('/v2/connect/connected-account-attempt-transactions/')) {
+      response.end(JSON.stringify({ revision: 1, content: attemptContent, expiresAtMs: attemptExpiresAtMs }));
+    } else if (request.method === 'POST' && path?.startsWith('/v2/connect/connected-account-attempt-transactions/')) {
+      mutations.push(`${request.method} ${path}`);
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const body: unknown = JSON.parse(Buffer.concat(chunks).toString());
+      if (typeof body !== 'object' || body === null || !('content' in body) || !('expiresAtMs' in body)) throw new Error('Invalid attempt body');
+      attemptContent = StoredJsonContentEnvelopeSchema.parse(body.content);
+      if (typeof body.expiresAtMs !== 'number') throw new Error('Invalid attempt expiry');
+      attemptExpiresAtMs = body.expiresAtMs;
+      response.end(JSON.stringify({ revision: 1, content: attemptContent, expiresAtMs: body.expiresAtMs }));
     } else if (request.method !== 'GET') {
       mutations.push(`${request.method} ${path}`);
       response.statusCode = 500;
@@ -96,14 +118,15 @@ async function authorityFixture() {
       isRuntimeRegistryCurrent: () => true } as unknown as Pick<PluginReloadController, 'acquireRuntimeRegistry' | 'isRuntimeRegistryCurrent'>,
     getAccountEncryptionMode: (signal, options) => api.getAccountEncryptionMode({ ...options, signal }),
     configuration: persistence.configuration });
-  return { account, credentials, persistence, owner, getAccountEncryptionMode, channel,
+  return { account, credentials, persistence, owner, getAccountEncryptionMode, channel, material,
+    attemptContent: () => StoredJsonContentEnvelopeSchema.parse(attemptContent),
     run: <T>(operation: () => T) => runWithServerHttpBaseUrl(base, operation),
     reads: () => currentnessReads, mutations,
     async warm() {
       await holder.read();
       await runWithServerHttpBaseUrl(base, async () => {
-        await expect(api.getAccountEncryptionMode()).resolves.toBe('plain');
-        await expect(api.getAccountEncryptionMode()).resolves.toBe('plain');
+        await expect(api.getAccountEncryptionMode()).resolves.toBe(initialMode);
+        await expect(api.getAccountEncryptionMode()).resolves.toBe(initialMode);
       });
       expect(currentnessReads).toBe(1);
     },
@@ -127,6 +150,29 @@ it('refuses account configuration sealing with retired observed plain authority 
       expectedRevision: null, replacement: { values: { endpoint: 'https://private.example' }, secretRefs: {} },
       occurrenceId: 'fixture', sourceCustody: { kind: 'host' } }))).resolves.toMatchObject({ status: 'unavailable' });
     expect(f.mutations).toEqual([]);
+    expect(f.reads()).toBe(2);
+  } finally { await f.close(); }
+});
+
+it.each(['plain', 'e2ee'] as const)('freshly seals and reopens a durable attempt without polling initial reads (%s)', async mode => {
+  const f = await authorityFixture(mode);
+  try {
+    await f.warm();
+    const adapters = createQualifiedConnectedAccountAttemptTransactionAdapters({ credentials: f.credentials,
+      getAccountEncryptionMode: f.getAccountEncryptionMode, getMachineId: () => 'machine' });
+    await f.run(() => adapters.oauth.create({ attemptId: 'attempt', service: f.account.service,
+      callbackUrl: 'https://provider.example/callback', snapshot: { attemptId: 'attempt', createdAtMs: Date.now(),
+        intent: 'connect', service: f.account.service, modeId: 'token', sourceCustody: { kind: 'host' }, phase: 'starting',
+        expectedCredentialRevision: null, expectedCredentialConfigurationRevision: null, expectedConfigurationRevision: 'unconfigured',
+        stagedCredentials: { token: 'private-token' } } }));
+    const envelope = f.attemptContent();
+    const opened = mode === 'plain'
+      ? openQualifiedConnectedAccountContentEnvelope({ kind: 'attempt', accountMode: 'plain', envelope })
+      : openQualifiedConnectedAccountContentEnvelope({ kind: 'attempt', accountMode: 'e2ee', material: f.material, envelope });
+    expect(opened).toMatchObject({ snapshot: { stagedCredentials: { token: 'private-token' } } });
+    if (mode === 'e2ee') expect(JSON.stringify(envelope)).not.toContain('private-token');
+    await expect(f.run(() => adapters.oauth.read?.('attempt'))).resolves.toMatchObject({ snapshot: { stagedCredentials: { token: 'private-token' } } });
+    // Exactly one mode acquisition at the actual seal; ordinary reopening borrows identity.
     expect(f.reads()).toBe(2);
   } finally { await f.close(); }
 });

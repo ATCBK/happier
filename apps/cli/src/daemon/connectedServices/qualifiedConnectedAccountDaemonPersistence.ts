@@ -31,7 +31,7 @@ import {
   readQualifiedConnectedAccountCredentialV4,
 } from '@/api/client/qualifiedConnectedAccountApi';
 import { requireAccountEncryptionCredentials } from '@/api/client/encryptionKey';
-import type { ConnectedServiceAccountEncryptionMode } from '@/api/client/connectedServiceCredentialApi';
+import type { AccountEncryptionModeReadOptions, ConnectedServiceAccountEncryptionMode } from '@/api/client/connectedServiceCredentialApi';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import type {
   SessionSyncPendingInputServerContractResult,
@@ -311,7 +311,7 @@ function sealContent(input: Readonly<{
 export function createQualifiedConnectedAccountDaemonPersistence(
   params: Readonly<{
     credentials: StoredCredentials;
-    getAccountEncryptionMode(): Promise<ConnectedServiceAccountEncryptionMode>;
+    getAccountEncryptionMode(options?: AccountEncryptionModeReadOptions): Promise<ConnectedServiceAccountEncryptionMode>;
     readCredential?: CredentialReader;
     readConfiguration?: ConfigurationReader;
     mutateCredential?: CredentialMutator;
@@ -593,10 +593,10 @@ export function createQualifiedConnectedAccountDaemonPersistence(
     }
   }
 
-  async function resolveAccountMode(): Promise<
+  async function resolveAccountMode(options?: AccountEncryptionModeReadOptions): Promise<
     Exclude<ConnectedServiceAccountEncryptionMode, 'unknown'>
   > {
-    const mode = await params.getAccountEncryptionMode();
+    const mode = await params.getAccountEncryptionMode(options);
     if (mode === 'unknown') {
       throw new Error('Connected-account account encryption mode is unavailable');
     }
@@ -799,7 +799,7 @@ export function createQualifiedConnectedAccountDaemonPersistence(
                   code: 'connected_account_credential_changed',
                 });
               }
-              const accountMode = await resolveAccountMode();
+              const accountMode = await resolveAccountMode({ usage: 'fresh-authority' });
               const result = await mutateConfiguration({
                 token: params.credentials.token,
                 patch: {
@@ -988,7 +988,7 @@ export function createQualifiedConnectedAccountDaemonPersistence(
                     : 'configured',
               },
               executeV4: async () => {
-                const accountMode = await resolveAccountMode();
+                const accountMode = await resolveAccountMode({ usage: 'fresh-authority' });
                 const payload =
                   QualifiedConnectedAccountCredentialPayloadV1Schema.parse({
                     v: 1,

@@ -119,7 +119,7 @@ describe('Follow HTTP family adapter', () => {
     app.put('/v2/account/session-follow-rules/:ruleId', async request => {
       const body = SetSessionFollowRuleRequestV1Schema.parse(request.body);
       expect(body.content.t).toBe(mode === 'plain' ? 'plain' : 'encrypted');
-      return { rule: { ruleId: 'authored-rule', receiver: body.receiver, content: body.content, version: 1 } };
+      return { rule: { ruleId: 'authored-rule', receiver: body.receiver, content: body.content, version: body.expectedVersion + 1 } };
     });
     const serverHttpBaseUrl = await app.listen({ port: 0, host: '127.0.0.1' });
     const holder = acquireRequesterAccountEncryptionCurrentness({ accountId, token, serverBaseUrl: serverHttpBaseUrl });

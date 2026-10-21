@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { describe, expect, it } from 'vitest';
 import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
 import { ConnectedServiceCredentialHttpClient } from '@/api/client/connectedServiceCredentialApi';
 import { acquireRequesterAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentnessObservation';
@@ -26,7 +26,7 @@ async function accountModeAuthorityFixture() {
     reads++;
     response.statusCode = revoked ? 401 : 200;
     response.end(JSON.stringify(revoked ? { error: 'unauthorized' }
-      : request.url === '/v1/account/encryption' ? { mode: currentness.mode } : currentness));
+      : request.url === '/v1/account/encryption' ? { mode: currentness.mode, updatedAt: currentness.updatedAt } : currentness));
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -99,6 +99,9 @@ describe('resolveConnectedServiceAccountMode canonical observation', () => {
       await f.channel.disconnect();
       if (change === 'mode') f.plain();
       else f.revoke();
+      await expect(f.read()).resolves.toBe('unknown');
+      expect(f.reads()).toBe(1);
+      await f.channel.reconnect();
       await expect(f.read()).resolves.toBe(change === 'mode' ? 'plain' : 'unknown');
       expect(f.reads()).toBe(2);
     } finally { await f.close(); }
@@ -114,58 +117,5 @@ describe('resolveConnectedServiceAccountMode canonical observation', () => {
       await expect(f.read({ refresh: true })).resolves.toBe('plain');
       expect(f.reads()).toBe(3);
     } finally { await f.close(); }
-  });
-});
-
-
-describe('resolveConnectedServiceAccountMode', () => {
-  it('dedupes concurrent account mode probes and supports invalidation', async () => {
-    const mod = await import('./resolveConnectedServiceAccountMode');
-    expect(mod.invalidateConnectedServiceAccountMode).toBeTypeOf('function');
-
-    const getAccountEncryptionMode = vi
-      .fn<() => Promise<'plain' | 'e2ee' | 'unknown'>>()
-      .mockResolvedValueOnce('plain')
-      .mockResolvedValueOnce('e2ee');
-    const api = { getAccountEncryptionMode };
-
-    const [first, second] = await Promise.all([
-      mod.resolveConnectedServiceAccountMode(api),
-      mod.resolveConnectedServiceAccountMode(api),
-    ]);
-    expect([first, second]).toEqual(['plain', 'plain']);
-    expect(getAccountEncryptionMode).toHaveBeenCalledTimes(1);
-
-    mod.invalidateConnectedServiceAccountMode(api);
-    await expect(mod.resolveConnectedServiceAccountMode(api)).resolves.toBe('e2ee');
-    expect(getAccountEncryptionMode).toHaveBeenCalledTimes(2);
-  });
-
-  it('preserves unknown mode briefly when the server probe fails', async () => {
-    const mod = await import('./resolveConnectedServiceAccountMode');
-    const getAccountEncryptionMode = vi.fn(async () => 'unknown' as const);
-    const api = { getAccountEncryptionMode };
-
-    await expect(mod.resolveConnectedServiceAccountMode(api)).resolves.toBe('unknown');
-    await expect(mod.resolveConnectedServiceAccountMode(api)).resolves.toBe('unknown');
-
-    expect(getAccountEncryptionMode).toHaveBeenCalledTimes(1);
-    mod.invalidateConnectedServiceAccountMode(api);
-  });
-
-  it('does not force-refresh account mode immediately after a recent failure', async () => {
-    vi.resetModules();
-    const mod = await import('./resolveConnectedServiceAccountMode');
-    const getAccountEncryptionMode = vi
-      .fn<() => Promise<'plain' | 'e2ee' | 'unknown'>>()
-      .mockRejectedValueOnce(new Error('server unavailable'))
-      .mockResolvedValueOnce('plain');
-    const api = { getAccountEncryptionMode };
-
-    await expect(mod.resolveConnectedServiceAccountMode(api, { refresh: true })).resolves.toBe('unknown');
-    await expect(mod.resolveConnectedServiceAccountMode(api, { refresh: true })).resolves.toBe('unknown');
-
-    expect(getAccountEncryptionMode).toHaveBeenCalledTimes(1);
-    mod.invalidateConnectedServiceAccountMode(api);
   });
 });

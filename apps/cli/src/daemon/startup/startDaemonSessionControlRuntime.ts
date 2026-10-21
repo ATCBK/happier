@@ -3322,7 +3322,7 @@ export async function startDaemonSessionControlRuntime(
   const providerAccountUsagePersistence =
     createProviderAccountUsagePersistenceScheduler({
       api: {
-        getAccountEncryptionMode: () => params.api.getAccountEncryptionMode(),
+        getAccountEncryptionMode: options => params.api.getAccountEncryptionMode(options),
       },
       credentials: params.credentials,
       randomBytes,

@@ -1403,7 +1403,7 @@ export async function startDaemon(
     const connectedAccountPersistence =
       createQualifiedConnectedAccountDaemonPersistence({
         credentials,
-        getAccountEncryptionMode: async () => await api.getAccountEncryptionMode(),
+        getAccountEncryptionMode: async options => await api.getAccountEncryptionMode(options),
         resolveServerFeaturesSnapshot: () =>
           serverFeaturesSnapshotStore.getSnapshot(),
         resolveSessionSyncPendingInputServerContractResult: () =>
@@ -1425,8 +1425,8 @@ export async function startDaemon(
           createQualifiedConnectedAccountAttemptTransactionAdapters({
             credentials,
             getMachineId: () => machineId,
-            getAccountEncryptionMode: async () =>
-              await api.getAccountEncryptionMode(),
+            getAccountEncryptionMode: async options =>
+              await api.getAccountEncryptionMode(options),
           }),
       });
     const connectedAccountConfigurationOwner =
@@ -1438,7 +1438,7 @@ export async function startDaemon(
       createQualifiedConnectedAccountEstablishedRuntimeOwner({
         reloadController: pluginReloadController,
         credentials,
-        getAccountEncryptionMode: (signal) => api.getAccountEncryptionMode({ signal }),
+        getAccountEncryptionMode: (signal, options) => api.getAccountEncryptionMode({ ...options, signal }),
         configuration: connectedAccountPersistence.configuration,
         configurationOwner: connectedAccountConfigurationOwner,
       });

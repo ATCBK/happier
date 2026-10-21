@@ -16,7 +16,7 @@ import {
   type ConnectedAccountAttemptTransactionScope,
   type ConnectedAccountAttemptTransactionStoreApi,
 } from '@/api/client/connectedAccountAttemptTransactionApi';
-import type { ConnectedServiceAccountEncryptionMode } from '@/api/client/connectedServiceCredentialApi';
+import type { AccountEncryptionModeReadOptions, ConnectedServiceAccountEncryptionMode } from '@/api/client/connectedServiceCredentialApi';
 import { generatePkceCodes } from '@/cloud/pkce';
 import type { StoredCredentials } from '@/persistence';
 import type {
@@ -246,7 +246,7 @@ export function createQualifiedConnectedAccountAttemptTransactionAdapters(
      * durability is installed for every Account, plaintext included, and the mode —
      * never key presence — decides whether content is sealed or stored plainly.
      */
-    getAccountEncryptionMode: () => Promise<ConnectedServiceAccountEncryptionMode>;
+    getAccountEncryptionMode: (options?: AccountEncryptionModeReadOptions) => Promise<ConnectedServiceAccountEncryptionMode>;
     getMachineId: () => string;
     api?: ConnectedAccountAttemptTransactionStoreApi;
     randomBytes?: (length: number) => Uint8Array;
@@ -285,8 +285,8 @@ export function createQualifiedConnectedAccountAttemptTransactionAdapters(
     });
   }
 
-  async function resolveAccountMode(): Promise<'plain' | 'e2ee'> {
-    const mode = await params.getAccountEncryptionMode();
+  async function resolveAccountMode(options?: AccountEncryptionModeReadOptions): Promise<'plain' | 'e2ee'> {
+    const mode = await params.getAccountEncryptionMode(options);
     if (mode === 'unknown') {
       throw new Error(
         'Connected-account attempt transaction account encryption mode is unavailable',
@@ -298,7 +298,7 @@ export function createQualifiedConnectedAccountAttemptTransactionAdapters(
   async function seal(
     payload: OAuthPayload | DevicePayload,
   ): Promise<StoredJsonContentEnvelope> {
-    const accountMode = await resolveAccountMode();
+    const accountMode = await resolveAccountMode({ usage: 'fresh-authority' });
     return accountMode === 'plain'
       ? sealQualifiedConnectedAccountContentEnvelope({
         kind: 'attempt',

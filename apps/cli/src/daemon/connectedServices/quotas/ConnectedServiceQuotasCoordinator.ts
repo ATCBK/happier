@@ -37,7 +37,6 @@ import {
   isConnectedServiceStoredContentUnavailableError,
 } from '@/cloud/connectedServices/connectedServiceStoredContentUnavailable';
 import {
-  invalidateConnectedServiceAccountMode,
   resolveConnectedServiceAccountMode,
   type ConnectedServiceAccountMode,
 } from '@/cloud/connectedServices/resolveConnectedServiceAccountMode';
@@ -3973,7 +3972,6 @@ export class ConnectedServiceQuotasCoordinator {
   private async flushInBandQuotaPersistencePayload(payload: InBandQuotaPersistencePayload): Promise<void> {
     const accountMode = await resolveConnectedServiceAccountMode(this.api, { refresh: true });
     if (accountMode === 'unknown') {
-      invalidateConnectedServiceAccountMode(this.api);
       throw new InBandQuotaPersistenceRetryError({
         reason: 'account_mode_unknown',
         retryable: false,

@@ -1189,7 +1189,7 @@ describe('createQualifiedConnectedAccountEstablishedRuntimeOwner', () => {
       },
     });
     expect(receipt.basis.isCurrent()).toBe(true);
-    const replacement = receipt.basis.prepareCredentialReplacement({
+    const replacement = await receipt.basis.prepareCredentialReplacement({
       set: { accessToken: 'access-rotated' },
       delete: [],
     });
@@ -1226,10 +1226,10 @@ describe('createQualifiedConnectedAccountEstablishedRuntimeOwner', () => {
         refreshToken: 'refresh-1',
       },
     });
-    expect(() => receipt.basis.prepareCredentialReplacement({
+    await expect(receipt.basis.prepareCredentialReplacement({
       set: { accessToken: 'access-again' },
       delete: ['accessToken'],
-    })).toThrow('cannot set and delete the same key');
+    })).rejects.toThrow('cannot set and delete the same key');
 
     expect(readCredential).toHaveBeenCalledWith({
       token: 'token-1',

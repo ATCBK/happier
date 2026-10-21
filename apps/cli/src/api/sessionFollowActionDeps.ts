@@ -77,7 +77,7 @@ export function createSessionFollowActionDeps(input: Readonly<{
       ...(input.externalActionMachineRequestPrivateKey ? { privateKey: input.externalActionMachineRequestPrivateKey } : {}),
       ...(input.externalActionMachineInstallationId ? { installationId: input.externalActionMachineInstallationId } : {}),
     });
-    const captureRuleStorage = async () => {
+    const captureRuleStorage = async (usage: 'identity' | 'fresh-authority' = 'fresh-authority') => {
       await assertCurrent();
       const credentials = requester?.credentials ?? input.credentials;
       const requesterAccountId = context.externalActionExecutionAuthorization?.binding.accountId;
@@ -91,7 +91,7 @@ export function createSessionFollowActionDeps(input: Readonly<{
       const authorization = authorize({ method: 'GET', path: '/v1/account/encryption/currentness' });
       if (!authorization.ok) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
       const admitted = await resolveCliAccountStorageContext({ credentials, serverBaseUrl: serverHttpBaseUrl,
-        authorizationHeaders: authorization.headers, ...(signal ? { signal } : {}) });
+        usage, authorizationHeaders: authorization.headers, ...(signal ? { signal } : {}) });
       await assertCurrent();
       return admitted;
     };
@@ -102,7 +102,7 @@ export function createSessionFollowActionDeps(input: Readonly<{
       return { ...rule, definition: opened.definition };
     };
     const readRules = async () => {
-      const admitted = await captureRuleStorage();
+      const admitted = await captureRuleStorage('identity');
       const authorization = authorize({ method: 'GET', path: SESSION_FOLLOW_RULES_ROUTE_V1 });
       if (!authorization.ok) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
       await assertCurrent();

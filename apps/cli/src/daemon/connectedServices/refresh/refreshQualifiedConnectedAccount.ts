@@ -285,7 +285,7 @@ export async function refreshQualifiedConnectedAccount(input: Readonly<{
     });
   }
   const replacement =
-    invocation.basis.prepareCredentialReplacement({
+    await invocation.basis.prepareCredentialReplacement({
       ...mutation,
       metadata: {
         ...(invocation.result.displayName

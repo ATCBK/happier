@@ -11,6 +11,7 @@ import {
 } from '@/api/client/qualifiedConnectedAccountApi';
 import { readHttpStatus } from '@/api/client/httpStatusError';
 import { requireAccountEncryptionCredentials } from '@/api/client/encryptionKey';
+import type { AccountEncryptionModeReadOptions } from '@/api/client/connectedServiceCredentialApi';
 import type { StoredCredentials } from '@/persistence';
 import type { RequesterSessionRuntimeContext } from '../../sessionEncryption/requesterSessionCredentials';
 import { createConnectedServiceQuotaPersistenceScheduler } from '../quotas/createConnectedServiceQuotaPersistenceScheduler';
@@ -27,7 +28,7 @@ import {
 const DEFAULT_PROVIDER_ACCOUNT_USAGE_PERSISTENCE_MIN_FRESHNESS_MS = 60_000;
 
 type AccountUsageApi = Readonly<{
-  getAccountEncryptionMode: () => Promise<'plain' | 'e2ee' | 'unknown'>;
+  getAccountEncryptionMode: (options?: AccountEncryptionModeReadOptions) => Promise<'plain' | 'e2ee' | 'unknown'>;
 }>;
 
 /**
@@ -237,7 +238,7 @@ export function createProviderAccountUsagePersistenceScheduler(params: Readonly<
       nowMs: Math.max(0, Math.trunc(params.now())), minFreshnessMs });
     if (!decision.persist && !(decision.reason === 'unchanged_fresh'
       && JSON.stringify(subscription) !== JSON.stringify(previous?.subscription))) return;
-    const accountMode = await params.api.getAccountEncryptionMode();
+    const accountMode = await params.api.getAccountEncryptionMode({ usage: 'fresh-authority' });
     if (accountMode !== 'plain' && accountMode !== 'e2ee') {
       throw new Error(
         'Provider account usage persistence route unavailable for account mode',
