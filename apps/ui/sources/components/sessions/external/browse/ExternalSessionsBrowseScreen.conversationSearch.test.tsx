@@ -100,17 +100,26 @@ afterEach(async () => { standardCleanup(); vi.useRealTimers(); await connection?
 async function flush() { await flushHookEffects({ runOnlyPendingTimers: true }); }
 
 describe('History unified conversation search', () => {
-    it('keeps a submitted native hit, query and mode through the scoped route projection refresh', async () => {
+    it.each(['ready', 'failed'] as const)('keeps a submitted native hit, query and mode through a %s scoped route projection refresh', async outcome => {
         const features = createRootLayoutFeaturesResponse();
         primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
         storage.setState(state => ({ settings: { ...state.settings, featureToggles: { ...state.settings.featureToggles, 'sessions.direct': true } } }));
         const refreshing = createDeferred<unknown>();
+        const archive = projection.agentsById['acme.archive'];
+        const source = archive.externalSessions!.sources[0];
+        const fields = [...source.schema.fields, { name: 'archiveHome', kind: 'string' as const }];
+        const sourceProjection = (reversed: boolean) => PluginProjectionV2Schema.parse({ ...projection, agentsById: {
+            ...projection.agentsById, 'acme.archive': { ...archive, externalSessions: { ...archive.externalSessions,
+                sources: [{ ...source, schema: { fields: reversed ? [...fields].reverse() : fields },
+                    instances: [{ kind: 'default', constants: { archiveHome: '/fixture/archive' } }] }],
+            } },
+        } });
         let refresh = false;
         let scans = 0;
         const push = vi.fn();
         rpc.mockImplementation(async call => {
             if (call.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
-                return refresh ? refreshing.promise : { protocolVersion: 1, projection };
+                return refresh ? refreshing.promise : { protocolVersion: 1, projection: sourceProjection(false) };
             }
             if (call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET) return DEFAULT_MEMORY_SETTINGS;
             if (call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST) {
@@ -144,12 +153,16 @@ describe('History unified conversation search', () => {
         expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)).toHaveLength(1);
         expect(readList().props).toMatchObject({ searchQuery: 'body phrase', searchTarget: 'content',
             candidates: [{ remoteSessionId: 'stable-native' }] });
-        await act(async () => refreshing.resolve({ protocolVersion: 1, projection }));
+        await act(async () => {
+            if (outcome === 'failed') refreshing.reject(new Error('Projection transport failed'));
+            else refreshing.resolve({ protocolVersion: 1, projection: sourceProjection(true) });
+        });
         await flush();
-        expect(readList().props.candidateActionsDisabled).toBe(false);
+        expect(readList().props.candidateActionsDisabled).toBe(outcome === 'failed');
         expect(readList().props).toMatchObject({ searchQuery: 'body phrase', searchTarget: 'content',
             candidates: [{ remoteSessionId: 'stable-native' }] });
         expect(scans).toBe(1);
+        if (outcome === 'failed') return;
         await act(async () => readList().props.onSelectCandidate(readList().props.candidates[0], readList().props.selectionAuthorityGeneration));
         expect(push).toHaveBeenCalledWith(expect.stringContaining('/session/opened-native'));
     });

@@ -69,6 +69,7 @@ import {
 } from './externalSessionBrowseErrorPresentation';
 import { readMachineName } from '@/utils/sessions/machineDisplayNames';
 import { useDeviceType } from '@/utils/platform/responsive';
+import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import { useConversationSearch } from '@/sync/domains/search/useConversationSearch';
 import { hasConversationSearchScanFallback, isConversationSearchOnDemandOff } from '@/sync/domains/search/searchConversations';
 import { useMemorySearchProvider } from '@/sync/domains/memory/useMemorySearchProvider';
@@ -402,7 +403,7 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
         };
     }, [searchQuery, searchTarget]);
 
-    const candidateActionAuthorityKey = React.useMemo(() => JSON.stringify({
+    const candidateActionAuthorityKey = React.useMemo(() => stableJsonStringify({
         machineId: effectiveSelectedMachineId,
         serverId: effectiveSelectedServerId,
         providerId: selectedProviderId,

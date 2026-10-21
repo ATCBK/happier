@@ -1027,8 +1027,8 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
             kind={projectionPhase === 'unsupported' ? 'unavailable' : 'error'}
             iconName="link-break"
             accessibilitySemantics="alert"
-            title={projectionFailureCopy?.title ?? t('externalSessions.browseCantReachTitle', { machine: machineInSentence })}
-            reason={projectionFailureCopy?.reason ?? t('externalSessions.browseCantReachBody')}
+            title={projectionFailureCopy?.title ?? ''}
+            reason={projectionFailureCopy?.reason}
             diagnosticCode={projectionFailureCopy?.diagnosticCode}
             action={retry}
         />

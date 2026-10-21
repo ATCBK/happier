@@ -54,7 +54,8 @@ export function resolveBrowseProjectionFailureCopy(input: Readonly<{
         default:
             return {
                 title: t('externalSessions.browseCantReachTitle', { machine }),
-                reason: t('externalSessions.browseCantReachBody'),
+                // Hedged on purpose: a failed read says nothing about whether the Machine is online.
+                reason: t('newSession.daemonRpcUnavailableBody'),
                 diagnosticCode,
             };
     }
