@@ -426,6 +426,46 @@ describe('registered native transcript source observation', () => {
       const removedDb = openDeepIndexDb({ dbPath: worker.getDeepDbPath()! });
       try { expect(removedDb.listExternalSourceStates()).toEqual([]); }
       finally { removedDb.close(); }
+      if (isCodex) {
+        const { EXTERNAL_SESSIONS_INVOCATION_POLICY } = await import('@/session/external/agentExternalSessionsInvocation');
+        const backlogCount = EXTERNAL_SESSIONS_INVOCATION_POLICY.listCandidates.maxItems * 6;
+        const putRollout = async (id: string, day: string, text: string) => {
+          const path = join(dirname(transcriptPath), `rollout-${day}T10-00-00-${id}.jsonl`);
+          await writeFile(path, JSON.stringify({ type: 'session_meta', timestamp, payload: { id,
+            timestamp, cwd: '/repo', source: 'cli', originator: 'codex_cli_rs', cli_version: '0.162.1' } }) + '\n'
+            + row('first', null, text));
+          return path;
+        };
+        const notifyTopology = (path: string) => {
+          let parent = dirname(path);
+          while (!topologyChanges.has(parent)) {
+            const next = dirname(parent);
+            if (next === parent) throw new Error('Codex fixture has no covering topology observer');
+            parent = next;
+          }
+          topologyChanges.get(parent)!(path);
+        };
+        const backlog = await Promise.all(Array.from({ length: backlogCount }, (_, index) => putRollout(
+          `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, '2026-10-20', 'corundum initial inventory')));
+        notifyTopology(backlog[0]!);
+        await worker.ensureUpToDate();
+        expect(worker.getIndexSources!().find(item => item.source.type === 'external_transcript')?.state).toBe('indexing');
+        const beforeSibling = openDeepIndexDb({ dbPath: worker.getDeepDbPath()! });
+        let completedPeerCount: number;
+        try { completedPeerCount = beforeSibling.listExternalSourceStates().length; }
+        finally { beforeSibling.close(); }
+        // The newer filename is before the retained descending crawl frontier.
+        // Its discovery and indexing must not wait for that crawl to finish.
+        const sibling = await putRollout('ffffffff-ffff-4fff-8fff-ffffffffffff', '2026-10-21', 'tourmaline fresh sibling');
+        notifyTopology(sibling);
+        // Refresh and backfill alternate. Existing completed peers may consume
+        // their refresh first; derive the turns from that real queue allowance.
+        const refreshTurns = Math.ceil(2 * (completedPeerCount + 1) / worker.getSettings().worker.maxSessionsPerTick);
+        for (let turn = 0; turn < refreshTurns; turn++) await worker.ensureUpToDate();
+        expect(search('tourmaline')).toHaveLength(1);
+        expect(search('corundum').length).toBeGreaterThan(0);
+        expect(worker.getIndexSources!().find(item => item.source.type === 'external_transcript')?.state).toBe('indexing');
+      }
       await worker.stop();
       expect(fileChanges.size).toBe(0);
       expect(topologyChanges.size).toBe(0);

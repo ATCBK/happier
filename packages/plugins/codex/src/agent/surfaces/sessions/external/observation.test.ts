@@ -30,8 +30,9 @@ vi.mock('node:fs/promises', async () => {
   };
 });
 
-import { createCodexExternalSessionObservationContribution } from './observation.js';
-import { inventoryCodexRootSessionRolloutFiles } from '../../../rollout/discovery/sessionsForHome.js';
+import { createCodexExternalSessionObservationContribution, codexExternalSessionObservationContribution } from './observation.js';
+import { readAfterCodexExternalSessionTranscript } from './transcriptSource.js';
+import { codexRolloutObservationInventories, inventoryCodexRootSessionRolloutFiles } from '../../../rollout/discovery/sessionsForHome.js';
 
 type CodexObservationContribution = ReturnType<
   typeof createCodexExternalSessionObservationContribution
@@ -652,6 +653,43 @@ describe('Codex External Session observation', () => {
     expect(retired.outcomes[0]).toMatchObject({ kind: 'unavailable' });
   });
 
+  it('reuses observed rollout heads in transcript refreshes while revalidating native membership', async () => {
+    const fixture = await createRolloutSetFixture();
+    const unrelated = join(dirname(fixture.rootFile), 'rollout-unrelated.jsonl');
+    await writeFile(unrelated, JSON.stringify({ type: 'session_meta', payload: { id: 'unrelated-session' } }));
+    const lifetime = new AbortController();
+    vi.stubEnv('CODEX_HOME', fixture.codexHome);
+    const contribution = codexExternalSessionObservationContribution;
+    const grouping = contribution.describeResource(fixture.identity);
+    const request = { purpose: 'resource_descriptors' as const, resourceKey: grouping.resourceKey,
+      links: [{ linkKey: grouping.linkKey, linkedSource: fixture.identity }], signal: new AbortController().signal,
+      observation: { lifetime: lifetime.signal, changedFiles: [] } };
+    const params = { source: { kind: 'codexHome', home: 'user', homePath: fixture.codexHome } as const,
+      env: { CODEX_HOME: fixture.codexHome }, remoteSessionId: fixture.identity.remoteSessionId, maxBytes: 256 * 1024, maxItems: 100 };
+    try {
+      await contribution.reconcileResource(request);
+      const tail = await readAfterCodexExternalSessionTranscript({ ...params, cursor: 'tail' });
+      expect(tail.nextCursor).toBeTruthy();
+      fsBoundary.open.mockClear();
+      const refreshed = await readAfterCodexExternalSessionTranscript({ ...params, cursor: tail.nextCursor! });
+      expect(refreshed.readAfterOutcome).toBe('already_current');
+      expect(fsBoundary.open.mock.calls.filter(([file]) => String(file) === unrelated)).toHaveLength(0);
+      // A transcript read has no dirty-file hint: it must re-stat remembered
+      // facts, and a same-inode rewrite must still change family membership.
+      await writeFile(unrelated, JSON.stringify({ type: 'session_meta', payload: { id: 'new-child', session_id: 'session-a' } }));
+      const changed = await readAfterCodexExternalSessionTranscript({ ...params, cursor: tail.nextCursor! });
+      expect(changed.tailCursor).not.toBe(tail.nextCursor);
+      expect(fsBoundary.open.mock.calls.some(([file]) => String(file) === unrelated)).toBe(true);
+      lifetime.abort();
+      fsBoundary.open.mockClear();
+      await readAfterCodexExternalSessionTranscript({ ...params, cursor: 'tail' });
+      expect(fsBoundary.open.mock.calls.some(([file]) => String(file) === unrelated)).toBe(true);
+    } finally {
+      lifetime.abort();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('reconciles an unchanged rollout tree without reopening unrelated heads or relisting directories', async () => {
     const fixture = await createRolloutSetFixture();
     const contribution = createCodexExternalSessionObservationContribution({ env: { CODEX_HOME: fixture.codexHome,
@@ -690,7 +728,8 @@ describe('Codex External Session observation', () => {
             base_instructions: { text: 'discarded-native-instructions '.repeat(800) + index } } }),
         )));
       }
-      const contribution = createCodexExternalSessionObservationContribution({ env: { CODEX_HOME: codexHome } });
+      const contribution = createCodexExternalSessionObservationContribution({ env: { CODEX_HOME: codexHome },
+        inventories: codexRolloutObservationInventories });
       const identity = linkedSource({ codexHome });
       let collect: (() => unknown) | undefined;
       if (process.env.HAPPIER_RUN_OBSERVATION_MEMORY_BENCHMARK === '1') {
@@ -743,6 +782,29 @@ describe('Codex External Session observation', () => {
       observationLifetimes.get(contribution)!.abort();
       const heapReleased = await sample();
       if (collect) console.info('R242_CODEX_HEAP', JSON.stringify({ heapBefore, heapDemanded, heapAfterTicks, heapReleased }));
+      const measureTranscriptRefresh = async () => {
+        fsBoundary.open.mockClear();
+        const cpuBefore = process.cpuUsage();
+        const started = performance.now();
+        for (let tick = 0; tick < 5; tick += 1) {
+          const page = await readAfterCodexExternalSessionTranscript({ source: { kind: 'codexHome', home: 'user' },
+            env: { CODEX_HOME: codexHome }, remoteSessionId: 'session-a', cursor: 'tail', maxBytes: 64 * 1024, maxItems: 100 });
+          expect(page.tailCursor).toBeTruthy();
+        }
+        const cpu = process.cpuUsage(cpuBefore);
+        return { cpuMs: (cpu.user + cpu.system) / 1000, elapsedMs: performance.now() - started,
+          headOpens: fsBoundary.open.mock.calls.filter(([file]) => String(file).endsWith('.jsonl')).length };
+      };
+      const unobservedTranscript = await measureTranscriptRefresh();
+      const replacementLifetime = new AbortController();
+      try {
+        const grouping = contribution.describeResource(identity);
+        await contribution.reconcileResource({ purpose: 'resource_descriptors', resourceKey: grouping.resourceKey,
+          links: [{ linkKey: grouping.linkKey, linkedSource: identity }], signal: new AbortController().signal,
+          observation: { lifetime: replacementLifetime.signal, changedFiles: [] } });
+        const observedTranscript = await measureTranscriptRefresh();
+        expect(observedTranscript.headOpens).toBeLessThan(unobservedTranscript.headOpens / 2);
+      } finally { replacementLifetime.abort(); }
       const { listCodexSessionCandidates } = await import('./candidateSource.js');
       const cursorBytes: number[] = [];
       let cursor: string | undefined;

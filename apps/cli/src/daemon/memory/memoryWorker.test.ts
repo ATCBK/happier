@@ -11,6 +11,186 @@ import { encodeBase64, encryptLegacy } from '@/api/encryption';
 await import('@/api/api');
 
 describe('memoryWorker', () => {
+  it.each([
+    { observed: 3, indexed: 5, backfillPolicy: 'new_only' as const },
+    { observed: 7, indexed: 6, backfillPolicy: 'new_only' as const },
+    { observed: 7, indexed: 6, backfillPolicy: 'all_history' as const },
+  ])('keeps an exhausted active Session ready across non-message inventory refreshes ($backfillPolicy $observed/$indexed)', async ({ observed, indexed, backfillPolicy }) => {
+    const session = { id: 'exhausted', machineId: 'machine_1', seq: observed, createdAt: 2000, updatedAt: 3000,
+      active: true, activeAt: 3000, archivedAt: null, encryptionMode: 'plain' };
+    vi.doMock('@/session/transport/http/sessionsHttp', () => ({
+      fetchSessionsPage: async ({ archivedOnly }: { archivedOnly?: boolean }) => ({
+        sessions: archivedOnly ? [] : [session], nextCursor: null, hasNext: false,
+      }),
+      fetchSessionById: async () => session,
+    }));
+    vi.doMock('@/session/replay/fetchEncryptedTranscriptMessages', () => ({
+      fetchEncryptedTranscriptMessagesPage: async () => {
+        return { messages: [{ id: 'message', seq: indexed, createdAt: 2000, messageRole: 'user',
+          content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'quartz retained message' } } } }],
+          hasMore: false, nextBeforeSeq: null, nextAfterSeq: null };
+      },
+    }));
+    const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
+    await writeMemorySettingsToDisk({ enabled: true, enabledAtMs: 1000, indexMode: 'deep', backfillPolicy,
+      coveragePolicy: { type: 'full' }, deep: { minChunkMessages: 1 } });
+    const { startMemoryWorker } = await import('./memoryWorker');
+    const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1', deps: {
+      fetchDecryptedTranscriptPageAfterSeq: async ({ afterSeq }) => {
+        return afterSeq < indexed ? [{ seq: indexed, createdAtMs: 2000, role: 'user',
+          content: { type: 'text', text: 'quartz retained message' } }] : [];
+      },
+    } });
+    try {
+      await worker.ensureUpToDate(session.id);
+      await worker.ensureUpToDate(session.id);
+      expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: session.id }, state: 'ready' });
+      const states = new Set<string>();
+      for (let refresh = 0; refresh < 3; refresh++) {
+        session.activeAt++;
+        let completed = false;
+        const pending = worker.ensureUpToDate(session.id).finally(() => { completed = true; });
+        while (!completed) {
+          for (let turn = 0; turn < 16 && !completed; turn++) {
+            for (const source of worker.getIndexSources!()) states.add(source.state);
+            await Promise.resolve();
+          }
+          await new Promise<void>(resolve => setImmediate(resolve));
+        }
+        await pending;
+      }
+      expect([...states]).toEqual(['ready']);
+    } finally { await worker.stop(); }
+  });
+  it('keeps a completed unchanged snapshot without refetching its body, but indexes revisions and new sequences', async () => {
+    const session = { id: 'snapshot', machineId: 'machine_1', seq: 10, createdAt: 2000, updatedAt: 3000,
+      active: false, activeAt: 0, archivedAt: null, encryptionMode: 'plain' };
+    let text = `quartz ${'valid body '.repeat(10_000)}`;
+    let messageSeq = 1;
+    let fetchedBytes = 0;
+    vi.doMock('@/session/transport/http/sessionsHttp', () => ({
+      fetchSessionsPage: async ({ archivedOnly }: { archivedOnly?: boolean }) => ({ sessions: archivedOnly ? [] : [session], nextCursor: null, hasNext: false }),
+      fetchSessionById: async () => session,
+    }));
+    vi.doMock('@/session/replay/fetchEncryptedTranscriptMessages', () => ({
+      fetchEncryptedTranscriptMessagesPage: async () => {
+        fetchedBytes += Buffer.byteLength(text);
+        return { messages: [{ id: 'message', seq: messageSeq, createdAt: 2000, messageRole: 'user',
+          content: { t: 'plain', v: { role: 'user', content: { type: 'text', text } } } }],
+          hasMore: false, nextBeforeSeq: null, nextAfterSeq: null };
+      },
+    }));
+    const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
+    await writeMemorySettingsToDisk({ v: 1, enabled: true, enabledAtMs: 1000, indexMode: 'deep', backfillPolicy: 'new_only',
+      coveragePolicy: { type: 'full' }, deep: { minChunkMessages: 1 } });
+    const { startMemoryWorker } = await import('./memoryWorker');
+    const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1' });
+    try {
+      await worker.ensureUpToDate('snapshot');
+      fetchedBytes = 0;
+      const started = performance.now();
+      const observedStates = new Set<string>();
+      for (let tick = 0; tick < 3; tick++) {
+        let complete = false;
+        const refresh = worker.ensureUpToDate('snapshot').finally(() => { complete = true; });
+        while (!complete) {
+          // Observe the published coverage during the real refresh, including
+          // the microtasks between admission and a no-op transcript turn.
+          for (let turn = 0; turn < 16 && !complete; turn++) {
+            for (const row of worker.getIndexSources!()) observedStates.add(row.state);
+            await Promise.resolve();
+          }
+          await new Promise<void>(resolve => setImmediate(resolve));
+        }
+        await refresh;
+      }
+      expect(fetchedBytes).toBe(0);
+      expect([...observedStates]).toEqual(['ready']);
+      const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
+      const db = openDeepIndexDb({ dbPath: worker.getDeepDbPath()! });
+      try {
+        expect(db.search({ query: 'quartz', scope: { type: 'session', sessionId: 'snapshot' }, maxResults: 1 })).toHaveLength(1);
+        text = 'garnet revised at the same sequence';
+        await worker.noteSessionTranscriptRevised?.({ sessionId: 'snapshot', seq: 1 });
+        await worker.ensureUpToDate('snapshot');
+        expect(db.search({ query: 'garnet', scope: { type: 'session', sessionId: 'snapshot' }, maxResults: 1 })).toHaveLength(1);
+        session.seq = 11;
+        messageSeq = 2;
+        text = 'sapphire next sequence';
+        await worker.ensureUpToDate('snapshot');
+        expect(db.search({ query: 'sapphire', scope: { type: 'session', sessionId: 'snapshot' }, maxResults: 1 })).toHaveLength(1);
+        const current = worker.getSettings();
+        await writeMemorySettingsToDisk({ ...current, deep: { ...current.deep, includeToolOutput: true } });
+        await worker.ensureUpToDate('snapshot');
+        expect(db.search({ query: 'sapphire', scope: { type: 'session', sessionId: 'snapshot' }, maxResults: 1 })).toHaveLength(1);
+      } finally { db.close(); }
+    } finally { await worker.stop(); }
+  });
+  it('finishes retained snapshot revisions across inventory refreshes instead of restarting the scheduling cursor', async () => {
+    let inventoryReads = 0;
+    const sessions = Array.from({ length: 15 }, (_, index) => ({ id: `retained-${index}`, machineId: 'machine_1',
+      seq: 4, createdAt: 2000, updatedAt: 3000, active: false, activeAt: 0, archivedAt: null, encryptionMode: 'plain' }));
+    vi.doMock('@/session/transport/http/sessionsHttp', () => ({
+      fetchSessionsPage: async ({ archivedOnly }: { archivedOnly?: boolean }) => {
+        // A normal HTTP response may arrive after the inventory's work wake
+        // has finished. Exercise that ordering instead of relying on microtasks.
+        if (++inventoryReads > 1) await new Promise(resolve => setTimeout(resolve, 200));
+        return { sessions: archivedOnly ? [] : sessions, nextCursor: null, hasNext: false };
+      },
+      fetchSessionById: async ({ sessionId }: { sessionId: string }) => sessions.find(row => row.id === sessionId),
+    }));
+    vi.doMock('@/session/replay/fetchEncryptedTranscriptMessages', () => ({
+      fetchEncryptedTranscriptMessagesPage: async () => ({ messages: [], hasMore: false, nextBeforeSeq: null, nextAfterSeq: null }),
+    }));
+    const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
+    const settings = await writeMemorySettingsToDisk({ v: 1, enabled: true, enabledAtMs: 1000, indexMode: 'deep', backfillPolicy: 'new_only',
+      coveragePolicy: { type: 'full' }, worker: { tickIntervalMs: 500, inventoryRefreshIntervalMs: 5000, maxSessionsPerTick: 1 } });
+    const { configuration } = await import('@/configuration');
+    const { resolveMemoryIndexPaths } = await import('./memoryIndexPaths');
+    const { openSummaryShardIndexDb } = await import('./summaryShardIndexDb');
+    const db = openSummaryShardIndexDb({ dbPath: resolveMemoryIndexPaths().tier1DbPath });
+    const { memoryIndexPolicyKey, resolveMemoryIndexPolicy } = await import('./transcript/coveragePolicy');
+    const key = memoryIndexPolicyKey(resolveMemoryIndexPolicy(settings));
+    db.setIndexPolicyKeys({ tier1: key, deep: key, external: JSON.stringify(settings.conversationSearch.indexExternal) });
+    for (const session of sessions) {
+      db.markDeepIndexSuccess({ sessionId: session.id, seqTo: 4, nowMs: Date.now() });
+      db.recordMemorySessionIndexState({ sessionId: session.id, status: 'indexed', lastScannedSeq: 4, updatedAtMs: Date.now() });
+    }
+    db.close();
+    const previousDaemon = configuration.isDaemonProcess;
+    configuration.isDaemonProcess = true;
+    const { startMemoryWorker } = await import('./memoryWorker');
+    const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1' });
+    try {
+      expect(worker.getSettings().worker.tickIntervalMs).toBe(500);
+      expect(worker.getSettings().worker.inventoryRefreshIntervalMs).toBe(5000);
+      expect(worker.getSettings().worker.maxSessionsPerTick).toBe(1);
+      await vi.waitFor(() => expect(worker.getIndexSources?.().some(row => row.state === 'indexing')).toBe(true));
+      await vi.waitFor(() => {
+        expect(worker.getIndexSources?.()).toHaveLength(sessions.length);
+        expect(worker.getIndexSources?.().filter(row => row.state !== 'ready')).toEqual([]);
+      }, { timeout: 15_000 });
+    } finally { await worker.stop(); configuration.isDaemonProcess = previousDaemon; }
+  });
+  it('publishes a retained queue failure code without exposing its private message', async () => {
+    vi.doMock('@/session/transport/http/sessionsHttp', () => ({
+      fetchSessionsPage: async () => ({ sessions: [], nextCursor: null, hasNext: false }),
+    }));
+    const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
+    await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'deep' });
+    const { startMemoryWorker } = await import('./memoryWorker');
+    const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1' });
+    try {
+      const { openSummaryShardIndexDb } = await import('./summaryShardIndexDb');
+      const db = openSummaryShardIndexDb({ dbPath: worker.getTier1DbPath()! });
+      db.markDeepIndexFailure({ sessionId: 'failed', nowMs: Date.now(), backoffBaseMs: 1000, backoffMaxMs: 1000 });
+      db.recordMemorySessionIndexState({ sessionId: 'failed', status: 'failed', lastErrorCode: 'deep_index_failed',
+        lastErrorMessage: 'private transcript /path', updatedAtMs: Date.now() });
+      db.close();
+      expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: 'failed' },
+        state: 'error', errorCode: 'deep_index_failed' });
+    } finally { await worker.stop(); }
+  });
   it('reads status without joining an index writer or mutating its cursor', async () => {
     vi.doMock('@/session/transport/http/sessionsHttp', () => ({
       fetchSessionsPage: async () => ({ sessions: [], nextCursor: null, hasNext: false }),
@@ -293,6 +473,7 @@ describe('memoryWorker', () => {
     let readable = true;
     let replaceAccountDuringSessionRead = false;
     let retainedSourceRead: (() => Promise<void>) | undefined;
+    let heldDocumentSessionRead: (() => Promise<void>) | undefined;
     let accountAttached = false;
     let projectOnly = false;
     const { configuration } = await import('@/configuration');
@@ -325,6 +506,7 @@ describe('memoryWorker', () => {
       if (path === '/v2/sessions' || path === '/v2/sessions/archived') return { status: 200,
         data: { sessions: path.endsWith('/archived') || projectOnly ? [] : [session()], nextCursor: null, hasNext: false } };
       if (path === '/v2/sessions/s1') {
+        await heldDocumentSessionRead?.();
         if (replaceAccountDuringSessionRead) {
           replaceAccountDuringSessionRead = false;
           setActiveAccountSettingsSnapshot({ ...accountSnapshot, scopeKey: 'another-account' });
@@ -379,6 +561,20 @@ describe('memoryWorker', () => {
       summaries.insertSummaryShard({ sessionId: 's1', seqFrom: 2, seqTo: 2,
         createdAtFromMs: 2, createdAtToMs: 2, summary: 'quartz hinted session', keywords: [], entities: [], decisions: [] });
       summaries.close();
+      if (indexMode === 'deep') {
+        const source = { type: 'happier_session', sessionId: 's1' };
+        expect(worker.getIndexSources?.()).toContainEqual({ source, state: 'ready' });
+        let release = () => {};
+        let entered = () => {};
+        const pending = new Promise<void>(resolve => { release = resolve; });
+        const started = new Promise<void>(resolve => { entered = resolve; });
+        heldDocumentSessionRead = async () => { entered(); await pending; };
+        const admission = worker.resolveDocumentSearchScope!({ type: 'session', sessionId: 's1' });
+        try {
+          await started;
+          expect(worker.getIndexSources?.()).toContainEqual({ source, state: 'ready' });
+        } finally { release(); heldDocumentSessionRead = undefined; await admission; }
+      }
       const { RpcHandlerManager } = await import('@/api/rpc/RpcHandlerManager');
       const manager = new RpcHandlerManager({ scopePrefix: 'machine_1', encryptionMode: 'plain', logger: () => {} });
       registerMachineMemoryRpcHandlers({ rpcHandlerManager: manager, memoryWorker: worker });
