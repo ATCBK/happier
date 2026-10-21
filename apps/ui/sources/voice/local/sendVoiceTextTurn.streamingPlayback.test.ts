@@ -4,6 +4,7 @@ import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpee
 import { serveAccountHomes, installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
 import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -236,8 +237,8 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
     observedStatuses.length = 0;
     streamEvents.clear();
     account = await serveAccountHomes({ homes: [{ key: 'voice', serverUrl: 'https://streaming-voice.test',
-      accountId: 'account-a', currentAccount: true, settings: buildAccountSettings() }], route: async request => {
-        const machineReply = speechBoundary.answerMachineHttpRequest(request.url, 'machine-1', 'account-a');
+      accountId: 'account-a', currentAccount: true, settings: buildAccountSettings() }], route: createSessionReadBatchHttpBoundary(async request => {
+        const machineReply = speechBoundary.answerMachineHttpRequest(request.url, 'machine-1', 'account-a', request);
         if (machineReply) return machineReply;
         const metadataReply = await sessionMetadata.handle(request.url.toString(), {
           method: request.method, headers: request.headers, signal: request.signal,
@@ -278,7 +279,7 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
         }
         if (request.method === 'POST' && /\/delivery\/handled$/.test(request.path)) return Response.json({});
         return undefined;
-      } });
+      }).handle });
     disconnect = await account.restoreActiveConnection();
     const { sync } = await import('@/sync/sync');
     await sync.resumeSync('manual');

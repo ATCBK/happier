@@ -43,7 +43,7 @@ export function createSessionMetadataHttpBoundary(readSessions: () => Readonly<R
                 snapshot: { schemaVersion: SESSION_ORGANIZATION_SNAPSHOT_VERSION, version: 0,
                     pins: [], folders: [], folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [] },
             }));
-            if (path === '/v2/sessions/lookup-by-tags') return null;
+            if (path === '/v2/sessions/lookup-by-tags' || path === '/v2/sessions/read-batch') return null;
             const detail = /^\/v2\/sessions\/([^/]+)$/.exec(path);
             const listing = path === '/v2/sessions' || path === '/v2/sessions/active' || path === '/v1/sessions';
             if (!detail && !listing) return null;

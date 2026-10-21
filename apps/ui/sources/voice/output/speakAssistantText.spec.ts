@@ -38,12 +38,12 @@ describe('speakAssistantText', () => {
   beforeEach(async () => {
     filesystem = speechBoundary.reset().filesystem;
     account = await restoreServerAccountForTest({ serverUrl: 'https://speech-output.example.test',
-      accountId: 'speech-account', credentialScope: 'restored-home', request: async (url) => {
+      accountId: 'speech-account', credentialScope: 'restored-home', request: async (url, init) => {
         const path = new URL(String(url)).pathname;
         if (path === '/health') return Response.json({ status: 'ok' });
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
-        const machineResponse = speechBoundary.answerMachineHttpRequest(url, 'speech-machine', 'speech-account');
+        const machineResponse = speechBoundary.answerMachineHttpRequest(url, 'speech-machine', 'speech-account', init);
         if (machineResponse) return machineResponse;
         if (path === '/v1/features') return Response.json(speechServerFeatures);
         return null;

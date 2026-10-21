@@ -60,7 +60,7 @@ describe('local model Session voice consumption', () => {
       ? answerStatus() : speechRpc?.(request));
     account = await serveAccountHomes({ homes: [{ key: 'voice', serverUrl: 'https://tts-preference.test', accountId: 'tts-account' }],
       route: async request => {
-        const machineReply = speechBoundary.answerMachineHttpRequest(request.url, 'tts-machine', 'tts-account');
+        const machineReply = speechBoundary.answerMachineHttpRequest(request.url, 'tts-machine', 'tts-account', request);
         if (machineReply) return machineReply;
         if (request.path === '/v1/features') return Response.json(serverFeatures);
         if (request.path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());

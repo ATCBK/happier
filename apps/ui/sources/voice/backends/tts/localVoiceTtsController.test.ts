@@ -61,7 +61,7 @@ describe('localVoiceTtsController', () => {
         account = await serveAccountHomes({ homes: [{ key: 'voice',
             serverUrl: `https://tts-controller-${state}.test`, accountId: 'tts-account' }],
             route: async request => {
-                const machineReply = speechBoundary.answerMachineHttpRequest(request.url, 'tts-machine', 'tts-account');
+                const machineReply = speechBoundary.answerMachineHttpRequest(request.url, 'tts-machine', 'tts-account', request);
                 if (machineReply) return machineReply;
                 if (request.path === '/v1/features') return featureResponse();
                 if (request.path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());

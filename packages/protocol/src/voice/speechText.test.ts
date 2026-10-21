@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { batchSpeechTextForSynthesis, segmentSentencesForSynthesis, resolveVoiceSpeechSegmentLength } from './speechText.js';
+import { batchSpeechTextForSynthesis, segmentSentencesForSynthesis, resolveVoiceSpeechSegmentLength, toSpeechText } from './speechText.js';
 import { isVoiceSpeechSynthesisInputWithinLimits, resolveVoiceSpeechSynthesisInputLimits } from './speech.js';
 
 describe('shared speech text policy', () => {
   it('keeps token punctuation, abbreviations and closing quotes while recognizing multilingual sentence ends', () => {
     expect(segmentSentencesForSynthesis('Open index.ts at https://example.com/a?b=yes at 10:30, e.g. with Dr. Smith. "Done!" 你好。继续。'))
       .toEqual(['Open index.ts at https://example.com/a?b=yes at 10:30, e.g. with Dr. Smith.', '"Done!"', '你好。', '继续。']);
+    expect(segmentSentencesForSynthesis('[First sentence. Second sentence.'))
+      .toEqual(['[First sentence.', 'Second sentence.']);
+    const literal = '[First sentence. Second sentence.](url)';
+    const parts = segmentSentencesForSynthesis(literal);
+    expect(parts[0]).toBe('[First sentence.');
+    expect(parts.join('').replace(/\s/gu, '')).toBe(literal.replace(/\s/gu, ''));
   });
 
   it('waits for dot lookahead and flushes the first useful sentence without de-coalescing the rest', () => {
@@ -26,6 +32,19 @@ describe('shared speech text policy', () => {
     }
     expect(() => batchSpeechTextForSynthesis('😀', { maxInputUtf8Bytes: 3 }))
       .toThrowError(expect.objectContaining({ code: 'provider_settings_invalid' }));
+    for (const text of [
+      `[ ${'a'.repeat(5100)}`,
+      toSpeechText(`\`[${'a'.repeat(5100)}](https://example.test/docs)\``),
+      toSpeechText(`[${'a'.repeat(5100)}](https://example.test/docs)`),
+      `${'a'.repeat(4999)}😀界${'😀界'.repeat(1000)}`,
+    ]) {
+      const limits = { maxInputUtf8Bytes: 5000 };
+      const batches = batchSpeechTextForSynthesis(text, limits);
+      expect(batches.length).toBeGreaterThan(1);
+      expect(batches.every(batch => isVoiceSpeechSynthesisInputWithinLimits(batch, limits))).toBe(true);
+      expect(batches.join('').replace(/\s/gu, '')).toBe(text.replace(/\s/gu, ''));
+      expect(batches.every(batch => !/[\uD800-\uDBFF]$|^[\uDC00-\uDFFF]/u.test(batch))).toBe(true);
+    }
   });
 
   it('uses the admitted latency target after the first sentence without a competing segment maximum', () => {

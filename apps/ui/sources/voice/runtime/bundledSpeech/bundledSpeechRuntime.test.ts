@@ -91,12 +91,12 @@ beforeEach(async () => {
     return await speechReply(request);
   };
   account = await restoreServerAccountForTest({ serverUrl: 'https://bundled-runtime.test',
-    accountId: 'runtime-account', credentialScope: 'restored-home', request: async input => {
+    accountId: 'runtime-account', credentialScope: 'restored-home', request: async (input, init) => {
       const path = new URL(String(input)).pathname;
       if (path === '/health') return Response.json({ status: 'ok' });
       if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
       if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(relayFeatures);
-      const machine = speech.answerMachineHttpRequest(input, 'runtime-machine', 'runtime-account');
+      const machine = speech.answerMachineHttpRequest(input, 'runtime-machine', 'runtime-account', init);
       if (machine) return machine;
       return null;
     } });
@@ -310,14 +310,17 @@ describe('bundledSpeechRuntime', () => {
     expect(speech.encodedAudio.start).not.toHaveBeenCalled();
   });
 
-  it('batches multibyte replies by the declared UTF-8 cap through the real settings owner', async () => {
-    const declaration = { ...CATALOG_TTS_DECLARATION, limits: { synthesize: { maxInputUtf8Bytes: 9 } } };
-    const text = '😀界你好。 继续。';
+  it.each([
+    ['multibyte replies', 9, '😀界你好。 继续。'],
+    ['unfinished brackets', 5000, `[ ${'a'.repeat(5100)}`],
+    ['literal long links', 5000, `[${'a'.repeat(5100)}](https://example.test/docs)`],
+  ])('batches %s by the declared UTF-8 cap through the real settings owner', async (_kind, maxInputUtf8Bytes, text) => {
+    const declaration = { ...CATALOG_TTS_DECLARATION, limits: { synthesize: { maxInputUtf8Bytes } } };
     await runtimeFor([declaration]).speak(CATALOG_TTS_ID, { text, providerConfig: config, registerPlaybackStopper: () => () => {} });
     const received = inputs();
     expect(received.length).toBeGreaterThan(1);
-    expect(received.every(batch => new TextEncoder().encode(batch).byteLength <= 9)).toBe(true);
-    expect(received.join('')).toBe(text.replace(/\s/gu, ''));
+    expect(received.every(batch => new TextEncoder().encode(batch).byteLength <= maxInputUtf8Bytes)).toBe(true);
+    expect(received.join('').replace(/\s/gu, '')).toBe(text.replace(/\s/gu, ''));
     expect(speech.encodedAudio.start).toHaveBeenCalledTimes(received.length);
   });
 

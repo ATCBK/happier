@@ -39,7 +39,7 @@ async function restoreAccount() {
     } } } } } }) });
     const accountHttp = account.request.getMockImplementation();
     if (!accountHttp) throw new Error('Account HTTP boundary missing');
-    account.request.mockImplementation(async (url, init) => boundary.answerMachineHttpRequest(url, 'tts-machine', account.scope.accountId)
+    account.request.mockImplementation(async (url, init) => boundary.answerMachineHttpRequest(url, 'tts-machine', account.scope.accountId, init)
       ?? accountHttp(url, init));
     const machine = createMachineFixture({ id: 'tts-machine', activeAt: Date.now() });
     storage.getState().applyMachines([machine], true, { sourceServerId: account.scope.serverId });

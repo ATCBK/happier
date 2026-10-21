@@ -2,6 +2,7 @@ import { vi } from 'vitest';
 import Module, { createRequire } from 'node:module';
 import { installDisconnectedServerSocketBoundary } from './serverAccountConnectionHarness';
 import { createPlainMachineRowFixture } from '../fixtures/machineFixtures';
+import { MachineReadBatchRequestV1Schema, MachineReadBatchResponseV1Schema } from '@happier-dev/protocol/machines/machineReadBatchV1';
 import { createNativeVoicePcmCaptureHarness } from './nativeVoicePcmCapture';
 import { getSharedVoiceAudioSessionCoordinator } from '@happier-dev/audio-stream-native';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
@@ -255,9 +256,16 @@ export function createVoiceSpeechOutputBoundary(input: Readonly<{ getAccount: ()
     failNextSynthesis(errorCode: VoiceProviderOperationErrorCode = 'provider_response_invalid') {
       speechSynthesizeRpc.mockResolvedValueOnce({ errorCode });
     },
-    answerMachineHttpRequest(input: URL | RequestInfo, machineId: string, accountId: string) {
+    answerMachineHttpRequest(input: URL | RequestInfo, machineId: string, accountId: string,
+      init?: Readonly<{ method?: string; body?: unknown }>) {
       const path = new URL(String(input)).pathname;
       const row = createPlainMachineRowFixture({ id: machineId, accountId });
+      if (path === '/v1/machines/read-batch' && init?.method === 'POST') {
+        const request = MachineReadBatchRequestV1Schema.parse(typeof init.body === 'string' ? JSON.parse(init.body) : init.body);
+        return Response.json(MachineReadBatchResponseV1Schema.parse({ results: request.machineIds.map(id => id === machineId
+          ? { machineId: id, status: 'found', machine: row }
+          : { machineId: id, status: 'not_found' }) }));
+      }
       if (path === '/v1/machines') return Response.json([row]);
       if (path === '/v1/machines/' + machineId) return Response.json({ machine: row });
       if (path === '/v1/machines/' + machineId + '/access') return Response.json({ machineId,

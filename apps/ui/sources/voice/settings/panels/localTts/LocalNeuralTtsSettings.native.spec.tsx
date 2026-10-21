@@ -308,6 +308,15 @@ describe('LocalNeuralTtsSettings (native)', () => {
     const url = new URL(request.url);
     expect(`${url.origin}${url.pathname}`).toBe('https://github.com/happier-dev/happier-assets/releases/download/model-packs/kokoro-82m-v1.0-onnx-q8-wasm__manifest.json');
     await screen.unmount();
+    // An admitted download belongs to the installer after its settings view detaches.
+    expect(request.signal.aborted).toBe(false);
+    const { findRunningModelPackInstall } = await import('@/voice/modelPacks/installer.native');
+    const running = await findRunningModelPackInstall({ packId: KOKORO_DEFAULT_TTS_PACK_ID });
+    expect(running).not.toBeNull();
+    const cancellation = new AbortController();
+    const settled = running!.follow({ signal: cancellation.signal });
+    cancellation.abort();
+    await expect(settled).rejects.toThrow();
     expect(request.signal.aborted).toBe(true);
   });
 
@@ -425,7 +434,7 @@ describe('LocalNeuralTtsSettings (native)', () => {
     const accountHttp = account.request.getMockImplementation();
     if (!accountHttp) throw new Error('Account HTTP boundary missing');
     const accountId = account.scope.accountId;
-    account.request.mockImplementation(async (url, init) => boundary.answerMachineHttpRequest(url, 'tts-machine', accountId)
+    account.request.mockImplementation(async (url, init) => boundary.answerMachineHttpRequest(url, 'tts-machine', accountId, init)
       ?? accountHttp(url, init));
     const machine = createMachineFixture({ id: 'tts-machine', activeAt: Date.now() });
     storage.getState().applyMachines([machine], true, { sourceServerId: account.scope.serverId });

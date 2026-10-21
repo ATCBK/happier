@@ -454,7 +454,7 @@ describe('BundledSpeechSettings', () => {
       return await nativeMachineRpc(request);
     });
     account = await createVoiceSettingsAccountTestHarness(settingsParse({ voice: voiceSettingsDefaults }), { features: speechFeatures });
-    setRuntimeFetch(async (url, init) => speechBoundary.answerMachineHttpRequest(url, executionMachine.currentId ?? 'machine-a', 'account-a')
+    setRuntimeFetch(async (url, init) => speechBoundary.answerMachineHttpRequest(url, executionMachine.currentId ?? 'machine-a', 'account-a', init)
       ?? await account.request(url, init));
     executionMachine.machineId = 'machine-a';
     executionMachine.machineLabel = 'Machine A';
@@ -1395,8 +1395,8 @@ describe('BundledSpeechSettings', () => {
         contribution: { pluginId: 'acme.speech', localId: 'multi-source-stt' },
         credentials: { slot: { id: 'api_key', purpose: 'voice.speech.transcribe' } },
     });
-    expect(rendered.tree.root.findByType(CredentialComponent).props.credentialSourcePurpose)
-      .toBe(expectedPurpose);
+    await vi.waitFor(() => expect(rendered.tree.root.findByType(CredentialComponent).props.credentialSourcePurpose)
+      .toBe(expectedPurpose));
   });
 
   it('renders only the canonical source selector for Connected Account-only speech', async () => {
@@ -1466,11 +1466,11 @@ describe('BundledSpeechSettings', () => {
       popoverBoundaryRef: null,
     }));
 
-    expect({
+    await vi.waitFor(() => expect({
       sourceSelectors: rendered.tree.root.findAllByType(VoiceCredentialSourceField).length,
       savedSecretEditors: rendered.tree.root.findAllByType(CredentialComponent).length,
       rawAccessReviews: rendered.tree.root.findAllByType(VoiceRawCredentialAccessReview).length,
-    }).toEqual({ sourceSelectors: 1, savedSecretEditors: 0, rawAccessReviews: 1 });
+    }).toEqual({ sourceSelectors: 1, savedSecretEditors: 0, rawAccessReviews: 1 }));
   });
 
   it('passes the exact selected SavedSecret speech grant through the canonical credential item', async () => {
@@ -1502,6 +1502,7 @@ describe('BundledSpeechSettings', () => {
           request: { kind: 'environment', keys: ['VOICE_API_KEY'] },
         }],
       });
+    await vi.waitFor(() => expect(rendered.tree.root.findAllByType(VoiceRawCredentialAccessReview)).toHaveLength(1));
     const credential = rendered.tree.root.findByType(CredentialComponent);
     const reviews = rendered.tree.root.findAllByType(VoiceRawCredentialAccessReview);
     expect(reviews).toHaveLength(1);
