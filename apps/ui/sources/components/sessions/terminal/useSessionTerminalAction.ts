@@ -45,7 +45,7 @@ export function useSessionTerminalAction(params: Readonly<{
             pane.closeRight();
             return;
         }
-        if (rightPaneHiddenByDetails) pane.closeDetails();
+        if (rightPaneHiddenByDetails === true) pane.closeDetails();
         closeEmbeddedTerminalOutsideDockLocation({ pane, dockLocation: 'sidebar' });
         openEmbeddedTerminalInDockLocation({ pane, dockLocation: 'sidebar' });
     }, [

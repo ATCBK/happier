@@ -21,7 +21,7 @@ import {
 } from './layout/paneSizing';
 import { resolveMultiPaneDeviceType } from './layout/resolveMultiPaneDeviceType';
 import { useReportSessionCockpitActionRailRect } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
-import { PaneActionRailContext, PANE_ACTION_RAIL_WIDTH } from './PaneActionRailContext';
+import { PaneActionRailContext, PANE_ACTION_RAIL_WIDTH, type RightPaneHiddenByDetails } from './PaneActionRailContext';
 import { captureArrangementTravelStart, playArrangementTravel, type ArrangementTravelStart } from './arrangement/arrangementTravel';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import type { RightPanePlacement } from './rightPanePlacement';
@@ -482,13 +482,20 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
         drawerControls.close(); props.onSetMainHidden?.(true);
     }, [drawerControls, props.onSetMainHidden]);
 
-    const rightPaneHiddenByDetails = detailsOpen && applyMainHiddenLayoutOverride({
+    // Opening the side column unfolds one that Details opened from main folded (`appPaneReducer`), so
+    // the rail asks the layout without that opener before deciding whether Details must go.
+    const rightHiddenWithDetails = (input: ResolvePaneLayoutInput) => applyMainHiddenLayoutOverride({
         arrangement,
         mainHidden,
         rightOpen: true,
         detailsOpen,
-        baseLayout: resolvePaneLayout({ ...paneLayoutInput, rightOpen: true }),
+        baseLayout: resolvePaneLayout({ ...input, rightOpen: true }),
     }).right === 'hidden';
+    const rightPaneHiddenByDetails: RightPaneHiddenByDetails = !detailsOpen || !rightHiddenWithDetails(paneLayoutInput)
+        ? false
+        : paneLayoutInput.detailsOpenedFrom === 'main' && !rightHiddenWithDetails({ ...paneLayoutInput, detailsOpenedFrom: null })
+            ? 'folded'
+            : true;
     const railContext = React.useMemo(() => ({
         visible: showActionRail,
         mirrored,

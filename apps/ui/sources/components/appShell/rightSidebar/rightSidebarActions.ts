@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { RightPaneHiddenByDetails } from '@/components/appShell/panes/PaneActionRailContext';
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { resolveRightSidebarTabPlacement, type RightSidebarBuiltinTabDefinition, type RightSidebarTabPlacementContext } from './rightSidebarTabRegistry';
 
@@ -47,11 +48,12 @@ export function toggleRightSidebarTab(
     tabId: string,
     activeTabId: string | null,
     onSelectTab: (tabId: string) => void,
-    rightPaneHiddenByDetails = false,
+    rightPaneHiddenByDetails: RightPaneHiddenByDetails = false,
     placement: 'main' | 'side' = 'side',
 ): void {
     if (placement === 'side' && rightPaneHiddenByDetails) {
-        pane.closeDetails();
+        // A folded column opens beside Details (it becomes the drawer); a covered one needs it gone.
+        if (rightPaneHiddenByDetails === true) pane.closeDetails();
         onSelectTab(tabId);
     } else if (pane.scopeState?.right.isOpen && activeTabId === tabId) {
         pane.closeRight();
