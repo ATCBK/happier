@@ -30,7 +30,7 @@ import { Modal, type CustomModalInjectedProps } from '@/modal';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { randomUUID } from '@/platform/randomUUID';
 import { describeFollowRuleMatchCount, useFollowRuleMatchCounts, type FollowRuleMatchCount } from '@/components/sessions/follow/followRuleMatchCounts';
-import { leaveProjectToFollowRule, undoFollowRuleProjectExclusion } from '@/sync/api/session/sessionFollowRuleEdits';
+import { leaveProjectToFollowRule, undoFollowRuleProjectEdit } from '@/sync/api/session/sessionFollowRuleEdits';
 import { readSessionFollowRules } from '@/sync/api/session/sessionFollowRulesApi';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { useSession, useSessionDisplayNameProjections, useSetting } from '@/sync/domains/state/storage';
@@ -427,7 +427,7 @@ function OverlapNote(props: Readonly<{
                 run: () => {
                     retirePresentationNotice(key);
                     fireAndForget((async () => {
-                        const undone = await undoFollowRuleProjectExclusion(result.value.undo);
+                        const undone = await undoFollowRuleProjectEdit(result.value.undo);
                         if (undone.kind === 'ok') replaceRule(undone.value);
                         else publishPresentationNotice({ key, severity: 'error', message: t('sessionCoordinator.make.undoFailed') });
                     })(), { tag: 'MakeCoordinatorDialog.undoOverlap' });
