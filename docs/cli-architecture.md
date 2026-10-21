@@ -1907,6 +1907,14 @@ or late response cannot extend the lease or resurrect an expired claim.
 Authorization and control reads remain serialized independently of renewal;
 a slow read cannot withhold the next heartbeat, and its eventual refusal still
 aborts the claimed execution.
+Local-file observations carry the Run, Machine and claim attempt with each
+renewal start, success, failure, expiry, stop and late response. Timer due time,
+last confirmed expiry and pending renewal/currentness state distinguish a late
+timer from a pending request. The existing transport separately records
+publisher-proof preparation, HTTP dispatch, response or decode failure, using
+only timings, status and structural error classification. No proof, token,
+request body or response body is logged. These diagnostics do not change the
+lease duration, cadence, request deadline or stale-writer refusal.
 
 In 0.3 development, Automation-origin Workflow claims materialize the accepted
 snapshot only on first admission. Subsequent claims carry the Run-owned snapshot
