@@ -152,6 +152,17 @@ function createPluginJsonSchemaZodAdapter<Schema extends z.ZodMiniType>(schema: 
     const matches = (branch: PluginJsonSchemaV2, value: unknown): boolean => {
       let validator = branchValidators.get(branch);
       if (!validator) {
+        // A conflicting supplied constant cannot match this arm. Avoid
+        // generating a trial validator just to reject that discriminator;
+        // possible matches still use AJV. Ref siblings retain AJV ownership.
+        if (branch.$ref === undefined && value !== null && typeof value === 'object' && !Array.isArray(value)) {
+          for (const [field, property] of Object.entries(branch.properties ?? {})) {
+            if (property.$ref === undefined && Object.hasOwn(property, 'const') && Object.hasOwn(value, field)
+              && !pluginJsonValuesEqual(property.const, (value as Readonly<Record<string, unknown>>)[field])) {
+              return false;
+            }
+          }
+        }
         validator = compilePluginJsonSchema({ ...branch,
           ...(normalized.definitions ? { definitions: normalized.definitions } : {}),
           ...(normalized.$defs ? { $defs: normalized.$defs } : {}),

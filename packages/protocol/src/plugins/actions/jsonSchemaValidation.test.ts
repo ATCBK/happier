@@ -1,4 +1,5 @@
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { Session } from 'node:inspector/promises';
 import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
@@ -145,6 +146,72 @@ describe('plugin JSON Schema validation policy', () => {
     ] });
     expect(ambiguous.safeParse(binding).success).toBe(false);
     expect(createStoredReadSchema(ambiguous).safeParse(binding).success).toBe(false);
+  });
+  it('does not generate stored-read trial validators for arms contradicted by supplied property constants', async () => {
+    const markers = ['storedConstTrialAlpha', 'storedConstTrialBeta', 'storedConstTrialGamma', 'storedConstTrialSelected'];
+    const adapter = protocolComposableKernel.createPluginJsonSchemaZodValueAdapter({ oneOf: markers.map(marker => ({
+      type: 'object', properties: { recordKind: { const: marker }, [marker]: { type: 'string' } },
+      required: ['recordKind', marker], additionalProperties: false,
+    })) });
+    const selected = markers[3]!;
+    const value = { recordKind: selected, [selected]: 'retained', retired: true };
+    expect(adapter.safeParse(value).success).toBe(false);
+    const stored = createStoredReadSchema(adapter);
+
+    // Observe V8's generated scripts after whole-root admission has finished.
+    // No compiler, schema, Function constructor, or internal parser is replaced.
+    const session = new Session();
+    const scripts = new Set<string>();
+    session.connect();
+    session.on('Debugger.scriptParsed', ({ params }) => scripts.add(params.scriptId));
+    try {
+      await session.post('Debugger.enable');
+      scripts.clear();
+      expect(stored.parse(value)).toEqual({ recordKind: selected, [selected]: 'retained' });
+      const compiledMarkers = new Set<string>();
+      for (const scriptId of [...scripts]) {
+        const { scriptSource } = await session.post('Debugger.getScriptSource', { scriptId });
+        for (const marker of markers) {
+          if (scriptSource.includes(marker)) compiledMarkers.add(marker);
+        }
+      }
+      // The selected arm must still use the real compiler; a const match must
+      // never become positive admission or erase its ordinary field checks.
+      expect(compiledMarkers.has(selected)).toBe(true);
+      expect([...compiledMarkers].filter(marker => marker !== selected)).toEqual([]);
+      scripts.clear();
+      const previouslyContradicted = markers[0]!;
+      expect(stored.parse({ recordKind: previouslyContradicted, [previouslyContradicted]: 'later demand', retired: true }))
+        .toEqual({ recordKind: previouslyContradicted, [previouslyContradicted]: 'later demand' });
+      const laterSources = await Promise.all([...scripts].map(async scriptId => (
+        await session.post('Debugger.getScriptSource', { scriptId })
+      ).scriptSource));
+      expect(laterSources.some(source => source.includes(previouslyContradicted))).toBe(true);
+      expect(stored.safeParse({ recordKind: selected, [selected]: 7, retired: true }).success).toBe(false);
+      expect(value).toEqual({ recordKind: selected, [selected]: 'retained', retired: true });
+    } finally {
+      session.disconnect();
+    }
+  });
+  it('preserves missing constants, non-constant properties, and JSON-equivalent compound constants during stored union selection', () => {
+    for (const tag of [false, 0, '', null, { first: 1, second: 2 }, ['one', 'two']]) {
+      const adapter = protocolComposableKernel.createPluginJsonSchemaZodValueAdapter({ oneOf: [
+        { type: 'object', properties: { tag: { const: tag }, payload: { type: 'string' } },
+          required: ['tag', 'payload'], additionalProperties: false },
+        { type: 'object', properties: { tag: { const: { other: true } } },
+          required: ['tag'], additionalProperties: false },
+      ] });
+      const suppliedTag = tag && !Array.isArray(tag) && typeof tag === 'object' ? { second: 2, first: 1 } : tag;
+      expect(createStoredReadSchema(adapter).parse({ tag: suppliedTag, payload: 'kept', retired: true }))
+        .toEqual({ tag: suppliedTag, payload: 'kept' });
+      expect(createStoredReadSchema(adapter).safeParse({ tag: suppliedTag, payload: 7, retired: true }).success).toBe(false);
+    }
+    const optionalConstant = protocolComposableKernel.createPluginJsonSchemaZodValueAdapter({ anyOf: [
+      { type: 'object', properties: { optional: { const: 'present' }, payload: { type: 'string' } },
+        required: ['payload'], additionalProperties: false },
+      { type: 'string' },
+    ] });
+    expect(createStoredReadSchema(optionalConstant).parse({ payload: 'kept', retired: true })).toEqual({ payload: 'kept' });
   });
   it('refuses invalid known union fields when no arm survives a root object projection', () => {
     const arms = [
