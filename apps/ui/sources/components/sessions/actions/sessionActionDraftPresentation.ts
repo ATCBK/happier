@@ -43,7 +43,8 @@ export type SessionActionDraftFieldPaint = Readonly<{
      */
     textBox: SessionActionDraftTextBoxPaint | null;
     /**
-     * The option rows this field paints, in paint order, or `null` for a field that paints no option
+     * The option rows this field paints, in resolver order (the choice field seats its disabled rows
+     * last, which adds, removes and resizes no row), or `null` for a field that paints no option
      * list.
      *
      * F-4 (2026-08-11) — this is what closes V-3, and this repo is the MORE exposed of the two.

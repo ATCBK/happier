@@ -118,24 +118,24 @@ export function ArtifactPassageThreadCard(
           onPress={props.onFocus}
           style={styles.quotePress}
         >
-        <Icon
-          name="quotes"
-          size={ICON_SIZE.xs}
-          color={theme.colors.text.tertiary}
-        />
-        <Text variant="meta" numberOfLines={1} style={styles.quote}>
-          {readDocPassageThreadQuote(thread)}
-        </Text>
-        {detached ? (
-          <Text
-            testID={`${testID}.changed`}
-            variant="meta"
-            emphasis="medium"
-            style={{ color: theme.colors.state.warning.textForeground }}
-          >
-            {t('artifacts.browser.passage.changed')}
+          <Icon
+            name="quotes"
+            size={ICON_SIZE.xs}
+            color={theme.colors.text.tertiary}
+          />
+          <Text variant="meta" numberOfLines={1} style={styles.quote}>
+            {readDocPassageThreadQuote(thread)}
           </Text>
-        ) : null}
+          {detached ? (
+            <Text
+              testID={`${testID}.changed`}
+              variant="meta"
+              emphasis="medium"
+              style={{ color: theme.colors.state.warning.textForeground }}
+            >
+              {t('artifacts.browser.passage.changed')}
+            </Text>
+          ) : null}
         </Pressable>
         <Pressable
           testID={`${testID}.open`}
