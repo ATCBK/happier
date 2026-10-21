@@ -19,6 +19,8 @@ import {
   type ProviderAccountUsageCurrentSourceResolution,
   type ProviderAccountUsageHydrationApi,
   type ProviderAccountUsageHydrationSource,
+  type ProviderAccountUsageUsageIdentityResolver,
+  type ProviderAccountUsageCurrentSourceIdentityResolver,
 } from './hydration';
 import { createProviderAccountUsageStore, type ProviderAccountUsageStore } from './store';
 
@@ -272,6 +274,8 @@ export async function hydrateProviderAccountUsageStoreFromConnectedServiceInvent
   credentials: StoredCredentials;
   store: Pick<ProviderAccountUsageStore, 'recordSnapshot'>;
   nowMs: number;
+  resolveUsageIdentity?: ProviderAccountUsageUsageIdentityResolver;
+  resolveCurrentProviderAccountIdentityForSource?: ProviderAccountUsageCurrentSourceIdentityResolver;
 }>): Promise<ConnectedServiceCurrentSourceHydrationResult> {
   const serviceIds = [...new Set([...input.serviceIds].map((id) => ConnectedServiceIdSchema.parse(id)))];
   const sources = await listCurrentSources({ serviceIds, api: input.api });
@@ -289,6 +293,8 @@ export async function hydrateProviderAccountUsageStoreFromConnectedServiceInvent
     credentials: input.credentials,
     store: stagingStore,
     nowMs: input.nowMs,
+    resolveUsageIdentity: input.resolveUsageIdentity,
+    resolveCurrentProviderAccountIdentityForSource: input.resolveCurrentProviderAccountIdentityForSource,
   });
   const currentSources = await listCurrentSources({ serviceIds, api: input.api });
   if (!inventoriesMatch(sources, currentSources)) {

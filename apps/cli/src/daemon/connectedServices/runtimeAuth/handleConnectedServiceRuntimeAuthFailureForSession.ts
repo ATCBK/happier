@@ -203,6 +203,10 @@ export async function authorizeConnectedServiceRuntimeAuthFailureSource(input: R
       };
     }
     classification = resolvedClassification;
+    if (!classification.profileId) {
+      return { status: 'recovery_superseded', reason: 'source_tuple_unavailable',
+        serviceId: classification.serviceId, groupId: classification.groupId, profileId: null };
+    }
   }
   if (providerQualifiedSourceBinding) {
     return {

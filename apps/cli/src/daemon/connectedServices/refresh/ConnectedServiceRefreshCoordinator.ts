@@ -142,6 +142,7 @@ export type QualifiedConnectedAccountRefreshRuntime = Readonly<{
   >;
   onCredentialUpdated?(
     account: QualifiedConnectedAccountRef,
+    options?: Readonly<{ reason?: 'provider_context' }>,
   ): void | Promise<void>;
 }>;
 
@@ -636,6 +637,7 @@ export class ConnectedServiceRefreshCoordinator {
     completion: Promise<ConnectedServiceCredentialRefreshResult>;
   }> | Readonly<{
     kind: 'qualified';
+    reason?: 'provider_context';
     completion: Promise<QualifiedConnectedAccountRefreshSettlement>;
   }>>();
   private readonly inFlightRefreshRematerializations = new Map<string, Promise<RematerializedTargetsResult>>();
@@ -730,8 +732,8 @@ export class ConnectedServiceRefreshCoordinator {
             listScheduledAccounts: () => this.runCurrentAccountOperation(() => runtime.listScheduledAccounts!(), true),
           } : {}),
           ...(runtime.onCredentialUpdated ? {
-            onCredentialUpdated: (account) => this.runCurrentAccountOperation(async () => {
-              await runtime.onCredentialUpdated!(account);
+            onCredentialUpdated: (account, options) => this.runCurrentAccountOperation(async () => {
+              await runtime.onCredentialUpdated!(account, options);
             }),
           } : {}),
         },
@@ -1532,6 +1534,77 @@ export class ConnectedServiceRefreshCoordinator {
     } };
   }
 
+  async enrichQualifiedConnectedAccountCredentialContext(input: Readonly<{
+    account: QualifiedConnectedAccountRef;
+    expectedCredentialRevision: ConnectedServiceCredentialRevisionV1;
+    signal?: AbortSignal;
+  }>): Promise<Readonly<{
+    status: 'enriched' | 'unchanged' | 'unavailable';
+    credentialRevision?: ConnectedServiceCredentialRevisionV1;
+  }>> {
+    const runtime = this.params.qualifiedConnectedAccountRuntime;
+    if (!runtime
+      || !this.shouldRunQualifiedOperation(input.account, 'credential_read')
+      || !this.shouldRunQualifiedOperation(input.account, 'refresh_lease')
+      || !this.shouldRunQualifiedOperation(input.account, 'credential_write')) {
+      return { status: 'unavailable' };
+    }
+    try {
+      const expectedCredential = await runtime.readCredential({
+        token: this.params.credentials.token, ref: input.account,
+      });
+      if (!expectedCredential
+        || qualifiedAccountKey(expectedCredential.ref) !== qualifiedAccountKey(input.account)
+        || expectedCredential.revisionSemantics !== 'revisioned'
+        || expectedCredential.credentialRevision !== input.expectedCredentialRevision) {
+        return { status: 'unavailable' };
+      }
+      const ownerId = this.params.ownerIdProvider?.()?.trim() || this.params.machineIdProvider().trim();
+      if (!ownerId) return { status: 'unavailable' };
+      const settlement = await this.refreshQualifiedAccount({
+        account: input.account,
+        token: this.params.credentials.token,
+        ownerId,
+        leaseMs: this.params.refreshLeaseMs,
+        operationId: randomBytes(16).toString('hex'),
+        reason: 'provider_context',
+        expectedCredential,
+        establishedRuntimeOwner: runtime.establishedRuntimeOwner,
+        resolveV4Support: () => peerClassV4Support(runtime.resolvePeerClass()),
+        acquireRefreshLease: runtime.acquireRefreshLease,
+        mutateCredential: runtime.mutateCredential,
+        ...(input.signal ? { signal: input.signal } : {}),
+      });
+      if (!settlement.basis.isCurrent()) return { status: 'unavailable' };
+      // A metadata CAS distributes its revision, but proves neither token rotation
+      // nor recovered auth health or quota. Those remain with their existing owners.
+      if (settlement.status === 'refreshed') {
+        await runtime.onCredentialUpdated?.(input.account, { reason: 'provider_context' });
+        return { status: 'enriched', credentialRevision: settlement.credentialRevision };
+      }
+      if (settlement.status === 'unchanged') {
+        return { status: 'unchanged', credentialRevision: settlement.basis.credentialRevision };
+      }
+      logger.warn('[DAEMON RUN] Qualified Connected Account context enrichment did not settle', {
+        service: input.account.service,
+        status: settlement.status,
+        ...(settlement.result.diagnostic?.code ? {
+          diagnosticCode: sanitizeConnectedServiceDiagnosticError(settlement.result.diagnostic.code, {
+            redactedValues: [input.account.accountId],
+          }),
+        } : {}),
+      });
+      return { status: 'unavailable' };
+    } catch (error) {
+      input.signal?.throwIfAborted();
+      logger.warn('[DAEMON RUN] Qualified Connected Account context enrichment did not settle', {
+        service: input.account.service,
+        error: sanitizeConnectedServiceDiagnosticError(error, { redactedValues: [input.account.accountId] }),
+      });
+      return { status: 'unavailable' };
+    }
+  }
+
   async refreshQualifiedConnectedAccountCredentialForRequestAuth(input: Readonly<{
     account: QualifiedConnectedAccountRef;
     expectedCredentialRevision: ConnectedServiceCredentialRevisionV1;
@@ -2189,9 +2262,25 @@ export class ConnectedServiceRefreshCoordinator {
     // it must not hold up credential-ready spawn preflights that join here.
     const key = JSON.stringify(['qualified', qualifiedAccountKey(input.account), input.expectedCredential.credentialRevision]);
     const existing = this.inFlightRefreshes.get(key);
-    if (existing?.kind === 'qualified') return await existing.completion;
+    if (existing?.kind === 'qualified') {
+      if (existing.reason === input.reason) return await existing.completion;
+      await existing.completion;
+      if (this.inFlightRefreshes.get(key) === existing) this.inFlightRefreshes.delete(key);
+      // A joined token exchange may already provide context. Re-enter the explicit
+      // optional operation against its settled revision; the plugin decides whether
+      // provider metadata is still missing. Never count a context CAS as rotation.
+      const current = await this.params.qualifiedConnectedAccountRuntime?.readCredential({
+        token: input.token, ref: input.account,
+      });
+      if (!current || current.revisionSemantics !== 'revisioned'
+        || (input.reason !== 'provider_context'
+          && current.credentialRevision !== input.expectedCredential.credentialRevision)) {
+        throw new Error('connected_service_credential_revision_mismatch');
+      }
+      return await this.refreshQualifiedAccount({ ...input, expectedCredential: current });
+    }
     const completion = refreshQualifiedConnectedAccount(input);
-    const inFlight = { kind: 'qualified', completion } as const;
+    const inFlight = { kind: 'qualified', reason: input.reason, completion } as const;
     this.inFlightRefreshes.set(key, inFlight);
     try {
       return await completion;

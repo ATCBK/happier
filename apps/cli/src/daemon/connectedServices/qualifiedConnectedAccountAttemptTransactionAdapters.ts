@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 import { CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1 } from '@happier-dev/protocol/connect/plugin-connected-account-authentication-v2';
 import { ConnectedAccountSourceCustodyV1Schema, connectedAccountSourceCustodyV1Equal } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
+import { QualifiedConnectedAccountProviderIdentityV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
 import { StoredJsonContentEnvelopeSchema, isStoredJsonContentEnvelopeModeCompatible } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { openQualifiedConnectedAccountContentEnvelope, sealQualifiedConnectedAccountContentEnvelope } from '@happier-dev/protocol/connect/qualifiedConnectedAccountContentEnvelope';
@@ -53,10 +54,6 @@ const StagedCredentialsSchema = z.record(
   z.string().check(z.minLength(1), z.maxLength(128)),
   z.string(),
 );
-const ProviderIdentitySchema = z.strictObject({
-  accountId: z.optional(BoundedIdSchema),
-  email: z.optional(z.string().check(z.minLength(1), z.maxLength(4_096))),
-});
 const PreparedSettlementShape = {
   intent: z.enum(['connect', 'reconnect']),
   service: ServiceSchema,
@@ -69,7 +66,7 @@ const PreparedSettlementShape = {
   expectedConfigurationRevision: z.string().check(z.minLength(1), z.maxLength(4_096)),
   stagedCredentials: StagedCredentialsSchema,
   stagedAccountConfigurationContent: z.optional(z.unknown()),
-  providerIdentity: z.optional(ProviderIdentitySchema),
+  providerIdentity: z.optional(QualifiedConnectedAccountProviderIdentityV4Schema),
   displayName: z.string().check(z.maxLength(4_096)),
   scopes: z.array(z.string().check(z.maxLength(4_096))).check(z.maxLength(256)),
 } as const;

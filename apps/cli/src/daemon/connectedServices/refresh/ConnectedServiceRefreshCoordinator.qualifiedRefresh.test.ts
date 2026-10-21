@@ -13,10 +13,12 @@ import {
   QualifiedProviderAccountUsageWriteV4Schema,
   sealQualifiedConnectedAccountContentEnvelope,
   type QualifiedConnectedAccountProfileV4,
+  type QualifiedConnectedAccountCredentialSnapshotV4,
 } from '@happier-dev/protocol';
 
 import type { ApiClient } from '@/api/api';
 import type { Credentials } from '@/persistence';
+import { logger } from '@/ui/logger';
 import type { PluginReloadController } from '@/plugins/runtime/reload/controller';
 import type {
   ConnectedAccountConfigurationRecord,
@@ -211,6 +213,8 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
   it.each([
     ['happier.agent.codex', 'openai-codex', 'quota', 200],
     ['happier.agent.claude', 'claude-subscription', 'scheduled', 200],
+    ['happier.agent.claude', 'claude-subscription', 'enrich_known_private', 200],
+    ['happier.agent.claude', 'claude-subscription', 'enrich_unknown_public', 200],
     ['happier.agent.claude', 'claude-subscription', 'scheduled', 400],
     ['happier.agent.claude', 'claude-subscription', 'overlap_quota', 200],
     ['happier.agent.claude', 'claude-subscription', 'overlap_request_auth', 200],
@@ -232,6 +236,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
   ] as const)('settles expired %s / %s via %s after provider HTTP %i', async (pluginId, serviceId, entryPoint, providerStatus) => {
     const service = Object.freeze({ pluginId, localId: serviceId });
     const account = Object.freeze({ service, accountId: 'work' });
+    const contextEnrichment = entryPoint === 'enrich_known_private' || entryPoint === 'enrich_unknown_public';
     const overlapping = entryPoint.startsWith('overlap_');
     let releaseProvider!: () => void;
     const providerGate = new Promise<void>((resolve) => { releaseProvider = resolve; });
@@ -244,7 +249,17 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
     let profileStatus: QualifiedConnectedAccountProfileV4['status'] = 'refresh_failed_retryable';
     let accountRuntimeCurrent = true;
     const effectAdmissions: boolean[] = [];
+    const tokenExchangeRequests = () => vi.mocked(fetch).mock.calls.filter(([request, init]) => {
+      const url = request instanceof Request ? request.url : String(request);
+      const method = init?.method ?? (request instanceof Request ? request.method : 'GET');
+      return method === 'POST' && new URL(url).pathname.endsWith('/oauth/token');
+    });
     vi.stubGlobal('fetch', vi.fn(async () => {
+      if (contextEnrichment) {
+        return new Response(JSON.stringify({ account: { uuid: 'work' }, organization: { uuid: 'organization-known' } }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
       providerEntered();
       if (overlapping) await providerGate;
       if (entryPoint === 'revoked_refresh') accountRuntimeCurrent = false;
@@ -268,7 +283,12 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
         networkDependencies: {
           resolveNetworkAddresses: async () => ['8.8.8.8'],
           openPinnedStream: async (request) => {
-            const response = await fetch(request.url);
+            const response = await fetch(request.url, {
+              method: request.method,
+              headers: request.headers,
+              ...(request.body === undefined ? {} : { body: new Uint8Array(request.body).buffer }),
+              signal: request.signal,
+            });
             const body = new Uint8Array(await response.arrayBuffer());
             let delivered = false;
             return {
@@ -304,7 +324,8 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
           refreshToken: 'refresh-old',
           idToken: 'id-old',
           providerAccountId: 'work',
-          expiresAtMs: String(entryPoint === 'spawn_window_retryable' ? now + 1 : now - 1),
+          expiresAtMs: contextEnrichment ? '4102444800000' : String(entryPoint === 'spawn_window_retryable' ? now + 1 : now - 1),
+          ...(contextEnrichment ? { organizationUuid: 'organization-known' } : {}),
         },
       },
       randomBytes: (length) => new Uint8Array(length),
@@ -325,6 +346,11 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
         tokenType: 'Bearer',
       },
     });
+    let qualifiedMetadata: QualifiedConnectedAccountCredentialSnapshotV4['metadata'] = {
+      providerIdentity: entryPoint === 'enrich_unknown_public'
+        ? { accountId: null, organizationId: null, email: null } : { accountId: 'work' },
+      displayName: 'work', scopes: ['openid'],
+    };
     const readCredential = vi.fn(async () => {
       if (entryPoint === 'owner_read_revoked' || entryPoint === 'owner_invoke_revoked'
         || entryPoint === 'coordinator_read_revoked') accountRuntimeCurrent = false;
@@ -335,11 +361,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
         credentialRevision: qualifiedRevision,
         configurationRevision: null,
         content: qualifiedContent,
-        metadata: {
-          providerIdentity: { accountId: 'work' },
-          displayName: 'work',
-          scopes: ['openid'],
-        },
+        metadata: qualifiedMetadata,
       };
     });
     const establishedRuntimeOwner =
@@ -422,6 +444,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
           metadata: mutation.metadata,
         });
       qualifiedContent = mutation.content;
+      qualifiedMetadata = mutation.metadata;
       qualifiedRevision = secondRevision;
       legacyRecord = buildConnectedServiceCredentialRecord({
         now,
@@ -483,10 +506,36 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
       },
     });
 
+    if (contextEnrichment) {
+      const before = parseQualifiedConnectedAccountCredentialPlaintextV1({
+        ref: account, authenticationModeId: 'oauth', metadata: qualifiedMetadata,
+        plaintext: openQualifiedConnectedAccountContentEnvelope({ kind: 'credential', accountMode: 'plain', envelope: qualifiedContent }),
+      });
+      expect(qualifiedMetadata.providerIdentity).toEqual(entryPoint === 'enrich_unknown_public'
+        ? { accountId: null, organizationId: null, email: null } : { accountId: 'work' });
+      await expect(coordinator.enrichQualifiedConnectedAccountCredentialContext({
+        account, expectedCredentialRevision: firstRevision,
+      })).resolves.toEqual({ status: 'enriched', credentialRevision: secondRevision });
+      const current = await readCredential();
+      const after = parseQualifiedConnectedAccountCredentialPlaintextV1({
+        ref: account, authenticationModeId: 'oauth', metadata: current.metadata,
+        plaintext: openQualifiedConnectedAccountContentEnvelope({ kind: 'credential', accountMode: 'plain', envelope: current.content }),
+      });
+      expect(after.values).toEqual(before.values);
+      expect(current.metadata.providerIdentity).toEqual({ accountId: 'work', organizationId: 'organization-known' });
+      expect(mutateCredential).toHaveBeenCalledOnce();
+      expect(acquireRefreshLease).toHaveBeenCalledOnce();
+      expect(tokenExchangeRequests()).toHaveLength(0);
+      expect(vi.mocked(fetch).mock.calls.map(([, init]) => init?.method)).toEqual(['GET']);
+      expect(mutateCredentialHealth).not.toHaveBeenCalled();
+      expect(profileStatus).toBe('refresh_failed_retryable');
+      return;
+    }
+
     if (entryPoint === 'scheduled_rejected_retry' || entryPoint === 'quota_rejected_retry') {
       await coordinator.tickOnce();
       expect(profileStatus).toBe('needs_reauth');
-      expect(fetch).toHaveBeenCalledOnce();
+      expect(tokenExchangeRequests()).toHaveLength(1);
       clock += 60_001;
       if (entryPoint === 'scheduled_rejected_retry') {
         await coordinator.tickOnce();
@@ -495,7 +544,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
           serviceId, profileId: 'work', force: true,
         })).resolves.toBeNull();
       }
-      expect(fetch).toHaveBeenCalledOnce();
+      expect(tokenExchangeRequests()).toHaveLength(1);
       expect(profileStatus).toBe('needs_reauth');
       // A new admitted credential clears the persisted latch; no daemon-local
       // reconnect flag may prevent refreshing that replacement revision.
@@ -503,7 +552,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
       profileStatus = 'connected';
       clock += 60_001;
       await coordinator.tickOnce();
-      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(tokenExchangeRequests()).toHaveLength(2);
       return;
     }
     if (entryPoint === 'spawn_null_expiry' || entryPoint === 'spawn_health_write_failure' || entryPoint === 'spawn_window_retryable') {
@@ -516,7 +565,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
         },
       })).resolves.toEqual({ status: providerStatus === 400 ? 'reconnect_required'
         : providerStatus === 503 ? 'refresh_failed' : 'ready' });
-      expect(fetch).toHaveBeenCalledOnce();
+      expect(tokenExchangeRequests()).toHaveLength(1);
       if (providerStatus === 200) {
         expect(qualifiedRevision).toBe(secondRevision);
         if (entryPoint === 'spawn_null_expiry') {
@@ -572,7 +621,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
       } else {
         await expect(foreground).resolves.toBe(true);
       }
-      expect(fetch).toHaveBeenCalledOnce();
+      expect(tokenExchangeRequests()).toHaveLength(1);
       expect(mutateCredential).toHaveBeenCalledOnce();
       expect(qualifiedRevision).toBe(secondRevision);
       return;
@@ -751,6 +800,19 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
             };
             return { status: 'connected', displayName: 'Novel account', scopes: [] };
           },
+          async enrichCredentialContext(context) {
+            const token = await context.credentials.get('token');
+            if (token === 'context-unknown' || token === 'context-rejected') return {
+              status: token === 'context-unknown' ? 'outcomeUnknown' : 'reconnectRequired',
+              diagnostic: { code: token === 'context-unknown' ? 'novel_context_unknown' : 'novel_context_rejected',
+                message: 'private-provider-message' },
+            };
+            if (await context.credentials.get('providerContext')) return { status: 'connected' };
+            await context.stagedCredentials.set('providerContext', 'organization-1');
+            return { status: 'connected', providerIdentity: {
+              accountId: 'novel-provider-account', organizationId: 'organization-1',
+            } };
+          },
           async refresh(context) {
             await context.stagedCredentials.set('token', 'novel-token-refreshed');
             return { status: 'connected', displayName: 'Novel account', scopes: [] };
@@ -838,6 +900,9 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
       payload: { v: 1, values: { token: 'novel-token-old' } },
       randomBytes: (length) => new Uint8Array(length),
     });
+    let metadata: QualifiedConnectedAccountCredentialSnapshotV4['metadata'] = {
+      displayName: 'Novel account', scopes: [],
+    };
     const readCredential = vi.fn(async () => ({
       ref: novelAccount,
       authenticationModeId: 'manual',
@@ -845,10 +910,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
       credentialRevision: revision,
       configurationRevision: null,
       content,
-      metadata: {
-        displayName: 'Novel account',
-        scopes: [],
-      },
+      metadata,
     }));
     const establishedRuntimeOwner =
       createQualifiedConnectedAccountEstablishedRuntimeOwner({
@@ -886,6 +948,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
         input.mutation,
       );
       content = mutation.content;
+      metadata = mutation.metadata;
       revision = revision === firstRevision
         ? secondRevision
         : thirdRevision;
@@ -1237,5 +1300,139 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
     mutateCredentialHealth.mockRejectedValueOnce(new Error('database_transaction_conflict_exhausted'));
     await expect(coordinator.refreshQualifiedConnectedAccountCredentialForSpawnPreflight({ profile: { ...currentProfile, credentialRevision: revision } }))
       .resolves.toEqual({ status: 'reconnect_required' });
+
+    // Metadata settlement keeps the rejected token and its existing auth health.
+    const tokenBeforeContext = parseQualifiedConnectedAccountCredentialPlaintextV1({
+      ref: novelAccount, authenticationModeId: 'manual', metadata: { scopes: [] },
+      plaintext: openQualifiedConnectedAccountContentEnvelope({
+        kind: 'credential', accountMode: 'plain', envelope: content,
+      }),
+    });
+    mutateCredential.mockClear();
+    mutateCredentialHealth.mockClear();
+    onCredentialUpdated.mockClear();
+    await expect(coordinator.enrichQualifiedConnectedAccountCredentialContext({
+      account: novelAccount, expectedCredentialRevision: revision,
+    })).resolves.toEqual({ status: 'enriched', credentialRevision: thirdRevision });
+    const enriched = parseQualifiedConnectedAccountCredentialPlaintextV1({
+      ref: novelAccount, authenticationModeId: 'manual', metadata: { scopes: [] },
+      plaintext: openQualifiedConnectedAccountContentEnvelope({
+        kind: 'credential', accountMode: 'plain', envelope: content,
+      }),
+    });
+    expect(enriched).toEqual({ ...tokenBeforeContext, values: {
+      ...tokenBeforeContext.values, providerContext: 'organization-1',
+    } });
+    expect(mutateCredential).toHaveBeenCalledOnce();
+    expect(metadata.providerIdentity).toEqual({
+      accountId: 'novel-provider-account', organizationId: 'organization-1',
+    });
+    expect((await readCredential()).metadata.providerIdentity).toEqual(metadata.providerIdentity);
+    expect(mutateCredentialHealth).not.toHaveBeenCalled();
+    expect(onCredentialUpdated).toHaveBeenCalledExactlyOnceWith(novelAccount, { reason: 'provider_context' });
+    mutateCredential.mockClear();
+    onCredentialUpdated.mockClear();
+    await expect(coordinator.enrichQualifiedConnectedAccountCredentialContext({
+      account: novelAccount, expectedCredentialRevision: revision,
+    })).resolves.toEqual({ status: 'unchanged', credentialRevision: thirdRevision });
+    expect(mutateCredential).not.toHaveBeenCalled();
+    expect(mutateCredentialHealth).not.toHaveBeenCalled();
+    expect(onCredentialUpdated).not.toHaveBeenCalled();
+
+    // A context demand joining a token exchange re-enters enrichment against
+    // the new revision, rather than mistaking rotation for complete context.
+    content = sealQualifiedConnectedAccountContentEnvelope({ kind: 'credential', accountMode: 'plain',
+      payload: { v: 1, values: { token: 'novel-token-old' } }, randomBytes: length => new Uint8Array(length) });
+    revision = firstRevision;
+    let releaseTokenCas!: () => void;
+    let tokenCasEntered!: () => void;
+    const tokenCasGate = new Promise<void>(resolve => { releaseTokenCas = resolve; });
+    const tokenCasStarted = new Promise<void>(resolve => { tokenCasEntered = resolve; });
+    mutateCredential.mockImplementationOnce(async (input) => {
+      tokenCasEntered();
+      await tokenCasGate;
+      const mutation = QualifiedConnectedAccountCredentialMutationV4Schema.parse(input.mutation);
+      content = mutation.content;
+      metadata = mutation.metadata;
+      revision = secondRevision;
+      return { success: true, credentialRevision: revision, configurationRevision: null };
+    });
+    const rotating = coordinator.refreshQualifiedConnectedAccountCredentialForRequestAuth({
+      account: novelAccount, expectedCredentialRevision: firstRevision,
+    });
+    await tokenCasStarted;
+    const enriching = coordinator.enrichQualifiedConnectedAccountCredentialContext({
+      account: novelAccount, expectedCredentialRevision: firstRevision,
+    });
+    releaseTokenCas();
+    await expect(rotating).resolves.toBe(true);
+    await expect(enriching).resolves.toEqual({ status: 'enriched', credentialRevision: thirdRevision });
+    expect(parseQualifiedConnectedAccountCredentialPlaintextV1({
+      ref: novelAccount, authenticationModeId: 'manual', metadata: { scopes: [] },
+      plaintext: openQualifiedConnectedAccountContentEnvelope({ kind: 'credential', accountMode: 'plain', envelope: content }),
+    }).values).toEqual({ token: 'novel-token-refreshed', providerContext: 'organization-1' });
+
+    // A token-refresh caller cannot accept a metadata-only revision as rotation.
+    content = sealQualifiedConnectedAccountContentEnvelope({ kind: 'credential', accountMode: 'plain',
+      payload: { v: 1, values: { token: 'novel-token-old' } }, randomBytes: length => new Uint8Array(length) });
+    revision = firstRevision;
+    let releaseContextCas!: () => void;
+    let contextCasEntered!: () => void;
+    const contextCasGate = new Promise<void>(resolve => { releaseContextCas = resolve; });
+    const contextCasStarted = new Promise<void>(resolve => { contextCasEntered = resolve; });
+    mutateCredential.mockClear();
+    mutateCredentialHealth.mockClear();
+    mutateCredential.mockImplementationOnce(async (input) => {
+      contextCasEntered();
+      await contextCasGate;
+      const mutation = QualifiedConnectedAccountCredentialMutationV4Schema.parse(input.mutation);
+      content = mutation.content;
+      metadata = mutation.metadata;
+      revision = secondRevision;
+      return { success: true, credentialRevision: revision, configurationRevision: null };
+    });
+    const contextFirst = coordinator.enrichQualifiedConnectedAccountCredentialContext({
+      account: novelAccount, expectedCredentialRevision: firstRevision,
+    });
+    await contextCasStarted;
+    const refreshAfterContext = coordinator.refreshQualifiedConnectedAccountCredentialForRequestAuth({
+      account: novelAccount, expectedCredentialRevision: firstRevision,
+    });
+    releaseContextCas();
+    await expect(contextFirst).resolves.toEqual({ status: 'enriched', credentialRevision: secondRevision });
+    await expect(refreshAfterContext).resolves.toBe(false);
+    expect(mutateCredential).toHaveBeenCalledOnce();
+    expect(mutateCredentialHealth).not.toHaveBeenCalled();
+    expect(parseQualifiedConnectedAccountCredentialPlaintextV1({
+      ref: novelAccount, authenticationModeId: 'manual', metadata: { scopes: [] },
+      plaintext: openQualifiedConnectedAccountContentEnvelope({ kind: 'credential', accountMode: 'plain', envelope: content }),
+    }).values).toEqual({ token: 'novel-token-old', providerContext: 'organization-1' });
+
+    const warn = vi.spyOn(logger, 'warn');
+    try {
+      for (const [token, status, diagnosticCode] of [
+        ['context-unknown', 'outcome_unknown', 'novel_context_unknown'],
+        ['context-rejected', 'not_connected', 'novel_context_rejected'],
+      ] as const) {
+        content = sealQualifiedConnectedAccountContentEnvelope({ kind: 'credential', accountMode: 'plain',
+          payload: { v: 1, values: { token } }, randomBytes: length => new Uint8Array(length) });
+        mutateCredential.mockClear();
+        mutateCredentialHealth.mockClear();
+        onCredentialUpdated.mockClear();
+        warn.mockClear();
+        await expect(coordinator.enrichQualifiedConnectedAccountCredentialContext({
+          account: novelAccount, expectedCredentialRevision: revision,
+        })).resolves.toEqual({ status: 'unavailable' });
+        expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+          service: novelService, status, diagnosticCode,
+        }));
+        expect(JSON.stringify(warn.mock.calls)).not.toContain('private-provider-message');
+        expect(mutateCredential).not.toHaveBeenCalled();
+        expect(mutateCredentialHealth).not.toHaveBeenCalled();
+        expect(onCredentialUpdated).not.toHaveBeenCalled();
+      }
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { logger } from '@/ui/logger';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod/mini';
 import {
@@ -1347,7 +1348,8 @@ describe('createQualifiedConnectedAccountDaemonPersistence', () => {
   );
 
   it('retains an unknown settlement outcome when the reread cannot prove the staged bytes', async () => {
-    const lostAcknowledgement = new Error('acknowledgement lost with no committed proof');
+    const lostAcknowledgement = Object.assign(new Error('private acknowledgement access-1 token-1'), { code: 'ECONNABORTED' });
+    const diagnostic = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     const legacySnapshot = QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
       ref: account,
       authenticationModeId: 'oauth',
@@ -1407,9 +1409,17 @@ describe('createQualifiedConnectedAccountDaemonPersistence', () => {
       }
       expect(post).toHaveBeenCalledTimes(2);
       expect(get).toHaveBeenCalledTimes(2);
+      expect(diagnostic.mock.calls.map(([, value]) => value)).toEqual([
+        { account, reconciliation: false, failedStage: 'credential_write', recoveryStage: 'credential_read',
+          failureCode: 'ECONNABORTED', failureHttpStatus: null, recoveryCode: 'ECONNABORTED', recoveryHttpStatus: null },
+        { account, reconciliation: false, failedStage: 'credential_write', recoveryStage: 'credential_read',
+          failureCode: 'ECONNABORTED', failureHttpStatus: null, recoveryCode: 'ECONNABORTED', recoveryHttpStatus: null },
+      ]);
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toMatch(/private acknowledgement|access-1|token-1/);
     } finally {
       post.mockRestore();
       get.mockRestore();
+      diagnostic.mockRestore();
     }
   });
 

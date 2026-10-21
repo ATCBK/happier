@@ -39,6 +39,19 @@ const classifiedFailure = {
 } as const;
 
 describe('runtimeAuthFailureReportOutbox', () => {
+  it('retains separate durable reports for organizations sharing one provider user', async () => {
+    const outboxDir = await createTempDir('happier-runtime-auth-outbox-context-');
+    try {
+      for (const sourceProviderOrganizationId of ['org-one', 'org-two']) {
+        await enqueueRuntimeAuthFailureReportOutboxItem({ outboxDir, report: {
+          sessionId: 'session-context', classification: { ...classifiedFailure, sourceProviderOrganizationId },
+        } });
+      }
+      const items = await readRuntimeAuthFailureReportOutboxItems({ outboxDir });
+      expect(items.map((item) => item.classification.sourceProviderOrganizationId).sort()).toEqual(['org-one', 'org-two']);
+    } finally { await removeTempDir(outboxDir); }
+  });
+
   it('keeps reports from different credential revisions independently durable', async () => {
     const outboxDir = await createTempDir('happier-runtime-auth-outbox-revision-');
     try {

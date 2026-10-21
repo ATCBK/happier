@@ -37,6 +37,139 @@ function quotaSnapshot(input: Readonly<{
 }
 
 describe('ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore', () => {
+  it('preserves verified unscoped quota through unavailable proof reads until an authoritative mismatch', () => {
+    const store = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
+    const binding = { serviceId: 'openai-codex', groupId: 'main', profileId: 'primary' } as const;
+    const context = { providerAccountId: 'account-user', providerOrganizationId: 'org-current' };
+    const snapshot = (fetchedAt: number, utilizationPct: number) => ({
+      ...quotaSnapshot({ profileId: 'primary', fetchedAt, utilizationPct }), activeAccountId: 'account-user',
+    });
+    store.recordSnapshot({ ...binding, snapshot: snapshot(1_000, 10), verifiedCredentialFingerprint: 'credential-one' });
+    const latest = snapshot(2_000, 20);
+    store.recordSnapshot({ ...binding, snapshot: latest, verifiedCredentialFingerprint: 'credential-one' });
+
+    store.retainProfileSnapshots({ ...binding, context });
+    expect(store.getSnapshot(binding)).toEqual(latest);
+    expect(store.getRecentBurn(binding)).not.toBeNull();
+    store.retainProfileSnapshots({ ...binding, context: null });
+    expect(store.getSnapshot(binding)).toEqual(latest);
+    store.retainProfileSnapshots({ ...binding, context, verifiedCredentialFingerprint: 'credential-one' });
+    expect(store.getSnapshotEntry(binding)).toEqual({ snapshot: latest, verifiedCredentialFingerprint: 'credential-one' });
+
+    store.retainProfileSnapshots({ ...binding, context: { ...context, providerAccountId: 'other-user' } });
+    expect(store.getSnapshot(binding)).toBeNull();
+    expect(store.getRecentBurn(binding)).toBeNull();
+
+    store.recordProfileSnapshot({ ...binding, snapshot: latest, verifiedCredentialFingerprint: 'credential-one' });
+    store.retainProfileSnapshots({ ...binding, context, verifiedCredentialFingerprint: null });
+    expect(store.getSnapshot(binding)).toBeNull();
+    store.recordProfileSnapshot({ ...binding, snapshot: latest });
+    store.retainProfileSnapshots({ ...binding, context });
+    expect(store.getSnapshot(binding)).toBeNull();
+  });
+
+  it('retains unscoped local quota only for its verified current credential and user', () => {
+    const store = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
+    const binding = { serviceId: 'openai-codex', groupId: 'main', profileId: 'primary' } as const;
+    const context = { providerAccountId: 'account-user', providerOrganizationId: 'org-current' };
+    const snapshot = {
+      ...quotaSnapshot({ profileId: 'primary', fetchedAt: 1_000, utilizationPct: 10 }),
+      activeAccountId: 'account-user',
+    };
+    store.recordSnapshot({ ...binding, snapshot, verifiedCredentialFingerprint: 'credential-one' });
+
+    store.retainProfileSnapshots({ ...binding, context, verifiedCredentialFingerprint: 'credential-one' });
+
+    expect(store.getSnapshot(binding)).toEqual(snapshot);
+    expect(store.getSnapshotEntry(binding)).toEqual({ snapshot, verifiedCredentialFingerprint: 'credential-one' });
+    expect(store.getSnapshotEntry({ serviceId: binding.serviceId, profileId: binding.profileId }))
+      .toEqual({ snapshot, verifiedCredentialFingerprint: 'credential-one' });
+
+    store.retainProfileSnapshots({ ...binding, context, verifiedCredentialFingerprint: 'credential-two' });
+    expect(store.getSnapshot(binding)).toBeNull();
+    expect(store.getSnapshotEntry({ serviceId: binding.serviceId, profileId: binding.profileId })).toBeNull();
+
+    store.recordProfileSnapshot({ ...binding, snapshot, verifiedCredentialFingerprint: 'credential-two' });
+    store.retainProfileSnapshots({ ...binding, context: { ...context, providerAccountId: 'other-user' },
+      verifiedCredentialFingerprint: 'credential-two' });
+    expect(store.getSnapshot(binding)).toBeNull();
+
+    store.recordProfileSnapshot({ ...binding, snapshot });
+    store.retainProfileSnapshots({ ...binding, context, verifiedCredentialFingerprint: 'credential-two' });
+    expect(store.getSnapshot(binding)).toBeNull();
+  });
+
+  it('retains known organization quota across token rotation but drops an organization change', () => {
+    const store = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
+    const binding = { serviceId: 'openai-codex', groupId: 'main', profileId: 'primary' } as const;
+    const context = { providerAccountId: 'account-user', providerOrganizationId: 'org-one' };
+    const snapshot = {
+      ...quotaSnapshot({ profileId: 'primary', fetchedAt: 1_000, utilizationPct: 10 }),
+      activeAccountId: 'account-user', providerOrganizationId: 'org-one',
+    };
+    store.recordSnapshot({ ...binding, snapshot, verifiedCredentialFingerprint: 'credential-one' });
+    store.retainProfileSnapshots({ ...binding, context, verifiedCredentialFingerprint: 'credential-two' });
+    expect(store.getSnapshot(binding)).toEqual(snapshot);
+    store.retainProfileSnapshots({ ...binding, context: { ...context, providerOrganizationId: 'org-two' },
+      verifiedCredentialFingerprint: 'credential-two' });
+    expect(store.getSnapshot(binding)).toBeNull();
+  });
+
+  it('starts new unscoped burn history when its verified credential changes', () => {
+    const store = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
+    const binding = { serviceId: 'openai-codex', groupId: 'main', profileId: 'primary', groupGeneration: 1 } as const;
+    const snapshot = (fetchedAt: number, utilizationPct: number) => ({
+      ...quotaSnapshot({ profileId: 'primary', fetchedAt, utilizationPct }), activeAccountId: 'account-user',
+    });
+    store.recordSnapshot({ ...binding, snapshot: snapshot(1_000, 10), verifiedCredentialFingerprint: 'credential-one' });
+    store.recordSnapshot({ ...binding, snapshot: snapshot(2_000, 30), verifiedCredentialFingerprint: 'credential-two' });
+    expect(store.getRecentBurn(binding)).toBeNull();
+    store.recordSnapshot({ ...binding, snapshot: snapshot(3_000, 31), verifiedCredentialFingerprint: 'credential-two' });
+    expect(store.getRecentBurn(binding)?.remainingPercentPerMs).toBeCloseTo(1 / 1_000, 8);
+    store.recordSnapshot({ ...binding, snapshot: snapshot(4_000, 32) });
+    expect(store.getRecentBurn(binding)).toBeNull();
+  });
+
+  it('starts new burn history after an organization change in the same profile and generation', () => {
+    const store = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
+    const binding = { serviceId: 'openai-codex', groupId: 'main', profileId: 'primary', groupGeneration: 1 } as const;
+    const snapshot = (fetchedAt: number, utilizationPct: number, providerOrganizationId: string) => ({
+      ...quotaSnapshot({ profileId: 'primary', fetchedAt, utilizationPct }),
+      activeAccountId: 'account-user', providerOrganizationId,
+    });
+    store.recordSnapshot({ ...binding, snapshot: snapshot(1_000, 10, 'org-a') });
+    store.recordSnapshot({ ...binding, snapshot: snapshot(2_000, 30, 'org-b') });
+    expect(store.getRecentBurn(binding)).toBeNull();
+    store.recordSnapshot({ ...binding, snapshot: snapshot(3_000, 31, 'org-b') });
+    expect(store.getRecentBurn(binding)?.remainingPercentPerMs).toBeCloseTo(1 / 1_000, 8);
+  });
+
+  it('drops mismatching profile projections and group burn while retaining matching and other-profile snapshots', () => {
+    const store = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
+    const binding = { serviceId: 'openai-codex', profileId: 'primary', groupGeneration: 1 } as const;
+    const snapshot = (profileId: string, fetchedAt: number, utilizationPct: number, providerOrganizationId: string) => ({
+      ...quotaSnapshot({ profileId, fetchedAt, utilizationPct }),
+      activeAccountId: 'account-user', providerOrganizationId,
+    });
+    store.recordSnapshot({ ...binding, groupId: 'old-group', snapshot: snapshot('primary', 1_000, 10, 'org-a') });
+    store.recordSnapshot({ ...binding, groupId: 'old-group', snapshot: snapshot('primary', 3_000, 30, 'org-a') });
+    store.recordSnapshot({ ...binding, groupId: 'current-group', snapshot: snapshot('primary', 2_000, 20, 'org-b') });
+    store.recordSnapshot({ ...binding, groupId: 'old-group', profileId: 'other', snapshot: snapshot('other', 3_000, 40, 'org-a') });
+    expect(store.getRecentBurn({ ...binding, groupId: 'old-group' })).not.toBeNull();
+
+    store.retainProfileSnapshots({ ...binding, context: {
+      providerAccountId: 'account-user', providerOrganizationId: 'org-b',
+    } });
+
+    expect(store.getSnapshot({ ...binding, groupId: 'old-group' })).toBeNull();
+    expect(store.getRecentBurn({ ...binding, groupId: 'old-group' })).toBeNull();
+    expect(store.getSnapshot({ ...binding, groupId: 'current-group' })).toMatchObject({ providerOrganizationId: 'org-b' });
+    expect(store.getSnapshot({ ...binding, groupId: 'old-group', profileId: 'other' })).toMatchObject({ providerOrganizationId: 'org-a' });
+    store.retainProfileSnapshots({ ...binding, context: null });
+    expect(store.getSnapshot({ ...binding, groupId: 'current-group' })).toBeNull();
+    expect(store.getSnapshot({ ...binding, groupId: 'old-group', profileId: 'other' })).not.toBeNull();
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });

@@ -1,3 +1,4 @@
+import { computeConnectedServiceAccessTokenFingerprint } from '../refresh/credentialFreshness/tokenFingerprint';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import axios from 'axios';
 import { ApiClient } from '@/api/api';
@@ -111,8 +112,21 @@ import {
 } from '../qualifiedConnectedAccountEstablishedRuntimeOwner';
 import { createQualifiedConnectedAccountDaemonPersistence } from '../qualifiedConnectedAccountDaemonPersistence';
 import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import type { PluginConnectedAccountDescriptorContributionV2 } from '@happier-dev/protocol';
+import { canonicalizeAgentAccountUsageSnapshot } from '@/agent/runtime/registry/engineRegistry/nativeAgentAccountUsage';
+import { recordProviderAccountUsageSnapshotForSession } from '../accountUsage/recordProviderAccountUsageSnapshotForSession';
+import { PLUGIN_MANIFEST as CLAUDE_USAGE_MANIFEST } from '../../../../../../packages/plugins/claude/src/manifest';
+import { PLUGIN_MANIFEST as CODEX_USAGE_MANIFEST } from '../../../../../../packages/plugins/codex/src/manifest';
+import { mapClaudeUsageLimitDetailsToProviderAccountUsageSnapshot } from '../../../../../../packages/plugins/claude/src/agent/auth/services/usage/snapshot';
+import { mapCodexRateLimitSnapshotToProviderAccountUsageSnapshot } from '../../../../../../packages/plugins/codex/src/agent/auth/services/usage/snapshot';
 
-async function createQualifiedQuotaRuntimeFixture(profile: QualifiedConnectedAccountProfileV4, now: number) {
+
+async function createQualifiedQuotaRuntimeFixture(profile: QualifiedConnectedAccountProfileV4, now: number, options?: Readonly<{
+  organizationQuota?: true;
+  failQuota?: boolean;
+  profiles?: readonly QualifiedConnectedAccountProfileV4[];
+  usageIdentity?: PluginConnectedAccountDescriptorContributionV2['usageIdentity'];
+}>) {
   const root = await mkdtemp(join(tmpdir(), 'happier-quota-runtime-'));
   const marker = join(root, 'quota-accounts');
   let runtime: Awaited<ReturnType<typeof createAuthoredAdmittedPluginRuntimeFixture>> | null = null;
@@ -124,7 +138,7 @@ async function createQualifiedQuotaRuntimeFixture(profile: QualifiedConnectedAcc
     manifest: { schemaVersion: 2, id: service.pluginId, version: '1.0.0', displayName: 'Quota fixture',
       engines: { happier: '^0.2.0' }, runtime: { apiVersion: 1 }, entrypoints: { daemon: './daemon.mjs' },
       hostAccess: { required: [], optional: [] }, contributes: { connectedAccountDescriptors: [{
-        id: service.localId, title: 'Quota account', authentication: { defaultModeId: 'manual', modes: [{
+        id: service.localId, title: 'Quota account', ...(options?.usageIdentity ? { usageIdentity: options.usageIdentity } : options?.organizationQuota ? { usageIdentity: { requiredContext: 'organization' as const } } : {}), authentication: { defaultModeId: 'manual', modes: [{
           id: 'manual', kind: 'manual', outcomeReconciliation: 'none',
           fields: [{ id: 'token', title: 'Token', schema: { type: 'string' }, secret: true }],
         }] },
@@ -137,18 +151,21 @@ async function createQualifiedQuotaRuntimeFixture(profile: QualifiedConnectedAcc
         async quota(context) {
           if (await context.credentials.get('token') !== 'fixture-token') throw new Error('Unexpected quota credential');
           await (await import('node:fs/promises')).appendFile(${JSON.stringify(marker)}, context.account.accountId + '\\n');
-          return { observedAtMs: ${now}, limits: [{ id: 'weekly', used: 25, remaining: 75 }] };
+          return { observedAtMs: ${now}, ${options?.failQuota ? `...(() => { throw new Error('Provider quota unavailable'); })(),` : ''} ${options?.organizationQuota ? `providerOrganizationId: await context.credentials.get('organizationUuid'),` : ''} limits: [{ id: 'weekly', used: 25, remaining: 75 }] };
         }
       });
     }` },
   }] });
   const credentials = { token: 'happy-token', encryption: null } satisfies StoredCredentials;
   const readCredential = vi.fn(async ({ ref }: Readonly<{ ref: QualifiedConnectedAccountProfileV4['ref'] }>) => {
-    expect(ref).toEqual(profile.ref);
+    const selectedProfile = (options?.profiles ?? [profile]).find(candidate =>
+      candidate.ref.accountId === ref.accountId && candidate.ref.service.pluginId === ref.service.pluginId
+      && candidate.ref.service.localId === ref.service.localId);
+    if (!selectedProfile) throw new Error('Unexpected quota account credential read');
     return QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({ ref, authenticationModeId: 'manual',
-      revisionSemantics: 'revisioned', credentialRevision: profile.credentialRevision, configurationRevision: null,
-      content: { t: 'plain', v: { v: 1, values: { token: 'fixture-token' } } },
-      metadata: { providerIdentity: profile.providerIdentity, displayName: profile.displayName, scopes: [] } });
+      revisionSemantics: 'revisioned', credentialRevision: selectedProfile.credentialRevision, configurationRevision: null,
+      content: { t: 'plain', v: { v: 1, values: { token: 'fixture-token', ...(options?.organizationQuota ? { organizationUuid: selectedProfile.providerIdentity?.organizationId ?? '' } : {}) } } },
+      metadata: { providerIdentity: selectedProfile.providerIdentity, displayName: selectedProfile.displayName, scopes: [] } });
   });
   const unexpectedConfiguration = async (): Promise<never> => { throw new Error('Unexpected quota configuration I/O'); };
   const owner = createQualifiedConnectedAccountEstablishedRuntimeOwner({ reloadController: runtime.controller, credentials,
@@ -156,7 +173,10 @@ async function createQualifiedQuotaRuntimeFixture(profile: QualifiedConnectedAcc
     configuration: { read: unexpectedConfiguration, secrets: {
       admit: unexpectedConfiguration, has: unexpectedConfiguration, read: unexpectedConfiguration,
     } } });
-  return { owner, credentials, readCredential, marker };
+  return { owner, credentials, readCredential, marker,
+    resolveUsageIdentity: async (serviceRef: QualifiedConnectedAccountProfileV4['ref']['service']) =>
+      runtime!.registry.contributes.connectedAccountDescriptorsById.get(`${serviceRef.pluginId}/${serviceRef.localId}`)?.definition.usageIdentity ?? null,
+  };
 }
 
 type AccountExhaustionInput = Parameters<ConnectedServiceQuotasCoordinator['recordAccountExhaustionAndFanout']>[0];
@@ -710,6 +730,91 @@ function recordGroupMemberAccountUsageFixture(
 }
 
 describe('ConnectedServiceQuotasCoordinator', () => {
+  it.each(['claude', 'codex'] as const)('shares %s native exhaustion with both polled profiles through the declared provider identity', async (provider) => {
+    const now = 1_000_000;
+    const manifest = provider === 'claude' ? CLAUDE_USAGE_MANIFEST : CODEX_USAGE_MANIFEST;
+    const service = { pluginId: `acme.native-${provider}-usage`, localId: provider === 'claude' ? 'claude-subscription' : 'openai-codex' };
+    const usageIdentity = manifest.contributes.connectedAccountDescriptors.find(descriptor => descriptor.id === service.localId)?.usageIdentity;
+    const profileA: QualifiedConnectedAccountProfileV4 = {
+      ref: { service, accountId: 'account-a' }, status: 'connected', authenticationModeId: 'manual',
+      revisionSemantics: 'revisioned', credentialRevision: 'csr_abcdefghijklmnopqrstuv', configurationReady: true,
+      configurationRevision: null, providerIdentity: { accountId: 'provider-user', ...(provider === 'claude' ? { organizationId: 'provider-org' } : {}) },
+      displayName: 'Work', scopes: [],
+    };
+    const profileB = { ...profileA, ref: { service, accountId: 'account-b' } };
+    const profiles = [profileA, profileB];
+    const fixture = await createQualifiedQuotaRuntimeFixture(profileA, now, {
+      profiles, usageIdentity, ...(provider === 'claude' ? { organizationQuota: true } : {}),
+    });
+    const store = createProviderAccountUsageStore();
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      api: { getAccountEncryptionMode: async () => 'plain' } as unknown as QuotaApi,
+      credentials: fixture.credentials, quotaFetchers: [], now: () => now, randomBytes,
+      accountUsageStore: store, quotaPersistenceMinFreshnessMs: 60_000,
+      qualifiedConnectedAccountRuntime: {
+        resolvePeerClass: () => 'advertised_v4', establishedRuntimeOwner: fixture.owner,
+        resolveUsageIdentity: fixture.resolveUsageIdentity, listScheduledAccounts: async () => profiles,
+        listGroupQuotaTargets: async () => profiles.map(profile => ({ profile, groupGeneration: 1 })),
+        readQuota: async () => null, writeProviderAccountUsage: async () => ({ success: true }),
+      },
+    });
+    expect(await coordinator.probeGroupQuotaSnapshots({ serviceId: `${service.pluginId}/${service.localId}`,
+      groupId: 'pool', profileIds: profiles.map(profile => profile.ref.accountId) })).toMatchObject({ status: 'complete' });
+    const sourceA = { serviceId: `${service.pluginId}/${service.localId}`, profileId: 'account-a',
+      bindingKind: 'group_member' as const, groupId: 'pool', groupGeneration: 1 };
+    const sourceB = { ...sourceA, profileId: 'account-b' };
+    expect(store.resolveBySource(sourceA)?.meters[0]?.remaining).toBe(75);
+    expect(store.resolveBySource(sourceB)?.meters[0]?.remaining).toBe(75);
+    const nativeObservation = provider === 'claude'
+      ? mapClaudeUsageLimitDetailsToProviderAccountUsageSnapshot({
+        subject: { providerId: 'claude', kind: 'providerSubject', accountSubjectId: 'provider-user', subjectKind: 'account',
+          providerOrganizationId: 'provider-org', proof: 'provider_account_id' },
+        details: { v: 1, quotaScope: 'account', limitCategory: 'usage_limit', providerLimitId: 'weekly', utilization: 100,
+          resetAtMs: now + 60_000, retryAfterMs: null, recoverability: 'wait', planType: null, overage: null, action: null, connectedService: null },
+        observedAtMs: now + 1, fetchedAtMs: now + 1,
+      })
+      : mapCodexRateLimitSnapshotToProviderAccountUsageSnapshot({
+        subject: { providerId: 'openai-codex', kind: 'providerSubject', accountSubjectId: 'provider-user', proof: 'connected_service_provider_account_id' },
+        rawSnapshot: { primary: { usedPercent: 100 } }, observedAtMs: now + 1, fetchedAtMs: now + 1,
+      });
+    const native = canonicalizeAgentAccountUsageSnapshot(nativeObservation);
+    if (!native) throw new Error('Native provider observation did not satisfy the canonical contract');
+    expect(await recordProviderAccountUsageSnapshotForSession({
+      getChildren: () => [{ happySessionId: 'session-a' }], sessionId: 'session-a', store, persistence: null,
+      snapshot: native, observation: { sources: [sourceA] }, requiresProviderOrganizationId: provider === 'claude',
+    })).toMatchObject({ status: 'snapshot_advanced' });
+    expect(store.resolveBySource(sourceB)?.recordKey).toEqual(native.recordKey);
+    expect(store.resolveBySource(sourceB)?.recordId).toBe(native.recordId);
+    expect(store.resolveBySource(sourceB)?.meters[0]?.utilizationPct).toBe(100);
+    const switchState = buildConnectedServiceAuthGroupSwitchStateFromAccountUsage({ accountUsageStore: store, group: {
+      serviceId: sourceA.serviceId, groupId: 'pool', activeProfileId: 'account-a', generation: 1, policy: {},
+      members: profiles.map((profile, priority) => ({ profileId: profile.ref.accountId, priority,
+        enabled: true, state: {}, createdAt: 0 })),
+    } });
+    expect(switchState?.state.memberStatesByProfileId.get('account-b')?.quotaSnapshot?.exhausted).toBe(true);
+  });
+
+  it('uses only quota-observed organization identity while retaining the provider user subject', () => {
+    const profile: QualifiedConnectedAccountProfileV4 = {
+      ref: { service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' }, accountId: 'work' },
+      status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
+      credentialRevision: 'csr_abcdefghijklmnopqrstuv', configurationReady: true, configurationRevision: null,
+      providerIdentity: { accountId: 'user-a', organizationId: 'profile-org' }, displayName: 'Work', scopes: [],
+    };
+    for (const providerOrganizationId of ['observed-org', undefined]) {
+      const snapshot = buildProviderAccountUsageSnapshotFromPluginConnectedAccountQuota({
+        profile, quota: { observedAtMs: 1_000, limits: [], ...(providerOrganizationId ? { providerOrganizationId } : {}) }, staleAfterMs: 60_000,
+      });
+      expect(snapshot.recordKey).toEqual({
+        providerId: 'happier.agent.claude/claude-subscription', accountSubjectId: 'user-a', subjectKind: 'account',
+        quotaScope: providerOrganizationId ? 'organization' : 'account', ...(providerOrganizationId ? { quotaScopeId: providerOrganizationId } : {}),
+      });
+      expect(snapshot.accountSubject).toEqual({ kind: 'providerSubject', id: 'user-a' });
+      if (providerOrganizationId) expect(projectProviderAccountUsageSnapshotToQualifiedConnectedAccountQuotaSnapshotV4({ snapshot, ref: profile.ref }))
+        .toMatchObject({ activeAccountId: 'user-a', providerOrganizationId });
+    }
+  });
+
   it('preserves provider window labels, fractional allowance and disabled status in qualified quota projection', () => {
     const snapshot = buildProviderAccountUsageSnapshotFromPluginConnectedAccountQuota({
       profile: { ref: { service: { pluginId: 'happier.agent.antigravity', localId: 'antigravity-account' }, accountId: 'selected' },
@@ -786,6 +891,117 @@ describe('ConnectedServiceQuotasCoordinator', () => {
 
 
 
+
+  it('reuses verified unscoped local quota only with current credential proof and preserves it through proof unavailability', async () => {
+    let now = 1_000_000;
+    let currentToken = 'access-a';
+    let proofAvailable = true;
+    let cloudSnapshot: ProviderAccountUsageSnapshotV1 | null = null;
+    const service = { pluginId: 'acme.organization-usage', localId: 'quota' };
+    const profile: QualifiedConnectedAccountProfileV4 = {
+      ref: { service, accountId: 'account-a' }, status: 'connected', authenticationModeId: 'manual',
+      revisionSemantics: 'revisioned', credentialRevision: 'csr_abcdefghijklmnopqrstuv',
+      configurationReady: true, configurationRevision: null,
+      providerIdentity: { accountId: 'provider-user' }, displayName: 'Work', scopes: [],
+    };
+    const fixture = await createQualifiedQuotaRuntimeFixture(profile, now, { organizationQuota: true });
+    const local: ConnectedServiceQuotaSnapshotV1 = {
+      v: 1, serviceId: `${service.pluginId}/${service.localId}`, profileId: 'account-a',
+      activeAccountId: 'provider-user', fetchedAt: now, staleAfterMs: 300_000, planLabel: null, accountLabel: null,
+      meters: [{ meterId: 'weekly', label: 'Weekly', used: 20, limit: 100, unit: 'percent',
+        utilizationPct: 20, resetsAt: null, status: 'ok', details: {} }],
+    };
+    const runtimeQuotaSnapshots = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
+    runtimeQuotaSnapshots.recordProfileSnapshot({ serviceId: local.serviceId, profileId: 'account-a', snapshot: local,
+      verifiedCredentialFingerprint: computeConnectedServiceAccessTokenFingerprint(currentToken) });
+    const store = createProviderAccountUsageStore();
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      api: { getAccountEncryptionMode: async () => 'plain' } as unknown as QuotaApi,
+      credentials: fixture.credentials, quotaFetchers: [], now: () => now, randomBytes, accountUsageStore: store, runtimeQuotaSnapshots,
+      qualifiedConnectedAccountRuntime: {
+        resolvePeerClass: () => 'advertised_v4', establishedRuntimeOwner: fixture.owner,
+        resolveUsageIdentity: async () => ({ requiredContext: 'organization' }),
+        // Current credential I/O boundary; verification and native projection have their owning composed tests.
+        resolveCurrentCredentialProof: async () => proofAvailable ? { providerAccountId: 'provider-user', providerOrganizationId: profile.providerIdentity?.organizationId ?? null,
+          credentialFingerprint: computeConnectedServiceAccessTokenFingerprint(currentToken) } : null,
+        listScheduledAccounts: async () => [profile], readQuota: async () => cloudSnapshot ? {
+          ref: profile.ref, sourceResolution: { source: { ref: profile.ref, bindingKind: 'account' },
+            recordId: cloudSnapshot.recordId, providerAccountId: 'provider-user', fetchedAt: now, staleAfterMs: 300_000 },
+          content: { t: 'plain', v: projectProviderAccountUsageSnapshotToQualifiedConnectedAccountQuotaSnapshotV4({ snapshot: cloudSnapshot, ref: profile.ref }) },
+          metadata: { fetchedAt: now, staleAfterMs: 300_000, status: 'ok' },
+        } : null,
+        writeProviderAccountUsage: async () => ({ success: true }),
+      },
+    });
+    await coordinator.tickOnce();
+    expect(await readFile(fixture.marker, 'utf8').catch(() => '')).toBe('');
+    proofAvailable = false;
+    now += 1_000;
+    await coordinator.tickOnce();
+    expect(runtimeQuotaSnapshots.getSnapshot({ serviceId: local.serviceId, profileId: 'account-a' })).toEqual(local);
+    const attemptsWhileUnavailable = await readFile(fixture.marker, 'utf8').catch(() => '');
+    proofAvailable = true;
+    now += 1_000;
+    await coordinator.tickOnce();
+    expect(await readFile(fixture.marker, 'utf8').catch(() => '')).toBe(attemptsWhileUnavailable);
+    currentToken = 'access-b';
+    now += 1_000;
+    await coordinator.tickOnce();
+    expect(runtimeQuotaSnapshots.getSnapshot({ serviceId: local.serviceId, profileId: 'account-a' })).toBeNull();
+    expect((await readFile(fixture.marker, 'utf8').catch(() => '')).length).toBeGreaterThan(attemptsWhileUnavailable.length);
+    expect(store.resolveBySource({ serviceId: local.serviceId, profileId: 'account-a', bindingKind: 'profile' })).toBeNull();
+    runtimeQuotaSnapshots.recordProfileSnapshot({ serviceId: local.serviceId, profileId: 'account-a', snapshot: local,
+      verifiedCredentialFingerprint: computeConnectedServiceAccessTokenFingerprint(currentToken) });
+    profile.providerIdentity = { accountId: 'provider-user', organizationId: 'org-current' };
+    now += 1_000;
+    cloudSnapshot = buildProviderAccountUsageSnapshotFromPluginConnectedAccountQuota({ profile,
+      quota: { observedAtMs: now, providerOrganizationId: 'org-current', limits: [{ id: 'weekly', used: 100, remaining: 0 }] },
+      staleAfterMs: 300_000 });
+    await coordinator.tickOnce();
+    expect(store.resolveBySource({ serviceId: local.serviceId, profileId: 'account-a', bindingKind: 'profile' })?.recordId)
+      .toBe(cloudSnapshot.recordId);
+  });
+
+  it.each([[undefined, false, undefined], ['org-old', false, undefined], ['org-current', false, undefined], ['org-old', true, undefined], ['org-current', false, 'semantic-provider'], ['org-current', true, 'semantic-provider']] as const)('admits fresh quota only in the current declared organization and provider (%s, failure=%s, provider=%s)', async (observedOrganization, failQuota, providerId) => {
+    const now = 1_000_000;
+    const service = { pluginId: 'acme.organization-usage', localId: 'quota' };
+    const profile: QualifiedConnectedAccountProfileV4 = {
+      ref: { service, accountId: 'account-a' }, status: 'connected', authenticationModeId: 'manual',
+      revisionSemantics: 'revisioned', credentialRevision: 'csr_abcdefghijklmnopqrstuv',
+      configurationReady: true, configurationRevision: null,
+      providerIdentity: { accountId: 'provider-user', organizationId: 'org-current' }, displayName: 'Work', scopes: [],
+    };
+    const usageIdentity = { requiredContext: 'organization' as const, ...(providerId ? { providerId } : {}) };
+    const fixture = await createQualifiedQuotaRuntimeFixture(profile, now, { organizationQuota: true, failQuota, usageIdentity });
+    const legacy = buildProviderAccountUsageSnapshotFromPluginConnectedAccountQuota({ profile,
+      quota: { observedAtMs: now, ...(observedOrganization ? { providerOrganizationId: observedOrganization } : {}), limits: [{ id: 'weekly', used: 90, remaining: 10 }] }, staleAfterMs: 300_000 });
+    const source = { serviceId: `${service.pluginId}/${service.localId}`, profileId: 'account-a', bindingKind: 'profile' } as const;
+    const store = createProviderAccountUsageStore();
+    store.recordSnapshot(legacy, { sources: [source] });
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      api: { getAccountEncryptionMode: async () => 'plain' } as unknown as QuotaApi,
+      credentials: fixture.credentials, quotaFetchers: [], now: () => now, randomBytes,
+      accountUsageStore: store, quotaPersistenceMinFreshnessMs: 60_000,
+      qualifiedConnectedAccountRuntime: {
+        resolvePeerClass: () => 'advertised_v4', establishedRuntimeOwner: fixture.owner,
+        resolveUsageIdentity: async () => usageIdentity,
+        listScheduledAccounts: async () => [profile],
+        readQuota: async () => ({ ref: profile.ref,
+          sourceResolution: { source: { ref: profile.ref, bindingKind: 'account' },
+            recordId: legacy.recordId, providerAccountId: 'provider-user', fetchedAt: now, staleAfterMs: 300_000 },
+          content: { t: 'plain', v: projectProviderAccountUsageSnapshotToQualifiedConnectedAccountQuotaSnapshotV4({ snapshot: legacy, ref: profile.ref }) },
+          metadata: { fetchedAt: now, staleAfterMs: 300_000, status: 'ok' },
+        }),
+        writeProviderAccountUsage: async () => ({ success: true }),
+      },
+    });
+    await coordinator.tickOnce();
+    expect(await readFile(fixture.marker, 'utf8').catch(() => '')).toBe(observedOrganization === 'org-current' && !providerId ? '' : 'account-a\n');
+    if (providerId && !failQuota) expect(store.resolveBySource(source)?.providerId).toBe(providerId);
+    if (failQuota) expect(store.resolveBySource(source)).toBeNull();
+    else expect(store.resolveBySource(source)?.recordKey).toMatchObject({ subjectKind: 'account',
+      accountSubjectId: 'provider-user', quotaScope: 'organization', quotaScopeId: 'org-current' });
+  });
 
   it('does not let a fresh quota response for another qualified account suppress polling', async () => {
     const now = 1_000_000;

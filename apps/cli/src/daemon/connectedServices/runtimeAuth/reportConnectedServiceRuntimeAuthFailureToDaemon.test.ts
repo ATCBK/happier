@@ -349,6 +349,17 @@ describe('reportConnectedServiceRuntimeAuthFailureToDaemon', () => {
       expect(notify).toHaveBeenCalledTimes(2);
     });
 
+    it('does not coalesce failures from different organizations of the same provider user', async () => {
+      const notify = vi.fn(async () => ({ ok: true, result: { status: 'noop' } }));
+      for (const sourceProviderOrganizationId of ['org-one', 'org-two']) {
+        await reportConnectedServiceRuntimeAuthFailureToDaemon({ sessionId: 'session-org',
+          classification: { ...limitClassification, sourceProviderAccountId: 'same-user', sourceProviderOrganizationId },
+          notify, nowMs: () => 1000,
+        });
+      }
+      expect(notify).toHaveBeenCalledTimes(2);
+    });
+
     it('does not suppress usage-limit reports from different source provider accounts', async () => {
       const notify = vi.fn(async () => ({ ok: true, result: { status: 'noop' } }));
 

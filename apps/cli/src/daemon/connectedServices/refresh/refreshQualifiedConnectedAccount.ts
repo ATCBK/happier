@@ -119,6 +119,7 @@ export async function refreshQualifiedConnectedAccount(input: Readonly<{
   ownerId: string;
   leaseMs: number;
   operationId: string;
+  reason?: 'provider_context';
   expectedCredential: QualifiedConnectedAccountCredentialSnapshotV4;
   signal?: AbortSignal;
   establishedRuntimeOwner: Pick<
@@ -233,7 +234,7 @@ export async function refreshQualifiedConnectedAccount(input: Readonly<{
         account: input.account,
         expectedCredentialRevision: expectedCredential.credentialRevision,
         operation: Object.freeze({
-          kind: 'refresh' as const,
+          kind: input.reason === 'provider_context' ? 'enrichCredentialContext' as const : 'refresh' as const,
           operationId,
           stagedCredentials: staged.store,
         }),
@@ -288,6 +289,9 @@ export async function refreshQualifiedConnectedAccount(input: Readonly<{
     await invocation.basis.prepareCredentialReplacement({
       ...mutation,
       metadata: {
+        ...(invocation.result.providerIdentity
+          ? { providerIdentity: invocation.result.providerIdentity }
+          : {}),
         ...(invocation.result.displayName
           ? { displayName: invocation.result.displayName }
           : {}),

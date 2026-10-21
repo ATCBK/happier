@@ -164,6 +164,7 @@ export function sanitizeConnectedServiceRuntimeFailureClassification(
   const providerLimitIdSource = value.providerLimitId === undefined ? rateLimits?.providerLimitId : value.providerLimitId;
   const providerLimitId = readNullableSafeProviderString(providerLimitIdSource);
   const sourceProviderAccountId = readNullableSafeProviderString(value.sourceProviderAccountId);
+  const sourceProviderOrganizationId = readNullableSafeProviderString(value.sourceProviderOrganizationId);
   const sourceAccountLabel = sourceProviderAccountId
     ? readNullableSafeProviderString(value.sourceAccountLabel)
     : null;
@@ -188,6 +189,7 @@ export function sanitizeConnectedServiceRuntimeFailureClassification(
     ...(quotaScope ? { quotaScope } : {}),
     ...(providerLimitIdSource === undefined ? {} : { providerLimitId }),
     ...(sourceProviderAccountId ? { sourceProviderAccountId } : {}),
+    ...(sourceProviderAccountId && sourceProviderOrganizationId ? { sourceProviderOrganizationId } : {}),
     ...(sourceProviderAccountId && value.sourceAccountLabel !== undefined ? { sourceAccountLabel } : {}),
     ...(failingAccessTokenFingerprint ? { failingAccessTokenFingerprint } : {}),
     ...(groupGeneration === null ? {} : { groupGeneration }),

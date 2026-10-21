@@ -29,6 +29,7 @@ import type {
 import {
   createQualifiedConnectedAccountEstablishedRuntimeOwner,
   readQualifiedConnectedAccountCredentialMaterial,
+  readQualifiedConnectedAccountCredentialIdentity,
 } from './qualifiedConnectedAccountEstablishedRuntimeOwner';
 import { createQualifiedConnectedAccountDaemonPersistence } from './qualifiedConnectedAccountDaemonPersistence';
 import { createDaemonConnectedAccountPurposeBindingRuntime } from './purposeBindings/createDaemonConnectedAccountPurposeBindingRuntime';
@@ -927,6 +928,19 @@ describe('createQualifiedConnectedAccountEstablishedRuntimeOwner', () => {
     await expect(snapshot.isCurrent()).resolves.toBe(false);
   });
 
+  it.each([undefined, { accountId: 'public-user', organizationId: 'public-org' }])('reads generic qualified identity only from canonical public metadata (%j)', (providerIdentity) => {
+    const identity = readQualifiedConnectedAccountCredentialIdentity({
+      storageMode: 'plain', credential: { v: 1, values: { providerAccountId: 'provider-private-value' } },
+      snapshot: { ref: account, authenticationModeId: 'oauth', revisionSemantics: 'revisioned',
+        credentialRevision: requestAuthCredentialRevision, configurationRevision: null,
+        metadata: { scopes: [], ...(providerIdentity ? { providerIdentity } : {}) },
+        content: { t: 'plain', v: { v: 1, values: {} } },
+      },
+    });
+    expect(identity).toEqual({ providerAccountId: providerIdentity?.accountId ?? null,
+      providerOrganizationId: providerIdentity?.organizationId ?? null, credentialRevision: requestAuthCredentialRevision });
+  });
+
   it('reads an exact credential revision for qualified request-auth currentness without invoking a runtime', async () => {
     const credentialSnapshot = QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
       ref: account,
@@ -1061,7 +1075,7 @@ describe('createQualifiedConnectedAccountEstablishedRuntimeOwner', () => {
         },
         token: null,
       }),
-      metadata: { scopes: [] },
+      metadata: { providerIdentity: { accountId: 'provider-user', organizationId: 'org-a' }, scopes: [] },
     };
     const configurationSnapshot: QualifiedConnectedAccountConfigurationSnapshotV4 = {
       target: { kind: 'account', ref: account },
@@ -1195,8 +1209,20 @@ describe('createQualifiedConnectedAccountEstablishedRuntimeOwner', () => {
     });
     expect(replacement).toMatchObject({
       authenticationModeId: 'oauth',
-      metadata: { scopes: [] },
+      metadata: { providerIdentity: { accountId: 'provider-user', organizationId: 'org-a' }, scopes: [] },
     });
+    const changedContext = await receipt.basis.prepareCredentialReplacement({
+      set: { accessToken: 'access-new-context' },
+      delete: [],
+      metadata: { providerIdentity: { accountId: 'provider-user', organizationId: 'org-b' } },
+    });
+    expect(changedContext.metadata.providerIdentity).toEqual({ accountId: 'provider-user', organizationId: 'org-b' });
+    const unattestedContext = await receipt.basis.prepareCredentialReplacement({
+      set: { accessToken: 'access-unattested-context' },
+      delete: [],
+      metadata: { providerIdentity: { accountId: 'provider-user' } },
+    });
+    expect(unattestedContext.metadata.providerIdentity).toEqual({ accountId: 'provider-user' });
     const replacementPlaintext = openQualifiedConnectedAccountContentEnvelope({
       kind: 'credential',
       accountMode: 'plain',

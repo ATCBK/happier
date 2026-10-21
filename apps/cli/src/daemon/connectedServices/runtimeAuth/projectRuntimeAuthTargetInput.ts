@@ -43,6 +43,7 @@ export function projectConnectedServiceRuntimeAuthSelection(
   const applyReason = readString(value.applyReason);
   const sourceProviderAccountId = readString(value.sourceProviderAccountId);
   const sourceAccountLabel = readString(value.sourceAccountLabel);
+  const sourceProviderOrganizationId = readString(value.sourceProviderOrganizationId);
   const kind = value.kind === 'profile' || value.kind === 'group' ? value.kind : null;
   const generation = typeof value.generation === 'number' && Number.isSafeInteger(value.generation) && value.generation >= 0
     ? value.generation
@@ -61,6 +62,7 @@ export function projectConnectedServiceRuntimeAuthSelection(
     ...(groupId ? { groupId } : {}),
     ...(applyReason ? { applyReason } : {}),
     ...(sourceProviderAccountId ? { sourceProviderAccountId } : {}),
+    ...(sourceProviderAccountId && sourceProviderOrganizationId ? { sourceProviderOrganizationId } : {}),
     ...(sourceAccountLabel ? { sourceAccountLabel } : {}),
     ...(kind ? { kind } : {}),
     ...(generation === null ? {} : { generation }),

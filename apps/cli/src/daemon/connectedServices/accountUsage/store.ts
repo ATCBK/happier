@@ -1,8 +1,10 @@
 import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { compareConnectedServiceQuotaObservationRecency } from '@happier-dev/protocol/connect/quotaObservationTime';
+import { isProviderAccountUsageIdentityMatch, isProviderAccountUsageOrganizationContextMatch, type ProviderAccountUsageOrganizationContext } from '@happier-dev/protocol/connect/accountUsage';
 import { ConnectedServiceUsageSourceV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
+import { ConnectedAccountServiceKeyIngressSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { mergeProviderAccountSubscription } from '@happier-dev/protocol/connect/accountSubscription';
-import type { ConnectedServiceUsageSourceV1, ProviderAccountUsageRecordKeyV1, ProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol';
+import type { ConnectedServiceUsageSourceV1, PluginConnectedAccountDescriptorContributionV2, ProviderAccountUsageRecordKeyV1, ProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol';
 import {
     ProviderAccountUsageAdoptionV1Schema,
     type ProviderAccountUsageAdoptionV1,
@@ -55,6 +57,12 @@ export type ProviderAccountUsageStore = Readonly<{
     resolveRecordId(recordId: string): ProviderAccountUsageSnapshotV1 | null;
     resolveBySource(source: ConnectedServiceUsageSourceV1): ProviderAccountUsageSnapshotV1 | null;
     listSnapshots(): readonly ProviderAccountUsageSnapshotV1[];
+    retainSourcesForProfile(input: Readonly<{
+        serviceId: ConnectedServiceUsageSourceV1['serviceId'];
+        profileId: string;
+        context: ProviderAccountUsageOrganizationContext | null;
+        usageIdentity?: PluginConnectedAccountDescriptorContributionV2['usageIdentity'];
+    }>): void;
     prepareAdoption(adoption: ProviderAccountUsageAdoptionV1): PreparedProviderAccountUsageAdoption;
 }>;
 
@@ -405,11 +413,29 @@ export function createProviderAccountUsageStore(): ProviderAccountUsageStore {
         return snapshotsByRecordId.get(resolveRedirect(recordId)) ?? null;
     }
 
+    function retainSourcesForProfile(input: Parameters<ProviderAccountUsageStore['retainSourcesForProfile']>[0]): void {
+        const serviceId = ConnectedAccountServiceKeyIngressSchema.parse(input.serviceId);
+        for (const [recordId, sources] of sourcesByRecordId) {
+            const snapshot = snapshotsByRecordId.get(recordId);
+            if (snapshot && (input.usageIdentity
+                ? isProviderAccountUsageIdentityMatch(snapshot.recordKey, input.context, input.usageIdentity)
+                : isProviderAccountUsageOrganizationContextMatch(snapshot.recordKey, input.context))) continue;
+            const retained = sources.filter((source) => {
+                if (source.serviceId !== serviceId || source.profileId !== input.profileId) return true;
+                const key = sourceKey(source);
+                if (sourceRecordIdsByKey.get(key) === recordId) sourceRecordIdsByKey.delete(key);
+                return false;
+            });
+            if (retained.length !== sources.length) sourcesByRecordId.set(recordId, retained);
+        }
+    }
+
     return {
         recordSnapshot,
         resolveRecordId,
         resolveBySource,
         listSnapshots,
+        retainSourcesForProfile,
         prepareAdoption,
     };
 }

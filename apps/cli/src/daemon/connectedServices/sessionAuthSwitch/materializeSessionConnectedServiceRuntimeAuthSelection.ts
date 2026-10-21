@@ -23,11 +23,12 @@ import { materializeConnectedServicesForSpawn } from '../materialize/materialize
 import { resolveConnectedServiceNativeHomeTarget } from '../materialize/resolveConnectedServiceNativeHomeTarget';
 import type { validateConnectedServiceGroupMutationCurrentness } from '../accountGroups/generation/validateGroupMutationCurrentness';
 import type { ConnectedServicesMaterializationDiagnostic } from '../materialization/materializer';
-import { readQualifiedConnectedAccountCredentialMaterial } from '@/daemon/connectedServices/qualifiedConnectedAccountEstablishedRuntimeOwner';
+import { readQualifiedConnectedAccountCredentialMaterial, readQualifiedConnectedAccountCredentialIdentity } from '@/daemon/connectedServices/qualifiedConnectedAccountEstablishedRuntimeOwner';
 import { resolveFirstPartyLegacyConnectedServiceIdForQualifiedServiceKey, resolveQualifiedConnectedAccountServiceForIngressServiceId } from '@/plugins/projection/registry/connectedAccountPurposeCompatibility';
 
 import type { SessionConnectedServiceRuntimeAuthSelectionMaterializerInput } from './switchSessionConnectedServiceAuth';
 import { resolveTrackedConnectedServiceSwitchContinuityContext } from './resolveTrackedConnectedServiceSwitchContinuityContext';
+import { readConnectedServiceCredentialProviderAccountId } from '../shared/connectedServiceCredentialRecord';
 
 function readNonEmptyString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -86,6 +87,9 @@ export async function materializeSessionConnectedServiceRuntimeAuthSelection(par
 
   let record: ConnectedServiceCredentialRecordV1 | undefined;
   let credentialRevision: ConnectedServiceCredentialRevisionV1;
+  let providerAccountIdentity: Readonly<{ providerAccountId: string | null; providerOrganizationId: string | null }> = {
+    providerAccountId: null, providerOrganizationId: null,
+  };
   if (legacyServiceId) {
     const resolutions = await resolveConnectedServiceCredentialResolutions({
       credentials: params.credentials,
@@ -96,6 +100,10 @@ export async function materializeSessionConnectedServiceRuntimeAuthSelection(par
     if (resolution?.revisionSemantics !== 'revisioned') return null;
     record = resolution.record;
     credentialRevision = resolution.credentialRevision;
+    providerAccountIdentity = {
+      providerAccountId: readConnectedServiceCredentialProviderAccountId(record),
+      providerOrganizationId: resolution.providerOrganizationId ?? null,
+    };
   } else {
     const service = resolveQualifiedConnectedAccountServiceForIngressServiceId(params.input.serviceId);
     if (!service) return null;
@@ -106,6 +114,7 @@ export async function materializeSessionConnectedServiceRuntimeAuthSelection(par
     });
     if (!material) return null;
     credentialRevision = material.snapshot.credentialRevision;
+    providerAccountIdentity = readQualifiedConnectedAccountCredentialIdentity(material);
   }
   await assertCurrent();
   const fallbackProfileId = binding.selection === 'group'
@@ -138,6 +147,11 @@ export async function materializeSessionConnectedServiceRuntimeAuthSelection(par
         }
       : {}),
     credentialRevision,
+    ...(providerAccountIdentity.providerAccountId ? {
+      sourceProviderAccountId: providerAccountIdentity.providerAccountId,
+      ...(providerAccountIdentity.providerOrganizationId
+        ? { sourceProviderOrganizationId: providerAccountIdentity.providerOrganizationId } : {}),
+    } : {}),
   };
 
   const isMaterializationCurrent = async () => {

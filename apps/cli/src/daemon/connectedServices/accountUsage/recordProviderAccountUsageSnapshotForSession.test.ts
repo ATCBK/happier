@@ -15,6 +15,7 @@ import {
     recordProviderAccountUsageSnapshotForSession,
 } from './recordProviderAccountUsageSnapshotForSession';
 import { createProviderAccountUsageStore } from './store';
+import { matchesCurrentQuotaObservationCredential } from '../quotas/proof/quotaProbeFreshProof';
 import { createProviderAccountUsagePersistenceScheduler, type ProviderAccountUsagePersistenceScheduler } from './persistence';
 
 function createRecordKey(accountSubjectId = 'acct_123'): ProviderAccountUsageRecordKeyV1 {
@@ -159,6 +160,51 @@ describe('recordProviderAccountUsageSnapshotForSession', () => {
         expect(store.resolveRecordId(previous.recordId)?.subscription).toEqual(expectedSubscription);
     });
 
+    it.each([
+        { observedOrganizationId: 'org-other', expected: 'credential_fingerprint_mismatch' },
+        { observedOrganizationId: undefined, expected: 'credential_fingerprint_mismatch' },
+        { observedOrganizationId: 'org-current', expected: 'snapshot_advanced' },
+    ])('qualifies global organization usage against current credential context ($observedOrganizationId)', async ({ observedOrganizationId, expected }) => {
+        const snapshot = createSnapshot({ ...createRecordKey('same-user'),
+            ...(observedOrganizationId ? { quotaScope: 'organization' as const, quotaScopeId: observedOrganizationId } : {}),
+        });
+        const store = createProviderAccountUsageStore();
+        const result = await recordProviderAccountUsageSnapshotForSession({
+            getChildren: () => [{ happySessionId: 'session-context' }], store, persistence: null,
+            sessionId: 'session-context', snapshot, requiresProviderOrganizationId: true,
+            observation: { sources: [profileSource] }, credentialFingerprint: 'sha256:deadbeef',
+            verifyCredentialFingerprint: async (candidate) => matchesCurrentQuotaObservationCredential({ ...candidate,
+                credential: { providerAccountId: 'same-user', providerOrganizationId: 'org-current', credentialFingerprint: 'sha256:deadbeef' },
+            }),
+        });
+        expect(result.status).toBe(expected);
+        expect(store.resolveBySource(profileSource)).toEqual(expected === 'snapshot_advanced' ? snapshot : null);
+    });
+
+    it.each([
+        { observedUser: 'same-user', fingerprint: 'sha256:deadbeef', bindingCurrent: true, accepted: true },
+        { observedUser: 'other-user', fingerprint: 'sha256:deadbeef', bindingCurrent: true, accepted: false },
+        { observedUser: 'same-user', fingerprint: 'sha256:bad00bad', bindingCurrent: true, accepted: false },
+        { observedUser: 'same-user', fingerprint: 'sha256:deadbeef', bindingCurrent: false, accepted: false },
+    ])('keeps exact provisional credential proof local ($observedUser/$fingerprint/$bindingCurrent)', async ({ observedUser, fingerprint, bindingCurrent, accepted }) => {
+        const snapshot = createSnapshot(createRecordKey('provisional:runtime'));
+        const store = createProviderAccountUsageStore();
+        const result = await recordProviderAccountUsageSnapshotForSession({
+            getChildren: () => [{ happySessionId: 'session-local' }], store, persistence: null,
+            sessionId: 'session-local', snapshot, requiresProviderOrganizationId: true,
+            observation: { sources: [profileSource] }, sourceProviderAccountId: observedUser,
+            credentialFingerprint: fingerprint,
+            verifyCredentialFingerprint: async (candidate) => matchesCurrentQuotaObservationCredential({ ...candidate,
+                credential: { providerAccountId: 'same-user', providerOrganizationId: null, credentialFingerprint: 'sha256:deadbeef' },
+            }),
+            resolveAuthoritativeSource: async () => bindingCurrent ? profileSource : null,
+        });
+        expect(result.status).toBe(accepted ? 'snapshot_advanced' : 'credential_fingerprint_mismatch');
+        expect(store.resolveBySource(profileSource)).toBeNull();
+        expect(store.resolveRecordId(snapshot.recordId)).toEqual(accepted ? snapshot : null);
+        if (accepted) expect(result).toMatchObject({ verifiedLocalSource: profileSource, sourceProviderAccountId: 'same-user' });
+    });
+
     it('persists only through a caller-proven qualified V4 source and currentness basis', async () => {
         const snapshot = createSnapshot(createRecordKey('acct_live'));
         const target = createTarget();
@@ -187,6 +233,7 @@ describe('recordProviderAccountUsageSnapshotForSession', () => {
             status: 'snapshot_advanced',
             recordId: snapshot.recordId,
             persisted: true,
+            qualifiedSource: profileSource,
         });
 
         expect(store.resolveBySource(profileSource)?.recordId).toBe(snapshot.recordId);
@@ -240,6 +287,7 @@ describe('recordProviderAccountUsageSnapshotForSession', () => {
             store,
             persistence,
             publishRecordId,
+            resolvePersistenceTargets: async () => [createTarget()],
             observation: { sources: [profileSource] },
             sessionId: 'sess_1',
             snapshot,
@@ -268,6 +316,10 @@ describe('recordProviderAccountUsageSnapshotForSession', () => {
             getChildren: () => [{ happySessionId: 'sess_1' }],
             store,
             persistence,
+            observation: { sources: [profileSource] }, credentialFingerprint: 'sha256:deadbeef',
+            verifyCredentialFingerprint: async (candidate) => matchesCurrentQuotaObservationCredential({ ...candidate,
+                credential: { providerAccountId: snapshot.accountSubject.id, credentialFingerprint: 'sha256:deadbeef' },
+            }),
             resolvePersistenceTargets: async () => [target],
             sessionId: 'sess_1',
             snapshot,
@@ -283,6 +335,7 @@ describe('recordProviderAccountUsageSnapshotForSession', () => {
             status: 'snapshot_advanced',
             recordId: snapshot.recordId,
             persisted: true,
+            qualifiedSource: profileSource,
         });
         expect(store.resolveRecordId(snapshot.recordId)).toEqual(snapshot);
         await resumedPersistence.flush(1_000);

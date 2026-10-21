@@ -24,7 +24,7 @@ export type UsageLimitContinuationResult = Readonly<{
 export async function continueAccountQualifiedSessionAfterUsageLimitReset(input: Readonly<{
   continuation: Parameters<typeof continueSessionAfterUsageLimitReset>[0];
   classification: ConnectedServiceRuntimeFailureClassification;
-  readAccount: () => Promise<Readonly<{ providerAccountId: string | null; credentialRevision: string | null }> | null>;
+  readAccount: () => Promise<Readonly<{ providerAccountId: string | null; providerOrganizationId?: string | null; requiresProviderOrganizationId?: boolean; credentialRevision: string | null }> | null>;
   readActiveBinding: () => ConnectedServiceRuntimeBindingIdentity | undefined;
 }>): Promise<Readonly<{
   status: 'continuation_enqueued' | 'continuation_cancelled' | 'recovery_superseded';

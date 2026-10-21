@@ -11,6 +11,26 @@ const classification: ConnectedServiceRuntimeFailureClassification = {
 };
 
 describe('isCurrentUsageLimitRecoveryAccount', () => {
+  it('preserves account-only token rotation when public metadata also names an organization', () => {
+    expect(isCurrentUsageLimitRecoveryAccount({ classification, providerAccountId: 'account-work',
+      providerOrganizationId: 'metadata-org', credentialRevision: 'csr_bbbbbbbbbbbbbbbbbbbbbb' })).toBe(true);
+  });
+
+  it('requires the original revision when required organization context was not attested', () => {
+    expect(isCurrentUsageLimitRecoveryAccount({ classification, providerAccountId: 'account-work',
+      requiresProviderOrganizationId: true, credentialRevision: 'csr_bbbbbbbbbbbbbbbbbbbbbb' })).toBe(false);
+    expect(isCurrentUsageLimitRecoveryAccount({ classification, providerAccountId: 'account-work',
+      requiresProviderOrganizationId: true, credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa' })).toBe(true);
+  });
+
+  it('rejects another organization for the same provider user while preserving matching-context token rotation', () => {
+    const failure = { ...classification, sourceProviderOrganizationId: 'org-work' };
+    expect(isCurrentUsageLimitRecoveryAccount({ classification: failure, providerAccountId: 'account-work',
+      providerOrganizationId: 'org-other', credentialRevision: 'csr_bbbbbbbbbbbbbbbbbbbbbb' })).toBe(false);
+    expect(isCurrentUsageLimitRecoveryAccount({ classification: failure, providerAccountId: 'account-work',
+      providerOrganizationId: 'org-work', credentialRevision: 'csr_bbbbbbbbbbbbbbbbbbbbbb' })).toBe(true);
+  });
+
   it('accepts a rotated credential for the same provider account, not a relinked profile', () => {
     expect(isCurrentUsageLimitRecoveryAccount({ classification, providerAccountId: 'account-work',
       credentialRevision: 'csr_bbbbbbbbbbbbbbbbbbbbbb' })).toBe(true);

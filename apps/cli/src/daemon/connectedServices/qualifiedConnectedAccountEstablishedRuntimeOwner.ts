@@ -191,6 +191,7 @@ export type QualifiedConnectedAccountCredentialMutationPreparationInput =
     set: Readonly<Record<string, string>>;
     delete: readonly string[];
     metadata?: Readonly<{
+      providerIdentity?: QualifiedConnectedAccountCredentialSnapshotV4['metadata']['providerIdentity'];
       displayName?: string;
       scopes?: readonly string[];
     }>;
@@ -356,6 +357,17 @@ export async function readQualifiedConnectedAccountCredentialMaterial(input: Rea
     }),
   });
   return Object.freeze({ snapshot, credential, storageMode: accountMode });
+}
+
+/** Reads identity from the same admitted credential snapshot; renewable tokens are not identity. */
+export function readQualifiedConnectedAccountCredentialIdentity(
+  material: NonNullable<Awaited<ReturnType<typeof readQualifiedConnectedAccountCredentialMaterial>>>,
+): Readonly<{ providerAccountId: string | null; providerOrganizationId: string | null; credentialRevision: string }> {
+  return {
+    providerAccountId: material.snapshot.metadata.providerIdentity?.accountId?.trim() || null,
+    providerOrganizationId: material.snapshot.metadata.providerIdentity?.organizationId?.trim() || null,
+    credentialRevision: material.snapshot.credentialRevision,
+  };
 }
 
 function requireRevisionedConfigurationSnapshot(

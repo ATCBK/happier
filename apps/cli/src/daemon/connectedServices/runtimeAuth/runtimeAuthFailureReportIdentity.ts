@@ -7,6 +7,8 @@ export function readRuntimeAuthFailureReportSourceIdentity(
 ) {
   return {
     serviceId: classification.serviceId,
+    ...(classification.sourceProviderOrganizationId
+      ? { sourceProviderOrganizationId: classification.sourceProviderOrganizationId } : {}),
     profileId: classification.profileId,
     groupId: classification.groupId,
     groupGeneration: classification.groupGeneration ?? null,

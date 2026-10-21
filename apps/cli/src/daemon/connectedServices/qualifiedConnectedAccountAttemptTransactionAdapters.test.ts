@@ -355,7 +355,7 @@ describe('qualified Connected Account attempt transaction adapters', () => {
     });
     await owner.device!.acknowledge(initial);
     const { directExportContract: _policy, ...settlement } = preparedDeviceSettlement(initial);
-    const prepared = { ...initial, preparedSettlement: { ...settlement, ...policy } };
+    const prepared = { ...initial, preparedSettlement: { ...settlement, ...policy, providerIdentity: { accountId: 'provider-user', organizationId: 'org-b' } } };
 
     await owner.device!.acknowledge(prepared);
 

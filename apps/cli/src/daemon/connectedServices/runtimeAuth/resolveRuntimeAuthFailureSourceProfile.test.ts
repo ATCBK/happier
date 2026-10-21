@@ -18,11 +18,36 @@ const classification = {
 } as const;
 
 describe('resolveRuntimeAuthFailureSourceProfile', () => {
+  it('keeps account-only service attribution independent of incidental organization metadata', async () => {
+    await expect(resolveRuntimeAuthFailureSourceProfile({
+      classification: { ...classification, serviceId: 'happier.agent.codex/openai-codex' },
+      getGroupMembers: async () => [{ profileId: 'live-profile' }],
+      resolveProviderAccountIdentity: async () => ({ providerAccountId: 'acct-live', providerOrganizationId: 'metadata-org' }),
+    })).resolves.toMatchObject({ profileId: 'live-profile' });
+  });
+
+  it('does not use user-only quota evidence when the service requires organization context', async () => {
+    await expect(resolveRuntimeAuthFailureSourceProfile({ classification, requiresProviderOrganizationId: true,
+      getGroupMembers: async () => [{ profileId: 'launch-profile' }],
+      resolveProviderAccountIdentity: async () => ({ providerAccountId: 'acct-live' }),
+    })).resolves.toMatchObject({ profileId: null, groupGeneration: null, expectedCredentialRevision: null });
+  });
+
+  it('attributes the observed organization rather than the stale launch member for the same provider user', async () => {
+    await expect(resolveRuntimeAuthFailureSourceProfile({
+      classification: { ...classification, sourceProviderOrganizationId: 'org-live' },
+      getGroupMembers: async () => [{ profileId: 'launch-profile' }, { profileId: 'live-profile' }],
+      resolveProviderAccountIdentity: async (profileId) => ({
+        providerAccountId: 'acct-live', providerOrganizationId: profileId === 'live-profile' ? 'org-live' : 'org-old',
+      }),
+    })).resolves.toMatchObject({ profileId: 'live-profile', groupGeneration: null, expectedCredentialRevision: null });
+  });
+
   it('maps exact provider account evidence to the unique group member and drops stale tuple fields', async () => {
     await expect(resolveRuntimeAuthFailureSourceProfile({
       classification,
       getGroupMembers: async () => [{ profileId: 'launch-profile' }, { profileId: 'live-profile' }],
-      resolveProviderAccountId: async (profileId) => profileId === 'live-profile' ? 'acct-live' : 'acct-old',
+      resolveProviderAccountIdentity: async (profileId) => ({ providerAccountId: profileId === 'live-profile' ? 'acct-live' : 'acct-old' }),
     })).resolves.toMatchObject({
       profileId: 'live-profile',
       groupGeneration: null,
@@ -30,13 +55,13 @@ describe('resolveRuntimeAuthFailureSourceProfile', () => {
     });
   });
 
-  it('leaves ambiguous provider identity unchanged', async () => {
+  it('clears an ambiguous stale source tuple', async () => {
     const result = await resolveRuntimeAuthFailureSourceProfile({
       classification,
       getGroupMembers: async () => [{ profileId: 'a' }, { profileId: 'b' }],
-      resolveProviderAccountId: async () => 'acct-live',
+      resolveProviderAccountIdentity: async () => ({ providerAccountId: 'acct-live' }),
     });
-    expect(result).toBe(classification);
+    expect(result).toMatchObject({ profileId: null, groupGeneration: null, expectedCredentialRevision: null });
   });
 
   it('does not load the group without provider account evidence', async () => {
@@ -45,7 +70,7 @@ describe('resolveRuntimeAuthFailureSourceProfile', () => {
     expect(await resolveRuntimeAuthFailureSourceProfile({
       classification: input,
       getGroupMembers,
-      resolveProviderAccountId: async () => 'acct-live',
+      resolveProviderAccountIdentity: async () => ({ providerAccountId: 'acct-live' }),
     })).toBe(input);
     expect(getGroupMembers).not.toHaveBeenCalled();
   });

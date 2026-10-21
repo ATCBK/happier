@@ -52,12 +52,14 @@ export function buildProviderAccountUsageSnapshotFromConnectedServiceQuotaObserv
     const hasStableSubject = Boolean(stableAccountId);
     const accountSubjectId = stableAccountId
         || `legacy-connected-service:${snapshot.serviceId}:${snapshot.profileId}`;
+    const providerOrganizationId = snapshot.providerOrganizationId?.trim();
     const fetchedAtMs = snapshot.fetchedAtMs ?? snapshot.fetchedAt;
     const recordKey: ProviderAccountUsageRecordKeyV1 = {
         providerId,
         accountSubjectId,
         subjectKind: hasStableSubject ? 'account' : 'unknown',
-        quotaScope: 'account',
+        quotaScope: providerOrganizationId ? 'organization' : 'account',
+        ...(providerOrganizationId ? { quotaScopeId: providerOrganizationId } : {}),
     };
 
     return ProviderAccountUsageSnapshotV1Schema.parse({

@@ -4,11 +4,13 @@ import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSch
 import { isConnectedServiceQuotaObservationFresh } from '@happier-dev/protocol/connect/quotaObservationTime';
 import { ProviderAccountUsageRecordIdSchema } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { QualifiedConnectedServiceUsageSourceV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { isProviderAccountUsageIdentityMatch, type ProviderAccountUsageOrganizationContext } from '@happier-dev/protocol/connect/accountUsage';
+import type { PluginConnectedAccountDescriptorContributionV2 } from '@happier-dev/protocol';
 import { openProviderAccountUsageEncryptedContentV4 } from '@happier-dev/protocol/connect/accountUsage';
 import { parseBuiltInLegacyProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/legacyConnectedServiceCompatibility';
 import { parseQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { readBuiltInLegacyConnectedServiceIdForQualifiedService } from '@happier-dev/protocol/connect/connected-service-bindings';
-import type { ConnectedServiceUsageSourceV1, ProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1, QualifiedConnectedServiceUsageSourceV4 } from '@happier-dev/protocol';
+import type { ConnectedServiceUsageSourceV1, ProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1, QualifiedConnectedServiceUsageSourceV4, QualifiedConnectedAccountServiceRef } from '@happier-dev/protocol';
 import { isConnectedServiceUsageProviderCompatible } from '@happier-dev/agents';
 
 import {
@@ -45,6 +47,14 @@ export type ProviderAccountUsageHydrationSource = Readonly<{
   localSource: ConnectedServiceUsageSourceV1;
   qualifiedSource: QualifiedConnectedServiceUsageSourceV4;
 }>;
+
+export type ProviderAccountUsageUsageIdentityResolver = (
+  service: QualifiedConnectedAccountServiceRef,
+) => Promise<PluginConnectedAccountDescriptorContributionV2['usageIdentity'] | null>;
+
+export type ProviderAccountUsageCurrentSourceIdentityResolver = (
+  source: QualifiedConnectedServiceUsageSourceV4,
+) => Promise<ProviderAccountUsageOrganizationContext | null>;
 
 export type ProviderAccountUsageCurrentSourceResolution = Readonly<{
   source: QualifiedConnectedServiceUsageSourceV4;
@@ -269,6 +279,8 @@ export async function hydrateProviderAccountUsageStoreFromCurrentSources(input: 
   credentials: StoredCredentials;
   store: Pick<ProviderAccountUsageStore, 'recordSnapshot'>;
   nowMs: number;
+  resolveUsageIdentity?: ProviderAccountUsageUsageIdentityResolver;
+  resolveCurrentProviderAccountIdentityForSource?: ProviderAccountUsageCurrentSourceIdentityResolver;
 }>): Promise<Readonly<{
   hydratedRecordIds: ProviderAccountUsageRecordId[];
   dispositions: ProviderAccountUsageCurrentSourceHydrationDisposition[];
@@ -356,18 +368,29 @@ export async function hydrateProviderAccountUsageStoreFromCurrentSources(input: 
     const accountIdentityProven = hydrated.snapshot.recordKey.subjectKind === 'account'
       && providerAccountId.length > 0
       && hydrated.snapshot.recordKey.accountSubjectId === providerAccountId;
+    let identityProven = false;
+    let providerCompatible = false;
+    try {
+      const usageIdentity = await input.resolveUsageIdentity?.(source.qualifiedSource.ref.service);
+      const current = input.resolveCurrentProviderAccountIdentityForSource
+        ? await input.resolveCurrentProviderAccountIdentityForSource(source.qualifiedSource)
+        : { providerAccountId: providerAccountId || null, providerOrganizationId: null };
+      identityProven = isProviderAccountUsageIdentityMatch(hydrated.snapshot.recordKey, current, usageIdentity);
+      providerCompatible = Boolean(usageIdentity?.providerId)
+        || isProviderCompatibleWithConnectedServiceSource({ providerId: hydrated.snapshot.providerId, source: source.localSource });
+    } catch {
+      identityProven = false;
+    }
     const freshnessProven = (resolved?.fetchedAt === null
       || resolved?.fetchedAt === hydrated.snapshot.fetchedAtMs)
       && (resolved?.staleAfterMs === null
         || resolved?.staleAfterMs === hydrated.snapshot.staleAfterMs);
     if (
       !sourceProven
+      || !identityProven
       || !accountIdentityProven
       || !freshnessProven
-      || !isProviderCompatibleWithConnectedServiceSource({
-        providerId: hydrated.snapshot.providerId,
-        source: source.localSource,
-      })
+      || !providerCompatible
     ) {
       dispositions.push({
         source: source.localSource,

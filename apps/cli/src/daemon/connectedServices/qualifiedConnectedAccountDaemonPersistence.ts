@@ -918,6 +918,20 @@ export function createQualifiedConnectedAccountDaemonPersistence(
         throw new Error('Connected-account pending attempt discovery is unavailable');
       }),
       settlement: (() => {
+        function transportFailureCode(error: unknown) {
+          if (typeof error !== 'object' || error === null) return null;
+          const code: unknown = Object.getOwnPropertyDescriptor(error, 'code')?.value;
+          switch (code) {
+            case 'ECONNABORTED':
+            case 'ETIMEDOUT':
+            case 'ECONNRESET':
+            case 'ECONNREFUSED':
+            case 'ERR_NETWORK':
+              return code;
+            default:
+              return null;
+          }
+        }
         async function publishSettledAccount(
           input: Parameters<NonNullable<typeof params.onAccountSettled>>[0],
         ) {
@@ -976,6 +990,7 @@ export function createQualifiedConnectedAccountDaemonPersistence(
               });
             }
           }
+          let failedStage = 'transport_negotiation';
           try {
             await executeNegotiatedOperation({
               service: account.service,
@@ -988,7 +1003,9 @@ export function createQualifiedConnectedAccountDaemonPersistence(
                     : 'configured',
               },
               executeV4: async () => {
+                failedStage = 'account_mode';
                 const accountMode = await resolveAccountMode({ usage: 'fresh-authority' });
+                failedStage = 'credential_materialization';
                 const payload =
                   QualifiedConnectedAccountCredentialPayloadV1Schema.parse({
                     v: 1,
@@ -1032,6 +1049,7 @@ export function createQualifiedConnectedAccountDaemonPersistence(
                         }),
                       }
                     : undefined;
+                failedStage = 'credential_write';
                 const settled = await mutateCredential({
                   token: params.credentials.token,
                   mutation: {
@@ -1055,6 +1073,7 @@ export function createQualifiedConnectedAccountDaemonPersistence(
                         }),
                   },
                 });
+                failedStage = 'credential_receipt';
                 const configurationSettled =
                   initialConfiguration !== undefined
                     ? settled.configurationRevision !== null
@@ -1092,8 +1111,10 @@ export function createQualifiedConnectedAccountDaemonPersistence(
                 code: 'connected_account_settlement_conflict',
               });
             }
+            let recoveryStage = 'account_mode';
             try {
               const accountMode = await resolveAccountMode();
+              recoveryStage = 'credential_read';
               const committed = await readCredential({
                 token: params.credentials.token,
                 ref: account,
@@ -1106,6 +1127,7 @@ export function createQualifiedConnectedAccountDaemonPersistence(
               ) {
                 throw error;
               }
+              recoveryStage = 'credential_verification';
               const opened = openContent({
                 kind: 'credential',
                 accountMode,
@@ -1143,6 +1165,7 @@ export function createQualifiedConnectedAccountDaemonPersistence(
                 throw error;
               }
               if (stagedAccountConfigurationContent !== undefined) {
+                recoveryStage = 'configuration_read';
                 const configuration = await readConfiguration({
                   token: params.credentials.token,
                   target: accountTarget(account),
@@ -1155,6 +1178,7 @@ export function createQualifiedConnectedAccountDaemonPersistence(
                 ) {
                   throw error;
                 }
+                recoveryStage = 'configuration_verification';
                 const openedConfigurationContent = openContent({
                   kind: 'configuration',
                   accountMode,
@@ -1187,13 +1211,25 @@ export function createQualifiedConnectedAccountDaemonPersistence(
                 credentialRevision: committed.credentialRevision,
                 configurationRevision: committed.configurationRevision,
               });
-            } catch {
+            } catch (recoveryError) {
               if (reconciliationConflict) {
                 return Object.freeze({
                   status: 'conflict' as const,
                   code: 'connected_account_settlement_conflict',
                 });
               }
+              // Exceptions can contain OAuth tokens, URLs and decrypted payloads.
+              // Log only owner stages and bounded transport metadata for lost-ack diagnosis.
+              logger.warn('[DAEMON] Qualified Connected Account settlement remains unknown', {
+                account,
+                reconciliation,
+                failedStage,
+                recoveryStage,
+                failureCode: transportFailureCode(error),
+                failureHttpStatus: readHttpStatus(error) ?? null,
+                recoveryCode: transportFailureCode(recoveryError),
+                recoveryHttpStatus: readHttpStatus(recoveryError) ?? null,
+              });
               throw error;
             }
           }

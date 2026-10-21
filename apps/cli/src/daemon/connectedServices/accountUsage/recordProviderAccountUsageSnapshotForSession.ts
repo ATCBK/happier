@@ -56,10 +56,13 @@ export async function recordProviderAccountUsageSnapshotForSession(input: Readon
         sources?: readonly ConnectedServiceUsageSourceV1[];
     }>;
     credentialFingerprint?: string | null;
+    sourceProviderAccountId?: string;
+    requiresProviderOrganizationId?: boolean;
     verifyCredentialFingerprint?: (input: Readonly<{
         serviceId: string;
         profileId: string;
         providerAccountId: string;
+        providerOrganizationId?: string | null;
         credentialFingerprint: string;
     }>) => Promise<boolean>;
     resolveAuthoritativeSource?: (
@@ -74,7 +77,7 @@ export async function recordProviderAccountUsageSnapshotForSession(input: Readon
     sessionId: string;
     snapshot: ProviderAccountUsageSnapshotV1;
 }>): Promise<
-    | Readonly<{ status: ProviderAccountUsageStoreMutationStatus; recordId: string; persisted: boolean; persistence?: UnpersistedSnapshotObservation }>
+    | Readonly<{ status: ProviderAccountUsageStoreMutationStatus; recordId: string; persisted: boolean; persistence?: UnpersistedSnapshotObservation; qualifiedSource?: ConnectedServiceUsageSourceV1; verifiedLocalSource?: ConnectedServiceUsageSourceV1; sourceProviderAccountId?: string }>
     | Readonly<{ status: 'session_not_found' }>
     | Readonly<{ status: 'credential_fingerprint_mismatch'; recordId: string; persisted: boolean }>
     | Readonly<{ status: 'source_qualification_failed'; reason: ProviderAccountUsageSourceQualificationError['reason']; recordId: string; persisted: false }>
@@ -86,45 +89,37 @@ export async function recordProviderAccountUsageSnapshotForSession(input: Readon
     const claimedSources = input.observation?.sources?.length
         ? input.observation.sources
         : null;
-    let sourceQualificationMismatch = false;
+    const observedProviderAccountId = input.sourceProviderAccountId?.trim()
+        || (snapshot.accountSubject.kind === 'providerSubject' ? snapshot.accountSubject.id : null);
+    const globalIdentityQualified = snapshot.accountSubject.kind === 'providerSubject'
+        && (!input.requiresProviderOrganizationId || (snapshot.recordKey.quotaScope === 'organization' && Boolean(snapshot.recordKey.quotaScopeId?.trim())));
+    let sourceQualificationMismatch = Boolean(claimedSources && !globalIdentityQualified && !input.sourceProviderAccountId);
     let qualifiedSources: readonly ConnectedServiceUsageSourceV1[] | null = null;
+    let verifiedLocalSource: ConnectedServiceUsageSourceV1 | undefined;
     if (input.credentialFingerprint !== undefined) {
         const credentialFingerprint = normalizeConnectedServiceAccessTokenFingerprint(input.credentialFingerprint);
-        if (
-            claimedSources
-            && credentialFingerprint
-            && input.verifyCredentialFingerprint
-            && snapshot.accountSubject.kind === 'providerSubject'
-        ) {
+        if (claimedSources && credentialFingerprint && input.verifyCredentialFingerprint && observedProviderAccountId
+            && (snapshot.accountSubject.kind !== 'providerSubject' || snapshot.accountSubject.id === observedProviderAccountId)) {
             const matches = await Promise.all(claimedSources.map(async (source) =>
                 await input.verifyCredentialFingerprint!({
                     serviceId: source.serviceId,
                     profileId: source.profileId,
-                    providerAccountId: snapshot.accountSubject.kind === 'providerSubject'
-                        ? snapshot.accountSubject.id
-                        : '',
+                    providerAccountId: observedProviderAccountId,
+                    providerOrganizationId: snapshot.recordKey.quotaScope === 'organization'
+                        ? snapshot.recordKey.quotaScopeId ?? null : null,
                     credentialFingerprint,
                 }),
             ));
             if (matches.every((matchesCurrentCredential) => matchesCurrentCredential === true)) {
                 const authoritativeSources = input.resolveAuthoritativeSource
-                    ? await Promise.all(claimedSources.map(async (source) =>
-                        await input.resolveAuthoritativeSource!(source),
-                    ))
+                    ? await Promise.all(claimedSources.map(async (source) => await input.resolveAuthoritativeSource!(source)))
                     : claimedSources;
-                if (authoritativeSources.every(
-                    (source): source is ConnectedServiceUsageSourceV1 => source !== null,
-                )) {
-                    qualifiedSources = authoritativeSources;
-                } else {
-                    sourceQualificationMismatch = true;
-                }
-            } else {
-                sourceQualificationMismatch = true;
-            }
-        } else {
-            sourceQualificationMismatch = true;
-        }
+                if (authoritativeSources.every((source): source is ConnectedServiceUsageSourceV1 => source !== null)) {
+                    if (globalIdentityQualified) qualifiedSources = authoritativeSources;
+                    if (input.sourceProviderAccountId && authoritativeSources.length === 1) verifiedLocalSource = authoritativeSources[0];
+                } else sourceQualificationMismatch = true;
+            } else sourceQualificationMismatch = true;
+        } else sourceQualificationMismatch = true;
     }
 
     // A credential-qualified source claim that does not match current authority must not
@@ -155,11 +150,11 @@ export async function recordProviderAccountUsageSnapshotForSession(input: Readon
     if (input.persistence) {
         let targets: readonly QualifiedProviderAccountUsagePersistenceTarget[];
         try {
-            targets = input.resolvePersistenceTargets
+            targets = input.resolvePersistenceTargets && qualifiedSources?.length
                 ? await input.resolvePersistenceTargets({
                     sessionId: input.sessionId,
                     snapshot: currentSnapshot,
-                    sources: qualifiedSources ?? [],
+                    sources: qualifiedSources,
                 })
                 : [];
         } catch (error) {
@@ -197,6 +192,8 @@ export async function recordProviderAccountUsageSnapshotForSession(input: Readon
         recordId: recorded.recordId,
         persisted,
         ...(unpersistedObservation ? { persistence: unpersistedObservation } : {}),
+        ...(qualifiedSources?.length === 1 ? { qualifiedSource: qualifiedSources[0] } : {}),
+        ...(verifiedLocalSource && observedProviderAccountId ? { verifiedLocalSource, sourceProviderAccountId: observedProviderAccountId } : {}),
     };
 }
 

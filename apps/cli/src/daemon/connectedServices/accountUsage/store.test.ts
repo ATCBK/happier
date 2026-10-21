@@ -1,10 +1,14 @@
 import {
     buildProviderAccountUsageRecordId,
+    buildQualifiedPluginContributionKey,
     type ConnectedServiceUsageSourceV1,
     type ProviderAccountUsageRecordKeyV1,
     type ProviderAccountUsageSnapshotV1,
+    type PluginConnectedAccountDescriptorContributionV2,
 } from '@happier-dev/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ProviderAccountUsageOrganizationContext } from '@happier-dev/protocol/connect/accountUsage';
+import { ConnectedServiceUsageSourceV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
 import type { ProviderAccountUsageAdoptionV1 } from './adoption';
 
 type PreparedAdoption = Readonly<{
@@ -34,6 +38,12 @@ type ProviderAccountUsageStore = Readonly<{
     resolveRecordId(recordId: string): ProviderAccountUsageSnapshotV1 | null;
     resolveBySource(source: ConnectedServiceUsageSourceV1): ProviderAccountUsageSnapshotV1 | null;
     listSnapshots(): readonly ProviderAccountUsageSnapshotV1[];
+    retainSourcesForProfile(input: Readonly<{
+        serviceId: ConnectedServiceUsageSourceV1['serviceId'];
+        profileId: string;
+        context: ProviderAccountUsageOrganizationContext | null;
+        usageIdentity?: PluginConnectedAccountDescriptorContributionV2['usageIdentity'];
+    }>): void;
     prepareAdoption(adoption: ProviderAccountUsageAdoptionV1): PreparedAdoption;
 }>;
 
@@ -85,6 +95,93 @@ function createSnapshot(overrides: Partial<ProviderAccountUsageSnapshotV1> = {})
 }
 
 describe('provider account usage store', () => {
+    it.each([
+        { serviceId: 'claude-subscription', providerId: 'claude', requiredContext: 'organization', quotaScope: 'organization', organizationId: 'org-one' },
+        { serviceId: 'openai-codex', providerId: 'openai-codex', requiredContext: undefined, quotaScope: 'account', organizationId: null },
+    ] as const)('removes wrong semantic provider aliases while retaining the current $serviceId allowance', async (input) => {
+        const module = await loadStoreModule();
+        const store = module!.createProviderAccountUsageStore();
+        const profileSource = { serviceId: input.serviceId, profileId: 'primary', bindingKind: 'profile' } as const;
+        const oldGroupSource = { ...profileSource, bindingKind: 'group_member', groupId: 'old-group' } as const;
+        const currentGroupSource = { ...oldGroupSource, groupId: 'current-group' } as const;
+        const otherProfileSource = { ...oldGroupSource, profileId: 'other' } as const;
+        const qualifiedServiceId = ConnectedServiceUsageSourceV1Schema.parse(profileSource).serviceId;
+        const snapshot = (providerId: string) => createSnapshot({ recordKey: {
+            providerId, accountSubjectId: 'account-user', subjectKind: 'account', quotaScope: input.quotaScope,
+            ...(input.organizationId ? { quotaScopeId: input.organizationId } : {}),
+        } });
+        const wrongProviderSnapshot = snapshot(qualifiedServiceId);
+        const currentSnapshot = snapshot(input.providerId);
+        store.recordSnapshot(wrongProviderSnapshot, { sources: [profileSource, oldGroupSource, otherProfileSource] });
+        store.recordSnapshot(currentSnapshot, { sources: [currentGroupSource] });
+
+        store.retainSourcesForProfile({ ...profileSource,
+            context: { providerAccountId: 'account-user', providerOrganizationId: input.organizationId },
+            usageIdentity: { providerId: input.providerId, ...(input.requiredContext ? { requiredContext: input.requiredContext } : {}) },
+        });
+
+        expect(store.resolveBySource(currentGroupSource)?.recordId).toBe(currentSnapshot.recordId);
+        expect(store.resolveBySource(profileSource)).toBeNull();
+        expect(store.resolveBySource(oldGroupSource)).toBeNull();
+        expect(store.resolveBySource(otherProfileSource)?.recordId).toBe(wrongProviderSnapshot.recordId);
+        expect(store.resolveRecordId(wrongProviderSnapshot.recordId)).toEqual(wrongProviderSnapshot);
+        expect(store.listSnapshots()).toHaveLength(2);
+    });
+
+    it('retains an opaque account allowance for a declared provider while the current user is unknown', async () => {
+        const module = await loadStoreModule();
+        const store = module!.createProviderAccountUsageStore();
+        const source = {
+            serviceId: buildQualifiedPluginContributionKey({ pluginId: 'example.opaque', localId: 'account' }),
+            profileId: 'primary', bindingKind: 'profile',
+        } as const;
+        const snapshot = createSnapshot({ recordKey: {
+            providerId: 'opaque-provider', accountSubjectId: 'opaque-subscription', subjectKind: 'subscription', quotaScope: 'account',
+        } });
+        store.recordSnapshot(snapshot, { sources: [source] });
+        store.retainSourcesForProfile({ ...source, context: null, usageIdentity: { providerId: 'opaque-provider' } });
+        expect(store.resolveBySource(source)?.recordId).toBe(snapshot.recordId);
+        store.retainSourcesForProfile({ ...source,
+            context: { providerAccountId: 'account-user', providerOrganizationId: null },
+            usageIdentity: { providerId: 'opaque-provider' },
+        });
+        expect(store.resolveBySource(source)).toBeNull();
+        expect(store.resolveRecordId(snapshot.recordId)).toEqual(snapshot);
+    });
+
+    it('removes every mismatching source for a profile while preserving matching sources and account records', async () => {
+        const module = await loadStoreModule();
+        const store = module!.createProviderAccountUsageStore();
+        const profileSource = { serviceId: 'claude-subscription', profileId: 'primary', bindingKind: 'profile' } as const;
+        const oldGroupSource = { ...profileSource, bindingKind: 'group_member', groupId: 'old-group', groupGeneration: 1 } as const;
+        const currentGroupSource = { ...oldGroupSource, groupId: 'current-group', groupGeneration: 2 } as const;
+        const otherProfileSource = { ...oldGroupSource, profileId: 'other' } as const;
+        const reboundSource = { ...oldGroupSource, groupId: 'rebound-group' } as const;
+        const organizationSnapshot = (organizationId: string) => createSnapshot({ recordKey: {
+            providerId: 'claude', accountSubjectId: 'account-user', subjectKind: 'account',
+            quotaScope: 'organization', quotaScopeId: organizationId,
+        } });
+        const oldSnapshot = organizationSnapshot('org-a');
+        const currentSnapshot = organizationSnapshot('org-b');
+        store.recordSnapshot(oldSnapshot, { sources: [profileSource, oldGroupSource, otherProfileSource, reboundSource] });
+        store.recordSnapshot(currentSnapshot, { sources: [currentGroupSource, reboundSource] });
+
+        store.retainSourcesForProfile({ ...profileSource, context: {
+            providerAccountId: 'account-user', providerOrganizationId: 'org-b',
+        } });
+
+        expect(store.resolveBySource(profileSource)).toBeNull();
+        expect(store.resolveBySource(oldGroupSource)).toBeNull();
+        expect(store.resolveBySource(currentGroupSource)?.recordId).toBe(currentSnapshot.recordId);
+        expect(store.resolveBySource(reboundSource)?.recordId).toBe(currentSnapshot.recordId);
+        expect(store.resolveBySource(otherProfileSource)?.recordId).toBe(oldSnapshot.recordId);
+        expect(store.resolveRecordId(oldSnapshot.recordId)).toEqual(oldSnapshot);
+        expect(store.listSnapshots()).toHaveLength(2);
+        store.retainSourcesForProfile({ ...profileSource, context: null });
+        expect(store.resolveBySource(currentGroupSource)).toBeNull();
+        expect(store.resolveBySource(otherProfileSource)?.recordId).toBe(oldSnapshot.recordId);
+    });
+
     afterEach(() => {
         vi.useRealTimers();
     });

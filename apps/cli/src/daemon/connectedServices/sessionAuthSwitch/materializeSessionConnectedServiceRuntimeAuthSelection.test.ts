@@ -329,7 +329,7 @@ describe('materializeSessionConnectedServiceRuntimeAuthSelection', () => {
       return { status: 200, data: QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
         ref: { service: { pluginId: 'acme.plugin', localId: 'novel-service' }, accountId: 'work' },
         authenticationModeId: 'personal-oauth', revisionSemantics: 'revisioned', credentialRevision: CREDENTIAL_REVISION,
-        configurationRevision: null, content: { t: 'plain', v: { v: 1, values: { accessToken: 'selected', refreshToken: 'selected-refresh' } } }, metadata: { scopes: [] },
+        configurationRevision: null, content: { t: 'plain', v: { v: 1, values: { accessToken: 'selected', refreshToken: 'selected-refresh' } } }, metadata: { scopes: [], providerIdentity: { accountId: 'same-user', organizationId: 'selected-org' } },
       }) };
     });
     const result = await materializeSessionConnectedServiceRuntimeAuthSelection({
@@ -341,7 +341,10 @@ describe('materializeSessionConnectedServiceRuntimeAuthSelection', () => {
         previousBindings: bindings, normalizedBindings: bindings,
       },
     });
-    expect(result).toMatchObject({ serviceId, profileId: 'work', credentialRevision: CREDENTIAL_REVISION });
+    expect(result).toMatchObject({ serviceId, profileId: 'work', credentialRevision: CREDENTIAL_REVISION,
+      sourceProviderAccountId: 'same-user', sourceProviderOrganizationId: 'selected-org' });
+    expect(projectConnectedServiceRuntimeAuthTargetInput({ agentId: 'codex', materializedSelection: result, fallbackSelection: {} }).selection)
+      .toMatchObject({ sourceProviderAccountId: 'same-user', sourceProviderOrganizationId: 'selected-org' });
     expect(result).not.toHaveProperty('credential');
   });
 
@@ -370,7 +373,7 @@ describe('materializeSessionConnectedServiceRuntimeAuthSelection', () => {
       return { status: 200, data: QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
         ref: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' },
         authenticationModeId, revisionSemantics: 'revisioned', credentialRevision,
-        configurationRevision: null, content: { t: 'plain', v: credential }, metadata: { scopes: [] },
+        configurationRevision: null, content: { t: 'plain', v: credential }, metadata: { scopes: [], providerIdentity: { accountId: 'same-user', organizationId: 'selected-org' } },
       }) };
     });
     const api = {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { ConnectedServiceRuntimeAuthSwitchAttemptTracker } from './ConnectedServiceRuntimeAuthSwitchAttemptTracker';
+import { resolveRuntimeAuthFailureSourceProfile } from './resolveRuntimeAuthFailureSourceProfile';
 import {
     authorizeConnectedServiceRuntimeAuthFailureSource,
     handleConnectedServiceRuntimeAuthFailureForSession,
@@ -12,6 +13,23 @@ import { ConnectedServiceRuntimeRegistry } from '../runtimeRegistry/registry';
 import { readConnectedServiceRuntimeAuthFailureSourceBinding, applyConnectedServiceRuntimeAuthFailureSourceBinding } from './handleConnectedServiceRuntimeAuthFailure';
 
 describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
+    it('does not authorize a stale launch member after actual organization attribution abstains', async () => {
+        const classification: ConnectedServiceRuntimeFailureClassification = {
+            kind: 'usage_limit', serviceId: 'happier.agent.claude/claude-subscription', profileId: 'launch', groupId: 'pool',
+            groupGeneration: 7, expectedCredentialRevision: 'csr_abcdefghijklmnopqrstuv',
+            sourceProviderAccountId: 'same-user', sourceProviderOrganizationId: 'org-absent',
+            resetsAtMs: null, planType: null, rateLimits: null, source: 'structured_provider_error',
+        };
+        await expect(authorizeConnectedServiceRuntimeAuthFailureSource({
+            getChildren: () => [{ startedBy: 'daemon', pid: 123, happySessionId: 'session-context', spawnOptions: { directory: '/project' } }],
+            sessionId: 'session-context', classification,
+            resolveProviderQualifiedRuntimeAuthFailureSource: async ({ classification }) => await resolveRuntimeAuthFailureSourceProfile({
+                classification, getGroupMembers: async () => [{ profileId: 'launch' }, { profileId: 'other' }],
+                resolveProviderAccountIdentity: async (profileId) => ({ providerAccountId: 'same-user', providerOrganizationId: profileId }),
+            }),
+        })).resolves.toMatchObject({ status: 'recovery_superseded', reason: 'source_tuple_unavailable', profileId: null });
+    });
+
     it('clears successful turn switch attempts while preserving the hourly budget and other runtime scopes', () => {
         const tracker = new ConnectedServiceRuntimeAuthSwitchAttemptTracker({ nowMs: () => 1_000, windowMs: 60_000 });
         const key = { sessionId: 'session', serviceId: 'happier.agent.codex/openai-codex', groupId: 'pool', profileId: 'current' };

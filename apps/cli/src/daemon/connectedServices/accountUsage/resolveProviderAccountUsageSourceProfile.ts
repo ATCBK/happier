@@ -1,6 +1,6 @@
 import type { ConnectedServiceUsageSourceV1 } from '@happier-dev/protocol';
 
-import { resolveConnectedServiceGroupMemberByProviderAccountId } from '../shared/resolveConnectedServiceGroupMemberByProviderAccountId';
+import { resolveConnectedServiceGroupMemberByProviderAccountId, type ConnectedServiceGroupMemberProviderAccountIdentity } from '../shared/resolveConnectedServiceGroupMemberByProviderAccountId';
 
 type CurrentGroupIdentity = Readonly<{
     generation: number;
@@ -10,19 +10,21 @@ type CurrentGroupIdentity = Readonly<{
 export async function resolveProviderAccountUsageSourceProfile(input: Readonly<{
     source: ConnectedServiceUsageSourceV1;
     providerAccountId: string;
+    providerOrganizationId?: string | null;
     getCurrentGroup: () => Promise<CurrentGroupIdentity | null>;
-    resolveProviderAccountId: (profileId: string) => Promise<string | null>;
-}>): Promise<ConnectedServiceUsageSourceV1> {
+    resolveProviderAccountIdentity: (profileId: string) => Promise<ConnectedServiceGroupMemberProviderAccountIdentity | null>;
+}>): Promise<ConnectedServiceUsageSourceV1 | null> {
     if (input.source.bindingKind !== 'group_member') return input.source;
 
     const currentGroup = await input.getCurrentGroup().catch(() => null);
-    if (!currentGroup) return input.source;
+    if (!currentGroup) return null;
     const profileId = await resolveConnectedServiceGroupMemberByProviderAccountId({
         providerAccountId: input.providerAccountId,
+        providerOrganizationId: input.providerOrganizationId,
         members: currentGroup.members,
-        resolveProviderAccountId: input.resolveProviderAccountId,
+        resolveProviderAccountIdentity: input.resolveProviderAccountIdentity,
     });
-    if (!profileId) return input.source;
+    if (!profileId) return null;
 
     return {
         serviceId: input.source.serviceId,

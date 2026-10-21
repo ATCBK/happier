@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ConnectedServiceQuotaSnapshotV1 } from '@happier-dev/protocol';
 
-import { resolveQuotaProbeFreshProof } from './quotaProbeFreshProof';
+import { resolveQuotaProbeFreshProof, matchesCurrentQuotaObservationCredential } from './quotaProbeFreshProof';
 
 function quotaSnapshot(overrides: Partial<ConnectedServiceQuotaSnapshotV1> = {}): ConnectedServiceQuotaSnapshotV1 {
     return {
@@ -181,5 +181,19 @@ describe('resolveQuotaProbeFreshProof', () => {
             maxAgeMs: 30_000,
             snapshotAppliedIdentity: { ...appliedIdentity, materialFingerprint: 'fingerprint-b' },
         })).toEqual({ status: 'no_proof', reason: 'provider_operation_identity_mismatch' });
+    });
+});
+
+describe('current observation credential proof', () => {
+    const credential = { providerAccountId: 'same-user', providerOrganizationId: 'org-one', credentialFingerprint: 'current-token' };
+    it('rejects conflicting organization evidence with the same user and current token', () => {
+        expect(matchesCurrentQuotaObservationCredential({ credential, providerAccountId: 'same-user',
+            providerOrganizationId: 'org-two', credentialFingerprint: 'current-token' })).toBe(false);
+    });
+    it('proves a profile-local observation without inventing an unattested organization', () => {
+        expect(matchesCurrentQuotaObservationCredential({ credential, providerAccountId: 'same-user',
+            credentialFingerprint: 'current-token' })).toBe(true);
+        expect(matchesCurrentQuotaObservationCredential({ credential, providerAccountId: 'same-user',
+            credentialFingerprint: 'old-token' })).toBe(false);
     });
 });

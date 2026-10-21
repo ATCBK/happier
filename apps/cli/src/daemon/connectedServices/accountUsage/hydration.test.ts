@@ -70,6 +70,47 @@ function v4HydrationSource(): ProviderAccountUsageHydrationSource {
 }
 
 describe('hydrateProviderAccountUsageStoreFromCurrentSources', () => {
+  it.each([
+    ['plain', undefined, 'org-current', false],
+    ['e2ee', undefined, 'org-current', false],
+    ['plain', 'org-old', 'org-current', false],
+    ['plain', 'org-current', null, false],
+    ['plain', 'org-current', 'org-current', true],
+    ['plain', 'org-current', 'org-current', true, 'semantic-provider', 'semantic-provider'],
+    ['plain', 'org-current', 'org-current', false, 'semantic-provider', 'happier.agent.codex/openai-codex'],
+  ] as const)('admits %s scoped usage only with declared current organization proof (%s, %s)', async (mode, observedOrganization, currentOrganization, expectedHydrated, declaredProvider, observedProvider) => {
+    const base = createSnapshot();
+    const recordKey = { ...base.recordKey, ...(observedProvider ? { providerId: observedProvider } : {}),
+      ...(observedOrganization ? { quotaScope: 'organization' as const, quotaScopeId: observedOrganization } : {}),
+    };
+    const snapshot = { ...base, providerId: recordKey.providerId, recordKey, recordId: buildProviderAccountUsageRecordId(recordKey) };
+    const secret = new Uint8Array(32).fill(9);
+    const sealed = sealProviderAccountUsageSnapshot({ snapshot, material: { type: 'legacy', secret },
+      randomBytes: (length) => new Uint8Array(length).fill(7) });
+    const store = createProviderAccountUsageStore();
+    const result = await hydrateProviderAccountUsageStoreFromCurrentSources({
+      sources: [v4HydrationSource()],
+      resolveUsageIdentity: async () => ({ requiredContext: 'organization', ...(declaredProvider ? { providerId: declaredProvider } : {}) }),
+      resolveCurrentProviderAccountIdentityForSource: async () => currentOrganization ? {
+        providerAccountId: 'acct-work', providerOrganizationId: currentOrganization,
+      } : null,
+      resolveRecordIdForSource: async (source) => ({ source, recordId: snapshot.recordId,
+        providerAccountId: 'acct-work', fetchedAt: snapshot.fetchedAtMs, staleAfterMs: snapshot.staleAfterMs }),
+      api: { getAccountEncryptionMode: async () => mode,
+        readProviderAccountUsageRecord: async () => ({
+          content: mode === 'plain' ? { t: 'plain' as const, v: snapshot }
+            : { t: 'encrypted' as const, c: sealed.ciphertext },
+          metadata: { fetchedAt: snapshot.fetchedAtMs, staleAfterMs: snapshot.staleAfterMs, status: 'ok' as const },
+          sources: [qualifiedGroupSource],
+        }),
+      },
+      credentials: { token: 'token', encryption: { type: 'legacy', secret } }, store, nowMs: 1_001,
+    });
+    expect(store.resolveBySource(localGroupSource)?.recordId ?? null).toBe(expectedHydrated ? snapshot.recordId : null);
+    expect(result.refreshSources).toEqual(expectedHydrated ? [] : [localGroupSource]);
+    expect(result.dispositions[0]?.status).toBe(expectedHydrated ? 'hydrated_fresh' : 'ownership_unproven');
+  });
+
   it('hydrates a V4 record only when the exact qualified source is linked by the owner', async () => {
     const snapshot = createSnapshot();
     const store = createProviderAccountUsageStore();

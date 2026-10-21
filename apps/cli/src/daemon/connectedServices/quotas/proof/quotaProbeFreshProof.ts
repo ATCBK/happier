@@ -152,3 +152,19 @@ export function resolveQuotaProbeFreshProof(input: Readonly<{
     }
     return { status: 'proof', proofKind: 'quota_probe_fresh' };
 }
+
+/** Exact profile-local token proof; global usage subject qualification remains separate. */
+export function matchesCurrentQuotaObservationCredential(input: Readonly<{
+    credential: Readonly<{ providerAccountId: string | null; providerOrganizationId?: string | null; credentialFingerprint: string | null }> | null;
+    providerAccountId: string;
+    providerOrganizationId?: string | null;
+    credentialFingerprint: string;
+}>): boolean {
+    const accountId = normalizeRequiredString(input.providerAccountId);
+    const fingerprint = normalizeRequiredString(input.credentialFingerprint);
+    const organizationId = normalizeRequiredString(input.providerOrganizationId);
+    return input.credential !== null && accountId !== null && fingerprint !== null
+        && normalizeRequiredString(input.credential.providerAccountId) === accountId
+        && (organizationId === null || normalizeRequiredString(input.credential.providerOrganizationId) === organizationId)
+        && normalizeRequiredString(input.credential.credentialFingerprint) === fingerprint;
+}
