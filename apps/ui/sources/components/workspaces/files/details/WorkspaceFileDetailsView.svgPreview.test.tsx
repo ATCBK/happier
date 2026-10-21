@@ -32,6 +32,7 @@ let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
 let transfer: ReturnType<typeof createSessionFileNativeTransferBoundary>;
 let actionRequests: string[];
 let readInputs: unknown[];
+let scmDiff = '';
 let portalBoundary: ReturnType<typeof installReactDomPortalBoundaryForTests>;
 // Compile and load the real runtime graph during collection, as the other composed File tests do.
 await prepareSessionFilesViewTestkit();
@@ -47,6 +48,7 @@ beforeEach(async () => {
     portalBoundary = installReactDomPortalBoundaryForTests();
     actionRequests = [];
     readInputs = [];
+    scmDiff = '';
     transfer = createSessionFileNativeTransferBoundary({ bytes: new TextEncoder().encode(svg), name: filePath });
     const read = await createExternalActionAccountHttpBoundary({ serverUrl: 'https://session-file-views.test',
         serverIdentityId: 'srv_svg_preview', accountId: 'alice', machineId: 'm1', tokenEpoch: 0,
@@ -64,7 +66,7 @@ beforeEach(async () => {
             if (parsed.pathname === '/v1/machines/m1') return Response.json({ machine: read.machine });
             return await read.handle(parsed, init) ?? transfer.request(url, init);
         },
-        rpc: request => request.method === 'scm.diff.file' ? { success: true, diff: '' } : transfer.rpc(request) });
+        rpc: request => request.method === 'scm.diff.file' ? { success: true, diff: scmDiff } : transfer.rpc(request) });
     fixture.storage.getState().updateWorkspaceScmSnapshot(fixture.scope, fileViewSnapshot());
 });
 afterEach(async () => { standardCleanup(); await fixture?.dispose(); portalBoundary?.restore(); vi.unstubAllGlobals(); });
@@ -149,6 +151,70 @@ describe('SVG File page preview dispatch', () => {
             const { FilePageHeader } = await import('../file/FilePageHeader');
             expect(screen.findByType(FilePageHeader).props.fileEditorEnabled).toBe(false);
             expect(readInputs).toContainEqual(expect.objectContaining({ path: '/workspace/opaque.bin' }));
+        } finally { await screen.unmount(); }
+    });
+
+    it.each([false, true])('offers Open Changes only when the shown scope has changes for the file (changed %s)', async (changed) => {
+        const textPath = 'notes.txt';
+        transfer.setPayload(new TextEncoder().encode('plain notes\n'), textPath);
+        if (changed) {
+            scmDiff = 'diff --git a/notes.txt b/notes.txt\n@@ -1 +1 @@\n-old notes\n+plain notes\n';
+            fixture.storage.getState().updateWorkspaceScmSnapshot(fixture.scope, fileViewSnapshot({
+                entries: [{ path: textPath, kind: 'modified', includeStatus: 'unmodified', pendingStatus: 'modified',
+                    hasIncludedDelta: false, hasPendingDelta: true, previousPath: null,
+                    stats: { pendingAdded: 1, pendingRemoved: 1, includedAdded: 0, includedRemoved: 0, isBinary: false } }],
+            }));
+        }
+        const onOpenChanges = vi.fn();
+        const screen = await fixture.render(<ModalProvider>
+            <WorkspaceFileDetailsView scopeId="workspace:open-changes" scope={fixture.scope} filePath={textPath}
+                sessionIdForAugmentation={null} onOpenChanges={onOpenChanges} />
+        </ModalProvider>);
+        try {
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain('plain notes'));
+            await flushHookEffects({ cycles: 4 });
+            const { FilePageHeader } = await import('../file/FilePageHeader');
+            const ids = () => screen.findByType(FilePageHeader).props.menuActions.map((item: { id: string }) => item.id);
+            // The same predicate as Discard all changes in this file: the two appear and disappear together.
+            if (changed) await vi.waitFor(() => expect(ids()).toContain('discard'));
+            expect(ids().includes('openChanges')).toBe(changed);
+            expect(ids().includes('discard')).toBe(changed);
+        } finally { await screen.unmount(); }
+    });
+
+    it('draws no viewer choice band for a text file that has nothing else to open with', async () => {
+        const textPath = 'notes.txt';
+        const text = 'plain notes\n';
+        transfer.setPayload(new TextEncoder().encode(text), textPath);
+        const { EMPTY_PLUGIN_UI_PROJECTION } = await import('@/sync/domains/plugins/ui/projection');
+        const target = { ...fixture.scope, kind: 'project' as const, workspaceRefId: 'project:text-notes' };
+        const host = {
+            targetKind: 'project' as const, projection: EMPTY_PLUGIN_UI_PROJECTION, platform: 'web' as const,
+            scopedLaunchFacts: { ...fixture.scope, interactionEnabled: true },
+            details: {
+                tab: { key: `file:${textPath}`, kind: 'workspace-file', title: textPath,
+                    resource: { filePath: textPath }, isPreview: true, isPinned: false },
+                descriptor: { surfaceId: 'workspace-file', resourceKey: `file:${textPath}`, scope: target,
+                    region: 'details', status: 'available' },
+                scope: target, region: 'details', active: true, callbacks: {},
+            },
+        } satisfies import('./WorkspaceFileDetailsView').WorkspaceFileOpenableContentViewerHost;
+        const screen = await fixture.render(<ModalProvider>
+            <WorkspaceFileDetailsView scopeId="project:text-notes" scope={fixture.scope} filePath={textPath}
+                sessionIdForAugmentation={null} openableContentViewer={host} />
+        </ModalProvider>);
+        try {
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain(text.trim()));
+            await flushHookEffects({ cycles: 4 });
+            expect(screen.findByTestId('plugin-details-viewer-choice:builtin')).toBeNull();
+            expect(screen.findByTestId('plugin-details-viewer-choice:text')).toBeNull();
+            // ⋯ › Info opens the facts of this file (the text's encoding facts are an object, not a name).
+            const { FilePageHeader } = await import('../file/FilePageHeader');
+            const info = screen.findByType(FilePageHeader).props.menuActions.find((item: { id: string }) => item.id === 'info');
+            await act(async () => { await info.onSelect(); });
+            await vi.waitFor(() => expect(screen.findByTestId('file-info-dialog')).not.toBeNull());
+            expect(screen.findByTestId('file-info-lines')).not.toBeNull();
+            await act(async () => Modal.hideAll());
         } finally { await screen.unmount(); }
     });
 
