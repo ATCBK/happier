@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rm, writeFile } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { createEncryptedRpcTestClient } from '@/rpc/handlers/encryptedRpc.testkit';
+import { registerScmHandlers } from '@/rpc/handlers/scm';
 import axios from 'axios';
 import { ExecutionRunStartRequestSchema, ExecutionRunScmDiffSummaryInputV1Schema, accountSettingsParse, buildBackendTargetKeyV2, type ScmComparisonSource } from '@happier-dev/protocol';
 import { getAgentStaticModels } from '@happier-dev/agents';
@@ -27,7 +30,7 @@ import { createActionExecutor, type ScmDiffSummaryGenerateInput } from '@happier
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { executeScmActionOperation } from './executeScmActionOperation';
 import { ScmDiffSummaryProfile } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/ScmDiffSummaryProfile';
-import { ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
+import { ScmComparisonCaptureOutputSchema, ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
 import { loadScmPullRequestDraftEvidence } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/loadScmDiffSummaryContext';
 
 const BACKEND_TARGET = { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const };
@@ -38,6 +41,50 @@ describe('executeScmDiffSummaryAction', () => {
         vi.restoreAllMocks();
         vi.unstubAllEnvs();
         await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })));
+    });
+
+    it('returns validated named-Turn Files evidence including the deleted before body through the Action executor', async () => {
+        const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-turn-files-' });
+        directories.push(fixture.rootPath);
+        const sessionId = randomUUID();
+        const turnId = 'native-turn-2';
+        const scopeId = `${sessionId}:${fixture.rootPath}`;
+        const refs = buildRepositoryCheckpointRefs({ scopeId, turnId });
+        const context = await resolveGitCheckpointBackendContext({ cwd: fixture.rootPath });
+        if (!context || !refs.turnStart || !refs.turnFinal) throw new Error('Git checkpoint fixture is unavailable');
+        const beforeBody = 'export function canRead(user) { return user.active && user.allowed; }\n';
+        await writeFile(join(fixture.rootPath, 'deleted.js'), beforeBody);
+        const before = await gitCheckpointAdapter.capture({ context, checkpointRef: refs.turnStart });
+        await rm(join(fixture.rootPath, 'deleted.js'));
+        const after = await gitCheckpointAdapter.capture({ context, checkpointRef: refs.turnFinal });
+        if (!before.success || !after.success) throw new Error('Git checkpoint capture failed');
+        await retainRepositoryCheckpointTurnEvidence({ cwd: fixture.rootPath, scopeId, turnChangeSet: {
+            sessionId, turnId, seqRange: { startSeqInclusive: 1, endSeqInclusive: 2 }, status: 'completed',
+            provider: 'agent', derivedAt: 1, files: [], repositoryCheckpoint: {
+                version: 1, scopeId, startRef: refs.turnStart.ref, finalRef: refs.turnFinal.ref,
+                baseRefSource: 'turn_start', contentConfidence: 'exact', attributionScope: 'shared_worktree',
+                receipts: [...before.receipts, ...after.receipts],
+            },
+        } });
+        const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), isActionApprovalRequired: () => false,
+            scmActionExecute: async ({ actionId, input }) => executeScmActionOperation({ actionId, input,
+                workingDirectory: fixture.rootPath, authorizeSession: async id => id === sessionId }),
+        });
+        const machineId = 'turn-files-machine';
+        const rpc = createEncryptedRpcTestClient({ scopePrefix: machineId, callerAuthority: 'account_automation',
+            registerHandlers: manager => registerScmHandlers(manager, fixture.rootPath, { machineId,
+                accessPolicy: { kind: 'restrictedRoots', roots: [fixture.rootPath] }, actionExecutor: executor }),
+        });
+        const response = await rpc.call('scm.diffSummary.capture', {
+            cwd: fixture.rootPath, sessionId, source: { kind: 'turnCheckpoint', turnId, evidenceMode: 'reconciled' },
+        });
+        const output = ScmComparisonCaptureOutputSchema.parse(response);
+        expect(output).toMatchObject({ success: true, comparison: {
+            source: { kind: 'turnCheckpoint', sessionId, turnId },
+            endpoints: { before: before.commitSha, after: after.commitSha },
+            inventory: { state: 'complete', files: [expect.objectContaining({ path: 'deleted.js', changeKind: 'deleted',
+                evidence: { state: 'available', unifiedDiff: expect.stringContaining(`-${beforeBody.trim()}`) } })] },
+        } });
     });
     async function changedRepository() {
         // Native CLI execution/auth are the boundary; automatic model resolution stays real.
