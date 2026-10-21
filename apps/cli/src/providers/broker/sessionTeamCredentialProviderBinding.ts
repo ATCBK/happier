@@ -22,6 +22,7 @@ import { resolveProviderCredentialPlaintextAsync } from '@/providers/spawn/crede
 import { MACHINE_HTTP_LOCAL_CAPABILITY_HEADER } from '@happier-dev/iroh-native/node';
 import { readProviderBrokerEndpointUrl, PROVIDER_BROKER_MODEL_ID_HEADER, teamCredentialBrokerLocalCredentialTransport } from './providerBrokerPrivateProtocol';
 import { assertTeamCredentialModelAdmission, type TeamCredentialModelCompatibilityInput } from './teamCredentialModelCompatibility';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/savedSecretOperationContext';
 
 type BrokerTunnel = Readonly<{
   localPort: number;
@@ -59,6 +60,7 @@ type SessionTeamCredentialProviderBindingOpenDependencies = Readonly<{
   lease: PluginRuntimeRegistryLease;
   materializationBaseDir: string;
   signal: AbortSignal;
+  providerSettingsOperationContext?: SavedSecretOperationContextV1;
   openBroker(request: ProviderBrokerOpenRequestV1, signal: AbortSignal): Promise<ProviderBrokerOpenResponseV1>;
   initialBrokerOpen?: Extract<ProviderBrokerOpenResponseV1, { ok: true }>;
   openTunnel(request: Readonly<{
@@ -151,8 +153,9 @@ export async function openExactSessionTeamCredentialProviderBinding(
   assertExactSelectionIsCoherent(input);
   const selection = input.selection;
   const assertAdmission = () => assertTeamCredentialModelAdmission({ lease: input.lease, agentId: input.agentId,
-    model: { ...selection, deliveryMode: 'brokered' } });
-  assertAdmission();
+    model: { ...selection, deliveryMode: 'brokered' }, signal: input.signal,
+    providerSettingsOperationContext: input.providerSettingsOperationContext });
+  await assertAdmission();
   const consumer = resolveProviderBrokerConsumer(input);
   const materializationScopeId = consumer.kind === 'execution_run'
     ? consumer.executionRunId
@@ -209,7 +212,7 @@ export async function openExactSessionTeamCredentialProviderBinding(
     input.signal.throwIfAborted();
     await input.revalidateSelection?.({ signal: input.signal, brokerOpen: opened, tunnel });
     input.signal.throwIfAborted();
-    assertAdmission();
+    await assertAdmission();
 
     const endpointUrl = await readProviderBrokerEndpointUrl({
       localOrigin: `http://127.0.0.1:${tunnel.localPort}`,
@@ -228,7 +231,7 @@ export async function openExactSessionTeamCredentialProviderBinding(
       input: { v: 1, agentTargetKey: selection.agentTargetKey, bindingKey },
     });
     // The Agent receives only its scoped loopback endpoint and the tunnel's
-    // local capability as its bearer. The Home-signed cross-Account authority
+    // local capability through the carrier's credential header. The Home-signed cross-Account authority
     // was admitted by the trusted transport owner during the machine/1
     // handshake and never enters Agent configuration, environment or requests.
     const credentialTransport = teamCredentialBrokerLocalCredentialTransport(selection.application.protocol);
@@ -244,9 +247,6 @@ export async function openExactSessionTeamCredentialProviderBinding(
           endpointTemplateId: selection.application.endpointTemplateId,
           normalizedUrl: endpointUrl,
           protocol: selection.application.protocol,
-          publicHeaders: {
-            'X-Happier-Machine-Local-Capability': tunnel.localCapability,
-          },
         },
         runtimeCredentialTransport: credentialTransport,
         compatibilityFingerprint: selection.sourceRevision,
@@ -283,9 +283,8 @@ export async function openExactSessionTeamCredentialProviderBinding(
         materialization: composed.launchMaterialization,
       },
       environmentOverlay: composed.providerEnvironmentOverlay,
-      // The one-shot local capability is the Agent's bearer and also travels in
-      // the endpoint's public headers, so it is redacted from transcripts and
-      // logs exactly like a direct source credential.
+      // The one-shot carrier capability is a credential, never a public header
+      // or engine-config literal; redact it like a direct source credential.
       additionalRedactionValues: Object.freeze([
         tunnel.localCapability,
         ...composed.additionalRedactionValues,
@@ -342,6 +341,7 @@ export async function openSessionTeamCredentialProviderBinding(input: Readonly<{
   lease: PluginRuntimeRegistryLease;
   materializationBaseDir: string;
   signal: AbortSignal;
+  providerSettingsOperationContext?: SavedSecretOperationContextV1;
   readCatalog(signal: AbortSignal): Promise<readonly TeamCredentialProviderModelCatalogEntryV1[]>;
   openBroker?: SessionTeamCredentialProviderBindingOpenDependencies['openBroker'];
   openTunnel?: SessionTeamCredentialProviderBindingOpenDependencies['openTunnel'];
@@ -367,8 +367,9 @@ export async function openSessionTeamCredentialProviderBinding(input: Readonly<{
     && candidate.availability === 'available'
   ));
   if (!row) throw new Error('team_credential_provider_selection_not_current');
-  assertTeamCredentialModelAdmission({ lease: input.lease, agentId: input.agentId,
-    model: { ...row, deliveryMode: row.selection.deliveryMode } });
+  await assertTeamCredentialModelAdmission({ lease: input.lease, agentId: input.agentId,
+    model: { ...row, deliveryMode: row.selection.deliveryMode }, signal: input.signal,
+    providerSettingsOperationContext: input.providerSettingsOperationContext });
 
   if (input.binding.deliveryMode === 'direct') {
     if (!row.direct) {
@@ -429,8 +430,9 @@ export async function openSessionTeamCredentialProviderBinding(input: Readonly<{
       && isDeepStrictEqual(candidate.direct, direct)
     ));
     if (!current) throw new Error('team_credential_provider_selection_changed');
-    assertTeamCredentialModelAdmission({ lease: input.lease, agentId: input.agentId,
-      model: { ...current, deliveryMode: current.selection.deliveryMode } });
+    await assertTeamCredentialModelAdmission({ lease: input.lease, agentId: input.agentId,
+      model: { ...current, deliveryMode: current.selection.deliveryMode }, signal: input.signal,
+      providerSettingsOperationContext: input.providerSettingsOperationContext });
 
     const bindingKey = `team_resource:${row.selection.resourceId}:revision:${row.selection.expectedResourceRevision}:route:direct`;
     const prepared = prepareLeasedAgentProviderBinding({
@@ -524,6 +526,7 @@ export async function openSessionTeamCredentialProviderBinding(input: Readonly<{
     lease: input.lease,
     materializationBaseDir: input.materializationBaseDir,
     signal: input.signal,
+    providerSettingsOperationContext: input.providerSettingsOperationContext,
     openBroker: input.openBroker,
     initialBrokerOpen: opened,
     openTunnel: input.openTunnel,
@@ -541,8 +544,9 @@ export async function openSessionTeamCredentialProviderBinding(input: Readonly<{
         && isSameTeamCredentialBrokerApplication(candidate.application, row.application)
       ));
       if (!current) throw new Error('team_credential_provider_selection_changed');
-      assertTeamCredentialModelAdmission({ lease: input.lease, agentId: input.agentId,
-        model: { ...current, deliveryMode: current.selection.deliveryMode } });
+      await assertTeamCredentialModelAdmission({ lease: input.lease, agentId: input.agentId,
+        model: { ...current, deliveryMode: current.selection.deliveryMode }, signal,
+        providerSettingsOperationContext: input.providerSettingsOperationContext });
     },
   });
 }

@@ -51,7 +51,7 @@ function lease(adapter: ProviderAdapter, protocol = 'openai-responses'): PluginR
           acceptsProtocols: [protocol], required: { streaming: true, toolRoundTrips: true },
           credentialSupport: { supportsNoAuth: false, apiKeyTransports: [{
             protocol,
-            destination: { kind: 'httpHeader', names: 'anyValidated', formats: ['bearer'] },
+            destination: { kind: 'httpHeader', names: 'anyValidated', formats: ['raw', 'bearer'] },
           }] },
           authIsolation: { suppressConnectedServiceIds: [], ownedEnvKeys: ['BROKER_AUTHORITY'] },
           materialization: 'spawnEnv', applyPolicy: 'restart_session', supportsFreeformModelIds: false,
@@ -129,7 +129,7 @@ describe('Session Team credential Provider binding', () => {
     publish();
     const adapter = { v: 1 as const, adapterVersion: 1, prepare: prepareSpawnEnv, materialize: materializeBrokerAuthoritySpawnEnv };
     const workerLease = lease(adapter);
-    const compatibility = resolveTeamCredentialModelCompatibility({ lease: workerLease, agentId: 'codex',
+    const compatibility = await resolveTeamCredentialModelCompatibility({ lease: workerLease, agentId: 'codex',
       model: { ...offered, deliveryMode: 'brokered' }, providerSettings: settings });
     const open = (selectedLease = workerLease) => openSessionTeamCredentialProviderBinding({
       sessionId: 'session-1', machineId: 'worker-1', agentId: 'codex', agentTargetKey: row.selection.agentTargetKey,

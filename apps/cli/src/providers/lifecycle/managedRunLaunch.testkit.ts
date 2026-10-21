@@ -25,6 +25,7 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
   upstreamUrl?: string;
   readUpstreamAnswer?: boolean;
   experimental?: boolean;
+  runtimeCredentialHeader?: Readonly<{ name: string; format: 'raw' | 'bearer' }>;
   connectedAccounts?: readonly ConnectedAccountPurposeDeclarationV1[];
   resolveAccountTarget?: Parameters<typeof createSharedGatewayRegistryTestkit>[0]['resolveAccountTarget'] }> = {}) {
   const directory = input.directory ?? await mkdtemp(join(tmpdir(), 'happier-managed-run-'));
@@ -75,7 +76,7 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
           executionRunContext: { versions: [1] } } },
         providerRequirements: { acceptsProtocols: ['openai-responses'], required: { streaming: true },
           credentialSupport: { supportsNoAuth: true, apiKeyTransports: [{ protocol: 'openai-responses',
-            destination: { kind: 'httpHeader', names: 'anyValidated', formats: ['bearer'] } }] },
+            destination: { kind: 'httpHeader', names: 'anyValidated', formats: [input.runtimeCredentialHeader?.format ?? 'bearer'] } }] },
           authIsolation: { suppressConnectedServiceIds: [], ownedEnvKeys: ['RUN_PROVIDER_TOKEN'] },
           materialization: 'spawnEnv', applyPolicy: 'restart_session', supportsFreeformModelIds: false } }],
       ...(gateway ? {} : { providers: [{ v: 1, id: 'gateway', name: 'Gateway', kind: 'aggregator',
@@ -98,7 +99,8 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
     const endpoint = request.providerBinding?.upstream.normalizedUrl;
     if (!endpoint) return;
     const response = await fetch((endpoint.endsWith('/') ? endpoint.slice(0, -1) : endpoint) + '/responses', { method: 'POST',
-      headers: { Authorization: 'Bearer ' + request.launchEnvironment.values.RUN_PROVIDER_TOKEN, 'content-type': 'application/json' },
+      headers: { [${JSON.stringify(input.runtimeCredentialHeader?.name ?? 'authorization')}]: ${input.runtimeCredentialHeader?.format === 'raw'
+        ? 'request.launchEnvironment.values.RUN_PROVIDER_TOKEN' : "'Bearer ' + request.launchEnvironment.values.RUN_PROVIDER_TOKEN"}, 'content-type': 'application/json' },
       body: JSON.stringify({ model: request.providerBinding.model.id, input: input.text }), signal });
     if (!response.ok) throw new Error('Managed Run endpoint refused: ' + response.status);
     const body = await response.text();

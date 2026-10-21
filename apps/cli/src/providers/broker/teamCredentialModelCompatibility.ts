@@ -7,6 +7,8 @@ import { readLeasedAgentProviderBindingAdapter } from '@/plugins/runtime/provide
 import { hasProviderExperimentalConfirmation } from '@/providers/catalog/compatibility';
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { readProviderSettingsForCli } from '@/providers/settings/read';
+import { prepareProviderConnectionsCatalogForCli } from '@/providers/settings/hydrate';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/savedSecretOperationContext';
 import { teamCredentialBrokerLocalCredentialTransport } from './providerBrokerPrivateProtocol';
 
 export type TeamCredentialModelCompatibilityInput = Pick<TeamCredentialProviderModelCatalogEntryV1,
@@ -14,11 +16,13 @@ export type TeamCredentialModelCompatibilityInput = Pick<TeamCredentialProviderM
 
 /** The source supplies declarations; only this worker's admitted adapter and
  * this recipient's Account can establish compatibility and consent. */
-export function resolveTeamCredentialModelCompatibility(input: Readonly<{
+export async function resolveTeamCredentialModelCompatibility(input: Readonly<{
   model: TeamCredentialModelCompatibilityInput;
   lease: PluginRuntimeRegistryLease;
   agentId: string;
   providerSettings?: ProviderSettingsV1;
+  providerSettingsOperationContext?: SavedSecretOperationContextV1;
+  signal?: AbortSignal;
 }>) {
   const adapter = readLeasedAgentProviderBindingAdapter(input);
   const facts = ProviderModelBindingSourceV1Schema.safeParse(input.model.sourceFacts);
@@ -36,8 +40,22 @@ export function resolveTeamCredentialModelCompatibility(input: Readonly<{
   });
   let confirmed = compatibility.result.status === 'verified';
   if (compatibility.result.status === 'experimental' && input.model.confirmationSource) {
-    const snapshot = input.providerSettings ? null : getActiveAccountSettingsSnapshot();
-    const settings = input.providerSettings ?? (snapshot ? readProviderSettingsForCli(snapshot).settings : null);
+    let settings = input.providerSettings ?? null;
+    if (!settings) {
+      const context = input.providerSettingsOperationContext;
+      const readSnapshot = () => context ? context.readSnapshot() : getActiveAccountSettingsSnapshot();
+      const captured = readSnapshot();
+      if (captured) {
+        const catalog = await prepareProviderConnectionsCatalogForCli({ expectedScopeKey: captured.scopeKey,
+          operationContext: context, signal: input.signal });
+        input.signal?.throwIfAborted();
+        const current = readSnapshot();
+        if (catalog.status !== 'ready' || current?.scopeKey !== captured.scopeKey) {
+          throw Object.assign(new Error('Provider catalog authority is unavailable'), createProviderErrorV1('provider_settings_invalid'));
+        }
+        settings = readProviderSettingsForCli(current).settings;
+      }
+    }
     confirmed = settings !== null && hasProviderExperimentalConfirmation({
       providerSettings: settings, ...input.model.confirmationSource,
       agentTargetKey: input.model.application.agentTargetKey, modelId: input.model.descriptor.id,
@@ -47,8 +65,10 @@ export function resolveTeamCredentialModelCompatibility(input: Readonly<{
   return { ...compatibility, confirmed };
 }
 
-export function assertTeamCredentialModelAdmission(input: Parameters<typeof resolveTeamCredentialModelCompatibility>[0]): void {
-  const compatibility = resolveTeamCredentialModelCompatibility(input);
+export async function assertTeamCredentialModelAdmission(input: Parameters<typeof resolveTeamCredentialModelCompatibility>[0]): Promise<void> {
+  input.signal?.throwIfAborted();
+  const compatibility = await resolveTeamCredentialModelCompatibility(input);
+  input.signal?.throwIfAborted();
   const code = compatibility.result.status === 'incompatible' ? 'provider_incompatible_with_agent'
     : !compatibility.confirmed ? 'provider_compatibility_unverified' : null;
   if (code) throw Object.assign(new Error(code), createProviderErrorV1(code));

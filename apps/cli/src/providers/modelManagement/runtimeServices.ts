@@ -485,7 +485,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         const model = request.teamCredentialModel;
         const confirmationSource = model.confirmationSource;
         if (!confirmationSource || model.availability !== 'available') return { status: 'error', error: createProviderErrorV1('provider_catalog_unavailable') };
-        const compatibility = resolveTeamCredentialModelCompatibility({ model: { ...model, deliveryMode: model.selection.deliveryMode },
+        const compatibility = await resolveTeamCredentialModelCompatibility({ model: { ...model, deliveryMode: model.selection.deliveryMode },
           lease, agentId: agentId!, providerSettings: settingsRead.settings });
         return DaemonProviderModelProjectionResponseV1Schema.parse({ status: 'success', agentTargetKey: request.agentTargetKey,
           groups: [{ connectionId: confirmationSource.connectionId, providerName: model.application.implementationIdentity.localId,
