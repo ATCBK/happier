@@ -6,7 +6,8 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storage';
 import { resolvePendingReorderIds } from '@/sync/domains/pending/pendingReorder';
 import { reorderTodos, TodoReorderError } from '@/sync/domains/todos/todoOps';
-import { serverFetch, type ServerFetch } from '@/sync/http/client';
+import { createServerFetchForActiveServer, type ServerFetch } from '@/sync/http/client';
+import { bindAccountEncryptionObservation, readAccountEncryptionObservationBinding } from '@/sync/http/accountEncryptionObservationBinding';
 import { sync } from '@/sync/sync';
 import { parseToken } from '@/utils/auth/parseToken';
 import { resolveListReorderFailure } from './listReorderFailure';
@@ -31,16 +32,6 @@ export async function executeListReorderAction(args: Readonly<{
     } catch { return { status: 'refused', reason: 'scope_changed' }; }
     if (args.signal?.aborted) return { status: 'refused', reason: 'cancelled' };
     let dispatched = false;
-    const request: ServerFetch = async (path, init, options) => {
-        if (!isCurrent() || args.signal?.aborted) throw new TodoReorderError('todo_reorder_scope_changed');
-        return serverFetch(path, { ...init, ...(args.signal ? { signal: args.signal } : {}) }, {
-            ...options, expectedActiveServer: { serverId: snapshot.serverId, generation: snapshot.generation },
-            onIssued: () => {
-                if (init?.method === 'POST') dispatched = true;
-                options?.onIssued?.();
-            },
-        });
-    };
     try {
         if (args.actionId === 'session.pending.reorder') {
             const pending = PendingReorderInputV1Schema.parse(input);
@@ -55,6 +46,18 @@ export async function executeListReorderAction(args: Readonly<{
             await sync.reorderPendingMessages(pending.sessionId, ids, pending.recipient ?? undefined, { serverId: pending.scope.serverId });
         } else {
             if (!storage.getState().todosLoaded) return { status: 'unavailable' };
+            const capturedRequest = createServerFetchForActiveServer(snapshot, { credentials, signal: args.signal, isCurrent });
+            const request: ServerFetch = async (path, init, options) => {
+                if (!isCurrent() || args.signal?.aborted) throw new TodoReorderError('todo_reorder_scope_changed');
+                return capturedRequest(path, init, {
+                    ...options,
+                    onIssued: () => {
+                        if (init?.method === 'POST') dispatched = true;
+                        options?.onIssued?.();
+                    },
+                });
+            };
+            bindAccountEncryptionObservation(request, readAccountEncryptionObservationBinding(capturedRequest, credentials) ?? undefined);
             await reorderTodos(credentials, input.sourceId, input.position, { request, isCurrent, signal: args.signal });
         }
         return { status: 'applied' };

@@ -21,6 +21,8 @@ import { Encryption } from '@/sync/encryption/encryption';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit';
 import { FeatureGatesSchema } from '@happier-dev/protocol/features/payload/featureGatesSchema';
 import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import {
     clearMachineRequestReachabilityForTest,
     readMachineRequestReachabilityObservation,
@@ -81,13 +83,6 @@ vi.mock('@/sync/api/capabilities/getReadyServerFeatures', () => ({
 
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/createEphemeralServerSocketClient', () => ({
     createEphemeralServerSocketClient: (...args: unknown[]) => createEphemeralSocketSpy(...args),
-}));
-
-vi.mock('@/utils/system/runtimeFetch', () => ({
-    runtimeFetch: (input: string | URL | Request, init?: RequestInit) => runtimeFetchWithServerReachabilitySpy({
-        url: typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
-        init,
-    }),
 }));
 
 vi.mock('@/sync/api/session/apiSocket', () => ({
@@ -176,6 +171,7 @@ function filesystemActionHomeResponse(input: string | URL | Request): Response |
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
     if (url.origin !== 'https://server-a.example.test') return null;
     if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+    if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
     if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
     if (url.pathname === '/health' || url.pathname === '/v1/auth/ping') return Response.json({});
     return null;
@@ -294,6 +290,10 @@ describe('machineRpcWithServerScope', () => {
     });
 
     beforeEach(async () => {
+        setRuntimeFetch((input, init) => runtimeFetchWithServerReachabilitySpy({
+            url: typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
+            init,
+        }));
         machineContextOwner = await Encryption.create(new Uint8Array(32).fill(17));
         resetRunnerCreatorMachineContentKeyTrustProjectionForTests();
         // Device custody is an external persistent boundary; successful absence
@@ -304,6 +304,7 @@ describe('machineRpcWithServerScope', () => {
     });
 
     afterEach(() => {
+        resetRuntimeFetch();
         homeCredentialMutationListeners.clear();
         vi.restoreAllMocks();
         machineRpcSpy.mockReset();

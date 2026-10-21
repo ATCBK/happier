@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createPlainSessionByIdResponseFixture, createSessionFixture, createSessionOwnerViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { resetRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { act } from 'react-test-renderer';
@@ -53,6 +58,152 @@ async function setup(secret?: string) {
 }
 
 describe('Follow exact Home Action transport', () => {
+    it.each([false, true])('checks preview authority after the held Session query (Home changed: %s)', async changeBeforeDisclosure => {
+        const homes = createHomeGovernanceHarness();
+        await homes.reset();
+        installHomeGovernanceBoundaries(homes);
+        const serverUrl = 'https://follow-preview-authority.test';
+        const credentials = { token: createAccountTokenForTests('preview-account', { currentAccount: true }) };
+        const serverId = await homes.addHome({ name: 'Preview authority', serverUrl, accountId: 'preview-account',
+            currentAccount: true, credentials });
+        const restored = await restoreServerAccountForTest({ serverUrl, accountId: 'preview-account', credentials,
+            request: homes.request, configureSocket: configureConnectedServerSocketBoundary });
+        const { sync } = await import('@/sync/sync');
+        const { apiSocket } = await import('@/sync/api/session/apiSocket');
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+        const { executeSessionFollowAction } = await import('./sessionFollowApi');
+        const releaseQuery = createDeferred<void>();
+        let pending: Promise<unknown> | undefined;
+        try {
+            await sync.awaitBootstrapForegroundAcquisition();
+            await vi.waitFor(() => expect(storage.getState().isDataReady).toBe(true));
+            const binding = apiSocket.getAccountEncryptionObservationBinding(credentials);
+            if (!binding) throw new Error('Missing preview fixture socket observation');
+            await binding.read();
+            const filter = normalizeSessionListFilterV1({ show: 'sessions', homeServerIds: [serverId], scope: 'all_accessible',
+                startedBy: ['you', 'agents', 'triggers'] });
+            const session = createSessionFixture({ id: 'preview-member', serverId, metadata: { path: '/repo', host: 'test' } });
+            homes.answer(serverId, '/v2/account/session-follow-rules', { body: { rules: [{ ruleId: 'private-other-rule',
+                receiver: { kind: 'session', sessionId: 'other-receiver' }, version: 1,
+                content: { t: 'plain', v: { v: 1, enabled: true, filter, policy: { preset: 'quiet' } } } }] } });
+            homes.answer(serverId, '/v2/sessions/query', { respondAfter: releaseQuery.promise,
+                body: SessionListQueryResponseV1Schema.parse({ sessions: [{ ...createPlainSessionByIdResponseFixture(session).session,
+                    viewer: createSessionOwnerViewerFixture(session) }], hasNext: false, nextCursor: null,
+                    attentionHasNext: false, attentionNextCursor: null }) });
+            let authorityReads = 0;
+            let committedChange = false;
+            setRuntimeFetch(async (url, init) => {
+                if (new URL(String(url)).pathname === '/v1/account/encryption/currentness') {
+                    authorityReads++;
+                    return Response.json(committedChange ? { ...createPlainAccountEncryptionCurrentnessFixture(), mode: 'e2ee',
+                        version: 2, updatedAt: 2, signingKeyFingerprint: 'changed-signing', contentKeyFingerprint: 'changed-content',
+                        recipientEnvelopeReadiness: { status: 'available' } } : createPlainAccountEncryptionCurrentnessFixture());
+                }
+                return homes.request(url, init);
+            });
+            const beforeQueries = homes.requests.filter(request => request.path === '/v2/sessions/query').length;
+            const reading = executeSessionFollowAction('follow.preview', { receiver: { kind: 'account' }, filter }, serverId);
+            pending = reading;
+            await vi.waitFor(() => expect(homes.requests.filter(request => request.path === '/v2/sessions/query').length).toBe(beforeQueries + 1));
+            // The Account socket remains connected and receives no mode-change delivery while the query is held.
+            const readsBeforeQueryRelease = authorityReads;
+            committedChange = changeBeforeDisclosure;
+            releaseQuery.resolve(undefined);
+            if (changeBeforeDisclosure) await expect(reading).resolves.toEqual({ kind: 'failed', error: 'unavailable' });
+            else await expect(reading).resolves.toMatchObject({ kind: 'ok', value: { matchCount: 1,
+                overlaps: [{ ruleId: 'private-other-rule', matches: [{ serverId, source: { kind: 'session', sessionId: session.id } }] }] } });
+            expect(authorityReads - readsBeforeQueryRelease).toBe(1);
+            // Preserve the two observed reads in this composed flow; moving Follow's final check must not add a third.
+            expect(authorityReads).toBe(2);
+        } finally {
+            releaseQuery.resolve(undefined);
+            await pending;
+            await restored.dispose();
+            await homes.reset();
+            installDisconnectedServerSocketBoundary();
+        }
+    });
+    it('reuses captured identity for the initial private census but refreshes before disclosure and rule sealing', async () => {
+        const env = await setup();
+        const { executeSessionFollowAction } = await import('./sessionFollowApi');
+        const { apiSocket } = await import('@/sync/api/session/apiSocket');
+        const { createServerFetchAtEndpoint } = await import('@/sync/http/client');
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime) throw new Error('Missing Follow fixture Account lifetime');
+        const credentials = await env.TokenStorage.getCredentialsForServerUrl('https://target.example', { serverId: env.target.id });
+        if (!credentials) throw new Error('Missing Follow fixture credentials');
+        let socket: import('socket.io-client').Socket | undefined;
+        installDisconnectedServerSocketBoundary(current => { socket = current; configureConnectedServerSocketBoundary(current); });
+        let authorityReads = 0;
+        let committedChange = false;
+        let requested = createDeferred<void>();
+        let bodyReady = createDeferred<void>();
+        const receiver = { kind: 'account' as const };
+        const ruleDefinition = { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1() };
+        const policy = { preset: 'quiet' as const };
+        const definition = { ...ruleDefinition, policy };
+        const rule = { ruleId: 'rule', receiver, version: 0, content: { t: 'plain' as const, v: definition } };
+        let writerStartedAt = 0;
+        setRuntimeFetch(async (url, init) => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/auth/ping') return Response.json({});
+            if (path === '/v1/account/encryption/currentness') {
+                authorityReads++;
+                return Response.json(committedChange ? { ...createPlainAccountEncryptionCurrentnessFixture(), mode: 'e2ee',
+                    version: 2, updatedAt: 2, signingKeyFingerprint: 'changed-signing', contentKeyFingerprint: 'changed-content',
+                    recipientEnvelopeReadiness: { status: 'available' } } : createPlainAccountEncryptionCurrentnessFixture());
+            }
+            if (path === '/v2/account/session-follow-rules') return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+                requested.resolve(undefined);
+                void bodyReady.promise.then(() => { controller.enqueue(new TextEncoder().encode(JSON.stringify({ rules: [rule] }))); controller.close(); });
+            } }), { headers: { 'Content-Type': 'application/json' } });
+            if (path === '/v2/account/session-follow-rules/rule' && init?.method === 'PUT') {
+                expect(authorityReads - writerStartedAt).toBe(1);
+                expect(JSON.parse(String(init.body))).toMatchObject({ content: rule.content });
+                return Response.json({ rule });
+            }
+            return env.request(String(url), init);
+        });
+        let pending: Promise<unknown> | undefined;
+        try {
+            apiSocket.initialize({ endpoint: 'https://target.example', token: credentials.token, credentials, serverId: env.target.id,
+                request: createServerFetchAtEndpoint({ endpointUrl: 'https://target.example', serverId: env.target.id, credentials }),
+                isCurrent: lifetime.isCurrent }, null);
+            await vi.waitFor(() => expect(socket?.connected).toBe(true));
+            const binding = apiSocket.getAccountEncryptionObservationBinding(credentials);
+            if (!binding) throw new Error('Missing Follow fixture socket observation');
+            await binding.read();
+            // The real Follow context producer captures the socket binding; no request is manually branded here.
+            for (const changeBeforeDisclosure of [false, true]) {
+                requested = createDeferred<void>();
+                bodyReady = createDeferred<void>();
+                const before = authorityReads;
+                const reading = executeSessionFollowAction('follow.list', { direction: 'following', receiver }, env.target.id);
+                pending = reading;
+                await Promise.race([requested.promise, reading.then(() => { throw new Error('Follow settled before the held census'); })]);
+                expect(authorityReads - before).toBe(0);
+                committedChange = changeBeforeDisclosure;
+                bodyReady.resolve(undefined);
+                if (changeBeforeDisclosure) await expect(reading).resolves.toEqual({ kind: 'failed', error: 'unavailable' });
+                else await expect(reading).resolves.toMatchObject({ kind: 'ok', value: { rules: [{ ruleId: 'rule', definition }] } });
+                expect(authorityReads - before).toBe(1);
+                if (!changeBeforeDisclosure) {
+                    writerStartedAt = authorityReads;
+                    await expect(executeSessionFollowAction('follow.set', { receiver, source: { kind: 'rule', ruleId: 'rule' },
+                        ruleDefinition, policy, expectedVersion: -1 }, env.target.id)).resolves.toMatchObject({ kind: 'ok' });
+                    expect(authorityReads - writerStartedAt).toBe(2);
+                }
+            }
+        } finally {
+            bodyReady.resolve(undefined);
+            await pending;
+            apiSocket.disconnect();
+            installDisconnectedServerSocketBoundary();
+        }
+    });
     it('preserves source continuation and emits private rules once across following pages', async () => {
         const env = await setup();
         const { executeSessionFollowAction } = await import('./sessionFollowApi');

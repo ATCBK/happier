@@ -20,7 +20,8 @@ import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from './serverScopedRpcTypes';
 type MachineContextAuthority = Pick<Encryption, 'captureMachineEncryptionContext' | 'captureMachineEncryptionContextForRead' | 'getMachineEncryptionContext'>;
 
 function machineRowTimeoutError() {
-    return createRpcCallError({ error: 'Machine row request timed out', errorCode: 'MACHINE_RPC_TIMEOUT' });
+    return Object.assign(createRpcCallError({ error: 'Machine row request timed out', errorCode: 'MACHINE_RPC_TIMEOUT' }),
+        { code: 'MACHINE_RPC_TIMEOUT' as const });
 }
 
 type MachineInstallationTransportIdentity = Readonly<{

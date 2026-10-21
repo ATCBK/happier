@@ -14,6 +14,7 @@ import { openSessionFollowRuleContentV1, sealSessionFollowRuleContentV1 } from '
 import { ListAccountSessionFollowsResponseV1Schema } from '@happier-dev/protocol/sessions/follow/api';
 import { ListSessionFollowSourcesResponseSchema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
 import { classifyAccountStorageReadFailure, resolveAccountStorageContext } from '@/sync/encryption/accountStorageContext';
+import type { AccountEncryptionReadUsage } from '@/sync/api/account/apiAccountEncryptionMode';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
 import { readSessionFollowRuleCensus, type SessionFollowRulesSnapshot } from './sessionFollowRulesApi';
 import { FollowReceiverRefV1Schema, FollowSourceRefV1Schema, type FollowDeliveryMuteScopeV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
@@ -105,25 +106,25 @@ export async function executeSessionFollowAction<TActionId extends SessionFollow
             const parsedSource = FollowSourceRefV1Schema.safeParse('source' in actionInput ? actionInput.source : undefined);
             const ruleTarget = parsedSource.success && parsedSource.data.kind === 'rule' && 'receiver' in actionInput
                 ? { ruleId: parsedSource.data.ruleId, receiver: FollowReceiverRefV1Schema.parse(actionInput.receiver) } : null;
-            const readStorage = async () => {
+            const readStorage = async (usage: AccountEncryptionReadUsage = 'fresh-authority') => {
                 if (!context.credentials) throw new Error('encryption-material-unavailable');
-                const account = await resolveAccountStorageContext(context.credentials, { encryption: context.encryption, request: send });
+                const account = await resolveAccountStorageContext(context.credentials, { encryption: context.encryption, request: send, usage });
                 if (!isCurrent()) throw new Error('scope-retired');
                 return { mode: account.mode, material: account.mode === 'plain' ? null
                     : resolveAccountScopedCryptoMaterialFromCredentials(context.credentials) };
             };
             const readRules = async () => {
-                const admitted = await readStorage();
+                const admitted = await readStorage('identity');
                 const rules = await readSessionFollowRuleCensus({ ...admitted, request: send, signal: requestSignal,
                     assertCurrent: () => { if (!isCurrent()) throw new Error('scope-retired'); } });
-                const current = await readStorage();
-                if (current.mode !== admitted.mode) throw new Error('account-mode-mismatch');
-                return rules;
+                return { mode: admitted.mode, rules };
             };
             if (actionId === 'follow.preview') {
                 let rules: SessionFollowRulesSnapshot;
+                let census: Awaited<ReturnType<typeof readRules>> | undefined;
                 try {
-                    rules = { status: 'ready', accountId: context.targetAccountId, rules: await readRules() };
+                    census = await readRules();
+                    rules = { status: 'ready', accountId: context.targetAccountId, rules: census.rules };
                 } catch (error) {
                     if (!isCurrent()) return UNAVAILABLE;
                     rules = { status: 'unavailable', reason: classifyAccountStorageReadFailure(error, requestSignal) };
@@ -134,6 +135,10 @@ export async function executeSessionFollowAction<TActionId extends SessionFollow
                     signal: requestSignal,
                     assertCurrent: () => { if (!isCurrent()) throw new Error('scope-retired'); },
                 });
+                if (census) {
+                    const current = await readStorage();
+                    if (current.mode !== census.mode) return UNAVAILABLE;
+                }
                 return { kind: 'ok', value: parseSessionFollowActionResponse(actionId, input, payload) };
             }
             const account = ruleTarget && actionId !== 'follow.remove' ? await readStorage() : null;
@@ -181,12 +186,16 @@ export async function executeSessionFollowAction<TActionId extends SessionFollow
                 const list = SessionFollowActionInputSchemasV1['follow.list'].parse(input);
                 if (list.direction === 'followers') return { kind: 'ok', value: parseSessionFollowActionResponse(actionId, input, payload) };
                 const receiver = FollowReceiverRefV1Schema.parse(list.receiver);
-                const census = list.cursor === undefined ? await readRules() : [];
+                const census = list.cursor === undefined ? await readRules() : null;
+                if (census) {
+                    const current = await readStorage();
+                    if (current.mode !== census.mode) return UNAVAILABLE;
+                }
                 const rows = receiver.kind === 'account'
                     ? { ...ListAccountSessionFollowsResponseV1Schema.parse(payload), sources: [] }
                     : { follows: [], ...ListSessionFollowSourcesResponseSchema.parse(payload) };
                 return { kind: 'ok', value: parseSessionFollowActionResponse(actionId, input, { ...rows,
-                    rules: census.filter(rule => equalFollowRuleReceiverV1(rule.receiver, receiver)),
+                    rules: census?.rules.filter(rule => equalFollowRuleReceiverV1(rule.receiver, receiver)) ?? [],
                     coverage: rows.continuation ? 'partial' : 'complete',
                 }) };
             }
