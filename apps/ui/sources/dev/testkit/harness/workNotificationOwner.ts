@@ -22,7 +22,22 @@ export function createWorkNotificationOwnerFixture(
     channelDisconnected?: boolean;
     runOutputState?: 'pending' | 'writing' | 'complete' | 'failed';
   }> = {},
-) {
+): {
+  read: SessionTriggersRead;
+  runRead: {
+    status: 'ready';
+    sets: never[];
+    add: ReturnType<typeof createWorkflowTriggerActions>['add'];
+    remove: (automationId: string, triggerId: string) => Promise<ReturnType<typeof WorkflowTriggerWriteResultV1Schema.parse>>;
+  };
+  execute: ReturnType<typeof createFrontDoorActionExecute>;
+  acceptCreate: () => void;
+  acceptRemove: () => void;
+  rows: Map<string, AutomationDefinitionDetail>;
+  actions: ReturnType<typeof createWorkflowTriggerActions>;
+  source: () => unknown;
+  removedId: () => string | undefined;
+} {
   const rows = new Map<string, AutomationDefinitionDetail>();
   let id = 0;
   let acceptCreate: () => void = () => undefined;

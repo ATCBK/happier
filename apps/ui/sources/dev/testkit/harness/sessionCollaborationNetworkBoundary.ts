@@ -54,7 +54,16 @@ export function createSessionCollaborationHttpBoundary() {
             accessResponse: undefined as ResponseOverride | undefined,
         };
     }
-    const addHome = (origin: string, accountId: string) => {
+    const addHome = (origin: string, accountId: string): {
+        accountId: string;
+        features: ReturnType<typeof createRootLayoutFeaturesResponse>;
+        sessions: Map<string, SessionCurrentProjectionRecordV1>;
+        publications: Map<string, Record<string, unknown> | null>;
+        snapshotResponse: ResponseOverride | undefined;
+        discussionResponse: ResponseOverride | undefined;
+        publicationResponse: ResponseOverride | undefined;
+        accessResponse: ResponseOverride | undefined;
+    } => {
         const home = createHome(accountId);
         homes.set(new URL(origin).origin, home);
         return home;
