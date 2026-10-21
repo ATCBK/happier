@@ -129,6 +129,7 @@ export function CustomModal({ config, onClose, showBackdrop = true, visible, zIn
             accessibilityLabel={accessibilityLabel}
             testID={effectiveChrome?.kind === 'stage' ? effectiveChrome.testID : undefined}
             focusReturnRef={config.focusReturnRef}
+            focusReturnFallback={effectiveChrome?.kind === 'stage' ? 'activation-time' : undefined}
             closeOnBackdrop={config.closeOnBackdrop ?? true}
             showBackdrop={showBackdrop && presentation.showBackdrop}
             motion={presentation.motion}
