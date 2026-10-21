@@ -10,12 +10,26 @@ import { PLUGIN_MANIFEST } from './manifest.js';
 import { CLIPROXYAPI_UI_TRANSLATION_BUNDLES } from './ui/translations.js';
 
 describe('CLIProxyAPI plugin manifest', () => {
-  it('is a declarative first-party Provider plugin with no runtime permissions', async () => {
+  it('discloses the managed gateway environment without granting host resources', async () => {
     await expect(import('./manifest.js').then((module) =>
       PluginManifestV2Schema.parse(module.PLUGIN_MANIFEST))).resolves.toMatchObject({
       id: 'happier.provider.cliproxyapi',
       runtime: { apiVersion: 1 },
-      hostAccess: { required: [], optional: [] },
+      hostAccess: {
+        required: [{
+          capability: 'environment',
+          scope: {
+            keys: [
+              'HOST',
+              'PORT',
+              'HAPPIER_CLIPROXYAPI_CONSUMER_ACCESS_PATH',
+              'HAPPIER_CLIPROXYAPI_DOWNSTREAM_BEARER',
+              'HAPPIER_CLIPROXYAPI_MANAGED_PURPOSE_CONFIGURATION',
+            ],
+          },
+        }],
+        optional: [],
+      },
       contributes: { providers: [{ id: 'cliproxyapi', kind: 'aggregator' }] },
     });
   });
