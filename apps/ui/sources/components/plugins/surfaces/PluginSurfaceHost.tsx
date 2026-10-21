@@ -1370,6 +1370,8 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
     resourceStore?: PluginUiResourceStore;
     /** Targeted caller fallback for a contributor render crash. */
     targetedFallback?: React.ReactNode;
+    /** A Composer chip's own content, drawn in place of every state card. */
+    stateFallback?: React.ReactNode;
     /** The targeted physical mount's incumbent bounded crash diagnostic. */
     onTargetedSurfaceRenderFailure?: (surfaceId: string, error: Error) => void;
     /**
@@ -1830,6 +1832,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
             subjectName={canonicalIdentity.brand?.displayName}
             renderContext={canonicalRenderContext}
             {...(props.targetedFallback === undefined ? {} : { targetedFallback: props.targetedFallback })}
+            {...(props.stateFallback === undefined ? {} : { stateFallback: props.stateFallback })}
             {...(props.onTargetedSurfaceRenderFailure ? { onCrash: props.onTargetedSurfaceRenderFailure } : {})}
             privateHostBindings={canonicalPrivateHostBindings}
             interactionEnabled={props.interactionEnabled}
@@ -4290,6 +4293,10 @@ function PluginSurfaceHostMount(props: Readonly<(
                 {...(targetedBinding || composerBinding || ephemeralBinding ? {
                     ...(embeddedFallback !== undefined
                         ? { targetedFallback: embeddedFallback }
+                        : {}),
+                    // A Composer chip is one pressable: its own content, never a state card.
+                    ...(composerBinding && embeddedFallback !== undefined
+                        ? { stateFallback: embeddedFallback }
                         : {}),
                     ...(targetedBinding ? {
                     onTargetedSurfaceRenderFailure: reportTargetedSurfaceRenderFailure,

@@ -141,6 +141,12 @@ type PluginReactNativeSurfaceProps = Readonly<{
     }>;
     /** Targeted caller fallback, consumed only for a contributor render crash. */
     targetedFallback?: React.ReactNode;
+    /**
+     * A caller that owns the chrome (a Composer chip's own icon and label) draws this in place of
+     * every host state card. Each card carries an action button, which would nest a button in
+     * the caller's pressable. The loading placeholder is not a card and stays.
+     */
+    stateFallback?: React.ReactNode;
     onCrash?: (surfaceId: string, error: Error) => void;
     watchdog?: PluginReactNativeWatchdog;
     /** Existing route-owned recovery callback for settings/update/enable actions. */
@@ -732,7 +738,7 @@ export function PluginReactNativeSurface(props: PluginReactNativeSurfaceProps): 
     ) : null;
 
     if (canonicalRenderContextDiagnostic) {
-        return (
+        return props.stateFallback !== undefined ? <>{props.stateFallback}</> : (
             <PluginReactNativeUnavailable
                 diagnostics={unavailableDiagnostics}
                 recoveryAction={props.recoveryAction}
@@ -751,15 +757,17 @@ export function PluginReactNativeSurface(props: PluginReactNativeSurfaceProps): 
     ) {
         return (
             <>
-            <PluginReactNativeUnavailable
-                diagnostics={unavailableDiagnostics}
-                onRetry={shouldOfferRetry ? handleRetry : undefined}
-                retrying={retrying}
-                animationEnabled={animationEnabled}
-                recoveryAction={props.recoveryAction}
+            {props.stateFallback !== undefined ? props.stateFallback : (
+                <PluginReactNativeUnavailable
+                    diagnostics={unavailableDiagnostics}
+                    onRetry={shouldOfferRetry ? handleRetry : undefined}
+                    retrying={retrying}
+                    animationEnabled={animationEnabled}
+                    recoveryAction={props.recoveryAction}
                     subjectName={props.subjectName}
                     offline={props.interactionEnabled === false}
-            />
+                />
+            )}
             {candidateProbe}
             </>
         );
@@ -777,7 +785,7 @@ export function PluginReactNativeSurface(props: PluginReactNativeSurfaceProps): 
             <>
             {initialLoadInFlight ? (
                 <PluginSurfaceFallback testID="plugin-rn-ui-loading" state="loading" />
-            ) : (
+            ) : props.stateFallback !== undefined ? props.stateFallback : (
                 <PluginReactNativeUnavailable
                     diagnostics={unavailableDiagnostics}
                     retrying={retrying}
@@ -836,7 +844,8 @@ export function PluginReactNativeSurface(props: PluginReactNativeSurfaceProps): 
         hasRetainedContent: true,
     });
     const retainedNotice = retainedPresentation.contentNotice;
-    if (!retainedNotice) return surface;
+    // A caller that owns the chrome draws no status block, whose action is another button.
+    if (!retainedNotice || props.stateFallback !== undefined) return surface;
     const retainedAction = resolvePluginSurfaceStateAction({
         recoveryAction: retainedPresentation.recoveryAction,
         onRetry: shouldOfferRetry ? handleRetry : undefined,

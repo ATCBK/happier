@@ -818,6 +818,77 @@ describe('PluginReactNativeSurface', () => {
         }
     });
 
+    describe('inside a Composer chip, whose caller owns the chrome', () => {
+        // The chip is the one pressable. A host state card carries its own action button, so
+        // every unavailable state must draw the caller's fallback (the chip's own icon and label)
+        // and never a card: a <button> inside a <button> is invalid HTML and two focus stops.
+        const chipFallback = React.createElement('ChipFallback', { testID: 'chip-own-content' });
+        const pressableCount = (screen: Awaited<ReturnType<typeof renderScreen>>): number => (
+            screen.findAll((node) => typeof node.type === 'string' && typeof node.props?.onPress === 'function').length
+        );
+
+        async function mountInChip(surface: React.ReactElement) {
+            const { HappierComposerChip } = await import('@happier-dev/plugin-ui/presentation');
+            return renderScreen(
+                <HappierComposerChip testID="chip" accessibilityLabel="PRs & Issues" onPress={() => undefined}>
+                    {surface}
+                </HappierComposerChip>,
+            );
+        }
+
+        it('draws the fallback, not a card with an action, when the renderer is not admitted', async () => {
+            const { PluginReactNativeSurface } = await import('./PluginReactNativeSurface');
+            const screen = await mountInChip(<PluginReactNativeSurface
+                surfaceId="surface_1"
+                renderContext={defaultRenderContext}
+                decision={{ state: 'fallback', reason: 'channel_policy_denied', diagnostics: [], fallback: { kind: 'hostedWeb', contributionId: 'web' } }}
+                stateFallback={chipFallback}
+                recoveryAction={{ label: 'Manage plugin', onPress: () => undefined }}
+            />);
+
+            expect(screen.findByTestId('chip-own-content')).toBeTruthy();
+            expect(screen.findByTestId('plugin-rn-ui-unavailable')).toBeNull();
+            expect(pressableCount(screen)).toBe(1);
+        });
+
+        it('draws the fallback, not a Retry card, when the artifact fails to load', async () => {
+            const { PluginReactNativeSurface } = await import('./PluginReactNativeSurface');
+            const load = vi.fn(() => Promise.reject(new Error('loader failed')));
+            const screen = await mountInChip(<PluginReactNativeSurface
+                surfaceId="surface_1"
+                renderContext={defaultRenderContext}
+                decision={{ state: 'load', reason: 'compatible', diagnostics: [] }}
+                load={load}
+                loadPolicy={{ source: 'installedArtifact' }}
+                cacheKey="cache_chip_load_failure"
+                watchdog={createPluginReactNativeWatchdog()}
+                stateFallback={chipFallback}
+            />);
+            await flushHookEffects({ cycles: 1, turns: 2 });
+
+            expect(load).toHaveBeenCalledTimes(1);
+            expect(screen.findByTestId('chip-own-content')).toBeTruthy();
+            expect(screen.findByTestId('plugin-rn-ui-unavailable')).toBeNull();
+            expect(screen.findByTestId('plugin-rn-ui-unavailable-action')).toBeNull();
+            expect(pressableCount(screen)).toBe(1);
+        });
+
+        it('draws the fallback when the runtime is offline and nothing loaded', async () => {
+            const { PluginReactNativeSurface } = await import('./PluginReactNativeSurface');
+            const screen = await mountInChip(<PluginReactNativeSurface
+                surfaceId="surface_1"
+                renderContext={defaultRenderContext}
+                decision={{ state: 'load', reason: 'compatible', diagnostics: [] }}
+                interactionEnabled={false}
+                stateFallback={chipFallback}
+            />);
+
+            expect(screen.findByTestId('chip-own-content')).toBeTruthy();
+            expect(screen.findByTestId('plugin-rn-ui-unavailable')).toBeNull();
+            expect(pressableCount(screen)).toBe(1);
+        });
+    });
+
     it('adopts a composed artifact load across context updates without imposing a competing deadline', async () => {
         const { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes');
         vi.useFakeTimers();

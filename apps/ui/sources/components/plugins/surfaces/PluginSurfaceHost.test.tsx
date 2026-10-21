@@ -12830,7 +12830,7 @@ describe('Composer physical surface mount', () => {
         ));
     });
 
-    it('tells a Composer-embedded React Native mount that a nested targeted Surface is unsupported', async () => {
+    it('tells a Composer-embedded React Native mount that a nested targeted Surface is unsupported, and gives it the chip\'s own content as its state chrome', async () => {
         reactNativeSurfaceProps.length = 0;
         const contribution = Object.freeze({
             pluginId: 'acme.browser',
@@ -12911,6 +12911,7 @@ describe('Composer physical surface mount', () => {
                 points: [],
             },
         });
+        const chipOwnContent = React.createElement('ChipOwnContent', { testID: 'chip-own-content' });
         let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
         try {
             screen = await renderScreen(
@@ -12948,6 +12949,7 @@ describe('Composer physical surface mount', () => {
                     serverId="server-a"
                     parentLifetime={parentLifetime}
                     transactionApplier={transactionApplier as never}
+                    fallback={chipOwnContent}
                 />,
                 { flushOptions: { cycles: 0 } },
             );
@@ -12955,6 +12957,9 @@ describe('Composer physical surface mount', () => {
             const mounted = reactNativeSurfaceProps.at(-1) as {
                 privateHostBindings?: Readonly<{ presentationHost?: PluginUiPrivatePresentationHost }>;
             };
+            // A Composer chip is one pressable, so the renderer draws the chip's own content in place of
+            // any state card (each carries an action button) and never nests a button in it.
+            expect((mounted as { stateFallback?: unknown }).stateFallback).toBe(chipOwnContent);
             // An embedded Composer mount deliberately receives no B->C bridge.
             expect(mounted.privateHostBindings?.presentationHost?.renderTargetedSurface).toBeUndefined();
             // Structurally unsupported must not be silent: the private presentation
