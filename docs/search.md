@@ -203,9 +203,13 @@ status; the per-source projection below is consumed by search selection and Acti
 
 `daemon.memory.status` advertises optional per-source readiness in `sources`.
 Native entries identify an Agent and configured source key; Happier entries
-identify a Session. `ready` means the worker has indexed the latest observed
-cursor with no pending work for that source. Source changes, queued reads,
-revisions, budget eviction and clearing invalidate that readiness. The deep
+identify a Session. For native sources, `ready` means the initial eligible
+inventory is complete and every retained conversation has reached its tail
+with complete searchable coverage. Pending appends and routine inventory
+refreshes do not erase that initial coverage. Read failures, replacement,
+revisions, budget eviction and clearing still invalidate readiness; it is not
+a promise that every concurrent append is already searchable. Happier Session
+readiness continues to follow its latest observed sequence. The deep
 index retains native reader progress after eviction and records incomplete
 searchable coverage in that same source state; unchanged tails or new appends
 do not restore evicted history. Clear/rebuild or source replacement restores
@@ -347,6 +351,14 @@ the worker's existing tick/disk/coverage budgets. The native history window
 adds a rolling cutoff to the existing backfill/content policy, enforced on each
 selected source turn even when its tail is unchanged; tool output is a separate
 opt-in. Selected Agents must actually supply usable readers.
+
+The native traversal owns one ordered work list. Observation-driven refreshes
+share its existing allowance with initial backfill, so active conversations
+cannot starve initial history and completed conversations need not wait behind
+the whole initial backlog. An observation with native ids prioritizes those
+conversations; a file notification without ids refreshes completed peers in
+that source. The configured tick allowance and interval remain unchanged;
+large windows can require substantially longer than thirty minutes.
 
 Memory requests native identities and activity without optional title enrichment.
 Claude and Codex apply the requested activity cutoff before transcript enrichment

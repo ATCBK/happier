@@ -222,6 +222,14 @@ coverage until the last page. Cursors bind the exact Account and inspection dire
 each page applies current access again and does not freeze membership. Private rules are
 returned with the first Following page, rather than repeated on every source page.
 
+In development source, Session and Account Voice Follow observations and
+acknowledgements use the authenticated socket's lifetime and cancellation, without
+a shorter handler-local deadline. The existing publisher authority checks and
+Serializable transaction retries remain; the storage owner retains its acquisition
+and execution budgets. A failed observation returns a typed failure without
+advancing Follow progress, so a later invalidation or reconnect can observe the
+same retained original again.
+
 In development source, configured Execution Run and Workflow Run follows read
 the Run's own terminal original through the Follow occurrence-route owner.
 Execution Runs retain their terminal occurrence id, including recovered host
@@ -750,8 +758,9 @@ availability.
 
 Agent provenance on a discussion message is decided once, at the mutation writer
 (`admitProducerInTx` in `apps/server/sources/app/discussions/mutations.ts`). A present-user
-post has no producer. Runtime-produced posts require a live participant binding whose Session
-belongs to the authenticated execution Account; trusted provenance must agree with that runtime.
+post has no producer. Runtime-produced posts require a current participant binding whose Session
+belongs to the authenticated execution Account, or the existing protected Workflow-original
+return admission; trusted provenance must agree with that retained execution origin.
 `DiscussionProducerV1` is display metadata, never caller-selected authority. Human invitations
 remain grants; executable participation binds an existing Session separately and requires
 runtime-control and pairwise disclosure admission. Neither invitation starts a turn.
@@ -768,11 +777,16 @@ facts describe who asked and who posted; they do not prove the Account or creden
 by a separate outward operation. Reply custody without that exact operation actor leaves
 the result's “using” identity unknown.
 
-Account-placed agent Actions publish through the current Session's existing authenticated
-publisher. The host's private Session RPC adapter verifies its active admission witness, or
-reopens the actual executing approval Artifact and its immutable Session origin, before
-calling `ApiSessionClient.postAgentDiscussionMessage`. A bare approval reference is not an
-approval claim. Terminal fallback instead reopens the protected original, resolves its exact
+Account-placed agent Actions use the existing authenticated Discussion publisher. Active
+Agent publication retains the current Session publisher and its admission witness. In
+development source, a person's approved post/reply instead reopens the actual executing
+approval Artifact and immutable Session origin through that same host verifier, then sends
+the reviewed body on the owning installed Machine's socket. The server rechecks retained
+Session/Machine custody, original input and current participant/reviewer access before the
+same append writer runs. This does not start or resume the receiver: an approved private
+draft can be posted after its native process exits. Atomic creation retains the current
+Session publisher. A bare approval reference is not an approval claim. Terminal fallback
+instead reopens the protected original, resolves its exact
 result or typed outcome, and checks the resource-decoded payload against that projection;
 an original-return tuple alone cannot authorize caller-authored text. None of these paths
 introduces another credential or uses human HTTP posting to invent Agent provenance. The
@@ -860,14 +874,32 @@ separately. Approval currentness compares that Home identity, not a browser's or
 daemon's local profile alias; unavailable Home identity holds preparation closed.
 The private publisher verifies the executing approval before stamping a draft
 review assertion on its trusted socket publication. Neither a public post nor
-an authored private publisher request accepts that assertion.
+an authored private publisher request accepts that assertion. Reviewed publication does
+not require a live Agent caller, but retains Home, Account, Machine, permission, source and
+participant currentness; ordinary Agent effects still require their live caller. Definite
+pre-publication refusals remain typed. An uncertain append acknowledgement remains an
+unknown outcome under the same original retry identity, not another approval or a wake.
+
+Reviewed post/reply replay uses that same `discussion-agent-post-v1` event's closed
+`approved_replay` Machine carrier. The installed owning daemon validates the executing
+private approval and its exact body, retains present-user replay authority, then supplies
+the required review assertion. Home rechecks the authenticated current Machine installation,
+the exact retained Machine–Session custody, the durable Session source or protected original
+return, and current participant/reviewer access before invoking the same append transaction.
+This does not require the receiver's Session process or current-publisher registration; it
+does not start one. Both deliberate drafts and ordinary human-approved replies use it.
+Ordinary Agent publication and atomic create retain their current-Session publisher fence.
+An indeterminate Machine append returns explicit `outcome_unknown` to the existing Action
+owner rather than silently withholding an acknowledgement or claiming no effect.
 
 Decline or cancel uses that same private approval transition, then settles the
 exact Discussion original through C2's existing reply mutation. The original
 becomes `released` with typed outcome `declined`; neither decision posts a reply.
 The Artifact retains the specific decision. Repeating a terminal decision can
 retry the idempotent original settlement after a lost response, but cannot replay
-the declined publication. No separate disposition store or decision hook exists.
+the declined publication. That settlement routes by the origin's canonical Home identity
+when present, retaining the creator's local profile id as descriptive origin data. No
+separate disposition store, profile alias or decision hook exists.
 
 `watches_and_speaks_up` deliberately admits ambient turns through the same Follow,
 Pending and autonomous check-in owners. The committed addressing snapshot
