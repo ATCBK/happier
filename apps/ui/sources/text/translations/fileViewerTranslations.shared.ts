@@ -10,6 +10,8 @@ export type FileViewerTranslations = Readonly<{
     ) => string;
     openFile: string;
     viewFullScreen: string;
+    hideControls: string;
+    showControls: string;
     zoomIn: string;
     zoomOut: string;
     fit: string;
@@ -33,6 +35,7 @@ export type FileViewerTranslations = Readonly<{
     pdfDamagedBody: string;
     pdfFailed: string;
     pdfPage: (params: Readonly<{ page: number; total: number }>) => string;
+    pdfPageCount: (params: Readonly<{ count: number }>) => string;
     pdfFitWidth: string;
     pdfFitPage: string;
     pdfZoom: string;
@@ -100,6 +103,8 @@ export const fileViewerTranslationsEnglish = {
       stageItem: ({ name, width, height }) => `${name}, ${width} by ${height}`,
       openFile: 'Open file',
       viewFullScreen: 'View full screen',
+      hideControls: 'Hide controls',
+      showControls: 'Show controls',
       zoomIn: 'Zoom in',
       zoomOut: 'Zoom out',
       fit: 'Fit',
@@ -123,6 +128,7 @@ export const fileViewerTranslationsEnglish = {
         "It isn't a valid PDF, or it is damaged. Open it in your default app to check.",
       pdfFailed: "Couldn't load this PDF",
       pdfPage: ({ page, total }) => `${page} / ${total}`,
+      pdfPageCount: ({ count }) => (count === 1 ? '1 page' : `${count} pages`),
       pdfFitWidth: 'Fit width',
       pdfFitPage: 'Fit page',
       pdfZoom: 'Zoom',
@@ -182,7 +188,3 @@ export const fileViewerTranslationsEnglish = {
     },
   },
 } satisfies Pick<Record<string, FileViewerTranslations>, 'en'>;
-    hideControls: string;
-    showControls: string;
-      hideControls: 'Hide controls',
-      showControls: 'Show controls',

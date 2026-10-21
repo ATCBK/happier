@@ -20,6 +20,12 @@ import { useWorkspaceFileLiveMoment } from './workspaceFileDetails/useWorkspaceF
 import { FileErrorState, FileLoadingState } from '@/components/workspaces/files/file/FileScreenState';
 import { FileViewerBody, type FileViewerStageHandle } from '@/components/workspaces/files/file/FileViewerBody';
 import type { ImageWellInfo } from '@/components/ui/media/ImageWell';
+import { PdfZoomMenu } from '@/components/ui/media/pdf/PdfZoomMenu';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
+import type { PdfPageInfo } from '@/components/ui/media/pdf/PdfViewerStates';
+import type { PdfViewPosition } from '@/components/ui/media/pdf/pdfViewPosition';
+import type { PdfZoom } from '@/components/ui/media/pdf/pdfZoom';
 import { CheckoutUnreachableState, useCheckoutReachability } from '@/components/workspaces/reachability/checkoutReachability';
 import { FileContentPanel, resolveFileCodeGeometry } from '@/components/workspaces/files/file/FileContentPanel';
 import { FileChangesSection, type FileChangesDiffSurface } from '@/components/workspaces/files/file/changes/FileChangesRegions';
@@ -573,7 +579,8 @@ function WorkspaceFileOpenableContentViewerControls(props: Readonly<{
         stage,
     ]);
 
-    if (!host || !choiceModel || choiceModel.selected.kind === 'plugin') return null;
+    // A choice of one is no choice: the band appears only when the file has another way to open (FV2b, gap 18).
+    if (!host || !choiceModel || choiceModel.selected.kind === 'plugin' || choiceModel.choices.length < 2) return null;
     const viewerChoice = createWorkspaceFileViewerChoiceChromeModel({
         model: choiceModel,
         selectedPluginViewerId: null,
@@ -1323,7 +1330,23 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     // (ED1p) or the review bar in Changes (rvp P1). The header then carries the view choice and Done itself.
     const phoneToolbar = phonePage && !isEditorSelected
         && !(displayMode === 'diff' && changesReview.controller.strip.total > 0);
-    const pageFind = (displayMode === 'diff' ? typeof diffContent === 'string' : typeof fileContent?.content === 'string' && !isBinaryContent)
+    // A PDF (lab FV5): the viewer owns its pages, scale and Find; the page remembers zoom and place per file
+    // and shows the facts the viewer reports (page count, the phone's "3 of 14").
+    const pdfBody = displayMode === 'file' && fileContent?.isBinary === true && fileViewer.kind === 'pdf';
+    const [pdfPageInfo, setPdfPageInfo] = React.useState<Readonly<{ path: string; info: PdfPageInfo }> | null>(null);
+    const shownPdfPageInfo = pdfPageInfo?.path === filePath ? pdfPageInfo.info : null;
+    const pdfZoom = fileView.pdfZoom ?? 'fit-width';
+    const pdfPosition = fileView.pdfPosition ?? null;
+    const pdfControl = React.useMemo(() => ({
+        zoom: pdfZoom,
+        onZoomChange: (zoom: PdfZoom) => patchFileView({ pdfZoom: zoom }),
+        position: pdfPosition,
+        onPositionChange: (position: PdfViewPosition) => patchFileView({ pdfPosition: position }),
+        onPageInfo: (info: PdfPageInfo) => setPdfPageInfo({ path: filePath, info }),
+        // Phones show the page in the bottom toolbar, so only one thing floats.
+        showPagePill: !phonePage,
+    }), [filePath, patchFileView, pdfPosition, pdfZoom, phonePage]);
+    const pageFind = (displayMode === 'diff' ? typeof diffContent === 'string' : pdfBody || (typeof fileContent?.content === 'string' && !isBinaryContent))
         && headerModel.findAvailable !== false ? { onOpen: () => findRuntime.open(findSurfaceId) } : null;
 
     const previewTooLarge = error === t('files.fileTooLargeToPreview');
@@ -1398,7 +1421,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     const shownImageInfo = imageInfo?.path === filePath ? imageInfo.info : null;
     const mediaFacts = isBinaryFile && fileViewer.kind !== 'binary' ? [
         ...(shownImageInfo ? [`${shownImageInfo.width} × ${shownImageInfo.height}`] : []),
-        t(fileViewer.labelKey as never) as string,
+        // A PDF says how long it is once the viewer knows (FV5 "14 pages · 1.8 MB"); its mark already names the kind.
+        pdfBody && shownPdfPageInfo ? t('files.viewer.pdfPageCount', { count: shownPdfPageInfo.total }) : t(fileViewer.labelKey as never) as string,
         ...(typeof fileContent?.binarySizeBytes === 'number' ? [formatFilePageBytes(fileContent.binarySizeBytes)] : []),
         ...(shownImageInfo && shownImageInfo.displayScale > 1 ? [t('files.viewer.shownAt', { scale: shownImageInfo.displayScale })] : []),
     ] : null;
@@ -1521,9 +1545,12 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                     statusPill={deleted ? { label: t('detailsSurface.file.statusDeleted') } : null}
                     modes={headerModel.modes}
                     find={pageFind}
+                    expand={pageExpand}
+                    accessory={pdfBody && !phonePage ? (
+                        <PdfZoomMenu testID="file-pdf-zoom" zoom={pdfZoom} percent={null} onZoomChange={pdfControl.onZoomChange} />
+                    ) : null}
                     edit={pageEditControl}
                     menuActions={menuActions}
-                    expand={pageExpand}
                     toolbarBelow={phoneToolbar}
                     displayMode={displayMode}
                     onDisplayMode={onDisplayMode}
@@ -1539,7 +1566,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                     lineSelectionEnabled={lineSelectionEnabled && Boolean(scope)}
                     lineSelectionActive={commitSelectionModeActive}
                     rangeSelectionActive={rangeSelectionActive}
-                    reviewCommentsEnabled={reviewCommentsEnabled}
+                    // Review comments land on lines: a picture or a PDF body has none to comment on.
+                    reviewCommentsEnabled={reviewCommentsEnabled && !showsViewerBody}
                     commentModeActive={reviewCommentModeActive}
                     selectedLineCount={commitSelectionModeActive ? selectedLineKeys.size : 0}
                     isApplyingStage={isApplyingStage}
@@ -1626,8 +1654,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                         onChange={onEditorChange} editorRef={editorHandleRef} liveValue={liveValue}
                         findSurfaceId={findSurfaceId} active={isActive} focusRootRef={findFocusRoot}
                         findSeed={props.findSeed} onFindSeedConsumed={props.onFindSeedConsumed}
-                        accessory={editorAccessory}
                         changeMarkers={changeMarkers}
+                        accessory={editorAccessory}
                         wrapLines={effectiveWrapLines} showLineNumbers={showLineNumbers}
                         changeDebounceMs={typeof filesEditorChangeDebounceMs === 'number' ? filesEditorChangeDebounceMs : undefined}
                         bridgeMaxChunkBytes={typeof filesEditorBridgeMaxChunkBytes === 'number' ? filesEditorBridgeMaxChunkBytes : undefined}
@@ -1663,11 +1691,11 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                         <FileEditorAskControls handle={readyEditorHandle} scopeId={props.scopeId} scope={scope} filePath={filePath}
                             savedText={fileContent?.isBinary ? undefined : fileContent?.content} sessionId={sessionId || null} active={isActive} />
                     ) : null}
+                    {/* Blame in Edit: the gutter markers open the same run card (a portal popover at the run's line). */}
+                    {blameRegion.card}
                     </>
                 ) : showsViewerBody ? (
                     <FileViewerBody
-                    {/* Blame in Edit: the gutter markers open the same run card (a portal popover at the run's line). */}
-                    {blameRegion.card}
                         viewer={fileViewer}
                         title={filePath.split(/[\\/]/).at(-1) || filePath}
                         source={viewerPreviewInput}
@@ -1679,12 +1707,13 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                         onOpenAsText={openAsText}
                         {...(share.openInDefaultApp ? { onOpenInDefaultApp: share.openInDefaultApp } : {})}
                         onImageInfo={onImageInfo}
+                        stageRef={viewerStageRef}
+                        {...(fileViewer.kind === 'pdf' ? { pdf: pdfControl } : {})}
                         testID="file-viewer-body"
                     />
                 ) : displayMode === 'diff' && scope ? (
                     <FileChangesSection review={changesReview} scope={scope} filePath={filePath}
                         keyboardActive={isActive} liveChangeKind={fileEntry?.kind ?? null}
-                        stageRef={viewerStageRef}
                         ask={{ scopeId: props.scopeId, sessionId: sessionId || null, active: isActive }}>
                         {(surface) => renderFindPanel(surface)}
                     </FileChangesSection>
@@ -1735,6 +1764,12 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                     onDisplayMode={onDisplayMode}
                     find={pageFind}
                     edit={pageEditControl}
+                    accessory={pdfBody && shownPdfPageInfo ? (
+                        <Text testID="file-page-toolbar-pdf-page" variant="body" style={[{ color: theme.colors.text.primary, paddingHorizontal: theme.space.s8 }, Typography.tabular()]}>
+                            {t('files.viewer.stageCounter', { current: shownPdfPageInfo.page, total: shownPdfPageInfo.total })}
+                        </Text>
+                    ) : null}
+                    overPicture={showsViewerBody}
                     bottomInset={safeAreaInsets.bottom}
                 />
             ) : null}

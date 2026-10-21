@@ -212,6 +212,50 @@ describe('PDF rendered recovery', () => {
         await screen.unmount();
     });
 
+    it('re-fits a fit-width web PDF when its column narrows, and leaves a chosen zoom alone', async () => {
+        Platform.OS = 'web';
+        vi.stubGlobal('Blob', NodeBlob);
+        const blobs = new Map<string, NodeBlob>();
+        vi.stubGlobal('URL', class extends URL {
+            static createObjectURL(blob: Blob | MediaSource) { const uri = `blob:pdf-fit-${blobs.size}`; blobs.set(uri, blob as unknown as NodeBlob); return uri; }
+            static revokeObjectURL() {}
+        });
+        vi.stubGlobal('fetch', async (uri: string) => ({ ok: true, arrayBuffer: () => blobs.get(uri)!.arrayBuffer() }));
+        vi.stubGlobal('IntersectionObserver', class { observe() {} disconnect() {} });
+        // ResizeObserver is the browser layout boundary: the test says when the column's box changed.
+        const resized: Array<() => void> = [];
+        vi.stubGlobal('ResizeObserver', class {
+            constructor(callback: ResizeObserverCallback) { resized.push(() => callback([], this as unknown as ResizeObserver)); }
+            observe() {} unobserve() {} disconnect() {}
+        });
+        let columnWidth = 800;
+        let container: HTMLElement | null = null;
+        const source = { enabled: true, source: { kind: 'bytes' as const, bytes, name: 'fit.pdf' }, cacheKey: 'fit', mimeType: 'application/pdf' };
+        const nodeMock = { createNodeMock: ({ props }: { props: Record<string, unknown> }) => {
+            if (!props.dataSet) return null;
+            const element = document.createElement('div');
+            Object.defineProperty(element, 'clientWidth', { get: () => columnWidth });
+            Object.defineProperty(element, 'clientHeight', { get: () => 1000 });
+            container = element; return element;
+        } };
+        const pageWidth = () => (container?.querySelector<HTMLElement>('[data-pdf-page="1"]')?.style.width ?? null);
+        const screen = await renderScreen(<WebPdfViewer {...base} source={source} />, nodeMock);
+        await vi.waitFor(() => expect(pageWidth()).toBe('800px'));
+        columnWidth = 400;
+        act(() => { for (const notify of resized) notify(); });
+        expect(pageWidth()).toBe('400px');
+        await screen.unmount();
+
+        // A zoom the person chose (125%) is theirs: a narrower column scrolls instead of shrinking the pages.
+        columnWidth = 800;
+        const chosen = await renderScreen(<WebPdfViewer {...base} zoom={1.25} source={{ ...source, cacheKey: 'fit-chosen' }} />, nodeMock);
+        await vi.waitFor(() => expect(pageWidth()).toBe('750px'));
+        columnWidth = 400;
+        act(() => { for (const notify of resized) notify(); });
+        expect(pageWidth()).toBe('750px');
+        await chosen.unmount();
+    });
+
     it('waits for the current WebView when the source changes after a decoder failure', async () => {
         const nextBytes = new TextEncoder().encode('%PDF-2.0 replacement');
         const observed: FilePreviewSourceState[] = [];

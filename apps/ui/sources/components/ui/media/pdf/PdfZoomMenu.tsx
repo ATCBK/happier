@@ -60,6 +60,8 @@ export function PdfZoomMenu(
       onOpenChange={setOpen}
       items={items}
       selectedId={zoomId(props.zoom)}
+      // The trigger reads the current zoom; the list sizes to its longest choice ("Fit width"), not to the trigger.
+      matchTriggerWidth={false}
       popoverAccessibilityLabel={t('files.viewer.pdfZoom')}
       onSelect={(id) => {
         setOpen(false);

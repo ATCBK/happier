@@ -3144,6 +3144,8 @@ const fileViewerTranslations = { es: {
         stageItem: ({ name, width, height }) => `${name}, ${width} por ${height}`,
         openFile: "Abrir archivo",
         viewFullScreen: "Ver a pantalla completa",
+        hideControls: "Ocultar controles",
+        showControls: "Mostrar controles",
         zoomIn: "Acercar",
         zoomOut: "Alejar",
         fit: "Ajustar",
@@ -3165,6 +3167,7 @@ const fileViewerTranslations = { es: {
         pdfDamagedBody: "No es un PDF válido o está dañado. Ábrelo en tu app predeterminada para comprobarlo.",
         pdfFailed: "No se pudo cargar este PDF",
         pdfPage: ({ page, total }) => `${page} / ${total}`,
+        pdfPageCount: ({ count }) => (count === 1 ? '1 página' : `${count} páginas`),
         pdfFitWidth: "Ajustar al ancho",
         pdfFitPage: "Ajustar a la página",
         pdfZoom: "Zoom",
@@ -15939,5 +15942,3 @@ export {
     Domain_workspaceSyncDiagnosticTranslations as workspaceSyncDiagnosticTranslations,
     Domain_workspaceTabTranslations as workspaceTabTranslations,
 };
-        hideControls: "Ocultar controles",
-        showControls: "Mostrar controles",

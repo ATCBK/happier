@@ -3137,6 +3137,8 @@ const fileViewerTranslations = { 'zh-Hant': {
         stageItem: ({ name, width, height }) => `${name}，${width} × ${height}`,
         openFile: "打開檔案",
         viewFullScreen: "全螢幕檢視",
+        hideControls: "隱藏控制項",
+        showControls: "顯示控制項",
         zoomIn: "放大",
         zoomOut: "縮小",
         fit: "符合視窗",
@@ -3158,6 +3160,7 @@ const fileViewerTranslations = { 'zh-Hant': {
         pdfDamagedBody: "它不是有效的 PDF，或已損毀。請在預設 App 中打開以檢查。",
         pdfFailed: "無法載入此 PDF",
         pdfPage: ({ page, total }) => `${page} / ${total}`,
+        pdfPageCount: ({ count }) => (`${count} 頁`),
         pdfFitWidth: "符合寬度",
         pdfFitPage: "符合頁面",
         pdfZoom: "縮放",
@@ -15831,5 +15834,3 @@ export {
     Domain_workspaceSyncDiagnosticTranslations as workspaceSyncDiagnosticTranslations,
     Domain_workspaceTabTranslations as workspaceTabTranslations,
 };
-        hideControls: "隱藏控制項",
-        showControls: "顯示控制項",

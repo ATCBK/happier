@@ -151,7 +151,7 @@ export function FileViewerBody(props: FileViewerBodyProps) {
     props.title,
     stageKind,
   ]);
-  React.useImperativeHandle<FileViewerStageHandle | null>(props.stageRef, () => (openInStage ? { open: openInStage } : null), [openInStage]);
+  React.useImperativeHandle<FileViewerStageHandle | null, FileViewerStageHandle | null>(props.stageRef, () => (openInStage ? { open: openInStage } : null), [openInStage]);
 
   switch (viewer.kind) {
     case 'image':

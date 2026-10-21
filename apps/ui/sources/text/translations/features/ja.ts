@@ -3142,6 +3142,8 @@ const fileViewerTranslations = { ja: {
         stageItem: ({ name, width, height }) => `${name}、${width} × ${height}`,
         openFile: "ファイルを開く",
         viewFullScreen: "全画面で表示",
+        hideControls: "コントロールを隠す",
+        showControls: "コントロールを表示",
         zoomIn: "拡大",
         zoomOut: "縮小",
         fit: "全体を表示",
@@ -3163,6 +3165,7 @@ const fileViewerTranslations = { ja: {
         pdfDamagedBody: "有効な PDF ではないか、破損しています。既定のアプリで開いて確認してください。",
         pdfFailed: "この PDF を読み込めませんでした",
         pdfPage: ({ page, total }) => `${page} / ${total}`,
+        pdfPageCount: ({ count }) => (`${count} ページ`),
         pdfFitWidth: "幅に合わせる",
         pdfFitPage: "ページに合わせる",
         pdfZoom: "ズーム",
@@ -15857,5 +15860,3 @@ export {
     Domain_workspaceSyncDiagnosticTranslations as workspaceSyncDiagnosticTranslations,
     Domain_workspaceTabTranslations as workspaceTabTranslations,
 };
-        hideControls: "コントロールを隠す",
-        showControls: "コントロールを表示",

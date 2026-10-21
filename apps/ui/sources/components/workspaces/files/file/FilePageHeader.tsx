@@ -6,6 +6,7 @@ import { DetailsTabHeader, type DetailsTabHeaderAction, type DetailsTabHeaderMet
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { ToolbarButton } from '@/components/ui/buttons/ToolbarButton';
 import { DiffPresentationStyleToggleButton } from '@/components/ui/code/diff/DiffPresentationStyleToggleButton';
+import { useSurfaceStateSize } from '@/components/ui/surfaces/surfaceStateSize';
 import { ToolbarSelect } from '@/components/ui/forms/ToolbarSelect';
 import type { PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import { FileIcon } from '@/components/ui/media/FileIcon';
@@ -114,6 +115,8 @@ export type FilePageHeaderProps = Readonly<{
     find?: Readonly<{ onOpen: () => void; active?: boolean }> | null;
     /** Media kinds: "View full screen" opens the Media stage, for people who don't click the picture (lab FV4). */
     expand?: Readonly<{ onOpen: () => void }> | null;
+    /** A body's own control in the band, before Find (a PDF's zoom menu, lab FV5). */
+    accessory?: React.ReactNode;
     /** The `⋯` menu, already resolved from the page's one item list (`fileMenus.ts`). */
     menuActions?: readonly PageHeaderMenuAction[];
     /** The phone page carries its view controls in a bottom toolbar instead (`FilePageToolbar`). */
@@ -210,7 +213,10 @@ export function FilePageHeader(props: FilePageHeaderProps) {
 
     // P4's editing state, in one word where the segment stood (lab ED1): Editing · Unsaved · Saving.
     // The editor's one status owner (P4-R2): Editing · Unsaved · Saving · Saved (the 2 s moment), word cross-fade.
-    const editorStatusPill = editing && editor ? <FileEditorStatusPill editor={editor} /> : null;
+    // Reading while a draft is kept (B1-PE-04) still says so: the draft waits behind Edit, never silently.
+    const draftKept = !editing && props.fileEditorEnabled === true && editor !== undefined
+        && (editor.status === 'dirty' || editor.status === 'conflict' || editor.status === 'saving');
+    const editorStatusPill = (editing || draftKept) && editor ? <FileEditorStatusPill editor={editor} /> : null;
     const pagePill = props.statusPill ? (
         <StatusPill testID="file-page-status" variant={props.statusPill.variant ?? 'neutral'} hideDot label={props.statusPill.label} />
     ) : null;
@@ -246,9 +252,13 @@ export function FilePageHeader(props: FilePageHeaderProps) {
     ) : null;
 
     // Quiet controls in the identity band: the view choice, then Find (lab FV1); review tools in Changes.
-    const diffPresentationToggle = Platform.OS === 'web' && isDiffDisplay;
-    const commentToggle = reviewCommentsEnabled === true && Boolean(onToggleCommentMode);
-    const hasBandControls = Boolean((!toolbarBelow && (modeSegment || findButton)) || expandButton || statusNode || diffPresentationToggle || commentToggle);
+    // A phone's band keeps only the view choice and Find (the review bar holds its bottom edge, rvp P1): its diff
+    // has one column, and a comment starts from a selection (the selection toolbar) instead of a mode.
+    const phoneBand = useSurfaceStateSize() === 'phone';
+    const diffPresentationToggle = Platform.OS === 'web' && isDiffDisplay && !phoneBand;
+    const commentToggle = reviewCommentsEnabled === true && Boolean(onToggleCommentMode) && !phoneBand;
+    const accessory = !toolbarBelow && props.accessory ? props.accessory : null;
+    const hasBandControls = Boolean((!toolbarBelow && (modeSegment || findButton)) || accessory || expandButton || statusNode || diffPresentationToggle || commentToggle);
     const bandControls = hasBandControls ? (
         <View testID="file-details-view-actions" style={styles.bandControls}>
             {!toolbarBelow ? modeSegment : null}
@@ -269,6 +279,7 @@ export function FilePageHeader(props: FilePageHeaderProps) {
                     onPress={() => onToggleCommentMode(!(commentModeActive === true))}
                 />
             ) : null}
+            {accessory}
             {!toolbarBelow ? findButton : null}
             {expandButton}
         </View>
@@ -410,15 +421,17 @@ export function FilePageToolbar(props: Readonly<{
     onDisplayMode: (mode: FileDisplayMode) => void;
     find?: Readonly<{ onOpen: () => void; active?: boolean }> | null;
     edit?: FilePageEditControl | null;
-    /** A body's own control in the toolbar (a PDF's page number). */
+    /** A body's own fact or control, leading the toolbar (a PDF's "3 of 14", lab FV5p). */
     accessory?: React.ReactNode;
+    /** The body under the bar is a picture or document (a PDF's white pages): the bar keeps its ink legible over it. */
+    overPicture?: boolean;
     bottomInset: number;
 }>) {
     const showModes = props.modes.length > 1 && props.edit?.kind !== 'done' && props.edit?.kind !== 'save';
     if (!showModes && !props.find && !props.edit && !props.accessory) return null;
     return (
         <View pointerEvents="box-none" style={styles.toolbarHost}>
-            <FloatingTabBarSurface testID="file-page-toolbar" bottomInset={props.bottomInset} stretch>
+            <FloatingTabBarSurface testID="file-page-toolbar" bottomInset={props.bottomInset} stretch overPicture={props.overPicture}>
                 <View style={styles.toolbarRow}>
                     {showModes ? (
                         <SegmentedTabBar
@@ -431,8 +444,8 @@ export function FilePageToolbar(props: Readonly<{
                             targetSize="platform"
                         />
                     ) : null}
-                    <View style={styles.toolbarSpacer} />
                     {props.accessory}
+                    <View style={styles.toolbarSpacer} />
                     {props.find ? (
                         <IconButton testID="file-page-toolbar-find" variant="plain" size={44} iconSize={20} iconName="magnifying-glass"
                             accessibilityRole="button" accessibilityLabel={t('find.open')} onPress={props.find.onOpen} />

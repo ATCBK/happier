@@ -8,6 +8,7 @@ import Animated, {
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { GlassPanel } from '@/components/ui/glass/GlassPanel';
+import { GlassLivePictureBackdropContext } from '@/components/ui/glass/livePictureBackdrop';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { formatPreviewProgressMegabytes } from '@/components/ui/media/MediaDownloadProgress';
 import type { FilePreviewProgress, FilePreviewSourceState, UseFilePreviewSourceInput } from '@/components/ui/media/useFilePreviewSource';
@@ -199,10 +200,14 @@ export function PdfPagePill(
 export function PdfViewerFrame(
   props: Readonly<{ children: React.ReactNode; testID?: string; presentation?: 'page' | 'stage' }>,
 ) {
+  // The page pill and the Find bar float over the paper (arbitrary pixels), so their glass takes the
+  // live-picture coat: dark-theme ink stays readable over a white page at the default.
   return (
-    <View testID={props.testID} style={[styles.frame, props.presentation === 'stage' ? styles.stageFrame : null]}>
-      {props.children}
-    </View>
+    <GlassLivePictureBackdropContext.Provider value>
+      <View testID={props.testID} style={[styles.frame, props.presentation === 'stage' ? styles.stageFrame : null]}>
+        {props.children}
+      </View>
+    </GlassLivePictureBackdropContext.Provider>
   );
 }
 

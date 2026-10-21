@@ -259,7 +259,7 @@ function PdfViewerBody(props: PdfViewerProps & Readonly<{ onRetry(): void }>) {
     };
   }, [applyScale, preview.status, preview.uri, scaleFor]);
 
-  // The header's zoom menu (or a fit mode re-resolved on resize) sets the absolute scale.
+  // The header's zoom menu sets the absolute scale.
   React.useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer || state.status !== 'ready') return;
@@ -267,6 +267,21 @@ function PdfViewerBody(props: PdfViewerProps & Readonly<{ onRetry(): void }>) {
     viewer.setScale(next);
     applyScale(next);
   }, [applyScale, props.zoom, scaleFor, state.status]);
+  // A fit mode follows the column: the pane or window narrowing or widening re-fits the pages. A chosen
+  // percentage stays as chosen (the column scrolls). The column resizes without the window on web (panes).
+  React.useEffect(() => {
+    const node = element();
+    if (!node || state.status !== 'ready' || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      const viewer = viewerRef.current;
+      if (!viewer || typeof latest.current.zoom === 'number') return;
+      const next = scaleFor();
+      viewer.setScale(next);
+      applyScale(next);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [applyScale, scaleFor, state.status]);
 
   const { onPageInfo } = props;
   React.useEffect(() => {

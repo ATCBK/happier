@@ -3164,6 +3164,8 @@ const fileViewerTranslations = { ru: {
         stageItem: ({ name, width, height }) => `${name}, ${width} на ${height}`,
         openFile: "Открыть файл",
         viewFullScreen: "Открыть на весь экран",
+        hideControls: "Скрыть элементы управления",
+        showControls: "Показать элементы управления",
         zoomIn: "Увеличить",
         zoomOut: "Уменьшить",
         fit: "Вписать",
@@ -3185,6 +3187,7 @@ const fileViewerTranslations = { ru: {
         pdfDamagedBody: "Это не PDF или файл повреждён. Откройте его в приложении по умолчанию, чтобы проверить.",
         pdfFailed: "Не удалось загрузить этот PDF",
         pdfPage: ({ page, total }) => `${page} / ${total}`,
+        pdfPageCount: ({ count }) => (count % 10 === 1 && count % 100 !== 11 ? `${count} страница` : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14) ? `${count} страницы` : `${count} страниц`),
         pdfFitWidth: "По ширине",
         pdfFitPage: "По странице",
         pdfZoom: "Масштаб",
@@ -15921,5 +15924,3 @@ export {
     Domain_workspaceSyncDiagnosticTranslations as workspaceSyncDiagnosticTranslations,
     Domain_workspaceTabTranslations as workspaceTabTranslations,
 };
-        hideControls: "Скрыть элементы управления",
-        showControls: "Показать элементы управления",

@@ -33,6 +33,12 @@ describe('File page header behaviour model', () => {
         expect(plugin.editUnavailableReason).toBe(null);
     });
 
+    it('offers Find in a PDF, whose viewer searches its text, but not in other binary kinds', () => {
+        expect(resolveFilePageHeaderModel({ ...text, kind: 'pdf', hasText: false }).findAvailable).toBe(true);
+        expect(resolveFilePageHeaderModel({ ...text, kind: 'image', hasText: false }).findAvailable).toBe(false);
+        expect(resolveFilePageHeaderModel({ ...text, kind: 'pdf', hasText: false, pluginViewerSelected: true }).findAvailable).toBe(false);
+    });
+
     it('does not offer an editor for a partial buffer, even when writes are supported', () => {
         expect(resolveFilePageHeaderModel({ ...text, partial: true }).editUnavailableReason).toBe('partial');
         expect(resolveFilePageHeaderModel({ ...text, hasText: false }).editUnavailableReason).toBe('binary');

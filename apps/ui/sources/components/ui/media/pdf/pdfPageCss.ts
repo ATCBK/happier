@@ -2,7 +2,9 @@
  * The one stylesheet for pdf.js pages, used by the web viewer (injected once per theme) and by the
  * native WebView document. Pages are always-white paper with an ink hairline on the inset well (lab
  * files FV5); the text layer is pdf.js's own transparent selection layer; Find marks use the theme's
- * find roles. Values arrive from the theme owner, never as literals here.
+ * find roles. The text is drawn on the canvas below its transparent twin, so the layer multiplies onto the
+ * paper like a highlighter: every match is a wash, the current one a stronger fill, and the word stays
+ * readable through both (lab FV5 Find). Values arrive from the theme owner, never as literals here.
  */
 export type PdfPageCssColors = Readonly<{
   well: string;
@@ -38,6 +40,7 @@ ${scope} .textLayer > :not(.markedContent), ${scope} .textLayer .markedContent s
 ${scope} .textLayer .markedContent { display: contents; }
 ${scope} .textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; }
 ${scope} .textLayer mark[data-pdf-find-match] { color: transparent; background: ${colors.matchAll}; border-radius: 2px; }
+${scope} .textLayer { mix-blend-mode: multiply; }
 ${scope} .textLayer mark[data-pdf-find-current] { background: ${colors.matchCurrent}; }
 `;
 }

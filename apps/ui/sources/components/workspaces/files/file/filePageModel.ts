@@ -55,7 +55,9 @@ export function resolveFilePageHeaderModel(input: Readonly<{
         : !input.hasText ? 'binary'
         : !input.writeSupported || input.deleted ? 'unsupported'
         : input.editorAvailable === false ? 'unavailable' : null;
-    return { modes, findAvailable: input.hasText && !input.pluginViewerSelected, editUnavailableReason };
+    // A PDF's viewer searches its own text layer (FV5f); other binary kinds have nothing to find.
+    const findAvailable = (input.hasText || input.kind === 'pdf') && !input.pluginViewerSelected;
+    return { modes, findAvailable, editUnavailableReason };
 }
 
 /**

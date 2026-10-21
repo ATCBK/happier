@@ -3144,6 +3144,8 @@ const fileViewerTranslations = { ca: {
         stageItem: ({ name, width, height }) => `${name}, ${width} per ${height}`,
         openFile: "Obre el fitxer",
         viewFullScreen: "Mostra a pantalla completa",
+        hideControls: "Amaga els controls",
+        showControls: "Mostra els controls",
         zoomIn: "Amplia",
         zoomOut: "Redueix",
         fit: "Ajusta",
@@ -3165,6 +3167,7 @@ const fileViewerTranslations = { ca: {
         pdfDamagedBody: "No és un PDF vàlid o està malmès. Obre'l a l'aplicació predeterminada per comprovar-ho.",
         pdfFailed: "No s'ha pogut carregar aquest PDF",
         pdfPage: ({ page, total }) => `${page} / ${total}`,
+        pdfPageCount: ({ count }) => (count === 1 ? '1 pàgina' : `${count} pàgines`),
         pdfFitWidth: "Ajusta a l'amplada",
         pdfFitPage: "Ajusta a la pàgina",
         pdfZoom: "Zoom",
@@ -15912,5 +15915,3 @@ export {
     Domain_workspaceSyncDiagnosticTranslations as workspaceSyncDiagnosticTranslations,
     Domain_workspaceTabTranslations as workspaceTabTranslations,
 };
-        hideControls: "Amaga els controls",
-        showControls: "Mostra els controls",

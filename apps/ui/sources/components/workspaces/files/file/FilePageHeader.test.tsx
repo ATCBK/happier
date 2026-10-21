@@ -806,6 +806,25 @@ describe('FilePageHeader', () => {
       'file',
     ]);
   });
+  it('says a kept draft is unsaved while reading, and nothing for a clean file', async () => {
+    const { FilePageHeader } = await import('./FilePageHeader');
+    const render = (status: string) =>
+      renderScreen(
+        React.createElement(FilePageHeader as any, {
+          displayMode: 'file', onDisplayMode: () => {}, diffMode: 'pending', onDiffMode: () => {},
+          hasPendingDelta: false, hasIncludedDelta: false, scmWriteEnabled: false, includeExcludeEnabled: false,
+          virtualSelectionEnabled: false, isSelectedForCommit: false, lineSelectionEnabled: false,
+          selectedLineCount: 0, isApplyingStage: false, inFlightScmOperation: null, onStageFile: () => {},
+          onUnstageFile: () => {}, onApplySelectedLines: () => {}, onClearSelection: () => {},
+          fileEditorEnabled: true, isEditingFile: false,
+          editor: { status, canSave: true, onSave: () => {}, onDone: () => {}, onCancel: () => {}, onStart: () => {} },
+          edit: { kind: 'edit', onPress: () => {} },
+          modes: [{ id: 'view', displayMode: 'file' }],
+        }),
+      );
+    expect((await render('dirty')).findByTestId('file-editor-status-pill')).not.toBeNull();
+    expect((await render('clean')).findByTestId('file-editor-status-pill')).toBeNull();
+  });
   it('names the views View | Changes in one segmented choice', async () => {
     const { FilePageHeader } = await import('./FilePageHeader');
 
@@ -940,6 +959,55 @@ describe('FilePageHeader', () => {
     expect(screen.findByTestId('file-header-find')).toBeNull();
     expect(screen.findByTestId('file-details-edit')).toBeNull();
   });
+  it('keeps View | Changes and Find in a phone Changes band and lets the desk-only review toggles go', async () => {
+    const { FilePageHeader } = await import('./FilePageHeader');
+    const { SurfaceStateSizeProvider } = await import('@/components/ui/surfaces/surfaceStateSize');
+    const { DiffPresentationStyleToggleButton } = await import('@/components/ui/code/diff/DiffPresentationStyleToggleButton');
+    const props = {
+      displayMode: 'diff',
+      onDisplayMode: () => {},
+      diffMode: 'pending',
+      onDiffMode: () => {},
+      hasPendingDelta: true,
+      hasIncludedDelta: false,
+      scmWriteEnabled: false,
+      includeExcludeEnabled: false,
+      virtualSelectionEnabled: false,
+      isSelectedForCommit: false,
+      lineSelectionEnabled: false,
+      selectedLineCount: 0,
+      isApplyingStage: false,
+      inFlightScmOperation: null,
+      onStageFile: () => {},
+      onUnstageFile: () => {},
+      onApplySelectedLines: () => {},
+      onClearSelection: () => {},
+      modes: [
+        { id: 'view', displayMode: 'file' },
+        { id: 'changes', displayMode: 'diff' },
+      ],
+      find: { onOpen: () => {} },
+      reviewCommentsEnabled: true,
+      onToggleCommentMode: () => {},
+    };
+    const segments = (screen: Awaited<ReturnType<typeof renderScreen>>) =>
+      screen.findAll((node) => Array.isArray(node.props?.tabs) && typeof node.props?.onSelectTab === 'function');
+    // The review bar holds the phone's bottom edge (rvp P1), so the band keeps only the way back to View and Find;
+    // comments start from a selection there, and a phone diff has one column.
+    const phone = await renderScreen(
+      React.createElement(SurfaceStateSizeProvider, {
+        size: 'phone',
+        children: React.createElement(FilePageHeader as any, props),
+      }),
+    );
+    expect(segments(phone)).toHaveLength(1);
+    expect(phone.findByTestId('file-header-find')).not.toBeNull();
+    expect(phone.findByTestId('file-details-comment-mode')).toBeNull();
+    expect(phone.findAllByType(DiffPresentationStyleToggleButton as any)).toHaveLength(0);
+    const pane = await renderScreen(React.createElement(FilePageHeader as any, props));
+    expect(pane.findByTestId('file-details-comment-mode')).not.toBeNull();
+  });
+
   it('shows the single diff area without offering an unavailable choice', async () => {
     const { FilePageHeader } = await import('./FilePageHeader');
 

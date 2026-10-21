@@ -3137,6 +3137,8 @@ const fileViewerTranslations = { 'zh-Hans': {
         stageItem: ({ name, width, height }) => `${name}，${width} × ${height}`,
         openFile: "打开文件",
         viewFullScreen: "全屏查看",
+        hideControls: "隐藏控件",
+        showControls: "显示控件",
         zoomIn: "放大",
         zoomOut: "缩小",
         fit: "适合窗口",
@@ -3158,6 +3160,7 @@ const fileViewerTranslations = { 'zh-Hans': {
         pdfDamagedBody: "它不是有效的 PDF，或已损坏。请在默认应用中打开以检查。",
         pdfFailed: "无法加载此 PDF",
         pdfPage: ({ page, total }) => `${page} / ${total}`,
+        pdfPageCount: ({ count }) => (`${count} 页`),
         pdfFitWidth: "适合宽度",
         pdfFitPage: "适合页面",
         pdfZoom: "缩放",
@@ -15831,5 +15834,3 @@ export {
     Domain_workspaceSyncDiagnosticTranslations as workspaceSyncDiagnosticTranslations,
     Domain_workspaceTabTranslations as workspaceTabTranslations,
 };
-        hideControls: "隐藏控件",
-        showControls: "显示控件",

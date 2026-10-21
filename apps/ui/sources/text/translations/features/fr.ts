@@ -3142,6 +3142,8 @@ const fileViewerTranslations = { fr: {
         stageItem: ({ name, width, height }) => `${name}, ${width} par ${height}`,
         openFile: "Ouvrir le fichier",
         viewFullScreen: "Afficher en plein écran",
+        hideControls: "Masquer les commandes",
+        showControls: "Afficher les commandes",
         zoomIn: "Zoom avant",
         zoomOut: "Zoom arrière",
         fit: "Ajuster",
@@ -3163,6 +3165,7 @@ const fileViewerTranslations = { fr: {
         pdfDamagedBody: "Ce n'est pas un PDF valide, ou il est endommagé. Ouvrez-le dans votre app par défaut pour vérifier.",
         pdfFailed: "Impossible de charger ce PDF",
         pdfPage: ({ page, total }) => `${page} / ${total}`,
+        pdfPageCount: ({ count }) => (count === 1 ? '1 page' : `${count} pages`),
         pdfFitWidth: "Ajuster à la largeur",
         pdfFitPage: "Ajuster à la page",
         pdfZoom: "Zoom",
@@ -15936,5 +15939,3 @@ export {
     Domain_workspaceSyncDiagnosticTranslations as workspaceSyncDiagnosticTranslations,
     Domain_workspaceTabTranslations as workspaceTabTranslations,
 };
-        hideControls: "Masquer les commandes",
-        showControls: "Afficher les commandes",
