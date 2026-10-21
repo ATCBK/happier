@@ -1052,7 +1052,12 @@ installation or a version conflict. An unopened explicit pin stays pending witho
 falling back. Auto-pick prefers the rendered release's version,
 then the Machine last used for this plugin on this device, this device's own
 Machine when known, and the most recently active eligible Machine (stable identity
-breaks ties). An unpinned operation re-picks when its Machine becomes ineligible.
+breaks ties). In unreleased 0.3 source, that ranking chooses the initial or replacement
+Auto origin. The mounted Administration publication retains its choice while it
+remains eligible and compatible; presence heartbeats and equal reconstructed inputs
+do not move it. Fresh execution and execution-origin Action reads revalidate that
+same choice. An explicit Machine pin takes precedence, including when unavailable;
+an unpinned operation re-picks when its current origin becomes ineligible.
 `executionTarget: { autoPick: false }` opts a Machine-dependent plugin into asking
 when several candidates remain; a sole candidate still works automatically.
 The existing optional `default: 'installation'` hint breaks otherwise equal

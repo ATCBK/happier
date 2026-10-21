@@ -133,13 +133,13 @@ describe('execution-origin plugin identity with real Account and machine owners'
         expect(hook.getCurrent().state).toMatchObject({ kind: 'selected', selectionSource: 'auto', origin: sources[1]!.source.origin });
         expect(hook.getCurrent()).toMatchObject({ loading: false, canExecute: true });
         await act(async () => { storage.setState({ machineListStatusByServerId: { [home.id]: 'idle' } }); });
-        // Recency is a ranking fact. A changed order must reach the chip before
-        // invocation, while timestamps that retain the order stay presentation-only.
+        // Recency ranks the initial choice. Heartbeats must leave the current
+        // eligible Auto choice and invocation target in agreement.
         const admittedCandidates = hook.getCurrent().candidates;
         await act(async () => { storage.setState({ machineListByServerId: { [home.id]: [{ ...a, activeAt: b.activeAt + 1 }, b] } }); });
-        expect(hook.getCurrent().selectedOrigin).toEqual(sources[0]!.source.origin);
-        // A heartbeat changes the choice, not the admitted candidate set consumed
-        // by AppShell's selectable-origin publication and plugin UI union.
+        expect(hook.getCurrent().selectedOrigin).toEqual(sources[1]!.source.origin);
+        expect(hook.getCurrent().resolveExecutionOrigin({ recordUse: false })?.origin).toEqual(sources[1]!.source.origin);
+        // Admitted candidates are likewise unchanged by recency ordering.
         expect(hook.getCurrent().candidates).toBe(admittedCandidates);
         await act(async () => { storage.setState({ machineListByServerId: { [home.id]: [a, b] } }); });
         expect(hook.getCurrent().candidates).toBe(admittedCandidates);
@@ -148,7 +148,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
         await act(async () => { recordMachineRequestFailed({ ...scope, machineId: b.id }); });
         expect(hook.getCurrent().selectedOrigin).toEqual(sources[0]!.source.origin);
         await act(async () => { clearMachineRequestReachabilityForScope({ ...scope, serverId: serverIdentityId }); });
-        expect(hook.getCurrent().selectedOrigin).toEqual(sources[1]!.source.origin);
+        expect(hook.getCurrent().selectedOrigin).toEqual(sources[0]!.source.origin);
         const { getSystemTasksRunner } = await import('@/components/systemTasks/systemTasksRuntime');
         const { publishLocalDaemonStatus, readLocalDaemonSharedState } = await import('@/components/settings/machines/localControl/localDaemonSharedState');
         const runner = getSystemTasksRunner();
@@ -160,9 +160,9 @@ describe('execution-origin plugin identity with real Account and machine owners'
         } finally {
             await act(async () => { publishLocalDaemonStatus(runner, previousLocalStatus); });
         }
-        await act(async () => { expect(hook.getCurrent().resolveExecutionOrigin()?.origin).toEqual(sources[1]!.source.origin); });
+        await act(async () => { expect(hook.getCurrent().resolveExecutionOrigin()?.origin).toEqual(sources[0]!.source.origin); });
         expect(readPluginMachineExecutionLastUsedTarget(storage.getState().settings.machineAdministrationTargetsLocalV1, pluginId))
-            .toEqual({ serverIdentityId, machineId: b.id });
+            .toEqual({ serverIdentityId, machineId: a.id });
         const offline = { ...b, active: false, activeAt: 0 };
         await act(async () => { storage.setState({ machineListByServerId: { [home.id]: [a, offline] } }); });
         expect(hook.getCurrent().state).toMatchObject({ kind: 'selected', selectionSource: 'auto', origin: sources[0]!.source.origin });

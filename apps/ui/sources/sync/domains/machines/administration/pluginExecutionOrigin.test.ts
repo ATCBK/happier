@@ -125,6 +125,26 @@ describe('resolvePluginMachineExecutionOriginState', () => {
         expect(resolvePluginMachineExecutionOriginState({ ...params, autoPick: false,
             declaredDefaultOrigins: [composePluginMachineExecutionOriginV1(b.materialization)] })).toMatchObject({ kind: 'selectionRequired' });
     });
+    it('retains an eligible automatic origin without overriding pins, compatibility or Ask', () => {
+        const a = candidate({ serverIdentityId: 'srv_one', machineId: 'machine-a', materializationId: 'a' });
+        const b = candidate({ serverIdentityId: 'srv_one', machineId: 'machine-b', materializationId: 'b' });
+        const originA = composePluginMachineExecutionOriginV1(a.materialization);
+        const originB = composePluginMachineExecutionOriginV1(b.materialization);
+        const params = { pluginId: 'acme.plugin', storedOrigin: null, candidates: [a, b], automaticOrigin: originA,
+            machineActivity: [{ serverIdentityId: 'srv_one', machineId: 'machine-b', activeAt: 200 }] };
+        expect(resolvePluginMachineExecutionOriginState(params)).toMatchObject({ kind: 'selected', origin: originA, selectionSource: 'auto' });
+        expect(resolvePluginMachineExecutionOriginState({ ...params, storedTarget: { serverIdentityId: 'srv_one', machineId: 'machine-b' } }))
+            .toMatchObject({ kind: 'selected', origin: originB, selectionSource: 'pinned' });
+        expect(resolvePluginMachineExecutionOriginState({ ...params, candidates: [{ ...a, validation: { kind: 'rejected', reason: 'offline' } }, b] }))
+            .toMatchObject({ kind: 'selected', origin: originB, selectionSource: 'auto' });
+        expect(resolvePluginMachineExecutionOriginState({ ...params, renderedVersion: '2.0.0',
+            candidates: [a, candidate({ ...b.materialization, version: '2.0.0' })] }))
+            .toMatchObject({ kind: 'selected', origin: originB, selectionSource: 'auto' });
+        expect(resolvePluginMachineExecutionOriginState({ ...params, autoPick: false })).toMatchObject({ kind: 'selectionRequired' });
+        expect(resolvePluginMachineExecutionOriginState({ ...params, contextualTarget: { serverIdentityId: 'srv_one', machineId: 'machine-b' } }))
+            .toMatchObject({ kind: 'selected', origin: originB });
+    });
+
     it('keeps an explicit admitted development choice able to replace the bundled rendered version', () => {
         const origin = { serverIdentityId: 'srv_one', sourceRef: { machineId: 'dev-machine', pluginId: 'acme.plugin',
             sourceCustody: { kind: 'development', registeredRootId: 'dev-root' } } } as const;

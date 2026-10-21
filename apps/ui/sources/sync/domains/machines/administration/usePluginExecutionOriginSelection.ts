@@ -212,6 +212,7 @@ export function readFreshPluginMachineExecutionOriginCandidates(params: FreshPlu
 export function resolveFreshPluginMachineExecutionOrigin(params: FreshPluginExecutionOriginParams): FreshPluginMachineExecutionOriginV1 | null {
     const candidates = readFreshPluginMachineExecutionOriginCandidates(params);
     const state = resolvePluginMachineExecutionOriginState({ pluginId: params.pluginId, storedOrigin: params.origin,
+        automaticOrigin: executionOriginMachineSnapshotPublication.readAutomaticOrigin(params.pluginId, captureActiveServerAccountScopeLifetime()),
         storedTarget: params.storedTarget, homeServerIdentityId: getServerProfileById(getActiveServerAccountScope()?.serverId ?? '')?.serverIdentityId,
         candidates, declaredDefaultOrigins: params.declaredDefaultOrigins, contextualTarget: params.contextualTarget,
         autoPick: params.autoPick, renderedVersion: params.renderedVersion,

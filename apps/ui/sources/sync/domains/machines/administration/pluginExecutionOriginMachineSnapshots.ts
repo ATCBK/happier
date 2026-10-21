@@ -211,6 +211,19 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
     const clockToken = {};
     let stops: Array<() => void> = [];
 
+    // Reuse the mounted selection, including for fresh invocation and Action
+    // reads. This is a descriptive hint; the policy still admits current facts.
+    function readAutomaticOrigin(pluginId: string, accountLifetime: ServerAccountScopeLifetime | null | undefined) {
+        if (accountLifetime === null || accountLifetime?.isCurrent() === false) return null;
+        for (const context of contexts.values()) for (const demand of context.demands) {
+            if (demand.inputs.pluginId !== pluginId || demand.inputs.accountLifetime !== accountLifetime
+                || demand.inputs.selection?.contextualTarget !== undefined) continue;
+            const state = demand.current.selection?.state;
+            if (state?.kind === 'selected' && state.selectionSource === 'auto') return state.origin;
+        }
+        return null;
+    }
+
     function describe(demand: Demand, inventory: InventoryPublication, key: string, eligibilityKey: string) {
         const spec = demand.inputs.selection;
         if (!spec) return null;
@@ -238,6 +251,10 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
             ?? spec.machineRejections?.find(entry => sameTarget(entry, rememberedTarget))?.reason ?? null : null;
         const resolved = resolvePluginMachineExecutionOriginState({ pluginId: demand.inputs.pluginId,
             storedOrigin: spec.storedOrigin, storedTarget, homeServerIdentityId: spec.homeServerIdentityId, candidates,
+            automaticOrigin: previous && previous.inputs.pluginId === demand.inputs.pluginId
+                && previous.inputs.accountLifetime === demand.inputs.accountLifetime
+                && previous.value.state.kind === 'selected' && previous.value.state.selectionSource === 'auto'
+                ? previous.value.state.origin : readAutomaticOrigin(demand.inputs.pluginId, demand.inputs.accountLifetime),
             declaredDefaultOrigins: spec.declaredDefaultOrigins, contextualTarget: spec.contextualTarget,
             storedOriginMachinePresence: presence, autoPick: spec.autoPick, renderedVersion: spec.renderedVersion,
             ...readPluginExecutionOriginAutomaticHints(demand.inputs.pluginId, candidates, inventory.snapshots),
@@ -307,8 +324,10 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
                 ?? readPluginMachineExecutionTargetPreference(inventory.state.settings.machineAdministrationTargetsLocalV1, inputs.pluginId)?.serverIdentityId
                 ?? getServerProfileById(inputs.activeServerId)?.serverIdentityId ?? '';
             const prefix = `${context.key}\u0000${readinessHome}\u0000${inventory.pendingHomes.has(readinessHome)}\u0000`;
-            const key = `${prefix}${demand.facts!.activityKey}`;
             const eligibilityKey = `${prefix}${demand.facts!.eligibilityKey}`;
+            // Activity ranks an initial/replacement Auto choice. A heartbeat
+            // alone must not republish or replace an eligible mounted choice.
+            const key = inputs.selection ? eligibilityKey : `${prefix}${demand.facts!.activityKey}`;
             const selection = describe(demand, inventory, key, eligibilityKey);
             if (demand.current.key !== key || demand.current.snapshots !== inventory.snapshots || demand.current.selection !== selection) {
                 const sibling = [...context.demands].find(other => other !== demand && other.current.key === key
@@ -397,6 +416,7 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
     }
 
     return {
+        readAutomaticOrigin,
         connect(inputs: ExecutionOriginMachineSnapshotInputs, listener: () => void): ExecutionOriginMachineSnapshotConnection {
             let disposed = false;
             let demand: Demand;

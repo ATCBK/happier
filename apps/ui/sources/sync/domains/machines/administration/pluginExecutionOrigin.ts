@@ -284,6 +284,8 @@ export function resolvePluginMachineExecutionOriginState(params: Readonly<{
     storedOrigin: PluginMachineExecutionOriginV1 | null;
     /** Device-local Machine intent, independent of current source/materialization custody. */
     storedTarget?: MachineAdministrationTargetV1 | null;
+    /** The mounted publication's Auto choice; re-admitted below, never a pin. */
+    automaticOrigin?: PluginMachineExecutionOriginV1 | null;
     /** Only this Home may supply an automatic, unpinned operation. */
     homeServerIdentityId?: string | null;
     candidates: readonly PluginExecutionOriginCandidateV1[];
@@ -423,6 +425,9 @@ export function resolvePluginMachineExecutionOriginState(params: Readonly<{
         if (new Set(compatible.map(getPluginExecutionOriginCandidateVersion)).size > 1) {
             return Object.freeze({ kind: 'conflict', candidates: compatible, reasons: Object.freeze(['different_versions'] as const) });
         }
+        const incumbent = params.automaticOrigin && compatible.find(candidate => candidateMatchesOrigin(candidate, params.automaticOrigin!));
+        if (incumbent) return Object.freeze({ kind: 'selected', origin: getPluginExecutionOriginCandidateOrigin(incumbent),
+            candidate: incumbent, selectionSource: 'auto' });
         const matchesTarget = (candidate: PluginExecutionOriginCandidateV1, target: MachineAdministrationTargetV1 | null | undefined) => {
             const origin = getPluginExecutionOriginCandidateOrigin(candidate);
             return target?.serverIdentityId === origin.serverIdentityId

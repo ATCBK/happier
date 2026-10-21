@@ -46,6 +46,42 @@ function fixture() {
 }
 
 describe('execution-origin Machine publication', () => {
+    it('retains Auto across heartbeat elections, shares it with a new consumer and gives explicit pins precedence', () => {
+        const { inputs, connect, home, machine, source, now } = fixture();
+        const second = createMachineFixture({ id: 'second-origin-machine', activeAt: now - 1 });
+        const secondSource = { ...source, source: { ...source.source,
+            origin: { ...source.source.origin, sourceRef: { ...source.source.origin.sourceRef, machineId: second.id } } } };
+        storage.setState({ machineListByServerId: { [home.id]: [machine, second] } });
+        const current = { ...inputs, sources: [source, secondSource], selection: { availabilityRevision: {},
+            storedOrigin: null, homeServerIdentityId: home.serverIdentityId,
+            classifyRelease: () => ({ releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }) } };
+        const first = connect(current);
+        const initial = first.getSnapshot().selection;
+        expect(initial?.state).toMatchObject({ kind: 'selected', origin: source.source.origin, selectionSource: 'auto' });
+        first.updateInputs({ ...current, sources: current.sources.map(candidate => ({ ...candidate,
+            source: { ...candidate.source, origin: { ...candidate.source.origin,
+                sourceRef: { ...candidate.source.origin.sourceRef } } } })) });
+        expect(first.getSnapshot().selection).toBe(initial);
+        storage.setState({ machineListByServerId: { [home.id]: [machine, { ...second, activeAt: now + 1 }] } });
+        expect(first.getSnapshot().selection).toBe(initial);
+        const page = connect({ ...current, selection: { ...current.selection } });
+        expect(page.getSnapshot().selection).toBe(initial);
+        storage.setState({ settings: { ...storage.getState().settings, machineAdministrationTargetsLocalV1: {
+            [`plugin.runOn:${inputs.pluginId}`]: { serverIdentityId: home.serverIdentityId, machineId: second.id },
+        } } });
+        const pinned = first.getSnapshot().selection;
+        expect(pinned?.state).toMatchObject({ kind: 'selected', origin: secondSource.source.origin, selectionSource: 'pinned' });
+        storage.setState({ machineListByServerId: { [home.id]: [{ ...machine, activeAt: now + 2 }, second] } });
+        expect(first.getSnapshot().selection).toBe(pinned);
+        expect(page.getSnapshot().selection).toBe(pinned);
+        storage.setState({ machineListByServerId: { [home.id]: [machine, { ...second, active: false, activeAt: 0 }] } });
+        expect(first.getSnapshot().selection?.state).toMatchObject({ kind: 'unavailable', storedTarget: { machineId: second.id } });
+        storage.setState({ settings: { ...storage.getState().settings, machineAdministrationTargetsLocalV1: {} } });
+        expect(first.getSnapshot().selection?.state).toMatchObject({ kind: 'selected', origin: source.source.origin, selectionSource: 'auto' });
+        storage.setState({ machineListByServerId: { [home.id]: [{ ...machine, active: false, activeAt: 0 }, second] } });
+        expect(first.getSnapshot().selection?.state).toMatchObject({ kind: 'selected', origin: secondSource.source.origin, selectionSource: 'auto' });
+    });
+
     it('retains equal descriptive output when a custom classifier callback changes and publishes actual classification changes', () => {
         const { inputs, connect, home, machine } = fixture();
         const materialization = { serverIdentityId: home.serverIdentityId, machineId: machine.id, pluginId: inputs.pluginId,
