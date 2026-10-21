@@ -8,7 +8,7 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/
 import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import type { ComposerStructuredInputMention } from './structuredInputMentions';
 import type { ComposerEditorReference } from '@/components/ui/forms/composerEditor/composerEditorTypes';
-import { projectAgentInputAttachmentRowItems } from './agentInputContracts';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -192,6 +192,9 @@ const browser = await installBrowserRuntimeForTests({ url: 'https://composer-str
 afterAll(() => browser.restore());
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
+// Match app startup before a composed UI consumer reaches the Account graph.
+await loadSyncSingletonForTests();
+const { projectAgentInputAttachmentRowItems } = await import('./agentInputContracts');
 const { getStorage } = await import('@/sync/domains/state/storageStore');
 const initialStorageState = getStorage().getState();
 beforeEach(() => {

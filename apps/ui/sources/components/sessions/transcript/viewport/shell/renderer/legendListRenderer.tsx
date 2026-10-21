@@ -1420,7 +1420,10 @@ function LegendListTranscriptRendererInner<TItem>(
         ...legendPlatformInteractionProps,
         ...nativeScrollInteractionAndLifecycleProps,
         style: LEGEND_LIST_STYLE,
-        alignItemsAtEnd: true,
+        // Tail alignment hugs rows to the bottom edge. A sidechain with no rows (a retained Run
+        // whose result is the only content) reads from the top like any detail page instead of
+        // sinking its result to the bottom edge under a void.
+        alignItemsAtEnd: data.length > 0 || props.frame.capability.kind !== 'sidechain',
         data,
         dataKey: props.dataKey,
         dataVersion: legendDataVersion,

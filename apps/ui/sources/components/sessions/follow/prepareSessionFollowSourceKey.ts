@@ -66,7 +66,7 @@ export type PrepareSessionFollowSourceKeyDeps = Readonly<{
 
 const defaultDeps: PrepareSessionFollowSourceKeyDeps = {
     resolveContext: async (serverId, options) => {
-        const context = await resolveServerAccountRequestContext({ serverId, preferScoped: true });
+        const context = await resolveServerAccountRequestContext({ serverId, preferScoped: true, signal: options?.signal });
         if (context.scope !== 'scoped') throw new Error('Expected scoped Follow preparation context');
         return {
             scope: 'scoped',
@@ -80,6 +80,7 @@ const defaultDeps: PrepareSessionFollowSourceKeyDeps = {
                 token: context.token,
                 sessionId,
                 timeoutMs: context.timeoutMs,
+                readTransport: context.readTransport,
                 ...(options?.signal ? { signal: options.signal } : {}),
                 ...(options?.intent === 'retry' ? { explicitRetry: true } : {}),
                 ...(context.encryption ? {

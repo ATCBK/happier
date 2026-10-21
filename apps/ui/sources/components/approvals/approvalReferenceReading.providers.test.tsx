@@ -8,6 +8,7 @@ import { PROVIDER_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/provider
 import { describeApprovalActionFields } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 installApprovalCommonModuleMocks({ text: () => vi.importActual<typeof import('@/text')>('@/text') });
 const harness = createHomeGovernanceHarness();
@@ -49,6 +50,27 @@ describe('Provider approval reference reading', () => {
         await harness.reset();
     });
     afterEach(() => standardCleanup());
+
+    it('reads a Provider approval computer through its captured Home Machine reference', async () => {
+        const home = await harness.addHome({ name: 'Approval Home', serverUrl: 'https://provider-machine-reference.test',
+            accountId: 'recipient', serverIdentityId: 'srv_approval' });
+        const { storage } = await import('@/sync/domains/state/storage');
+        const machine = createMachineFixture({ id: 'machine-provider', metadata: {
+            ...createMachineFixture().metadata!, displayName: 'Studio computer',
+        } });
+        storage.setState({ machineListByServerId: { [home]: [machine] },
+            machineListStatusByServerId: { [home]: 'idle' } });
+        const fields = describeApprovalActionFields({ actionId, actionArgs: { ...input, machineId: machine.id } });
+        const field = fields.rows.find(row => row.path === 'machineId');
+        if (!field || field.kind !== 'value') throw new Error('Missing computer field');
+        const hook = await renderHook(() => useApprovalReferenceReading(field.reference, field.value, home));
+        expect(hook.getCurrent()).toMatchObject({ text: 'Studio computer', named: true });
+        const account = await captureLazyActionAccountContext(home);
+        try {
+            expect(await readApprovalReferenceForConfirmation(field.reference, account))
+                .toMatchObject({ text: 'Studio computer', named: true });
+        } finally { account.dispose(); }
+    });
 
     it('names a brokered connection in the captured Home Account without borrowing another Account catalog', async () => {
         const home = await harness.addHome({ name: 'Approval Home', serverUrl: 'https://provider-reference.test',

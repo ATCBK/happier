@@ -6,6 +6,7 @@ import { createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
 import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { ArtifactReadBatchInputV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 
 vi.mock('socket.io-client', async original =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
@@ -17,7 +18,7 @@ await import('@/sync/syncEngine');
 afterEach(() => standardCleanup());
 
 describe('transcript approval hydration', () => {
-    it.each(['recover', 'retire'] as const)('owns a demanded settled receipt retry without another navigation (%s)', async scenario => {
+    it.each(['recover', 'retire', 'isolate'] as const)('owns overlapping demanded receipt retries without another navigation (%s)', async scenario => {
         installDisconnectedServerSocketBoundary();
         const approval = ApprovalRequestV2Schema.parse({ v: 2, status: 'executed', createdAtMs: 1, updatedAtMs: 2,
             createdBy: { surface: 'agent', sessionId: 's1' }, requestedSurface: 'agent', actionId: 'session.capabilities.set',
@@ -26,40 +27,60 @@ describe('transcript approval hydration', () => {
             executionOriginV1: { v: 1, authority: 'account_automation', surface: 'agent', caller: { kind: 'host' },
                 serverId: 'remote', sessionId: 's1', actionId: 'session.capabilities.set', requestId: 'request' } });
         const artifactId = '11111111-1111-4111-8111-111111111111';
+        const artifactIds = [artifactId, '11111111-1111-4111-8111-111111111112', '11111111-1111-4111-8111-111111111113'];
         let reads = 0;
+        const readsById = new Map<string, number>();
+        let failedIds: readonly string[] = [];
+        let allowRecovery = false;
         const home = await serveSessionActionHome({ homes: [{ key: 'session', serverUrl: `https://receipt-retry-${scenario}.test`,
             accountId: 'session-account', currentAccount: true }], route: request => {
             if (request.path === '/v1/artifacts' && request.method === 'GET') return Response.json([]);
             if (request.path !== '/v1/artifacts/read') return undefined;
             reads += 1;
-            if (reads === 1) return Response.json({ error: 'artifact_content_unavailable' }, { status: 503 });
-            return Response.json({ items: [{ artifactId, ok: true, recipientCensus: null, artifact: {
-                id: artifactId, ownerAccountId: 'session-account', access: 'owner', encryptionMode: 'plain',
+            const requestedIds = ArtifactReadBatchInputV1Schema.parse(request.body).artifactIds;
+            for (const id of requestedIds) readsById.set(id, (readsById.get(id) ?? 0) + 1);
+            if (reads === 1 && scenario !== 'isolate') {
+                failedIds = requestedIds;
+                return Response.json({ error: 'artifact_content_unavailable' }, { status: 503 });
+            }
+            return Response.json({ items: requestedIds.map(id => scenario === 'isolate' && id === artifactId && !allowRecovery
+                ? { artifactId: id, ok: false, error: 'artifact_content_unavailable', status: 500, retryable: true }
+                : { artifactId: id, ok: true, recipientCensus: null, artifact: {
+                id, ownerAccountId: 'session-account', access: 'owner', encryptionMode: 'plain',
                 dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, publicAudience: 'none',
                 header: encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1(approval)),
                 body: encodePlainArtifactStoredContent({ body: JSON.stringify(approval) }),
                 headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 2,
-            } }] });
+            } }) });
         } });
         const disconnect = await home.restoreActiveConnection();
         try {
             const { sync } = await import('@/sync/sync');
             const { storage } = await import('@/sync/domains/state/storage');
-            storage.getState().deleteArtifact(artifactId);
-            const pending = sync.hydrateSessionApprovalArtifacts(home.serverId, [artifactId]);
-            const settled = pending.catch((error: unknown) => error);
-            expect(sync.hydrateSessionApprovalArtifacts(home.serverId, [artifactId])).toBe(pending);
+            for (const id of artifactIds) storage.getState().deleteArtifact(id);
+            const pending = sync.hydrateSessionApprovalArtifacts(home.serverId, artifactIds.slice(0, 2));
+            const overlapping = sync.hydrateSessionApprovalArtifacts(home.serverId, artifactIds.slice(1));
+            const settled = Promise.all([pending, overlapping]).then(() => undefined, (error: unknown) => error);
             if (scenario === 'retire') {
-                await vi.waitFor(() => expect(reads).toBe(1));
+                await vi.waitFor(() => expect(failedIds.length).toBeGreaterThan(0));
+                const readsAtRetirement = reads;
                 const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
                 retireActiveServerAccountScopeLifetime();
                 await expect(settled).resolves.toBeUndefined();
-                expect(reads).toBe(1);
-                expect(storage.getState().artifacts[artifactId]?.body).toBeUndefined();
+                expect(reads).toBe(readsAtRetirement);
+                expect(failedIds.map(id => storage.getState().artifacts[id]?.body)).toEqual(failedIds.map(() => undefined));
             } else {
-                await pending;
-                expect(reads).toBe(2);
-                expect(storage.getState().artifacts[artifactId]?.body).toBe(JSON.stringify(approval));
+                if (scenario === 'isolate') {
+                    await overlapping;
+                    expect(artifactIds.slice(1).map(id => storage.getState().artifacts[id]?.body)).toEqual([JSON.stringify(approval), JSON.stringify(approval)]);
+                    expect(storage.getState().artifacts[artifactId]?.body).toBeUndefined();
+                    expect(artifactIds.slice(1).map(id => readsById.get(id))).toEqual([1, 1]);
+                    allowRecovery = true;
+                }
+                await Promise.all([pending, overlapping]);
+                expect(artifactIds.map(id => readsById.get(id))).toEqual(artifactIds.map(id =>
+                    scenario === 'isolate' ? id === artifactId ? 2 : 1 : failedIds.includes(id) ? 2 : 1));
+                expect(artifactIds.map(id => storage.getState().artifacts[id]?.body)).toEqual(artifactIds.map(() => JSON.stringify(approval)));
             }
         } finally { await disconnect(); await home.dispose(); }
     });

@@ -1290,6 +1290,7 @@ export function useSessionComposerController({
             machineId,
             serverId: sessionRouteServerId,
             projection,
+            pluginUiProjection: daemonMergedProjection.inputs!.pluginUiProjection,
             isCurrent: () => (
                 composerReferenceHostRef.current === host
                 && composerReferenceAccountLifetime?.isCurrent() !== false
@@ -1300,6 +1301,7 @@ export function useSessionComposerController({
         sessionRouteServerId,
         composerReferenceAccountLifetime,
         daemonMergedProjection.inputs?.pluginProjectionV2,
+        daemonMergedProjection.inputs?.pluginUiProjection,
         daemonMergedProjection.phase,
         machineId,
         sessionId,
@@ -1311,12 +1313,12 @@ export function useSessionComposerController({
         const projection = daemonMergedProjection.inputs?.pluginProjectionV2;
         if (daemonMergedProjection.phase !== 'ready' || !projection || !machineId) return null;
         const host: ComposerReferenceSearchHost = {
-            machineId, serverId: sessionRouteServerId, projection,
+            machineId, serverId: sessionRouteServerId, projection, pluginUiProjection: daemonMergedProjection.inputs!.pluginUiProjection,
             isCurrent: () => composerDropReferenceHostRef.current === host
                 && isActiveComposerPresentationCurrent() && surfacePresented,
         };
         return host;
-    }, [daemonMergedProjection.inputs?.pluginProjectionV2, daemonMergedProjection.phase,
+    }, [daemonMergedProjection.inputs?.pluginProjectionV2, daemonMergedProjection.inputs?.pluginUiProjection, daemonMergedProjection.phase,
         isActiveComposerPresentationCurrent, machineId, sessionRouteServerId, surfacePresented]);
     composerDropReferenceHostRef.current = composerDropReferenceHost;
     const isSessionComposerPluginScopeCurrent = React.useCallback(() => (
@@ -6234,7 +6236,7 @@ export function useSessionComposerController({
                 onAttachmentsAdded={attachmentsUploadsEnabled && !pendingComposerDocument ? addAttachments : undefined}
                 hasSendableAttachments={
                     (!pendingComposerDocument && hasIncludedReviewCommentDrafts)
-                    || (!pendingComposerDocument && attachmentsUploadsEnabled && attachmentDrafts.length > 0)
+                    || (!pendingComposerDocument && attachmentsUploadsEnabled && sendableAttachmentDrafts(attachmentDrafts).length > 0)
                     || composerAttachmentViews.some((attachment) => attachment.availability.status === 'ready')
                 }
                 permissionRequests={pendingPermissionRequests}

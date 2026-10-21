@@ -49,7 +49,10 @@ export function planComposerReferenceInsertion(input: Readonly<{
     reference: ComposerReferenceInsertion;
     at: Readonly<{ kind: 'activeWord'; range: Readonly<{ start: number; end: number }> }>
         | Readonly<{ kind: 'offset'; offset: number }> | Readonly<{ kind: 'caret' }>;
-}>): ComposerOperationV1[] {
+}>): [
+    Extract<ComposerOperationV1, { kind: 'text.insert' | 'text.replaceRange' }>,
+    Extract<ComposerOperationV1, { kind: 'reference.insert' }>,
+] {
     const { snapshot, reference, at } = input;
     const clamp = (offset: number) => Math.max(0, Math.min(snapshot.text.length, offset));
     let range = at.kind === 'activeWord' ? at.range : at.kind === 'offset'

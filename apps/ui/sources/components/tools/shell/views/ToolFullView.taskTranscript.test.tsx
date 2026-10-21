@@ -641,7 +641,7 @@ describe('ToolFullView (Task transcript reuse)', () => {
         expect(loadOlderSidechainMessagesMock.mock.calls.filter((call) => call[1] === 'sidechain-b')).toHaveLength(1);
     });
 
-    it('renders SubAgentRun sidechain messages through MessageView instead of SubAgentRun renderer in full view', async () => {
+    it('renders running SubAgentRun sidechain messages through MessageView instead of SubAgentRun renderer in full view', async () => {
         renderedSpecificTaskViewSpy.mockReset();
         renderedSpecificSubAgentRunViewSpy.mockReset();
         renderedMessageViewSpy.mockReset();
@@ -649,6 +649,8 @@ describe('ToolFullView (Task transcript reuse)', () => {
 
         const tool = makeToolCall({
             name: 'SubAgentRun',
+            state: 'running',
+            completedAt: null,
             input: { intent: 'review', backendId: 'claude' },
             result: null,
         });

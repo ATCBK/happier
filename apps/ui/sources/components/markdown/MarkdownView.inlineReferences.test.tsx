@@ -16,6 +16,8 @@ installMarkdownCommonModuleMocks();
 const openExternalUrl = vi.fn(async (_url: string) => undefined);
 vi.mock('@/utils/url/openExternalUrl', () => ({ openExternalUrl: (url: string) => openExternalUrl(url) }));
 
+const { MarkdownView } = await import('./MarkdownView');
+
 describe('MarkdownView inline references', () => {
     it('follows Markdown code boundaries rather than treating an unmatched backtick as code', async () => {
         const { sanitizeEnrichedMarkdownWithInlineReferences } = await import('./enriched/enrichedMarkdownLinkHandling');
@@ -51,7 +53,6 @@ describe('MarkdownView inline references', () => {
     });
 
     it('draws a cited reference inline with the owner’s label and hands its press to the owner, never opening it', async () => {
-        const { MarkdownView } = await import('./MarkdownView');
         const onPress = vi.fn();
         const references = {
             scheme: 'finding',
@@ -78,7 +79,6 @@ describe('MarkdownView inline references', () => {
     });
 
     it('leaves a reference link as plain text when nobody owns its scheme', async () => {
-        const { MarkdownView } = await import('./MarkdownView');
         const screen = await renderScreen(<MarkdownView markdown={'See [the sheet](finding:codex-run:f1) here.'} />);
         expect(screen.findAllByType('EnrichedMarkdownText')[0]!.props.markdown).toBe('See the sheet here.');
     });
@@ -88,7 +88,6 @@ describe('MarkdownView inline references', () => {
         const { PluginUiPresentationHostProviderInternal } = await import('../../../../../packages/plugin-ui/src/presentationHost/context');
         const { createPluginUiPrivatePresentationHost } = await import('@/components/plugins/surfaces/pluginUiPrivatePresentationHost');
         const { sanitizeEnrichedMarkdownWithInlineReferences } = await import('./enriched/enrichedMarkdownLinkHandling');
-        const { MarkdownView } = await import('./MarkdownView');
         const onPress = vi.fn();
         const reference = { label: 'High · Plugin', severity: 'high' as const, foreground: '#c00', background: '#fee' };
         const inlineReferences = { scheme: 'plugin-finding', resolve: (target: string) => target === 'f1' ? reference : null, onPress };

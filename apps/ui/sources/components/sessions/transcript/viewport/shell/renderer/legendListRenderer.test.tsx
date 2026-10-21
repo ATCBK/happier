@@ -1021,6 +1021,29 @@ describe('Legend transcript renderer adapter', () => {
         expect(capturedLegendListProps.alignItemsAtEnd).toBe(true);
     });
 
+    it('lets a sidechain with no rows read from the top while rowed transcripts stay tail-aligned', async () => {
+        const { legendListRenderer } = await import('./legendListRenderer');
+        const Renderer = legendListRenderer.Component;
+        const renderWith = (data: Array<{ id: string }>, frame: ReturnType<typeof resolveSidechainTranscriptListShellFrame>) => renderScreen(
+            <Renderer
+                webDomObservation={mountedWebDomObservation}
+                data={data}
+                dataKey="session-test"
+                keyExtractor={(item: { id: string }) => item.id}
+                renderItem={({ item }: { item: { id: string } }) => React.createElement('Row', { id: item.id })}
+                frame={frame}
+                header={React.createElement('HeaderSlot')}
+            />,
+        );
+        const sidechainFrame = resolveSidechainTranscriptListShellFrame({ platformOS: 'web' });
+
+        await renderWith([], sidechainFrame);
+        expect(capturedLegendListProps.alignItemsAtEnd).toBe(false);
+
+        await renderWith([{ id: 'row-1' }], sidechainFrame);
+        expect(capturedLegendListProps.alignItemsAtEnd).toBe(true);
+    });
+
     it('keeps edge slots unprojected on oldest-first frames (web standard space)', async () => {
         // On oldest-first frames the shell list-space already IS standard space: header at the
         // visual top, footer (composer inset spacer on main) at the visual bottom. No swap.

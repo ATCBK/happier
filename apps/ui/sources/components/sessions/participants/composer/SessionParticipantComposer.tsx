@@ -351,6 +351,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
             machineId,
             serverId: participantServerId,
             projection,
+            pluginUiProjection: participantDaemonProjection.inputs!.pluginUiProjection,
             isCurrent: () => (
                 participantComposerReferenceHostRef.current === host
                 && isParticipantComposerCurrent()
@@ -361,6 +362,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
     }, [
         isParticipantComposerCurrent,
         participantDaemonProjection.inputs?.pluginProjectionV2,
+        participantDaemonProjection.inputs?.pluginUiProjection,
         participantDaemonProjection.phase,
         participantMachineTarget?.machineId,
         participantServerId,
