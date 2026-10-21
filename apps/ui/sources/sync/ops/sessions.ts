@@ -68,8 +68,8 @@ import type { StructuredQuestionAnswersV1 } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { normalizeSpawnSessionResult } from './_shared';
 import { isAccountSettingsScopeChangedDuringSpawnPreparationError } from '@/sync/engine/settings/accountSettingsSpawnPreparationError';
-import { isSocketIoAckTimeoutError } from '@happier-dev/sync-client';
-import { isMachineRpcTimeoutError } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcTimeoutError';
+import { isSocketIoAckTimeoutError, readRpcRequestDisposition } from '@happier-dev/sync-client';
+import { isMachineRpcTimeoutError, MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcTimeoutError';
 import { readMachineControlTargetForSession } from './sessionMachineTarget';
 import { stopSessionUsingCanonicalStrategy } from './sessionStopStrategy';
 import {
@@ -725,9 +725,14 @@ export async function forkSession(options: ForkSessionOptions): Promise<SessionF
                     `The daemon may be stopped, still starting, or not connected to the server.`,
             };
         }
+        // Preserve setup failures only when the transport proves this attempt
+        // was not sent. An issued fork still requires lineage reconciliation.
+        const setupErrorCode = readRpcRequestDisposition(error) === 'notSent'
+            ? readSessionRpcErrorCode(error) ?? (isMachineRpcTimeoutError(error) ? MACHINE_RPC_TIMEOUT_ERROR_CODE : undefined)
+            : undefined;
         return {
             ok: false,
-            errorCode: 'UNEXPECTED',
+            errorCode: setupErrorCode ?? 'UNEXPECTED',
             errorMessage: error instanceof Error ? error.message : 'Failed to fork session',
         };
     }

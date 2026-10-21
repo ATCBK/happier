@@ -545,6 +545,49 @@ describe('session resume and fork routing through the Home and Account boundary'
         expect(forkRequests()).toEqual([expect.objectContaining({ method: RPC_METHODS.SESSION_FORK })]);
     });
 
+    it.each(['describe', 'fork'] as const)('preserves a pre-issuance disconnect through the real scoped %s consumer', async kind => {
+        vi.useRealTimers();
+        const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+        await serverScopedRpcSocketPool.stopAll();
+        let physicalSocket: { connected: boolean } | undefined;
+        boundary.setSocketConfigurator(({ socket }) => { physicalSocket = socket; });
+        let releaseRow!: () => void;
+        const row = new Promise<void>(resolve => { releaseRow = resolve; });
+        boundary.setHttpResponder(async input => {
+            if (new URL(String(input)).pathname !== '/v1/machines/machine-1') return null;
+            await row;
+            return Response.json({ machine: machineFixtures.createPlainMachineRowFixture({ id: 'machine-1', accountId: home.accountId }) });
+        });
+        const { machineCapabilitiesDescribe } = await import('./capabilities');
+        const pending = kind === 'describe'
+            ? machineCapabilitiesDescribe('machine-1', { serverId: home.id })
+            : ops.forkSession({ machineId: 'machine-1', parentSessionId: 'sess-parent', forkPoint: { type: 'latest' }, serverId: home.id });
+        try {
+            await vi.waitFor(() => expect(physicalSocket?.connected).toBe(true));
+            // Mis-wiring case: a retained pool holder must expose physical readiness at emission.
+            physicalSocket!.connected = false;
+        } finally { releaseRow(); }
+        const result = await pending;
+        if (kind === 'describe') {
+            expect(result).toEqual({ supported: false, reason: 'error', error: {
+                name: 'RpcError', rpcErrorCode: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE,
+            } });
+        } else {
+            const { SessionForkRpcResultSchema } = await import('@happier-dev/protocol/sessions/fork');
+            expect(SessionForkRpcResultSchema.parse(result)).toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE });
+        }
+        expect(boundary.requests).toEqual([]);
+    });
+
+    it('keeps a fork disconnect after issuance uncertain', async () => {
+        boundary.setRpcResponder(async () => { throw new Error('socket has been disconnected'); });
+        const result = await ops.forkSession({ machineId: 'machine-1', parentSessionId: 'sess-parent',
+            forkPoint: { type: 'latest' }, serverId: home.id });
+        const { classifySessionForkRpcOutcome } = await import('@/sync/domains/sessionFork/sessionForkStrategy');
+        expect(classifySessionForkRpcOutcome(result)).toMatchObject({ type: 'unknown', errorCode: 'UNEXPECTED' });
+        expect(forkRequests()).toHaveLength(1);
+    });
+
     it('routes checkpoint code rollback through the exact Session and Home', async () => {
         boundary.respond('session.checkpointCodeRollback', { status: 'applied', changedPaths: ['tracked.txt'], skippedPaths: [], receipts: ['checkpoint.rollback_applied'], diagnostics: [] });
         const request = { v: 1, sessionId: 'sess-parent', turnId: 'turn-1', cwd: '/repo', codeMode: 'conversation_and_code_without_stash',

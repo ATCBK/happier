@@ -30,7 +30,9 @@ export async function emitWithAckCancellable<T>(params: Readonly<{
   let issued = false;
   try {
     if (params.signal?.aborted) throw createSocketRpcAbortError();
-    if (params.socket.connected === false) throw new Error('Socket not connected');
+    if (params.socket.connected === false) throw createRpcCallError({
+      error: 'Socket not connected', errorCode: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE,
+    });
     const timeout = typeof params.timeoutMs === 'number' && params.timeoutMs > 0 ? params.timeoutMs : undefined;
     // Socket.IO's native timer overflows above this platform boundary; the
     // existing acknowledgement race owns those longer authored deadlines.

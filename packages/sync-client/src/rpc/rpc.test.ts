@@ -7,6 +7,7 @@ import { callSocketRpc, emitWithAckCancellable, type SocketRpcAckScope } from '.
 import { readRpcRequestDisposition } from './rpcDisposition.js';
 import { socketRpcCodec, type SocketRpcContent } from './socketRpcCodec.js';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 
 function cipher(): SocketRpcContent {
   const key = randomBytes(32);
@@ -85,6 +86,45 @@ it('classifies a disconnected Goal caller and allows a fresh call after reconnec
     method: RPC_METHODS.DAEMON_SESSION_GOAL_GET, params: { sessionId: 's' },
     content: { mode: 'plain' }, timeoutMs: null })).resolves.toEqual({ workState: null });
   expect(requests).toEqual([`m:${RPC_METHODS.DAEMON_SESSION_GOAL_SET_V2}`, `m:${RPC_METHODS.DAEMON_SESSION_GOAL_GET}`]);
+});
+it('classifies a disconnect during request preparation before issuance and permits a fresh plugin read after reconnect', async () => {
+  const socket = await setup();
+  const content = cipher();
+  if (content.mode !== 'e2ee') throw new Error('Expected encrypted transport');
+  let prepared!: () => void;
+  const preparing = new Promise<void>(resolve => { prepared = resolve; });
+  let finishPreparation!: () => void;
+  const preparation = new Promise<void>(resolve => { finishPreparation = resolve; });
+  const delayedContent: SocketRpcContent = { mode: 'e2ee', cipher: {
+    ...content.cipher,
+    encryptRaw: async value => { prepared(); await preparation; return await content.cipher.encryptRaw(value); },
+  } };
+  let issued = false;
+  const pending = callSocketRpc({ socket, target: { kind: 'machine', id: 'm' }, method: 'plugin.example.read',
+    params: {}, content: delayedContent, onIssued: () => { issued = true; } })
+    .catch((failure: unknown) => failure);
+  await preparing;
+  socket.disconnect();
+  finishPreparation();
+  const failure = await pending;
+  expect(readRpcErrorCode(failure)).toBe(RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE);
+  expect(readRpcRequestDisposition(failure)).toBe('notSent');
+  expect(issued).toBe(false);
+
+  const requests: string[] = [];
+  server.on('connection', remote => remote.on('rpc-call', async (packet, ack) => {
+    requests.push(packet.method);
+    const request = await socketRpcCodec.decodeRequestParams(content, packet.params, packet.method);
+    ack({ ok: true, result: await socketRpcCodec.encodeResponse(content, { ready: true }, request.callId) });
+  }));
+  await new Promise<void>((resolve, reject) => {
+    socket.once('connect', resolve);
+    socket.once('connect_error', reject);
+    socket.connect();
+  });
+  await expect(callSocketRpc({ socket, target: { kind: 'machine', id: 'm' }, method: 'plugin.example.read',
+    params: {}, content })).resolves.toEqual({ ready: true });
+  expect(requests).toEqual(['m:plugin.example.read']);
 });
 it.each([undefined, null, 180_000])('carries the caller deadline intent across real Socket.IO (%s)', async timeoutMs => {
   const socket = await setup();

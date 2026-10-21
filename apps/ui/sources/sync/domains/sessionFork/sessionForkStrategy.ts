@@ -34,9 +34,9 @@ const UNKNOWN_OUTCOME_ERROR_CODES: ReadonlySet<string> = new Set<string>([
     // The daemon accepted the request and the launch is still pending; the child
     // may yet appear.
     SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT,
-    // `forkSession` collapses a thrown transport error and an undecodable daemon
-    // reply into `UNEXPECTED`. In both cases the request may already have been
-    // emitted, so neither may claim the source is untouched.
+    // `forkSession` preserves classified notSent failures separately. Other
+    // transport errors and undecodable replies may follow issuance, so they
+    // cannot claim the source is untouched.
     SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
 ]);
 
