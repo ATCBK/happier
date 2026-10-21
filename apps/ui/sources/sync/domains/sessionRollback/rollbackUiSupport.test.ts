@@ -5,7 +5,20 @@ import type { Message } from "@happier-dev/session-core/messages";
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { Metadata } from '@happier-dev/session-core/state';
 
-import { readSessionRollbackRangesV1, resolveTranscriptRollbackActions } from './rollbackUiSupport';
+import { readSessionRollbackRangesV1, resolveTranscriptRollbackActions, resolveCheckpointRollbackEvidence } from './rollbackUiSupport';
+import type { TurnChangeSet } from '@happier-dev/protocol/sessions/changes/types';
+
+it('resolves only the exact requested turn checkpoint for a File-page rollback', () => {
+    const turn: TurnChangeSet = { sessionId: 's', turnId: 't', seqRange: { startSeqInclusive: 1, endSeqInclusive: 2 },
+        status: 'completed', files: [], provider: 'scm:git', derivedAt: 1, repositoryCheckpoint: {
+            version: 1, scopeId: 's:/repo', startRef: 'refs/start', finalRef: 'refs/final', baseRefSource: 'turn_start',
+            contentConfidence: 'exact', attributionScope: 'unknown', receipts: [{ id: 'checkpoint.diff_computed' }],
+        } };
+    const input = { conversationRollbackSupported: false, sessionId: 's', turnChangeSets: [turn] };
+    expect(resolveCheckpointRollbackEvidence({ ...input, turnId: 't' })).toMatchObject({ turnId: 't', cwd: '/repo', expectedStartRef: 'refs/start', expectedFinalRef: 'refs/final' });
+    expect(resolveCheckpointRollbackEvidence({ ...input, turnId: 'different' })).toBeUndefined();
+    expect(resolveCheckpointRollbackEvidence({ ...input, sessionId: 'other', turnId: 't' })).toBeUndefined();
+});
 
 const projectedExternalRollbackCapabilities: NonNullable<
     Parameters<typeof resolveTranscriptRollbackActions>[0]['currentAgentCapabilities']

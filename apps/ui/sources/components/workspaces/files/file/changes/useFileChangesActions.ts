@@ -6,6 +6,26 @@ import { discardChange, type DiscardChangeParams, type DiscardChangeResult } fro
 import type { SessionScmReviewComparison } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import type { FileMenuContext } from '../fileMenus';
 import { resolveFileChangesRestoreIntent } from './fileChangesRestore';
+import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { useDerivedSessionChangeSet } from '@/sync/domains/session/changes/hooks/useDerivedSessionChangeSet';
+import { resolveCheckpointRollbackEvidence } from '@/sync/domains/sessionRollback/rollbackUiSupport';
+import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
+import { executeTranscriptRollbackAction } from '@/components/sessions/transcript/transcriptRollbackActionRunner';
+import { t } from '@/text';
+
+/** Reuse the transcript's exact checkpoint admission and dialog; no nearest-turn fallback. */
+export function useFileChangesRollback(address: SessionAddress | null, rootPath: string) {
+    const derived = useDerivedSessionChangeSet(address, rootPath);
+    return React.useCallback((turnId: string) => {
+        if (!address) return;
+        const evidence = resolveCheckpointRollbackEvidence({ sessionId: address.sessionId, turnId,
+            turnChangeSets: derived.turnChangeSets, conversationRollbackSupported: false });
+        if (!evidence || evidence.cwd !== rootPath) return;
+        const executor = createDefaultActionExecutor({ resolveServerIdForSessionId: () => address.serverId });
+        void executeTranscriptRollbackAction({ executor, sessionId: address.sessionId, checkpointCodeRollback: evidence })
+            .catch((error: unknown) => Modal.alert(t('common.error'), error instanceof Error ? error.message : t('errors.unknownError')));
+    }, [address?.serverId, address?.sessionId, derived.turnChangeSets, rootPath]);
+}
 
 /** Menu behavior only; PAGE supplies the dirty-editor and whole-turn-dialog owners. */
 export function useFileChangesActions(input: Omit<DiscardChangeParams, 'entry'> & Readonly<{
@@ -36,7 +56,7 @@ export function useFileChangesActions(input: Omit<DiscardChangeParams, 'entry'> 
             readCurrentText: selected.readCurrentText, refresh: selected.refresh, options: selected.options, sessionTarget: selected.sessionTarget });
         setResult(outcome);
         if (outcome.ok) {
-            if (dirty) selected.onReplacedUnsavedEdits();
+            if (dirty && outcome.fileReplaced) selected.onReplacedUnsavedEdits();
         } else if ((outcome.reason === 'unsupported' || outcome.reason === 'moved_on')
             && selected.selector.kind === 'turnCheckpoint' && selected.selector.turnId) {
             selected.offerWholeTurnRollback?.(selected.selector.turnId);

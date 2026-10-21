@@ -159,15 +159,15 @@ function readCheckpointRollbackCwd(params: Readonly<{
     return cwd.length > 0 ? cwd : null;
 }
 
-function findCheckpointRollbackEvidence(params: Readonly<{
+export function resolveCheckpointRollbackEvidence(params: Readonly<{
     conversationRollbackSupported: boolean;
-    messageSeq: number;
     sessionId: string;
     turnChangeSets: readonly TurnChangeSet[];
-}>): TranscriptRollbackAction['checkpointCodeRollback'] | undefined {
+} & ({ messageSeq: number; turnId?: never } | { turnId: string; messageSeq?: never })>): TranscriptRollbackAction['checkpointCodeRollback'] | undefined {
     for (const turn of params.turnChangeSets) {
         if (turn.sessionId !== params.sessionId) continue;
-        if (params.messageSeq < turn.seqRange.startSeqInclusive || params.messageSeq > turn.seqRange.endSeqInclusive) continue;
+        if (params.turnId !== undefined ? turn.turnId !== params.turnId
+            : params.messageSeq < turn.seqRange.startSeqInclusive || params.messageSeq > turn.seqRange.endSeqInclusive) continue;
         const checkpoint = turn.repositoryCheckpoint;
         if (!checkpoint) continue;
         if (checkpoint.contentConfidence !== 'exact') continue;
@@ -238,7 +238,7 @@ export function resolveTranscriptRollbackActions(params: Readonly<{
             actions[messageId] = withCheckpointRollbackEvidence(
                 action,
                 sessionId
-                    ? findCheckpointRollbackEvidence({
+                    ? resolveCheckpointRollbackEvidence({
                         conversationRollbackSupported,
                         messageSeq: seq,
                         sessionId,
@@ -259,7 +259,7 @@ export function resolveTranscriptRollbackActions(params: Readonly<{
     const latestActiveMessage = params.messagesById[latestActiveMessageId] ?? null;
     const latestActiveSeq = readFiniteSeq(latestActiveMessage?.seq);
     const checkpointCodeRollback = sessionId && latestActiveSeq != null
-        ? findCheckpointRollbackEvidence({
+        ? resolveCheckpointRollbackEvidence({
             conversationRollbackSupported,
             messageSeq: latestActiveSeq,
             sessionId,

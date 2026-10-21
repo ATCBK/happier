@@ -239,6 +239,7 @@ export function useFileChangesReview(params: FileChangesReviewParams) {
   );
 
   return {
+    changesScope: current,
     scopeKind: current.kind as FileChangesScopeKind,
     scopeTabs,
     selectScope,
