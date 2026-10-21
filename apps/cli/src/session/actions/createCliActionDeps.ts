@@ -553,6 +553,18 @@ function notSupported(): never {
   throw new Error('action_not_supported_in_cli');
 }
 
+function readMachineActionRpcResult(result: unknown): unknown {
+  // Local invocation and decoded daemon replies carry RPC refusals as values.
+  // Preserve their transport code before an Action parses its success payload.
+  if (result && typeof result === 'object' && !('success' in result) && !('ok' in result)
+    && 'errorCode' in result && 'error' in result
+    && typeof result.error === 'string' && typeof result.errorCode === 'string'
+    && Object.values(RPC_ERROR_CODES).some(code => code === result.errorCode)) {
+    throw new RpcError(result.error, result.errorCode);
+  }
+  return result;
+}
+
 function serializeHostSubagentStoreError(error: unknown): Readonly<{ ok: false; errorCode: string; error: string }> {
   if (error instanceof HostSubagentStoreError) {
     return { ok: false, errorCode: error.code, error: error.code };
@@ -1800,21 +1812,21 @@ export function createCliActionDeps(params: Readonly<{
         ...(input.context?.requesterWorkAttributionV1 ? { requesterWorkAttributionV1: input.context.requesterWorkAttributionV1 } : {}),
       };
       const hasLocalActionContext = Object.keys(localActionContext).length > 0;
-      return await direct.invoke(
+      return readMachineActionRpcResult(await direct.invoke(
         input.method,
         input.request,
         input.signal || hasLocalActionContext ? {
           ...(input.signal ? { signal: input.signal } : {}),
           ...(hasLocalActionContext ? { localActionContext } : {}),
         } : undefined,
-      );
+      ));
     }
     const invoke = input.exactMachine ? callExactMachineRpc : callMachineRpc;
     const requestId = input.requestId ?? input.context?.actionRequestId;
     const reviewedOpinionDirectoryRead = input.method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT
       && input.effectActionId === 'session.spawn_new'
       && requester?.authorization.binding.actionId === 'discussion.second_opinion.start';
-    return await invoke({
+    return readMachineActionRpcResult(await invoke({
       credentials: reviewedOpinionDirectoryRead ? requester.credentials : params.credentials!,
       machineId: input.machineId,
       method: input.method,
@@ -1830,7 +1842,7 @@ export function createCliActionDeps(params: Readonly<{
       ...(input.signal ? { signal: input.signal } : {}),
       ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
       ...(input.waitForResultOnCancel ? { waitForResultOnCancel: true } : {}),
-    });
+    }));
   };
 
   const resolveWidgetSessionTransport = async (sessionRef: Readonly<{ serverId: string; sessionId: string }>, signal?: AbortSignal) => {

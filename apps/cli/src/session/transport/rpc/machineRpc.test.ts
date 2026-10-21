@@ -1920,6 +1920,20 @@ describe('callMachineRpc', () => {
     }
   });
 
+  it.each(['memory.status', 'search.settings.get'] as const)(
+    'preserves a missing local handler refusal through the real %s Action', async actionId => {
+      const machineId = 'missing-memory-machine';
+      const manager = new RpcHandlerManager({ scopePrefix: machineId, encryptionMode: 'plain', logger() {} });
+      const credentials = { token: 'plain-token', encryption: null };
+      const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
+        sessionId: 'cli-global', mode: 'plain', ctx: null, machineActionDirectTargetTransport: {
+          machineId, invoke: (method, request, options) => manager.invokeLocal(method, request, options),
+        } }));
+      expect(await executor.execute(actionId, { machineId }, { surface: 'cli', authority: 'present_user' }))
+        .toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
+    },
+  );
+
   it('keeps caller-lifecycle machine RPC acknowledgement open until cancellation', async () => {
     vi.useFakeTimers();
     axiosGet.mockResolvedValueOnce({
