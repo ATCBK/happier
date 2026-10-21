@@ -19,3 +19,7 @@ export { callAdmittedFilesystemTransferActionRpc } from './plumbing/filesystemTr
 export { createTransferManifestHasher } from './plumbing/transferManifestHasher';
 export type { AcquireBrowserMachineCarrierEndpointLease, MachineCarrierStreamDuplex,
     OpenMachineCarrierStream } from './plumbing/machineCarrierBrowserStream';
+export { downloadBulkPayloadViaDirectExportToDestination } from './plumbing/directTransferExportDownload';
+export { MACHINE_CARRIER_TRANSPORT_FAILED_ERROR_CODE, MACHINE_CARRIER_UNAVAILABLE_ERROR_CODE,
+    resolveMachineCarrierRoute } from './plumbing/machineCarrierHttpLease';
+export { copyPreparedFilesystemFile } from './plumbing/preparedFilesystemCopy';
