@@ -44,6 +44,25 @@ export type ScmRepositoryActionInputById = {
     readonly "scm.hostingRepository.resolveAddress": {
         address: string;
     };
+    readonly "scm.hostingRepository.get": {
+        selector: {
+            provider: {
+                id: string;
+                kind: 'unknown' | 'custom' | 'github' | 'gitlab' | 'bitbucket' | 'azure-devops';
+                displayName: string;
+                baseUrl: string;
+            };
+            repository: {
+                nameWithOwner: string;
+                defaultBranch?: string | null | undefined;
+                visibility?: 'private' | 'public' | 'internal' | undefined;
+                webUrl?: string | undefined;
+                cloneUrl?: string | undefined;
+                sshUrl?: string | undefined;
+            };
+            protocol: 'auto' | 'ssh' | 'https';
+        };
+    };
     readonly "scm.hostingRepository.describePublishTargets": {
         [x: string]: unknown;
         cwd?: string | undefined;
@@ -2622,6 +2641,27 @@ export type ScmRepositoryActionResultById = {
     } | {
         success: true;
         kind: 'invalid';
+    };
+    readonly "scm.hostingRepository.get": {
+        success: true;
+        kind: 'public';
+        repository: {
+            label: string;
+            url: string;
+        };
+    } | {
+        success: true;
+        kind: 'private';
+    } | {
+        success: true;
+        kind: 'unknown';
+    } | {
+        success: true;
+        kind: 'unsupported';
+    } | {
+        success: false;
+        kind: 'failed';
+        code: 'repository_unavailable';
     };
     readonly "scm.hostingRepository.describePublishTargets": {
         [x: string]: unknown;

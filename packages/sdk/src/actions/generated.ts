@@ -2287,6 +2287,7 @@ export type GeneratedActions = Readonly<{
     }> ;
     readonly hostingRepository: Readonly<{
       readonly describePublishTargets: (input: PublicActionInputById["scm.hostingRepository.describePublishTargets"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"scm.hostingRepository.describePublishTargets">>;
+      readonly get: (input: PublicActionInputById["scm.hostingRepository.get"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"scm.hostingRepository.get">>;
       readonly publish: (input: PublicActionInputById["scm.hostingRepository.publish"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"scm.hostingRepository.publish">>;
       readonly resolveAddress: (input: PublicActionInputById["scm.hostingRepository.resolveAddress"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"scm.hostingRepository.resolveAddress">>;
     }> ;
@@ -4695,6 +4696,7 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
       },
       hostingRepository: {
         describePublishTargets: (input: PublicActionInputById["scm.hostingRepository.describePublishTargets"], options?: ActionExecutionOptions) => execute("scm.hostingRepository.describePublishTargets", input, options),
+        get: (input: PublicActionInputById["scm.hostingRepository.get"], options?: ActionExecutionOptions) => execute("scm.hostingRepository.get", input, options),
         publish: (input: PublicActionInputById["scm.hostingRepository.publish"], options?: ActionExecutionOptions) => execute("scm.hostingRepository.publish", input, options),
         resolveAddress: (input: PublicActionInputById["scm.hostingRepository.resolveAddress"], options?: ActionExecutionOptions) => execute("scm.hostingRepository.resolveAddress", input, options),
       },
