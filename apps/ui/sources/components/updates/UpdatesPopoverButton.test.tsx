@@ -208,7 +208,7 @@ describe('UpdatesPopoverButton', () => {
         expect(screen.findAll((node) => typeof node.type === 'string' && node.props?.children === '3').length).toBeGreaterThan(0);
     });
 
-    it('pressing Update on another machine runs it inline: no confirmation, the popover stays open', async () => {
+    it('pressing Update on another machine confirms once, then runs it inline: no approval request, the popover stays open', async () => {
         await activateAccount();
         modal.confirm.mockClear();
         rpc.invoke.mockClear();
@@ -222,15 +222,10 @@ describe('UpdatesPopoverButton', () => {
         expect(screen.findAllByTestId('updates.machine.machine:studio').length).toBeGreaterThan(0);
         expect(screen.findAllByTestId('updates.row.studio:happier-cli').length).toBe(0);
         await screen.pressByTestIdAsync('updates.machine.machine:studio.action');
-        expect(modal.confirm).not.toHaveBeenCalled();
-        const approval = artifacts.list()[0];
-        expect(approval).toBeDefined();
-        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-        let result!: Awaited<ReturnType<ReturnType<typeof createDefaultActionExecutor>['execute']>>;
-        await act(async () => { result = await createDefaultActionExecutor().execute('approval.request.decide', {
-            artifactId: approval!.id, decision: 'approve',
-        }, { surface: 'ui', serverId: connection!.home.id, expectedAccountId: 'account-a' }); });
-        expect(result).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true, result: { status: 'requested' } } } });
+        // The Action's default (no explicit Ask-first preference) is one present-user confirmation (a559acc1ca),
+        // not a deferred approval request.
+        expect(modal.confirm).toHaveBeenCalledTimes(1);
+        expect(artifacts.list()).toHaveLength(0);
         expect(rpc.invoke).toHaveBeenCalledWith('studio', expect.objectContaining({ id: 'tool.systemTasks', method: 'start' }), expect.anything());
         expect(screen.findAllByTestId('updates.content.popover').length).toBeGreaterThan(0);
         // "Open Updates" stays the footer link to the full list.

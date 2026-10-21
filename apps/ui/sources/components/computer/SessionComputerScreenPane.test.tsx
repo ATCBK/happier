@@ -186,6 +186,7 @@ describe('SessionComputerScreenPane retained source', () => {
                 initialStatus.resolve();
                 return { protocolVersion: 1, result: {
                     target, sourceId, controller: 'agent', controlEpoch: 1, stopping: false, uncertain: false,
+                    grants: { capture: 'granted', input: 'granted' },
                 } };
             }
             throw new Error(`Unexpected Computer control: ${payload.actionId}`);

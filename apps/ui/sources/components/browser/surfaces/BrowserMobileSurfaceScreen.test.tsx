@@ -31,18 +31,21 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/usePreferredServerIdForSes
 }));
 
 const paneStub = vi.hoisted(() => ({ current: null as AppPaneScopeApi | null }));
-const sessionRuntimeState = vi.hoisted(() => ({
+const sessionRuntimeState = vi.hoisted(() => {
+  const contextState = {
+    itemsById: {},
+    itemOrder: [],
+    attachmentsById: {},
+    attachmentOrder: [],
+    navigationGenerationByViewId: {},
+    activeAnnotationByViewId: {},
+    annotationDraftByViewId: {},
+  };
+  return {
     runtime: {
+        state: contextState,
         browserShellContext: {
-            state: {
-                itemsById: {},
-                itemOrder: [],
-                attachmentsById: {},
-                attachmentOrder: [],
-                navigationGenerationByViewId: {},
-                activeAnnotationByViewId: {},
-                annotationDraftByViewId: {},
-            },
+            state: contextState,
             contextCapabilities: {
                 enabled: true,
                 available: true,
@@ -59,10 +62,17 @@ const sessionRuntimeState = vi.hoisted(() => ({
             onStateChange: vi.fn(),
         },
     },
-}));
+  };
+});
 
 vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
     useAppPaneScope: () => paneStub.current,
+}));
+
+// Recording controls are admitted by the mounted Action owner, which needs a signed-in Account lifetime;
+// this screen suite stands that admission in as ready and exercises everything above it for real.
+vi.mock('@/components/approvals/useMountedActionExecution', () => ({
+    useMountedActionExecution: () => ({ execute: vi.fn(), isCurrent: () => true, ready: true }),
 }));
 
 vi.mock('@/components/sessions/browser/sessionBrowserContextRuntime', () => ({
@@ -75,6 +85,9 @@ vi.mock('@/components/browser/surfaces/BrowserSurfaceHost', () => ({
     ),
     mergeBrowserSurfaceProductModels: (a: unknown, b: unknown) => a ?? b,
 }));
+
+// The screen's import graph is large; loading it at file scope keeps that cost out of the first test's timeout.
+const { BrowserMobileSurfaceScreen } = await import('./BrowserMobileSurfaceScreen');
 
 const target = {
     kind: 'localServicePreview',
@@ -132,7 +145,6 @@ function paneWithBrowserView(): AppPaneScopeApi {
 describe('BrowserMobileSurfaceScreen (scoped workspace)', () => {
     it('mounts the details-workspace engine and activates a browser-view tab', async () => {
         paneStub.current = paneWithBrowserView();
-        const { BrowserMobileSurfaceScreen } = await import('./BrowserMobileSurfaceScreen');
 
         const screen = await renderScreen(
             <BrowserMobileSurfaceScreen sessionId="session_1" scopeId="session:session_1:mobile-browser" />,
@@ -156,7 +168,6 @@ describe('BrowserMobileSurfaceScreen (scoped workspace)', () => {
             ...basePane(),
             scopeState: { details: buildDetailsWorkspaceStateView(createEmptyPaneDetailsState()) },
         } as AppPaneScopeApi;
-        const { BrowserMobileSurfaceScreen } = await import('./BrowserMobileSurfaceScreen');
 
         const screen = await renderScreen(
             <BrowserMobileSurfaceScreen sessionId="session_1" scopeId="session:session_1:mobile-browser" />,
@@ -167,7 +178,6 @@ describe('BrowserMobileSurfaceScreen (scoped workspace)', () => {
 
     it('threads the admitted projection, currentness, Browser target, and execution origin into the mobile Browser host', async () => {
         paneStub.current = paneWithBrowserView();
-        const { BrowserMobileSurfaceScreen } = await import('./BrowserMobileSurfaceScreen');
         const screen = await renderScreen(
             <BrowserMobileSurfaceScreen
                 sessionId="session_1"
@@ -192,7 +202,6 @@ describe('BrowserMobileSurfaceScreen (scoped workspace)', () => {
             ...basePane(),
             scopeState: { details: buildDetailsWorkspaceStateView(createEmptyPaneDetailsState()) },
         } as AppPaneScopeApi;
-        const { BrowserMobileSurfaceScreen } = await import('./BrowserMobileSurfaceScreen');
         const slot = await import('@/components/appShell/panes/paneHeaderSlot');
         function HeaderLineProbe(): React.ReactElement {
             const published = slot.usePublishedPaneHeaderContent('browser');

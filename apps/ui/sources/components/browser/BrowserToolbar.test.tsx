@@ -116,7 +116,7 @@ describe('BrowserToolbar (AMD-8)', () => {
       loading.findByTestId('tb-stop')?.props.accessibilityState?.disabled,
     ).toBe(true);
     expect(loading.findByTestId('tb-stop')?.props.accessibilityHint).toBe(
-      reason,
+      'browserShell.toolbar.stopUncontrollable',
     );
     await loading.unmount();
   });

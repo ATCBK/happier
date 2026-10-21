@@ -279,7 +279,7 @@ describe('createFaviconPermissionSnapshotSelector', () => {
         expect(second.hasFreshPermission).toBe(true);
     });
 
-    it('keeps modern viewer permission attention while pre-viewer agent-state freshness expires', () => {
+    it('keeps permission attention for modern viewer and pre-viewer sessions past the old request-age window while the runtime is live', () => {
         vi.setSystemTime(new Date(1_000));
         const selector = createFaviconPermissionSnapshotSelector();
         const state = createState({
@@ -321,10 +321,11 @@ describe('createFaviconPermissionSnapshotSelector', () => {
         expect(freshSnapshot.hasFreshPermission).toBe(true);
         expect(staleSnapshot.hasFreshPermission).toBe(true);
         expect(legacyFreshSnapshot.hasFreshPermission).toBe(true);
-        expect(legacySelector(state).hasFreshPermission).toBe(false);
+        // A pending request no longer expires by observation age (6fbfe58bb3); only settlement or runtime liveness ends it.
+        expect(legacySelector(state).hasFreshPermission).toBe(true);
     });
 
-    it('keeps modern viewer permission attention while pre-viewer transcript freshness expires', () => {
+    it('keeps permission attention for modern viewer and pre-viewer transcript requests past the old request-age window while the runtime is live', () => {
         vi.setSystemTime(new Date(1_000));
         const selector = createFaviconPermissionSnapshotSelector();
         const state = createState({
@@ -368,7 +369,8 @@ describe('createFaviconPermissionSnapshotSelector', () => {
         expect(freshSnapshot.hasFreshPermission).toBe(true);
         expect(staleSnapshot.hasFreshPermission).toBe(true);
         expect(legacyFreshSnapshot.hasFreshPermission).toBe(true);
-        expect(legacySelector(state).hasFreshPermission).toBe(false);
+        // A pending request no longer expires by observation age (6fbfe58bb3); only settlement or runtime liveness ends it.
+        expect(legacySelector(state).hasFreshPermission).toBe(true);
     });
 
     it('reuses derived transcript permission freshness for unrelated session updates', () => {

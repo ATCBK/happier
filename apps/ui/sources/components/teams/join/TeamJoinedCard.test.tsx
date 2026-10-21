@@ -307,7 +307,14 @@ describe('TeamJoinedCard', () => {
     if (settlement === 'uncommitted') {
       expect(home.lostWrites).toBeGreaterThan(0);
       expect(account!.artifacts.readPlainBody(artifactId)).toContain('"status":"executing"');
-      await vi.waitFor(async () => expect((await import('@/modal')).Modal.alert).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('approval_execution_outcome_unknown')), { timeout: 20_000 });
+      // The refusal names the outcome plainly; the returned Action code stays behind Technical details.
+      const { Modal } = await import('@/modal');
+      await vi.waitFor(() => expect(Modal.alert).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.arrayContaining([
+        expect.objectContaining({ onPress: expect.any(Function) }),
+      ])), { timeout: 20_000 });
+      const [, , buttons] = vi.mocked(Modal.alert).mock.calls[0]!;
+      buttons!.find((button) => typeof button.onPress === 'function')!.onPress!();
+      expect(Modal.alert).toHaveBeenLastCalledWith(expect.any(String), expect.stringContaining('approval_execution_outcome_unknown'));
       expect(onOpenTeam).not.toHaveBeenCalled();
       expect(router.dismissTo).not.toHaveBeenCalled();
       return;

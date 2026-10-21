@@ -51,6 +51,13 @@ const pluginProjectionState = vi.hoisted<{
     },
 }));
 
+const workspaceFileOpener = vi.hoisted(() => ({ open: vi.fn(async () => true) }));
+// The shared file opener is the single file activation owner (adfe9cc35f); its Action and navigation path is
+// covered by WorkspaceTabs.seam.test.tsx. This corridor owns that the surface hands it the file.
+vi.mock('@/components/workspaces/files/useWorkspaceFileOpener', () => ({
+    useWorkspaceFileOpener: () => ({ open: workspaceFileOpener.open, canOpen: true }),
+}));
+
 vi.mock('@react-navigation/native', async () => {
     const { createReactNavigationNativeMock } = await import('@/dev/testkit/mocks/reactNavigation');
     return createReactNavigationNativeMock();
@@ -169,6 +176,7 @@ function PaneScopeProbe(props: Readonly<{ scopeId: string }>) {
     return React.createElement('PaneScopeProbe', {
         scopeState: pane.scopeState,
         closeDetailsTab: pane.closeDetailsTab,
+        openDetailsTab: pane.openDetailsTab,
     });
 }
 
@@ -207,6 +215,7 @@ describe('SessionCockpitSurfaceScreen', () => {
     });
 
     beforeEach(async () => {
+        workspaceFileOpener.open.mockClear();
         standardCleanup();
         await primeSessionBoardFeature('server-b', true);
         storage.setState(initialStorageState);
@@ -613,7 +622,7 @@ describe('SessionCockpitSurfaceScreen', () => {
         expect(screen.tree.findByType('PaneScopeProbe' as never).props.scopeState?.right?.isOpen).toBe(false);
     });
 
-    it('opens file details on the internal details tab without pushing a sibling stack route', async () => {
+    it('hands a browsed file to the shared workspace file opener without pushing a sibling stack route or opening a pane tab', async () => {
         const switchSurface = vi.fn();
         primeLocalSettings({
             appPaneScopesV1: {
@@ -655,20 +664,22 @@ describe('SessionCockpitSurfaceScreen', () => {
         });
 
         const probe = screen.tree.findByType('PaneScopeProbe' as never);
-        expect(switchSurface).toHaveBeenCalledWith('tabs');
-        expect(probe.props.scopeState?.details?.isOpen).toBe(true);
-        expect(probe.props.scopeState?.details?.tabs).toEqual([
-            expect.objectContaining({
-                key: 'file:src/example.ts',
-                resource: { kind: 'file', path: 'src/example.ts' },
-            }),
-        ]);
+        expect(workspaceFileOpener.open).toHaveBeenCalledWith(
+            expect.objectContaining({ kind: 'session', sessionId: 's_1', serverId: 'server-b', path: 'src/example.ts' }),
+            expect.objectContaining({ intent: 'preview' }),
+        );
+        // The opener's workspace Action owns the destination; the surface neither opens a pane tab nor switches surface itself.
+        expect(switchSurface).not.toHaveBeenCalled();
+        expect(probe.props.scopeState?.details?.tabs).toEqual([]);
     });
 
     it.each(['git', 'browse'] as const)('returns to %s when the final details tab closes', async (surface) => {
         const { SessionCockpitSurfaceScreen } = await import('./SessionCockpitSurfaceScreen');
+        const { createSessionCommitDetailsTab } = await import('@/components/sessions/panes/details/sessionDetailsTabBuilders');
+        let switchTo!: (next: import('./sessionCockpitState').SessionMobileSurface) => void;
         function Harness() {
             const [activeSurface, setActiveSurface] = React.useState<import('./sessionCockpitState').SessionMobileSurface>(surface);
+            switchTo = setActiveSurface;
             return (
                 <SessionCockpitSurfaceNavigationProvider value={{ switchSurface: setActiveSurface, returnToPreviousSurface: () => setActiveSurface(surface) }}>
                     <SessionCockpitSurfaceScreen sessionId="s_1" scopeId="session:s_1" surface={activeSurface} terminalTabAvailable />
@@ -682,13 +693,15 @@ describe('SessionCockpitSurfaceScreen', () => {
             </AppPaneProvider>,
         );
         const sourceType = surface === 'git' ? 'SessionGitSurface' : 'SessionBrowseFilesSurface';
+        // A file now opens through the shared workspace opener, so the internal Details tab is seeded with a commit tab.
         await act(async () => {
-            screen.tree.findByType(sourceType as never).props.onOpenFile('src/example.ts');
+            screen.tree.findByType('PaneScopeProbe' as never).props.openDetailsTab(createSessionCommitDetailsTab('abc1234')!);
+            switchTo('tabs');
             await new Promise((resolve) => setTimeout(resolve, 0));
         });
         expect(screen.tree.findAllByType('SessionDetailsPanel' as never)).toHaveLength(1);
         await act(async () => {
-            screen.tree.findByType('PaneScopeProbe' as never).props.closeDetailsTab('file:src/example.ts');
+            screen.tree.findByType('PaneScopeProbe' as never).props.closeDetailsTab('commit:abc1234');
         });
         expect(screen.tree.findAllByType(sourceType as never)).toHaveLength(1);
         expect(screen.tree.findAllByType('SessionDetailsPanel' as never)).toHaveLength(0);

@@ -556,6 +556,12 @@ describe('AuthContext with the production connection manager', () => {
                     expect(result).toMatchObject({ ok: false, errorCode: 'action_account_scope_changed' });
                     expect(replace).not.toHaveBeenCalled();
                     expect(await TokenStorage.getCredentialsForServerUrl(home.serverUrl, { serverId: home.id })).toEqual(credentials);
+                } else if (entrypoint === 'mounted-navigation-failure') {
+                    // The signed-in page is retired before credentials are removed, so a route that cannot
+                    // be left keeps the credentials and reports the failure instead of a receipt.
+                    expect(replace).toHaveBeenCalledWith('/');
+                    expect(await TokenStorage.getCredentialsForServerUrl(home.serverUrl, { serverId: home.id })).toEqual(credentials);
+                    expect(result).toMatchObject({ ok: false });
                 } else {
                     expect(replace).toHaveBeenCalledWith('/');
                     expect(await TokenStorage.getCredentialsForServerUrl(home.serverUrl, { serverId: home.id })).toBeNull();
@@ -580,7 +586,9 @@ describe('AuthContext with the production connection manager', () => {
                         }, { signal: new AbortController().signal });
                         expect(await TokenStorage.getCredentialsForServerUrl(home.serverUrl, { serverId: home.id })).toEqual(replacement);
                         expect(await TokenStorage.getCredentialsForServerUrl(otherHome.serverUrl, { serverId: otherHome.id })).toEqual(other);
-                        expect(received).toMatchObject({ execution: { ok: false, errorCode: 'outcome_uncertain' } });
+                        // A committed Next navigation may retire its starting Account scope; only its closed,
+                        // status-only completion survives that (accountAuthorityRetirementStatuses).
+                        expect(received).toEqual({ v: 1, execution: { ok: true, result: { status: 'opened' } } });
                         return;
                     } finally { release(); }
                 }
@@ -667,6 +675,15 @@ describe('AuthContext with the production connection manager', () => {
                 expect(await TokenStorage.getCredentialsForServerUrl(home.serverUrl, { serverId: home.id })).toEqual(replacement);
                 expect(await TokenStorage.getCredentialsForServerUrl(otherHome.serverUrl, { serverId: otherHome.id })).toEqual(other);
                 expect(approved).toMatchObject({ ok: false });
+                return;
+            }
+            if (entrypoint === 'forget-navigation') {
+                // The signed-in page is retired before any credential is removed: a route that cannot be
+                // left keeps every credential and reports the failure.
+                expect(await TokenStorage.getCredentialsForServerUrl(home.serverUrl, { serverId: home.id })).toEqual(credentials);
+                expect(await TokenStorage.getCredentialsForServerUrl(otherHome.serverUrl, { serverId: otherHome.id })).toEqual(other);
+                expect(approved).toMatchObject({ ok: true, result: { status: 'failed',
+                    execution: { ok: false, errorCode: 'action_failed', error: 'Navigation unavailable' } } });
                 return;
             }
             expect(await TokenStorage.getCredentialsForServerUrl(home.serverUrl, { serverId: home.id })).toBeNull();

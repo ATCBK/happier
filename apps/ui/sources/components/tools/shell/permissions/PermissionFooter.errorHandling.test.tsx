@@ -52,8 +52,9 @@ vi.mock('@/agents/catalog/permissionUiCopy', () => ({
     }),
 }));
 
+const { PermissionFooter } = await import('../permissions/PermissionFooter');
+
 async function renderPendingFooter(permissionId = 'p1') {
-    const { PermissionFooter } = await import('../permissions/PermissionFooter');
     return renderScreen(React.createElement(PermissionFooter, {
         permission: { id: permissionId, status: 'pending' },
         sessionId: 's1',

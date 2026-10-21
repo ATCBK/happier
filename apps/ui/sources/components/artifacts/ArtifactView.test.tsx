@@ -52,10 +52,14 @@ function OpenView({ id }: Readonly<{ id: string }>) {
     return <ArtifactView artifactId={id} artifact={artifact} presentation="page" />;
 }
 
+// The shared image preview cache is process-wide and keyed by content, so every setup serves
+// distinct bytes: each test then starts from a cold preview rather than a cache hit.
+let setupSequence = 0;
+
 async function setup(kind: 'image' | 'html' | 'file', delayBlob?: Promise<Response>, warm = false,
     override?: (request: ServedHomeRequest) => Response | Promise<Response> | undefined) {
     Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
-    const bytes = new TextEncoder().encode(kind === 'html' ? '<!doctype html><h1>Saved HTML</h1>' : 'Private bytes');
+    const bytes = new TextEncoder().encode(kind === 'html' ? '<!doctype html><h1>Saved HTML</h1>' : `Private bytes ${++setupSequence}`);
     const reference = { blobId: 'e704b26f-9c31-4728-9590-858378e34ed9', mime: kind === 'html' ? 'text/html' : kind === 'image' ? 'image/png' : 'application/zip',
         sizeBytes: bytes.length, sha256: hashArtifactBinaryContent(bytes) };
     const row: DecryptedArtifact = { id: 'document', title: 'Saved', header: { kind: kind === 'html' ? 'html' : 'artifact.legacy', title: 'Saved' },
@@ -135,7 +139,7 @@ describe('Artifact composed view reads', () => {
         'opens $kind (warm=$warm) through one authenticated head and renders its private preview', async ({ kind, warm }) => {
         const { served } = await setup(kind, undefined, warm);
         const screen = await renderScreen(<OpenView id="document" />);
-        await vi.waitFor(() => expect(kind === 'image' ? screen.findByTestId('file:imagePreview') : screen.findByTestId('artifact:htmlPreview')).not.toBeNull());
+        await vi.waitFor(() => expect(kind === 'image' ? screen.findByTestId('artifact:viewerBody') : screen.findByTestId('artifact:htmlPreview')).not.toBeNull());
         const heads = served.requests.filter(request => request.path === '/v1/artifacts/document');
         console.info('Artifact view measurement', { kind, warm, heads: heads.length,
             blobs: served.requests.filter(request => request.path.includes('/blobs/')).length,
@@ -168,10 +172,10 @@ describe('Artifact composed view reads', () => {
             await vi.waitFor(() => expect(blobReads).toBe(2));
             await act(async () => { pending.resolve(response()); });
             await flushHookEffects();
-            expect(image.findByTestId('file:imagePreview') === null).toBe(true);
+            expect(image.findByTestId('artifact:viewerBody') === null).toBe(true);
             expect(URL.createObjectURL).not.toHaveBeenCalled();
             await act(async () => { renewed.resolve(response()); });
-            await vi.waitFor(() => expect(image.findByTestId('file:imagePreview')).not.toBeNull());
+            await vi.waitFor(() => expect(image.findByTestId('artifact:viewerBody')).not.toBeNull());
         } finally {
             pending.resolve(response());
             renewed.resolve(response());
@@ -204,7 +208,7 @@ describe('Artifact composed view reads', () => {
         head.headerVersion = 2;
         head.bodyVersion = 2;
         await act(async () => { getStorage().getState().updateArtifact({ ...row, headerVersion: 2, bodyVersion: 2 }); });
-        await vi.waitFor(() => expect(screen.findByTestId('file:imagePreview')).not.toBeNull());
+        await vi.waitFor(() => expect(screen.findByTestId('artifact:viewerBody')).not.toBeNull());
         expect(getStorage().getState().artifacts.document?.bodyVersion).toBe(2);
         expect(served.requests.filter(request => request.path === '/v1/artifacts/document')).toHaveLength(2);
         expect(URL.createObjectURL).toHaveBeenCalledTimes(1);

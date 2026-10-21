@@ -58,7 +58,7 @@ describe('mounted Computer recovery through configurable Action approval', () =>
             let result: unknown;
             if (actionId === 'computer.target.get') result = selected();
             else if (actionId === 'computer.targets.list') result = { targets: [{ target }], grants: { capture: 'granted', input: 'granted' } };
-            else if (actionId === 'computer.control.status') result = { target, sourceId, controller: 'human', controlEpoch: 2, stopping: false, uncertain };
+            else if (actionId === 'computer.control.status') result = { target, sourceId, controller: 'human', controlEpoch: 2, stopping: false, uncertain, grants: { capture: 'granted', input: 'granted' } };
             else if (actionId === 'computer.target.select') { sourceId = 'computer:fresh'; result = selected(); }
             else if (actionId === 'computer.capture') {
                 expect(input).toMatchObject({ target, sourceId: 'computer:fresh' });

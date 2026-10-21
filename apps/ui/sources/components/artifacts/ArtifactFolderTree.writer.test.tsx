@@ -114,7 +114,9 @@ it('uses current catalog authority and settles its durable receipt before a held
         await vi.waitFor(() => expect(state.read().folders[0]?.name).toBe('Receipt folder'));
         await vi.waitFor(() => expect(state.screen.findByTestId('folders:edit:name')).toBeNull());
         expect(state.screen.findByTestId('folders:row:folder:' + state.read().folders[0]!.id)).toBeTruthy();
-        expect(state.screen.findByTestId('folders:unavailable-action')).toBeTruthy();
+        // An acknowledged write confirms its own row (it starts no catalog refresh), so the held read
+        // neither blocks the next write nor puts the folders behind an unavailable line.
+        expect(state.screen.findByTestId('folders:unavailable')).toBeNull();
     } finally { await act(async () => { release(); }); }
     await vi.waitFor(() => expect(state.screen.findByTestId('folders:unavailable')).toBeNull());
 });

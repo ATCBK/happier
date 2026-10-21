@@ -57,7 +57,7 @@ it('offers only executable migration targets and withdraws a selected target aft
     expect(network.requests).toEqual([]);
 });
 
-it('resolves the focused Home inventory through its portable identity and retires failed inventory', async () => {
+it('resolves the focused Home inventory through its portable identity, keeps it through a failed list read, and retires it when signed out', async () => {
     const { scope } = await activateMigrationHome('inventory');
     const machine = createMachineFixture({ id: 'canonical-member', activeAt: Date.now() });
     storage.setState({ profileScope: scope, machines: {},
@@ -70,6 +70,8 @@ it('resolves the focused Home inventory through its portable identity and retire
     expect(hook.getCurrent().serverId).toBe(scope.serverId);
     expect(hook.getCurrent().targetMachines.map(target => target.id)).toEqual([machine.id]);
     await act(async () => storage.setState({ machineListStatusByServerId: { [scope.serverId]: 'error' } }));
+    expect(hook.getCurrent().machineId).toBe(machine.id);
+    await act(async () => storage.setState({ machineListStatusByServerId: { [scope.serverId]: 'signedOut' } }));
     expect(hook.getCurrent().machineId).toBeNull();
     expect(hook.getCurrent().targetMachines).toEqual([]);
 });
