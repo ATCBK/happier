@@ -19,20 +19,24 @@ describe('createNativeCacheFileSink', () => {
     });
 
     it('offers a local PDF to the iOS share sheet and reports unavailable sharing', async () => {
+        const shareAsync = vi.fn(async () => ({ action: 'sharedAction' }));
+        vi.doMock('react-native', async () => ({
+            ...(await (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock({ platformOS: 'ios' })),
+            Share: { share: shareAsync, sharedAction: 'sharedAction', dismissedAction: 'dismissedAction' },
+        }));
         const { Platform } = await import('react-native');
         const previous = Platform.OS;
         Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
-        const shareAsync = vi.fn(async () => {});
         let available = true;
         vi.doMock('expo-sharing', () => ({ isAvailableAsync: async () => available, shareAsync }));
         try {
             const { shareNativeCacheFile } = await import('./nativeCacheFileSink');
             const input = { fileUri: 'file:///cache/document.pdf', name: 'document.pdf', mimeType: 'application/pdf' };
-            await expect(shareNativeCacheFile(input)).resolves.toEqual({ status: 'shared', retainCacheFile: false });
-            expect(shareAsync).toHaveBeenCalledWith(input.fileUri, { mimeType: 'application/pdf' });
+            await expect(shareNativeCacheFile(input)).resolves.toEqual({ status: 'shared', retainCacheFile: false, completion: 'confirmed' });
+            expect(shareAsync).toHaveBeenCalledWith({ url: input.fileUri });
             const zip = { fileUri: 'file:///cache/package.zip', name: 'package.zip', mimeType: 'application/zip', UTI: 'public.zip-archive', dialogTitle: 'Export package' };
-            await expect(shareNativeCacheFile(zip)).resolves.toEqual({ status: 'shared', retainCacheFile: false });
-            expect(shareAsync).toHaveBeenLastCalledWith(zip.fileUri, { mimeType: 'application/zip', UTI: 'public.zip-archive', dialogTitle: 'Export package' });
+            await expect(shareNativeCacheFile(zip)).resolves.toEqual({ status: 'shared', retainCacheFile: false, completion: 'confirmed' });
+            expect(shareAsync).toHaveBeenLastCalledWith({ url: zip.fileUri });
             available = false;
             await expect(shareNativeCacheFile(input)).resolves.toEqual({ status: 'unavailable' });
             expect(shareAsync).toHaveBeenCalledTimes(2);

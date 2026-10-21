@@ -7,7 +7,11 @@ import { captureUsageViewPng, deliverUsageImageFile } from '@/components/setting
 const platform = vi.hoisted(() => ({ OS: 'ios' }));
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return { ...await createReactNativeWebMock(), Platform: platform };
+    return { ...await createReactNativeWebMock(), Platform: platform,
+        Share: { sharedAction: 'sharedAction', dismissedAction: 'dismissedAction', share: async (content: { url: string }) => {
+            await sdk.share({ uri: content.url, bytes: fs.files.get(content.url) });
+            return { action: 'sharedAction' };
+        } } };
 });
 const fs = await vi.hoisted(async () => {
     const { createExpoFileSystemFileMock } = await import('@/dev/testkit/mocks/expoFileSystem');
@@ -81,15 +85,14 @@ describe('native export consumers through the cache sharing owner', () => {
             platform.OS = os;
             sdk.share.mockImplementation((handoff: { uri: string; name?: string; mimeType?: string; UTI?: string; dialogTitle?: string; bytes: number[] }) => {
                 document.read(new TextDecoder().decode(new Uint8Array(handoff.bytes)));
-                if (document.kind === 'diagnostics') {
+                if (document.kind === 'diagnostics' && os === 'android') {
                     expect(handoff.dialogTitle).toBeTruthy();
-                    if (os === 'ios') expect(handoff.UTI).toBe('public.json');
                 }
             });
             await document.export();
             const handoff = sdk.share.mock.calls.at(-1)![0];
             expect(handoff.uri).toContain('/happier-downloads/');
-            expect(handoff.mimeType).toBe(document.mimeType);
+            if (os === 'android') expect(handoff.mimeType).toBe(document.mimeType);
             if (os === 'android' && document.name) expect(handoff.name).toBe(document.name);
             expect(fs.files.has(handoff.uri)).toBe(os === 'android');
             fs.files.clear();
@@ -112,7 +115,7 @@ describe('native export consumers through the cache sharing owner', () => {
         expect(await deliverUsageImageFile({ mediaType: 'image/png', base64, fileName: 'recap.png' }, 'save')).toBe(true);
         const handoff = sdk.share.mock.calls.at(-1)![0];
         expect(handoff.uri).toContain('/happier-downloads/');
-        expect(handoff.mimeType).toBe('image/png');
+        if (os === 'android') expect(handoff.mimeType).toBe('image/png');
         expect(fs.files.has(handoff.uri)).toBe(os === 'android');
         expect(fs.files.has(captureUri.startsWith('file://') ? captureUri : `file://${captureUri}`)).toBe(false);
         expect(sdk.releaseCapture).toHaveBeenCalledWith(captureUri);

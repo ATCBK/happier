@@ -1,5 +1,5 @@
 import { log } from '@/log';
-import { Platform } from 'react-native';
+import { Platform, Share } from 'react-native';
 import { randomUUID } from '@/platform/randomUUID';
 import { MAX_CACHE_FILE_NAME_BYTES, sanitizeFileUriSegment } from './fileUriPath';
 
@@ -38,7 +38,7 @@ export type NativeCacheFileSink = Readonly<{
 }>;
 
 export type NativeCacheFileShareResult =
-    | Readonly<{ status: 'shared'; retainCacheFile: boolean }>
+    | Readonly<{ status: 'shared'; retainCacheFile: boolean; completion: 'confirmed' | 'unobservable' }>
     | Readonly<{ status: 'unavailable' }>
     | Readonly<{ status: 'canceled' }>;
 
@@ -63,7 +63,7 @@ export async function shareNativeCacheFile(input: Readonly<{
             const result = await performAndroidFileAction({ fileUri: input.fileUri, name: input.name, action, mimeType: input.mimeType, dialogTitle: input.dialogTitle });
             if (result.canceled) return { status: 'canceled' };
             // Android chooser completion does not prove the recipient finished reading.
-            return { status: 'shared', retainCacheFile: action !== 'save' };
+            return { status: 'shared', retainCacheFile: action !== 'save', completion: action === 'save' ? 'confirmed' : 'unobservable' };
         }
         const sharing = await import('expo-sharing');
         if (!isCurrent()) return { status: 'canceled' };
@@ -71,14 +71,22 @@ export async function shareNativeCacheFile(input: Readonly<{
         if (!isCurrent()) return { status: 'canceled' };
         if (!available) return { status: 'unavailable' };
         input.onHandoff?.();
+        if (Platform.OS === 'ios') {
+            // RN exposes UIActivityViewController's completed/dismissed result;
+            // Expo's Promise<void> discards it. The same cache-file custody stays here.
+            const result = await Share.share({ url: input.fileUri });
+            if (result.action === Share.dismissedAction) return { status: 'canceled' };
+            return result.action === Share.sharedAction
+                ? { status: 'shared', retainCacheFile: false, completion: 'confirmed' }
+                : { status: 'shared', retainCacheFile: false, completion: 'unobservable' };
+        }
         const options = input.mimeType || input.UTI || input.dialogTitle ? {
             ...(input.mimeType ? { mimeType: input.mimeType } : {}),
             ...(input.UTI ? { UTI: input.UTI } : {}),
             ...(input.dialogTitle ? { dialogTitle: input.dialogTitle } : {}),
         } : undefined;
         await sharing.shareAsync(input.fileUri, options);
-        // Expo iOS settles from UIActivityViewController's completion handler.
-        return { status: 'shared', retainCacheFile: false };
+        return { status: 'shared', retainCacheFile: false, completion: 'unobservable' };
     } catch (error) {
         log.log(`Failed to share cache file: ${error instanceof Error ? error.message : String(error)}`);
         throw error;
