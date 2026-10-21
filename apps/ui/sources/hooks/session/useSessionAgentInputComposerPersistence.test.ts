@@ -586,28 +586,31 @@ describe('useSessionAgentInputComposerPersistence', () => {
         // restore generation, never echo our own persist writes.
         vi.useFakeTimers();
         const { useSessionAgentInputComposerPersistence } = await importHook();
-
+        let renders = 0;
         const hook = await renderHook(
-            () => useSessionAgentInputComposerPersistence({
+            () => { renders++; return useSessionAgentInputComposerPersistence({
                 sessionId: 'session-a',
                 textLength: 20,
                 fontScale: 1,
-            }),
+            }); },
         );
 
         const initialToken = hook.getCurrent().inputPersistence.restoreToken;
+        const initialRenders = renders;
 
         await act(async () => {
             hook.getCurrent().inputPersistence.onSelectionChangePersist({ start: 5, end: 5 }, 21);
             vi.advanceTimersByTime(150);
         });
         expect(hook.getCurrent().inputPersistence.restoreToken).toBe(initialToken);
+        expect(renders).toBe(initialRenders);
 
         await act(async () => {
             hook.getCurrent().inputPersistence.onScrollYChange(42);
             vi.advanceTimersByTime(150);
         });
         expect(hook.getCurrent().inputPersistence.restoreToken).toBe(initialToken);
+        expect(renders).toBe(initialRenders);
 
         vi.useRealTimers();
     });

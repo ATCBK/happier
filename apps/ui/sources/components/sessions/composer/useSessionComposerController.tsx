@@ -19,8 +19,9 @@ import { PendingNavigationPill } from "@/components/sessions/pendingNavigation/P
 import { PendingNavigationSettledNotice } from "@/components/sessions/pendingNavigation/PendingNavigationSettledNotice";
 import { normalizeSessionAddress, type SessionAddress } from "@/sync/domains/session/sessionAddress";
 import { resolveWorkspaceTargetForSession } from "@/sync/domains/session/resolveWorkspaceTargetForSession";
-import { AgentInput, type AgentInputSendOptions } from "@/components/sessions/agentInput";
-import { useComposerTextStore, useComposerTextValue, type ComposerTextStore } from "@/components/sessions/agentInput/composerTextStore";
+import type { AgentInputSendOptions } from "@/components/sessions/agentInput";
+import { useComposerTextStore } from "@/components/sessions/agentInput/composerTextStore";
+import { SessionComposerAgentInput } from "@/components/sessions/composer/SessionComposerAgentInput";
 import type { SessionInstrumentStripQuota } from "@/components/sessions/agentInput/instrumentStrip";
 import { computeExistingSessionComposerInputMaxHeight, computeExistingSessionComposerPanelMaxHeight } from "@/components/sessions/agentInput/inputMaxHeight";
 import { useComposerAvailablePanelHeight, useComposerKeyboardLayoutContext } from "@/components/sessions/keyboardAvoidance";
@@ -534,18 +535,6 @@ export function SessionAuthRecoveryBanner({ message }: Readonly<{ message: strin
  * Session view: the view reads the text when it acts (send, actions, persistence) and follows
  * only what the text means to it. A pending-message edit shows that edit's own text instead.
  */
-function SessionComposerAgentInput({
-    textStore,
-    pendingText,
-    ...props
-}: Omit<React.ComponentPropsWithoutRef<typeof AgentInput>, 'value'> & Readonly<{
-    textStore: ComposerTextStore;
-    pendingText: string | null;
-}>) {
-    const liveText = useComposerTextValue(textStore);
-    return <AgentInput {...props} value={pendingText ?? liveText} />;
-}
-
 function normalizeComposerKeyboardHeight(height: number | null | undefined): number {
     return typeof height === 'number' && Number.isFinite(height)
         ? Math.max(0, Math.round(height))
@@ -6191,6 +6180,7 @@ export function useSessionComposerController({
                 composerReferenceHost={composerDropReferenceHost}
                 composerFileScope={companionAddress ? resolveWorkspaceTargetForSession(companionAddress) : null}
                 textStore={composerTextStore}
+                structuredInputPersistence={inputComposerPersistence.structuredInputPersistence}
                 pendingText={pendingComposerDocument?.text ?? null}
                 placeholder={isReadOnly
                     ? t('session.sharing.viewOnlyMode')
@@ -7956,7 +7946,7 @@ export function useSessionComposerController({
                 inputMaxHeight={maxAgentInputTextHeight}
                 inputExpansion={inputExpansion}
                 inputPersistence={inputComposerPersistence.inputPersistence}
-                structuredInputMentions={pendingComposerDocument?.mentions ?? inputComposerPersistence.structuredInputPersistence.mentions}
+                structuredInputMentions={pendingComposerDocument?.mentions}
                 onStructuredInputMentionsChange={pendingComposerDocument
                     ? (mentions) => {
                         updatePendingMessageComposerDocument((document) => (

@@ -36,6 +36,19 @@ import { useWebLifecycleFlush } from './useWebLifecycleFlush';
 
 export type AgentInputTextSelection = Readonly<{ start: number; end: number }>;
 
+type SessionComposerStructuredInputPersistence = Readonly<{
+    /** Read at call time outside render, or subscribe in the composer input leaf. */
+    mentions: readonly ComposerStructuredInputMention[];
+    subscribe: (listener: () => void) => () => void;
+    getSnapshot: () => string;
+    onMentionsChange: (mentions: readonly ComposerStructuredInputMention[]) => void;
+}>;
+
+export function useSessionComposerStructuredInputMentions(source: SessionComposerStructuredInputPersistence): readonly ComposerStructuredInputMention[] {
+    const snapshot = React.useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot);
+    return React.useMemo(() => source.mentions, [source, snapshot]);
+}
+
 export type SessionAgentInputComposerPersistence = Readonly<{
     expanded: boolean;
     setExpanded: React.Dispatch<React.SetStateAction<boolean>>;
@@ -49,10 +62,7 @@ export type SessionAgentInputComposerPersistence = Readonly<{
         onScrollYChange: (scrollY: number) => void;
         onSelectionChangePersist: (selection: AgentInputTextSelection, textLength: number) => void;
     }>;
-    structuredInputPersistence: Readonly<{
-        mentions: readonly ComposerStructuredInputMention[];
-        onMentionsChange: (mentions: readonly ComposerStructuredInputMention[]) => void;
-    }>;
+    structuredInputPersistence: SessionComposerStructuredInputPersistence;
 }>;
 
 export type UseSessionAgentInputComposerPersistenceParams = Readonly<{
@@ -230,20 +240,14 @@ export function useSessionAgentInputComposerPersistence({
     const owner = React.useMemo(() => createSessionDraftOwner(sessionId), [sessionId]);
     const subscribeToStructuredMentions = React.useCallback((listener: () => void) => {
         if (!scope || !scopeIsCurrent() || owner?.kind !== 'session') return () => undefined;
-        return subscribeSessionDraft(scope, { kind: 'session', sessionId: owner.sessionId }, listener);
-    }, [owner, scope, scopeIsCurrent]);
+        const unsubscribeDraft = subscribeSessionDraft(scope, { kind: 'session', sessionId: owner.sessionId }, listener);
+        const unsubscribeText = textStore?.subscribe(listener);
+        return () => { unsubscribeDraft(); unsubscribeText?.(); };
+    }, [owner, scope, scopeIsCurrent, textStore]);
     const readStructuredMentionsSignature = React.useCallback(() => {
         if (!scope || !scopeIsCurrent() || owner?.kind !== 'session') return 'disabled';
-        return JSON.stringify(
-            getSessionComposerDraftSnapshot(scope, { kind: 'session', sessionId: owner.sessionId })
-                ?.composer.mentions.value ?? [],
-        );
-    }, [owner, scope, scopeIsCurrent]);
-    React.useSyncExternalStore(
-        subscribeToStructuredMentions,
-        readStructuredMentionsSignature,
-        readStructuredMentionsSignature,
-    );
+        return JSON.stringify(readStructuredMentions(scope, owner, textStore?.getPrompt()));
+    }, [owner, scope, scopeIsCurrent, textStore]);
     const readLiveTextContext = React.useCallback((): ScopedComposerPersistenceReadContext => {
         const liveText = textStore?.getPrompt();
         return { text: liveText, textLength: liveText?.length, fontScale };
@@ -268,7 +272,6 @@ export function useSessionAgentInputComposerPersistence({
         : readScopedComposerPersistenceState(scope, owner, scopedStateReadContext);
     const expanded = currentScopedState.expanded;
     const inputState = currentScopedState.inputState;
-    const structuredInputMentions = readStructuredMentions(scope, owner, text);
     // One-way latch per owner/scope: flips when the persisted basis first
     // becomes applicable to the live text (draft adopted after an async load on
     // session open), so restoreToken changes exactly once at the moment the
@@ -290,8 +293,8 @@ export function useSessionAgentInputComposerPersistence({
     }
     const restoreBasisAdopted = restoreBasisLatchRef.current.adopted;
     // What the live text means here, for render: whether the withheld restore basis has become
-    // applicable (the draft finishing its async load) and which structured mentions survive it.
-    // Typing changes neither, so a keystroke re-renders only the input leaf.
+    // applicable (the draft finishing its async load). Reference ranges belong to
+    // the input leaf: typing before a chip shifts them on every keystroke.
     const readTextMeaning = React.useCallback(() => {
         const liveText = textStore?.getPrompt();
         if (liveText === undefined) return 'none';
@@ -300,7 +303,7 @@ export function useSessionAgentInputComposerPersistence({
                 readInputState(scope, owner, { textLength: liveText.length, fontScale }),
                 liveText.length,
             );
-        return `${basisApplicable ? 'applicable' : 'pending'}\u0000${JSON.stringify(readStructuredMentions(scope, owner, liveText))}`;
+        return basisApplicable ? 'applicable' : 'pending';
     }, [fontScale, owner, scope, textStore]);
     const subscribeToText = React.useCallback((listener: () => void) => (
         textStore ? textStore.subscribe(listener) : () => undefined
@@ -338,22 +341,6 @@ export function useSessionAgentInputComposerPersistence({
             return {
                 ...base,
                 expanded: nextExpanded,
-            };
-        });
-    }, [owner, readLiveTextContext, scope]);
-
-    const setScopedStateWithInputState = React.useCallback((nextContext?: Readonly<{
-        textLength?: number;
-        fontScale?: number;
-    }>) => {
-        const liveContext = readLiveTextContext();
-        setScopedState((current) => {
-            const base = isScopedComposerPersistenceStateCurrent(current, scope, owner, liveContext)
-                ? current
-                : readScopedComposerPersistenceState(scope, owner, liveContext);
-            return {
-                ...base,
-                inputState: readInputState(scope, owner, nextContext ?? liveContext),
             };
         });
     }, [owner, readLiveTextContext, scope]);
@@ -455,9 +442,10 @@ export function useSessionAgentInputComposerPersistence({
             textLength: readLiveTextContext().textLength,
             fontScale,
         });
-        setScopedStateWithInputState();
+        // These are resume values, not live presentation state. The local owner
+        // already retains them for capture, flush and the next restore generation.
         scheduleUiStateFlush(scope);
-    }, [fontScale, owner, readLiveTextContext, scheduleUiStateFlush, scope, scopeIsCurrent, setScopedStateWithInputState]);
+    }, [fontScale, owner, readLiveTextContext, scheduleUiStateFlush, scope, scopeIsCurrent]);
 
     const onSelectionChangePersist = React.useCallback((selection: AgentInputTextSelection, nextTextLength: number) => {
         if (!owner || !scopeIsCurrent()) return;
@@ -466,12 +454,8 @@ export function useSessionAgentInputComposerPersistence({
             textLength: nextTextLength,
             fontScale,
         });
-        setScopedStateWithInputState({
-            textLength: nextTextLength,
-            fontScale,
-        });
         scheduleUiStateFlush(scope);
-    }, [fontScale, owner, scheduleUiStateFlush, scope, scopeIsCurrent, setScopedStateWithInputState]);
+    }, [fontScale, owner, scheduleUiStateFlush, scope, scopeIsCurrent]);
 
     const clearTransientInputState = React.useCallback(() => {
         if (!owner || !scopeIsCurrent()) return;
@@ -553,10 +537,14 @@ export function useSessionAgentInputComposerPersistence({
         onSelectionChangePersist,
     }), [inputState, onScrollYChange, onSelectionChangePersist, owner, restoreBasisAdopted, restoreEpoch, scope]);
 
-    const structuredInputPersistence = React.useMemo(() => ({
-        mentions: structuredInputMentions,
+    const structuredInputPersistence = React.useMemo<SessionComposerStructuredInputPersistence>(() => ({
+        get mentions() {
+            return scopeIsCurrent() ? readStructuredMentions(scope, owner, textStore?.getPrompt()) : [];
+        },
+        subscribe: subscribeToStructuredMentions,
+        getSnapshot: readStructuredMentionsSignature,
         onMentionsChange: onStructuredMentionsChange,
-    }), [onStructuredMentionsChange, structuredInputMentions]);
+    }), [onStructuredMentionsChange, owner, readStructuredMentionsSignature, scope, scopeIsCurrent, subscribeToStructuredMentions, textStore]);
 
     return React.useMemo(() => ({
         expanded,
