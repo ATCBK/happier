@@ -87,6 +87,16 @@ inspection processes. Provider-reported SSH key
 evidence must match a fresh scan but cannot approve replacing saved host trust.
 
 The remote enrollment recipe shares one budget across request, consent and wait.
+In 0.3 development, service installation and startup also consume the remaining
+enrollment lifetime through the CLI's `--wait-timeout-ms` service argument. The
+service owner charges its preflight and launch against that budget, waits for a
+slow active service to publish the selected Home's owner, and ends the ownership
+check without adding its standalone grace window. The supplied budget is a
+remaining duration; guest CLI bootstrap before service-command entry is outside
+this check. An observed service exit
+or incompatible owner ends this finite wait early. Standalone service commands
+keep their existing startup checkpoints and platform defaults. The controller
+and guest CLI must both be updated for this propagation.
 The consent prompt ends at the earlier recipe deadline or Home request expiry,
 with `auth_enrollment_timeout` or `auth_request_expired` and a request to Retry
 setup; late consent cannot authorize the expired request. Finite `auth wait`
