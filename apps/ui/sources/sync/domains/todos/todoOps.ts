@@ -4,6 +4,7 @@ import { resolveAnchoredListMoveV1, type AnchoredListPositionV1 } from '@happier
 import { applyInternalTaskReorder, InternalTaskReorderError } from '@happier-dev/protocol/todos/todoActionOperationsV1';
 import { storage } from '@/sync/domains/state/storage';
 import { kvList } from '@/sync/api/account/apiKv';
+import type { AccountEncryptionReadUsage } from '@/sync/api/account/apiAccountEncryptionMode';
 import { createServerFetchForActiveServer, type ServerFetch } from '@/sync/http/client';
 import { createAccountKvJsonTransport, openUiAccountKvJsonRow, type AccountKvJsonTransport } from '@/sync/ops/account/accountKvJsonTransport';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -58,6 +59,7 @@ export async function resolveTodoAccountStorageContext(
     options: Readonly<{
         encryption?: TodoAccountStorageContext['encryption'];
         request?: ServerFetch;
+        usage?: AccountEncryptionReadUsage;
     }> = {},
 ): Promise<TodoAccountStorageContext> {
     try {
@@ -87,7 +89,7 @@ export async function fetchTodos(
     };
     requireCurrent();
     const request = opts.request ?? createServerFetchForActiveServer();
-    const context = await resolveTodoAccountStorageContext(credentials, { request });
+    const context = await resolveTodoAccountStorageContext(credentials, { request, usage: 'identity' });
     const state: TodoState = {
         todos: {},
         undoneOrder: [],

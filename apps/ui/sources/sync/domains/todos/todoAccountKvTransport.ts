@@ -12,10 +12,10 @@ import { parseTodoStoredContent } from './todoStoredContent';
 export function createTodoAccountKvTransport(args: Readonly<{
   credentials: AuthCredentials; request: ServerFetch; requireCurrent: () => void;
 }>): AccountJsonKvCollectionPort {
-  const context = async () => { args.requireCurrent(); const value = await resolveTodoAccountStorageContext(args.credentials, { request: args.request }); args.requireCurrent(); return value; };
+  const context = async (usage: 'identity' | 'fresh-authority') => { args.requireCurrent(); const value = await resolveTodoAccountStorageContext(args.credentials, { request: args.request, usage }); args.requireCurrent(); return value; };
   return {
     read: async key => {
-      const admitted = await context();
+      const admitted = await context('identity');
       const row = await kvGet(args.credentials, key, { request: args.request, retry: 'none' });
       args.requireCurrent();
       if (!row) return { value: null, version: -1 };
@@ -23,7 +23,7 @@ export function createTodoAccountKvTransport(args: Readonly<{
       return { ...opened, value: opened.tombstone ? null : parseTodoStoredContent(key, opened.value, true).value };
     },
     list: async prefix => {
-      const admitted = await context();
+      const admitted = await context('identity');
       const rows: { key: string; value: unknown; version: number }[] = [];
       const seen = new Set<string>();
       let afterKey: string | undefined;
@@ -41,7 +41,7 @@ export function createTodoAccountKvTransport(args: Readonly<{
       }
     },
     mutate: async mutations => {
-      const admitted = await context();
+      const admitted = await context('fresh-authority');
       const encoded = await Promise.all(mutations.map(async row => ({ key: row.key, version: row.version,
         value: await encodeTodoStoredContent({ key: row.key, mode: admitted.mode, value: row.value,
           encryption: isRawAccountStorageEncryption(admitted.encryption) ? admitted.encryption : null }),

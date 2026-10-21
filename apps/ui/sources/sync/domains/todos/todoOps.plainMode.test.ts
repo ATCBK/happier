@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
     computeAccountEncryptionMigrateKeyFingerprintV1,
@@ -9,6 +9,8 @@ import tweetnacl from 'tweetnacl';
 import { encodeBase64 } from '@/encryption/base64';
 import { Encryption } from '@/sync/encryption/encryption';
 import { legacyAccountKvVectors } from '../../../../../../packages/protocol/src/crypto/fixtures/accountKvLegacyV0';
+import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import type { ServerFetch } from '@/sync/http/client';
 
 const LEGACY_SECRET_BYTES = new Uint8Array(32).fill(7);
 const LEGACY_SECRET = encodeBase64(LEGACY_SECRET_BYTES, 'base64url');
@@ -21,8 +23,7 @@ const LEGACY_ACCOUNT_MIGRATION_KEY_FINGERPRINT =
 
 const mocks = vi.hoisted(() => ({
     applyTodos: vi.fn(),
-    fetchAccountEncryptionMode: vi.fn(),
-    fetchAccountEncryptionCurrentness: vi.fn(),
+    currentnessHttp: vi.fn<() => Promise<unknown>>(),
     kvGet: vi.fn(),
     kvList: vi.fn(),
     kvMutate: vi.fn(),
@@ -42,11 +43,6 @@ const mocks = vi.hoisted(() => ({
         doneOrder: string[];
         versions: Record<string, number>;
     },
-}));
-
-vi.mock('@/sync/api/account/apiAccountEncryptionMode', () => ({
-    fetchAccountEncryptionMode: mocks.fetchAccountEncryptionMode,
-    fetchAccountEncryptionCurrentness: mocks.fetchAccountEncryptionCurrentness,
 }));
 
 vi.mock('@/sync/api/capabilities/serverFeaturesClient', () => ({
@@ -89,16 +85,23 @@ import {
 } from '@/sync/encryption/base64StoredJsonContent';
 
 describe('todoOps plaintext account storage', () => {
+    afterEach(() => resetRuntimeFetch());
     beforeEach(() => {
         mocks.applyTodos.mockReset();
-        mocks.fetchAccountEncryptionMode.mockReset();
-        mocks.fetchAccountEncryptionCurrentness.mockReset();
-        mocks.fetchAccountEncryptionCurrentness.mockResolvedValue({
+        mocks.currentnessHttp.mockReset();
+        mocks.currentnessHttp.mockResolvedValue({
             mode: 'plain',
             version: 1,
             signingKeyFingerprint: null,
             contentKeyFingerprint: null,
             updatedAt: 0,
+        });
+        // Replace Home HTTP only; the strict mode parser and material admission
+        // remain real so unavailable/mismatch tests cannot pass on missing mocks.
+        setRuntimeFetch(async input => {
+            const path = new URL(String(input)).pathname;
+            if (path === '/v1/account/encryption/currentness') return Response.json(await mocks.currentnessHttp());
+            return new Response(null, { status: 404 });
         });
         mocks.kvGet.mockReset();
         mocks.kvList.mockReset();
@@ -181,7 +184,7 @@ describe('todoOps plaintext account storage', () => {
                 undoneOrder: ['z-last', ...first.map(row => row.key.slice('todo.'.length))], completedOrder: [],
             } }) }, item('z-last'),
         ] });
-        const request = vi.fn();
+        const request = vi.fn<ServerFetch>(async () => Response.json(await mocks.currentnessHttp()));
         const state = await fetchTodos({ token: 'token-only' }, { retry: 'none', request });
         expect(Object.keys(state.todos)).toHaveLength(1001);
         expect(state.undoneOrder[0]).toBe('z-last');
@@ -208,7 +211,7 @@ describe('todoOps plaintext account storage', () => {
     });
 
     it('opens and lazily re-seals real predecessor item/index shapes before Todo projection', async () => {
-        mocks.fetchAccountEncryptionCurrentness.mockResolvedValue({
+        mocks.currentnessHttp.mockResolvedValue({
             mode: 'e2ee',
             version: 1,
             signingKeyFingerprint: 'signing-current',
@@ -241,7 +244,7 @@ describe('todoOps plaintext account storage', () => {
     });
 
     it('refuses E2EE Todo access when local credentials do not match Account key currentness', async () => {
-        mocks.fetchAccountEncryptionCurrentness.mockResolvedValue({
+        mocks.currentnessHttp.mockResolvedValue({
             mode: 'e2ee',
             version: 1,
             signingKeyFingerprint: 'signing-current',
@@ -299,7 +302,7 @@ describe('todoOps plaintext account storage', () => {
         credentials,
         encryption,
     }) => {
-        mocks.fetchAccountEncryptionCurrentness.mockResolvedValue({
+        mocks.currentnessHttp.mockResolvedValue({
             mode: accountMode,
             version: 1,
             signingKeyFingerprint:

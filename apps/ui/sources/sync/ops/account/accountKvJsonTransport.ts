@@ -1,6 +1,6 @@
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { kvGet, kvMutate, type KvItem } from '@/sync/api/account/apiKv';
-import { encodeAccountStoredJsonContent } from '@/sync/encryption/accountStoredJsonContent';
+import { AccountStoredJsonContentModeMismatchError, encodeAccountStoredJsonContent } from '@/sync/encryption/accountStoredJsonContent';
 import { openAccountKvJsonRow } from '@happier-dev/protocol/crypto/accountKvCipher';
 import { createUiAccountKvCipher } from '@/sync/encryption/accountKvCipher';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
@@ -31,9 +31,23 @@ export async function openUiAccountKvJsonRow(params: Readonly<{
     request: ServerFetch;
     requireCurrent: () => void;
 }>): Promise<AccountKvJsonSnapshot> {
+    const cipher = (context: AccountStorageContext) => createUiAccountKvCipher(context.mode, context.mode === 'plain' ? null
+        : resolveAccountScopedCryptoMaterialFromCredentials(params.credentials));
     return await openAccountKvJsonRow({ row: params.row,
-        cipher: createUiAccountKvCipher(params.context.mode, params.context.mode === 'plain' ? null
-            : resolveAccountScopedCryptoMaterialFromCredentials(params.credentials)),
+        cipher: {
+            open: cipher(params.context).open,
+            seal: async value => {
+                // A legacy read becomes a write here. Its fresh sealing
+                // authority cannot come from a still-unpublished socket fact.
+                params.requireCurrent();
+                const current = await resolveAccountStorageContext(params.credentials, {
+                    request: params.request, encryption: params.context.encryption, usage: 'fresh-authority',
+                });
+                params.requireCurrent();
+                if (current.mode !== params.context.mode) throw new AccountStoredJsonContentModeMismatchError();
+                return await cipher(current).seal(value);
+            },
+        },
         requireCurrent: params.requireCurrent,
         compareAndSet: async (value, version) => {
             const result = await kvMutate(params.credentials, [{ key: params.row.key, value, version }], { request: params.request, retry: 'none' });
@@ -72,7 +86,7 @@ export function createAccountKvJsonTransport(params: Readonly<{
     return {
         async read() {
             checkCurrent();
-            const context = await whileCurrent(() => resolveAccountStorageContext(params.credentials, { ...requestOptions,
+            const context = await whileCurrent(() => resolveAccountStorageContext(params.credentials, { request: params.request, usage: 'identity',
                 ...(params.encryption !== undefined ? { encryption: params.encryption } : {}) }));
             checkCurrent();
             const item = await kvGet(params.credentials, params.key, requestOptions);

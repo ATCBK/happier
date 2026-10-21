@@ -8,7 +8,7 @@ import type { ReviewCommentAttachEvidenceRequestV1, ReviewCommentCreateRequestV1
 
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { getRandomBytes } from '@/platform/cryptoRandom';
-import { fetchAccountEncryptionMode } from '@/sync/api/account/apiAccountEncryptionMode';
+import { fetchAccountEncryptionMode, type AccountEncryptionReadUsage } from '@/sync/api/account/apiAccountEncryptionMode';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
 import { serverFetch, type ServerFetch } from '@/sync/http/client';
 import { parseToken } from '@/utils/auth/parseToken';
@@ -21,7 +21,7 @@ export type ReviewCommentUiActionExecutor = (
 
 export type CreateReviewCommentsHttpActionExecutorParams = Readonly<{
     request?: ServerFetch;
-    resolveEventStorageContext?: () => Promise<ReviewCommentEventStorageContext>;
+    resolveEventStorageContext?: (usage: AccountEncryptionReadUsage) => Promise<ReviewCommentEventStorageContext>;
     randomBytes?: (length: number) => Uint8Array;
 }>;
 
@@ -29,13 +29,13 @@ export type ReviewCommentEventStorageContext =
     | Readonly<{ accountId: string; mode: 'plain' }>
     | Readonly<{ accountId: string; mode: 'e2ee'; material?: AccountScopedCryptoMaterial }>;
 
-async function resolveDefaultEventStorageContext(): Promise<ReviewCommentEventStorageContext> {
+async function resolveDefaultEventStorageContext(usage: AccountEncryptionReadUsage): Promise<ReviewCommentEventStorageContext> {
     const credentials = await TokenStorage.getCredentials();
     if (!credentials) {
         throw new Error('review_comment_credentials_unavailable');
     }
     const accountId = parseToken(credentials.token);
-    const mode = (await fetchAccountEncryptionMode(credentials, { usage: 'fresh-authority' })).mode;
+    const mode = (await fetchAccountEncryptionMode(credentials, { usage })).mode;
     if (mode === 'plain') return { accountId, mode };
     try {
         return {
@@ -140,14 +140,22 @@ export function createReviewCommentsHttpActionExecutor(
     const resolveEventStorageContext = params.resolveEventStorageContext ?? resolveDefaultEventStorageContext;
     const randomBytes = params.randomBytes ?? getRandomBytes;
     return async (actionId, input, options) => {
-        const actionRequest: ServerFetch = options?.signal
-            ? (path, init, requestOptions) => request(
-                path,
-                { ...init, signal: options.signal },
-                requestOptions,
-            )
-            : request;
-        const storage = await resolveEventStorageContext();
+        const storage = await resolveEventStorageContext('identity');
+        const actionRequest: ServerFetch = async (path, init, requestOptions) => {
+            const method = (init?.method ?? 'GET').toUpperCase();
+            // Prepare carries structural data only. Admit private mutation and
+            // publication bytes after their crypto, at the final request port.
+            if (method !== 'GET' && method !== 'HEAD' && path !== '/v1/reviews/comments/mutations/prepare') {
+                const current = await resolveEventStorageContext('fresh-authority');
+                if (current.accountId !== storage.accountId || current.mode !== storage.mode) {
+                    throw Object.assign(new Error('review_comment_encryption_mode_mismatch'), {
+                        code: 'review_comment_encryption_mode_mismatch',
+                    });
+                }
+            }
+            options?.signal?.throwIfAborted();
+            return request(path, options?.signal ? { ...init, signal: options.signal } : init, requestOptions);
+        };
         const context = { ...storage, material: storage.mode === 'plain' ? null : storage.material ?? null };
         if (actionId === 'reviews.comments.claimPublicationDispatch') {
             const parsed = parseReviewCommentInput<ReviewCommentClaimPublicationDispatchRequestV1>(actionId, input);

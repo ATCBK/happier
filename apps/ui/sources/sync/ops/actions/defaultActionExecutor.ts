@@ -257,6 +257,7 @@ import { createRunnerActivationClient, RunnerActivationClientError } from '@/syn
 import type { RunnerActivationCreateRequestV1 } from '@happier-dev/protocol/ephemeralRunner/activation';
 import { getReadyServerFeatures } from '@/sync/api/capabilities/getReadyServerFeatures';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
+import { fetchAccountEncryptionMode } from '@/sync/api/account/apiAccountEncryptionMode';
 import { writeUiSessionStateField, type UiSessionStateMetadataPreprocess } from '@/sync/state/engine';
 import { admitDeclaredSessionVoicePreferenceV1, readBuiltInSessionVoiceDeclarationV1 } from '@happier-dev/protocol/sessions/instructions/sessionVoicePreferenceV1';
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
@@ -936,9 +937,13 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
   const resolveActionsSettingsSnapshot = () => resolveActionsSettingsV1FromState({ settings: readAccountSettingsSnapshot() });
   const executeReviewCommentAction = createReviewCommentsHttpActionExecutor(accountContext ? {
     request: accountContext.request,
-    resolveEventStorageContext: async () => (await accountContext.resolveAccountEncryption()).accountMode === 'plain'
-      ? { accountId: accountContext.accountId, mode: 'plain' }
-      : { accountId: accountContext.accountId, mode: 'e2ee', material: resolveAccountScopedCryptoMaterialFromCredentials(accountContext.credentials) },
+    resolveEventStorageContext: async usage => {
+      const { mode } = await fetchAccountEncryptionMode(accountContext.credentials, { request: accountContext.request, usage });
+      accountContext.assertCurrent();
+      return mode === 'plain'
+        ? { accountId: accountContext.accountId, mode }
+        : { accountId: accountContext.accountId, mode, material: resolveAccountScopedCryptoMaterialFromCredentials(accountContext.credentials) };
+    },
   } : undefined);
   const executePluginPermissionGrantAction = createPluginPermissionGrantHttpActionExecutor(accountContext ? { request: accountContext.request } : undefined);
   const executePluginWebhookAction = createPluginWebhookEndpointHttpActionExecutor(accountContext ? { request: accountContext.request } : undefined);
@@ -2830,9 +2835,16 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       accountContext.assertCurrent();
       return result;
     },
-    reviewCommentAction: async ({ actionId, input, signal }) => signal
-      ? await executeReviewCommentAction(actionId, input, { signal })
-      : await executeReviewCommentAction(actionId, input),
+    reviewCommentAction: async ({ actionId, input, signal }) => {
+      try {
+        return await executeReviewCommentAction(actionId, input, signal ? { signal } : undefined);
+      } catch (error) {
+        if (error instanceof Error && 'code' in error && error.code === 'review_comment_encryption_mode_mismatch') {
+          return { ok: false, errorCode: error.code, error: error.code };
+        }
+        throw error;
+      }
+    },
     pluginPermissionGrantAction: async ({ actionId, input, signal }) => signal
       ? await executePluginPermissionGrantAction(actionId, input, { signal })
       : await executePluginPermissionGrantAction(actionId, input),
