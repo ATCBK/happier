@@ -30,7 +30,7 @@ const CODEX_APP_SERVER_CONTEXT_WINDOW_EXHAUSTED_MESSAGE_MARKERS = [
 ] as const;
 const CODEX_APP_SERVER_TURN_FAILURE_MESSAGE = 'Codex app-server turn failed.';
 const CODEX_APP_SERVER_DIAGNOSTIC_ERROR_CODES = new Set([
-    'ContextWindowExceeded', 'UsageLimitExceeded', 'Unauthorized', 'Other',
+    'ContextWindowExceeded', 'UsageLimitExceeded', 'Unauthorized', 'Other', 'HttpConnectionFailed',
 ]);
 const CODEX_APP_SERVER_RUNTIME_AUTH_KIND_VALUES = [
     'usage_limit',
@@ -75,11 +75,13 @@ type CodexAppServerErrorPayload = Readonly<{
     message: string | null;
     additionalDetails: string | null;
     codexErrorInfo: string | null;
+    httpStatus?: number;
 }>;
 
 class CodexAppServerTurnFailure extends Error {
     readonly failureReason: CodexTurnFailureReason;
     declare readonly providerErrorCode?: string;
+    declare readonly httpStatus?: number;
     readonly isAuthAccountChanged: boolean;
     readonly contextWindowExhaustionEvidence: 'structured' | 'message' | null;
     readonly isTemporaryRecoverableTurnFailure: boolean;
@@ -95,6 +97,7 @@ class CodexAppServerTurnFailure extends Error {
         isWorkspaceRoutingUnauthorized: boolean;
         isRejectedStartModelEntitlement: boolean;
         providerErrorCode?: string;
+        httpStatus?: number;
     }>) {
         super(message);
         this.name = 'CodexAppServerTurnFailure';
@@ -110,15 +113,21 @@ class CodexAppServerTurnFailure extends Error {
                 : options.isAuthAccountChanged ? 'auth_account_changed'
                     : CODEX_APP_SERVER_RUNTIME_AUTH_KIND_VALUES.find(kind => kind === classification?.kind) ?? 'unclassified_provider_error';
         if (options.providerErrorCode) this.providerErrorCode = options.providerErrorCode;
+        if (options.httpStatus !== undefined) this.httpStatus = options.httpStatus;
     }
 }
 
 export function readCodexAppServerTurnFailureDiagnostic(error: unknown): Readonly<{
     failureReason: CodexTurnFailureReason;
     providerErrorCode?: string;
+    httpStatus?: number;
 }> {
     return error instanceof CodexAppServerTurnFailure
-        ? { failureReason: error.failureReason, ...(error.providerErrorCode ? { providerErrorCode: error.providerErrorCode } : {}) }
+        ? {
+            failureReason: error.failureReason,
+            ...(error.providerErrorCode ? { providerErrorCode: error.providerErrorCode } : {}),
+            ...(error.httpStatus === undefined ? {} : { httpStatus: error.httpStatus }),
+        }
         : { failureReason: 'unclassified_provider_error' };
 }
 
@@ -207,10 +216,17 @@ function readCodexAppServerErrorPayload(value: unknown): CodexAppServerErrorPayl
         ?? readRecord(dataTurn?.error) ?? data ?? (value instanceof Error ? record : null);
     if (!error) return null;
 
+    const errorInfo = error.codexErrorInfo ?? error.codex_error_info;
+    const structuredInfo = readRecord(errorInfo);
+    const httpFailure = readRecord(structuredInfo?.httpConnectionFailed ?? structuredInfo?.http_connection_failed);
+    const httpStatus = httpFailure?.httpStatusCode ?? httpFailure?.http_status_code;
+
     return {
         message: trimStringValue(error.message) ?? (value instanceof Error ? value.message : null),
         additionalDetails: trimStringValue(error.additionalDetails ?? error.additional_details),
-        codexErrorInfo: trimStringValue(error.codexErrorInfo ?? error.codex_error_info),
+        codexErrorInfo: httpFailure ? 'HttpConnectionFailed' : trimStringValue(errorInfo),
+        ...(typeof httpStatus === 'number' && Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599
+            ? { httpStatus } : {}),
     };
 }
 
@@ -322,6 +338,7 @@ export function createCodexAppServerTurnFailure(params: Readonly<{
                 && sanitizedClassification.quotaScope === 'model'
                 && typeof sanitizedClassification.providerLimitId === 'string',
             ...(providerErrorCode ? { providerErrorCode } : {}),
+            ...(payload?.httpStatus === undefined ? {} : { httpStatus: payload.httpStatus }),
         },
     );
 }

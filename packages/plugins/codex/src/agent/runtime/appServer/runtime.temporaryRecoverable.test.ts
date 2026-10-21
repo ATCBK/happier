@@ -1311,6 +1311,30 @@ describe('Codex app-server temporary recoverable turn failures', () => {
     }
   });
 
+  it('retains structured HTTP failure diagnostics through terminal turn settlement without provider text', async () => {
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const runtime = createRuntime({ ctx: { logger } });
+    const events: CodexAppServerEvent[] = [];
+    runtime.events.subscribe(event => events.push(event));
+    try {
+      await runtime.send({ v: 1, text: 'prompt' }, { turnId: 'host-turn-http-refusal' });
+      emitNotification('turn/completed', { threadId: 'thread-1', turn: {
+        id: 'turn-1', status: 'failed', error: {
+          message: 'PRIVATE_PROVIDER_BODY_AND_CREDENTIAL', additionalDetails: 'PRIVATE_PROMPT',
+          codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 403 } },
+        },
+      } });
+      await expect(waitForCodexAppServerRuntimeTurnCompletion(runtime)).rejects.toThrow('Codex app-server turn failed.');
+      expect(logger.warn).toHaveBeenCalledWith('Codex app-server turn failed', expect.objectContaining({
+        providerErrorCode: 'HttpConnectionFailed', httpStatus: 403,
+      }));
+      expect(events).toContainEqual(expect.objectContaining({ kind: 'turn-failed', issue: expect.objectContaining({
+        code: 'codex_app_server_turn_failed', sanitizedPreview: 'Codex app-server turn failed.',
+      }) }));
+      expect(JSON.stringify({ events, diagnostics: logger.warn.mock.calls })).not.toContain('PRIVATE_');
+    } finally { await runtime.dispose(); }
+  });
+
   it('reports the safe cause of a workspace routing 401 in the issue and daemon log', async () => {
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const runtime = createRuntime({ ctx: { logger } });

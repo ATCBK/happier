@@ -5,9 +5,31 @@ import {
     formatCodexAppServerErrorForUi,
     isCodexAppServerContextWindowExhaustedError,
     isCodexAppServerTemporaryRecoverableTurnFailureError,
+    readCodexAppServerTurnFailureDiagnostic,
 } from './failure.js';
 
 describe('createCodexAppServerTurnFailure', () => {
+    it.each([
+        { http_connection_failed: { http_status_code: 403 } },
+        { httpConnectionFailed: { httpStatusCode: 403 } },
+    ])('retains structured HTTP failure status without provider text: %j', codexErrorInfo => {
+        const failure = createCodexAppServerTurnFailure({ value: { turn: { error: {
+            message: 'PRIVATE_BODY_AND_CREDENTIAL', additionalDetails: 'PRIVATE_PROMPT', codexErrorInfo,
+        } } } });
+        expect(readCodexAppServerTurnFailureDiagnostic(failure)).toMatchObject({
+            providerErrorCode: 'HttpConnectionFailed', httpStatus: 403,
+        });
+        expect(JSON.stringify(failure)).not.toContain('PRIVATE_');
+    });
+
+    it.each([null, '403', 403.5, 99, 600])('omits invalid structured HTTP status %j', httpStatusCode => {
+        const failure = createCodexAppServerTurnFailure({ value: { error: {
+            codexErrorInfo: { httpConnectionFailed: { httpStatusCode } }, message: 'PRIVATE_BODY',
+        } } });
+        expect(readCodexAppServerTurnFailureDiagnostic(failure)).not.toHaveProperty('httpStatus');
+        expect(JSON.stringify(failure)).not.toContain('PRIVATE_');
+    });
+
     it('retains only closed provider failure reasons for failure logging', () => {
         const failure = createCodexAppServerTurnFailure({ value: { error: {
             message: 'secret credential and transcript', codexErrorInfo: 'ContextWindowExceeded',
