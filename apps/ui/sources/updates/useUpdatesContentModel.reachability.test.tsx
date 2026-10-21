@@ -5,6 +5,7 @@ import { UpdatesActionOutputSchemas } from '@happier-dev/protocol/actions/update
 import { createMachineFixture, createRootLayoutFeaturesResponse, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -22,7 +23,6 @@ vi.mock('expo-updates', () => ({
 
 const network = await installSessionOpsNetworkBoundary();
 const { storage } = await import('@/sync/domains/state/storageStore');
-const { adoptHomeProfile } = await import('@/sync/domains/server/serverProfiles');
 const { recordMachineRequestFailed, clearMachineRequestReachabilityForTest } = await import('@/sync/domains/machines/reachability/machineReachability');
 const { useUpdatesContentModel } = await import('./useUpdatesContentModel');
 const { createFrontDoorActionExecute } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
@@ -35,17 +35,21 @@ afterAll(() => network.dispose());
 
 it('Checks updates explicitly on a request-unreachable machine through the mounted Action owner', async () => {
     const accountHome = await network.addHome('https://updates-retry.test', 'updates-account');
-    const home = await adoptHomeProfile({ descriptor: { serverUrl: accountHome.serverUrl, homeServerIdentityId: 'srv_updates_reachability' }, source: 'manual' });
-    connection = await restoreServerAccountForTest({ serverUrl: home.serverUrl, accountId: accountHome.accountId,
+    const serverIdentityId = 'srv_updates_reachability';
+    connection = await restoreServerAccountForTest({ serverUrl: accountHome.serverUrl, serverIdentityId, accountId: accountHome.accountId,
         credentials: { token: accountHome.token }, request: async input => {
             const path = new URL(String(input)).pathname;
-            if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
+            if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse({ capabilities: { serverIdentity: { serverIdentityId } } }));
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            // The Home's own Machine row is the transport authority the capability read refreshes.
+            if (path.startsWith('/v1/machines/')) return Response.json({ machine: createPlainMachineRowFixture({
+                id: decodeURIComponent(path.slice('/v1/machines/'.length)), accountId: accountHome.accountId }) });
             if (path === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain', v: {} } });
             return null;
         } });
-    const scope = { serverId: home.id, accountId: accountHome.accountId };
+    // The restored Account lifetime names the Home that is actually active.
+    const scope = { serverId: connection.serverId, accountId: accountHome.accountId };
     // Match the Plain Machine producer; metadata presence alone is not a content-mode authority.
     const machine = createMachineFixture({ id: 'studio', activeAt: Date.now(), storageMode: 'plain' });
     const machines = [machine,
@@ -54,9 +58,9 @@ it('Checks updates explicitly on a request-unreachable machine through the mount
         createMachineFixture({ id: 'replaced', activeAt: Date.now(), replacedByMachineId: machine.id }),
     ];
     storage.setState(state => ({ profileScope: scope, profile: { ...state.profile, id: scope.accountId },
-        machines: Object.fromEntries(machines.map(row => [row.id, row])), machineListByServerId: { [home.id]: machines },
-        machineListStatusByServerId: { [home.id]: 'idle' } }));
-    recordMachineRequestFailed({ ...scope, serverId: home.serverIdentityId!, machineId: machine.id });
+        machines: Object.fromEntries(machines.map(row => [row.id, row])), machineListByServerId: { [scope.serverId]: machines },
+        machineListStatusByServerId: { [scope.serverId]: 'idle' } }));
+    recordMachineRequestFailed({ ...scope, serverId: serverIdentityId, machineId: machine.id });
     network.respond(RPC_METHODS.CAPABILITIES_DETECT, { protocolVersion: 1, results: {} });
     const hook = await renderHook(() => useUpdatesContentModel());
     await flushHookEffects();
@@ -65,7 +69,7 @@ it('Checks updates explicitly on a request-unreachable machine through the mount
         const execute = createFrontDoorActionExecute();
         await act(async () => {
             const checked = await execute('updates.check', {}, { surface: 'ui', authority: 'present_user',
-                serverId: home.id, expectedAccountId: scope.accountId });
+                serverId: scope.serverId, expectedAccountId: scope.accountId });
             if (!checked.ok) throw new Error(checked.errorCode);
             expect(UpdatesActionOutputSchemas['updates.check'].parse(checked.result)).toEqual({ status: 'requested' });
         });

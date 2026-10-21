@@ -201,6 +201,73 @@ describe('useProviderConnections', () => {
         expect(machineRpcWithServerScope).not.toHaveBeenCalled();
     });
 
+    it('keeps admitted Account rows on a remount while its fresh Home read is pending', async () => {
+        const catalog = ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+            connections: [{ v: 1, id: 'pc_a', source: { kind: 'custom', template: buildCustomProviderTemplate({
+                ...createCustomProviderDraft('openai-chat'), name: 'Acme', baseUrl: 'https://models.example.test/v1', requiresApiKey: false,
+            }) }, role: 'named', displayName: 'Acme', displayNameMode: 'custom', revision: 1, createdAt: 1, updatedAt: 1 }],
+        });
+        account.home.answer(serverId, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, {
+            body: { status: 'present', revision: 1, content: { t: 'plain', v: catalog } },
+        });
+        const first = await renderHook(() => useProviderConnections({ enabled: true, machineId: null, serverId }));
+        await vi.waitFor(() => expect(first.getCurrent().data?.connections[0]?.displayName).toBe('Acme'));
+        await first.unmount();
+        let release!: () => void;
+        const pending = new Promise<void>(resolve => { release = resolve; });
+        account.home.answer(serverId, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, {
+            respondAfter: pending, body: { status: 'present', revision: 1, content: { t: 'plain', v: catalog } },
+        });
+        try {
+            const second = await renderHook(() => useProviderConnections({ enabled: true, machineId: null, serverId, connectionId: 'pc_a' }));
+            expect(second.getCurrent().data?.connections).toMatchObject([{ connectionId: 'pc_a', displayName: 'Acme' }]);
+            expect(second.getCurrent().loading).toBe(false);
+            expect(second.getCurrent().catalog?.connections[0]?.revision).toBe(1);
+            await act(async () => { applyProviderCatalogSnapshot(captureActiveServerAccountScopeLifetime()!.scope,
+                { status: 'unavailable', reason: 'encryption-material-unavailable' }, true); });
+            expect(second.getCurrent().data).toBeNull();
+        } finally { await act(async () => { release(); }); }
+    });
+
+    it('keeps answered Account rows available while Machine augmentation refreshes without refetching unchanged inputs', async () => {
+        const catalog = ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+            connections: [{ v: 1, id: 'pc_a', source: { kind: 'custom', template: buildCustomProviderTemplate({
+                ...createCustomProviderDraft('openai-chat'), name: 'Acme', baseUrl: 'https://models.example.test/v1', requiresApiKey: false,
+            }) }, role: 'named', displayName: 'Acme', displayNameMode: 'custom', revision: 1, createdAt: 1, updatedAt: 1 }],
+        });
+        account.home.answer(serverId, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, {
+            body: { status: 'present', revision: 1, content: { t: 'plain', v: catalog } },
+        });
+        let finishRead!: (response: ReturnType<typeof createProviderConnectionsDescribeFixture>) => void;
+        machineRpcWithServerScope.mockResolvedValueOnce(createProviderConnectionsDescribeFixture({
+            connections: [createProviderConnectionViewFixture({ connectionId: 'pc_a', displayName: 'Acme' })],
+        }));
+        const hook = await renderHook(() => useProviderConnections({ enabled: true, machineId: 'machine-a', serverId }));
+        await vi.waitFor(() => expect(hook.getCurrent().loading).toBe(false));
+        const answered = hook.getCurrent().data;
+        expect(answered).not.toBeNull();
+        machineRpcWithServerScope.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+        let refresh!: Promise<unknown>;
+        await act(async () => {
+            refresh = hook.getCurrent().refresh();
+            await flushHookEffects();
+        });
+        try {
+            await vi.waitFor(() => expect(finishRead).toBeTypeOf('function'));
+            expect(hook.getCurrent().data?.connections).toMatchObject([{ connectionId: 'pc_a', displayName: 'Acme' }]);
+            expect(hook.getCurrent().catalog?.connections).toMatchObject([{ id: 'pc_a', displayName: 'Acme' }]);
+            expect(hook.getCurrent().loading).toBe(false);
+            await hook.rerender();
+            await hook.rerender();
+            expect(machineRpcWithServerScope).toHaveBeenCalledTimes(2);
+        } finally {
+            await act(async () => {
+                finishRead(createProviderConnectionsDescribeFixture({ connections: [] }));
+                await refresh;
+            });
+        }
+    });
+
     it('does not hold the selected query refresh open while a supporting pane is still reading', async () => {
         let holdCollection = false;
         let finishCollection!: (response: ReturnType<typeof createProviderConnectionsDescribeFixture>) => void;

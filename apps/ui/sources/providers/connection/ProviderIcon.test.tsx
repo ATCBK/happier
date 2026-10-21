@@ -37,7 +37,7 @@ describe('ProviderIcon', () => {
         expect(mark.findAllByType(Icon)).toHaveLength(0);
         const image = mark.findByType('Image');
         expect(image.props.source.uri).toMatch(/^data:image\/png;base64,/);
-        expect(image.props.style.tintColor).toBe('#123456');
+        expect(image.props.tintColor).toBe('#123456');
         const tokenOnly = await renderScreen(<ProviderIcon icon="deepseek" size={24} color="#123456" />);
         expect(tokenOnly.findByType(Icon).props.name).toBe('cube');
     });

@@ -4,7 +4,7 @@ import type { MachineCapabilitiesSnapshot } from '@/hooks/server/useMachineCapab
 import type { CapabilitiesDetectRequest, CapabilitiesInvokeRequest } from '@/sync/api/capabilities/capabilitiesProtocol';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import type { MachineCapabilitiesInvokeResult } from '@/sync/ops';
-import type { DaemonMergedProjectionInputs } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
+import { publishDaemonMergedProjectionInputs } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import type { PluginProjectionV2 } from '@happier-dev/protocol';
 
 import {
@@ -64,14 +64,8 @@ const codexAcpPluginProjection = {
     },
 } satisfies PluginProjectionV2;
 
-const loadDaemonMergedProjectionInputs = vi.fn(async (): Promise<DaemonMergedProjectionInputs> => ({
-    mergedProviderProjectionById: {},
-    mergedBackendProjectionById: {},
-    discoveredBackendIds: [],
-    pluginProjectionById: {},
-    pluginProjectionV2: codexAcpPluginProjection,
-    registryDiagnostics: [],
-}));
+const codexAcpProjectionInputs = publishDaemonMergedProjectionInputs({ projection: codexAcpPluginProjection });
+const loadDaemonMergedProjectionInputs = vi.fn(async () => codexAcpProjectionInputs);
 
 const CODEX_ACP_PLUGIN_SETTINGS = {
     account: { codexBackendMode: 'acp' },

@@ -776,7 +776,7 @@ describe('getSessionStatus', () => {
         expect(status.isPulsing).toBe(false);
     });
 
-    it('does not let sourceClass turn provider runtime activity into foreground work', async () => {
+    it('keeps a completed turn with continuing provider runtime activity as background work, not foreground work', async () => {
         const { getSessionStatus } = await import('./sessionUtils');
         const now = 1_000_000;
         const session = createBaseSession({
@@ -793,7 +793,7 @@ describe('getSessionStatus', () => {
 
         const status = getSessionStatus(session, now, 0);
 
-        expect(status.state).toBe('ready');
+        expect(status.state).toBe('background_active');
         expect(status.isPulsing).toBe(false);
         expect(status.awareness?.runtime).toBe('background_active');
     });

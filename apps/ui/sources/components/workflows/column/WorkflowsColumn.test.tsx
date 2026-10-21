@@ -255,17 +255,17 @@ describe('WorkflowsColumn', () => {
             expect(observation.retry, JSON.stringify(observation)).toBe(true);
         });
         const target = () => screen.tree.findHostByTestId('workflows-column:library:failed:retry')!;
-        const flattened = () => StyleSheet.flatten(typeof target().props.style === 'function'
-            ? target().props.style({ pressed: false }) : target().props.style);
+        // A line recovery paints no ring of its own: the keyboard ring is the shared document ring
+        // (theme.css `:where(:focus-visible)`), which only shows while the host neither suppresses the
+        // outline inline nor leaves the tab order.
+        const hostOutlineStyle = () => StyleSheet.flatten(typeof target().props.style === 'function'
+            ? target().props.style({ pressed: false }) : target().props.style)?.outlineStyle;
         expect(target().props.role ?? target().props.accessibilityRole).toBe('button');
-        const restingOutline = flattened()?.outlineColor;
-        expect(flattened()?.outlineWidth ?? 0).toBe(0);
+        expect(target().props.tabIndex ?? 0).not.toBe(-1);
+        expect(hostOutlineStyle()).not.toBe('none');
         document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
         await act(async () => { target().props.onFocus({ target: { matches: () => true } }); });
-        expect(flattened()?.outlineStyle).toBe('solid');
-        expect(flattened()?.outlineWidth).toBeGreaterThan(0);
-        expect(flattened()?.outlineColor).toBeTruthy();
-        expect(flattened()?.outlineColor).not.toBe(restingOutline);
+        expect(hostOutlineStyle()).not.toBe('none');
         expect(target().props.role ?? target().props.accessibilityRole).toBe('button');
         const requestsBeforeRetry = artifactRequests.length;
         await screen.pressByTestIdAsync('workflows-column:library:failed:retry');
@@ -309,7 +309,7 @@ describe('WorkflowsColumn', () => {
         const rows = screen.tree.root.findAll((node) => node.props?.testID === 'workflow-run-row:run-waiting' && typeof node.props.onPress === 'function');
         expect(rows.length).toBeGreaterThan(0);
         await act(async () => { rows[0]!.props.onPress(); });
-        expect(routerPush).toHaveBeenCalledWith('/workflows/runs/run-waiting');
+        expect(routerPush).toHaveBeenCalledWith('/workflows/runs/run-waiting?serverId=unified-column.test');
     });
 
     it('keeps the library in main beside a column that already lists Runs (DESIGN-16 D9)', async () => {
@@ -362,7 +362,7 @@ describe('WorkflowsColumn', () => {
         expect(filterTrigger?.props.accessibilityLabel).not.toContain('sessionsList.filtersMyWork');
         expect(screen.findByTestId('session-list-filter-summary-reset')).toBeTruthy();
         await act(async () => { runRows[0]!.props.onPress(); });
-        expect(routerPush).toHaveBeenCalledWith('/workflows/runs/run-waiting');
+        expect(routerPush).toHaveBeenCalledWith('/workflows/runs/run-waiting?serverId=unified-column.test');
 
         await screen.pressByTestIdAsync('session-list-search-trigger');
         await act(async () => { screen.changeTextByTestId('session-list-search-input', 'release'); });
