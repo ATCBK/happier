@@ -718,6 +718,15 @@ bytes. Ordinary writes publish the source-owned projection set through that same
 writer. There is no generator completion record, private compiler orchestrator or
 prepared Agent-facts child protocol.
 
+In 0.3 development, captured daemon source builds add `--daemon-projections` to
+that check. This selects the generated locator table and normalized manifest
+assets consumed by `readCliSourceEntries`, including runner leaves derived from
+real authored Agent registration. UI, Voice, locale and Agent catalog projections
+remain covered by the full semantic gate. The daemon selector is check-only and
+does not repair captured inputs or publish package artifacts. Its captured
+declarations share one inspection process and module graph for that invocation;
+full publication retains per-plugin inspection processes.
+
 Aggregate final-artifact publication deliberately reads serialized plugin declarations.
 Both authored and serialized inputs must validate before replacing semantic membership;
 invalid declarations fail visibly and leave the prior projection intact. Optional
