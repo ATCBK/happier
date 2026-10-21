@@ -14,7 +14,7 @@ import { getActionSpec } from '../actions/actionSpecs.js';
 import { MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS } from '../actions/specs/machineTerminal.js';
 import { FollowEventV1Schema } from '../sessions/follow/sessionFollowPolicyV1.js';
 import { SessionFollowSourceMessageV1Schema, SessionFollowSourceRequestsV1Schema } from '../sessions/follow/sessionFollowSourceOccurrenceV1.js';
-import { ExecutionRunFollowOriginalV1Schema, WorkflowRunFollowOriginalV1Schema, RunFollowOccurrenceV1Schema } from '../sessions/follow/sessionFollowInputV1.js';
+import { ExecutionRunFollowSourceV1Schema, WorkflowRunFollowOriginalV1Schema, RunFollowOccurrenceV1Schema } from '../sessions/follow/sessionFollowInputV1.js';
 import { DiscussionMessageRefV1Schema } from '../discussions/messageRefs.js';
 
 const followUpdateFields = { event: z.lazy(() => FollowEventV1Schema) };
@@ -326,7 +326,7 @@ export const ActivityWebhookPayloadV1Schema = lazyZodSchema(() => z.discriminate
       DiscussionFollowUpdateNotificationV1Schema.shape.follow]),
     navigation: z.union([z.strictObject({ sessionId: z.string().check(z.minLength(1)) }),
       z.strictObject({ message: DiscussionMessageRefV1Schema }),
-      z.strictObject({ source: z.union([ExecutionRunFollowOriginalV1Schema.shape.source, WorkflowRunFollowOriginalV1Schema.shape.source]) })]),
+      z.strictObject({ source: z.union([ExecutionRunFollowSourceV1Schema, WorkflowRunFollowOriginalV1Schema.shape.source]) })]),
   }).check(z.superRefine((payload, ctx) => {
     if ('original' in payload.follow ? 'kind' in payload.follow.original
       ? !('message' in payload.navigation) || !sameStrictJsonValue(payload.follow.original, payload.navigation.message)
