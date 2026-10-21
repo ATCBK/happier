@@ -5,6 +5,12 @@ import { resolvePreferredBackendTarget } from './resolvePreferredBackendTarget';
 import { DEFAULT_AGENT_ID } from '@/agents/catalog/catalog';
 import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
 import { AcpBackendDefinitionV1Schema } from '@happier-dev/protocol/acp/catalog/settingsV1';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { publishDaemonMergedProjectionInputs } from './daemonContributionRegistryProjectionAdapters';
+
+const emptyProjectionInputs = publishDaemonMergedProjectionInputs({
+    projection: PluginProjectionV2Schema.parse({ v: 2, generation: 1, familiesById: {} }),
+});
 
 const CLAUDE_TARGET = { kind: 'agent' as const, identity: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES.claude };
 const ANTIGRAVITY_TARGET = { kind: 'agent' as const, identity: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES.antigravity };
@@ -44,7 +50,7 @@ describe('resolvePreferredBackendTargetFromProjection', () => {
             createdAt: 1, updatedAt: 1 });
         const inputs = { lastUsedAgent: 'codex', lastUsedBackendTarget: target,
             enabledAgentIds: ['codex'],
-            daemonMergedProjectionInputs: { discoveredBackendIds: [], mergedBackendProjectionById: {},
+            daemonMergedProjectionInputs: { ...emptyProjectionInputs, discoveredBackendIds: [], mergedBackendProjectionById: {},
                 mergedProviderProjectionById: {}, pluginProjectionById: {}, pluginProjectionV2: null, registryDiagnostics: [] },
         };
         expect(resolvePreferredBackendTargetFromProjection({ ...inputs,
@@ -89,6 +95,7 @@ describe('resolvePreferredBackendTargetFromProjection', () => {
             backendEnabledByTargetKey: {},
             acpCatalogSnapshot: { status: 'ready', revision: 3, record: { v: 1, definitions: [] } },
             daemonMergedProjectionInputs: {
+                ...emptyProjectionInputs,
                 discoveredBackendIds: ['antigravity-localharness', 'antigravity-terminal'],
                 mergedProviderProjectionById: {
                     antigravity: {
@@ -137,6 +144,7 @@ describe('resolvePreferredBackendTargetFromProjection', () => {
             backendEnabledByTargetKey: {},
             acpCatalogSnapshot: { status: 'ready', revision: 3, record: { v: 1, definitions: [] } },
             daemonMergedProjectionInputs: {
+                ...emptyProjectionInputs,
                 discoveredBackendIds: ['antigravity-localharness', 'antigravity-terminal'],
                 mergedProviderProjectionById: {
                     antigravity: {
@@ -209,6 +217,7 @@ describe('resolvePreferredBackendTargetFromProjection', () => {
                     },
                 ] } },
             daemonMergedProjectionInputs: {
+                ...emptyProjectionInputs,
                 discoveredBackendIds: ['antigravity-localharness', 'antigravity-terminal'],
                 mergedProviderProjectionById: {
                     antigravity: {
@@ -257,6 +266,7 @@ describe('resolvePreferredBackendTargetFromProjection', () => {
             backendEnabledByTargetKey: {},
             acpCatalogSnapshot: { status: 'ready', revision: 3, record: { v: 1, definitions: [] } },
             daemonMergedProjectionInputs: {
+                ...emptyProjectionInputs,
                 discoveredBackendIds: ['acme.review.backend'],
                 mergedProviderProjectionById: {
                     'acme.review.provider': {
@@ -295,6 +305,7 @@ describe('resolvePreferredBackendTargetFromProjection', () => {
             backendEnabledByTargetKey: {},
             acpCatalogSnapshot: { status: 'ready', revision: 3, record: { v: 1, definitions: [] } },
             daemonMergedProjectionInputs: {
+                ...emptyProjectionInputs,
                 discoveredBackendIds: [],
                 mergedProviderProjectionById: {
                     'acme.review': {
@@ -325,6 +336,7 @@ describe('resolvePreferredBackendTargetFromProjection', () => {
                     launch: { kind: 'command' as const, command: 'ghost', args: [] }, createdAt: 1, updatedAt: 1 }),
             ] } },
             daemonMergedProjectionInputs: {
+                ...emptyProjectionInputs,
                 discoveredBackendIds: [],
                 mergedProviderProjectionById: {
                     'acme.review': {
@@ -348,6 +360,7 @@ describe('resolvePreferredBackendTargetFromProjection', () => {
             defaultBuiltInAgentId: 'claude',
             acpCatalogSnapshot: { status: 'ready', revision: 3, record: { v: 1, definitions: [] } },
             daemonMergedProjectionInputs: {
+                ...emptyProjectionInputs,
                 discoveredBackendIds: ['acme.review.backend'],
                 mergedProviderProjectionById: {
                     'acme.review.provider': {
@@ -408,6 +421,7 @@ describe('resolvePreferredBackendTargetFromProjection', () => {
                     },
                 ] } },
             daemonMergedProjectionInputs: {
+                ...emptyProjectionInputs,
                 discoveredBackendIds: ['plugin-runtime'],
                 mergedProviderProjectionById: {
                     'plugin-provider': {

@@ -1,4 +1,5 @@
 import { storage } from '@/sync/domains/state/storage';
+import { publishDaemonMergedProjectionInputs } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import { seedAutocompleteSessions } from './autocompleteTestFixtures';
 import type { ReactElement } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -119,9 +120,9 @@ function composerReferenceProjection(entries: readonly Readonly<{
     registrationOccurrenceId?: string;
     activationState?: 'active' | 'dormant' | 'unavailable';
     activationOccurrenceId?: string;
-}>[]): PluginProjectionV2 {
+}>[]) {
     const generation = 7;
-    return {
+    const projection: PluginProjectionV2 = {
         v: 2,
         generation,
         installedPackagesById: {},
@@ -174,6 +175,7 @@ function composerReferenceProjection(entries: readonly Readonly<{
         },
         diagnostics: [],
     };
+    return { projection, pluginUiProjection: publishDaemonMergedProjectionInputs({ projection }).pluginUiProjection };
 }
 
 async function importSuggestions() {
@@ -306,7 +308,7 @@ describe('sectioned composer suggestions (EU-3)', () => {
                 composerReferenceHost: {
                     machineId: 'machine-a',
                     serverId: 'server-a',
-                    projection,
+                    ...projection,
                     isCurrent: () => true,
                 },
             });
@@ -343,7 +345,7 @@ describe('sectioned composer suggestions (EU-3)', () => {
                 composerReferenceHost: {
                     machineId: 'machine-a',
                     serverId: 'server-a',
-                    projection,
+                    ...projection,
                     isCurrent: () => true,
                 },
             })).resolves.toEqual([]);
@@ -376,7 +378,7 @@ describe('sectioned composer suggestions (EU-3)', () => {
                 composerReferenceHost: {
                     machineId: 'machine-a',
                     serverId: 'server-a',
-                    projection,
+                    ...projection,
                     isCurrent: () => true,
                 },
             });
@@ -434,7 +436,7 @@ describe('sectioned composer suggestions (EU-3)', () => {
                 composerReferenceHost: {
                     machineId: 'machine-a',
                     serverId: 'server-a',
-                    projection: composerReferenceProjection([
+                    ...composerReferenceProjection([
                         { pluginId: 'acme.issues', localId: 'issues' },
                     ]),
                     isCurrent: () => true,
@@ -490,7 +492,7 @@ describe('sectioned composer suggestions (EU-3)', () => {
                 composerReferenceHost: {
                     machineId: 'machine-a',
                     serverId: 'server-a',
-                    projection: composerReferenceProjection([
+                    ...composerReferenceProjection([
                         { pluginId: 'acme.issues', localId: 'healthy' },
                         { pluginId: 'acme.issues', localId: 'stalled' },
                     ]),
@@ -532,7 +534,7 @@ describe('sectioned composer suggestions (EU-3)', () => {
                 composerReferenceHost: {
                     machineId: 'machine-a',
                     serverId: 'server-a',
-                    projection: composerReferenceProjection([
+                    ...composerReferenceProjection([
                         { pluginId: 'acme.issues', localId: 'healthy' },
                         { pluginId: 'acme.issues', localId: 'stalled' },
                     ]),
@@ -574,7 +576,7 @@ describe('sectioned composer suggestions (EU-3)', () => {
                 composerReferenceHost: {
                     machineId: 'machine-a',
                     serverId: 'server-a',
-                    projection: composerReferenceProjection([
+                    ...composerReferenceProjection([
                         { pluginId: 'acme.issues', localId: 'issues' },
                     ]),
                     isCurrent: () => current,
@@ -614,7 +616,7 @@ describe('sectioned composer suggestions (EU-3)', () => {
                 composerReferenceHost: {
                     machineId: 'machine-a',
                     serverId: 'server-a',
-                    projection: composerReferenceProjection([
+                    ...composerReferenceProjection([
                         { pluginId: 'acme.issues', localId: 'issues' },
                     ]),
                     isCurrent: () => true,
@@ -640,7 +642,7 @@ describe('sectioned composer suggestions (EU-3)', () => {
                 composerReferenceHost: {
                     machineId: 'machine-a',
                     serverId: 'server-a',
-                    projection: composerReferenceProjection([
+                    ...composerReferenceProjection([
                         { pluginId: 'acme.issues', localId: 'issues' },
                     ]),
                     isCurrent: () => true,
@@ -1035,7 +1037,7 @@ describe('sectioned composer suggestions (EU-3)', () => {
                 composerReferenceHost: {
                     machineId: 'machine-a',
                     serverId: 'server-a',
-                    projection: composerReferenceProjection([
+                    ...composerReferenceProjection([
                         { pluginId: 'acme.issues', localId: 'issues' },
                     ]),
                     isCurrent: () => true,
@@ -1084,7 +1086,7 @@ describe('sectioned composer suggestions (EU-3)', () => {
                 composerReferenceHost: {
                     machineId: 'machine-a',
                     serverId: 'server-a',
-                    projection: composerReferenceProjection([
+                    ...composerReferenceProjection([
                         { pluginId: 'acme.issues', localId: 'healthy' },
                         { pluginId: 'acme.issues', localId: 'stalled' },
                     ]),

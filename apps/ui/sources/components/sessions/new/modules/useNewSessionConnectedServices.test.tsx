@@ -276,7 +276,7 @@ installNewSessionModulesCommonModuleMocks({
 });
 
 // Load real owners during collection, after native boundary factories are set.
-const { adaptDaemonContributionRegistryProjectionToMergedProjectionInputs } = await import('@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters');
+const { publishDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters');
 const { getResolvedBackendCatalogEntries } = await import('@/agents/backendCatalog/getResolvedBackendCatalogEntries');
 const { resolveNewSessionConnectedServicesAgent, useNewSessionConnectedServicesAgentOptions } = await import('../hooks/screenModel/useNewSessionConnectedServicesAgentOptions');
 const { useAgentInputSelectionOverlayController } = await import('@/components/sessions/agentInput/selection/useAgentInputSelectionOverlayController');
@@ -338,11 +338,7 @@ describe('new Session Connected Accounts from the machine catalog', () => {
                 },
             },
         });
-        const adaptedInputs = adaptDaemonContributionRegistryProjectionToMergedProjectionInputs(projection);
-        const inputs = { ...adaptedInputs,
-            discoveredBackendIds: Object.keys(adaptedInputs.mergedBackendProjectionById),
-            pluginProjectionV2: projection,
-        };
+        const inputs = publishDaemonMergedProjectionInputs({ projection });
         const catalog = {
             enabledAgentIds: ['claude'],
         };

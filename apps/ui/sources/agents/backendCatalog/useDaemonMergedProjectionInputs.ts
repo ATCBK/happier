@@ -61,6 +61,8 @@ export function useDaemonMergedProjectionSummary(params: Readonly<{
 }
 
 export function useDaemonMergedProjectionInputs(params: Readonly<{
+    /** Reuse a mounted caller's exact routed lifetime instead of resolving it again. */
+    accountLifetime?: ActiveServerAccountScopeLifetime | null;
     machineId: string | null | undefined;
     serverId?: string | null;
     enabled?: boolean;
@@ -87,12 +89,12 @@ export function useDaemonMergedProjectionInputs(params: Readonly<{
         ? Math.max(0, Math.floor(params.staleMs))
         : 60_000;
     const routedBindings = useServerCredentialAccountScopeBindings(
-        serverId ? [serverId] : [],
+        params.accountLifetime === undefined && serverId ? [serverId] : [],
     );
     // A routed projection uses that Home's credential-bound lifetime, even
     // while another Home is focused. The binding is itself the lifetime.
     const routedAccountLifetime: ActiveServerAccountScopeLifetime | null = routedBindings.values().next().value ?? null;
-    const accountLifetime = serverId
+    const accountLifetime = params.accountLifetime !== undefined ? params.accountLifetime : serverId
         ? routedAccountLifetime
         : captureActiveServerAccountScopeLifetime();
     const hasProjectionScope = enabled && Boolean(machineId);

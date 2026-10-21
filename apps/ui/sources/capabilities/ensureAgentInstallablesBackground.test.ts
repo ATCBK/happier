@@ -559,6 +559,7 @@ describe('ensureAgentInstallablesBackground', () => {
                     },
                 },
             } satisfies PluginProjectionV2;
+            const pinnedArchiveInputs = publishDaemonMergedProjectionInputs({ projection: pinnedArchiveProjection });
 
             const settings = settingsParse({} as any);
             const prefetchMachineCapabilities = vi.fn(async () => {});
@@ -601,14 +602,7 @@ describe('ensureAgentInstallablesBackground', () => {
                     prefetchMachineCapabilities,
                     getMachineCapabilitiesSnapshot,
                     machineCapabilitiesInvoke,
-                    loadDaemonMergedProjectionInputs: vi.fn(async () => ({
-                        mergedProviderProjectionById: {},
-                        mergedBackendProjectionById: {},
-                        discoveredBackendIds: [],
-                        pluginProjectionById: {},
-                        pluginProjectionV2: pinnedArchiveProjection,
-                        registryDiagnostics: [],
-                    })),
+                    loadDaemonMergedProjectionInputs: vi.fn(async () => pinnedArchiveInputs),
                 },
             );
 

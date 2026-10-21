@@ -913,6 +913,12 @@ fact: a missing selected page or sidebar destination stays pending while an
 eligible origin is establishing, rather than becoming an unavailable tombstone.
 Machine presence updates that leave the resolved target set unchanged do not
 republish the installed/runtime catalog.
+Origin reports that leave the UI union unchanged do not rebuild it. This includes
+native-only package selections and additional controller checks that cannot
+change an agreed or explicitly selected declaration. A changed UI or Resource
+selection derives only that plugin's slice, sharing unrelated published rows.
+Administration and Connected Account facts remain separate; actual source,
+trust and currentness changes still invalidate the affected composition.
 
 In the unreleased UI implementation, the existing Availability reader store,
 Machine execution-origin producer and Account-lifetime AppShell publisher prepare

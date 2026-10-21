@@ -17,11 +17,12 @@ let clearDaemonMergedProjectionCacheForTests: typeof import('./loadDaemonMergedP
 let activeAccountRestored = false;
 let initialRevision = 0;
 const projectionScope = { machineId: 'machine-1', serverId: 'server-1' };
+const textBoundary = vi.hoisted(() => ({ locale: 'en' }));
 
 // Localization is a platform boundary; projection and descriptor logic stay real.
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock();
+    return createTextModuleMock({ getPreferredLanguage: () => textBoundary.locale });
 });
 
 // Install the network boundary before preparing the real Sync graph once,
@@ -167,6 +168,7 @@ const composerSurfaceCatalog = [{
 
 describe('loadDaemonMergedProjectionCacheEntry', () => {
     beforeEach(async () => {
+        textBoundary.locale = 'en';
         network.resetRequests();
         retireActiveServerAccountScopeLifetime();
         storage.setState(storage.getInitialState(), true);
@@ -393,7 +395,7 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
         }
     });
 
-    it('publishes normalized model slices once and retains unchanged rows across a same-generation endpoint refresh', async () => {
+    it('publishes normalized model slices once and retains unchanged rows across same-generation endpoint and locale refreshes', async () => {
         const { loadDaemonMergedProjectionInputs, loadDaemonMergedProjectionCacheEntry } = await import('./loadDaemonMergedProjectionInputs');
         await (await import('@/sync/domains/state/warmCacheEncryptionKey')).prepareWarmCacheEncryptionKey();
         const normalizer = await import('@/sync/domains/plugins/ui/projection');
@@ -421,6 +423,18 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
             const repeatedAnswer = await loadDaemonMergedProjectionCacheEntry({ ...params, reuseFreshReady: false });
             expect(repeatedAnswer?.kind === 'ready' && repeatedAnswer.inputs).toBe(first);
             expect(normalize).toHaveBeenCalledTimes(initialNormalizations);
+
+            // Locale still obtains a fresh endpoint answer, but identical
+            // source facts must not replace schema/catalog owners underneath
+            // the live surface's locale-only context update.
+            const describesBeforeLocale = projectionDescribeMock.mock.calls.length;
+            textBoundary.locale = 'es';
+            projectionDescribeMock.mockResolvedValueOnce({ supported: true, projection: structuredClone(projection) });
+            const localeAnswer = await loadDaemonMergedProjectionInputs(params);
+            expect(projectionDescribeMock).toHaveBeenCalledTimes(describesBeforeLocale + 1);
+            expect(localeAnswer).toBe(first);
+            expect(localeAnswer?.pluginUiProjection.composerAttachmentsById).toBe(first?.pluginUiProjection.composerAttachmentsById);
+            expect(normalize).toHaveBeenCalledTimes(initialNormalizations);
             publishMachineContributionRegistryProjectionInvalidation(projectionScope);
             projectionDescribeMock.mockResolvedValueOnce({ supported: true, projection: {
                 ...projection, familiesById: { pluginUi: { ...projection.familiesById.pluginUi, entriesById: {
@@ -435,6 +449,7 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
             expect(next?.pluginUiProjection.composerAttachmentsById).toBe(first?.pluginUiProjection.composerAttachmentsById);
             expect(normalize.mock.results.filter(result => result.type === 'return' && result.value === next?.pluginUiProjection)).toHaveLength(1);
         } finally {
+            textBoundary.locale = 'en';
             normalize.mockRestore();
         }
     });

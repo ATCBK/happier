@@ -421,7 +421,10 @@ export async function loadDaemonMergedProjectionCacheEntry(params: Readonly<{
         // machine's descriptor set — unless a newer answer already replaced it.
         const newerPublished = currentProjectionCacheEntry(cacheKey);
         if (newerPublished !== null && newerPublished.projectionRevision > requestRevision) return newerPublished;
-        const previousInputs = newerPublished && newerPublished.locale === locale
+        // Locale chooses the fresh RPC/cache answer, not an unrelated mounted
+        // catalog lifetime. Reconcile the actual new response against the same
+        // Account's owned predecessor, including unchanged attachment schemas.
+        const previousInputs = newerPublished
             && areServerAccountScopesEqual(newerPublished.accountScope ?? null, accountScope)
             && (newerPublished.kind === 'ready' || newerPublished.kind === 'error')
             ? newerPublished.inputs : undefined;

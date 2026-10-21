@@ -42,7 +42,7 @@ const { createMachineFixture } = await import("@/dev/testkit/fixtures/machineFix
 const { createPlainArtifactHomeFixture } = await import("@/dev/testkit/harness/artifactStoreBoundary");
 const { createConnectedPurposeCatalogHttpBoundary } = await import("@/dev/testkit/harness/connectedAccountCatalogBoundary");
 const { answerVoiceRealtimePreparationHttpRequest } = await import("@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary");
-const { EMPTY_PLUGIN_UI_PROJECTION, resolvePluginUiProjectionState } = await import("@/sync/domains/plugins/ui/projection");
+const { EMPTY_PLUGIN_UI_PROJECTION, normalizePluginUiProjection, resolvePluginUiProjectionPlatform } = await import("@/sync/domains/plugins/ui/projection");
 import type { PluginUiProjectionModel } from "@/sync/domains/plugins/ui/projection";
 const { unionPluginUiProjections } = await import("@/sync/domains/plugins/ui/projectionUnion");
 const { getVoiceAdapterRegistry, resolveVoiceAdapterSurfaceCapabilities } = await import("@/voice/session/voiceAdapterRegistry");
@@ -255,7 +255,7 @@ function projectConversationVoiceEntries(input: Readonly<{
   declarations: readonly VoiceConversationProviderContribution[];
   executionOrigin: PluginMachineExecutionOriginV1;
 }>): PluginUiProjectionModel['voiceProvidersById'] {
-  const projection = resolvePluginUiProjectionState(EMPTY_PLUGIN_UI_PROJECTION, PluginProjectionV2Schema.parse({
+  const projection = normalizePluginUiProjection(PluginProjectionV2Schema.parse({
     v: 2, generation: input.generation,
     installedPackagesById: {}, agentsById: {}, actionsById: {}, toolsById: {},
     commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [],
@@ -435,7 +435,7 @@ describe('projected external Voice provider activation', () => {
       },
       diagnostics: [],
     });
-    const projection = resolvePluginUiProjectionState(EMPTY_PLUGIN_UI_PROJECTION, rawProjection);
+    const projection = normalizePluginUiProjection(rawProjection);
     const executableHost = createPluginUiExecutableModuleHost();
     onTestFinished(async () => {
       await unloadAppShellProjectedClientExecutables(executableHost);
@@ -600,11 +600,11 @@ describe('projected external Voice provider activation', () => {
         })
       : null;
 
-    const removedProjection = resolvePluginUiProjectionState(projection, {
+    const removedProjection = normalizePluginUiProjection({
       ...rawProjection,
       generation: 32,
       familiesById: {},
-    });
+    }, resolvePluginUiProjectionPlatform(), projection);
     const removedAttempts = await reconcileAppShellProjectedClientExecutables({
       projection: null,
       platform: 'web',
@@ -711,7 +711,7 @@ describe('projected external Voice provider activation', () => {
         definition: declaration,
       }];
     }));
-    const projection = resolvePluginUiProjectionState(EMPTY_PLUGIN_UI_PROJECTION, {
+    const projection = normalizePluginUiProjection({
       v: 2,
       generation,
       installedPackagesById: {},
@@ -1224,7 +1224,7 @@ describe('projected external Voice provider activation', () => {
       },
       diagnostics: [],
     });
-    const normalizedProjection = resolvePluginUiProjectionState(EMPTY_PLUGIN_UI_PROJECTION, rawProjection);
+    const normalizedProjection = normalizePluginUiProjection(rawProjection);
     const projection = Object.freeze({
       ...normalizedProjection,
       voiceProvidersById: Object.freeze(Object.fromEntries(Object.entries(normalizedProjection.voiceProvidersById).map(([id, entry]) => [

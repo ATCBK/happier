@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PluginApi } from '@happier-dev/plugin-sdk';
 import { createRecipientContractDigestV1 } from '@happier-dev/protocol';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
-import { EMPTY_PLUGIN_UI_PROJECTION, resolvePluginUiProjectionState } from '@/sync/domains/plugins/ui/projection';
+import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
 import { reconcileAppShellProjectedClientExecutables, unloadAppShellProjectedClientExecutables } from '@/components/appShell/plugins/appShellClientExecutableActivation';
 import { createPluginUiExecutableModuleHost } from '@/components/plugins/reactNative/executableModuleHost';
 import { createDefaultVoiceProviderRegistry } from './defaultRegistry';
@@ -196,7 +196,7 @@ describe('createBundledConversationRuntimes', () => {
     const initialRows = rows();
     expect(initialRows).toHaveLength(6);
     const builtInRows = initialRows.filter(row => registry.get(row.providerId)?.source.kind === 'built_in');
-    const project = (withdrawn: boolean) => resolvePluginUiProjectionState(EMPTY_PLUGIN_UI_PROJECTION,
+    const project = (withdrawn: boolean) => normalizePluginUiProjection(
       PluginProjectionV2Schema.parse({
         v: 2, generation: withdrawn ? 32 : 31,
         installedPackagesById: {}, agentsById: {}, actionsById: {}, toolsById: {},
