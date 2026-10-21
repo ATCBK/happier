@@ -8,6 +8,17 @@ import type { RuntimeTranscriptProjectionSession } from './projectRuntimeTranscr
 import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
 import { createKeyedStreamedTranscriptBridge } from '@/api/session/createKeyedStreamedTranscriptBridge';
 import { projectSessionUsageWorkEvidence } from '@happier-dev/protocol/usage/usageWorkEvidence';
+import { assertCommittedTranscriptAdmission } from '@/api/session/transcriptPort';
+import {
+  applyReducedMessages,
+  createRawMessageNormalizationSequenceState,
+  createReducer,
+  createTranscriptStreamSegmentAssembler,
+  interpretTranscriptStreamSegment,
+  RawRecordSchema,
+  reducer,
+  type OrderedTranscript,
+} from '@happier-dev/session-core';
 import { createCodexAppServerRuntime } from '../../../../../../../packages/plugins/codex/src/agent/runtime/appServer/runtime';
 import { createCodexNativeAppServerSessionRuntime } from '../../../../../../../packages/plugins/codex/src/agent/runtime/appServer/native';
 import type { DisposableCodexAppServerClient } from '../../../../../../../packages/plugins/codex/src/agent/runtime/appServer/client';
@@ -49,10 +60,33 @@ describe('projectRuntimeTranscriptEvent', () => {
   it('replaces an unfinished Codex answer on native retry without replaying input or removing completed messages', async () => {
     const { createRuntimeTranscriptProjector } = await import('./projectRuntimeTranscriptEvent');
     const stored = new Map<string, CommittedAgentMessageBody>();
+    const live = new Map<string, CommittedAgentMessageBody>();
+    const assembler = createTranscriptStreamSegmentAssembler();
+    const rawMessageNormalizationState = createRawMessageNormalizationSequenceState();
+    const reducerState = createReducer();
+    let transcript: OrderedTranscript = { messageIdsOldestFirst: [], messagesById: {} };
+    const renderedText = () => transcript.messageIdsOldestFirst.flatMap(id => {
+      const message = transcript.messagesById[id];
+      return message?.kind === 'agent-text' && message.text ? [message.text] : [];
+    });
     const session = { sessionId: 'codex-retry-session',
       enqueueAgentMessageCommitted: vi.fn<EnqueueAgentMessageCommitted>(async (_provider, body, opts) => {
         stored.set(opts.localId, body);
         return { persisted: true, delivered: false };
+      }),
+      sendAgentMessageEphemeral: vi.fn<NonNullable<RuntimeTranscriptProjectionSession['sendAgentMessageEphemeral']>>((_provider, body, opts) => {
+        live.set(opts.localId, body);
+        const normalized = interpretTranscriptStreamSegment({
+          assembler,
+          rawMessageNormalizationState,
+          sessionId: 'codex-retry-session',
+          type: 'transcript-stream-segment',
+          record: RawRecordSchema.parse(buildAcpAgentMessageEnvelope({ provider: 'codex', body, meta: opts.meta })),
+          message: { localId: opts.localId, createdAt: opts.createdAt },
+        });
+        expect(normalized).not.toBeNull();
+        if (normalized) transcript = applyReducedMessages(transcript, reducer(reducerState, [normalized], null).messages);
+        return { accepted: true, epoch: 0 };
       }),
     };
     // Only the external native JSON-RPC process and durable storage are substituted.
@@ -77,7 +111,8 @@ describe('projectRuntimeTranscriptEvent', () => {
     const runtime = createCodexAppServerRuntime({ happierSessionId: session.sessionId, directory: '/tmp',
       host: { baseProcessEnv: {}, logger: { debug: vi.fn(), warn: vi.fn() }, createClient: async () => client } });
     const native = createCodexNativeAppServerSessionRuntime(runtime, session.sessionId);
-    const bridge = createKeyedStreamedTranscriptBridge({ provider: 'codex', createSessionForStream: () => session });
+    const bridge = createKeyedStreamedTranscriptBridge({ provider: 'codex', createSessionForStream: () => session,
+      initialCheckpointDelayMs: 0 });
     const project = createRuntimeTranscriptProjector();
     const events: AgentSessionRuntimeEventV1[] = [];
     let projection = Promise.resolve();
@@ -102,12 +137,20 @@ describe('projectRuntimeTranscriptEvent', () => {
       await notify('item/completed', { ...scope, item: { type: 'agentMessage', id: 'completed', text: 'Earlier complete message' } });
       await text('interrupted', '1. able\n2. acid\n3');
       await vi.waitFor(() => expect([...stored.values()]).toContainEqual({ type: 'message', message: '1. able\n2. acid\n3' }));
+      const interruptedLocalId = [...stored.entries()].find(([, body]) => body.type === 'message' && body.message === '1. able\n2. acid\n3')![0];
+      expect(assembler.isTranscriptStreamSegmentAssemblyReady(session.sessionId, interruptedLocalId)).toBe(true);
+      expect(renderedText()).toEqual(['Earlier complete message', '1. able\n2. acid\n3']);
       // An unrelated error and a diagnostic without a native retry must leave the active draft alone.
       await notify('error', { ...scope, threadId: 'foreign-thread', willRetry: true, error: { message: 'stream failed' } });
       await notify('error', { ...scope, willRetry: false, error: { message: 'diagnostic' } });
       expect([...stored.values()]).toContainEqual({ type: 'message', message: '1. able\n2. acid\n3' });
       // c40 daemon :74348 records this same native-turn willRetry=true boundary after Gateway SIGTERM.
       await notify('error', { ...scope, willRetry: true, error: { message: 'stream failed' } });
+      // Retire the live snapshot as well as its durable checkpoint. Discarding
+      // a writer alone leaves the already-published partial on connected clients.
+      expect([...live.values()].filter(body => body.type === 'message' && body.message.includes('1. able'))).toEqual([]);
+      expect(renderedText()).toEqual(['Earlier complete message']);
+      expect(assembler.isTranscriptStreamSegmentAssemblyReady(session.sessionId, interruptedLocalId)).toBe(false);
       await text('retry-answer', '1. able\n2. acid\n3. acre');
       await notify('item/completed', { ...scope, item: { type: 'agentMessage', id: 'retry-answer', text: '1. able\n2. acid\n3. acre' } });
       await notify('turn/completed', { ...scope, turn: { id: scope.turnId, status: 'completed' } });
@@ -115,6 +158,7 @@ describe('projectRuntimeTranscriptEvent', () => {
       await projection;
       expect([...stored.values()].flatMap(body => body.type === 'message' && body.message ? [body.message] : []))
         .toEqual(['Earlier complete message', '1. able\n2. acid\n3. acre']);
+      expect(renderedText()).toEqual(['Earlier complete message', '1. able\n2. acid\n3. acre']);
       expect(requests.filter(method => method === 'turn/start')).toHaveLength(1);
       expect(events.some(event => event.kind === 'turn-failed' || event.kind === 'turn-cancelled')).toBe(false);
     } finally {
@@ -148,7 +192,7 @@ describe('projectRuntimeTranscriptEvent', () => {
     },
   );
 
-  it('retains the checkpoint identity when native final custody is refused and retried', async () => {
+  it.each([undefined, 'named-message'])('retains the checkpoint identity when native final custody is refused and retried (messageId=%s)', async messageId => {
     const { createKeyedStreamedTranscriptBridge } = await import('@/api/session/createKeyedStreamedTranscriptBridge');
     const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
     let available = true;
@@ -162,11 +206,11 @@ describe('projectRuntimeTranscriptEvent', () => {
     const bridge = createKeyedStreamedTranscriptBridge({ provider: 'agent', createSessionForStream: () => session });
     const project = async (event: Record<string, unknown>) => projectRuntimeTranscriptEvent({ session, provider: 'agent',
       runtimeMessageDeltaBridge: bridge, event: canonicalRuntimeEvent({ sessionId: session.sessionId, emittedAtMs: 1, turnId: 'turn-1', ...event }) });
-    await project({ kind: 'message-delta', channel: 'assistant', text: 'Checkpoint' });
+    await project({ kind: 'message-delta', channel: 'assistant', messageId, text: 'Checkpoint' });
     await vi.waitFor(() => expect(stored.size).toBe(1));
     const checkpointLocalId = [...stored.keys()][0]!;
     available = false;
-    const final = { kind: 'transcript-message-committed', role: 'assistant', messageId: 'native-final', text: 'Authoritative' };
+    const final = { kind: 'transcript-message-committed', role: 'assistant', messageId: messageId ?? 'native-final', text: 'Authoritative' };
     await expect(project(final)).rejects.toMatchObject({ code: 'runtime_transcript_required_admission_failed', reason: 'streamed_final_not_durable' });
     expect(stored.get(checkpointLocalId)).toEqual({ type: 'message', message: 'Checkpoint' });
     available = true;
@@ -195,6 +239,56 @@ describe('projectRuntimeTranscriptEvent', () => {
     expect([...stored.values()]).toHaveLength(2);
     expect([...stored.values()]).toContainEqual({ type: 'message', message: 'Unnamed output' });
     bridge.clear();
+  });
+
+  it('drains a named live stream before durable finalization and retains its identity after cancellation', async () => {
+    const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
+    let releaseLive!: () => void;
+    const pendingLive = new Promise<void>(resolve => { releaseLive = resolve; });
+    const stored = new Map<string, CommittedAgentMessageBody>();
+    const live: CommittedAgentMessageBody[] = [];
+    const session = {
+      sessionId: 'named-cancellation',
+      sendAgentMessageEphemeral: async (_provider: unknown, body: CommittedAgentMessageBody) => {
+        if (body.type === 'message' && body.message === 'Draft') await pendingLive;
+        live.push(body);
+        return { accepted: true as const, epoch: 0 };
+      },
+      enqueueAgentMessageCommitted: vi.fn<EnqueueAgentMessageCommitted>(async (_provider, body, opts) => {
+        assertCommittedTranscriptAdmission(opts.admission);
+        stored.set(opts.localId, body);
+        return { persisted: true, delivered: true, committedSequence: 42 };
+      }),
+    };
+    const bridge = createKeyedStreamedTranscriptBridge({ provider: 'codex', createSessionForStream: () => session,
+      initialCheckpointDelayMs: 60_000 });
+    const project = async (input: Record<string, unknown>, signal?: AbortSignal) => projectRuntimeTranscriptEvent({
+      session, provider: 'codex', runtimeMessageDeltaBridge: bridge,
+      ...(signal ? { admission: { signal, requireDelivery: true } } : {}),
+      event: canonicalRuntimeEvent({ sessionId: session.sessionId, emittedAtMs: 1, turnId: 'turn', ...input }),
+    });
+    const final = { kind: 'transcript-message-committed', role: 'assistant', messageId: 'named', text: 'Authoritative' };
+    try {
+      await project({ kind: 'message-delta', channel: 'assistant', messageId: 'named', text: 'Draft' });
+      const abort = new AbortController();
+      const publication = project(final, abort.signal);
+      const cancelled = expect(publication).rejects.toMatchObject({ reason: 'admission_expired' });
+      await Promise.resolve();
+      expect(stored.size).toBe(0);
+      abort.abort();
+      releaseLive();
+      await cancelled;
+      expect(stored.size).toBe(0);
+      expect(live).toEqual([{ type: 'message', message: 'Draft' }, { type: 'message', message: 'Authoritative' }]);
+      await expect(project(final)).resolves.toMatchObject({ finalAssistantMessageSeq: 42 });
+      expect([...stored.entries()]).toEqual([['named', { type: 'message', message: 'Authoritative' }]]);
+      expect(session.enqueueAgentMessageCommitted).toHaveBeenLastCalledWith('codex',
+        { type: 'message', message: 'Authoritative' }, expect.objectContaining({ localId: 'named',
+          meta: expect.objectContaining({ happierStreamSegmentV1: expect.objectContaining({ segmentState: 'complete' }) }) }));
+    } finally {
+      releaseLive();
+      bridge.clear();
+    }
   });
 
   it.each(['assistant', 'reasoning'] as const)('finalizes the checkpoint for an unnamed %s output under its existing identity', async (channel) => {
