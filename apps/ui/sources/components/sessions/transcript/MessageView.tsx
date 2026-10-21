@@ -44,6 +44,7 @@ import { TranscriptEventRow } from '@/components/sessions/transcript/events/Tran
 import { projectWorkerCardDelivery } from '@/components/sessions/transcript/events/followWorkerCardDelivery';
 import type { FollowDeliveryProjectionV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowDeliveryProjectionV1';
 import { isRuntimeIssueMessageMeta } from '@/components/sessions/transcript/events/runtimeIssueMessage';
+import { isHostFollowInputMeta } from '@/components/sessions/transcript/events/hostFollowInput';
 import type { AgentEvent } from "@happier-dev/session-core/raw";
 import { transcriptMarkdownTextStyle } from '@/components/sessions/transcript/transcriptMarkdownTypography';
 import { parseHappierMetaEnvelope } from '@/components/sessions/transcript/structured/happierMetaEnvelope';
@@ -454,11 +455,12 @@ export const MessageViewWithSessionCommon = React.memo(function MessageViewWithS
     props.message,
     props.messageDisplayCommon.debugInformationEnabled,
   ) === 'hidden') return null;
+  const isHostFollowInput = props.message.kind === 'user-text' && isHostFollowInputMeta(props.message.meta);
   return (
     <View style={styles.messageContainer} renderToHardwareTextureAndroid={true}>
       <View style={messageContentStyle}>
         <RecoveredHistoryIndicator message={props.message} />
-        {props.message.kind === 'user-text' && (
+        {props.message.kind === 'user-text' && !isHostFollowInput && (
           <SessionMessageAccountByline
             messageId={props.message.id}
             actor={props.message.accountActor}
@@ -472,6 +474,7 @@ export const MessageViewWithSessionCommon = React.memo(function MessageViewWithS
         />}
         <RenderBlock
           message={props.message}
+          isHostFollowInput={isHostFollowInput}
           metadata={props.metadata}
           sessionId={props.sessionId}
           layoutContext={props.layoutContext ?? 'transcript'}
@@ -504,6 +507,7 @@ export const MessageViewWithSessionCommon = React.memo(function MessageViewWithS
 
 // RenderBlock function that dispatches to the correct component based on message kind
 function RenderBlock(props: {
+  isHostFollowInput: boolean;
   message: Message;
   metadata: Metadata | null;
   sessionId: string;
@@ -534,6 +538,9 @@ function RenderBlock(props: {
   const transcriptSource = useSessionTranscriptSource();
   switch (props.message.kind) {
     case 'user-text':
+      if (props.isHostFollowInput) {
+        return <TranscriptTextNoticeRow message={props.message} sessionId={props.sessionId} serverId={props.serverId} />;
+      }
       return (
         <UserTextBlock
           message={props.message}
@@ -558,7 +565,7 @@ function RenderBlock(props: {
 
     case 'agent-text':
       if (!props.message.isThinking && isRuntimeIssueMessageMeta(props.message.meta)) {
-        return <RuntimeIssueRow message={props.message} sessionId={props.sessionId} serverId={props.serverId} />;
+        return <TranscriptTextNoticeRow message={props.message} sessionId={props.sessionId} serverId={props.serverId} tone="failure" />;
       }
       return (
         <AgentTextBlock
@@ -642,11 +649,12 @@ function RenderBlock(props: {
   }
 }
 
-/** A typed turn failure or input rejection reads as one event row, not as the end of the assistant's reply. */
-function RuntimeIssueRow(props: Readonly<{
-  message: AgentTextMessage;
+/** Host notices reuse the event row without changing the persisted agent-input role. */
+function TranscriptTextNoticeRow(props: Readonly<{
+  message: AgentTextMessage | UserTextMessage;
   sessionId: string;
   serverId?: string | null;
+  tone?: 'failure';
 }>) {
   const transcriptSource = useSessionTranscriptSource();
   const find = useTranscriptFindRow(props.message.id);
@@ -662,7 +670,7 @@ function RuntimeIssueRow(props: Readonly<{
     >
       <TranscriptEventRow
         event={event}
-        tone="failure"
+        tone={props.tone}
         findSourceRanges={findSourceRanges}
         messageId={props.message.id}
         sessionId={props.sessionId}

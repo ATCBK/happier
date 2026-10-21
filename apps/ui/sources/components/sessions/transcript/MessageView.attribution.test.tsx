@@ -44,6 +44,73 @@ afterEach(() => {
 });
 
 describe('MessageView Account attribution', () => {
+    it.each(['next_turn', 'wake'] as const)('renders committed host Follow %s context as a notice, not a person’s bubble', async (delivery) => {
+        const { normalizeRawMessage } = await import('@happier-dev/session-core/raw');
+        const { createReducer, reducer } = await import('@happier-dev/session-core/reducer');
+        const { UserMessageBubble } = await import('./UserMessageBubble');
+        const { TranscriptEventRow } = await import('./events/TranscriptEventRow');
+        // Persisted producer shape observed in QA-R42 Bot seq 101/135/136/137.
+        const text = 'Followed source changed. Read the original source context.';
+        const meta = {
+            happierProvenanceV1: { v: 1, kind: 'host', producer: 'sessionAction' },
+            happierInputAuthorityV1: {
+                v: 1, producer: 'sessionAction', caller: { kind: 'host' },
+                permission: { admittedPermissionCeiling: 'default' },
+                followDeliveryV1: { v: 1, delivery,
+                    original: { sourceSessionId: 'cmvgukay000kdmcyhj5avwapl',
+                        sourceMessage: { localId: '73a3dbcc-6d07-4fac-b2bb-671af06ccf80', seq: 6 } },
+                    event: { kind: 'finished' } },
+            },
+        };
+        const normalized = [
+            normalizeRawMessage('follow', 'follow-original:test', 1, { role: 'user', content: { type: 'text', text }, meta }, { seq: 1 }),
+            // The words do not classify authorship: a real person can write the same sentence.
+            normalizeRawMessage('person', 'person', 2, { role: 'user', content: { type: 'text', text },
+                meta: { happierProvenanceV1: { v: 1, kind: 'happierApp', actor: { kind: 'owner' } } } }, { seq: 2 }),
+            // Unvalidated authority must not turn an ordinary input into a host notice.
+            normalizeRawMessage('invalid-follow', 'invalid-follow', 3, { role: 'user', content: { type: 'text', text },
+                meta: { ...meta, happierInputAuthorityV1: { ...meta.happierInputAuthorityV1, followDeliveryV1: { v: 1, delivery } } } }, { seq: 3 }),
+        ];
+        const messages = reducer(createReducer(), normalized.filter((message): message is NonNullable<typeof message> => message !== null)).messages;
+        expect(messages).toHaveLength(3);
+        const screen = await renderBareScreen(<AppSessionTranscriptSourceProvider sessionId="bot">
+            {messages.map((message) => <MessageViewWithSessionCommon key={message.id}
+                sessionId="bot" metadata={null} message={message}
+                forkCommon={{ ...settingsDefaults, executionRunsEnabled: false, agentSwitchingEnabled: false, sessionForkSupportSource: null }}
+                messageDisplayCommon={{ ...settingsDefaults, workspacePath: null, debugInformationEnabled: false }}
+                toolChromeCommon={settingsDefaults} toolRouteCommon={{ messagesById: {}, reducerState: null }} />)}
+        </AppSessionTranscriptSourceProvider>);
+        expect(screen.findAllByType(UserMessageBubble)).toHaveLength(2);
+        expect(screen.findAllByType(TranscriptEventRow)).toHaveLength(1);
+        expect(screen.getTextContent()).toContain(text);
+    });
+
+    it('keeps host Follow origin visible while queued or discarded without removing queue controls', async () => {
+        const { PendingMessagesTranscriptBlock } = await import('../pending/PendingMessagesTranscriptBlock');
+        const { TranscriptEventRow } = await import('./events/TranscriptEventRow');
+        const text = 'Followed source changed. Read the original source context.';
+        const follow = {
+            id: 'queued-follow', localId: 'queued-follow', text, createdAt: 1, updatedAt: 1,
+            rawRecord: { role: 'user', content: { type: 'text', text }, meta: {
+                happierProvenanceV1: { v: 1, kind: 'host', producer: 'sessionAction' },
+                happierInputAuthorityV1: { v: 1, producer: 'sessionAction', caller: { kind: 'host' },
+                    permission: { admittedPermissionCeiling: 'default' },
+                    followDeliveryV1: { v: 1, delivery: 'next_turn',
+                        original: { sourceSessionId: 'cmvgukay000kdmcyhj5avwapl',
+                            sourceMessage: { localId: '73a3dbcc-6d07-4fac-b2bb-671af06ccf80', seq: 6 } },
+                        event: { kind: 'finished' } } },
+            } },
+        };
+        const screen = await renderBareScreen(<AppSessionTranscriptSourceProvider sessionId="bot">
+            <PendingMessagesTranscriptBlock sessionId="bot" pendingMessages={[follow]}
+                discardedMessages={[{ ...follow, id: 'discarded-follow', localId: 'discarded-follow', discardedAt: 2, discardedReason: 'manual' }]} />
+        </AppSessionTranscriptSourceProvider>);
+        expect(screen.findAllByType(TranscriptEventRow)).toHaveLength(2);
+        expect(screen.findHostByTestId('pendingMessages.message:queued-follow')).not.toBeNull();
+        expect(screen.findHostByTestId('pendingMessages.discarded.message:discarded-follow')).not.toBeNull();
+        expect(screen.getTextContent()).toContain(text);
+    });
+
     it('keeps the LIVE-11B app turn distinct from an adjacent workflow-injected turn', async () => {
         const run = createWorkflowRunSummaryFixture({ id: 'daily-digest' });
         storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(run, { kind: 'available', value: { title: 'Daily digest' } })]);

@@ -52,6 +52,8 @@ import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { SessionMessageAccountByline } from '@/components/sessions/transcript/SessionMessageAccountByline';
+import { TranscriptEventRow } from '@/components/sessions/transcript/events/TranscriptEventRow';
+import { isHostFollowInputMeta } from '@/components/sessions/transcript/events/hostFollowInput';
 import { useSessionMessageAuthorshipScope } from '@/components/sessions/transcript/useSessionMessageAuthorshipScope';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { SurfaceRim } from '@/components/ui/surfaces/SurfaceRim';
@@ -59,6 +61,7 @@ import type { PendingMessageWithdrawRecoveryResult } from '@/components/sessions
 import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 const PENDING_AFFORDANCE_ICON_SIZE_PX = 8;
+const QUEUE_GUTTER_PX = 16;
 
 function getPendingText(message: PendingMessage | DiscardedPendingMessage): string {
     const raw = (message.displayText ?? message.text) ?? '';
@@ -673,6 +676,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         // Its Session reader hasn't opened it yet: the bubble holds a placeholder, not the message, so
         // nothing that reads or delivers the content is offered until the real text arrives.
         const isContentLoading = message.pendingDecryption?.kind === 'loading';
+        const isHostFollowInput = !hasDecryptFailure && !isContentLoading && isHostFollowInputMeta(message.rawRecord?.meta);
         const visualState = getPendingMessageVisualState(message, {
             materializingLocalIds,
             hasEarlierRow: pendingMessages.slice(0, index).some((candidate) =>
@@ -868,6 +872,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                         testID={`pendingMessages.row:${message.id}`}
                         style={[
                             styles.userMessageWrapper,
+                            isHostFollowInput ? styles.hostInputContainer : null,
                             { paddingBottom: messageGapPx },
                             isWeb && (hoveredMessageId === message.id || menuOpen) ? styles.userMessageWrapperHovered : null,
                         ]}
@@ -879,18 +884,18 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                             }
                             : null)}
                     >
-                        <SessionMessageAccountByline
+                        {!isHostFollowInput && <SessionMessageAccountByline
                             messageId={message.id}
                             actor={message.accountActor}
                             viewerScope={accountActorViewerScope}
                             hasOtherNamedCollaborator={authorship.hasOtherNamedCollaborator}
-                        />
+                        />}
                         {/* The bubble is a surface, not a button: its message opens the menu and its
                             "View more" toggles the clamp, side by side, so the web never nests one
                             <button> inside another. Full opacity, like the committed bubble it
                             becomes: a queued utterance that paints dimmer BRIGHTENS one step at the
                             crossover. The delivery state is carried by the status mark, not the ink. */}
-                        <View style={[styles.userMessageBubble, { backgroundColor: theme.colors.message.user.background, borderRadius: theme.parts.userBubble.radius }]}>
+                        <View style={isHostFollowInput ? undefined : [styles.userMessageBubble, { backgroundColor: theme.colors.message.user.background, borderRadius: theme.parts.userBubble.radius }]}>
                             <Pressable
                                 onPress={(event) => {
                                     if (menuOpen) {
@@ -917,12 +922,15 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                     props.onPaintedUtteranceBubbleMeasured?.({ localId, bubbleHeightPx });
                                 } : undefined}
                                 style={({ pressed }) => ([
-                                    styles.userMessageBubbleBody,
+                                    !isHostFollowInput ? styles.userMessageBubbleBody : null,
                                     isCollapsible ? styles.userMessageBubbleBodyAboveToggle : null,
                                     { opacity: pressed ? motionTokens.press.opacitySubtle : 1 },
                                 ])}
                             >
-                                {isExpanded ? (
+                                {isHostFollowInput ? (
+                                    <TranscriptEventRow event={{ type: 'message', message: text }}
+                                        messageId={message.id} sessionId={props.sessionId} serverId={props.serverId} createdAt={message.createdAt} />
+                                ) : isExpanded ? (
                                     <MarkdownView markdown={text} textStyle={styles.transcriptMarkdownText} />
                                 ) : (
                                     <Text
@@ -953,7 +961,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                 </Pressable>
                             ) : null}
                             {/* The committed bubble's edge, so the crossover changes nothing but the status. */}
-                            <SurfaceRim role="bubble" radius={theme.parts.userBubble.radius} border="surface" />
+                            {!isHostFollowInput && <SurfaceRim role="bubble" radius={theme.parts.userBubble.radius} border="surface" />}
                         </View>
 
                         <View
@@ -963,6 +971,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                             {...(!isWeb ? { pointerEvents: 'none' as const } : null)}
                             style={[
                                 styles.pendingAffordanceChip,
+                                isHostFollowInput ? styles.hostAffordanceChip : null,
                                 { backgroundColor: theme.colors.surface.base, borderColor: theme.colors.border.default },
                                 isWeb ? { pointerEvents: 'none' as const } : null,
                             ]}
@@ -1196,6 +1205,8 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
     const renderDiscardedMessage = React.useCallback((message: DiscardedPendingMessage, index: number, all: readonly DiscardedPendingMessage[]) => {
         const isLastDiscarded = index === all.length - 1;
         const text = getPendingText(message).trim();
+        const isHostFollowInput = message.pendingDecryption?.kind !== 'loading'
+            && message.pendingDecryptFailure?.kind !== 'decrypt_failed' && isHostFollowInputMeta(message.rawRecord?.meta);
         const menuKey = `discarded:${message.id}`;
         const menuOpen = openMenuKey === menuKey;
         const menuAnchor = menuPressAnchor?.menuKey === menuKey ? menuPressAnchor.anchor : undefined;
@@ -1245,6 +1256,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                         testID={`pendingMessages.discarded.row:${message.id}`}
                         style={[
                             styles.userMessageWrapper,
+                            isHostFollowInput ? styles.hostInputContainer : null,
                             // Same rule the estimate models: no trailing gap under the last row.
                             { paddingBottom: resolvePendingMessageGapPx({ isLastInScrollContent: isLastDiscarded }), opacity: 0.85 },
                         ]}
@@ -1256,12 +1268,12 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                             }
                             : null)}
                     >
-                        <SessionMessageAccountByline
+                        {!isHostFollowInput && <SessionMessageAccountByline
                             messageId={message.id}
                             actor={message.accountActor}
                             viewerScope={accountActorViewerScope}
                             hasOtherNamedCollaborator={authorship.hasOtherNamedCollaborator}
-                        />
+                        />}
                         <Pressable
                             onPress={(event) => {
                                 if (menuOpen) {
@@ -1276,14 +1288,15 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                             accessibilityRole="button"
                             accessibilityLabel={text || t('session.pendingMessages.discarded.label')}
                             style={({ pressed }) => ([
-                                styles.userMessageBubble,
-                                styles.userMessageBubbleBody,
-                                { backgroundColor: theme.colors.input.background, opacity: pressed ? motionTokens.press.opacity : 0.82 },
+                                !isHostFollowInput ? styles.userMessageBubble : null,
+                                !isHostFollowInput ? styles.userMessageBubbleBody : null,
+                                { backgroundColor: isHostFollowInput ? undefined : theme.colors.input.background, opacity: pressed ? motionTokens.press.opacity : 0.82 },
                             ])}
                         >
-                            <Text numberOfLines={collapsedLines} style={{ color: theme.colors.text.primary, ...Typography.default() }}>
+                            {isHostFollowInput ? <TranscriptEventRow event={{ type: 'message', message: text }}
+                                messageId={message.id} sessionId={props.sessionId} serverId={props.serverId} createdAt={message.createdAt} /> : <Text numberOfLines={collapsedLines} style={{ color: theme.colors.text.primary, ...Typography.default() }}>
                                 {text}
-                            </Text>
+                            </Text>}
                             <Text style={{ marginTop: theme.space.s6, color: theme.colors.text.secondary, ...Typography.variant('meta', 'semiBold'),  }}>
                                 {t('session.pendingMessages.discarded.label')}
                             </Text>
@@ -1621,7 +1634,7 @@ const styles = StyleSheet.create(() => ({
         flexDirection: 'column',
         alignItems: 'flex-end',
         justifyContent: 'flex-end',
-        paddingHorizontal: 16,
+        paddingHorizontal: QUEUE_GUTTER_PX,
     },
     queueTopInset: {
         height: PENDING_QUEUE_TOP_INSET_PX,
@@ -1645,6 +1658,14 @@ const styles = StyleSheet.create(() => ({
         borderRadius: 999,
         borderWidth: 0,
         zIndex: 20,
+    },
+    // A bubble wears its status as a corner badge; a notice has no corner, so its status follows it in flow
+    // (a badge over the notice's first line crowds the text).
+    hostAffordanceChip: {
+        position: 'relative',
+        top: 0,
+        alignSelf: 'flex-end',
+        marginTop: 2,
     },
     blockedDeliveryNotice: {
         marginTop: 8,
@@ -1696,6 +1717,12 @@ const styles = StyleSheet.create(() => ({
     },
     userMessageWrapperHovered: {
         zIndex: 60,
+    },
+    // A host notice reads on the transcript column's own edge, like the committed notice it becomes; only
+    // the person's bubbles sit inside the queue's gutter.
+    hostInputContainer: {
+        alignSelf: 'stretch',
+        marginLeft: -QUEUE_GUTTER_PX,
     },
     userMessageBubble: {
         borderRadius: 12,
