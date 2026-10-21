@@ -2485,6 +2485,7 @@ export const zhHans: TranslationStructure = {
                 profileMissing: '所选已连接账号不再可用。刷新账号列表并选择其他账号。',
                 groupMissing: '所选账号池不再可用。刷新账号列表并选择其他账号池。',
                 metadataUpdateFailed: '会话无法保存新的认证选择。请在会话完成同步后重试。',
+                restartDisallowedByExecutionPolicy: '此认证更改需要重启，但会话运行期间不允许重启。请先停止会话，再更改其认证。',
                 restartFailed: '无法使用新的认证选择重启会话。停止会话后重试。',
                 hotApplyFailed: '正在运行的会话拒绝了新的认证选择。重启会话后重试。',
                 agentMismatch: '此认证选择与会话后端不匹配。',
@@ -4342,6 +4343,9 @@ export const zhHans: TranslationStructure = {
       full: "全宽",
       fullDescription: "使用可用窗口宽度",
     },
+    feedback: "反馈",
+    haptics: "触感反馈",
+    hapticsDescription: "在此设备上为操作和重新排序提供触感反馈。",
     backdropBlur: "背景模糊",
     backdropBlurDescription: "在弹窗和菜单后使用背景模糊。关闭后可提升浏览器性能。",
     multiPanePanels: "右侧面板",
@@ -5375,6 +5379,11 @@ export const zhHans: TranslationStructure = {
         composerBanners: {
             showBannerAction: '显示横幅',
             hideBannerAction: '隐藏横幅',
+	    },
+	    runnerRestartBackgroundWork: {
+	        title: '后台任务正在运行',
+	        body: ({ count }: { count: number }) => `${count} 个后台任务正在运行。重启将停止它们。`,
+	        confirmAction: '停止并重启',
 	    },
 	    staleRunner: {
 	      title: "会话仍在旧版 CLI 上运行",
@@ -9031,6 +9040,10 @@ settingsSession: {
         progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
           `${loaded} / ${total} · ${filesDone} / ${filesTotal} 个文件`,
         progressAccessibilityLabel: "下载进度",
+        verifyingDetail: "正在校验",
+        verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+          `已校验 ${verified} / ${total} · ${filesDone} / ${filesTotal} 个文件`,
+        verifyingAccessibilityLabel: "校验进度",
         failedDetail: "失败",
         failedSubtitle: "无法准备模型。轻点以重试。",
         failedResumableSubtitle: ({ size }: { size: string }) => `下载未完成。已保留 ${size}，轻点即可继续。`,
@@ -10715,8 +10728,8 @@ settingsSession: {
       anthropic: "Anthropic（默认）",
       deepseek: "DeepSeek（推理）",
       zai: "Z.AI (GLM-4.6)",
-      minimax: "MiniMax (M3)",
-      minimaxCn: "MiniMax (M3, CN)",
+      minimax: "MiniMax (M3.1 Flash)",
+      minimaxCn: "MiniMax (M3.1 Flash, CN)",
       codex: "Codex（默认）",
       openai: "OpenAI (GPT-5)",
       azureOpenai: "Azure OpenAI",

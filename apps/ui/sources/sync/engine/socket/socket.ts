@@ -8,6 +8,7 @@ import type { Machine } from '@/sync/domains/state/storageTypes';
 import { buildPendingChangedSessionPatch } from './pendingChangedSessionPatch';
 import { isSessionVisible } from '@/sync/domains/session/activeViewingSession';
 import { computeNextSessionSeqFromUpdate } from '@/sync/domains/session/sequence/realtimeSessionSeq';
+import { resolveSessionPresence } from '@/sync/domains/session/sessionLifecycleProjection';
 import { resolveSessionLiveConsumption } from '@/sync/runtime/sessionLiveConsumption';
 import type { MachineActivityUpdate } from '@/sync/reducer/machineActivityAccumulator';
 import { storage } from '@/sync/domains/state/storage';
@@ -412,6 +413,9 @@ function buildCacheOnlySessionProjectionPatch(params: Readonly<{
                 : renderable.thinkingAt;
     if (typeof updateBody.active === 'boolean') patch.active = projectedActive;
     if (typeof updateBody.activeAt === 'number' && Number.isFinite(updateBody.activeAt)) patch.activeAt = projectedActiveAt;
+    if (typeof updateBody.active === 'boolean' || patch.activeAt !== undefined) {
+        patch.presence = resolveSessionPresence({ active: projectedActive, activeAt: projectedActiveAt });
+    }
     if (typeof updateBody.thinking === 'boolean' || updateBody.active === false) patch.thinking = projectedThinking;
     if (
         typeof updateBody.thinkingAt === 'number' && Number.isFinite(updateBody.thinkingAt)
@@ -2236,7 +2240,7 @@ export function flushActivityUpdates(params: {
                 activeAt: update.activeAt,
                 thinking: nextThinking,
                 thinkingAt: runtimePresence.thinkingAt,
-                presence: update.active ? 'online' as const : update.activeAt,
+                presence: resolveSessionPresence(update),
                 updatedAt: update.activeAt,
             };
             if (!shouldApplyActivityPatch(session, patch)) continue;
@@ -2264,7 +2268,7 @@ export function flushActivityUpdates(params: {
                 activeAt: update.activeAt,
                 thinking: nextThinking,
                 thinkingAt: runtimePresence.thinkingAt,
-                presence: update.active ? 'online' as const : update.activeAt,
+                presence: resolveSessionPresence(update),
                 updatedAt: Math.max(finiteNumber(renderable.updatedAt) ?? update.activeAt, update.activeAt),
             };
             const isTimestampOnlyPatch = isTimestampOnlyActivityPatch(renderable, patch);
