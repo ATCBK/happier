@@ -144,15 +144,14 @@ describe('approval Artifact cross-device decision', () => {
         caller: { kind: 'session', sessionId: 'receiver', starterDepth: 0, turnDepth: 0 },
         sessionId: 'receiver', serverId: 'profile-a', serverIdentityId: 'stable-home', machineId: 'machine', accountId: 'account',
         actionId: 'discussion.reply', requestId: localId,
-        discussionReplyReturn: { serverId: 'profile-a', requestLocalId: 'original-input', acceptedTurnId: 'turn' },
+        discussionReplyReturn: { serverId: 'stable-home', requestLocalId: 'original-input', acceptedTurnId: 'turn' },
         sessionInputSource: { sourceSessionId: 'receiver', sourceInputId: 'original-input', sourceTurnId: 'turn', via: 'action',
           discussionAddressing: { discussionId: 'discussion', messageId: 'question', throughSeq: 1, participantSessionId: 'receiver' } },
       } });
     const first = await store.approvalsCreate({ request, serverId: 'profile-a' });
     const retry = ApprovalRequestV2Schema.parse({ ...request, createdAtMs: 5, updatedAtMs: 5,
       actionArgs: { ...request.actionArgs as object, content: { v: 1, parts: [{ t: 'text', text: 'Later terminal fallback' }] } },
-      executionOriginV1: { ...request.executionOriginV1, caller: { kind: 'host' }, serverId: 'profile-b',
-        discussionReplyReturn: { ...request.executionOriginV1.discussionReplyReturn, serverId: 'profile-b' } } });
+      executionOriginV1: { ...request.executionOriginV1, caller: { kind: 'host' }, serverId: 'profile-b' } });
     expect(await createStore().approvalsCreate({ request: retry, serverId: 'profile-b' })).toEqual(first);
     expect(await store.approvalsGet(first)).toEqual(request);
     expect(artifacts.size).toBe(1);
@@ -180,7 +179,7 @@ describe('approval Artifact cross-device decision', () => {
     const nextQuestion = ApprovalRequestV2Schema.parse({ ...request, actionArgs: { ...request.actionArgs as object, localId: nextLocalId,
       replyTarget: { kind: 'message', messageId: 'next-question' } },
       executionOriginV1: { ...request.executionOriginV1, requestId: nextLocalId,
-        discussionReplyReturn: { serverId: 'profile-a', requestLocalId: 'next-input', acceptedTurnId: 'next-turn' },
+        discussionReplyReturn: { serverId: 'stable-home', requestLocalId: 'next-input', acceptedTurnId: 'next-turn' },
         sessionInputSource: { ...request.executionOriginV1.sessionInputSource,
           sourceInputId: 'next-input', sourceTurnId: 'next-turn', discussionAddressing: {
             discussionId: 'discussion', messageId: 'next-question', throughSeq: 2, participantSessionId: 'receiver' } } } });

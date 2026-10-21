@@ -1603,7 +1603,7 @@ it.each(['plain', 'e2ee'] as const)('round trips binary content under the same A
       mockPost.mockImplementationOnce(async (rawUrl: string, wire: unknown) => {
         expect(new URL(rawUrl).pathname).toBe(`/v1/artifacts/${artifactId}/revisions/2/restore`);
         const request = z.strictObject({ expectedHeaderVersion: z.literal(3), expectedBodyVersion: z.literal(4),
-          header: z.string(), provenance: z.string(), kind: z.literal('other') }).parse(wire);
+          header: z.string(), provenance: z.string(), kind: z.literal('widget_definition') }).parse(wire);
         expect(decodePlainArtifactStoredContent(request.provenance)).toMatchObject({ artifactId, bodyVersion: 5,
           provenance: { savedBy: { kind: 'person', accountId: 'owner' }, restoredFromBodyVersion: 2 } });
         stored = { ...stored, header: request.header, body: retainedBody, provenance: request.provenance, headerVersion: 4, bodyVersion: 5 };

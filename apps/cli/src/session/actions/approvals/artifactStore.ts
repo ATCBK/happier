@@ -12,6 +12,7 @@ import type { ApprovalRequest, ExecutionRunHostActionApprovalRequestV1, TargetAc
 import type { StoredCredentials } from '@/persistence';
 import {
   createConnectedServiceCredentialApi,
+  type AccountEncryptionModeReadOptions,
   type ConnectedServiceAccountEncryptionMode,
 } from '@/api/client/connectedServiceCredentialApi';
 import { createAccountArtifactStore, encodeAccountArtifactListCursor, type AccountArtifact } from '@/api/artifacts/accountArtifactStore';
@@ -120,7 +121,7 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
   serverId?: string;
   serverHttpBaseUrl?: string;
   operationContext?: SavedSecretOperationContextV1;
-  getAccountEncryptionMode?: () => Promise<ConnectedServiceAccountEncryptionMode>;
+  getAccountEncryptionMode?: (options?: AccountEncryptionModeReadOptions) => Promise<ConnectedServiceAccountEncryptionMode>;
 }>): Readonly<{
   approvalsList: NonNullable<import('@happier-dev/protocol').ActionExecutorDeps['approvalsList']>;
   approvalsCreate: NonNullable<import('@happier-dev/protocol').ActionExecutorDeps['approvalsCreate']>;
@@ -140,10 +141,10 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
     ? null
     : createConnectedServiceCredentialApi(params.credentials);
   const getAccountEncryptionMode = params.getAccountEncryptionMode
-    ?? (() => accountModeApi!.getAccountEncryptionMode());
+    ?? ((options?: AccountEncryptionModeReadOptions) => accountModeApi!.getAccountEncryptionMode(options));
   const rawAccountArtifactStore = createAccountArtifactStore({
     credentials: params.credentials,
-    getAccountEncryptionMode: () => timeWebLatencyPhase('approval.account_mode', getAccountEncryptionMode),
+    getAccountEncryptionMode: options => timeWebLatencyPhase('approval.account_mode', () => getAccountEncryptionMode(options)),
   });
   const accountArtifactStore = { ...rawAccountArtifactStore,
     read: (...args: Parameters<typeof rawAccountArtifactStore.read>) => timeWebLatencyPhase('approval.artifact.read', () => rawAccountArtifactStore.read(...args)),

@@ -32,7 +32,7 @@ import { computeActionInputApprovalDigestV1 } from '@happier-dev/protocol/action
 import { SessionAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 
 import type { Credentials, StoredCredentials } from '@/persistence';
-import type { ConnectedServiceAccountEncryptionMode } from '@/api/client/connectedServiceCredentialApi';
+import type { AccountEncryptionModeReadOptions, ConnectedServiceAccountEncryptionMode } from '@/api/client/connectedServiceCredentialApi';
 import { createConnectedServiceCredentialApi } from '@/api/client/connectedServiceCredentialApi';
 import {
   decodeBase64,
@@ -327,7 +327,7 @@ function readStoredAccess(value: Record<string, unknown>): Pick<StoredArtifact, 
 
 export function createAccountArtifactStore(params: Readonly<{
   credentials: StoredCredentials;
-  getAccountEncryptionMode: () => Promise<ConnectedServiceAccountEncryptionMode>;
+  getAccountEncryptionMode: (options?: AccountEncryptionModeReadOptions) => Promise<ConnectedServiceAccountEncryptionMode>;
   savedBy?: ArtifactSavedByV1;
 }>) {
   // Account-mode conversion retains Artifact ids. A miss at the mode-private
@@ -424,9 +424,9 @@ export function createAccountArtifactStore(params: Readonly<{
         await axios.post(accessUrl(stored.id, 'key-envelopes'), input, await authorizedAccessConfig(stored.id, 'key-envelopes', 'POST', signal, authorizationHeaders, input)))),
     });
   };
-  const openStored = async (stored: Pick<StoredArtifact, 'access' | 'encryptionMode' | 'dataEncryptionKey'>,
+  const assertOwnerAccountMode = async (stored: Pick<StoredArtifact, 'access' | 'encryptionMode'>,
     timing?: { accountModeMs: number; codecMs: number },
-    options?: Readonly<{ authorizationHeaders?: ArtifactRequestAuthorizationHeaders; signal?: AbortSignal }>) => {
+    options?: Readonly<{ authorizationHeaders?: ArtifactRequestAuthorizationHeaders; signal?: AbortSignal; usage?: AccountEncryptionModeReadOptions['usage'] }>) => {
     // Personal Artifact reads/writes follow the persisted Account mode. Shared
     // recipients instead open the owner's content mode, which may differ from theirs.
     if (stored.access === 'owner') {
@@ -435,11 +435,16 @@ export function createAccountArtifactStore(params: Readonly<{
         ? (await fetchAccountEncryptionCurrentness({ token: params.credentials.token,
             authorizationHeaders: await options.authorizationHeaders({ method: 'GET', path: '/v1/account/encryption/currentness' }),
             allowCredentialRecovery: false, ...(options.signal ? { signal: options.signal } : {}) })).mode
-        : await params.getAccountEncryptionMode();
+        : await params.getAccountEncryptionMode(options);
       if (timing) timing.accountModeMs += performance.now() - startedAt;
       if (accountMode === 'unknown') throw Object.assign(new Error('account_encryption_mode_unavailable'), { code: 'account_encryption_mode_unavailable' });
       if (accountMode !== stored.encryptionMode) throw Object.assign(new Error('artifact_account_mode_mismatch'), { code: 'artifact_account_mode_mismatch' });
     }
+  };
+  const openStored = async (stored: Pick<StoredArtifact, 'access' | 'encryptionMode' | 'dataEncryptionKey'>,
+    timing?: { accountModeMs: number; codecMs: number },
+    options?: Readonly<{ authorizationHeaders?: ArtifactRequestAuthorizationHeaders; signal?: AbortSignal }>) => {
+    await assertOwnerAccountMode(stored, timing, options);
     const startedAt = performance.now();
     try { return await openCodec(params.credentials, stored.dataEncryptionKey, stored.encryptionMode); }
     finally { if (timing) timing.codecMs += performance.now() - startedAt; }
@@ -458,7 +463,7 @@ export function createAccountArtifactStore(params: Readonly<{
     }
     return parsed.data.provenance;
   };
-  const writeProvenance = async (input: Readonly<{ artifactId: string; bodyVersion: number; savedBy?: ArtifactSavedByV1; source?: ArtifactWorkspaceSourceV1; restoredFromBodyVersion?: number; signal?: AbortSignal }>, stored?: StoredArtifact, contentCodec?: Codec): Promise<Readonly<{
+  const writeProvenance = async (input: Readonly<{ artifactId: string; bodyVersion: number; savedBy?: ArtifactSavedByV1; source?: ArtifactWorkspaceSourceV1; restoredFromBodyVersion?: number; signal?: AbortSignal }>, stored: StoredArtifact | undefined, contentCodec: Codec): Promise<Readonly<{
     wire: Readonly<{ provenance?: string; provenanceDataEncryptionKey?: string }>;
     prepareRecipients?: () => Promise<void>;
   }>> => {
@@ -466,7 +471,7 @@ export function createAccountArtifactStore(params: Readonly<{
     if (!savedBy) return { wire: {} };
     const existing = stored ? await openProvenanceCodec(stored) : null;
     const codec = existing ?? await createCodec({ credentials: params.credentials,
-      mode: stored?.encryptionMode ?? await params.getAccountEncryptionMode() });
+      mode: contentCodec.mode });
     const metadata = ArtifactPrivateRevisionMetadataV1Schema.parse({ v: 1, artifactId: input.artifactId, bodyVersion: input.bodyVersion,
       provenance: { savedBy, ...(input.source ? { source: input.source } : {}), ...(input.restoredFromBodyVersion === undefined ? {} : { restoredFromBodyVersion: input.restoredFromBodyVersion }) } });
     let ownerEnvelope = codec.dataEncryptionKey;
@@ -860,6 +865,8 @@ export function createAccountArtifactStore(params: Readonly<{
         signal?.throwIfAborted();
         const provenance = await writeProvenance({ artifactId: input.artifactId, bodyVersion: stored.bodyVersion + 1,
           savedBy: input.savedBy, source: retained.provenance?.source, restoredFromBodyVersion: input.bodyVersion, signal }, stored, codec);
+        await assertOwnerAccountMode(stored, undefined, { usage: 'fresh-authority', signal });
+        signal?.throwIfAborted();
         const response = await axios.post(`${resolveServerHttpBaseUrl()}/v1/artifacts/${encodeURIComponent(input.artifactId)}/revisions/${input.bodyVersion}/restore`,
           { expectedHeaderVersion: input.expectedRevision.headerVersion, expectedBodyVersion: input.expectedRevision.bodyVersion,
             header: codec.encode(withArtifactExcerptV1(nextHeader, retained.body)),
@@ -931,10 +938,13 @@ export function createAccountArtifactStore(params: Readonly<{
       const header = codec.encode(nextHeader);
       const kind = deriveArtifactCoarseKindV1(nextHeader);
       const body = codec.encode({ body: content.body });
-      const provenance = (await writeProvenance({ artifactId, bodyVersion: 1, savedBy: input.savedBy, source: input.source, signal: input.signal })).wire;
+      const provenance = (await writeProvenance({ artifactId, bodyVersion: 1, savedBy: input.savedBy, source: input.source, signal: input.signal }, undefined, codec)).wire;
       // Host-owned admission is rechecked after preparation's last await and
       // immediately before the first HTTP write. It is never a persisted field.
       if (input.beforeWrite) await input.beforeWrite();
+      await assertOwnerAccountMode({ access: 'owner', encryptionMode: codec.mode }, undefined,
+        { usage: 'fresh-authority', signal: input.signal });
+      input.signal?.throwIfAborted();
       const response = content.blob?.content
         ? await axios.post(`${resolveServerHttpBaseUrl()}${ARTIFACT_UPLOAD_PATH_V1}`, Buffer.from(encodeArtifactUploadFrameV1({
           kind: 'create', artifactId, blobId: content.blob.blobId, header, body, dataEncryptionKey: codec.dataEncryptionKey, ...provenance,
@@ -993,6 +1003,8 @@ export function createAccountArtifactStore(params: Readonly<{
         response = await retryArtifactRevisionUpdate(async () => {
           input.signal?.throwIfAborted();
           if (input.beforeWrite) await input.beforeWrite();
+          await assertOwnerAccountMode(stored, undefined, { usage: 'fresh-authority', signal: input.signal });
+          input.signal?.throwIfAborted();
           const result = blob?.content
             ? await axios.post(`${resolveServerHttpBaseUrl()}${ARTIFACT_UPLOAD_PATH_V1}`, Buffer.from(encodeArtifactUploadFrameV1({
               kind: 'update', artifactId: input.artifactId, blobId: blob.blobId, header, body, ...provenance.wire,
@@ -1176,7 +1188,7 @@ export function createCredentialedAccountArtifactStore(credentials: StoredCreden
   const accountId = readAccountIdFromToken(credentials.token);
   return createAccountArtifactStore({
     credentials,
-    getAccountEncryptionMode: () => accountModeApi.getAccountEncryptionMode(),
+    getAccountEncryptionMode: options => accountModeApi.getAccountEncryptionMode(options),
     ...(accountId ? { savedBy: { kind: 'person', accountId } as const } : {}),
   });
 }

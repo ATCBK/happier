@@ -516,7 +516,8 @@ describe('createCliApprovalsArtifactStore', () => {
     });
 
     let createdPayload: any = null;
-    mockGet.mockResolvedValueOnce({ status: 200, data: { mode: 'plain', updatedAt: 1 } });
+    // Mode authority is a live HTTP route, including final create/update admission.
+    mockGet.mockResolvedValue({ status: 200, data: { mode: 'plain', updatedAt: 1 } });
     mockPost.mockImplementationOnce(async (_url: string, body: any) => {
       createdPayload = body;
       return { status: 200, data: { id: body.id, headerVersion: 1, bodyVersion: 1 } };
@@ -545,15 +546,13 @@ describe('createCliApprovalsArtifactStore', () => {
       createdAt: 1,
       updatedAt: version,
     });
-    mockGet.mockResolvedValueOnce({ status: 200, data: record(createdPayload.header, createdPayload.body, 1) });
+    mockGet.mockImplementation(async (url: string) => ({ status: 200, data: url.endsWith('/v1/account/encryption')
+      ? { mode: 'plain', updatedAt: 1 }
+      : new URL(url).pathname === '/v1/artifacts' ? [record(createdPayload.header, createdPayload.body, 1)]
+        : record(createdPayload.header, createdPayload.body, 1) }));
     await expect(store.approvalsGet({ artifactId: created.artifactId, serverId: 'server-1' }))
       .resolves.toEqual(open);
 
-    mockGet
-      .mockResolvedValueOnce({
-        status: 200,
-        data: [record(createdPayload.header, createdPayload.body, 1)],
-      });
     await expect(store.approvalsList({ status: 'open', limit: 10, serverId: 'server-1' }))
       .resolves.toMatchObject({
         items: [{ artifactId: created.artifactId, status: 'open', serverId: 'server-1' }],
@@ -565,9 +564,6 @@ describe('createCliApprovalsArtifactStore', () => {
       updatedAtMs: 2,
       decision: { kind: 'approve', decidedAtMs: 2 },
     });
-    mockGet
-      .mockResolvedValueOnce({ status: 200, data: record(createdPayload.header, createdPayload.body, 1) })
-      .mockResolvedValueOnce({ status: 200, data: record(createdPayload.header, createdPayload.body, 1) });
     let updatedPayload: any = null;
     mockPost.mockImplementationOnce(async (_url: string, body: any) => {
       updatedPayload = body;
