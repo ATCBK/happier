@@ -7139,6 +7139,7 @@ const enSettingsAgents = {
     capabilitiesSection: 'Capabilities',
     capabilitiesSectionDescription:
       'What the agent supports. Unknown uses what the agent reports when a session starts.',
+    supportsLoadSession: 'Supports session resume',
     supportsModes: 'Modes',
     supportsModels: 'Model choice',
     supportsConfigOptions: 'Configuration options',

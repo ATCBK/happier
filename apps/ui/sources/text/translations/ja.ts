@@ -6318,6 +6318,7 @@ localTailscale: {
           machineLoginKeyDescription: 'マシンがこのエージェントのサインイン状態を報告する際のキーです。',
           capabilitiesSection: '機能',
           capabilitiesSectionDescription: 'エージェントが対応する機能です。「不明」はセッション開始時にエージェントが報告する内容を使います。',
+          supportsLoadSession: 'セッションの再開をサポート',
           supportsModes: 'モード',
           supportsModels: 'モデルの選択',
           supportsConfigOptions: '設定オプション',

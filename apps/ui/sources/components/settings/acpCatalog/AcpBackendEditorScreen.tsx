@@ -22,6 +22,7 @@ import { ValueRefRowsEditor } from '@/components/ui/forms/valueRefs/ValueRefRows
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { Switch } from '@/components/ui/forms/Switch';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { StringListField } from '@/components/ui/forms/StringListField';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -635,6 +636,20 @@ export const AcpBackendEditorScreen = React.memo(function AcpBackendEditorScreen
                 title={t('settingsAgents.customAcp.capabilitiesSection')}
                 description={t('settingsAgents.customAcp.capabilitiesSectionDescription')}
             >
+                <Item
+                    title={t('settingsAgents.customAcp.supportsLoadSession')}
+                    rightElement={(
+                        <Switch
+                            testID={`${TEST_ID}.supportsLoadSession`}
+                            accessibilityLabel={t('settingsAgents.customAcp.supportsLoadSession')}
+                            value={draft.capabilities.supportsLoadSession}
+                            onValueChange={(value) => update(null, (current) => ({
+                                ...current,
+                                capabilities: { ...current.capabilities, supportsLoadSession: value },
+                            }))}
+                        />
+                    )}
+                />
                 {CAPABILITY_ROWS.map((row) => (
                     <SegmentedChoiceItem<AcpCatalogSupportHintV1>
                         key={row.field}

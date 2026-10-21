@@ -1596,6 +1596,8 @@ Instead:
 - ACP capability probing is reserved for opt-in diagnostics, not day-to-day UX
 - the development provider harness `acp_probe_capabilities` scenario validates the negotiated runtime capabilities published by the active session
 
+In 0.3 development source, the custom ACP agent editor exposes **Supports session resume** and writes the existing boolean `capabilities.supportsLoadSession` through the catalog action. It defaults to disabled. Enable it before starting a session with an agent that supports `session/load`. Changing the declaration does not reconstruct a missing native resume identity for an older session and does not bypass exact-agent resume eligibility or runtime negotiation.
+
 In 0.3 development source, the host advertises ACP form elicitation only when its
 permission handler implements it. The ACP SDK 1.2.1 `elicitation/create` contract
 is experimental. Native requests retain their active-turn custody and flow

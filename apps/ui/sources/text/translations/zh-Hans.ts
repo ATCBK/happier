@@ -5721,6 +5721,7 @@ const zhHansValues = {
         machineLoginKeyDescription: '机器报告此智能体登录状态时使用的键。',
         capabilitiesSection: '能力',
         capabilitiesSectionDescription: '智能体支持的功能。“未知”将使用会话开始时智能体报告的内容。',
+        supportsLoadSession: '支持恢复会话',
         supportsModes: '模式',
         supportsModels: '模型选择',
         supportsConfigOptions: '配置选项',

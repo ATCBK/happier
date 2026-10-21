@@ -5067,6 +5067,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
             machineLoginKeyDescription: '機器回報此代理登入狀態時使用的鍵。',
             capabilitiesSection: '功能',
             capabilitiesSectionDescription: '代理支援的功能。「未知」會使用工作階段開始時代理回報的內容。',
+            supportsLoadSession: '支援恢復工作階段',
             supportsModes: '模式',
             supportsModels: '模型選擇',
             supportsConfigOptions: '設定選項',

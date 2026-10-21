@@ -86,6 +86,17 @@ That lets different custom backends behave as distinct backend choices, even whe
 
 Custom ACP models can also be saved as favorites from the new-session engine picker. Favorites are stored per configured backend, not just per Agent family.
 
+## Session resume
+
+In unreleased 0.3 development source, the custom ACP agent editor includes
+**Supports session resume**. It defaults to off. Enable it before starting a
+session with an agent that supports ACP `session/load`.
+
+Enabling the setting does not recover an older session whose native resume
+identity was never recorded. Exact-agent eligibility and runtime negotiation
+still apply; a failed explicit resume remains an error rather than silently
+starting a new agent conversation.
+
 ## Authentication
 
 Custom ACP does not imply one single Agent-level auth system.

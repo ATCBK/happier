@@ -5731,6 +5731,7 @@ const ruValues = {
         machineLoginKeyDescription: 'Ключ, под которым машина сообщает о входе этого агента.',
         capabilitiesSection: 'Возможности',
         capabilitiesSectionDescription: 'Что поддерживает агент. «Неизвестно» использует то, что агент сообщит при запуске сессии.',
+        supportsLoadSession: 'Поддержка возобновления сеансов',
         supportsModes: 'Режимы',
         supportsModels: 'Выбор модели',
         supportsConfigOptions: 'Параметры конфигурации',
