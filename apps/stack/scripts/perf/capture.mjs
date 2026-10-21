@@ -4,9 +4,22 @@ import { SourceMap } from 'node:module';
 import { connectPage } from './cdp.mjs';
 import { frameKey, requestFingerprint, safeUrl, summarizeNetwork, summarizeProfile } from './analysis.mjs';
 
-function stackFrames(stack) {
+// Counts-only diagnostic budget: retain at most eight async scheduling hops.
+// This bounds debugger bookkeeping, not user work or the synchronous frames.
+const COUNTS_ASYNC_STACK_DEPTH = 8;
+
+function stackFrames(stack, parents = COUNTS_ASYNC_STACK_DEPTH) {
   return stack ? [...(stack.callFrames ?? []).map(frame => ({ functionName: frame.functionName, url: safeUrl(frame.url), lineNumber: frame.lineNumber, columnNumber: frame.columnNumber })),
-    ...stackFrames(stack.parent)] : [];
+    ...(parents > 0 ? stackFrames(stack.parent, parents - 1) : [])] : [];
+}
+
+function pageAuthSurface() {
+  const visible = selector => [...document.querySelectorAll(selector)].some(node => node.getClientRects().length > 0);
+  const welcome = visible('[data-testid="welcome-decision-panel"], [data-testid="unauth-shell-brand-pane"]');
+  const shell = visible('[data-testid="session-list-view-options-trigger"], [data-testid="home-header-start-new-session"], [data-testid="app-shell-title-strip"]');
+  return { surface: welcome ? 'welcome' : shell ? 'shell' : 'unknown',
+    authenticated: null, basis: 'visible DOM markers only; not credential authority',
+    retirementReasonCode: null, retirementReasonAvailability: 'not exposed by the app browser surface' };
 }
 
 export async function startCapture(options) {
@@ -15,11 +28,27 @@ export async function startCapture(options) {
   try { cdp = await connectPage(options.cdp, options.pageId, options.signal); }
   catch {
     const error = new Error('CDP setup.connect failed; discovery/transport details suppressed');
-    error.captureDiagnostics = { setup: { phase: 'setup.connect', kind: 'discovery-or-transport' }, cleanup: { status: 'NOT_CONNECTED' } };
+    error.captureDiagnostics = { setup: { phase: 'setup.connect', kind: 'discovery-or-transport' }, cleanup: { status: 'NOT_CONNECTED', authState: null, asyncCallStackDepth: null } };
     throw error;
   }
   const salt = randomBytes(32).toString('hex');
   const requests = [], sockets = [], telemetry = [], scripts = new Map(), nativePairs = [];
+  const initiatorWork = [];
+  let asyncCallStackDepth = null, beginAuthState = null;
+  const requestedAsyncDepth = options.captureMode === 'counts' ? COUNTS_ASYNC_STACK_DEPTH : 0;
+  const expandStack = async (stack, parents = requestedAsyncDepth, seen = new Set()) => {
+    if (!stack) return [];
+    const frames = stackFrames(stack, 0);
+    if (!parents) return frames;
+    let parent = stack.parent;
+    if (!parent && stack.parentId) {
+      const key = JSON.stringify(stack.parentId);
+      if (seen.has(key)) return frames;
+      seen.add(key);
+      parent = (await cdp.send('Debugger.getStackTrace', { stackTraceId: stack.parentId })).stackTrace;
+    }
+    return [...frames, ...await expandStack(parent, parents - 1, seen)];
+  };
   const inFlight = new Map();
   let recording = false, profileStarted = false, identifier, finished, unmappedRequests = 0;
   let startMs, phase = 'setup.connect';
@@ -49,8 +78,11 @@ export async function startCapture(options) {
       fingerprint: requestFingerprint(event.request, salt),
       bodyUnknown: Boolean(event.request.hasPostData && !event.request.postData),
       requestBodyBytes: event.request.postData === undefined ? null : Buffer.byteLength(event.request.postData),
-      initiator: { type: event.initiator?.type, stack: stackFrames(event.initiator?.stack) } };
+      initiator: { type: event.initiator?.type, stack: stackFrames(event.initiator?.stack, requestedAsyncDepth) } };
     requests.push(row); inFlight.set(event.requestId, row);
+    if (requestedAsyncDepth) initiatorWork.push(expandStack(event.initiator?.stack)
+      .then(frames => { row.initiator.stack = frames; })
+      .catch(() => { row.initiator.asyncStackUnavailable = true; }));
   });
   cdp.on('Network.responseReceived', event => {
     const row = inFlight.get(event.requestId);
@@ -116,8 +148,12 @@ export async function startCapture(options) {
       try { const result = await operation(); operations.push({ phase: name, status: 'ok' }); return result; }
       catch (error) { const result = diagnostic(error, name); errors.push(result); operations.push({ ...result, status: 'failed' }); }
     };
-    let off;
+    let off, authState;
     try {
+      authState = await attempt('cleanup.auth-surface', () => evaluate(`(${pageAuthSurface.toString()})()`));
+      await attempt('cleanup.Debugger.asyncStacksOff', async () => {
+        await cdp.send('Debugger.setAsyncCallStackDepth', { maxDepth: 0 }); asyncCallStackDepth = 0;
+      });
       if (profileStarted) await attempt('cleanup.Profiler.stop', async () => { await cdp.send('Profiler.stop', {}, { timeout: 60000 }); profileStarted = false; });
       await attempt('cleanup.Network.setCacheDisabled', () => cdp.send('Network.setCacheDisabled', { cacheDisabled: false }));
       if (identifier) await attempt('cleanup.Page.removeScript', () => cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier }));
@@ -134,7 +170,7 @@ export async function startCapture(options) {
           await attempt('cleanup.OFF.reload', () => cdp.send('Page.reload'));
           off = await attempt('cleanup.OFF.attest', () => evaluate(`new Promise(resolve => { const check = () => {
             const api = globalThis.__HAPPIER_SYNC_PERFORMANCE__;
-            if (globalThis.__HAPPIER_PERF_OFF_DOCUMENT__ === ${JSON.stringify(salt)} && api?.isEnabled) resolve({ atMs: Date.now(), storeTelemetry: api.isEnabled(), fiberHook: Boolean(globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__), viewport: { width: innerWidth, height: innerHeight } });
+            if (globalThis.__HAPPIER_PERF_OFF_DOCUMENT__ === ${JSON.stringify(salt)} && api?.isEnabled) resolve({ atMs: Date.now(), storeTelemetry: api.isEnabled(), fiberHook: Boolean(globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__), viewport: { width: innerWidth, height: innerHeight }, authState: (${pageAuthSurface.toString()})() });
             else requestAnimationFrame(check);
           }; check(); })`));
         } finally {
@@ -144,10 +180,14 @@ export async function startCapture(options) {
       }
     } finally { recording = false; cdp.close(); }
     return { status: errors.length || attestOff && (off?.storeTelemetry !== false || off?.fiberHook !== false) ? 'CLEANUP_FAILED' : 'CLEANED', operations, errors,
+      asyncCallStackDepth, authState: authState ?? null,
       ...(attestOff ? { freshDocumentOffAttestation: off ?? null } : {}) };
   };
   try {
     for (const domain of ['Page', 'Network', 'Runtime', 'Debugger', 'Profiler']) await step(`setup.${domain}.enable`, () => cdp.send(`${domain}.enable`));
+    await step('setup.Debugger.asyncStacks', async () => {
+      await cdp.send('Debugger.setAsyncCallStackDepth', { maxDepth: requestedAsyncDepth }); asyncCallStackDepth = requestedAsyncDepth;
+    });
     await step('setup.Runtime.addBinding', () => cdp.send('Runtime.addBinding', { name: '__happierPerfTelemetry' }));
     const probe = `globalThis.__HAPPIER_PERF_CAPTURE_MODE__ = ${JSON.stringify(options.captureMode)};\n` + await readFile(new URL('./browser-probe.js', import.meta.url), 'utf8');
     ({ identifier } = await step('setup.Page.addScript', () => cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: probe })));
@@ -156,6 +196,7 @@ export async function startCapture(options) {
     await step('setup.probe.install', () => evaluate(probe));
     return { cdp, evaluate,
       async begin() {
+        beginAuthState = await evaluate(`(${pageAuthSurface.toString()})()`);
         await evaluate('globalThis.__happierPerfProbe.reset()');
         await cdp.send('Network.setCacheDisabled', { cacheDisabled: options.cache === 'cold' });
         if (options.cache === 'cold') await cdp.send('Network.clearBrowserCache');
@@ -174,6 +215,10 @@ export async function startCapture(options) {
         const stopped = profileStarted ? await available('finish.Profiler.stop', () => cdp.send('Profiler.stop', {}, { timeout: 60000 })) : null;
         if (stopped) profileStarted = false;
         recording = false;
+        await available('finish.async-initiators', () => Promise.all(initiatorWork));
+        if (requests.some(row => row.initiator.asyncStackUnavailable)) errors.push({ phase: 'finish.async-initiators', kind: 'parent-stack-unavailable' });
+        const endAuthState = await available('finish.auth-surface', () => evaluate(`(${pageAuthSurface.toString()})()`));
+        if (probeData?.instrumentation) probeData.instrumentation.asyncCallStackDepth = asyncCallStackDepth;
         const profile = stopped?.profile;
         const pageUrl = await available('finish.page.attest', () => evaluate('location.href'));
         // Read rotating server evidence before potentially large source maps.
@@ -225,7 +270,7 @@ export async function startCapture(options) {
         const windowSockets = mappedSockets.filter(row => row.atMs !== null && row.atMs >= startMs && row.atMs <= endMs);
         return finished = { startMs, endMs, durationMs: endMs - startMs, profile: profile ?? null, cpu: profile ? summarizeProfile(profile, cleanSymbols) : null,
           network: { ...summarizeNetwork(windowRequests, { startMs, endMs }), records: windowRequests, observedThroughMs: Date.now() }, sockets: windowSockets, telemetry,
-          react: probeData, observedUi: { url: safeUrl(pageUrl), scripts: [...new Set([...scripts.values()].map(script => safeUrl(script.url)).filter(Boolean))] },
+          react: probeData, authState: { begin: beginAuthState, end: endAuthState }, observedUi: { url: safeUrl(pageUrl), scripts: [...new Set([...scripts.values()].map(script => safeUrl(script.url)).filter(Boolean))] },
           attribution: { sourceMaps: [...sourceMaps.values()].filter(Boolean).length, attemptedSourceMaps: sourceMaps.size,
             mappedFrames: symbols.size, mapResponses, mapFailures },
           clock: { basis: 'Native Network.requestWillBeSent wallTime/timestamp pairs; request-local conversion, preceding pair (first pair for earlier sockets)',

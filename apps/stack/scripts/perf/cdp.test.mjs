@@ -48,6 +48,7 @@ test('capture composes CDP events, safe network records, telemetry and mapped CP
   const epoch = Date.now();
   const rendererDelayMs = 15827;
   let rendererClockRequests = 0;
+  const asyncDepthCommands = [];
   const map = 'data:application/json;base64,' + Buffer.from(JSON.stringify({ version: 3, sources: ['src/Owner.ts'], names: ['realOwner'], mappings: 'AAAAA' })).toString('base64');
   server.on('upgrade', (request, socket) => {
     ownedSocket = socket;
@@ -72,6 +73,9 @@ test('capture composes CDP events, safe network records, telemetry and mapped CP
         for (let index = 0; index < body.length; index++) body[index] ^= mask[index % 4];
         const message = JSON.parse(body.toString());
         let result = {};
+        if (message.method === 'Debugger.setAsyncCallStackDepth') asyncDepthCommands.push(message.params.maxDepth);
+        if (message.method === 'Debugger.getStackTrace') result.stackTrace = { description: 'never-save description',
+          callFrames: [{ functionName: 'asyncOwner', url: 'http://app.test/issuer.js?token=never-save', lineNumber: 4, columnNumber: 2 }] };
         if (message.method === 'Debugger.enable') send({ method: 'Debugger.scriptParsed', params: { scriptId: '1', url: 'http://app.test/bundle.js', sourceMapURL: map } });
         if (message.method === 'Page.addScriptToEvaluateOnNewDocument') result.identifier = 'probe';
         if (message.method === 'Performance.getMetrics') result.metrics = [{ name: 'Timestamp', value: 10 }];
@@ -86,7 +90,9 @@ test('capture composes CDP events, safe network records, telemetry and mapped CP
           const timestamp = 10 + (Date.now() - epoch) / 1000;
           send({ method: 'Network.webSocketFrameReceived', params: { timestamp, response: { opcode: 1, payloadData: '42["before-native-pair",{}]' } } });
           send({ method: 'Network.requestWillBeSent', params: { requestId: 'n', wallTime: Date.now() / 1000, timestamp,
-            request: { method: 'GET', url: 'http://app.test/v1/data?key=never-save' }, initiator: { type: 'script', stack: { callFrames: [] } } } });
+            request: { method: 'GET', url: 'http://app.test/v1/data?key=never-save' }, initiator: { type: 'script', stack: { callFrames: [],
+              parent: { callFrames: [{ functionName: 'inlineScheduler', url: 'http://app.test/scheduler.js?token=never-save', lineNumber: 1, columnNumber: 0 }],
+                parentId: { id: 'out-of-line', debuggerId: 'fixture' }, description: 'never-save description' } } } } });
           send({ method: 'Network.responseReceived', params: { requestId: 'n', timestamp, response: { status: 200, headers: { 'x-request-id': 'returned-id' },
             timing: { requestTime: timestamp, sendStart: 0, receiveHeadersStart: 0 } } } });
           send({ method: 'Network.loadingFinished', params: { requestId: 'n', timestamp, encodedDataLength: 25 } });
@@ -114,6 +120,9 @@ test('capture composes CDP events, safe network records, telemetry and mapped CP
     await capture.begin();
     const result = await capture.finish();
     assert.equal(result.network.requests, 4);
+    assert.deepEqual(result.network.records.find(row => row.requestId === 'n').initiator.stack.map(frame => frame.functionName),
+      ['inlineScheduler', 'asyncOwner'], 'inline and out-of-line async parents must use the same safe frame projection');
+    assert.equal(asyncDepthCommands[0] > 0, true);
     assert.equal(result.network.records.find(row => row.requestId === 'n').startMs,
       result.network.records.find(row => row.requestId === 'n').nativeWallTime * 1000,
       'membership uses the native coherent wall clock, not a delayed renderer sample');
@@ -136,5 +145,6 @@ test('capture composes CDP events, safe network records, telemetry and mapped CP
     assert.equal(result.cpu.functions[0].name, 'realOwner');
     assert.equal(result.attribution.mappedFrames, 1);
     assert.ok(!JSON.stringify(result).includes('never-save'));
-  } finally { await capture.close(); }
+  } finally { assert.equal((await capture.close()).asyncCallStackDepth, 0); }
+  assert.equal(asyncDepthCommands.at(-1), 0);
 });

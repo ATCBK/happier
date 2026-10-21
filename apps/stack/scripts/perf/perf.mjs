@@ -170,6 +170,9 @@ async function journey(id) {
     if (browserResult.react.instrumentation?.storeTelemetry !== expectedInstrumentation || browserResult.react.instrumentation?.fiberHook !== expectedInstrumentation) {
       throw new Error('RELOAD NEEDED: loaded UI did not establish the requested store/fiber capture mode');
     }
+    if (expectedInstrumentation ? !(browserResult.react.instrumentation?.asyncCallStackDepth > 0) : browserResult.react.instrumentation?.asyncCallStackDepth !== 0) {
+      throw new Error('CDP capture did not establish the requested async call-stack mode');
+    }
     if (new URL(browserResult.observedUi.url).origin !== new URL(options.url).origin) throw new Error('Observed page left the requested QA UI origin');
     phase = 'host-after'; requireIdentity(hostAfter);
     if (JSON.stringify(hostBefore.identity) !== JSON.stringify(hostAfter.identity)) throw new Error('Runtime identity changed during capture');
@@ -208,7 +211,7 @@ async function journey(id) {
       observedUi: browserResult.observedUi,
       clock: browserResult.clock,
       viewport: { declared: viewportDeclaration ?? null, observations: viewports },
-      readiness: { selector: options['home-selector'], meaning: definition.readiness ?? 'Lane-declared selector only; J1 default is a shell marker, not proof of hydrated Home' },
+      readiness: { selector: options['home-selector'], meaning: definition.readiness ?? 'Lane-declared selector only; J1 default is a shell marker, not proof of hydrated Home', authState: browserResult.authState },
       counts, socketEventsPerSecond: browserResult.socketEventsPerSecond,
       sameWindowProcessSamples: { start: windowHostStart, end: windowHostEnd,
         note: 'Interior control-channel endpoint samples inside the browser bracket, not whole-window/peak measurements. Sampling adds overhead; processes are shared across all clients. Operation/constructor counts remain unavailable unless existing logs report them.' },
@@ -261,6 +264,7 @@ async function journey(id) {
         storeNotifications: storeMeasured ? partialStore.events.find(event => event.name === 'sync.store.storage.notify')?.count ?? 0 : null,
         selectorEvaluations: storeMeasured ? partialStore.events.filter(event => event.name.startsWith('sync.store.storage.selector.')).reduce((sum, event) => sum + event.count, 0) : null },
       instrumentation: browserResult?.react?.instrumentation,
+      readiness: { authState: browserResult?.authState ?? null },
       clock: browserResult?.clock,
       concurrentLaneLoad: { before: lanesBefore, after: lanesAfter },
       gaps: ['Failed journey: partial evidence is diagnostic only; never accepted timing/count comparison evidence'] });

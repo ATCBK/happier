@@ -73,8 +73,8 @@ can change between exports and name collisions coalesce; use CPU source maps
 and component evidence for callsite-level conclusions. Output identity-change
 fields remain per-closure observations, not a count of component renders.
 
-No headers, bodies, SQL parameters, auth state or socket argument values are
-saved. The protocol owns capability-path redaction. A salted per-run digest
+No headers, bodies, SQL parameters, credential material or socket argument values
+are saved. The protocol owns capability-path redaction. A salted per-run digest
 compares full request URLs/bodies without exposing them. A candidate means
 overlapping equal requests, not proof of wasted work; unknown request bodies
 cannot establish equality. Network transfer bytes include protocol overhead.
@@ -101,6 +101,20 @@ exits 1. No partial run supplies timing evidence. The caller still owns browser
 SIGINT/cleanup after either result.
 
 Round-4 collector details:
+
+- Counts mode requests eight async scheduling hops with CDP
+  `Debugger.setAsyncCallStackDepth`; timing explicitly requests zero. Inline
+  parents and out-of-line `parentId` stacks use the same frame-only URL
+  redaction. Parent lookup failure is explicit; absence of a caller is not proof
+  that no caller exists. Depth is recorded in instrumentation and reset to zero
+  on normal/aborted cleanup. This adds counts-mode overhead, never timing work.
+- `readiness.authState` records beginning/end visible `shell`, `welcome` or
+  `unknown` surfaces; `cleanup.json` records its pre-cleanup surface and the
+  fresh OFF document's surface. These are DOM markers, not credential authority:
+  Personal Home may retain a shell while unauthenticated. `authenticated` stays
+  null. The app exposes no browser retirement/sign-out reason, so its reason
+  field is explicitly null/unavailable; nothing is inferred from a welcome
+  marker, URL, network error, storage or React props.
 
 - Failed steps finalize available CPU/network/React/store/socket evidence and
   write a `FAILED`, ineligible bundle plus the original phase in `failure.json`.
