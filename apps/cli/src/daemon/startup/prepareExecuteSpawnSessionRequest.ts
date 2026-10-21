@@ -30,6 +30,7 @@ import { resolvePreparedSessionDirectory } from './resolvePreparedSessionDirecto
 import { resolveRequesterLaunchAdmissionFailure } from '../lifecycle/requesterWorkAttribution';
 import { resolveSessionMemoryCeilingBytes } from '../platform/linux/sessionMemoryCeiling';
 import { resolveSessionRuntimeSnapshot } from '../sessions/runtimeSnapshot/resolveSessionRuntimeSnapshot';
+import { projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import {
     ConnectedServicesDefaultUnavailableError,
     createCredentialsSpawnConnectedServicesTeamResourceCatalogResolver,
@@ -151,11 +152,6 @@ export async function prepareExecuteSpawnSessionRequest(
         sessionId,
         resume,
         existingSessionId,
-        permissionMode,
-        permissionModeUpdatedAt,
-        agentModeId,
-        agentModeUpdatedAt,
-        modelSelection,
         agentTarget,
         backendTarget,
     } = options;
@@ -186,25 +182,12 @@ export async function prepareExecuteSpawnSessionRequest(
         options, normalizedExistingSessionId, ownerMetadata, existingSessionWorkspacePath,
     });
     let persistedProviderResumeState: ReturnType<typeof readPersistedProviderResumeState>;
+    const attachSnapshot = sessionAttachPayload?.snapshot;
+    const persistedMetadata = ownerMetadata && attachSnapshot
+        ? projectSessionOwnerCompatibilityViewV1({ sharedMetadata: attachSnapshot.metadata, ownerMetadata })
+        : attachSnapshot?.metadata ?? null;
     try {
-        const ownerProviderResumeMetadata = ownerMetadata
-            ? {
-                ...(ownerMetadata.runtime?.providerBindingV1
-                    ? { providerBindingV1: ownerMetadata.runtime.providerBindingV1 }
-                    : {}),
-                ...(ownerMetadata.runtime?.modelSelectionIntentV1
-                    ? { modelSelectionIntentV1: ownerMetadata.runtime.modelSelectionIntentV1 }
-                    : {}),
-            }
-            : null;
-        persistedProviderResumeState = readPersistedProviderResumeState(
-            ownerProviderResumeMetadata
-                ?? (
-                    sessionAttachPayload && 'snapshot' in sessionAttachPayload
-                        ? sessionAttachPayload.snapshot?.metadata ?? null
-                        : null
-                ),
-        );
+        persistedProviderResumeState = readPersistedProviderResumeState(persistedMetadata);
     } catch (error) {
         if (!(error instanceof PersistedProviderResumeBindingError)) throw error;
         return buildProviderSpawnErrorResult(error.providerError);
@@ -341,12 +324,11 @@ export async function prepareExecuteSpawnSessionRequest(
 
     // Resume RPCs need not carry private launch identity. Read it from the
     // admitted Session owner, using the same selection rules as tracked resumes.
-    const connectedServiceOptions = normalizedExistingSessionId
+    const runtimeOptions = normalizedExistingSessionId
         ? resolveSessionRuntimeSnapshot({
             incomingOptions: options,
-            persistedMetadata: ownerMetadata
-                ? ownerMetadata.connectedServices ?? {}
-                : sessionAttachPayload?.snapshot?.metadata ?? null,
+            persistedMetadata,
+            acceptedTeamCredentialBinding: attachSnapshot?.acceptedTeamCredentialBinding,
         }).spawnOptions
         : options;
     // Omitted fresh-launch intent consumes the same Account default owner as
@@ -354,7 +336,7 @@ export async function prepareExecuteSpawnSessionRequest(
     // resumed Sessions retain their admitted identity rather than today's default.
     let connectedServicesDefaults: Awaited<ReturnType<typeof resolveSessionSpawnConnectedServicesDefaultsPayload>> = null;
     if (!normalizedExistingSessionId && !effectiveResume && catalogAgentId
-        && connectedServiceOptions.connectedServices === undefined) {
+        && runtimeOptions.connectedServices === undefined) {
         try {
             connectedServicesDefaults = await resolveSessionSpawnConnectedServicesDefaultsPayload({
                 agentId: catalogAgentId,
@@ -369,11 +351,11 @@ export async function prepareExecuteSpawnSessionRequest(
                 errorMessage: error.reason };
         }
     }
-    const connectedServices = connectedServiceOptions.connectedServices ?? connectedServicesDefaults?.connectedServices;
-    const connectedServicesUpdatedAt = connectedServiceOptions.connectedServicesUpdatedAt
+    const connectedServices = runtimeOptions.connectedServices ?? connectedServicesDefaults?.connectedServices;
+    const connectedServicesUpdatedAt = runtimeOptions.connectedServicesUpdatedAt
         ?? connectedServicesDefaults?.connectedServicesUpdatedAt;
     const teamCredentialBindings = mergeSessionTeamCredentialBindingIntents({
-        explicit: options.teamCredentialBindings,
+        explicit: runtimeOptions.teamCredentialBindings,
         admitted: connectedServicesDefaults?.teamCredentialBindings ?? null,
     });
     const resources = params.request.readMachineResourcesPolicy?.();
@@ -385,11 +367,11 @@ export async function prepareExecuteSpawnSessionRequest(
         ...(sessionCreationTag ? { sessionCreationTag } : {}),
         sessionId,
         existingSessionId,
-        permissionMode,
-        permissionModeUpdatedAt,
-        agentModeId,
-        agentModeUpdatedAt,
-        modelSelection: persistedProviderResumeState.selection ?? modelSelection,
+        permissionMode: runtimeOptions.permissionMode,
+        permissionModeUpdatedAt: runtimeOptions.permissionModeUpdatedAt,
+        agentModeId: runtimeOptions.agentModeId,
+        agentModeUpdatedAt: runtimeOptions.agentModeUpdatedAt,
+        modelSelection: runtimeOptions.modelSelection,
         normalizedExistingSessionId,
         effectiveResume,
         effectiveBackendTargetV2,
@@ -401,8 +383,8 @@ export async function prepareExecuteSpawnSessionRequest(
         ...(connectedServices ? { connectedServices } : {}),
         ...(connectedServicesUpdatedAt !== undefined ? { connectedServicesUpdatedAt } : {}),
         ...(teamCredentialBindings ? { teamCredentialBindings } : {}),
-        ...(connectedServiceOptions.connectedServiceMaterializationIdentityV1
-            ? { connectedServiceMaterializationIdentityV1: connectedServiceOptions.connectedServiceMaterializationIdentityV1 } : {}),
+        ...(runtimeOptions.connectedServiceMaterializationIdentityV1
+            ? { connectedServiceMaterializationIdentityV1: runtimeOptions.connectedServiceMaterializationIdentityV1 } : {}),
         ...runtimeSelection,
     };
 }

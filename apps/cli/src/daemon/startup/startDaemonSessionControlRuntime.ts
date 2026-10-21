@@ -1,5 +1,6 @@
 import { matchesCurrentQuotaObservationCredential } from '@/daemon/connectedServices/quotas/proof/quotaProbeFreshProof';
 import axios from 'axios';
+import { SessionTeamCredentialLaunchUnavailableError } from '@/session/services/sessionTeamCredentialLaunch';
 import { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import type { PendingSessionResumeAdmission, PendingSessionResumePort } from '../sessions/activatePendingInactiveSession';
 import { DiscussionAgentPublisherResponseV1Schema } from '@happier-dev/protocol/discussions/api';
@@ -17646,13 +17647,7 @@ export async function startDaemonSessionControlRuntime(
               !binding ||
               consumerAgentId === null
             ) {
-              return {
-                ok: false as const,
-                error: {
-                  code: 'provider_broker_binding_not_current',
-                  message: 'Team credential Provider binding is not current',
-                },
-              };
+              throw new SessionTeamCredentialLaunchUnavailableError();
             }
             let opened;
             try {
@@ -17725,13 +17720,7 @@ export async function startDaemonSessionControlRuntime(
             });
             if (!unregisterCleanup) {
               await opened.cleanup();
-              return {
-                ok: false as const,
-                error: {
-                  code: 'provider_broker_binding_not_current',
-                  message: 'Team credential Provider binding is not current',
-                },
-              };
+              throw new SessionTeamCredentialLaunchUnavailableError();
             }
             if (bindingId)
               providerBrokerBindingReleaseById.set(bindingId, {

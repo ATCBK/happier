@@ -19,7 +19,7 @@ import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
 import { readRuntimeDescriptorV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor-compat';
 import { sessionModelSelectionV2TeamBindingIntent } from '@happier-dev/protocol/providers/selection/v2';
-import type { ProviderBoundModelRef, ConnectedServiceMaterializationIdentityV1, SessionModelSelectionV2, ConnectedServiceBindingsV2, SessionCapabilitySelectionV1 } from '@happier-dev/protocol';
+import type { ProviderBoundModelRef, ConnectedServiceMaterializationIdentityV1, SessionModelSelectionV2, ConnectedServiceBindingsV2, SessionCapabilitySelectionV1, SessionTeamCredentialBindingIntentV1 } from '@happier-dev/protocol';
 import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
 import type { CatalogAgentId } from '@/agent/catalog/ids';
 import {
@@ -68,6 +68,8 @@ export type SessionRuntimeSnapshot = Readonly<{
 export type ResolveSessionRuntimeSnapshotParams = Readonly<{
   incomingOptions: SpawnSessionOptions;
   persistedMetadata?: Record<string, unknown> | null;
+  /** Current Home-accepted slot, read with this exact Session's attach snapshot. */
+  acceptedTeamCredentialBinding?: SessionTeamCredentialBindingIntentV1 | null;
   trackedSpawnOptions?: SpawnSessionOptions | null;
   /** Canonical tracked intent includes clears, unlike launch-only model refs. */
   trackedModelSelection?: SessionRuntimeSnapshot['modelSelection'];
@@ -529,7 +531,13 @@ export function resolveSessionRuntimeSnapshot(
       ]),
     teamCredentialBindings: (() => {
       if (retainedLiveRuntimeOptions) return retainedLiveRuntimeOptions.teamCredentialBindings ?? null;
-      if (!persistedTeamModelSelection) return null;
+      if (!persistedTeamModelSelection) {
+        // The native attach consumer already uses this accepted Home witness.
+        // V1's null Account Provider connection must not erase its Team route.
+        const accepted = params.acceptedTeamCredentialBinding;
+        if (params.persistedMetadata?.modelSelectionIntentV2 !== undefined) return null;
+        return accepted?.slot.kind === 'provider_model' && accepted.resourceId !== null ? [accepted] : null;
+      }
       // Protocol owns how a V2 Team selection becomes a launch binding intent,
       // including its route and Team identity; this owner only decides when.
       const intent = sessionModelSelectionV2TeamBindingIntent(persistedTeamModelSelection);

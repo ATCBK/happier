@@ -33,6 +33,55 @@ describe('connected-account session creation → inactive resume admission', () 
     });
   });
 
+  it.each(['flat', 'owner'] as const)('restores the accepted Team binding and current person permission on sparse %s resume and stale recovery', async layout => {
+    const agentTargetKey = 'agent:happier.agent.codex/codex';
+    const acceptedTeamCredentialBinding = { v: 1 as const, slot: { kind: 'provider_model' as const },
+      resourceId: 'team-pool', expectedResourceRevision: 2, deliveryMode: 'brokered' as const, teamId: 'team-1' };
+    const { metadata } = createSessionMetadata({
+      flavor: 'codex', machineId: 'machine-connected', directory: '/project', startedBy: 'daemon',
+      runtimeDescriptorV1: { v: 1, agentId: 'codex', agent: {} },
+      launchControlMetadata: captureSessionLaunchControlMetadata({ processEnvironment: {} }),
+      permissionMode: 'read-only', permissionModeUpdatedAt: 200,
+      modelSelectionIntent: { v: 1, updatedAt: 100,
+        selection: { agentTargetKey, providerConnectionId: null, modelId: 'gpt-5.6-luna' } },
+    });
+    const row = (currentMetadata: typeof metadata) => {
+      const owner = createSessionOwnerMetadataV1({ metadata: currentMetadata });
+      if (!owner.ok) throw new Error('Invalid resume fixture metadata');
+      return { id: 'session-team-resume', seq: 1, active: false, encryptionMode: 'plain',
+        metadataVersion: 1, agentStateVersion: 0, agentState: null, dataEncryptionKey: null,
+        acceptedTeamCredentialBinding,
+        ...(layout === 'owner' ? { metadataLayoutVersion: 1,
+          metadata: JSON.stringify(projectSessionSharedMetadataV1({ metadata: currentMetadata })),
+          ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(owner.ownerMetadata),
+        } : { metadata: JSON.stringify(currentMetadata) }) };
+    };
+    network.fetchSessionByIdCompat.mockResolvedValue(row(metadata));
+    const resume = (controls = {}) => prepareExecuteSpawnSessionRequest({
+      request: { credentials: { token: 'synthetic-owner', encryption: null }, options: {
+        directory: '/project', existingSessionId: 'session-team-resume', ...controls,
+      } }, validateEnvVarRecordStrict,
+    });
+    const first = await resume();
+    expect(first).toMatchObject({ normalizedExistingSessionId: 'session-team-resume',
+      permissionMode: 'read-only', permissionModeUpdatedAt: 200,
+      modelSelection: { v: 1, updatedAt: 100, ref: { agentTargetKey, providerConnectionId: null, modelId: 'gpt-5.6-luna' } },
+      teamCredentialBindings: [acceptedTeamCredentialBinding] });
+    // A later person choice must also beat an automatic child using the prior
+    // launch's permission; runtime publication retains this original timestamp.
+    network.fetchSessionByIdCompat.mockResolvedValue(row({ ...metadata, permissionMode: 'yolo', permissionModeUpdatedAt: 300 }));
+    expect(await resume({ permissionMode: 'read-only', permissionModeUpdatedAt: 200 })).toMatchObject({
+      permissionMode: 'yolo', permissionModeUpdatedAt: 300,
+      teamCredentialBindings: [acceptedTeamCredentialBinding],
+    });
+    // An explicit new choice still wins. This is not a blanket persisted-wins rule.
+    expect(await resume({ permissionMode: 'read-only', permissionModeUpdatedAt: 400 })).toMatchObject({
+      permissionMode: 'read-only', permissionModeUpdatedAt: 400,
+    });
+    network.fetchSessionByIdCompat.mockResolvedValue({ ...row(metadata), acceptedTeamCredentialBinding: null });
+    expect(await resume()).not.toHaveProperty('teamCredentialBindings');
+  });
+
   it.each([
     ['claude', 'happier.agent.claude/claude-subscription', 'flat', false],
     ['claude', 'happier.agent.claude/claude-subscription', 'owner', false],

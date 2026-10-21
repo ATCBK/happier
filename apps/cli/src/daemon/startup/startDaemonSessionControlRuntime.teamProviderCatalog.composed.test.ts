@@ -57,7 +57,7 @@ vi.mock('@/daemon/controlServer', async importOriginal => {
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); boundary.control = null; });
 
-it.each(['ready', 'missing declaration', 'non-204', 'socket closed', 'refresh refused', 'slow catalog'] as const)(
+it.each(['ready', 'binding not current', 'missing declaration', 'non-204', 'socket closed', 'refresh refused', 'slow catalog'] as const)(
   'opens the real Codex Team binder with the tracked recipient catalog, never custodian consent (%s)', async metadata => {
   let h: Awaited<ReturnType<typeof createInstalledProjectAgentDaemonFixture>>;
   let model: TeamCredentialProviderModelCatalogEntryV1;
@@ -241,6 +241,18 @@ it.each(['ready', 'missing declaration', 'non-204', 'socket closed', 'refresh re
     kind: 'provider_broker.binding.open', resourceId: 'resource', expectedResourceRevision: 2,
     agentTargetKey, modelId: model.descriptor.id } });
   try {
+  if (metadata === 'binding not current') {
+    h.tracked.spawnOptions = { ...h.tracked.spawnOptions, teamCredentialBindings: [{ v: 1, slot: { kind: 'provider_model' },
+      resourceId: 'other-resource', expectedResourceRevision: 2, teamId: 'team', deliveryMode: 'brokered' }] };
+    const refused = await openThroughRunner().then(() => null, (error: unknown) => error);
+    expect(brokerOpens).toBe(0);
+    expect(boundary.responseStatus).toBe(200);
+    expect(boundary.responseBody).toEqual({ ok: false, error: {
+      code: 'team_credential_provider_selection_not_current', message: 'team_credential_provider_selection_not_current' } });
+    expect(refused).toMatchObject({ code: 'team_credential_provider_selection_not_current' });
+    expect(readSessionPreparationFailureDiagnostic(refused).originalCode).toBe('team_credential_provider_selection_not_current');
+    return;
+  }
   if (metadata !== 'ready' && metadata !== 'slow catalog') {
     const refused = await openThroughRunner().then(() => null, (error: unknown) => error);
     expect(brokerOpens).toBe(metadata === 'refresh refused' ? 2 : 1);
