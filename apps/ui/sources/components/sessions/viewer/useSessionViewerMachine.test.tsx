@@ -7,6 +7,7 @@ const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 const { getStorage } = await import('@/sync/domains/state/storage');
 const { useSessionViewerMachine, resolveSessionViewerMachineName } = await import('./useSessionViewerMachine');
+const { useSessionComputerScreen } = await import('@/components/computer/useSessionComputerScreen');
 
 const initialStorage = getStorage().getState();
 const serverId = 'srv_viewer_machine';
@@ -29,6 +30,16 @@ function seed(machineSeed: Parameters<typeof createMachineFixture>[0] | null) {
 }
 
 describe('the Machine name the viewer says', () => {
+    it('keeps a hydrating Machine title out of Computer recovery sentences', async () => {
+        seed({ metadata: null, availability: undefined });
+        const hook = await renderHook(() => ({
+            computer: useSessionComputerScreen({ sessionId: 's1', serverId, machineId: 'm1' }),
+            viewer: useSessionViewerMachine('s1', serverId, 'computer'),
+        }));
+        expect(hook.getCurrent().viewer.name).toBe('Loading…');
+        expect(hook.getCurrent().computer.machineName).toBeNull();
+    });
+
     it('names a Machine whose details are locked by the same name its presence gives it, so a pane can say it too', async () => {
         seed({ availability: { kind: 'locked', reason: 'encryption_material_unavailable' } });
         const hook = await renderHook(() => useSessionViewerMachine('s1', serverId, 'computer'));

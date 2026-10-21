@@ -3,6 +3,7 @@ import { useUnistyles } from 'react-native-unistyles';
 import { FloatingFramePicture } from '@happier-dev/plugin-ui/presentation';
 
 import { shadowLevelStyle } from '@/shadowElevation';
+import { SurfaceStateSizeProvider, useSurfaceStateCardSize } from '@/components/ui/surfaces/surfaceStateSize';
 
 import { useOptionalSessionViewerController } from './SessionViewerController';
 import type { SessionViewerSource } from './sessionViewerPresentation';
@@ -22,6 +23,9 @@ export function SessionViewerPicture(
   const controlling =
     useOptionalSessionViewerController()?.facts[props.source]?.personInControl ===
     true;
+  // The viewer's frame is a small window, whichever source it shows: its states take the pane step, not
+  // the unsized page-width column. A pane keeps its own.
+  const enclosingStateSize = useSurfaceStateCardSize();
   const elevationStyle = React.useMemo(
     () => shadowLevelStyle(theme.colors.shadowLevels[5]),
     [theme],
@@ -33,7 +37,7 @@ export function SessionViewerPicture(
       drivenRingColor={controlling ? theme.colors.accent.blue : null}
       testID={props.testID}
     >
-      {props.children}
+      <SurfaceStateSizeProvider size={props.framed ? 'pane' : enclosingStateSize}>{props.children}</SurfaceStateSizeProvider>
     </FloatingFramePicture>
   );
 }

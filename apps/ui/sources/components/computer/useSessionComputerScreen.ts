@@ -3,7 +3,6 @@ import * as React from 'react';
 import { useBrowserSessionAgentIdentity } from '@/components/browser/copresence/BrowserShellPresence';
 import { noteSessionComputerMachine } from '@/sync/domains/computer/sessionComputerMachines';
 import { useSessionViewerSourceAccountLifetime } from '@/components/sessions/viewer/SessionViewerSourceAccountScope';
-import { resolveSessionViewerMachineName } from '@/components/sessions/viewer/useSessionViewerMachine';
 import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 
 import type { ComputerScreenViewerProps } from './ComputerScreenViewer';
@@ -64,8 +63,9 @@ export function useSessionComputerScreen(props: Readonly<{
     // The machine's presence, when this client holds its row: an unreachable machine is a cause to say.
     const machinePresence = useMachinePresenceSummary(serverId, enabled ? props.machineId : null);
     const machineOnline = machinePresence.reachability === 'unknown' ? undefined : machinePresence.reachability === 'reachable';
-    // The same name the viewer's controls give this Machine, so the pane's bar and sentences never name it differently.
-    const machineName = resolveSessionViewerMachineName(control.machineName, machinePresence.name);
+    // Control owns the Machine's readable name. Presence titles can be "Loading…" or "Locked machine",
+    // which are status placeholders, not names to put in recovery sentences. Unnamed copy stays generic.
+    const machineName = control.machineName;
     const selectedTarget = control.selection?.selectedTarget ?? null;
     const { applySelection, refresh } = control;
     const pickerParams = React.useCallback(() => ({

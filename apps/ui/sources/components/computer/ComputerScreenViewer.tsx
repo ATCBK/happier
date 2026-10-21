@@ -21,7 +21,6 @@ import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { GlassLivePictureBackdropContext } from '@/components/ui/glass/livePictureBackdrop';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
-import { SurfaceStateSizeProvider } from '@/components/ui/surfaces/surfaceStateSize';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { resolveComputerRecovery } from '@/sync/domains/computer/targets';
 import { SessionViewerMachineMark } from '@/components/sessions/viewer/SessionViewerMachineMark';
@@ -513,8 +512,7 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                 />
             ) : null}
             <View style={stylesheet.stage} onLayout={onLayout}>
-                {/* The viewer's frame is a small floating window: its states take the pane step, not the unsized page-width column. */}
-                {props.chrome === 'none' ? <SurfaceStateSizeProvider size="pane">{stage}</SurfaceStateSizeProvider> : stage}
+                {stage}
                 {pictureUp && props.presence.kind === 'agent' ? (
                     <BrowserAgentCursor
                         target={props.presence.target}
