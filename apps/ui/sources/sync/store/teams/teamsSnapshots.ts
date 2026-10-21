@@ -408,6 +408,19 @@ export function readTeamGroups(
     return getTeamGroupsSnapshot(scope, address, queryKey)?.data ?? null;
 }
 
+/** A recipient-scoped Team name from the detail or directory already read. */
+export function readTeam(scope: ServerAccountScope, address: TeamAddress): TeamSummaryV1 | null {
+    const detail = getTeamSnapshot(scope, address)?.data;
+    if (detail) return detail;
+    if (scope.serverId !== address.serverId) return null;
+    for (const snapshot of directories.values()) {
+        if (snapshot.scope.serverId !== scope.serverId || snapshot.scope.accountId !== scope.accountId) continue;
+        const team = snapshot.data?.find(row => row.id === address.teamId);
+        if (team) return team;
+    }
+    return null;
+}
+
 /**
  * One Group by id, from whichever projection already holds it: its own detail
  * read, or the Groups sequence a surface loaded. A caller that only needs a

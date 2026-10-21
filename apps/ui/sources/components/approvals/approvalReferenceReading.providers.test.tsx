@@ -17,7 +17,7 @@ const { readActionApprovalSubject } = await import('./actionApprovalPresentation
 const { resolveApprovalRequestTitle, useApprovalRequestTitle } = await import('./approvalRequestTitle');
 const { useApprovalReferenceReading, readApprovalReferenceForConfirmation } = await import('./approvalReferenceReading');
 const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
-const { applyTeamCredentialResourceCatalog, resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
+const { applyTeamCredentialResourceCatalog, applyTeamProjection, resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
 const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
 const { resetTeamActionClientForTests } = await import('@/sync/ops/teams/teamActionClient');
 const { resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
@@ -78,14 +78,24 @@ describe('Provider approval reference reading', () => {
         applyTeamCredentialResourceCatalog({ scope: { serverId: 'srv_approval', accountId: 'other' },
             address: { serverId: 'srv_approval', teamId: resource.teamId },
             resources: [{ ...resource, displayName: 'Wrong Account gateway' }], observedAt: 1 });
+        applyTeamProjection({ scope: { serverId: 'srv_approval', accountId: 'other' },
+            address: { serverId: 'srv_approval', teamId: resource.teamId },
+            team: teamSummaryFixture({ id: resource.teamId, name: 'Wrong Account Team' }), observedAt: 1 });
         const account = await captureLazyActionAccountContext(home);
         try {
             const reference = { kind: 'providerConnection' as const, id: input.connectionId };
-            expect((await readApprovalReferenceForConfirmation(reference, account)).text).not.toBe('Wrong Account gateway');
+            expect((await readApprovalReferenceForConfirmation(reference, account)).text).toBe('Unavailable');
             applyTeamCredentialResourceCatalog({ scope: { serverId: 'srv_approval', accountId: 'recipient' },
                 address: { serverId: 'srv_approval', teamId: resource.teamId }, resources: [resource], observedAt: 1 });
             expect(await readApprovalReferenceForConfirmation(reference, account))
                 .toMatchObject({ text: resource.displayName, named: true });
+            applyTeamProjection({ scope: { serverId: 'srv_approval', accountId: 'recipient' },
+                address: { serverId: 'srv_approval', teamId: resource.teamId },
+                team: teamSummaryFixture({ id: resource.teamId, name: 'Platform' }), observedAt: 1 });
+            expect((await readApprovalReferenceForConfirmation(reference, account)).text)
+                .toBe(`${resource.displayName} · Platform`);
+            expect((await readApprovalReferenceForConfirmation({ ...reference, catalogSourceKey: 'x'.repeat(43) }, account)).text)
+                .toBe('Unavailable');
         } finally { account.dispose(); }
     });
 
@@ -120,7 +130,7 @@ describe('Provider approval reference reading', () => {
         await harness.selectHomes([home]);
         const directory = bindHomeDomainActionHttpRequestV1('teams.list', { v: 1, scope: 'member', archived: 'active' });
         harness.answer(home, `${directory.method} ${directory.path.split('?')[0]}`,
-            { body: { items: [teamSummaryFixture({ id: resource.teamId })], nextCursor: null } });
+            { body: { items: [teamSummaryFixture({ id: resource.teamId, name: 'Platform' })], nextCursor: null } });
         const catalog = bindHomeDomainActionHttpRequestV1('teams.credentials.entitled.list', { teamId: resource.teamId });
         harness.answer(home, `${catalog.method} ${catalog.path.split('?')[0]}`, { body: { resources: [resource] } });
         const fields = describeApprovalActionFields({ actionId, actionArgs: input });
@@ -132,9 +142,15 @@ describe('Provider approval reference reading', () => {
         }), { flushOptions: { cycles: 25 } });
         await flushHookEffects({ cycles: 25 });
         await vi.waitFor(() => {
-            expect(hook.getCurrent().connection.text).toBe(resource.displayName);
+            expect(hook.getCurrent().connection.text).toContain(resource.displayName);
+            expect(hook.getCurrent().connection.text).toContain('Platform');
             expect(hook.getCurrent().title.title).toContain('GPT-5.6 Luna');
         });
         expect(hook.getCurrent().title.title).not.toContain('Unavailable');
+        const account = await captureLazyActionAccountContext(home);
+        try {
+            const reading = await readApprovalReferenceForConfirmation(connection.reference, account);
+            expect(reading.text).toBe(hook.getCurrent().connection.text);
+        } finally { account.dispose(); }
     });
 });

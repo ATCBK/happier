@@ -33,7 +33,7 @@ import { createManagedMachineActionClient } from '@/sync/api/machines/managedMac
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import type { TeamCredentialResourceCatalogEntryV1 } from '@happier-dev/protocol/teams';
 import { useHomeTeamCredentialModelCatalog } from '@/hooks/teams/useHomeTeamCredentialModelCatalog';
-import { readTeamCredentialResourceCatalogs } from '@/sync/store/teams/teamsSnapshots';
+import { readTeam, readTeamCredentialResourceCatalogs } from '@/sync/store/teams/teamsSnapshots';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 type ApprovalReference = ApprovalActionReference;
 
@@ -53,6 +53,9 @@ export async function readApprovalReferenceForConfirmation(reference: ApprovalRe
     account: LazyActionAccountContext, signal?: AbortSignal): Promise<ApprovalReferenceReading> {
     if (!reference) return { text: '', named: false };
     const scope = { serverId: account.serverId, accountId: account.accountId };
+    const teamScope = { ...scope, serverId: resolveServerProfileScopeIdForIdentifier(scope.serverId) };
+    const teamResources = reference.kind === 'providerConnection' || reference.kind === 'providerModel'
+        ? readTeamCredentialResourceCatalogs(teamScope) : [];
     const state = storage.getState();
     const sources: ApprovalReferenceSources = {
         serverId: reference.kind === 'session' ? reference.serverId ?? account.serverId : account.serverId,
@@ -62,8 +65,9 @@ export async function readApprovalReferenceForConfirmation(reference: ApprovalRe
         registries: getPromptLibraryCatalogValue(scope, 'registry-sources'),
         projects: readCurrentProjectAccountRows(state),
         providerCatalog: getProviderCatalogSnapshot(scope),
-        teamResources: readTeamCredentialResourceCatalogs({ ...scope,
-            serverId: resolveServerProfileScopeIdForIdentifier(scope.serverId) }),
+        teamResources,
+        teamNameById: Object.fromEntries(teamResources.map(resource => [resource.teamId,
+            readTeam(teamScope, { serverId: teamScope.serverId, teamId: resource.teamId })?.name ?? ''])),
     };
     if (reference.kind === 'artifact' || reference.kind === 'skill') {
         sources.artifact = await account.fetchArtifact(reference.id, { signal });
@@ -119,7 +123,7 @@ export function useApprovalReferenceReading(reference: ApprovalReference | undef
     const { managedMachine, managedEnrolledMachine, managedMachineLoading } = useManagedReferenceSources(reference, approvalServerId);
     return resolveApprovalReferenceReading(reference, literal, approvalServerId, { serverId, sessionReading, viewer, ownHome, artifact, machine,
         managedMachine, managedEnrolledMachine, managedMachineLoading, sessionMachine, mcp, registries, projects, agents, providerCatalog, declarations,
-        syncLink, workspace, teamResources: teamCatalog.resources });
+        syncLink, workspace, teamResources: teamCatalog.resources, teamNameById: teamCatalog.teamNameById });
 }
 
 /** The managed row and its enrolled Machine behind a managed reference, read in the reference's own Home. */
@@ -166,6 +170,7 @@ type ApprovalReferenceSources = {
     agents?: ReturnType<typeof useAgentCatalogIdentities>;
     providerCatalog?: ReturnType<typeof useProviderCatalogForServer>;
     teamResources?: readonly TeamCredentialResourceCatalogEntryV1[];
+    teamNameById?: Readonly<Record<string, string>>;
     declarations: ReturnType<typeof readAccountProviderDeclarations>;
     syncLink?: WorkspaceSyncRelationshipSummary | null;
     workspace?: WorkspaceSyncRelationshipEndpoint | null;
@@ -244,7 +249,9 @@ function resolveApprovalReferenceReading(reference: ApprovalReference | undefine
                 providerName: sourceName ?? t('common.unavailable') }).title, named: true };
         }
         const resource = findApprovalProviderSource(reference, sources.teamResources);
-        return { text: reference.displayName ?? resource?.displayName ?? t('common.unavailable'), named: true };
+        return { text: resource
+            ? [resource.displayName, sources.teamNameById?.[resource.teamId]].filter(Boolean).join(' · ')
+            : reference.displayName ?? t('common.unavailable'), named: true };
     }
     if (reference?.kind === 'session') {
         if (sessionReading.status === 'resolving') return { text: t('common.loading'), named: false, resolving: true };
