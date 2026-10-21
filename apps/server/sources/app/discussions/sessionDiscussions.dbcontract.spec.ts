@@ -12,6 +12,7 @@ import { observePendingSessionFollowForDestinationInTx, acknowledgeDiscussionFol
 import { deriveDiscussionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { DEFAULT_PENDING_REQUESTED_ACTION_V1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { createSessionInputReplyProgressInTx } from '@/app/session/messages/sessionMessageReply';
+import { deleteOwnedSession } from '@/app/session/delete/deleteOwnedSession';
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
 import { db, initDbMysql, initDbPostgres, requireDbProviderFromEnv, shutdownDbClient } from "@/storage/db";
 
@@ -117,6 +118,58 @@ describe("Discussion provider contract", () => {
             await app.close();
             await db.session.deleteMany({ where: { accountId: owner.id } });
             await db.account.delete({ where: { id: owner.id } });
+        }
+    });
+
+    it.each(['session', 'message'] as const)('invites through HTTP after the source %s is deleted, but never bypasses a live private source', async deleted => {
+        const [owner, reader, outsider] = await Promise.all([0, 1, 2].map(() => db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } })));
+        const source = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const answer = await db.sessionMessage.create({ data: { sessionId: source.id, seq: 1, messageRole: 'agent', content: { t: 'plain', v: { text: 'Private source answer' } } } });
+        const reviewer = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const sourceShare = await db.sessionShare.create({ data: { sessionId: source.id, sharedByUserId: owner.id, sharedWithUserId: reader.id, accessLevel: 'view' } });
+        await db.sessionShare.create({ data: { sessionId: reviewer.id, sharedByUserId: owner.id, sharedWithUserId: reader.id, accessLevel: 'view' } });
+        const content = { v: 1 as const, parts: [{ t: 'text' as const, text: 'Private source answer' }] };
+        const request = buildDiscussionMutationRequestBodyV1({ kind: 'create', creationLocalId: randomUUID(),
+            anchor: { kind: 'session', sessionId: source.id, messageId: answer.id },
+            titleContent: { t: 'plain', v: { v: 1, title: 'Retained source' } }, participants: [{ kind: 'account', accountId: reader.id }],
+            firstMessage: { localId: randomUUID(), content: { t: 'plain', v: content }, authoredContent: content, mentionedAccountIds: [] } });
+        const app: Fastify = createAuthenticatedTestApp();
+        registerDiscussionRoutes(app);
+        await app.ready();
+        try {
+            const created = await createDiscussion({ authentication, actorAccountId: owner.id, request });
+            if (!created.ok) throw new Error(created.error);
+            const discussionId = created.value.discussion.id;
+            const invite = (participant: { kind: 'session'; sessionId: string } | { kind: 'account'; accountId: string }) => app.inject({ method: 'POST',
+                url: DISCUSSION_HTTP_PATHS_V1.invite.replace(':discussionId', discussionId), headers: { 'x-test-user-id': owner.id }, payload: { participant } });
+            const target = { kind: 'session' as const, sessionId: reviewer.id };
+            const person = { kind: 'account' as const, accountId: outsider.id };
+            await db.sessionShare.delete({ where: { id: sourceShare.id } });
+            for (const participant of [target, person]) {
+                const denied = await invite(participant);
+                expect(denied.statusCode, denied.body).toBe(403);
+                expect(denied.json()).toEqual({ error: 'discussion_access_forbidden' });
+            }
+            expect(await db.discussionParticipant.count({ where: { discussionId } })).toBe(0);
+            expect(await db.sessionFollowEdge.count({ where: { sourceDiscussionId: discussionId } })).toBe(0);
+            if (deleted === 'session') expect(await deleteOwnedSession({ sessionId: source.id, ownerAccountId: owner.id, reason: 'user_request' })).toEqual({ ok: true });
+            else await db.sessionMessage.delete({ where: { id: answer.id } });
+            const accepted = await invite(target);
+            expect(accepted.statusCode, accepted.body).toBe(200);
+            expect(accepted.json()).toMatchObject({ changed: true });
+            expect(accepted.body).not.toContain('Private source answer');
+            expect((await invite(target)).json()).toMatchObject({ changed: false });
+            expect((await invite(person)).statusCode).toBe(200);
+            expect(await db.discussionParticipant.count({ where: { discussionId, sessionId: reviewer.id } })).toBe(1);
+            expect(await db.sessionFollowEdge.findFirst({ where: { sourceDiscussionId: discussionId, destinationSessionId: reviewer.id } }))
+                .toMatchObject({ sourceSessionId: null, deliveredTranscriptSeq: 1 });
+            expect(await db.sessionShare.count({ where: { sessionId: source.id } })).toBe(0);
+            expect(await db.discussionMessage.count({ where: { discussionId } })).toBe(1);
+            expect((await db.discussion.findUniqueOrThrow({ where: { id: discussionId } })).messageSeq).toBe(1);
+        } finally {
+            await app.close();
+            await db.session.deleteMany({ where: { accountId: owner.id } });
+            await db.account.deleteMany({ where: { id: { in: [owner.id, reader.id, outsider.id] } } });
         }
     });
 

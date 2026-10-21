@@ -251,6 +251,7 @@ export async function inviteDiscussionParticipantInTx(tx: Tx, input: DiscussionA
     const session = await tx.session.findUnique({ where: { id: request.participant.sessionId }, select: { accountId: true, archivedAt: true } });
     if (!session || session.archivedAt) return discussionFailure("discussion_subject_ineligible");
     const sourceQuote = await admitDiscussionSecondOpinionSourceInTx(tx, { ...input,
+        allowMissingSource: true,
         anchor: (await tx.discussion.findUnique({ where: { id: input.discussionId }, select: { anchorV1: true } }))?.anchorV1,
         destination: { kind: 'session', sessionId: request.participant.sessionId } });
     if (!sourceQuote.ok) return sourceQuote;

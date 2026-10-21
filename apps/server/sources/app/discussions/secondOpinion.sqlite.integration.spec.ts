@@ -8,7 +8,7 @@ import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lig
 import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
 import { buildDiscussionMutationRequestBodyV1 } from '@happier-dev/protocol/discussions/api';
 import { createDiscussion, postDiscussionMessage } from './mutations';
-import { inviteDiscussionParticipant } from './accessService';
+import { inviteDiscussionParticipant, setDiscussionGrant } from './accessService';
 import { readDiscussionMessages } from './queries';
 import { previewDiscussionSecondOpinion } from './secondOpinion';
 import { DISCUSSION_SECOND_OPINION_PREVIEW_HTTP_PATH_V1, DiscussionSecondOpinionPreviewResponseV1Schema } from '@happier-dev/protocol/discussions/secondOpinion';
@@ -142,6 +142,53 @@ describe('Second opinion source admission (SQLite)', () => {
         expect(await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
             request: buildDiscussionMutationRequestBodyV1({ kind: 'post', localId: crypto.randomUUID(),
                 content: { t: 'plain', v: ordinary }, authoredContent: ordinary, mentionedAccountIds: [] }) })).toMatchObject({ ok: true });
+    });
+    it.each(['session', 'message'] as const)('invites into the retained Discussion after its source %s is deleted without granting source access', async deleted => {
+        const { owner, reader, source, answer, request } = await fixture();
+        const share = await db.sessionShare.create({ data: { sessionId: source.id, sharedByUserId: owner.id, sharedWithUserId: reader.id, accessLevel: 'view' } });
+        const created = await createDiscussion({ authentication, actorAccountId: owner.id, request });
+        if (!created.ok) throw new Error(created.error);
+        const discussionId = created.value.discussion.id;
+        const reviewer = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        await db.sessionShare.create({ data: { sessionId: reviewer.id, sharedByUserId: owner.id, sharedWithUserId: reader.id, accessLevel: 'view' } });
+        const invite = () => inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: reviewer.id } } });
+        const outsider = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const grant = () => inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'account', accountId: outsider.id } } });
+        // A live private source still requires explicit access for the new audience.
+        await db.sessionShare.delete({ where: { id: share.id } });
+        expect(await invite()).toEqual({ ok: false, error: 'discussion_access_forbidden' });
+        expect(await grant()).toEqual({ ok: false, error: 'discussion_access_forbidden' });
+        expect(await setDiscussionGrant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { principal: { kind: 'account', accountId: reader.id }, accessLevel: 'admin' } })).toMatchObject({ ok: true });
+        const readerReviewer = await db.session.create({ data: { accountId: reader.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        // The source still exists: loss of the configuring actor's transcript access is not deletion.
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: reader.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: readerReviewer.id } } }))
+            .toEqual({ ok: false, error: 'discussion_content_unavailable' });
+        expect(await db.discussionParticipant.count({ where: { discussionId } })).toBe(0);
+        expect(await db.sessionFollowEdge.count({ where: { sourceDiscussionId: discussionId } })).toBe(0);
+        await db.session.update({ where: { id: source.id }, data: { encryptionMode: 'e2ee' } });
+        expect(await invite()).toEqual({ ok: false, error: 'discussion_content_unavailable' });
+        await db.session.update({ where: { id: source.id }, data: { encryptionMode: 'plain' } });
+        if (deleted === 'session') expect(await deleteOwnedSession({ sessionId: source.id, ownerAccountId: owner.id, reason: 'user_request' })).toEqual({ ok: true });
+        else await db.sessionMessage.delete({ where: { id: answer.id } });
+        const admitted = await invite();
+        expect(admitted).toMatchObject({ ok: true, value: { changed: true } });
+        expect(JSON.stringify(admitted)).not.toContain('Private answer');
+        expect(await invite()).toMatchObject({ ok: true, value: { changed: false } });
+        expect(await grant()).toMatchObject({ ok: true });
+        expect(await db.discussionParticipant.count({ where: { discussionId, sessionId: reviewer.id } })).toBe(1);
+        expect(await db.sessionFollowEdge.findFirst({ where: { sourceDiscussionId: discussionId, destinationSessionId: reviewer.id } }))
+            .toMatchObject({ sourceSessionId: null, deliveredTranscriptSeq: 1 });
+        expect(await db.sessionShare.count({ where: { sessionId: source.id } })).toBe(0);
+        expect(await db.discussionMessage.count({ where: { discussionId } })).toBe(1);
+        expect(await createDiscussion({ authentication, actorAccountId: owner.id, request }))
+            .toEqual({ ok: false, error: 'discussion_content_unavailable' });
+        expect(await createDiscussion({ authentication, actorAccountId: owner.id, request: { ...request, creationLocalId: crypto.randomUUID() } }))
+            .toEqual({ ok: false, error: 'discussion_content_unavailable' });
+        expect(await db.discussion.count({ where: { ownerAccountId: owner.id } })).toBe(1);
     });
     it('exposes the closed read-only preview route and previews a model without creating its Session', async () => {
         const { owner, source, answer } = await fixture();

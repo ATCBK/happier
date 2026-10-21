@@ -141,10 +141,16 @@ export function previewDiscussionSecondOpinion(input: Parameters<typeof previewD
 
 /** A committed source-message anchor marks the quoted-source flow; a Session-only anchor stays a link. */
 export async function admitDiscussionSecondOpinionSourceInTx(tx: Tx, input: Actor & Readonly<{
-    anchor: unknown; destination: ContextDisclosureResource;
+    anchor: unknown; destination: ContextDisclosureResource; allowMissingSource?: true;
 }>): Promise<DiscussionResult<void>> {
     const anchor = DiscussionAnchorV1Schema.safeParse(input.anchor);
     if (!anchor.success || anchor.data.kind !== 'session' || !anchor.data.messageId) return discussionSuccess(undefined);
+    // Retained-resource invitations need no grant to a physically absent source.
+    // Read only identity here: absent access/key readiness is NOT source deletion.
+    // Fresh quotes and active source disclosure keep the strict default below.
+    if (input.allowMissingSource && !await tx.sessionMessage.findFirst({
+        where: { sessionId: anchor.data.sessionId, id: anchor.data.messageId }, select: { id: true },
+    })) return discussionSuccess(undefined);
     const facts = await sessionSourceFactsInTx(tx, { ...input, sessionId: anchor.data.sessionId, messageId: anchor.data.messageId });
     if (!facts?.ready) return discussionFailure('discussion_content_unavailable');
     const disclosure = await mayInjectResourceContextInTx(tx, { configuringAccountId: input.actorAccountId,
@@ -179,7 +185,7 @@ export async function admitDiscussionSecondOpinionGrantInTx(tx: Tx, input: Actor
     }
     const currentAudience = new Set(resolveResourceGrantAudienceFromFacts(current));
     if (resolveResourceGrantAudienceFromFacts(facts).every(accountId => currentAudience.has(accountId))) return discussionSuccess(undefined);
-    return admitDiscussionSecondOpinionSourceInTx(tx, { ...input, anchor: row?.anchorV1,
+    return admitDiscussionSecondOpinionSourceInTx(tx, { ...input, anchor: row?.anchorV1, allowMissingSource: true,
         destination: { kind: 'resource', resourceId: input.discussionId, adapter: {
             ...discussionContextStorageAdapter,
             async readAccessFactsInTx(_tx, resourceId) { return resourceId === input.discussionId ? facts : null; },
