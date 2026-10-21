@@ -1,5 +1,4 @@
 type Agent = Readonly<{ agent: string }>;
-type Reply = Readonly<{ requester: string; bot: string }>;
 type Requester = Readonly<{ requester: string }>;
 type Name = Readonly<{ name: string }>;
 
@@ -765,85 +764,61 @@ export const sessionReadinessCopy = {
 /** A Bot reply's cause, as the append owner stamped it; never inferred from who posted it. */
 export const discussionAttributionCopy = {
   en: {
-    askedByAnsweredBy: ({ requester, bot }: Reply) =>
-      `Asked by ${requester} · answered by ${bot}`,
     askedBy: ({ requester }: Requester) => `Asked by ${requester}`,
     you: 'you',
     anotherPerson: 'another person',
   },
   ca: {
-    askedByAnsweredBy: ({ requester, bot }: Reply) =>
-      `Ho ha demanat ${requester} · ha respost ${bot}`,
     askedBy: ({ requester }: Requester) => `Ho ha demanat ${requester}`,
     you: 'tu',
     anotherPerson: 'una altra persona',
   },
   de: {
-    askedByAnsweredBy: ({ requester, bot }: Reply) =>
-      `Gefragt von ${requester} · beantwortet von ${bot}`,
     askedBy: ({ requester }: Requester) => `Gefragt von ${requester}`,
     you: 'dir',
     anotherPerson: 'einer anderen Person',
   },
   es: {
-    askedByAnsweredBy: ({ requester, bot }: Reply) =>
-      `Lo pidió ${requester} · respondió ${bot}`,
     askedBy: ({ requester }: Requester) => `Lo pidió ${requester}`,
     you: 'tú',
     anotherPerson: 'otra persona',
   },
   fr: {
-    askedByAnsweredBy: ({ requester, bot }: Reply) =>
-      `Demandé par ${requester} · répondu par ${bot}`,
     askedBy: ({ requester }: Requester) => `Demandé par ${requester}`,
     you: 'toi',
     anotherPerson: 'une autre personne',
   },
   it: {
-    askedByAnsweredBy: ({ requester, bot }: Reply) =>
-      `Chiesto da ${requester} · risposto da ${bot}`,
     askedBy: ({ requester }: Requester) => `Chiesto da ${requester}`,
     you: 'te',
     anotherPerson: 'un’altra persona',
   },
   ja: {
-    askedByAnsweredBy: ({ requester, bot }: Reply) =>
-      `依頼: ${requester} · 回答: ${bot}`,
     askedBy: ({ requester }: Requester) => `依頼: ${requester}`,
     you: 'あなた',
     anotherPerson: '別の人',
   },
   pl: {
-    askedByAnsweredBy: ({ requester, bot }: Reply) =>
-      `Poprosił(a): ${requester} · odpowiedział: ${bot}`,
     askedBy: ({ requester }: Requester) => `Poprosił(a): ${requester}`,
     you: 'ty',
     anotherPerson: 'inna osoba',
   },
   pt: {
-    askedByAnsweredBy: ({ requester, bot }: Reply) =>
-      `Pedido por ${requester} · respondido por ${bot}`,
     askedBy: ({ requester }: Requester) => `Pedido por ${requester}`,
     you: 'si',
     anotherPerson: 'outra pessoa',
   },
   ru: {
-    askedByAnsweredBy: ({ requester, bot }: Reply) =>
-      `Спросил(а): ${requester} · ответил: ${bot}`,
     askedBy: ({ requester }: Requester) => `Спросил(а): ${requester}`,
     you: 'вы',
     anotherPerson: 'другой человек',
   },
   'zh-Hans': {
-    askedByAnsweredBy: ({ requester, bot }: Reply) =>
-      `由${requester}提问 · 由${bot}回答`,
     askedBy: ({ requester }: Requester) => `由${requester}提问`,
     you: '你',
     anotherPerson: '其他人',
   },
   'zh-Hant': {
-    askedByAnsweredBy: ({ requester, bot }: Reply) =>
-      `由${requester}提問 · 由${bot}回答`,
     askedBy: ({ requester }: Requester) => `由${requester}提問`,
     you: '你',
     anotherPerson: '其他人',

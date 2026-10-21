@@ -46,16 +46,15 @@ export function resolveDiscussionMessageAuthorLabel(
 }
 
 /**
- * A Bot reply's quiet byline (C7): who asked, from the cause the append owner stamped, and which Bot
- * answered. The requester's name comes only from the sanitized projection for that exact Account; an
- * unprojected or mismatched requester stays "another person", never the Bot's owner or poster. No
+ * A Bot reply's quiet byline (C7): who asked, from the cause the append owner stamped. The row's
+ * speaker already names the Bot that answered, so the byline does not repeat it. The requester's
+ * name comes only from the sanitized projection for that exact Account; an unprojected or mismatched requester stays "another person", never the Bot's owner or poster. No
  * person cause (autonomous or older replies) says nothing. "Using <account>" is not offered: the reply
  * custody carries no exact outward-operation actor.
  */
 export function resolveDiscussionReplyAttributionLine(
     message: Pick<DiscussionOpenedMessageV1, 'producerV1'> & Partial<Pick<DiscussionOpenedMessageV1, 'requesterAccountActor'>>,
     viewer: Readonly<{ serverId: string; accountId: string }>,
-    botLabel: string | null,
 ): string | null {
     const requester = message.producerV1?.actionRequestAttributionV1?.requester;
     if (!requester) return null;
@@ -65,9 +64,7 @@ export function resolveDiscussionReplyAttributionLine(
         : actor && actor.accountId === requester.accountId && actor.profile
             ? formatAccountDisplayName(actor.profile) ?? t('session.collaboration.discussion.attribution.anotherPerson')
             : t('session.collaboration.discussion.attribution.anotherPerson');
-    return botLabel
-        ? t('session.collaboration.discussion.attribution.askedByAnsweredBy', { requester: name, bot: botLabel })
-        : t('session.collaboration.discussion.attribution.askedBy', { requester: name });
+    return t('session.collaboration.discussion.attribution.askedBy', { requester: name });
 }
 
 /**

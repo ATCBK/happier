@@ -26,8 +26,8 @@ export function ReplyQuote(props: ReplyQuoteProps): ReactElement {
 function QuoteText(props: HappierReplyQuoteTextProps): ReactElement {
   const theme = usePluginTheme();
   const typography = useOptionalHappierUiTypography();
-  return <HappierText testID={props.testID} style={[
+  return <HappierText testID={props.testID} numberOfLines={props.numberOfLines} style={[
     resolveHappierTypeRoleStyle('meta', theme, typography, props.role === 'source' ? 'semiBold' : undefined),
-    { color: props.color },
+    { color: props.color }, props.style,
   ]}>{props.children}</HappierText>;
 }

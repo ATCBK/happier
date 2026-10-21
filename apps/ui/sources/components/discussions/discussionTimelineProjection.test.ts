@@ -62,26 +62,26 @@ describe('resolveDiscussionReplyAttributionLine', () => {
         requesterAccountActor: actor ? { v: 1 as const, accountId: actor.accountId, profile: { name: actor.name, firstName: null, lastName: null, username: null, avatarUrl: null } } : null,
     });
 
-    it('names who asked and which Bot answered, from the stamped cause only', () => {
-        expect(resolveDiscussionReplyAttributionLine(reply('bob', { accountId: 'bob', name: 'Bob Keller' }), viewer, 'Release bot'))
-            .toBe(t('session.collaboration.discussion.attribution.askedByAnsweredBy', { requester: 'Bob Keller', bot: 'Release bot' }));
-        expect(resolveDiscussionReplyAttributionLine(reply('viewer', { accountId: 'viewer', name: 'Maya Chen' }), viewer, 'Release bot'))
-            .toBe(t('session.collaboration.discussion.attribution.askedByAnsweredBy', { requester: t('session.collaboration.discussion.attribution.you'), bot: 'Release bot' }));
-        expect(resolveDiscussionReplyAttributionLine(reply('bob', { accountId: 'bob', name: 'Bob Keller' }), viewer, null))
+    it('names who asked, from the stamped cause only (the row already names the agent)', () => {
+        expect(resolveDiscussionReplyAttributionLine(reply('bob', { accountId: 'bob', name: 'Bob Keller' }), viewer))
+            .toBe(t('session.collaboration.discussion.attribution.askedBy', { requester: 'Bob Keller' }));
+        expect(resolveDiscussionReplyAttributionLine(reply('viewer', { accountId: 'viewer', name: 'Maya Chen' }), viewer))
+            .toBe(t('session.collaboration.discussion.attribution.askedBy', { requester: t('session.collaboration.discussion.attribution.you') }));
+        expect(resolveDiscussionReplyAttributionLine(reply('bob', { accountId: 'bob', name: 'Bob Keller' }), viewer))
             .toBe(t('session.collaboration.discussion.attribution.askedBy', { requester: 'Bob Keller' }));
     });
 
     it('keeps an unprojected or mismatched requester unknown and says nothing without a person cause', () => {
         const other = t('session.collaboration.discussion.attribution.anotherPerson');
-        expect(resolveDiscussionReplyAttributionLine(reply('bob', null), viewer, 'Release bot'))
-            .toBe(t('session.collaboration.discussion.attribution.askedByAnsweredBy', { requester: other, bot: 'Release bot' }));
-        expect(resolveDiscussionReplyAttributionLine(reply('bob', { accountId: 'owner', name: 'Bot Owner' }), viewer, 'Release bot'))
-            .toBe(t('session.collaboration.discussion.attribution.askedByAnsweredBy', { requester: other, bot: 'Release bot' }));
-        expect(resolveDiscussionReplyAttributionLine(reply('viewer', null), { serverId: 'elsewhere', accountId: 'viewer' }, 'Release bot'))
-            .toBe(t('session.collaboration.discussion.attribution.askedByAnsweredBy', { requester: other, bot: 'Release bot' }));
-        expect(resolveDiscussionReplyAttributionLine(reply(null, null), viewer, 'Release bot')).toBeNull();
-        expect(resolveDiscussionReplyAttributionLine({ producerV1: { v: 1, kind: 'agent', sessionId: 'release-bot' }, requesterAccountActor: null }, viewer, 'Release bot')).toBeNull();
-        expect(resolveDiscussionReplyAttributionLine({ producerV1: null }, viewer, 'Release bot')).toBeNull();
+        expect(resolveDiscussionReplyAttributionLine(reply('bob', null), viewer))
+            .toBe(t('session.collaboration.discussion.attribution.askedBy', { requester: other }));
+        expect(resolveDiscussionReplyAttributionLine(reply('bob', { accountId: 'owner', name: 'Bot Owner' }), viewer))
+            .toBe(t('session.collaboration.discussion.attribution.askedBy', { requester: other }));
+        expect(resolveDiscussionReplyAttributionLine(reply('viewer', null), { serverId: 'elsewhere', accountId: 'viewer' }))
+            .toBe(t('session.collaboration.discussion.attribution.askedBy', { requester: other }));
+        expect(resolveDiscussionReplyAttributionLine(reply(null, null), viewer)).toBeNull();
+        expect(resolveDiscussionReplyAttributionLine({ producerV1: { v: 1, kind: 'agent', sessionId: 'release-bot' }, requesterAccountActor: null }, viewer)).toBeNull();
+        expect(resolveDiscussionReplyAttributionLine({ producerV1: null }, viewer)).toBeNull();
     });
 });
 

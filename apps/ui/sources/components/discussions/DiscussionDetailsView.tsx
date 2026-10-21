@@ -1249,8 +1249,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                             proposalDocRead={item.message.content && isDiscussionDocEditProposalContentV1(item.message.content)
                                 ? readProposalDoc(item.message.content.proposal.target.ref.artifactId) : LOADING_PROPOSAL_DOC}
                             viewerAccountId={props.scope.accountId}
-                            attributionLine={resolveDiscussionReplyAttributionLine(item.message, props.scope,
-                                item.message.producerV1 ? resolveSessionLabel(item.message.producerV1.sessionId) : null)}
+                            attributionLine={resolveDiscussionReplyAttributionLine(item.message, props.scope)}
                             footer={requesterApprovalsByMessage.has(item.message.id) || pendingMutation ? <>
                                 {requesterApprovalsByMessage.get(item.message.id)?.map((approval) => <ApprovalRequesterThreadCard
                                     key={approval.artifact.id} approval={approval} serverId={props.scope.serverId} returnHref={discussionReturnHref} />)}
@@ -1464,9 +1463,13 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
                     proposer={message.producerV1 ? { label: speaker, mention: { sessionId: message.producerV1.sessionId } }
                         : message.authorAccountId ? { label: speaker, mention: { accountId: message.authorAccountId } } : null} />
                 : <Text testID={`session-discussion-message-content-${message.id}`} style={styles.messageText}>{renderDiscussionMessageContent(message, props.resolveAccountLabel, props.resolveSessionLabel)}</Text>}
-            {props.attributionLine ? <Text testID={`session-discussion-message-attribution-${message.id}`} style={styles.meta}>{props.attributionLine}</Text> : null}
-            {/* An addressed answer read the conversation only up to the question that asked it (C3 cutoff). */}
-            {outcome === 'answer' ? <Text testID={`session-discussion-message-cutoff-${message.id}`} style={styles.meta}>{t('session.collaboration.discussion.reply.readUpTo')}</Text> : null}
+            {/* One quiet line under an answer (lab T2-A): who asked, and that it read the conversation only up to
+                that question (C3 cutoff). Explicit and final-return replies share it. */}
+            {props.attributionLine || outcome === 'answer' ? <Text style={styles.meta}>
+                {props.attributionLine ? <Text testID={`session-discussion-message-attribution-${message.id}`}>{props.attributionLine}</Text> : null}
+                {props.attributionLine && outcome === 'answer' ? ' · ' : null}
+                {outcome === 'answer' ? <Text testID={`session-discussion-message-cutoff-${message.id}`}>{t('session.collaboration.discussion.reply.readUpTo')}</Text> : null}
+            </Text> : null}
             {message.participantDeliveryV1?.map((delivery) => <Text
                 key={delivery.participantSessionId}
                 testID={`session-discussion-participant-held-${message.id}-${delivery.participantSessionId}`}

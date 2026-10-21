@@ -22,5 +22,5 @@ export function ReplyQuote(props: Readonly<{
 
 function QuoteText(props: HappierReplyQuoteTextProps) {
     return <Text testID={props.testID} variant="meta" emphasis={props.role === 'source' ? 'semiBold' : undefined}
-        style={{ color: props.color }}>{props.children}</Text>;
+        numberOfLines={props.numberOfLines} style={[{ color: props.color }, props.style]}>{props.children}</Text>;
 }
