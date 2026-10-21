@@ -284,6 +284,146 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 No field hints are published. Use the typed input accepted by `execute`.
 
+## `account.public_profile.embed.get`
+
+**Read a public-profile embed** — Format a currently admitted public link, badge or server card. This does not copy, save or share it.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `account.public_profile.get`
+
+**Read your public profile** — Read the applied public edition, its consent and canonical service destination.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `account.public_profile.pause`
+
+**Pause your public profile** — Hide public facts while retaining the applied edition for an explicit resume.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `account.public_profile.preview`
+
+**Preview your public profile** — Prepare the exact allowed disclosure locally without uploading a public snapshot or image.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `account.public_profile.publish`
+
+**Publish your public profile** — Publish reviewed plaintext facts and presentation on this Account service. Daily refresh requires its own Action authorization.
+
+- Safety: `danger`; side effect: `external`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `account.public_profile.refresh`
+
+**Refresh your public profile** — Replace facts under the existing consent and prune previously selected project links. Never publish, resume or apply a private draft.
+
+- Safety: `danger`; side effect: `external`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `account.public_profile.report.get`
+
+**Read the public-profile report destination** — Read this service operator’s configured report link without sending a report.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `account.public_profile.resume`
+
+**Resume your public profile** — Refresh and resume the existing applied public edition without applying a draft or changing consent.
+
+- Safety: `danger`; side effect: `external`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `account.public_profile.unpublish`
+
+**Unpublish your public profile** — Withdraw and erase the public edition, keeping your Account username and private layouts.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `account.public_profile.update`
+
+**Update your public profile** — Apply reviewed fields, metadata, period or presentation. An acknowledged change survives any follow-on refresh failure.
+
+- Safety: `danger`; side effect: `external`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
 ## `account.security.get`
 
 **View Account security** — Read the current Account authentication summary without exposing credential material.
@@ -341,9 +481,37 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `serverId` (text, required): Invoking Home
 - `accountId` (text, required): Your Account
 
+## `account.username.check`
+
+**Check your username** — Check a username and available suggestions on this Home. A check does not reserve a name.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
+
+### Input guidance
+
+- `username` (text, required): Username
+
+## `account.username.release`
+
+**Release your username** — Clear your username on this Home and hold the released name for 30 days against all claims.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
 ## `account.username.set`
 
-**Set your username** — Set your own username when this Home’s Friends policy permits it.
+**Set your username** — Set your own username when this Home supports public profiles or its Friends policy permits it.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `required` result; `deferred` flow.
@@ -441,7 +609,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `fieldPath` (text): Field path — Required with actionId or consumer. Use the Action input dot-path, or the declared workflow input name without an inputs prefix. A known workflow with an unknown name returns availableFields in its refusal details.
 - `optionsSourceId` (text): Options source id — Direct options source lookup when known.
 - `sessionId` (text): Session id — Omit to use the current invoking Session. Set only for an intentional authorized cross-Session target.
-- `draftInput` (json): Partial action input — Partial input for dependent options, for example &#123;"backendTargetKeys":["agent:pi"]&#125; when resolving a model, configuration, or connected service.
+- `draftInput` (json): Partial action input — Dependent inventory context: for execution.run.start use &#123;"backendTargetKey":"&lt;backend option.value&gt;"&#125; for model, config, or connected-service choices; backendTarget alone does not select an inventory. Ergonomic multi-backend starts use backendTargetKeys. Session spawn uses its agentTarget and executionTarget objects.
 - `query` (text): Query filter — Optional search text to filter the returned options.
 - `limit` (text): Limit — Maximum number of options to return.
 - `values` (json): Values — Return only the options for these values, to check a picked value without reading the whole inventory. A source that can answer directly does; any other is read in full and narrowed.
@@ -618,7 +786,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `agents.config_options.list`
 
-**List agent config options** — List configurable option definitions for an agent backend without exposing current values.
+**List agent config options** — List configurable option definitions for an agent backend without exposing current values. Supply modelId to include that model’s declared options and allowed values alongside session-wide options. Omit serverId; the authenticated host binds the Home.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -628,16 +796,15 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-- `agentId` (text): Runtime agent id
+- `agentId` (text): Runtime agent id — For an external Agent, retain the runtime agentId returned by backend inventory alongside its qualified backendTargetKey.
 - `backendTargetKey` (text): Backend target key
 - `modelId` (text): Model id
 - `machineId` (text): Machine id (optional)
-- `serverId` (text): Server id (optional)
 - `limit` (text): Max results
 
 ## `agents.models.list`
 
-**List agent models** — List available models for an agent backend.
+**List agent models** — List available models for an agent backend. Omit serverId; the authenticated host binds the Home.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -650,12 +817,11 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `agentId` (text): Runtime agent id
 - `backendTargetKey` (text): Backend target key
 - `machineId` (text): Machine id (optional)
-- `serverId` (text): Server id (optional)
 - `limit` (text): Max results
 
 ## `agents.session_modes.list`
 
-**List agent session modes** — List session modes available for an agent backend.
+**List agent session modes** — List session modes available for an agent backend. Omit serverId; the authenticated host binds the Home.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -668,7 +834,6 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `agentId` (text): Runtime agent id
 - `backendTargetKey` (text): Backend target key
 - `machineId` (text): Machine id (optional)
-- `serverId` (text): Server id (optional)
 - `limit` (text): Max results
 
 ## `app.updates.check`
@@ -2322,6 +2487,42 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `text` (text, required): Text to copy
 
+## `code.codeAction.apply`
+
+**Apply code action** — Apply one reviewed server code action, including a declared server command. Server edit requests share the guarded multi-file writer and retain partial results and Undo.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+- `machineId` (text, required): Machine id
+- `rootPath` (text, required): Workspace root
+- `path` (text, required): Current file
+- `languageId` (text): Language id
+- `operation` (json, required): Reviewed code action
+
+## `code.codeActions.list`
+
+**List code actions** — Read available server code actions at a symbol. Edits are normalized and hash-guarded; command execution requires the separate apply Action.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `machineId` (text, required): Machine id
+- `rootPath` (text, required): Workspace root
+- `path` (text, required): Current file
+- `line` (text, required): Line (one-based)
+- `symbol` (text, required): Symbol name
+
 ## `code.definition.get`
 
 **Go to definition** — Find the definition of a symbol by one-based line plus symbol text. Semantic answers concern disk text and include its hash. Without a capable server, explicit symbol names use approximate declaration search labeled text_matches.
@@ -2356,6 +2557,42 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `rootPath` (text, required): Workspace root
 - `path` (text, required): Current file
 
+## `code.file.rename.apply`
+
+**Apply file rename** — Apply a reviewed file rename and importer updates through the guarded multi-file writer, retaining inverse edits and the reverse move for Undo.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+- `machineId` (text, required): Machine id
+- `rootPath` (text, required): Workspace root
+- `path` (text, required): Current file
+- `languageId` (text): Language id
+- `files` (json, required): Reviewed file edits
+
+## `code.file.rename.preview`
+
+**Preview file rename** — Preview a file move with importer updates from the language server. Returns the guarded source move and importer edits; writes nothing.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `machineId` (text, required): Machine id
+- `rootPath` (text, required): Workspace root
+- `path` (text, required): Current file
+- `languageId` (text): Language id
+- `newPath` (text, required): New file path
+
 ## `code.hover.get`
 
 **Get symbol information** — Read type and documentation for the symbol at a one-based line plus symbol text, or an explicit zero-based UTF-16 character. Answers concern disk text and include its content hash. Unsaved editor edits are refused; a loading project never becomes an empty answer.
@@ -2377,6 +2614,42 @@ No field hints are published. Use the typed input accepted by `execute`.
 ## `code.references.list`
 
 **Find references** — Find semantic references before changing a signature; address the symbol by one-based line plus name. Answers include the disk content hash. Without a capable server, explicit names use identifier text search labeled text_matches.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `machineId` (text, required): Machine id
+- `rootPath` (text, required): Workspace root
+- `path` (text, required): Current file
+- `line` (text, required): Line (one-based)
+- `symbol` (text, required): Symbol name
+
+## `code.rename.apply`
+
+**Apply symbol rename** — Apply reviewed semantic rename edits through the guarded multi-file writer. Changed files are refused and successful files return inverse edits for Undo.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+- `machineId` (text, required): Machine id
+- `rootPath` (text, required): Workspace root
+- `path` (text, required): Current file
+- `languageId` (text): Language id
+- `files` (json, required): Reviewed file edits
+
+## `code.rename.preview`
+
+**Preview symbol rename** — Preview a semantic symbol rename as workspace-relative hash-guarded edits without writing. Omit newName to prepare the rename and inspect its target. Address by one-based line and symbol text.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -2440,7 +2713,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `composer.transaction.apply`
 
-**Apply composer transaction** — Apply a revision-bound transaction to the exact mounted editable composer. Attachment selection is validated against its current composition; never submits input or grants staged-media custody.
+**Apply composer transaction** — Apply a revision-bound transaction to the exact mounted editable composer. Mention in composer uses the text insertion and reference.insert operations from the shared composer reference insertion owner, at the current caret or the end without a selection. reviewComment.add adds anchored review context to the Session workspace draft; attachment selection is validated against its current composition. Never submits input or grants staged-media custody.
 
 - Safety: `safe`; side effect: `external`.
 - Approval: `required` result; `blocking` flow.
@@ -4061,7 +4334,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `discussion.reply`
 
-**Reply in a discussion** — Reply to one committed message in this Discussion through the same admitted message writer. Replying does not grant source access or start an agent turn.
+**Reply in a discussion** — Reply to one committed message in this Discussion through the same admitted message writer. A reply to an Agent-produced message can address that participant and start a turn, subject to its answer policy and current delivery admission. Replying grants no source access or additional authority.
 
 - Safety: `danger`; side effect: `danger`.
 - Approval: `optional` result; `deferred` flow.
@@ -4109,6 +4382,35 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `reviewers` (json, required): Reviewers
 - `retry` (json, required): Retained retry identities
 - `confirmedPreview` (json): Confirmed access preview
+
+## `discussion.settings.get`
+
+**Read discussion settings** — Read the Discussion check-in override. An absent override inherits the Account setting; null never pauses.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+
+## `discussion.settings.set`
+
+**Set discussion settings** — Set this Discussion’s check-in override through its current owner or admin authority. Empty settings restore Account inheritance; null never pauses.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+- `settings` (json, required): Discussion settings
 
 ## `doc.comment.reply`
 
@@ -4316,7 +4618,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `execution.run.start`
 
-**Start execution run** — Start a new execution run. Set waitForCompletion=true to wait for a terminal run result. waitTimeoutSeconds only bounds this observation; it never stops, retries, or starts the run. A nonempty sessionId selects that exact authorized Session. Omitting sessionId inherits the current Action Session, or selects detached scope when none exists. sessionId:null selects detached scope even inside a current Session.
+**Start execution run** — Start a new execution run. Resolve dependent model, config, and connected-service options with draftInput.backendTargetKey set to the selected backend option.value; then supply the schema-defined backendTarget object to start. Set waitForCompletion=true to wait for a terminal run result. waitTimeoutSeconds only bounds this observation; it never stops, retries, or starts the run. A nonempty sessionId selects that exact authorized Session. Omitting sessionId inherits the current Action Session, or selects detached scope when none exists. sessionId:null selects detached scope even inside a current Session.
 
 - Safety: `safe`; side effect: `write`.
 - Approval: `optional` result; `deferred` flow.
@@ -4337,8 +4639,8 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `waitForCompletion` (boolean): Wait for completion — Return the terminal run disposition under wait instead of returning immediately after start.
 - `waitTimeoutSeconds` (text): Wait timeout seconds — Optional observation deadline; requires waitForCompletion=true and never stops the run.
 - `initialContextMode` (text): Initial context mode
-- `modelId` (text): Model id — Optional explicit model for the run backend. Attached omission inherits the applied parent choice; independent starts use defaults.
-- `configOptions` (json): Config options (e.g. reasoning effort) — Optional agent config-option overrides, e.g. &#123;"reasoning_effort":"high"&#125;. Merged into sessionConfigOptionOverrides at the boundary; a conflict fails with invalid_parameters.
+- `modelId` (text): Model id — Optional explicit model for the run backend. Assign the model option.value string, not the &#123;value,label&#125; choice object or a stamped Session snapshot. Attached omission inherits the applied parent choice; independent starts use defaults.
+- `configOptions` (json): Config options (e.g. reasoning effort) — Optional scalar overrides keyed by config-option ids, e.g. &#123;"reasoning_effort":"high"&#125;. Supply draftInput.modelId for model-scoped choices. Config-option choices name ids; read agents.config_options.list with modelId for their value choices. These are not stamped Session configuration fields. Merged into sessionConfigOptionOverrides at the boundary; a conflict fails with invalid_parameters.
 - `connectedServices` (textarea): Connected services (json) — Optional connected-services selection for the run backend. Accepts "native", a per-service string ("&lt;service&gt;:group:&lt;id&gt;", "&lt;service&gt;:&lt;profileId&gt;", "&lt;service&gt;:native"), an array, or the full object. Attached omission inherits the parent choice; independent starts use Account defaults. Enumerate valid selections via the shared session-spawn options source.
 - `secretReferenceOverlay` (json): Saved Secret overrides (json) — Optional value-free Saved Secret references for this launch only. Values are resolved by the exact daemon and the selected Profile is not changed.
 
@@ -5068,6 +5370,53 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `authenticationPolicy.storagePolicy` (text): Storage policy
 - `confirmWidening` (boolean): Widening confirmed
 
+## `home.public_profiles.handle_reclaim`
+
+**Reclaim a public-profile handle** — Reclaim the reviewed Account username with an audited reason and owner notice. Any publication restriction remains.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `required` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
+
+### Input guidance
+
+- `accountId` (text, required): Account ID
+- `username` (text, required): Current username
+- `reason` (text, required): Reason
+- `notice` (text, required): Notice to the Account owner
+
+## `home.public_profiles.restore`
+
+**Restore a public profile** — Lift one Account’s public-profile restriction with an audited reason. Deleted disclosure is not republished; the Home rechecks the operator’s authority.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `required` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
+
+### Input guidance
+
+- `accountId` (text, required): Account ID
+- `reason` (text, required): Reason
+
+## `home.public_profiles.restrict`
+
+**Restrict a public profile** — Remove one Account’s public profile from this Home with an audited reason. The Home rechecks the operator’s authority.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `required` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
+
+### Input guidance
+
+- `accountId` (text, required): Account ID
+- `reason` (text, required): Reason
+
 ## `home.reachNudge.dismiss`
 
 **Dismiss Home reachability suggestion** — Permanently dismiss the selected Home’s reachability suggestion on this client device. Other devices are unchanged.
@@ -5773,7 +6122,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `localServices.actions.restartManaged`
 
-**Restart managed local service** — Restart a Happier-managed local service.
+**Restart a local service** — Restart a Happier-managed local service.
 
 - Safety: `danger`; side effect: `danger`.
 - Approval: `required` result; `blocking` flow.
@@ -5787,7 +6136,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `localServices.actions.stopManaged`
 
-**Stop managed local service** — Stop a Happier-managed local service.
+**Stop a local service** — Stop a Happier-managed local service.
 
 - Safety: `danger`; side effect: `danger`.
 - Approval: `required` result; `blocking` flow.
@@ -5899,7 +6248,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `localServices.launcher.start`
 
-**Start local service launcher target** — Start a managed local service from a launch target.
+**Start a local service** — Start a managed local service from a launch target.
 
 - Safety: `danger`; side effect: `danger`.
 - Approval: `required` result; `blocking` flow.
@@ -10360,6 +10709,8 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
+- `modelId` (text): Model
+- `agentTargetKey` (text, required): Agent
 - `connectionId` (text): Provider connection
 - `machineId` (text): Computer
 
@@ -12505,6 +12856,20 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `cwd` (text, required): Repository directory
 - `providerKind` (select): Hosting provider
 
+## `scm.hostingRepository.get`
+
+**Read hosting repository** — Read authoritative public repository metadata through the selected Machine’s SCM hosting provider.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+- `selector` (json, required): Repository selector
+
 ## `scm.hostingRepository.publish`
 
 **Publish repository to hosting provider** — Create or bind a hosting repository and publish the active source-control state.
@@ -14378,7 +14743,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `session.pending.dismiss`
 
-**Dismiss uncertain pending delivery** — Archive the exact uncertain Pending input without claiming it was accepted or sending it again.
+**Dismiss uncertain pending delivery** — Set aside a pending message that may not have been delivered, without sending it again.
 
 - Safety: `danger`; side effect: `danger`.
 - Approval: `required` result; `blocking` flow.
@@ -14880,16 +15245,16 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `executionTarget.machineId` (text, required): Machine id
 - `directory` (json, required): Directory intent
 - `organizationPlacement` (json): Organization placement
-- `agentTarget` (json, required): Agent target
-- `modelSelection` (json): Model selection
+- `agentTarget` (json, required): Agent target — Backend options carry target keys. For agent:&lt;pluginId&gt;/&lt;localId&gt;, use &#123;kind:"agent",identity:&#123;pluginId,localId&#125;&#125;; retain definitionId for a configured Agent.
+- `modelSelection` (json): Model selection — Native model options carry a model id in option.value. Use &#123;v:1,ref:&#123;agentTargetKey,providerConnectionId:null,modelId:option.value&#125;,updatedAt:&lt;milliseconds&gt;&#125;, with the selected Agent target key. Provider catalog choices retain their structured ref. A Connected Account profile is not a providerConnectionId.
 - `title` (text): Title
-- `permissionMode` (text): Permission mode
+- `permissionMode` (text): Permission mode — Canonical intent: default, read-only, safe-yolo, yolo, plan. Use "read-only" for read-only access.
 - `allowedTools` (json): Allowed tool rules
 - `unlistedTools` (select): Unlisted tools
 - `agentModeId` (text): Agent mode
-- `configuration` (json): Configuration
+- `configuration` (json): Configuration — Optional full snapshot: &#123;mode:&#123;value:null,updatedAtMs:0&#125;,model:&#123;value:null,updatedAtMs:0&#125;,permissionIntent:&#123;value:null,updatedAtMs:0&#125;,options:&#123;&#125;&#125;. Set model.value to a model-id string or null, permissionIntent.value to a canonical intent or null, and options[option.value] to &#123;value:&lt;scalar&gt;,updatedAtMs:&lt;milliseconds&gt;&#125;. For model-scoped choices, first supply draftInput.modelSelection or draftInput.configuration.model; without a selected model the inventory contains only session-wide options. Config-option choices name option ids, not snapshots or selected values; read agents.config_options.list with modelId for their value choices. Omit configuration when no override is needed.
 - `profileId` (text): Profile id
-- `connectedServices` (json): Connected services
+- `connectedServices` (json): Connected services — Pass the selected option.value through the connected-services input schema; do not put a Connected Account profile id in modelSelection.ref.providerConnectionId.
 - `capabilitySelection` (json): Capability selection
 - `transcriptStorage` (text): Transcript storage
 - `terminal` (json): Terminal
@@ -14932,7 +15297,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Stop session** — Request that the local daemon stops the specified session.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `write`.
 - Approval: `none` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -15758,7 +16123,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `sessions.spawn.connected_services.list`
 
-**List spawn connected services** — List connected-service references available for new sessions without exposing credentials.
+**List spawn connected services** — List connected-service references available for new sessions without exposing credentials. Omit serverId; the authenticated host binds the Home.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -15771,7 +16136,6 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `agentId` (text): Runtime agent id
 - `backendTargetKey` (text): Backend target key
 - `machineId` (text): Machine id (optional)
-- `serverId` (text): Server id (optional)
 - `includeUnavailable` (boolean): Include unavailable
 
 ## `sessions.spawn.mcp_servers.preview`
@@ -16259,7 +16623,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `fields` (json, required): Task fields
 
 ## `tasks.internal.edit`
 
@@ -16273,7 +16637,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `scope` (json, required): Task Home and Account
+- `taskId` (text, required): Task
+- `fields` (json, required): Fields to change
 
 ## `tasks.internal.list`
 
@@ -16334,7 +16700,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `scope` (json, required): Task Home and Account
+- `taskId` (text, required): Task
+- `state` (select, required): State
 
 ## `teams.archive`
 
@@ -18394,7 +18762,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `usage.recap.compose`
 
-**Compose a private usage recap** — Compose a private selected-field preview from the same authorized usage query. Names and dollars are excluded by default. Missing historical detail stays unavailable. This operation produces data without opening a share sheet or publishing.
+**Compose a usage recap** — Compose a selected-field preview from an authorized private Usage query or the captured Account’s current admitted public profile. Private names and dollars are excluded by default and are refused in public mode. Missing detail stays unavailable. This operation produces data without opening a share sheet or publishing.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `none` result; `deferred` flow.
@@ -18404,14 +18772,34 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-- `query` (json, required): Usage query
+- `query` (json): Private Usage query
+- `source` (json): Public source
+- `style` (select): Style
+- `format` (select): Format
+- `selectedFields` (text_list): Selected fields
+
+## `usage.recap.deliver`
+
+**Copy, save or share a usage recap** — Compose and render selected admitted facts, then perform the explicit device delivery intent. Cancellation and unconfirmed system-sheet outcomes are reported without claiming delivery. Native Save opens the system sheet; it does not promise a photo-library write.
+
+- Safety: `danger`; side effect: `external`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `query` (json): Private Usage query
+- `source` (json): Public source
+- `intent` (select, required): Delivery
 - `style` (select): Style
 - `format` (select): Format
 - `selectedFields` (text_list): Selected fields
 
 ## `usage.recap.export`
 
-**Export a private usage recap** — Render the same authorized selected-field recap on the executing client and return PNG file bytes. A headless caller receives compose data with explicit image unavailability. Save, Copy and Share remain explicit local operations.
+**Export a usage recap** — Render the authorized selected-field private query or current admitted public profile on the executing client and return PNG file bytes. Public mode never reads private Usage. A headless caller receives compose data with explicit image unavailability. Save, Copy and Share require the explicit delivery Action.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `none` result; `deferred` flow.
@@ -18421,7 +18809,8 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-- `query` (json, required): Usage query
+- `query` (json): Private Usage query
+- `source` (json): Public source
 - `style` (select): Style
 - `format` (select): Format
 - `selectedFields` (text_list): Selected fields
@@ -19665,7 +20054,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `workflow.run.start`
 
-**Start workflow Run** — Start an ordinary workflow from a built-in/plugin catalog, a saved definition, or an inline definition. A Session caller supplies the origin Session and its Machine/workspace through authenticated Action context. inputs contains only declared workflow input values; machineId and directory inside inputs do not select a run target. executionTarget selects the leaf execution kind, not the Machine/workspace. Retain runId when a response is uncertain. Run again uses source.replay.runId to reopen the accepted graph, runtime and participants; Another round adds source.replay.intent="another_round" and the owner reads authorized prior outcomes into its declared previousRoundContext input. Another round retains all accepted inputs and participants; unavailable context or targets requires repair before starting. It uses the ordinary start approval; contained Actions keep their own approval and authority.
+**Start workflow Run** — Start an ordinary workflow from a built-in/plugin catalog, a saved definition, or an inline definition. A Session caller supplies the origin Session and its Machine/workspace through authenticated Action context. inputs contains only declared workflow input values; machineId and directory inside inputs do not select a run target. executionTarget selects the leaf execution kind, not the Machine/workspace. For an inline definition, put model and effort on defaults.engine or a step execution.engine, for example &#123;agentTarget,modelSelection,effort:"low"&#125;; do not place reasoning_effort in sessionConfigOptionOverrides. Validate the definition with workflow.validate before starting. Retain runId when a response is uncertain. Run again uses source.replay.runId to reopen the accepted graph, runtime and participants; Another round adds source.replay.intent="another_round" and the owner reads authorized prior outcomes into its declared previousRoundContext input. Another round retains all accepted inputs and participants; unavailable context or targets requires repair before starting. It uses the ordinary start approval; contained Actions keep their own approval and authority.
 
 - Safety: `safe`; side effect: `write`.
 - Approval: `optional` result; `deferred` flow.
@@ -19865,20 +20254,19 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `workspace.files.replace`
 
-**Replace text in workspace files** — Apply the reviewed replacement only to selected files and matches whose raw file hashes still match the preview.
+**Replace text in workspace files** — Apply a reviewed replacement or restore its inverse edits only when the raw file hashes still match.
 
 - Safety: `danger`; side effect: `danger`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
 
 ### Input guidance
 
 - `machineId` (text): Machine id
 - `rootPath` (text): Workspace root
-- `query` (text): Search text
-- `replacement` (text): Replacement text
+- `operation` (json): Guarded replacement or restore
 
 ## `workspace.files.replace.preview`
 
@@ -19888,7 +20276,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
 
 ### Input guidance
 
