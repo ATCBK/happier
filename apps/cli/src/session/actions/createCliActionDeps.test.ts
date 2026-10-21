@@ -1164,6 +1164,7 @@ describe('createCliActionDeps hook dispatch', () => {
     const deps = createCliActionDeps({
       token: credentials.token,
       credentials,
+      serverId: 'home-1',
       sessionId: 'session-1',
       mode: 'plain',
       ctx: null,

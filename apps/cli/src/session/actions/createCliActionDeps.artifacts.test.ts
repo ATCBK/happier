@@ -804,7 +804,9 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
       serverId: configuration.activeServerId, defaultSessionMachineId: 'local-machine', actionRequestId: 'export-binary-request',
       actionCaller: { kind: 'session' as const, sessionId: 'session', starterDepth: 0, turnDepth: 0 },
       defaultSessionId: 'session', presentUserConfirmation: { actionId: 'artifact.export' as const } };
-    http.post.mockImplementation(async (_url: string, wire: unknown) => {
+    http.post.mockImplementation(async (url: string, wire: unknown) => {
+      // Short Session ids resolve through the indexed tag lookup first; the foreign id matches nothing.
+      if (url.endsWith('/v2/sessions/lookup-by-tags')) return { status: 200, data: { sessions: [] } };
       const input = readCarrierMutation(wire);
       return { status: 200, data: { id: input.id, headerVersion: 1, bodyVersion: 1 } };
     });

@@ -227,6 +227,8 @@ const registerExecutionRunHandlers = (
     cwd,
     readPromptCredentials: baseCtx.readPromptCredentials ?? (async () => transcriptLaunch?.credentials ?? null),
     getServerFeaturesSnapshot: baseCtx.getServerFeaturesSnapshot ?? (() => voiceEnabledServerSnapshot),
+    // The Account run-report preference read is an HTTP boundary; the default Account choice is Important.
+    resolveRunReportPolicy: baseCtx.resolveRunReportPolicy ?? (async () => ({ preset: 'important' })),
     resolveExecutionRunProfileCatalog: baseCtx.resolveExecutionRunProfileCatalog ?? (() => ({
       profileCatalog: baseCtx.executionRunProfileCatalog ?? buildExecutionRunProfileCatalog(),
       engineRegistry: executionRunTestEngineRegistry,

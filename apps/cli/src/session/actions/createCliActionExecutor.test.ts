@@ -136,6 +136,9 @@ vi.mock('@/session/transport/rpc/machineRpc', async importOriginal => ({
   ...await importOriginal<typeof import('@/session/transport/rpc/machineRpc')>(),
   callMachineRpc,
   callExactMachineRpc: callMachineRpc,
+  // Target custody discovery is an HTTP/Machine boundary; null = the caller's own Account custody, so the
+  // ordinary exact-target spawn below it stays real.
+  dispatchRequesterSessionSpawnNewRpc: async () => null,
 }));
 
 vi.mock('@/api/machine/machineOperationProtocolCapabilities', () => ({

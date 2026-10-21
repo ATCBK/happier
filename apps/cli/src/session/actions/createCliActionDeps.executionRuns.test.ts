@@ -13,6 +13,12 @@ import axios from 'axios';
 import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createLocalScmRepositoryFixture } from '@/testkit/scm/scmBackendContractFixtures';
+import { withTempDir } from '@/testkit/fs/tempDir';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { reloadConfiguration } from '@/configuration';
+import { updateSettings } from '@/persistence';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { createLocalTestMetadata, createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
@@ -63,6 +69,31 @@ function serveSessionRecord(row: Readonly<{ id: string; active: boolean; machine
       ...(row.machineId ? { machineId: row.machineId } : {}),
     })),
   }));
+}
+
+const SCM_TEST_MACHINE_ID = 'machine-scm';
+const SCM_TEST_HOME_ID = 'scm-capture-home';
+/**
+ * SCM Actions run on the Session's Machine. This host is that Machine: the installed plugin runtime
+ * (real Git backend) and the Machine identity are the real owners, so capture runs unchanged beneath the Action.
+ */
+async function withLocalScmMachine<T>(run: () => Promise<T>): Promise<T> {
+  return withTempDir('scm-local-machine-home-', async home => {
+    const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID']);
+    let admitted: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | undefined;
+    try {
+      env.patch({ HAPPIER_HOME_DIR: home, HAPPIER_ACTIVE_SERVER_ID: SCM_TEST_HOME_ID });
+      reloadConfiguration();
+      await updateSettings(settings => ({ ...settings, machineIdByServerId: { [SCM_TEST_HOME_ID]: SCM_TEST_MACHINE_ID } }));
+      admitted = await createAdmittedPluginRuntimeFixture({ happyHomeDir: home, controller: pluginReloadController,
+        runtimeOptions: { pluginIds: ['happier.scm.backend.git'] } });
+      return await run();
+    } finally {
+      await admitted?.dispose();
+      env.restore();
+      reloadConfiguration();
+    }
+  });
 }
 
 beforeEach(() => {
@@ -501,7 +532,7 @@ describe('createCliActionDeps execution-run plugin bindings', () => {
     ]);
   });
 
-  it('routes SCM diff-summary through the supplied canonical Action boundary without a direct run transport', async () => {
+  it('routes SCM diff-summary through the supplied canonical Action boundary without a direct run transport', () => withLocalScmMachine(async () => {
     const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-summary-deps-' });
     directories.push(fixture.rootPath);
     await writeFile(join(fixture.rootPath, fixture.trackedPath), 'captured through session Action\n');
@@ -509,7 +540,7 @@ describe('createCliActionDeps execution-run plugin bindings', () => {
       token: 'token',
       encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) },
     };
-    serveSessionRecord({ id: 'session-1', active: true, path: fixture.rootPath, local: true });
+    serveSessionRecord({ id: 'session-1', active: true, machineId: SCM_TEST_MACHINE_ID, path: fixture.rootPath, local: true });
     const executeCanonicalAction = vi.fn(async (actionId: string, _input: unknown) => {
       if (actionId === 'execution.run.start') {
         return {
@@ -535,6 +566,7 @@ describe('createCliActionDeps execution-run plugin bindings', () => {
       actionId: 'scm.diffSummary.generate',
       input: {
         cwd: fixture.rootPath,
+        sessionId: 'session-1',
         source: { kind: 'workingTree' },
         modelSelector: {
           backendTargetKey: buildBackendTargetKeyV2({
@@ -560,7 +592,7 @@ describe('createCliActionDeps execution-run plugin bindings', () => {
     expect(executeCanonicalAction.mock.calls[0]?.[1]).toHaveProperty('sessionId', 'session-1');
     expect(executeCanonicalAction).toHaveBeenCalledTimes(1);
     expect(callSessionRpc).not.toHaveBeenCalled();
-  });
+  }));
 
   it('forwards exact-machine generation with the selected session and strict public comparison input', async () => {
     const credentials = { token: 'token', encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) } };
@@ -580,10 +612,10 @@ describe('createCliActionDeps execution-run plugin bindings', () => {
     })).resolves.toMatchObject({ success: false, errorCode: 'MODEL_UNAVAILABLE' });
   });
 
-  it('captures selected-session inventory without model admission', async () => {
+  it('captures selected-session inventory without model admission', () => withLocalScmMachine(async () => {
     const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-capture-deps-' });
     const credentials = { token: 'token', encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) } };
-    serveSessionRecord({ id: 'session-1', active: true, path: fixture.rootPath, local: true });
+    serveSessionRecord({ id: 'session-1', active: true, machineId: SCM_TEST_MACHINE_ID, path: fixture.rootPath, local: true });
     const executeCanonicalAction = vi.fn(async () => { throw new Error('Capture must not admit an analysis run'); });
     const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: 'cli-global', mode: 'plain', ctx: null });
     try {
@@ -596,13 +628,13 @@ describe('createCliActionDeps execution-run plugin bindings', () => {
       } } });
       expect(executeCanonicalAction).not.toHaveBeenCalled();
     } finally { await rm(fixture.rootPath, { recursive: true, force: true }); }
-  });
+  }));
 
-  it('reads pinned comparison evidence without recapturing later pending files', async () => {
+  it('reads pinned comparison evidence without recapturing later pending files', () => withLocalScmMachine(async () => {
     const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-pinned-capture-deps-' });
     directories.push(fixture.rootPath);
     const credentials = { token: 'token', encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) } };
-    serveSessionRecord({ id: 'session-1', active: true, path: fixture.rootPath, local: true });
+    serveSessionRecord({ id: 'session-1', active: true, machineId: SCM_TEST_MACHINE_ID, path: fixture.rootPath, local: true });
     const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: 'cli-global', mode: 'plain', ctx: null });
     const executeCanonicalAction = vi.fn(async () => { throw new Error('Pinned reads must not admit another action'); });
     const execute = (input: unknown) => deps.scmActionExecute?.({ actionId: 'scm.diffSummary.capture', input,
@@ -618,13 +650,13 @@ describe('createCliActionDeps execution-run plugin bindings', () => {
       success: false, errorCode: 'DIFF_UNAVAILABLE',
     });
     expect(executeCanonicalAction).not.toHaveBeenCalled();
-  });
+  }));
 
-  it('reads PR evidence through the canonical constrained source Action from page one', async () => {
+  it('reads PR evidence through the canonical constrained source Action from page one', () => withLocalScmMachine(async () => {
     const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-pr-source-deps-' });
     directories.push(fixture.rootPath);
     const credentials = { token: 'token', encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) } };
-    serveSessionRecord({ id: 'session-1', active: true, path: fixture.rootPath, local: true });
+    serveSessionRecord({ id: 'session-1', active: true, machineId: SCM_TEST_MACHINE_ID, path: fixture.rootPath, local: true });
     // The contributed plugin process is the system boundary; canonical Action
     // admission, source-input shaping, and evidence capture stay real.
     const invokeContributedAction = vi.fn(async (request: Readonly<{ input?: unknown }>) => {
@@ -664,7 +696,7 @@ describe('createCliActionDeps execution-run plugin bindings', () => {
       input: { instance: { selected: 'account-one' }, routingToken: 'source-token', limit: 7, comparison: true,
         continuation: 'source-page-two' }, requiredDangerLevel: 'safe',
     }));
-  });
+  }));
 
   it('refuses selected-session evidence outside the machine filesystem policy before capture or admission', async () => {
     const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-summary-permission-' });
