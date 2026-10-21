@@ -11,6 +11,7 @@ import {
     createMachineFixture,
 } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 
@@ -342,21 +343,6 @@ vi.mock('@/sync/domains/state/persistence', async (importOriginal) => {
     };
 });
 
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        refreshMachinesThrottled: async () => {},
-        encryptSecretValue: (v: string) => v,
-        decryptSecretValue: (v: string | null) => v ?? '',
-        acquireUserRequestLease: () => () => {},
-        getCredentials: () => ({ secret: 'test-secret' }),
-        refreshAutomations: async () => {},
-        refreshSessions: async () => {},
-        refreshMachines: async () => {},
-        sendMessage: async () => {},
-        ensureSessionVisibleForMessageRoute: async () => {},
-    },
-}));
-
 vi.mock('@/agents/hooks/useEnabledAgentIds', () => ({
     useEnabledAgentIds: () => enabledAgentIdsState.value,
 }));
@@ -577,6 +563,7 @@ async function selectAcmeTarget(hook: Awaited<ReturnType<typeof renderNewSession
 const network = await installSessionOpsNetworkBoundary();
 // As in useMachineAgents.test.tsx, physical Socket.IO must be installed before
 // importing the real storage/model graph that captures its transport adapter.
+await loadSyncSingletonForTests();
 const { getStorage } = await import('@/sync/domains/state/storageStore');
 const { settingsParse } = await import('@/sync/domains/settings/settings');
 const { AIBackendProfileSchema } = await import('@/sync/domains/profiles/profileCompatibility');
