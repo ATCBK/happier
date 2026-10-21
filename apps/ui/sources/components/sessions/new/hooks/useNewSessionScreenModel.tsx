@@ -83,7 +83,7 @@ import { createTemporaryComputerCreatorDependencies } from './creator/temporaryC
 import { createRunnerActivationClient } from '@/sync/api/ephemeralRunner/runnerActivationClient';
 import { createServerFetchAtEndpoint } from '@/sync/http/client';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
-import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
+import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
 
 import type { NewSessionDraft } from '@/sync/domains/state/persistence';
 import { NewSessionEngineOptionDetail } from '@/components/sessions/new/components/NewSessionEngineOptionDetail';
@@ -1269,11 +1269,8 @@ export function useNewSessionScreenModel(input?: Readonly<{
     // New Session draft records have no generation field. Revalidate them
     // only against the exact current machine/account projection; retained
     // inputs during a target/account transition are intentionally inert.
-    const composerAttachmentEntriesById = React.useMemo(() => {
-        return normalizePluginUiProjection(
-            currentProjectionInputs?.pluginProjectionV2 ?? null,
-        ).composerAttachmentsById;
-    }, [currentProjectionInputs?.pluginProjectionV2]);
+    const composerAttachmentEntriesById = currentProjectionInputs?.pluginUiProjection.composerAttachmentsById
+        ?? EMPTY_PLUGIN_UI_PROJECTION.composerAttachmentsById;
     const enabledAgentIds = useEnabledAgentIds();
     const { snapshot: acpCatalog } = useAcpCatalog(temporaryComputerTargetScope);
     const acpCatalogReady = acpCatalog?.catalog.status === 'ready' && !acpCatalog.stale;
@@ -2264,6 +2261,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
             machineId: selectedMachineId,
             serverId: targetServerId,
             projection,
+            pluginUiProjection: currentProjectionInputs!.pluginUiProjection,
             isCurrent: () => (
                 newSessionComposerReferenceHostRef.current === host
                 && newSessionComposerReferenceSearchIsCurrent()
@@ -2272,6 +2270,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         return host;
     }, [
         currentProjectionInputs?.pluginProjectionV2,
+        currentProjectionInputs?.pluginUiProjection,
         newSessionComposerReferenceSearchIsCurrent,
         selectedMachineId,
         targetServerId,
@@ -4279,6 +4278,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
             setFavoriteDirectories,
         },
         footer: {
+            isTemporaryComputer: executionTarget?.kind === 'temporary_computer',
             promptStore,
             composerDocument: newSessionComposerDocument,
             composerReferenceHost: newSessionComposerDropHost,

@@ -18,7 +18,6 @@ import type { FreshPluginMachineExecutionOriginV1 } from '@/sync/domains/machine
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import {
     createPluginUiProjectedActionResolver,
-    normalizePluginUiProjection,
 } from '@/sync/domains/plugins/ui/projection';
 import {
     areFreshPluginMachineExecutionOriginsCurrent,
@@ -201,7 +200,7 @@ function resolveCurrentRecoverySnapshot(params: Readonly<{
     let actionSnapshot!: PluginContributedActionCurrentSnapshot;
     actionSnapshot = {
         pluginProjectionById: params.inputs!.pluginProjectionById,
-        pluginUiProjection: normalizePluginUiProjection(params.inputs!.pluginProjectionV2 ?? null),
+        pluginUiProjection: params.inputs!.pluginUiProjection,
         resolveContributedAction,
         host: {
             machineId: origin.machineTarget.target.machineId,

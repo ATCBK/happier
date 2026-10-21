@@ -6,7 +6,8 @@ import * as React from 'react';
 import { FEATURE_IDS, FeaturesResponseSchema, PluginProjectionV2Schema, tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 import { normalizePluginUiSettingsPageBindingV1 } from '@happier-dev/protocol/plugins/ui';
 
-import { renderHook as renderRealHook } from '@/dev/testkit';
+import { flushHookEffects, renderScreen, renderHook as renderRealHook } from '@/dev/testkit';
+import { commitPreferredLanguage, getPreferredLanguage } from '@/text/preferredLanguage';
 import {
     normalizePluginUiProjection,
     type PluginUiProjectionModel,
@@ -80,7 +81,7 @@ const { AppShellPluginUiProjectionValueProvider } = await import('@/components/a
 const profiles = await import('@/sync/domains/server/serverProfiles');
 const { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
 
-function CatalogProjectionProvider({ children }: React.PropsWithChildren) {
+function CatalogProjectionProvider({ children, executableRevision = 0 }: React.PropsWithChildren<{ executableRevision?: number }>) {
     // The wire projection fixture enters the actual AppShell context owner.
     // Neither the catalog hooks nor its localized-text resolver are replaced.
     return <AppShellPluginUiProjectionValueProvider value={{
@@ -91,6 +92,7 @@ function CatalogProjectionProvider({ children }: React.PropsWithChildren) {
         machineId: null,
         serverId: null,
         platform: 'web',
+        connectedAccountProjectionRevision: executableRevision,
         reloadConnectedAccountProjection() {},
         accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' },
         reloadClientExecutables() {},
@@ -202,6 +204,63 @@ describe('useResolvedSettingsPageCatalog', () => {
         featureGateState.enabled = () => true;
         settingsState.tauriDesktop = false;
         appShellPluginProjectionState.projection = null;
+    });
+
+    it('S1 Settings tree ignores executable-only publication while preserving changed declarations', async () => {
+        const { useResolvedSettingsPageTree } = await import('./useResolvedSettingsPageIdentity');
+        let renders = 0;
+        let ids: string[] = [];
+        const Probe = React.memo(function TreeProbe() {
+            renders += 1;
+            ids = flattenIds(useResolvedSettingsPageTree(true).tree);
+            return null;
+        });
+        const child = <Probe />;
+        const screen = await renderScreen(<CatalogProjectionProvider>{child}</CatalogProjectionProvider>);
+        try {
+            await flushHookEffects();
+            const settled = renders;
+            await screen.update(<CatalogProjectionProvider executableRevision={1}>{child}</CatalogProjectionProvider>);
+            expect(renders).toBe(settled);
+            appShellPluginProjectionState.projection = pluginSettingsProjection();
+            await screen.update(<CatalogProjectionProvider executableRevision={1}>{child}</CatalogProjectionProvider>);
+            expect(ids).toContain('pluginSettingsPage:examples.descriptor-only:settings');
+            expect(renders).toBeGreaterThan(settled);
+        } finally { await screen.unmount(); }
+    });
+
+    it('S1 Settings tree follows ready locale without an executable or declaration update', async () => {
+        const { useResolvedSettingsPageTree } = await import('./useResolvedSettingsPageIdentity');
+        const previousLocale = getPreferredLanguage();
+        commitPreferredLanguage('en');
+        const base = pluginSettingsProjection();
+        const group = Object.values(base.settingsGroupsById)[0]!;
+        appShellPluginProjectionState.projection = {
+            ...base,
+            // A single-page plugin destination uses its group's title, not
+            // its generic page title; exercise that canonical visible label.
+            settingsGroupsById: { ...base.settingsGroupsById, [group.id]: { ...group,
+                group: { ...group.group, title: { key: 'settingsTitle', fallback: 'Fallback' } } } },
+            translationsByPluginId: { 'examples.descriptor-only': {
+                id: 'translations:examples.descriptor-only', pluginId: 'examples.descriptor-only',
+                contributionKind: 'translations', locales: ['en', 'fr'],
+                bundles: { en: { settingsTitle: 'Review settings' }, fr: { settingsTitle: 'Réglages de revue' } },
+            } },
+        };
+        let titles: readonly (string | undefined)[] = [];
+        function Probe() {
+            const snapshot = useResolvedSettingsPageTree(true);
+            titles = (function read(nodes: typeof snapshot.tree): readonly (string | undefined)[] {
+                return nodes.flatMap(node => [node.title, ...read(node.children ?? [])]);
+            })(snapshot.tree);
+            return null;
+        }
+        const screen = await renderScreen(<CatalogProjectionProvider><Probe /></CatalogProjectionProvider>);
+        try {
+            expect(titles).toContain('Review settings');
+            await act(async () => commitPreferredLanguage('fr'));
+            expect(titles).toContain('Réglages de revue');
+        } finally { await screen.unmount(); commitPreferredLanguage(previousLocale); }
     });
 
     it('keeps Teams in navigation and search for a capable secondary Home, then removes it outside that Home set', async () => {

@@ -302,6 +302,7 @@ export type PluginSurfaceAccountEncryptionModeReadiness =
     | Readonly<{ status: 'ready'; mode: SurfaceContext['accountEncryptionMode'] }>;
 
 const ACCOUNT_MODE_LOADING = Object.freeze({ status: 'loading' as const });
+const ACCOUNT_MODE_UNAVAILABLE = Object.freeze({ status: 'unavailable' as const });
 
 type ResolvedAccountEncryptionMode = Readonly<{
     accountLifetime: ActiveServerAccountScopeLifetime;
@@ -334,6 +335,11 @@ export function usePluginSurfaceAccountEncryptionMode(input: Readonly<{
     const isCurrentRef = React.useRef(input.isCurrent);
     isCurrentRef.current = input.isCurrent;
     const [resolved, setResolved] = React.useState<ResolvedAccountEncryptionMode | null>(null);
+    // Currentness callbacks can retain their identity while their captured
+    // mount becomes ready or retires. Reconcile that transition on this render.
+    const canReadMode = input.accountLifetime?.isCurrent() === true
+        && Boolean(input.credentials || input.resolveMode)
+        && input.isCurrent();
 
     React.useEffect(() => {
         const accountLifetime = input.accountLifetime;
@@ -352,9 +358,7 @@ export function usePluginSurfaceAccountEncryptionMode(input: Readonly<{
 
         if (
             !accountLifetime
-            || (!credentials && !resolveMode)
-            || !accountLifetime.isCurrent()
-            || !isCurrentRef.current()
+            || !canReadMode
         ) {
             return;
         }
@@ -394,7 +398,9 @@ export function usePluginSurfaceAccountEncryptionMode(input: Readonly<{
             requestRevisionRef.current += 1;
             retirement.dispose();
         };
-    }, [cacheRevision, input.accountLifetime, input.credentials, input.resolveMode, input.isCurrent]);
+    }, [cacheRevision, canReadMode, input.accountLifetime, input.credentials, input.resolveMode, input.isCurrent]);
+
+    if (!canReadMode) return ACCOUNT_MODE_UNAVAILABLE;
 
     return resolved
         && resolved.accountLifetime === input.accountLifetime

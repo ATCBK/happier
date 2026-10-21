@@ -5,6 +5,7 @@ import 'fake-indexeddb/auto';
 import { buildQualifiedPluginContributionKey, PluginProjectionV2Schema, type MachineAgentInventoryItem } from '@happier-dev/protocol';
 import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
+import { publishDaemonMergedProjectionInputs } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import {
     flushHookEffects,
     renderHook,
@@ -72,7 +73,17 @@ function buildAcmeProjectionInputs(params: Readonly<{
     generation: number;
     hasAgent?: boolean;
 }>): Record<string, unknown> {
+    const projection = PluginProjectionV2Schema.parse({
+        v: 2, generation: params.generation,
+        installedPackagesById: {}, actionsById: {}, familiesById: {}, toolsById: {},
+        commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [],
+        agentsById: params.hasAgent === false ? {} : { [ACME_AGENT_ID]: {
+            id: ACME_AGENT_ID, title: params.title,
+            capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+        } },
+    });
     return {
+        ...publishDaemonMergedProjectionInputs({ projection }),
         mergedProviderProjectionById: params.hasAgent === false ? {} : {
             [ACME_AGENT_ID]: {
                 agentId: ACME_AGENT_ID,
@@ -92,15 +103,7 @@ function buildAcmeProjectionInputs(params: Readonly<{
         },
         discoveredBackendIds: params.hasAgent === false ? [] : ['acme.review.backend'],
         pluginProjectionById: {},
-        pluginProjectionV2: PluginProjectionV2Schema.parse({
-            v: 2, generation: params.generation,
-            installedPackagesById: {}, actionsById: {}, familiesById: {}, toolsById: {},
-            commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [],
-            agentsById: params.hasAgent === false ? {} : { [ACME_AGENT_ID]: {
-                id: ACME_AGENT_ID, title: params.title,
-                capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
-            } },
-        }),
+        pluginProjectionV2: projection,
         registryDiagnostics: [],
     };
 }

@@ -7,11 +7,13 @@ import {
     PluginAccountAvailabilityIntentReadResponseV1Schema,
     PluginMachineMaterializationV1Schema,
     PluginWebhookEndpointIdV1Schema,
+    PluginProjectionV2Schema,
     getActionSpec,
     type DaemonContributionRegistryProjectionAutomationEligibleEventV1,
 } from '@happier-dev/protocol';
 
 import type { DaemonMergedProjectionInputs } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
+import { publishDaemonMergedProjectionInputs } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
@@ -184,10 +186,7 @@ function projectionInputs(
     event: DaemonContributionRegistryProjectionAutomationEligibleEventV1,
 ): DaemonMergedProjectionInputs {
     return {
-        mergedProviderProjectionById: {},
-        mergedBackendProjectionById: {},
-        discoveredBackendIds: [],
-        pluginProjectionById: {},
+        ...publishDaemonMergedProjectionInputs({ projection: PluginProjectionV2Schema.parse({ v: 2, generation: 0 }) }),
         pluginProjectionV2: null,
         automationEligibleEvents: [event],
         registryDiagnostics: [],

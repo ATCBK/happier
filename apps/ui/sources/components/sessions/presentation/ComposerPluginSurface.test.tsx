@@ -10,6 +10,7 @@ import {
 } from '@happier-dev/protocol';
 
 import { renderScreen } from '@/dev/testkit';
+import { publishDaemonMergedProjectionInputs } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import { createComposerPresentationTransactionApplier } from './sessionComposerPresentationTargets';
 
 const pluginSurfaceHostSpy = vi.hoisted(() => vi.fn());
@@ -85,6 +86,8 @@ describe('ComposerPluginSurface', () => {
         const { ComposerPluginSurface } = await import('./ComposerPluginSurface');
         const catalogEntry = createCatalogEntry();
         const fallback = React.createElement('FallbackBadge', { testID: 'canonical-composer-badge' });
+        const projection = createProjection(7);
+        const { pluginUiProjection } = publishDaemonMergedProjectionInputs({ projection });
 
         await renderScreen(<ComposerPluginSurface
             request={{
@@ -103,7 +106,8 @@ describe('ComposerPluginSurface', () => {
             projectionGeneration={7}
             catalogEntries={[catalogEntry]}
             pluginProjectionById={{}}
-            pluginProjectionV2={createProjection(7)}
+            pluginProjectionV2={projection}
+            pluginUiProjection={pluginUiProjection}
             machineId="machine-1"
             serverId="server-1"
             parentLifetime={lifetime}
@@ -145,6 +149,8 @@ describe('ComposerPluginSurface', () => {
     it('passes the existing mount/catalog identity to the host for boundary recovery', async () => {
         const { ComposerPluginSurface } = await import('./ComposerPluginSurface');
         const renderComposer = (occurrenceId: string, projectionGeneration: number) => {
+            const projection = createProjection(projectionGeneration);
+            const { pluginUiProjection } = publishDaemonMergedProjectionInputs({ projection });
             const catalogEntry = DaemonPluginUiComposerSurfaceCatalogEntryV1Schema.parse({
                 ...createCatalogEntry(),
                 occurrenceId,
@@ -176,7 +182,8 @@ describe('ComposerPluginSurface', () => {
                     projectionGeneration={projectionGeneration}
                     catalogEntries={[catalogEntry]}
                     pluginProjectionById={{}}
-                    pluginProjectionV2={createProjection(projectionGeneration)}
+                    pluginProjectionV2={projection}
+                    pluginUiProjection={pluginUiProjection}
                     machineId="machine-1"
                     serverId="server-1"
                     parentLifetime={lifetime}
@@ -209,6 +216,8 @@ describe('ComposerPluginSurface', () => {
     it('classifies the desktop shell as desktop and a plain browser tab as web', async () => {
         const { ComposerPluginSurface } = await import('./ComposerPluginSurface');
         const catalogEntry = createCatalogEntry();
+        const projection = createProjection(7);
+        const { pluginUiProjection } = publishDaemonMergedProjectionInputs({ projection });
         const renderComposerSurface = () => renderScreen(<ComposerPluginSurface
             request={{
                 contribution: catalogEntry.contribution,
@@ -226,7 +235,8 @@ describe('ComposerPluginSurface', () => {
             projectionGeneration={7}
             catalogEntries={[catalogEntry]}
             pluginProjectionById={{}}
-            pluginProjectionV2={createProjection(7)}
+            pluginProjectionV2={projection}
+            pluginUiProjection={pluginUiProjection}
             machineId="machine-1"
             serverId="server-1"
             parentLifetime={lifetime}

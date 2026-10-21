@@ -2108,6 +2108,8 @@ export type PluginSurfaceTargetedMountProps = Readonly<{
     pluginProjectionById?: Readonly<Record<string, PluginProjectionEntry>> | null;
     /** Exact response-local V2 package/translation facts for B presentation. */
     pluginProjectionV2?: PluginProjectionV2 | null;
+    /** Already composed and normalized by this target's acquisition publication. */
+    pluginUiProjection?: PluginUiProjectionModel | null;
     /**
      * The response-local daemon authority is ready. Retained exact target facts
      * may keep B presented during revalidation, but daemon mutations remain
@@ -2136,6 +2138,7 @@ export type PluginSurfaceComposerMountProps = Readonly<{
     pluginProjectionById?: Readonly<Record<string, PluginProjectionEntry>> | null;
     /** Exact current V2 projection for translations/package presentation. */
     pluginProjectionV2?: PluginProjectionV2 | null;
+    pluginUiProjection: PluginUiProjectionModel;
     /** Mutation admission remains closed until this current response is ready. */
     daemonProjectionReady: boolean;
     /** Canonical Composer badge shown if the selected renderer cannot mount. */
@@ -2160,6 +2163,7 @@ export type PluginSurfaceEphemeralMountProps = Readonly<{
     parentLifetime: BoundPluginSurfaceMountLifetime;
     pluginProjectionById?: Readonly<Record<string, PluginProjectionEntry>> | null;
     pluginProjectionV2?: PluginProjectionV2 | null;
+    pluginUiProjection: PluginUiProjectionModel;
     daemonProjectionReady: boolean;
     fallback?: React.ReactNode;
     binding?: BoundPluginSurfaceBinding;
@@ -2447,11 +2451,11 @@ function PluginSurfaceHostMount(props: Readonly<(
                 targetedMount?.pluginProjectionV2 ? normalizePluginUiProjection(targetedMount.pluginProjectionV2) : null)
                 : normalizePluginUiProjection(targetedMount?.pluginProjectionV2 ?? null)
             : composerBinding
-                ? normalizePluginUiProjection(composerMount?.pluginProjectionV2 ?? null)
+                ? composerMount?.pluginUiProjection ?? null
                 : ephemeralBinding
-                    ? normalizePluginUiProjection(ephemeralMount?.pluginProjectionV2 ?? null)
+                    ? ephemeralMount?.pluginUiProjection ?? null
                 : props.pluginUiProjection ?? null
-    ), [accountExecutionOrigin, composerBinding, composerMount?.pluginProjectionV2, ephemeralBinding, ephemeralMount?.pluginProjectionV2, mountedAccountUiProjection, props.pluginUiProjection, targetedBinding, targetedMount?.pluginProjectionV2]);
+    ), [accountExecutionOrigin, composerBinding, composerMount?.pluginUiProjection, ephemeralBinding, ephemeralMount?.pluginUiProjection, mountedAccountUiProjection, props.pluginUiProjection, targetedBinding, targetedMount?.pluginProjectionV2]);
     const installedPackagesById = mountedPluginUiProjection?.installedPackagesById;
     // The raw V2 Action map is the sole target source for the bound surface.
     // This closure is an exact lookup over that producer-owned snapshot, not a

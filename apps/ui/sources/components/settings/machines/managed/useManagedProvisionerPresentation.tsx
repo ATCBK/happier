@@ -4,13 +4,13 @@ import type { ManagedControllerV1 } from '@happier-dev/protocol/machines/managed
 import type { ManagedMachinePresetV1 } from '@happier-dev/protocol/machines/managed/managedMachinePresetV1';
 import type { MachineProvisionersListResultV1 } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
-import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
 import { createPluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
 import type { PluginProjectionInstalledPackageV2 } from '@happier-dev/protocol';
 import { Icon } from '@/components/ui/icons/Icon';
 import { InstalledPluginBrandMark } from '@/components/plugins/shared/InstalledPluginBrandMark';
 import { useServerInstalledPluginBrand } from '@/components/settings/plugins/PluginMark';
 import { getPreferredLanguage } from '@/text';
+import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
 import { resolvePluginContributedActionIconName } from '@/components/plugins/actions/pluginContributedActionPresentation';
 import { launchPluginSurfaceAction } from '@/components/plugins/surfaces/launchPluginSurfaceAction';
 import { createPluginUiProjectedActionResolver } from '@/sync/domains/plugins/ui/projection';
@@ -69,7 +69,7 @@ export function useManagedProvisionerPresentation(input: Readonly<{
 }>) {
     const projection = useDaemonMergedProjectionInputs({ serverId: input.serverId, machineId: input.controller?.machineId, enabled: !!input.controller,
         ...(input.refreshKey === undefined ? {} : { refreshKey: input.refreshKey }) });
-    const uiProjection = React.useMemo(() => normalizePluginUiProjection(projection.inputs?.pluginProjectionV2 ?? null), [projection.inputs?.pluginProjectionV2]);
+    const uiProjection = projection.inputs?.pluginUiProjection ?? EMPTY_PLUGIN_UI_PROJECTION;
     const locale = getPreferredLanguage();
     const projected = input.provider ? projection.inputs?.pluginProjectionV2?.familiesById.machineProvisioners?.entriesById[
         buildQualifiedPluginContributionKey(input.provider)] : undefined;

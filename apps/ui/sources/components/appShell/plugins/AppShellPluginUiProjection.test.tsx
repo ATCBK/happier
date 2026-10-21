@@ -23,7 +23,6 @@ import {
 import { createDeferred, createMachineFixture, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import * as projectionCurrentness from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
 import * as executionOriginSelection from '@/sync/domains/machines/administration/usePluginExecutionOriginSelection';
-import * as projectionUnionOwner from '@/sync/domains/plugins/ui/projectionUnion';
 import {
     selectCurrentAppShellPluginExecutionOrigins,
     selectCurrentAppShellPluginUiCurrentness,
@@ -122,6 +121,32 @@ describe('app-shell projection bootstrap targets', () => {
 });
 
 describe('AppShell declaration subscriptions', () => {
+    it('does not relabel a retained declaration with the newly active Account lifetime', async () => {
+        const accountA = captureActiveServerAccountScopeLifetime();
+        if (!accountA) throw new Error('Account fixture must establish a lifetime');
+        const projectionA = { ...EMPTY_PLUGIN_UI_PROJECTION, generation: 917 };
+        const value: AppShellPluginUiProjectionValue = {
+            pluginUiProjection: projectionA, pluginBrowserProjection: null,
+            phase: 'current', interactionEnabled: true, machineId: null, serverId: null,
+            platform: 'web', accountLifetime: accountA,
+            reloadConnectedAccountProjection: () => {}, clientExecutableActivation: { status: 'ready' },
+            reloadClientExecutables: () => {},
+        };
+        const screen = await renderScreen(<AppShellPluginUiProjectionValueProvider value={value}>{null}</AppShellPluginUiProjectionValueProvider>);
+        onTestFinished(() => screen.unmount());
+        expect(readCurrentAppShellPluginUiProjection()).toBe(projectionA);
+        await act(async () => { installActiveAccountScope('account-publication-b'); });
+        const accountB = captureActiveServerAccountScopeLifetime();
+        expect(accountA.isCurrent()).toBe(false);
+        expect(accountB?.scope.accountId).toBe('account-publication-b');
+        // A retained props value is still A's value even after another render
+        // captures B. The committed boundary cannot re-admit it under B.
+        await screen.update(<AppShellPluginUiProjectionValueProvider value={{ ...value,
+            connectedAccountProjectionRevision: 2 }}>{null}</AppShellPluginUiProjectionValueProvider>);
+        expect(readCurrentAppShellPluginUiProjection()).toBeNull();
+        expect(readCurrentAppShellPluginUiProjection({ scope: accountB!.scope, declarationsOnly: true })).toBeNull();
+    });
+
     it('updates declared plugin text when the ready locale changes without a new projection', async () => {
         const previousLanguage = getPreferredLanguage();
         onTestFinished(() => commitPreferredLanguage(previousLanguage));
@@ -933,10 +958,28 @@ function pluginUiProjectionWithClientAction(input: Readonly<{
 
 describe('AppShellPluginUiProjectionProvider', () => {
     it('does not rerender retained origin consumers for unchanged parent inputs', async () => {
-        // Count the real composition owners, forwarding all policy/normalization.
-        const unions = vi.spyOn(projectionUnionOwner, 'unionPluginUiProjections');
-        const merges = vi.spyOn(projectionUnionOwner, 'mergeInstalledPluginUiProjections');
-        onTestFinished(() => { unions.mockRestore(); merges.mockRestore(); });
+        // Publication factories call their pure algorithms within the owning
+        // module, so exported-function spies would miss those actual calls.
+        // Observe real source enumeration without replacing any implementation.
+        const entries = vi.spyOn(Object, 'entries');
+        const values = vi.spyOn(Object, 'values');
+        const currentnessReads = vi.spyOn(projectionCurrentness, 'usePluginUiProjectionCurrentness');
+        onTestFinished(() => { entries.mockRestore(); values.mockRestore(); currentnessReads.mockRestore(); });
+        const sourceTraversals = () => {
+            const sources = new Set<object>();
+            for (const result of currentnessReads.mock.results) {
+                if (result.type !== 'return' || !result.value.pluginUiProjection) continue;
+                const model = result.value.pluginUiProjection;
+                sources.add(model);
+                for (const key of Reflect.ownKeys(model)) {
+                    const value: unknown = Reflect.get(model, key);
+                    if (value !== null && typeof value === 'object') sources.add(value);
+                }
+            }
+            const isSource = (value: unknown) => value !== null && typeof value === 'object' && sources.has(value);
+            return entries.mock.calls.filter(([value]) => isSource(value)).length
+                + values.mock.calls.filter(([value]) => isSource(value)).length;
+        };
         const pluginId = 'acme.retained-origin';
         const origin = installSelectedAppScopePluginFixture({ machineId: 'machine-retained', pluginId });
         projectionDescribeSpy.mockResolvedValue({ supported: true,
@@ -950,16 +993,15 @@ describe('AppShellPluginUiProjectionProvider', () => {
         const reads = () => selection.mock.calls.filter(([input]) => input.pluginId === pluginId).length;
         expect(reads()).toBeGreaterThan(0);
         const settled = reads();
-        const settledUnions = unions.mock.calls.length;
-        const settledMerges = merges.mock.calls.length;
+        const settledTraversals = sourceTraversals();
+        expect(settledTraversals).toBeGreaterThan(0);
         for (let index = 0; index < 3; index++) {
             await screen.update(<AppShellPluginUiProjectionProvider>{null}</AppShellPluginUiProjectionProvider>);
         }
         expect(reads()).toBe(settled);
         console.info('R-C AppShell unchanged parent renders', { renders: 3,
-            unions: unions.mock.calls.length - settledUnions, merges: merges.mock.calls.length - settledMerges });
-        expect(unions.mock.calls.length).toBe(settledUnions);
-        expect(merges.mock.calls.length).toBe(settledMerges);
+            sourceTraversals: sourceTraversals() - settledTraversals });
+        expect(sourceTraversals()).toBe(settledTraversals);
         for (let index = 0; index < 3; index += 1) {
             await act(async () => {
                 storageState.machines = storageState.machines.map(machine => ({ ...machine, activeAt: Date.now() + index }));
@@ -967,9 +1009,8 @@ describe('AppShellPluginUiProjectionProvider', () => {
             await flushHookEffects({ cycles: 3 });
         }
         console.info('R-C AppShell unchanged Machine publications', { publications: 3,
-            unions: unions.mock.calls.length - settledUnions, merges: merges.mock.calls.length - settledMerges });
-        expect(unions.mock.calls.length).toBe(settledUnions);
-        expect(merges.mock.calls.length).toBe(settledMerges);
+            sourceTraversals: sourceTraversals() - settledTraversals });
+        expect(sourceTraversals()).toBe(settledTraversals);
         const scope = captureActiveServerAccountScopeLifetime()!.scope;
         const admission = readPluginAccountAvailability(scope).readMaterializations();
         expect(admission.kind).toBe('available');
@@ -982,9 +1023,8 @@ describe('AppShellPluginUiProjectionProvider', () => {
         });
         await flushHookEffects({ cycles: 5 });
         console.info('R-C AppShell cursor-only Availability publication', {
-            unions: unions.mock.calls.length - settledUnions, merges: merges.mock.calls.length - settledMerges });
-        expect(unions.mock.calls.length).toBe(settledUnions);
-        expect(merges.mock.calls.length).toBe(settledMerges);
+            sourceTraversals: sourceTraversals() - settledTraversals });
+        expect(sourceTraversals()).toBe(settledTraversals);
         // A choice report changes the union's selected stamp, but not its
         // candidate supplies. It must settle without feeding a fresh facts
         // object back through the same selector on every parent publication.

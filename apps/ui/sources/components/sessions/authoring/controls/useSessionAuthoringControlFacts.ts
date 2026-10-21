@@ -21,7 +21,6 @@ import { useAiLaunchProfilesWithReadState } from '@/sync/store/useAiLaunchProfil
 import { useAllMachines, useSetting, useSettings } from '@/sync/domains/state/storage';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { resolvePluginLocalizedText } from '@/sync/domains/plugins/ui/i18n';
-import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
 import { getPreferredLanguage } from '@/text';
 import { resolveWindowsTerminalAvailable } from '@/capabilities/windowsTerminalAvailability';
 
@@ -80,12 +79,7 @@ export function useSessionAuthoringControlFacts(params: Readonly<{
         enabled: machineId !== null,
     });
     const projectionInputs = daemonProjection.phase === 'ready' ? daemonProjection.inputs : null;
-    const pluginUiProjection = React.useMemo(
-        () => projectionInputs?.pluginProjectionV2
-            ? normalizePluginUiProjection(projectionInputs.pluginProjectionV2)
-            : null,
-        [projectionInputs?.pluginProjectionV2],
-    );
+    const pluginUiProjection = projectionInputs?.pluginUiProjection ?? null;
 
     const agentTargets = React.useMemo<readonly SessionAuthoringAgentTargetOption[]>(() => {
         const entries = getResolvedBackendCatalogEntries({

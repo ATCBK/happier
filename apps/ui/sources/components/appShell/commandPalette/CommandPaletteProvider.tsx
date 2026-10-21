@@ -35,7 +35,6 @@ import {
 } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import {
     createPluginUiProjectedActionResolver,
-    normalizePluginUiProjection,
 } from '@/sync/domains/plugins/ui/projection';
 import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
@@ -145,7 +144,7 @@ function useCommandPalettePluginActionPresentation(activeSessionId: string | nul
         let current!: PluginContributedActionCurrentSnapshot;
         current = {
             pluginProjectionById: inputs.pluginProjectionById,
-            pluginUiProjection: normalizePluginUiProjection(inputs.pluginProjectionV2 ?? null),
+            pluginUiProjection: inputs.pluginUiProjection,
             resolveContributedAction: createPluginUiProjectedActionResolver(
                 inputs.pluginProjectionV2?.actionsById,
             ),

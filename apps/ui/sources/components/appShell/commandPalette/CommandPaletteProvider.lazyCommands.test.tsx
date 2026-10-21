@@ -280,11 +280,11 @@ describe('CommandPaletteProvider lazy command building', () => {
         testState.enabledFeatures.add('sessions.direct');
         await screen.update(element());
 
-        expect(Modal.update).toHaveBeenCalledWith('modal-id', {
+        expect(Modal.update).toHaveBeenCalledWith('modal-id', expect.objectContaining({
             commands: expect.arrayContaining([
                 expect.objectContaining({ id: 'app-destination:browseExistingSessions' }),
             ]),
-        });
+        }));
     });
 
     it('opens the canonical Browse Existing Sessions compact destination from the web palette', async () => {

@@ -9,6 +9,7 @@ import type {
     PluginProjectionAction,
     PluginProjectionEntry,
 } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
+import { publishDaemonMergedProjectionInputs } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import type { DaemonMergedProjectionInputs } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import type { PluginContributedActionDispatch } from '@/components/plugins/actions/pluginContributedActionController';
 import { createPluginDeclarativeModelFixture } from '@/dev/testkit/fixtures/pluginDeclarativeModelFixture';
@@ -243,7 +244,7 @@ function projectionInputs(
         resources: [],
         editableSettingsGroups: [],
     };
-    return {
+    const inputs = {
         mergedProviderProjectionById: {},
         mergedBackendProjectionById: {},
         discoveredBackendIds: [],
@@ -277,7 +278,8 @@ function projectionInputs(
         },
         automationEligibleEvents: [event],
         registryDiagnostics: [],
-    };
+    } satisfies Omit<DaemonMergedProjectionInputs, 'pluginUiProjection' | 'pluginUiProjectionPlatform' | 'connectedAccountProjection'>;
+    return { ...publishDaemonMergedProjectionInputs({ projection: inputs.pluginProjectionV2 }), ...inputs };
 }
 
 function executionOrigin(

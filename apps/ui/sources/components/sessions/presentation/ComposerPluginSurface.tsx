@@ -24,6 +24,7 @@ import {
 import { resolveLocalServicePreviewPlatform } from '@/sync/domains/local/services/preview/platform';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 
 export type ComposerPluginSurfaceMountRequest = Readonly<{
     contribution: PluginContributionIdentityV1;
@@ -81,6 +82,7 @@ export type ComposerPluginSurfaceProps = Readonly<{
     catalogEntries: readonly DaemonPluginUiComposerSurfaceCatalogEntryV1[];
     pluginProjectionById: Readonly<Record<string, PluginProjectionEntry>>;
     pluginProjectionV2: PluginProjectionV2;
+    pluginUiProjection: PluginUiProjectionModel;
     machineId: string | null;
     parentLifetime: BoundPluginSurfaceMountLifetime;
     transactionApplier: ComposerPresentationTransactionApplier;
@@ -210,6 +212,7 @@ export function ComposerPluginSurface(props: ComposerPluginSurfaceProps): React.
                 parentLifetime: props.parentLifetime,
                 pluginProjectionById: props.pluginProjectionById,
                 pluginProjectionV2: props.pluginProjectionV2,
+                pluginUiProjection: props.pluginUiProjection,
                 daemonProjectionReady: true,
                 fallback: props.fallback,
                 ...(binding === undefined ? {} : { binding }),

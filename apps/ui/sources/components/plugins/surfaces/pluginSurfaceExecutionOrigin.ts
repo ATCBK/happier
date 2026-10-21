@@ -2,11 +2,12 @@ import * as React from 'react';
 import { arePluginMachineExecutionOriginsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
 
-import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
+import { readCurrentAppShellPluginUiProjection, readCurrentAppShellPluginUiExecutionOriginCandidates,
+    subscribeCommittedAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
 import { useActivePluginAccountAvailabilityReleaseClassifier } from '@/sync/domains/plugins/availability/projection';
 import { usePluginMachineExecutionOriginSelection } from '@/sync/domains/machines/administration/usePluginExecutionOriginSelection';
 import { createPluginUiProjectedActionResolver, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
-import { readPluginUiContributionSupplies, readPluginUiExecutionOriginCandidates } from '@/sync/domains/plugins/ui/projectionUnion';
+import { readPluginUiContributionSupplies } from '@/sync/domains/plugins/ui/projectionUnion';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getPluginExecutionOriginCandidateOrigin, type PluginExecutionOriginContextualTarget } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import { resolvePluginUiProjectionContributionId } from '@/sync/domains/plugins/ui/projectionRefs';
@@ -76,17 +77,8 @@ export function usePluginSurfaceExecutionOrigin(params: Readonly<{
     // Selection is plugin-scoped, just like the shell's Administration
     // reporter. The open page narrows only the selected producer's supply,
     // never the candidates or defaults used to choose that producer.
-    const suppliedRef = React.useRef<ReturnType<typeof readPluginUiExecutionOriginCandidates> | undefined>(undefined);
-    const supplied = React.useMemo(() => {
-        const next = readPluginUiExecutionOriginCandidates({
-            projection: params.projection ?? null, pluginId: params.pluginId, previous: suppliedRef.current,
-        });
-        suppliedRef.current = next;
-        return next;
-    }, [params.pluginId, params.projection]);
-    const readCurrentCandidates = React.useCallback(() => readPluginUiExecutionOriginCandidates({
-        projection: readCurrentAppShellPluginUiProjection(), pluginId: params.pluginId,
-    }), [params.pluginId]);
+    const readCurrentCandidates = React.useCallback(() => readCurrentAppShellPluginUiExecutionOriginCandidates(params.pluginId), [params.pluginId]);
+    const supplied = React.useSyncExternalStore(subscribeCommittedAppShellPluginUiProjection, readCurrentCandidates, readCurrentCandidates);
     const readSourceCandidates = React.useCallback(() => readCurrentCandidates().sourceCandidates, [readCurrentCandidates]);
     const readMachineRejections = React.useCallback(() => readCurrentCandidates().machineRejections, [readCurrentCandidates]);
     const readDeclaredDefaultOrigins = React.useCallback(() => readCurrentCandidates().declaredDefaultOrigins, [readCurrentCandidates]);

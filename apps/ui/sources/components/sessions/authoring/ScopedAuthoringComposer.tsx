@@ -232,10 +232,11 @@ export const ScopedAuthoringComposer = React.memo(React.forwardRef<
             machineId,
             serverId,
             projection,
+            pluginUiProjection: daemonProjection.inputs!.pluginUiProjection,
             isCurrent: () => referenceHostRef.current === host && isCurrent() && focusedRef.current,
         };
         return host;
-    }, [daemonProjection.inputs?.pluginProjectionV2, daemonProjection.phase, isCurrent, machineId, serverId]);
+    }, [daemonProjection.inputs?.pluginProjectionV2, daemonProjection.inputs?.pluginUiProjection, daemonProjection.phase, isCurrent, machineId, serverId]);
     referenceHostRef.current = referenceHost;
     const dropReferenceHost = React.useMemo<ComposerReferenceSearchHost | null>(() => (
         referenceHost ? {

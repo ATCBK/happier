@@ -66,7 +66,6 @@ import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/acti
 import {
     createPluginUiProjectedActionResolver,
     EMPTY_PLUGIN_UI_PROJECTION,
-    readPluginUiProjectionSnapshot,
     type PluginUiComposerAttachmentProjection,
 } from '@/sync/domains/plugins/ui/projection';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -84,7 +83,7 @@ import { getPreferredLanguage } from '@/text';
 
 export type ComposerScopeProjectionInputs = Pick<
     DaemonMergedProjectionInputs,
-    'pluginProjectionById' | 'pluginProjectionV2' | 'composerSurfaceCatalog'
+    'pluginProjectionById' | 'pluginProjectionV2' | 'pluginUiProjection' | 'composerSurfaceCatalog'
 >;
 
 type ComposerAttachmentPresentationRequest = Readonly<{
@@ -243,6 +242,7 @@ export function useComposerScopePluginPresentation(
     const openDestinationSurface = destinationNavigation?.openSurface;
     const isScopeCurrentRef = React.useRef(params.isScopeCurrent);
     isScopeCurrentRef.current = params.isScopeCurrent;
+    const scopeIsCurrent = params.isScopeCurrent();
     const physicalTargetRef = React.useRef(params.physicalTarget);
     physicalTargetRef.current = params.physicalTarget;
     const resourceContextRef = React.useRef(params.resourceContext);
@@ -289,6 +289,7 @@ export function useComposerScopePluginPresentation(
         resourceContextKey,
         params.serverId,
         params.isScopeCurrent,
+        scopeIsCurrent,
         scopeKey,
     ]);
     React.useEffect(() => () => scopeAbort.abort(), [scopeAbort]);
@@ -305,7 +306,7 @@ export function useComposerScopePluginPresentation(
             || generation === null
             || generation === undefined
             || !params.machineId
-            || !params.isScopeCurrent()
+            || !scopeIsCurrent
         ) {
             return null;
         }
@@ -313,7 +314,7 @@ export function useComposerScopePluginPresentation(
         let snapshot!: PluginContributedActionCurrentSnapshot;
         snapshot = {
             pluginProjectionById: inputs.pluginProjectionById,
-            pluginUiProjection: readPluginUiProjectionSnapshot(projection),
+            pluginUiProjection: inputs.pluginUiProjection,
             resolveContributedAction: createPluginUiProjectedActionResolver(
                 projection.actionsById,
             ),
@@ -355,6 +356,7 @@ export function useComposerScopePluginPresentation(
         params.projectionPhase,
         params.serverId,
         params.isScopeCurrent,
+        scopeIsCurrent,
         physicalTargetKey,
         readCurrentComposerSnapshot,
         scopeAbort,
@@ -465,9 +467,11 @@ export function useComposerScopePluginPresentation(
         fallback?: React.ReactNode;
     }>): React.ReactNode => {
         const snapshot = actionSnapshotRef.current;
-        const projection = params.projectionInputs?.pluginProjectionV2;
+        const inputs = params.projectionInputs;
+        const projection = inputs?.pluginProjectionV2;
         if (
             !snapshot
+            || !inputs
             || !projection
             || !surfaceLifetime
             || !surfaceLifetime.isCurrent()
@@ -487,6 +491,7 @@ export function useComposerScopePluginPresentation(
                 catalogEntries={composerSurfaceCatalog}
                 pluginProjectionById={snapshot.pluginProjectionById}
                 pluginProjectionV2={projection}
+                pluginUiProjection={inputs.pluginUiProjection}
                 machineId={snapshot.host.machineId ?? null}
                 parentLifetime={surfaceLifetime}
                 transactionApplier={transactionApplier}

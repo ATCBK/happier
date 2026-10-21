@@ -1,7 +1,6 @@
 import * as React from 'react';
 import type { AuthoringComposerScope } from '@/components/sessions/authoring/ScopedAuthoringComposer';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
-import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
 import { getStorage } from '@/sync/domains/state/storage';
 import { resolveMachineControlTargetForSessionFromState } from '@/sync/domains/session/resolveMachineTargetForSessionFromState';
 import { listWorkflowStepActionSpecs } from './workflowActionCatalog';
@@ -19,6 +18,7 @@ export function useWorkflowActionCatalog(scope?: AuthoringComposerScope) {
     // The merged-projection lifecycle already subscribes this leaf to language changes.
     const language = getPreferredLanguage();
     const current = projection.phase === 'ready' ? projection.inputs?.pluginProjectionV2 ?? null : null;
-    const specs = React.useMemo(() => listWorkflowStepActionSpecs(current, current ? normalizePluginUiProjection(current) : null), [current, language]);
+    const uiProjection = projection.phase === 'ready' ? projection.inputs?.pluginUiProjection ?? null : null;
+    const specs = React.useMemo(() => listWorkflowStepActionSpecs(current, uiProjection), [current, uiProjection, language]);
     return { specs, phase: projection.phase, machineId, serverId: serverId ?? null };
 }

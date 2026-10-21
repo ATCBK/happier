@@ -78,10 +78,9 @@ import { createPluginActionHandlerNotStartedError } from '@happier-dev/plugin-sd
 import {
     isPluginProjectedActionExecutable,
     type PluginUiProjectionModel,
-    normalizePluginUiProjection,
     createPluginUiProjectedActionResolver,
 } from '@/sync/domains/plugins/ui/projection';
-import { adaptDaemonContributionRegistryProjectionToMergedProjectionInputs } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
+import { publishDaemonMergedProjectionInputs } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import { createSelectedActionInputCustody } from '../hostApi/selectedActionInputCustody';
 import { createPluginActionInputSelector } from './pluginActionInputSelectionHostApi';
 
@@ -723,10 +722,11 @@ function createClientActionUi(
                     : null;
                 assertCurrent();
                 if (projection && !projection.supported) throw new PluginError({ code: 'plugin_action_input_selection_unavailable' });
-                const selectionProjection = projection?.supported ? normalizePluginUiProjection(projection.projection) : null;
+                const selectionInputs = projection?.supported ? publishDaemonMergedProjectionInputs({ projection: projection.projection }) : null;
+                const selectionProjection = selectionInputs?.pluginUiProjection ?? null;
                 const select = createPluginActionInputSelector({
-                    ...(projection?.supported ? {
-                        pluginProjectionById: adaptDaemonContributionRegistryProjectionToMergedProjectionInputs(projection.projection).pluginProjectionById,
+                    ...(selectionInputs ? {
+                        pluginProjectionById: selectionInputs.pluginProjectionById,
                         pluginUiProjection: selectionProjection,
                     } : {}),
                     targetedContributions: targeted?.targetedContributions,

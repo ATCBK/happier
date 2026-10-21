@@ -1,6 +1,5 @@
 import { PluginError } from '@happier-dev/plugin-sdk';
 import { resolveManifestTargetedContributions } from '@happier-dev/plugin-sdk/host/registration';
-import { computePluginAccountBundledDeclarationDigestV1 } from '@happier-dev/protocol/plugins/availability';
 import {
     DaemonPluginUiTargetedSurfaceMountV1Schema,
     PluginUiTargetedSurfaceMountCoreV1Schema,
@@ -129,7 +128,7 @@ export async function readMountedAccountTargetedContributions(input: Readonly<{
                 mounts.push(Object.freeze({ ...core, accountExecutionOrigin: Object.freeze({
                     ...input.accountLifetime.scope, custodyId: selection.custodyId, sourceCustody: selection.sourceCustody,
                     ...(selection.sourceCustody.kind === 'bundled_first_party'
-                        ? { declarationDigest: computePluginAccountBundledDeclarationDigestV1(selection.manifest) } : {}),
+                        ? { declarationDigest: availability.readBundledAccountDeclarationDigest(contributor.pluginId)! } : {}),
                 }) }));
             }
         }

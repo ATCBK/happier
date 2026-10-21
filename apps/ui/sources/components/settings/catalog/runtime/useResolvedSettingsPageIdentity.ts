@@ -2,13 +2,14 @@ import * as React from 'react';
 import type { FeatureId } from '@happier-dev/protocol';
 
 import { useGlobalSearchParams, usePathname } from '@/components/appShell/workspace/destinationRoute';
-import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { useAppShellPluginUiDeclarationProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useTeamsSettingsAdmission } from '@/hooks/teams/useTeamsSettingsAdmission';
 import { useTeamsDestinationShown } from '@/hooks/teams/useTeamsDestinationShown';
 import { useHomeAdministrationSettingsAdmission } from '@/hooks/home/useHomeAdministrationSettingsAdmission';
 import { useLocalSetting, useSetting } from '@/sync/domains/state/storage';
-import { getPreferredLanguage, t } from '@/text';
+import { t } from '@/text';
+import { usePreferredLanguage } from '@/text/usePreferredLanguage';
 
 import { SETTINGS_PAGE_CATALOG, flattenSettingsPageCatalog } from '../pageCatalog';
 import { SETTINGS_ROUTES, settingsRoutePathname } from '../routes';
@@ -115,7 +116,7 @@ export function useResolvedSettingsPageTree(enabled: boolean): ResolvedSettingsP
     const pathname = usePathname();
     const routeParams = useGlobalSearchParams();
     const routeContext = React.useMemo<SettingsRouteContext>(() => ({ pathname: pathname ?? '/', params: routeParams }), [pathname, routeParams]);
-    const appShellPluginUiProjection = useAppShellPluginUiProjection();
+    const pluginUiProjection = useAppShellPluginUiDeclarationProjection();
     const useProfiles = Boolean(useSetting('useProfiles'));
     const devModeEnabled = Boolean(useLocalSetting('devModeEnabled'));
     const { os: hostOs, desktop: tauriDesktop } = resolveSettingsHost();
@@ -129,10 +130,10 @@ export function useResolvedSettingsPageTree(enabled: boolean): ResolvedSettingsP
     const teamRouteAdmitted = typeof routeServerId === 'string' && teamsAdmission.capableServerIds.includes(routeServerId);
     const homeRouteAdmitted = typeof routeServerId === 'string' && homeAdministrationAdmission.admittedServerIds.includes(routeServerId);
     const featureSnapshot = useSettingsPageFeatureSnapshot(SETTINGS_PAGE_FEATURE_IDS);
-    const locale = getPreferredLanguage();
+    const locale = usePreferredLanguage();
     const catalog = React.useMemo(() => enabled ? mergeAdmittedPluginSettingsPages({
-        baseCatalog: SETTINGS_PAGE_CATALOG, projection: appShellPluginUiProjection.pluginUiProjection, locale,
-    }) : [], [enabled, appShellPluginUiProjection.pluginUiProjection, locale]);
+        baseCatalog: SETTINGS_PAGE_CATALOG, projection: pluginUiProjection, locale,
+    }) : [], [enabled, pluginUiProjection, locale]);
     const tree = React.useMemo(() => resolveTree(catalog, {
         useProfiles, devModeEnabled, tauriDesktop, features: featureSnapshot, teamsAdmitted, homeAdministrationAdmitted,
     }), [catalog, devModeEnabled, featureSnapshot, teamsAdmitted, homeAdministrationAdmitted, locale, tauriDesktop, useProfiles]);

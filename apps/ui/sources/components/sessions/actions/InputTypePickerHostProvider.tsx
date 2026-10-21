@@ -12,7 +12,6 @@ import { captureActiveServerAccountScopeLifetime, type ActiveServerAccountScopeL
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { resolveUiAccountActionFallbackMachineId } from '@/sync/ops/actions/accountActionDeps';
 import { readPluginSurfaceEphemeralMountBinding } from '@/components/plugins/surfaces/pluginSurfaceMountBinding';
-import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
 import { resolvePluginLocalizedText } from '@/sync/domains/plugins/ui/i18n';
 import { createInputTypePickerPort } from './inputTypePickerPort';
 import { createHostInputTypePickerForm } from './hostInputTypePickerForm';
@@ -170,7 +169,7 @@ export function InputTypePickerHostProvider(props: HostProps): React.ReactElemen
                 const { presentPluginEphemeralInputSurface } = await import('@/components/automations/editor/presentPluginEventAutomationSetupSurface');
                 return presentPluginEphemeralInputSurface({
                     surface, title: resolvePluginLocalizedText({
-                        projection: normalizePluginUiProjection(admitted.now.inputs.pluginProjectionV2),
+                        projection: admitted.now.inputs.pluginUiProjection,
                         pluginId: admitted.entry.pluginId, value: admitted.entry.definition.title,
                     }),
                     launchInput: request.launchInput,

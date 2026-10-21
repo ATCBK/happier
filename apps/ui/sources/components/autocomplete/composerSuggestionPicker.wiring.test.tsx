@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS, type PluginProjectionV2 } from '@happier-dev/protocol';
 
 import { createDeferred, flushHookEffects, renderHook } from '@/dev/testkit';
+import { publishDaemonMergedProjectionInputs } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import type { FileItem, FileSuggestionScope } from '@/sync/domains/input/suggestionFile';
 import {
     DISCUSSION_COMPOSER_SUGGESTION_KINDS,
@@ -140,6 +141,7 @@ function composerReferenceHost(): ComposerReferenceSearchHost {
         machineId: 'machine-a',
         serverId: 'server-a',
         projection,
+        pluginUiProjection: publishDaemonMergedProjectionInputs({ projection }).pluginUiProjection,
         isCurrent: () => true,
     };
 }

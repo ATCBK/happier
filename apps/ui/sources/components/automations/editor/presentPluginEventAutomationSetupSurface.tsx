@@ -136,6 +136,7 @@ function PluginEventAutomationSetupSurfaceModal(
         parentLifetime: props.accountLifetime,
         pluginProjectionById: props.projection.pluginProjectionById,
         pluginProjectionV2: props.projection.pluginProjectionV2,
+        pluginUiProjection: props.projection.pluginUiProjection,
         daemonProjectionReady: true,
         fallback: null,
         binding,
