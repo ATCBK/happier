@@ -11,6 +11,7 @@ describe('resolveSegmentedTabFit', () => {
   it('keeps every tab with its glyph while the measured row holds them all', () => {
     expect(resolveSegmentedTabFit({ ...base, available: 600 })).toEqual({
       icons: true,
+      counts: true,
       visibleCount: 6,
     });
   });
@@ -18,7 +19,30 @@ describe('resolveSegmentedTabFit', () => {
   it('drops the glyphs before moving any tab into More', () => {
     expect(resolveSegmentedTabFit({ ...base, available: 430 })).toEqual({
       icons: false,
+      counts: true,
       visibleCount: 6,
+    });
+  });
+
+  it('drops the counts after the glyphs and before moving any tab into More', () => {
+    // Inbox views beside an open item: "Needs you 69 | Updates 95 | Mentions" do not fit 280,
+    // the names alone do (93+75+79 = 247 + 2 gaps).
+    const counted = { withIcons: [113, 98, 79], labelsOnly: [113, 98, 79], labelsWithoutCounts: [93, 75, 79], gap: 2, more: 60 } as const;
+    expect(resolveSegmentedTabFit({ ...counted, available: 280 })).toEqual({
+      icons: false,
+      counts: false,
+      visibleCount: 3,
+    });
+    expect(resolveSegmentedTabFit({ ...counted, available: 300 })).toEqual({
+      icons: true,
+      counts: true,
+      visibleCount: 3,
+    });
+    // Narrower still, the names without counts are what moves behind More.
+    expect(resolveSegmentedTabFit({ ...counted, available: 240 })).toEqual({
+      icons: false,
+      counts: false,
+      visibleCount: 2,
     });
   });
 
@@ -26,6 +50,7 @@ describe('resolveSegmentedTabFit', () => {
     // 80+54+82+60 = 276 + 3 gaps = 282; + gap + More 60 = 344 fits 350; a fifth tab would not.
     expect(resolveSegmentedTabFit({ ...base, available: 350 })).toEqual({
       icons: false,
+      counts: false,
       visibleCount: 4,
     });
   });
@@ -40,12 +65,13 @@ describe('resolveSegmentedTabFit', () => {
         more: 60,
         available: 350,
       }),
-    ).toEqual({ icons: false, visibleCount: 2 });
+    ).toEqual({ icons: false, counts: false, visibleCount: 2 });
   });
 
   it('leaves the row as it is before the first measurement, so nothing moves on arrival', () => {
     expect(resolveSegmentedTabFit({ ...base, available: null })).toEqual({
       icons: true,
+      counts: true,
       visibleCount: 6,
     });
   });
@@ -53,6 +79,7 @@ describe('resolveSegmentedTabFit', () => {
   it('can put every tab behind More in the narrowest pane', () => {
     expect(resolveSegmentedTabFit({ ...base, available: 100 })).toEqual({
       icons: false,
+      counts: false,
       visibleCount: 0,
     });
   });

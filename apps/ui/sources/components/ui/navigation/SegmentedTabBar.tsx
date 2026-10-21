@@ -506,8 +506,9 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
         setMeasured((current) => (current[key] === width ? current : { ...current, [key]: width }));
     }, []);
     const fit = React.useMemo(() => {
-        if (!overflow) return { icons: true, visibleCount: props.tabs.length };
-        const complete = props.tabs.every((tab) => measured[`i:${tab.id}`] !== undefined && measured[`l:${tab.id}`] !== undefined)
+        if (!overflow) return { icons: true, counts: true, visibleCount: props.tabs.length };
+        const complete = props.tabs.every((tab) => measured[`i:${tab.id}`] !== undefined && measured[`l:${tab.id}`] !== undefined
+            && (!tab.count || measured[`b:${tab.id}`] !== undefined))
             && measured.more !== undefined;
         return resolveSegmentedTabFit({
             // The track's own padding is not room for segments: counting it let a row that "fit" squeeze
@@ -515,6 +516,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
             available: complete && rowWidth !== null ? rowWidth - (plain ? 0 : SEGMENT_TRACK_PADDING_PX * 2) : null,
             withIcons: props.tabs.map((tab) => measured[`i:${tab.id}`] ?? 0),
             labelsOnly: props.tabs.map((tab) => measured[`l:${tab.id}`] ?? 0),
+            labelsWithoutCounts: props.tabs.map((tab) => measured[`b:${tab.id}`] ?? measured[`l:${tab.id}`] ?? 0),
             gap: plain ? HAPPIER_SEGMENTED_METRICS.plain.gapPx : 0,
             more: measured.more ?? 0,
         });
@@ -620,6 +622,10 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
 
     return (
         <View
+            // React Native Web starts observing a View's layout only when it mounts with a handler, so a
+            // bar that starts fitting itself later (the Inbox list narrowing beside an open item) would
+            // never learn its width. Switching modes remounts the row, which then measures.
+            key={overflow ? 'fit' : 'flow'}
             style={[styles.container, contentSized && !overflow ? styles.containerContent : null]}
             onLayout={overflow ? (event) => {
                 const width = event.nativeEvent.layout.width;
@@ -642,6 +648,11 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                                 <View onLayout={(event) => recordMeasure(`l:${tab.id}`, event)}>
                                     <PlainTabCaption tab={tab} icon={false} active={active} measuring segmented={!plain} />
                                 </View>
+                                {tab.count ? (
+                                    <View onLayout={(event) => recordMeasure(`b:${tab.id}`, event)}>
+                                        <PlainTabCaption tab={tab} icon={false} count={false} active={active} measuring segmented={!plain} />
+                                    </View>
+                                ) : null}
                             </React.Fragment>
                         );
                     })}
@@ -709,7 +720,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                                 tabFrameTarget,
                                 HAPPIER_FOCUS_RING_DELEGATED_STYLE,
                             ]}
-                            {...(iconOnly || glyphOnly ? ({ title: tab.label } as object) : {})}
+                            {...(iconOnly || glyphOnly ? ({ title: tab.label } as object) : !fit.counts && tab.count ? ({ title: baseName } as object) : {})}
                             accessibilityRole={valueChoice ? 'radio' : 'tab'}
                             accessibilityLabel={unavailableReason ? `${tabName}, ${unavailableReason}` : tabName}
                             accessibilityState={valueChoice
@@ -745,7 +756,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                                     />
                                 ) : null}
                                 {plain ? (
-                                    <PlainTabCaption tab={tab} icon={showIcons} active={active} label={!glyphOnly} />
+                                    <PlainTabCaption tab={tab} icon={showIcons} count={fit.counts} active={active} label={!glyphOnly} />
                                 ) : iconOnly ? (
                                     <View style={styles.tabIcon}>{tab.icon}</View>
                                 ) : (
@@ -769,7 +780,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                                         ]}
                                     >
                                         {tab.label}
-                                        {tab.count ? <Text style={styles.tabCount}>{` ${tab.count}`}</Text> : null}
+                                        {tab.count && fit.counts ? <Text style={styles.tabCount}>{` ${tab.count}`}</Text> : null}
                                     </Text>
                                     {tab.badge ? <StatusPill variant="info" hideDot label={tab.badge} /> : null}
                                     </View>
@@ -805,6 +816,8 @@ function PlainTabCaption(props: Readonly<{
     active: boolean;
     /** The words are drawn (false: the glyph stands alone for a tab that is not chosen). */
     label?: boolean;
+    /** The quiet count is drawn (false: the row had no room for it; it stays in the accessible name). */
+    count?: boolean;
     /** Off-screen measuring copy: drawn with the surface's own padding so widths match. */
     measuring?: boolean;
     /** Measure as a content-sized segment on the track (its padding and label), not a plain page tab. */
@@ -820,7 +833,7 @@ function PlainTabCaption(props: Readonly<{
             {props.label === false ? null : (
                 <Text numberOfLines={1} style={[styles.tabLabel, props.segmented ? null : styles.plainLabel, props.active ? styles.tabLabelActive : null]}>
                     {props.tab.label}
-                    {props.tab.count ? <Text style={styles.tabCount}>{` ${props.tab.count}`}</Text> : null}
+                    {props.tab.count && props.count !== false ? <Text style={styles.tabCount}>{` ${props.tab.count}`}</Text> : null}
                 </Text>
             )}
         </View>
