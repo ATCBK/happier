@@ -21,15 +21,20 @@ export function useWorkflowTriggerSets(request: WorkflowTriggerListRequestV1 | n
     const workflow = request && 'workflow' in request ? request.workflow : null;
     const requestedScope = request && 'scope' in request ? request.scope : 'account_inline';
     const queryKey = request === null ? '' : workflow ? `workflow:${workflow}` : requestedScope;
+    // Addressed reads for the focused Account share its canonical Automation
+    // projection, including local Action receipts before a socket wake arrives.
+    const focused = !addressed || Boolean(scope && activeLifetime?.isCurrent()
+        && activeLifetime.scope.accountId === scope.accountId
+        && areServerProfileIdentifiersEquivalent(activeLifetime.scope.serverId, scope.serverId));
     // The semantic query, not a caller's object allocation, owns the read lifetime.
     const readRequest = React.useMemo<WorkflowTriggerListRequestV1 | null>(() => queryKey === '' ? null
         : workflow === null ? { scope: requestedScope } : { workflow }, [queryKey, workflow, requestedScope]);
     const identity = React.useMemo(() => ({}), [queryKey, scopeKey, lifetime]);
-    const selector = React.useMemo(() => addressed ? () => EMPTY_SETS
-        : createWorkflowTriggerSetSelector(queryKey, workflow !== null), [addressed, queryKey, workflow]);
+    const selector = React.useMemo(() => focused ? createWorkflowTriggerSetSelector(queryKey, workflow !== null)
+        : () => EMPTY_SETS, [focused, queryKey, workflow]);
     const sets = getStorage()(selector);
-    const changeSelector = React.useMemo(() => addressed || queryKey === '' ? () => ''
-        : createWorkflowTriggerChangeSelector(null, workflow, requestedScope === 'account_all'), [addressed, queryKey, workflow, requestedScope]);
+    const changeSelector = React.useMemo(() => !focused || queryKey === '' ? () => ''
+        : createWorkflowTriggerChangeSelector(null, workflow, requestedScope === 'account_all'), [focused, queryKey, workflow, requestedScope]);
     const changeSignal = getStorage()(changeSelector);
     const [state, setState] = React.useState<{ identity: object; status: 'loading' | 'ready' | 'failed'; sets?: readonly WorkflowTriggerSetV1[] }>(
         () => ({ identity, status: request === null ? 'ready' : 'loading' }),
@@ -77,5 +82,5 @@ export function useWorkflowTriggerSets(request: WorkflowTriggerListRequestV1 | n
     const status = state.identity !== identity ? 'loading' as const
         : state.status === 'failed' && homeSettling ? 'loading' as const : state.status;
     return { sets: request === null ? EMPTY_SETS : addressed ? state.identity === identity && accountLifetime?.isCurrent()
-        ? state.sets ?? EMPTY_SETS : EMPTY_SETS : sets, status: request === null ? 'ready' as const : status, retry };
+        ? focused ? sets : state.sets ?? EMPTY_SETS : EMPTY_SETS : sets, status: request === null ? 'ready' as const : status, retry };
 }

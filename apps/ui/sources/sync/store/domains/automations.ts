@@ -11,6 +11,7 @@ import { getAutomationDefinitionRunCauseAt } from '@/sync/domains/automations/au
 import { loadSyncTuning } from '@/sync/runtime/syncTuning';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { WorkflowTriggerSetV1 } from '@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1';
+import { isWorkflowTriggerSetAttachedToSession } from '@/sync/domains/workflows/workflowTriggerSession';
 
 import type { StoreGet, StoreSet } from './_shared';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -60,16 +61,23 @@ function mergeTriggerSets(previous: AutomationsDomain['workflowTriggerSetsById']
 const EMPTY_TRIGGER_SETS: readonly WorkflowTriggerSetV1[] = [];
 /** One reader instance per mounted query; unrelated queries keep the same selected value. */
 export function createWorkflowTriggerSetSelector(queryKey: string, includeEmpty = false) {
+    const sessionId = queryKey.startsWith('session:') ? queryKey.slice('session:'.length) : null;
     let previous: readonly WorkflowTriggerSetV1[] = EMPTY_TRIGGER_SETS;
     let previousFacts: AutomationsDomain['workflowTriggerSetsById'] | null = null;
     let previousIds: readonly string[] | undefined;
+    let previousAccountIds: readonly string[] | undefined;
     return (state: Pick<AutomationsDomain, 'workflowTriggerSetsById' | 'workflowTriggerSetIdsByQuery'>) => {
         const ids = state.workflowTriggerSetIdsByQuery[queryKey];
-        if (previousFacts === state.workflowTriggerSetsById && previousIds === ids) return previous;
+        const accountIds = sessionId === null ? undefined : state.workflowTriggerSetIdsByQuery.account_all;
+        if (previousFacts === state.workflowTriggerSetsById && previousIds === ids && previousAccountIds === accountIds) return previous;
         previousFacts = state.workflowTriggerSetsById;
         previousIds = ids;
-        const next = (ids ?? []).flatMap((id) => {
+        previousAccountIds = accountIds;
+        const selectedIds = sessionId === null ? ids ?? [] : [...new Set([...(ids ?? []), ...(accountIds ?? [])])];
+        const scopedIds = sessionId === null ? undefined : new Set(ids);
+        const next = selectedIds.flatMap((id) => {
             const value = state.workflowTriggerSetsById[id];
+            if (value && sessionId !== null && !scopedIds?.has(id) && !isWorkflowTriggerSetAttachedToSession(value, sessionId)) return [];
             // Manual Account Automations keep their owned steps after reviewed conversion too.
             return value && (includeEmpty || value.triggers.length > 0
                 || (queryKey === 'account_inline' && (value.legacy || value.target))) ? [value] : [];
@@ -393,6 +401,11 @@ export function createAutomationsDomain<S extends AutomationsDomain & Automation
                 }
                 if (queryKey && !(windows[queryKey] ?? []).includes(written.automationId)) {
                     windows = { ...windows, [queryKey]: [...(windows[queryKey] ?? []), written.automationId] };
+                }
+                // A committed new set is also part of an already-open Account census. Its body
+                // remains shared, so Session Habits and Scheduled work see the same ACK.
+                if (windows.account_all && !windows.account_all.includes(written.automationId)) {
+                    windows = { ...windows, account_all: [...windows.account_all, written.automationId] };
                 }
                 if (facts === state.workflowTriggerSetsById && windows === state.workflowTriggerSetIdsByQuery) return state;
                 return { ...state, workflowTriggerSetsById: facts, workflowTriggerSetIdsByQuery: windows };

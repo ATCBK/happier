@@ -342,6 +342,8 @@ function SessionTriggersContent(props: Readonly<{ sessionId: string; serverId?: 
 
     const close = React.useCallback(() => setPopover(null), []);
     const row = popover?.row ?? null;
+    const editedSet = row ? read.sets.find(set => set.automationId === row.automationId) : undefined;
+    const editorSessionId = editedSet?.scopeSessionId ?? props.sessionId;
 
     // "When this turn finishes…" (04 §5.5): the deep link carries the exact turn; the section opens
     // its popover once with When a turn ends bound to that turn (the existing exact-turn owner parses it).
@@ -436,7 +438,7 @@ function SessionTriggersContent(props: Readonly<{ sessionId: string; serverId?: 
                     onRequestClose={close}
                     whenKinds={[...SESSION_TRIGGER_WHEN_KINDS, 'pluginEvent']}
                     unavailableKinds={Object.fromEntries(Object.entries(SESSION_UNAVAILABLE_KINDS).map(([kind, key]) => [kind, t(key)]))}
-                    sessionId={props.sessionId}
+                    sessionId={editorSessionId}
                     {...(Array.isArray(read.pullRequestLinks) ? { pullRequestLinks: read.pullRequestLinks } : {})}
                     initial={initial}
                     {...(row === null && boundWhen !== undefined ? { initialWhen: boundWhen } : {})}
@@ -457,9 +459,10 @@ function SessionTriggersContent(props: Readonly<{ sessionId: string; serverId?: 
                     machineId={read.machineId}
                     {...(row !== null && initial?.when.kind === 'pluginEvent' ? { eventEdit: { automationId: row.automationId, triggerId: row.triggerId } } : {})}
                     {...(row === null ? {} : {
-                        onSaveAsWorkflow: (target: TriggerTargetV1) => openTriggerAsWorkflow(target, {
-                            scope: 'session', sessionId: props.sessionId, triggerId: row.triggerId, expectedRevision: row.revision,
-                        }),
+                        onSaveAsWorkflow: (target: TriggerTargetV1) => openTriggerAsWorkflow(target,
+                            editedSet?.scopeSessionId
+                                ? { scope: 'session', sessionId: editedSet.scopeSessionId, triggerId: row.triggerId, expectedRevision: row.revision }
+                                : { scope: 'account', automationId: row.automationId, triggerId: row.triggerId, expectedRevision: row.revision }),
                         // History and Run now are the row's own line here, not a second copy in its popover.
                         onDelete: async () => { await read.remove(row.triggerId); },
                     })}

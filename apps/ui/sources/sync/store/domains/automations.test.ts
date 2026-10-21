@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createStore } from 'zustand/vanilla';
 import {
     AutomationDefinitionDetailSchema,
+    AutomationTriggerIdSchema,
     AutomationDefinitionListItemSchema,
     AutomationV3RunListItemSchema,
 } from '@happier-dev/protocol';
@@ -122,6 +123,28 @@ describe('Automation attention retention', () => {
 });
 
 describe('shared workflow trigger observations', () => {
+    it('reads scoped triggers and Account Habits targeting a Session as one stable, deduplicated set', () => {
+        const h = createHarness();
+        const base: WorkflowTriggerSetV1 = { automationId: 'scoped', revision: 1, enabled: true, health: 'available',
+            scopeSessionId: 'session-a', triggers: [{ kind: 'schedule', id: AutomationTriggerIdSchema.parse('timer'), revision: 1,
+                enabled: true, createdAt: 1, updatedAt: 1, nextRunAt: 1000, triggerDefinitionEnvelope: null,
+                schedule: { kind: 'interval', everyMs: 60_000, scheduleExpr: null, timezone: null } }] };
+        const habit: WorkflowTriggerSetV1 = { ...base, automationId: 'habit', scopeSessionId: null,
+            destinations: { targetSessionIds: ['session-a'], usesOriginSession: false, unresolvedWorkflowRefs: [], leaves: [] } };
+        const unrelated: WorkflowTriggerSetV1 = { ...habit, automationId: 'elsewhere',
+            destinations: { ...habit.destinations!, targetSessionIds: ['session-b'] } };
+        h.get().applyWorkflowTriggerSetPage({ queryKey: 'session:session-a', sets: [base] });
+        h.get().applyWorkflowTriggerSetPage({ queryKey: 'account_all', sets: [base, habit, unrelated] });
+        const select = createWorkflowTriggerSetSelector('session:session-a');
+        const selected = select(h.get());
+        expect(selected.map(value => value.automationId)).toEqual(['scoped', 'habit']);
+        h.get().upsertWorkflowTriggerSet({ set: { ...unrelated, revision: 2, enabled: false } });
+        expect(select(h.get())).toBe(selected);
+        h.get().upsertWorkflowTriggerSet({ set: { ...habit, revision: 2, destinations: unrelated.destinations } });
+        expect(select(h.get()).map(value => value.automationId)).toEqual(['scoped']);
+        h.get().upsertWorkflowTriggerSet({ queryKey: 'account_inline', set: { ...habit, automationId: 'new-habit' } });
+        expect(select(h.get()).map(value => value.automationId)).toEqual(['scoped', 'new-habit']);
+    });
     it('does not restore a deleted trigger set from a delayed acknowledged update beyond the displayed revision', () => {
         const store = createStore<State>((set, get) => ({
             profileScope,

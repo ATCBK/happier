@@ -16,5 +16,8 @@ describe('upcoming scheduled work', () => {
             set('other', 700, 'elsewhere'), set('first', 1000, 'here')];
         expect(projectScheduledWorkflowRows(sets).map((row) => row.set.automationId)).toEqual(['other', 'first', 'later', 'pending']);
         expect(projectScheduledWorkflowRows(sets, 'here').map((row) => row.set.automationId)).toEqual(['first', 'later', 'pending']);
+        // Starting here does not mean writing here: scope and destination are distinct facts
+        // within the shared Session Habit relation.
+        expect(projectScheduledWorkflowRows([{ ...set('starts-here', 500, 'elsewhere'), scopeSessionId: 'here' }], 'here')).toEqual([]);
     });
 });
