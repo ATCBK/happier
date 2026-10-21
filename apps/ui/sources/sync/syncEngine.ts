@@ -494,7 +494,7 @@ import {
     runWithServerRequestAuthorityForServerAccountScope,
 } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { resolveServerAccountRequestContext } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerAccountRequestContext';
-import { readSessionSnapshotForAuthority } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
+import { readSessionSnapshotForAuthority, readSessionEncryptionContextsForAuthority } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
 import { sessionRpcWithPreferredSessionScope } from '@/sync/runtime/orchestration/serverScopedRpc/sessionRpcWithPreferredSessionScope';
 import { sessionRpcWithServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
 import type { ExactSessionMachineTargetIdentity } from '@/sync/ops/sessionMachineTarget';
@@ -573,7 +573,7 @@ import { MessageAckResponseSchema, type MessageAckResponse } from '@happier-dev/
 import { resolveRuntimeFeatureDecisionOrThrow } from '@/sync/domains/features/featureDecisionInputs';
 import { fetchAccountEncryptionMode } from '@/sync/api/account/apiAccountEncryptionMode';
 import { createApiSessionDraftsTransport } from '@/sync/api/account/apiSessionDrafts';
-import { createSessionDraftCipher } from '@/sync/encryption/sessionDraftEncryption';
+import { createSessionDraftCipher, type SessionDraftContext } from '@/sync/encryption/sessionDraftEncryption';
 import { createAuthoringMemoryCipher } from '@/sync/encryption/authoringMemoryEncryption';
 import { createProjectAccountRowCipherV1 } from '@happier-dev/protocol/projects/projectAccountRowCipherV1';
 import { createApiProjectAccountRowsTransport } from '@/sync/api/account/apiProjectAccountRows';
@@ -3068,6 +3068,22 @@ class Sync {
             && this.credentials?.token === credentials.token
             && this.encryption === draftEncryption
             && areServerAccountScopesEqual(getActiveServerAccountScope(), scope);
+        const readContext = (sessionId: string, resolvedMode?: 'plain' | 'e2ee', contextEncryption = draftEncryption): SessionDraftContext => {
+            if (!isDraftScopeCurrent()) return null;
+            const state = storage.getState();
+            const retained = state.sessions[sessionId];
+            const session = retained && areServerProfileIdentifiersEquivalent(retained.serverId, scope.serverId)
+                ? retained
+                : readSessionListRowForServerId(state.sessionListRowsByServerId, scope.serverId, sessionId);
+            const mode = resolvedMode ?? session?.encryptionMode;
+            if (!mode) return null;
+            assertUiSessionEncryptionModeAllowed({
+                mode,
+                requirement: resolveUiClientEncryptionRequirement({ syncedSettings: state.settings, localSettings: state.settings }),
+            });
+            return mode === 'plain' ? { mode: 'plain' }
+                : { mode: 'e2ee', encryption: contextEncryption?.getSessionEncryption(sessionId) ?? null };
+        };
         this.sessionDraftFlushSync?.stop();
         const draftFlushSync = this.sessionDraftSyncEnabled ? new InvalidateSync(async () => {
             if (isDraftScopeCurrent()) await retryPendingSessionDrafts(scope);
@@ -3102,29 +3118,7 @@ class Sync {
                     ? null
                     : resolveAccountScopedCryptoMaterialFromCredentials(credentials),
                 getSessionContext: async (sessionId) => {
-                    const readContext = (resolvedMode?: 'plain' | 'e2ee') => {
-                        if (!isDraftScopeCurrent()) return null;
-                        const state = storage.getState();
-                        const retained = state.sessions[sessionId];
-                        const session = retained && areServerProfileIdentifiersEquivalent(retained.serverId, scope.serverId)
-                            ? retained
-                            : readSessionListRowForServerId(state.sessionListRowsByServerId, scope.serverId, sessionId);
-                        const mode = resolvedMode ?? session?.encryptionMode;
-                        if (!mode) return null;
-                        assertUiSessionEncryptionModeAllowed({
-                            mode,
-                            requirement: resolveUiClientEncryptionRequirement({
-                                syncedSettings: state.settings,
-                                localSettings: state.settings,
-                            }),
-                        });
-                        if (mode === 'plain') return { mode: 'plain' as const };
-                        return {
-                            mode: 'e2ee' as const,
-                            encryption: draftEncryption?.getSessionEncryption(sessionId) ?? null,
-                        };
-                    };
-                    const context = readContext();
+                    const context = readContext(sessionId);
                     if (context && (context.mode === 'plain' || context.encryption)) return context;
                     if (appliedTarget && isDraftScopeCurrent()) {
                         // Draft recovery needs the Session's mode and cipher, not
@@ -3142,9 +3136,37 @@ class Sync {
                             log,
                             isCurrent: isDraftScopeCurrent,
                         });
-                        return result.ok ? readContext(result.encryptionMode) : null;
+                        return result.ok ? readContext(sessionId, result.encryptionMode) : null;
                     }
                     return null;
+                },
+                withSessionContexts: async (sessionIds, operation) => {
+                    const contexts = new Map<string, SessionDraftContext>();
+                    const missing: string[] = [];
+                    for (const sessionId of sessionIds) {
+                        const context = readContext(sessionId);
+                        if (context && (context.mode === 'plain' || context.encryption)) contexts.set(sessionId, context);
+                        else missing.push(sessionId);
+                    }
+                    if (!missing.length || !appliedTarget || !isDraftScopeCurrent()) return await operation(contexts);
+                    return await runWithServerRequestAuthorityForServerAccountScope({
+                        scope, activeRequest: this.requestViaConfiguredSocket,
+                    }, async authority => {
+                        const currentness = createOperationAccountCurrentnessSource({ credentials,
+                            request: authority.request, serverId: scope.serverId });
+                        try {
+                            const results = await readSessionEncryptionContextsForAuthority({
+                                authority, sessionIds: missing,
+                                sessionDataKeys: this.sessionDataKeys, sessionDataKeyEnvelopes: this.sessionDataKeyEnvelopes,
+                                accountCurrentnessSource: currentness, isCurrent: isDraftScopeCurrent,
+                            });
+                            for (const [sessionId, result] of results) contexts.set(sessionId,
+                                result.ok ? readContext(sessionId, result.encryptionMode, authority.context.encryption) : null);
+                            const value = await operation(contexts);
+                            currentness.assertCurrent();
+                            return value;
+                        } finally { currentness.dispose(); }
+                    });
                 },
                 randomBytes: getRandomBytes,
             }),

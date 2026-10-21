@@ -377,6 +377,8 @@ export type SessionDraftRepositoryTransport = Readonly<{
 export type SessionDraftRepositoryCipher = Readonly<{
     seal(address: SessionDraftAddressV2, document: SessionDraftDocumentV2): Promise<SessionDraftStoredContentEnvelopeV2>;
     open(address: SessionDraftAddressV2, content: SessionDraftStoredContentEnvelopeV2): Promise<SessionDraftDocumentV2 | null>;
+    /** One collection page shares a finite Session-context read, never a retained admission cache. */
+    withSessionContexts?<T>(sessionIds: readonly string[], operation: (cipher: SessionDraftRepositoryCipher) => Promise<T>): Promise<T>;
 }>;
 
 type PersistedReplica = {
@@ -2355,6 +2357,7 @@ export class SessionDraftRepository {
         runtime: Readonly<{ cipher: SessionDraftRepositoryCipher }>,
         record: SessionDraftRecordV2,
         scope: SessionDraftRepositoryScope,
+        cipher = runtime.cipher,
     ): Promise<SessionDraftDocumentV2> {
         if (!record.content) throw new Error(`Session draft ${canonicalSessionDraftAddressV2(record.address)} has no active content`);
         // The replica already owns the parsed base. Refreshes still read/reconcile the collection,
@@ -2365,7 +2368,7 @@ export class SessionDraftRepository {
             const opened = base ? this.openedAccountDocuments.get(base) : undefined;
             if (base && opened?.cipher === runtime.cipher && areJsonValuesEqual(opened.content, record.content)) return base;
         }
-        const document = await runtime.cipher.open(record.address, record.content);
+        const document = await cipher.open(record.address, record.content);
         if (!document) throw new Error(`Unable to open session draft ${canonicalSessionDraftAddressV2(record.address)}`);
         if (isAccountOwnedDraftAddressV2(record.address)) {
             this.openedAccountDocuments.set(document, { cipher: runtime.cipher, content: record.content });
@@ -2539,6 +2542,30 @@ export class SessionDraftRepository {
         }>>();
         const listedAddresses = new Set<string>();
         let unavailableSessionContextCount = 0;
+        const stageReads = async (reads: readonly Readonly<{ address: SessionDraftAddressV2; response: SessionDraftReadResponseV2 }>[]) => {
+            const sessionIds = [...new Set(reads.flatMap(({ response }) => response.status === 'present'
+                && !isAccountOwnedDraftAddressV2(response.record.address) ? [response.record.address.sessionId] : []))];
+            const open = async (cipher: SessionDraftRepositoryCipher) => {
+                await Promise.all(reads.map(async ({ address, response }) => {
+                    let document: SessionDraftDocumentV2 | null = null;
+                    if (response.status === 'present') {
+                        try {
+                            document = await this.openRequiredDocument(params.runtime, response.record, scope, cipher);
+                        } catch (error) {
+                            if (!params.isCurrent()) return;
+                            if (!isSessionDraftContextUnavailableError(error)) throw error;
+                            unavailableSessionContextCount += 1;
+                            return;
+                        }
+                    }
+                    if (!params.isCurrent()) return;
+                    staged.set(canonicalSessionDraftAddressV2(address), { address, response, document });
+                }));
+            };
+            if (sessionIds.length && params.runtime.cipher.withSessionContexts) {
+                await params.runtime.cipher.withSessionContexts(sessionIds, open);
+            } else await open(params.runtime.cipher);
+        };
         let after: string | undefined;
         do {
             const response = await params.runtime.transport.list({ ...(after ? { after } : {}), limit: 100 });
@@ -2546,48 +2573,24 @@ export class SessionDraftRepository {
             // The list page is the existing allocation boundary. Independent
             // record opens share no mutable replica state; reconcile only once
             // every page has staged successfully below.
-            await Promise.all(response.items.map(async (record) => {
+            const reads = response.items.map((record) => {
                 const addressKey = canonicalSessionDraftAddressV2(record.address);
                 listedAddresses.add(addressKey);
-                let document: SessionDraftDocumentV2;
-                try {
-                    document = await this.openRequiredDocument(params.runtime, record, scope);
-                } catch (error) {
-                    if (!params.isCurrent()) return;
-                    if (!isSessionDraftContextUnavailableError(error)) throw error;
-                    unavailableSessionContextCount += 1;
-                    return;
-                }
-                if (!params.isCurrent()) return;
-                staged.set(addressKey, {
-                    address: record.address,
-                    response: { status: 'present', record },
-                    document,
-                });
-            }));
+                return { address: record.address, response: { status: 'present' as const, record } };
+            });
+            await stageReads(reads);
             if (!params.isCurrent()) return;
             after = response.nextAfter;
         } while (after);
         const localAddressesMissingFromActiveList = [...this.getScopeState(scope).replicas.values()]
             .map((replica) => replica.address)
             .filter((address) => !listedAddresses.has(canonicalSessionDraftAddressV2(address)));
-        await Promise.all(localAddressesMissingFromActiveList.map(async (address) => {
+        const missingReads = await Promise.all(localAddressesMissingFromActiveList.map(async (address) => {
             const response = await params.runtime.transport.read(address);
-            if (!params.isCurrent()) return;
-            let document: SessionDraftDocumentV2 | null = null;
-            if (response.status === 'present') {
-                try {
-                    document = await this.openRequiredDocument(params.runtime, response.record, scope);
-                } catch (error) {
-                    if (!params.isCurrent()) return;
-                    if (!isSessionDraftContextUnavailableError(error)) throw error;
-                    unavailableSessionContextCount += 1;
-                    return;
-                }
-            }
-            if (!params.isCurrent()) return;
-            staged.set(canonicalSessionDraftAddressV2(address), { address, response, document });
+            return { address, response };
         }));
+        if (!params.isCurrent()) return;
+        await stageReads(missingReads);
         if (!params.isCurrent()) return;
         const addressesToFlush: SessionDraftAddressV2[] = [];
         const addressesToRematerialize: SessionDraftAddressV2[] = [];

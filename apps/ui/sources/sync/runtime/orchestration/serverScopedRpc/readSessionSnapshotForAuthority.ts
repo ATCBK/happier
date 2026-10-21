@@ -113,3 +113,39 @@ export async function readSessionSnapshotsForAuthority(params: Readonly<{
         return new Map(results);
     } finally { if (!params.accountCurrentnessSource) currentness.dispose(); }
 }
+
+/** Draft pages consume the ordinary admitted mode/key path without opening Session content. */
+export async function readSessionEncryptionContextsForAuthority(params: Readonly<{
+    authority: ServerAccountRequestAuthority;
+    sessionIds: readonly string[];
+    sessionDataKeys: Map<string, Uint8Array>;
+    sessionDataKeyEnvelopes: Map<string, string>;
+    accountCurrentnessSource: ReturnType<typeof createOperationAccountCurrentnessSource>;
+    isCurrent: () => boolean;
+}>): Promise<ReadonlyMap<string, Awaited<ReturnType<typeof fetchSessionByIdWithServerScope>>>> {
+    const credentials = params.authority.context.credentials;
+    if (!credentials) throw new Error('Session request requires credentials');
+    const assertCurrent = () => {
+        params.accountCurrentnessSource.assertCurrent();
+        if (!params.isCurrent()) throw new SessionSnapshotReadError('stale_response');
+    };
+    const accessProjectionVersion = readSessionDetailAccessProjectionVersion(params.authority.scope.serverId);
+    const rows = await readSessionBatchForAuthority({ ...params, accessProjectionVersion,
+        includeSnapshot: true, includeMessages: false, assertCurrent });
+    const results = await Promise.all([...rows].map(async ([sessionId, row]) => {
+        assertCurrent();
+        if (!row.detail) throw new SessionSnapshotReadError('invalid_response');
+        const result = await fetchSessionByIdWithServerScope({
+            authority: params.authority, serverId: params.authority.scope.serverId, sessionId,
+            prefetched: { accessProjectionVersion, detail: row.detail }, contentDemand: 'encryption-context',
+            activeCredentials: credentials, activeEncryption: params.authority.context.encryption, activeRequest: params.authority.request,
+            sessionDataKeys: params.sessionDataKeys, sessionDataKeyEnvelopes: params.sessionDataKeyEnvelopes,
+            accountCurrentnessSource: params.accountCurrentnessSource, isCurrent: params.isCurrent,
+            applySessions: () => {}, log: { log: () => {} },
+        });
+        assertCurrent();
+        return [sessionId, result] as const;
+    }));
+    assertCurrent();
+    return new Map(results);
+}

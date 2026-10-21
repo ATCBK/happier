@@ -6,7 +6,7 @@ import { SessionDraftContextUnavailableError } from '@/sync/ops/sessionDrafts/se
 
 import { openSessionStoredContent, sealSessionStoredContent, type SessionContentEncryption } from '@happier-dev/sync-client';
 
-type SessionDraftContext =
+export type SessionDraftContext =
     | Readonly<{ mode: 'plain' }>
     | Readonly<{ mode: 'e2ee'; encryption: SessionContentEncryption | null }>
     | null;
@@ -15,6 +15,7 @@ type SessionDraftCipherOptions = Readonly<{
     accountMode: 'plain' | 'e2ee';
     accountCryptoMaterial: AccountScopedCryptoMaterial | null;
     getSessionContext(sessionId: string): SessionDraftContext | Promise<SessionDraftContext>;
+    withSessionContexts?<T>(sessionIds: readonly string[], operation: (contexts: ReadonlyMap<string, SessionDraftContext>) => Promise<T>): Promise<T>;
     randomBytes(length: number): Uint8Array;
 }>;
 
@@ -36,6 +37,14 @@ function parseBoundPayload(address: SessionDraftAddressV2, value: unknown, encry
 
 export function createSessionDraftCipher(options: SessionDraftCipherOptions): SessionDraftRepositoryCipher {
     return {
+        ...(options.withSessionContexts ? {
+            withSessionContexts: <T>(sessionIds: readonly string[], operation: (cipher: SessionDraftRepositoryCipher) => Promise<T>) =>
+                options.withSessionContexts!(sessionIds, contexts => operation(createSessionDraftCipher({
+                    ...options,
+                    withSessionContexts: undefined,
+                    getSessionContext: sessionId => contexts.get(sessionId) ?? null,
+                }))),
+        } : {}),
         seal: async (address, document): Promise<SessionDraftStoredContentEnvelopeV2> => {
             const payload = createSessionDraftPrivatePayloadV2(address, document);
             if (isAccountOwnedDraftAddressV2(address)) {
