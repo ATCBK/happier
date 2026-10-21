@@ -1224,7 +1224,7 @@ async function startAdmittedExecutionRun(
               await settleExecutionRunController({ runId, controller: ctrl, controllers: args.controllers });
             });
         } catch (e: unknown) {
-          const error = projectExecutionRunError(e);
+          const error = projectExecutionRunError(e, { runId });
           const message = error.message;
           const finishedAtMs = args.getNowMs();
           try {
@@ -1520,7 +1520,7 @@ async function startAdmittedExecutionRun(
           await settleExecutionRunController({ runId, controller: ctrl, controllers: args.controllers });
           return;
         }
-        const terminalError = projectExecutionRunError(error);
+        const terminalError = projectExecutionRunError(error, { runId });
         const message = terminalError.message;
         const finishedAtMs = args.getNowMs();
         // Start already transferred the detached initial instruction into this
@@ -1588,7 +1588,7 @@ async function startAdmittedExecutionRun(
       throw markExecutionRunStartFailure(e, 'outcomeUnknown');
     }
     args.budgetRegistry?.releaseExecutionRun(runId);
-    const error = projectExecutionRunError(e);
+    const error = projectExecutionRunError(e, { runId });
     const message = error.message;
     const finishedAtMs = args.getNowMs();
     try {

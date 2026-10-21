@@ -536,7 +536,7 @@ export async function sendBackendLongLivedRun(args: Readonly<{
         return;
       }
 
-      const error = projectExecutionRunError(e);
+      const error = projectExecutionRunError(e, { runId: args.runId });
       const message = error.message;
       if (ctrl2.turnEpoch === thisEpoch) ctrl2.turnInFlight = false;
       if (localInputId && ctrl2.currentInputTurn) {
@@ -665,7 +665,7 @@ export async function sendBackendLongLivedRun(args: Readonly<{
     }
 
     await args.writeActivityMarker(args.runId, args.getNowMs(), { force: true }).catch(() => {});
-    const error = projectExecutionRunError(e);
+    const error = projectExecutionRunError(e, { runId: args.runId });
     const message = error.message;
     const finishedAtMs = args.getNowMs();
     try {

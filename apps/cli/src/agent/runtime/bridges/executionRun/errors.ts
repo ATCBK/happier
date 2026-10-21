@@ -105,18 +105,19 @@ export function readExecutionRunRuntimeIssue(error: unknown): NonNullable<Execut
     occurredAt: event.emittedAtMs, agentTurnId: event.turnId }) : undefined;
 }
 
-export function projectExecutionRunError(error: unknown): NonNullable<ExecutionRunState['error']> & Readonly<{ message: string }> {
+export function projectExecutionRunError(error: unknown, context?: Readonly<{ runId: string }>): NonNullable<ExecutionRunState['error']> & Readonly<{ message: string }> {
+  recordExecutionRunHttpFailure(error, value => value, context);
   const runtimeIssueV1 = readExecutionRunRuntimeIssue(error);
   return { code: readExecutionRunErrorCode(error) ?? 'execution_run_failed', message: readExecutionRunErrorMessage(error),
     ...(runtimeIssueV1 ? { runtimeIssueV1 } : {}) };
 }
 
-/** Keep the typed cause across a redaction boundary without copying private details. */
-export function sanitizeExecutionRunError(
+/** Both native failures and host publication failures retain request identity before projection. */
+function recordExecutionRunHttpFailure(
   error: unknown,
   sanitize: (value: string) => string,
   context?: Readonly<{ runId: string }>,
-): Error & { code?: string } {
+): void {
   // Record request identity before deliberately discarding Axios's private
   // config, headers and bodies. This serves installed Agents as well as bundled ones.
   if (axios.isAxiosError<unknown>(error)) {
@@ -141,6 +142,15 @@ export function sanitizeExecutionRunError(
         ? { domainCode: sanitize(domainCode) } : {}),
     });
   }
+}
+
+/** Keep the typed cause across a redaction boundary without copying private details. */
+export function sanitizeExecutionRunError(
+  error: unknown,
+  sanitize: (value: string) => string,
+  context?: Readonly<{ runId: string }>,
+): Error & { code?: string } {
+  recordExecutionRunHttpFailure(error, sanitize, context);
   const sanitized = new Error(sanitize(typeof error === 'string' ? error : readExecutionRunErrorMessage(error)));
   if (error instanceof Error) sanitized.name = error.name;
   const code = readExecutionRunErrorCode(error);

@@ -226,7 +226,7 @@ export async function finishExecutionRun(args: Readonly<{
         summary: args.next.status === 'failed' ? updated.summary : message,
         error: args.next.status === 'failed' && updated.error
           ? updated.error
-          : projectExecutionRunError(terminalizationError),
+          : projectExecutionRunError(terminalizationError, { runId: args.runId }),
       };
     }
   }

@@ -604,7 +604,7 @@ export async function executeBoundedBackendRun(args: Readonly<{
       }
       args.onPublicStateUpdated?.(runId);
     }
-    const error = projectExecutionRunError(e);
+    const error = projectExecutionRunError(e, { runId: args.runId });
     const message = error.message;
     if (isExecutionRunTimeoutError(e)) {
       backendCtrl.cancelled = true;

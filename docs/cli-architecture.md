@@ -1765,8 +1765,9 @@ Existing-Run Actions preserve their admitted causal permission witness and curre
 caller ceiling through the same private direct transport as start. That private
 context cannot fall through to a public Machine transport that cannot carry it.
 
-In 0.3 development, the native Run error sanitizer records Axios request
-failures before discarding their private transport objects. File diagnostics
+In 0.3 development, Run error projection and native error sanitization share
+one HTTP diagnostic collector. It records Axios failures from native execution
+and host publication before discarding their private transport objects. File diagnostics
 retain the Run id, method, origin, redacted route, HTTP status and an identifier
 domain code when present. The shared URL redactor removes credentials, query
 values and token-shaped path segments; headers and request/response bodies are
