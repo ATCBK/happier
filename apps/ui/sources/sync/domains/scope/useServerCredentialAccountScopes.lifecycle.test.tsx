@@ -117,7 +117,7 @@ describe('credential projection lifecycle identity', () => {
         }
     });
 
-    it('retains selected Home bindings and still retires them on profile change and unmount', async () => {
+    it('retains selected Home bindings through metadata changes and still retires them on deselection and unmount', async () => {
         const selectedHomes = await Promise.all(['a', 'b', 'c'].map(async suffix => {
             const home = await upsertServerProfile({ serverUrl: `https://credential-selection-${suffix}.example.test` });
             homes.push(home);
@@ -150,13 +150,13 @@ describe('credential projection lifecycle identity', () => {
         expect(hook.getCurrent().has(homeB!.id)).toBe(false);
 
         await act(async () => {
-            await upsertServerProfile({ serverUrl: homeA!.serverUrl, name: 'Changed transport profile' });
+            await upsertServerProfile({ serverUrl: homeA!.serverUrl, name: 'Changed Home label' });
         });
-        expect(bindingA.isCurrent()).toBe(false);
-        expect(retiredA).toBe(1);
+        expect(bindingA.isCurrent()).toBe(true);
+        expect(retiredA).toBe(0);
         const currentA = bindings.get(homeA!.id)!;
         const currentC = bindings.get(homeC!.id)!;
-        expect(currentA).not.toBe(bindingA);
+        expect(currentA).toBe(bindingA);
         expect(currentA.isCurrent()).toBe(true);
         let retiredCurrentA = 0;
         currentA.onRetire(() => { retiredCurrentA += 1; });

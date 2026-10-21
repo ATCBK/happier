@@ -56,6 +56,22 @@ afterEach(() => {
 });
 
 describe('useServerCredentialAccountScopes', () => {
+    it('keeps credential custody through Home label publications and still retires it when that Home is removed', async () => {
+        harness.tokenByServerId.set('home-a', 'account-a');
+        const { useServerCredentialAccountScopes } = await import('./useServerCredentialAccountScopes');
+        const hook = await renderHook(() => useServerCredentialAccountScopes(['home-a']));
+        await vi.waitFor(() => expect(hook.getCurrent().get('home-a')?.accountId).toBe('account-a'));
+        const binding = hook.getCurrent().get('home-a')!;
+        const retired = vi.fn();
+        binding.onRetire(retired);
+        await act(async () => { await serverProfiles.upsertServerProfile({ serverUrl: 'https://home-a.example.test', name: 'Renamed Home' }); });
+        expect(binding.isCurrent()).toBe(true);
+        expect(hook.getCurrent().get('home-a')).toBe(binding);
+        expect(retired).not.toHaveBeenCalled();
+        await act(async () => { await serverProfiles.removeServerProfile('home-a'); });
+        expect(binding.isCurrent()).toBe(false);
+        expect(retired).toHaveBeenCalledOnce();
+    });
     it('does not reacquire the profile resolver per entry on unchanged credential-scope renders', async () => {
         harness.tokenByServerId.set('home-a', 'account-a');
         harness.tokenByServerId.set('home-b', 'account-b');

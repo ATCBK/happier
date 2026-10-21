@@ -6,6 +6,7 @@ import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGen
 import {
     areServerProfileIdentifiersEquivalent,
     captureServerProfileScopeResolver,
+    getServerProfileById,
     resolveServerProfileScopeIdForIdentifier,
 } from '@/sync/domains/server/serverProfiles';
 import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
@@ -85,6 +86,13 @@ function useCredentialScopeEntries(
         .map(resolveScopeId)
         .filter(Boolean))].sort();
     const serverIdsKey = JSON.stringify(normalizedServerIds);
+    // Credential lookup consumes the exact Home's URL. Labels, last-used times
+    // and unrelated Home publications do not change credential custody.
+    const credentialTargets = React.useMemo(() => new Map(normalizedServerIds.map(serverId => [serverId, getServerProfileById(serverId)?.serverUrl ?? null])),
+        // The sorted set and profile publication are the complete lookup inputs.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [profilesGeneration, serverIdsKey]);
+    const credentialTargetsKey = JSON.stringify([...credentialTargets]);
     const embedEntriesRef = React.useRef<ReadonlyMap<string, ScopeEntry>>(new Map());
     const embedEntries = React.useMemo(() => {
         if (!embedded) return embedEntriesRef.current;
@@ -111,10 +119,7 @@ function useCredentialScopeEntries(
     const [entries, setEntries] = React.useState<ReadonlyMap<string, ScopeEntry>>(() => new Map());
     /** Homes whose latest settled read failed on this device's secure storage. */
     const unreadableServerIdsRef = React.useRef(new Set<string>());
-    const committedHomesRef = React.useRef<Readonly<{
-        profilesGeneration: number;
-        serverIds: ReadonlySet<string>;
-    }> | null>(null);
+    const committedHomesRef = React.useRef<ReadonlyMap<string, string | null> | null>(null);
     // Projection callbacks observe credential transitions; their identity is
     // not a credential transition. Read the latest committed callbacks without
     // retiring and republishing a binding on each consumer render.
@@ -129,10 +134,10 @@ function useCredentialScopeEntries(
         return () => { mountedRef.current = false; };
     }, []);
     React.useLayoutEffect(() => {
-        committedHomesRef.current = { profilesGeneration, serverIds: new Set(normalizedServerIds) };
+        committedHomesRef.current = credentialTargets;
         // Only committed selections may retire Home bindings; a suspended render owns none.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [profilesGeneration, serverIdsKey]);
+    }, [credentialTargetsKey]);
 
     React.useEffect(() => {
         if (embedded) return;
@@ -170,10 +175,11 @@ function useCredentialScopeEntries(
         };
 
         const resolveBinding = async (requestedServerId: string, revision: number): Promise<void> => {
+            const requestedServerUrl = credentialTargets.get(requestedServerId);
             const isCurrent = () => mountedRef.current
                 && revisionsRef.current.get(requestedServerId) === revision
-                && committedHomesRef.current?.profilesGeneration === profilesGeneration
-                && committedHomesRef.current.serverIds.has(requestedServerId);
+                && committedHomesRef.current?.has(requestedServerId) === true
+                && committedHomesRef.current.get(requestedServerId) === requestedServerUrl;
             const resolution = await resolveServerCredentialAccountScope(requestedServerId);
             if (!isCurrent()) return;
             if (resolution.kind === 'unavailable') unreadableServerIdsRef.current.add(requestedServerId);
@@ -227,15 +233,9 @@ function useCredentialScopeEntries(
             // Changing the selected Home set does not change the credentials of a retained Home.
             // Its live binding and every consumer's cursor remain current until its own retirement.
             if (previous && 'binding' in previous && previous.binding?.isCurrent()) continue;
-            // A profile publication can change transport metadata without
-            // changing the Home or Account this credential resolves to. Retire
-            // the old binding immediately, but keep its settled projection on
-            // screen while the replacement is checked. Publishing a transient
-            // `resolving` row here made every profile refresh withdraw Settings
-            // destinations such as Home Administration, then add them back a
-            // microtask later. New Homes still begin in `resolving`; explicit
-            // credential mutations below continue to publish it because the
-            // previous Account claim is no longer safe to show.
+            // An actual lookup-target change retires authority immediately.
+            // Keep its identity while resolving the new credential; metadata-only
+            // publications retain the current binding through the guard above.
             const retainedEntry: ScopeEntry = previous
                 ? previous.resolution.kind === 'bound'
                     ? Object.freeze({ resolution: previous.resolution })
@@ -270,14 +270,14 @@ function useCredentialScopeEntries(
             unsubscribeRetry();
             const committedHomes = committedHomesRef.current;
             for (const serverId of trackedServerIds) {
-                if (!mountedRef.current || !committedHomes || committedHomes.profilesGeneration !== profilesGeneration
-                    || !committedHomes.serverIds.has(serverId)) invalidate(serverId, null);
+                if (!mountedRef.current || !committedHomes?.has(serverId)
+                    || committedHomes.get(serverId) !== credentialTargets.get(serverId)) invalidate(serverId, null);
             }
         };
-        // The sorted key identifies the Home set. Profile changes retire and
-        // re-resolve bindings without making profile data Account authority.
+        // The exact lookup targets identify the Home set. Credentials themselves
+        // still retire through their canonical mutation subscription.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [profilesGeneration, serverIdsKey, embedScopeRevision]);
+    }, [credentialTargetsKey, embedScopeRevision]);
 
     return embedded ? embedEntries : entries;
 }
