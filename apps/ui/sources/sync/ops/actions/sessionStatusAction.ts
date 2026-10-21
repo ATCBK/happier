@@ -128,7 +128,8 @@ export function createUiSessionStatusGet(account: LazyActionAccountContext | nul
           repairAccess: resolveMachineRpcRoutePolicy(CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD).sharedMachineAccess,
           bindings: catalog?.status === 'ready' && catalog.record.key === 'purposes' ? catalog.record.value : { v: 1, bindings: [] },
           ...(credentialTeamSelection ? { teamSelection: credentialTeamSelection } : {}),
-          projection, accounts: profile?.connectedAccountsV4 ?? [], groups: profile?.connectedAccountGroupsV4 ?? [],
+          projection, machineProvisionersById: projection.familiesById.machineProvisioners?.entriesById ?? {},
+          accounts: profile?.connectedAccountsV4 ?? [], groups: profile?.connectedAccountGroupsV4 ?? [],
           now: Date.now(), teamResource: resource, readAuthentication: service => {
             const matching = descriptors.filter(descriptor => descriptor.pluginId === service.pluginId && descriptor.serviceId === service.localId);
             return matching.length === 1 ? matching[0]!.authentication : null;

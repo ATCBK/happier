@@ -86,13 +86,15 @@ export function readSessionOperationCredentialReadinessV1(input: Omit<Parameters
   bindings: QualifiedConnectedAccountPurposeBindingsV1;
   teamSelection?: QualifiedConnectedAccountPurposeTeamResourceSelectionV1;
   projection: Parameters<typeof readDeclaredConnectedAccountPurposeV1>[0]['projection'];
+  machineProvisionersById: Parameters<typeof readDeclaredConnectedAccountPurposeV1>[0]['machineProvisionersById'];
   teamResource: TeamCredentialResourceCatalogEntryV1 | null;
   machineId: string;
   executionAccountId: string | null;
   machineAccess: AccessibleMachineAccessV1 | null;
   repairAccess: MachineRpcRoutePolicyV1['sharedMachineAccess'];
 }>): SessionCredentialReadinessV1 {
-  const declared = readDeclaredConnectedAccountPurposeV1({ purpose: input.purpose, projection: input.projection });
+  const declared = readDeclaredConnectedAccountPurposeV1({ purpose: input.purpose, projection: input.projection,
+    machineProvisionersById: input.machineProvisionersById });
   if (!declared) return { kind: 'unknown' };
   const key = qualifiedPurposeKey(input.purpose);
   const team = input.teamSelection;

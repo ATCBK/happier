@@ -25,15 +25,15 @@ export function readDeclaredConnectedAccountResourcePurposeV1(input: Readonly<{
 /** Canonical declaration lookup for host setup and default-target admission. */
 export function readDeclaredConnectedAccountPurposeV1(input: Readonly<{
   purpose: QualifiedConnectedAccountPurposeV1;
+  machineProvisionersById: Readonly<Record<string, PluginProjectedMachineProvisionerEntryV1>>;
   projection: Parameters<typeof readDeclaredConnectedAccountResourcePurposeV1>[0]['projection'] & Readonly<{
-    machineProvisionersById?: Readonly<Record<string, PluginProjectedMachineProvisionerEntryV1>>;
     actionsById?: Readonly<Record<string, PluginProjectedActionV2>>;
   }>;
 }>) {
   const resource = readDeclaredConnectedAccountResourcePurposeV1(input);
   const consumer = input.purpose.consumer;
   if (input.projection.installedPackagesById[consumer.pluginId]?.enabled !== true) return null;
-  const provisioners = Object.values(input.projection.machineProvisionersById ?? {}).filter(entry =>
+  const provisioners = Object.values(input.machineProvisionersById).filter(entry =>
     entry.pluginId === consumer.pluginId && entry.definition.id === consumer.localId);
   const declarations = provisioners.length === 1 ? provisioners[0]!.connectedAccountPurposes?.filter(declaration =>
     declaration.purpose === input.purpose.purpose) ?? [] : [];

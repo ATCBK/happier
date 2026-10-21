@@ -53,7 +53,8 @@ it('keeps the purpose resource owner detail only for the current exact Team sele
       connectedAccountPurposes: [{ purpose: purpose.purpose, serviceRefs: [service] }] } },
   });
   const input: Parameters<typeof readSessionOperationCredentialReadinessV1>[0] = {
-    purpose, projection, bindings: { v: 1, bindings: [] }, teamSelection: { purpose, teamId: 'team', selection },
+    purpose, projection, machineProvisionersById: projection.familiesById.machineProvisioners?.entriesById ?? {},
+    bindings: { v: 1, bindings: [] }, teamSelection: { purpose, teamId: 'team', selection },
     accounts: [], groups: [], now: 30, machineId: 'machine-1', executionAccountId: 'alice', machineAccess: null,
     repairAccess: 'custodian_only', teamResource: resource,
   };

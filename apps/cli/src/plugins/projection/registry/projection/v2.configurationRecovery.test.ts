@@ -145,11 +145,12 @@ describe('UI-T28 configuration reachability after a failed activation', () => {
         } })), occurrenceIdsByPluginId: { [PLUGIN_ID]: createPluginRuntimeOccurrenceId(PLUGIN_ID) } };
         const projection = PluginProjectionV2Schema.parse(buildPluginProjectionV2({ registry, generation: 4 }));
         const purpose = { consumer: { pluginId: PLUGIN_ID, localId: 'sync' }, purpose: 'tracker-api' };
-        expect(readDeclaredConnectedAccountPurposeV1({ purpose, projection })).toEqual({
+        const machineProvisionersById = projection.familiesById.machineProvisioners?.entriesById ?? {};
+        expect(readDeclaredConnectedAccountPurposeV1({ purpose, projection, machineProvisionersById })).toEqual({
             consumerKind: 'action', purpose: 'tracker-api', serviceRefs: [{ pluginId: PLUGIN_ID, localId: 'tracker-account' }],
         });
-        expect(readDeclaredConnectedAccountPurposeV1({ purpose: { ...purpose, purpose: 'undeclared' }, projection })).toBeNull();
-        expect(readDeclaredConnectedAccountPurposeV1({ purpose, projection: { ...projection, actionsById: {} } })).toBeNull();
+        expect(readDeclaredConnectedAccountPurposeV1({ purpose: { ...purpose, purpose: 'undeclared' }, projection, machineProvisionersById })).toBeNull();
+        expect(readDeclaredConnectedAccountPurposeV1({ purpose, projection: { ...projection, actionsById: {} }, machineProvisionersById })).toBeNull();
     });
 
     it('keeps declared settings and Connected Account setup projected when activation throws', async () => {

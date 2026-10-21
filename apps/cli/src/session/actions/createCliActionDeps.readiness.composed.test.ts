@@ -16,6 +16,7 @@ import { createCliActionExecutor } from './createCliActionExecutor';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
 import { TeamCredentialResourceCatalogEntryV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
+import { createLoadedMachineProvisionerFixture } from '@/plugins/projection/registry/machineProvisioners.testkit';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -61,7 +62,7 @@ it('reads an entitled exact Team binding through the live CLI composition withou
       resourceId: resource.id, readiness: resource.readiness, recoveryAction: resource.recoveryAction } } } });
 });
 
-it('reads the operation execution Account purpose and repairs its expired exact connection through the real Action', async () => {
+it.each(['resource', 'machineProvisioner'] as const)('reads the %s operation execution Account purpose and repairs its expired exact connection through the real Action', async consumerKind => {
   const credentials = { token: 'operation-owner', encryption: null };
   const service = { pluginId: 'acme.external', localId: 'account' };
   const purpose = { consumer: { pluginId: 'acme.external', localId: 'helper' }, purpose: 'outside-write' };
@@ -73,9 +74,13 @@ it('reads the operation execution Account purpose and repairs its expired exact 
   const projection = DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1,
     projection: { v: 2, generation: 1, installedPackagesById: { 'acme.external': { id: 'acme.external', displayName: 'Acme',
       enabled: true, source: { kind: 'builtin', locator: 'acme.external' } } },
-    resourcesById: { helper: { id: 'helper', pluginId: 'acme.external', resourceKind: 'config', path: 'helper.json',
-      connectedAccountPurposes: [{ purpose: purpose.purpose, serviceRefs: [service] }] } },
-    familiesById: { connectedAccounts: { family: 'connectedAccounts', entriesById: { account: {
+    resourcesById: consumerKind === 'resource' ? { helper: { id: 'helper', pluginId: 'acme.external', resourceKind: 'config', path: 'helper.json',
+      connectedAccountPurposes: [{ purpose: purpose.purpose, serviceRefs: [service] }] } } : {},
+    familiesById: { ...(consumerKind === 'machineProvisioner' ? { machineProvisioners: { family: 'machineProvisioners', entriesById: {
+      [`${service.pluginId}/helper`]: { id: `${service.pluginId}/helper`, pluginId: service.pluginId, pluginVersion: '1.0.0',
+        definition: { ...createLoadedMachineProvisionerFixture(service.pluginId).manifest.contributes.machineProvisioners![0], id: 'helper' },
+        connectedAccountPurposes: [{ purpose: purpose.purpose, serviceRefs: [service] }] },
+    } } } : {}), connectedAccounts: { family: 'connectedAccounts', entriesById: { account: {
       id: service.localId, serviceId: service.localId, pluginId: service.pluginId, provenance: 'external', sourceKind: 'test', title: 'Acme',
       authentication: { defaultModeId: 'manual', modes: [{ id: 'manual', kind: 'manual', outcomeReconciliation: 'none', fields: [] }] },
       capabilities: [], availability: { state: 'available', reason: 'enabled' }, diagnostics: [],

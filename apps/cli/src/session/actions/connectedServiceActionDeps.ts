@@ -212,7 +212,8 @@ export function createCliConnectedServiceAction(params: Readonly<{
         const described = DaemonContributionRegistryProjectionDescribeResponseSchema.safeParse(rawProjection);
         if (!described.success) return null;
         const projection = described.data.projection;
-        const declaration = readDeclaredConnectedAccountPurposeV1({ purpose: input.purpose, projection });
+        const declaration = readDeclaredConnectedAccountPurposeV1({ purpose: input.purpose, projection,
+          machineProvisionersById: projection.familiesById.machineProvisioners?.entriesById ?? {} });
         if (!declaration || declaration.consumerKind === 'machineProvisioner') return null;
         let rawProfile: unknown;
         try { rawProfile = await host.request({ method: 'GET', path: '/v1/account/profile' }); }

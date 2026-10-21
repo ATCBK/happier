@@ -36,6 +36,7 @@ export function readConnectedAccountPurposeSetupDeclaration(request: ConnectedAc
         || runtime.machineId !== request.machineId || runtime.phase !== 'current' || !runtime.interactionEnabled) return null;
     return runtime.pluginUiProjection ? readDeclaredConnectedAccountPurposeV1({
         purpose: request.purpose, projection: runtime.pluginUiProjection,
+        machineProvisionersById: runtime.pluginUiProjection.machineProvisionersById,
     }) : null;
 }
 

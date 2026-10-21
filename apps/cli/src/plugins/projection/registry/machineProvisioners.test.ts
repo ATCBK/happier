@@ -25,15 +25,19 @@ describe('machine provisioner projection', () => {
         const registry = createResolvedContributionRegistry({ ...projectLoadedPluginContributes({
             loadResult: { loadedPlugins: [{ ...loaded, manifest }], diagnosticsByPluginId: {} }, provenance: 'external',
         }), occurrenceIdsByPluginId: { [pluginId]: createPluginRuntimeOccurrenceId(pluginId) } });
-        const projection = buildPluginProjectionV2({ registry, generation: 1 });
-        expect(PluginProjectionV2Schema.safeParse(projection).success).toBe(true);
+        const projection = PluginProjectionV2Schema.parse(buildPluginProjectionV2({ registry, generation: 1 }));
         const entry = projection.familiesById.machineProvisioners?.entriesById[`${pluginId}/guest`];
         expect(entry).toMatchObject({ connectedAccountPurposes: [{ purpose: 'cloud-account', serviceRefs: [service] }] });
         expect(projection.resourcesById).toEqual({});
         const purpose = { consumer: { pluginId, localId: 'guest' }, purpose: 'cloud-account' };
-        expect(readDeclaredConnectedAccountPurposeV1({ purpose, projection })).toMatchObject({ consumerKind: 'machineProvisioner', serviceRefs: [service] });
-        expect(readDeclaredConnectedAccountPurposeV1({ purpose, projection: { ...projection, installedPackagesById: {} } })).toBeNull();
-        expect(readDeclaredConnectedAccountPurposeV1({ purpose: { ...purpose, purpose: 'other' }, projection })).toBeNull();
+        const machineProvisionersById = projection.familiesById.machineProvisioners?.entriesById ?? {};
+        expect(readDeclaredConnectedAccountPurposeV1({ purpose, projection, machineProvisionersById })).toMatchObject({ consumerKind: 'machineProvisioner', serviceRefs: [service] });
+        expect(readDeclaredConnectedAccountPurposeV1({ purpose, projection: { ...projection, installedPackagesById: {} }, machineProvisionersById })).toBeNull();
+        expect(readDeclaredConnectedAccountPurposeV1({ purpose: { ...purpose, purpose: 'other' }, projection, machineProvisionersById })).toBeNull();
+        expect(readDeclaredConnectedAccountPurposeV1({ purpose, projection: { ...projection, resourcesById: { guest: {
+            id: 'guest', pluginId, resourceKind: 'config', path: 'guest.json',
+            connectedAccountPurposes: [{ purpose: purpose.purpose, serviceRefs: [service] }],
+        } } }, machineProvisionersById })).toBeNull();
         // Resource defaults are a separate operation: a provisioner must never acquire that authority.
         expect(readDeclaredConnectedAccountResourcePurposeV1({ projection,
             purpose: { consumer: { pluginId, localId: 'guest' }, purpose: 'cloud-account' } })).toBeNull();
