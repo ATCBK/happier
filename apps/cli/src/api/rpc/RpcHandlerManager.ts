@@ -117,16 +117,18 @@ const SERVER_ORIGIN_RPC_FAMILIES: readonly Readonly<{
 function readOutcomeCode(value: unknown, thrown = false): string {
     if (!value || typeof value !== 'object') return thrown ? 'unclassified_error' : 'ok';
     const result = value as Record<string, unknown>;
+    const domainCode = result.status === 'error' && result.error && typeof result.error === 'object'
+        && 'code' in result.error ? result.error.code : undefined;
     const code = (thrown && result.code === 'RPC_REQUEST_TIMEOUT' ? result.code : undefined)
         ?? readRpcErrorCode(value) ?? result.errorCode
         ?? (thrown || result.ok === false ? result.code : undefined)
-        ?? (result.ok === false ? result.error : undefined);
+        ?? (result.ok === false ? result.error : undefined) ?? domainCode;
     // Retain typed native refusals as well as transport codes, never error prose.
     // Match the existing RPC provider diagnostic token budget (128 characters).
     // The end assertion rejects trailing newlines too, unlike JavaScript's `$`.
     if (typeof code === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,127}(?![\s\S])/.test(code)) return code;
     if (thrown && result.name === 'AbortError') return 'request_cancelled';
-    return thrown || code !== undefined || typeof result.error === 'string' || result.ok === false
+    return thrown || code !== undefined || typeof result.error === 'string' || result.ok === false || result.status === 'error'
         ? 'unclassified_error' : 'ok';
 }
 

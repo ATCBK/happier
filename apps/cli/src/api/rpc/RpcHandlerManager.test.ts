@@ -1506,6 +1506,21 @@ describe('RpcHandlerManager.handleRequest (plaintext)', () => {
   });
 
   it.each([
+    { code: 'agent_error', outcomeCode: 'agent_error' },
+    { code: 'private failure prose\ncredential', outcomeCode: 'unclassified_error' },
+  ])('records a structured domain error instead of success ($outcomeCode)', async ({ code, outcomeCode }) => {
+    const logger = vi.fn();
+    const rpc = new RpcHandlerManager({ scopePrefix: 'sess_1', encryptionMode: 'plain', logger });
+    const failure = { status: 'error', error: { code, message: 'private failure details' } };
+    rpc.registerHandler('demo.structured-failure', async () => failure);
+    await expect(rpc.handleRequest({ method: 'sess_1:demo.structured-failure', params: {} })).resolves.toEqual(failure);
+    await expect(rpc.invokeLocal('demo.structured-failure', {})).resolves.toEqual(failure);
+    expect(logger.mock.calls).toHaveLength(2);
+    for (const call of logger.mock.calls) expect(call).toEqual(['[RPC] Request completed', expect.objectContaining({ outcomeCode })]);
+    expect(JSON.stringify(logger.mock.calls)).not.toContain('private failure');
+  });
+
+  it.each([
     { error: 'discussion_post_denied', outcomeCode: 'discussion_post_denied' },
     { error: 'Private publication details must not enter diagnostics', outcomeCode: 'unclassified_error' },
   ])('classifies a returned domain refusal without logging error prose ($outcomeCode)', async ({ error, outcomeCode }) => {
