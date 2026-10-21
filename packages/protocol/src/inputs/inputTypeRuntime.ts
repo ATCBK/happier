@@ -103,17 +103,22 @@ export function readInputFieldSelectedValues(field: Pick<InputFieldHint, 'widget
   return field.widget === 'multiselect' && Array.isArray(value) ? value : [value];
 }
 
-/** Full admission fails closed until every declared choice constraint is available. */
+/**
+ * Full admission fails closed until every declared choice constraint is available. A `storedValue`
+ * was admitted when it was written: choices are needed to pick a value, not to show one, so
+ * unknown choices never retire it, while known choices that no longer name it still do.
+ */
 export function validateInputFieldValue(params: Readonly<{
   field: InputFieldHint; value: JsonValue; type?: ResolvedInputTypeV1 | null;
   options?: readonly Pick<InputOption, 'value' | 'disabled'>[]; viewerPurpose?: boolean; contextBound?: boolean;
+  storedValue?: boolean;
 }>): ReturnType<typeof validateInputFieldSchema> {
   const schema = validateInputFieldSchema(params);
   if (schema.status !== 'valid') return schema;
   if (params.contextBound) return schema;
   const constraint = readInputFieldOptionsConstraint(params.field, params.type, params.viewerPurpose, params);
   const options = constraint.kind === 'static' ? constraint.options : params.options;
-  if (constraint.kind === 'dynamic' && options === undefined)
+  if (constraint.kind === 'dynamic' && options === undefined && !params.storedValue)
     return { status: 'unavailable', reasonCode: 'input_type_options_unavailable' };
   const values = readInputFieldSelectedValues(params.field, params.value);
   const fieldOptions = params.field.options;

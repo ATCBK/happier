@@ -73,6 +73,20 @@ describe('typed inputs across consumer domains', () => {
     expect(validateInputFieldValue({ field: dynamic, value: { metric: 'cost' } }))
       .toEqual({ status: 'unavailable', reasonCode: 'input_type_options_unavailable' });
   });
+  it('shows a stored value without its choices: they are needed to pick a value, not to show one', () => {
+    const field = InputFieldHintSchema.parse({ path: 'repository', title: 'Repository', widget: 'select', inputType: identity });
+    const stored = { repositoryId: 'one' };
+    // Unreachable or still-loading choices never retire a value that was admitted when it was written...
+    expect(validateInputFieldValue({ field, type, value: stored, storedValue: true })).toEqual({ status: 'valid', value: stored });
+    // ...a malformed value still fails its schema...
+    expect(validateInputFieldValue({ field, type, value: { repositoryId: 1 }, storedValue: true }))
+      .toEqual({ status: 'invalid', reasonCode: 'input_type_value_invalid' });
+    // ...and known choices that no longer name it retire it, exactly as before.
+    expect(validateInputFieldValue({ field, type, value: stored, storedValue: true, options: [{ value: { repositoryId: 'two' }, label: 'Two' }] }))
+      .toEqual({ status: 'invalid', reasonCode: 'input_type_option_invalid' });
+    // A write still fails closed until its choices are known.
+    expect(validateInputFieldValue({ field, type, value: stored })).toEqual({ status: 'unavailable', reasonCode: 'input_type_options_unavailable' });
+  });
   it('[blocked: authored typed static choices] compares authored options before host normalization', () => {
     const selected = ['two', 'one', 'two'];
     const field = InputFieldHintSchema.parse({ path: 'session', title: 'Sessions', widget: 'select',
