@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, symlink, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -15,6 +15,13 @@ import { registerLanguageIntelligenceHandlers } from './languageIntelligence';
 import { createLanguageServerHost } from '@/lsp/languageServerHost';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createTargetedActionRpcRequestV1 } from '@happier-dev/protocol/actions/actionRpcTransport';
+import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
+import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
+import { configuration } from '@/configuration';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
+import { SocketRpcMachineAdmissionContextV1Schema } from '@happier-dev/protocol/socketRpc';
+import { accountSettingsParse } from '@happier-dev/protocol';
 
 describe('language intelligence registered Machine transport', () => {
   const roots: string[] = [];
@@ -57,6 +64,74 @@ describe('language intelligence registered Machine transport', () => {
         .toMatchObject({ ok: true, results: [{ status: 'replaced' }] });
       expect(await readFile(join(rootPath, 'a.ts'), 'utf8')).toBe('next');
     } finally { await host.dispose(); }
+  });
+
+  it('settles admitted language mutations through the credentialed CLI factories and native guarded writer', async () => {
+    await withConfiguredDaemonTestHome({ prefix: 'happier-lsp-native-action-' }, async () => {
+      const rootPath = await mkdtemp(join(tmpdir(), 'happier-lsp-native-action-'));
+      roots.push(rootPath);
+      await writeFile(join(rootPath, 'a.ts'), 'old');
+      const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
+      const credentials = { token, encryption: null, credentialProvenance: 'stored_session' as const };
+      const client = new ApiMachineClient(token, { id: 'machine', encryptionKey: new Uint8Array(32).fill(7),
+        encryptionVariant: 'legacy', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
+      const nativeEffect = {
+        languageIntelligenceApply: client.createLanguageIntelligenceApplyActionExecutor(configuration.activeServerId),
+      } satisfies Pick<ActionExecutorDeps, 'languageIntelligenceApply'>;
+      const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: {
+        'code.rename.apply': ['ui'], 'code.file.rename.apply': ['ui'], 'code.codeAction.apply': ['ui'],
+      } });
+      const accountSettings = accountSettingsParse({ actionsSettingsV1: actionsSettings });
+      const executor = createCliActionExecutorFromCredentials({ credentials, ...nativeEffect,
+        readCredentials: async () => credentials,
+        serverId: configuration.activeServerId, serverApiUrl: 'http://127.0.0.1:1',
+        actionsSettingsProvider: { getActionsSettings: () => actionsSettings, getAccountSettings: () => accountSettings },
+        machineActionDirectTargetTransport: { machineId: 'machine', invoke: client.invokeLocalMachineAction.bind(client) },
+      });
+      client.setRPCHandlers({ spawnSession: async () => ({ type: 'error', errorCode: 'SPAWN_FAILED', errorMessage: 'unused' }),
+        stopSession: async () => true, requestShutdown: () => {} }, { externalActionIngressOwner: {
+        currentServerId: configuration.activeServerId, executor, resolveTarget: async () => ({ kind: 'machine', machineId: 'machine' }),
+      } });
+      const controller = new AbortController();
+      const invoke = (method: string, request: unknown) => client.invokeLocalMachineAction(method,
+        createTargetedActionRpcRequestV1(request, { kind: 'machine', machineId: 'machine' }),
+        { signal: controller.signal, localActionContext: { surface: 'ui', authority: 'present_user' },
+          // The authenticated Home ingress is the boundary fixture. Action input
+          // cannot supply this requester identity; all dispatch/effects stay real.
+          rpcContext: { machineAdmission: SocketRpcMachineAdmissionContextV1Schema.parse({ actorAccountId: 'owner',
+            custodianAccountId: 'owner', machineId: 'machine', installationId: '11111111-1111-4111-8111-111111111111',
+            role: 'manage', encryptionMode: 'plain' }) },
+        });
+      const hash = (text: string) => createHash('sha256').update(text).digest('hex');
+      const file = { path: 'a.ts', expectedHash: hash('old'), edits: [
+        { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }, text: 'next' },
+      ] };
+      let pending: Promise<unknown> | undefined;
+      try {
+        let outcome: unknown;
+        pending = invoke(RPC_METHODS.DAEMON_LSP_RENAME_APPLY, { rootPath, path: 'a.ts', operation: { kind: 'rename', files: [file] } })
+          .then(result => { outcome = result; });
+        // Observe settlement before awaiting the request, so a recursive self-RPC
+        // fails as an unresolved Action and can still be cancelled in cleanup.
+        await vi.waitFor(() => expect(outcome, `Native apply outcome: ${JSON.stringify(outcome)}`)
+          .toMatchObject({ ok: true, results: [{ status: 'replaced' }] }));
+        await pending;
+        expect(await readFile(join(rootPath, 'a.ts'), 'utf8')).toBe('next');
+        expect(await invoke(RPC_METHODS.DAEMON_LSP_FILE_RENAME_APPLY, { rootPath, path: 'a.ts', operation: { kind: 'fileRename',
+          files: [{ path: 'a.ts', expectedHash: hash('next'), edits: [], renameTo: 'moved.ts' }],
+        } })).toMatchObject({ ok: true, results: [{ status: 'replaced', renameTo: 'moved.ts' }] });
+        expect(await readFile(join(rootPath, 'moved.ts'), 'utf8')).toBe('next');
+        expect(await invoke(RPC_METHODS.DAEMON_LSP_CODE_ACTION_APPLY, { rootPath, path: 'moved.ts', operation: { kind: 'codeAction',
+          expectedHash: hash('old'), action: { serverId: 'fixture/server', title: 'Stale fix', hasCommand: false,
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }, files: [] },
+        } })).toMatchObject({ status: 'error', errorCode: 'stale_query' });
+        expect(await readFile(join(rootPath, 'moved.ts'), 'utf8')).toBe('next');
+      } finally {
+        controller.abort();
+        try { await pending; }
+        finally { await client.shutdown(); }
+      }
+    });
   });
 
   it('exposes typed no-server behavior through the transport and real process host', async () => {

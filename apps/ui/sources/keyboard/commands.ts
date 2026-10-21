@@ -24,6 +24,16 @@ export const defaultKeyboardCommands: readonly KeyboardCommand[] = [
     },
     { id: 'code.showProblems', settingsTitleKey: 'actionPresentation.titles.code_diagnostics_list' },
     { id: 'code.restart', settingsTitleKey: 'actionPresentation.titles.code_restart' },
+    {
+        id: 'code.rename',
+        settingsTitleKey: 'files.pane.menu.renameSymbol',
+        defaultBinding: { binding: 'F2', allowInEditable: true, nativeConsumable: true },
+    },
+    {
+        id: 'code.quickFix',
+        settingsTitleKey: 'files.pane.menu.quickFix',
+        defaultBinding: { binding: 'Alt+Enter', allowInEditable: true, nativeConsumable: true },
+    },
     ...([
         ['media.previous', 'mediaPrevious', 'ArrowLeft'],
         ['media.next', 'mediaNext', 'ArrowRight'],

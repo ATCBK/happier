@@ -23,6 +23,8 @@ export type FilesPaneTranslations = Readonly<{
         goToDefinition: string;
         showInfo: string;
         restartLanguageServices: string;
+        renameSymbol: string;
+        quickFix: string;
     }>;
     changedOnly: string;
     /** The tree's All | Changed view switch (lab FB1) and its accessible name. */
@@ -128,6 +130,41 @@ export type FilesPaneTranslations = Readonly<{
         saveAndAsk: (params: Readonly<{ count: number }>) => string;
         referencesEmpty: string;
         problemsEmpty: string;
+        fix: string;
+        renameTitle: string;
+        fixesTitle: string;
+        preparingRename: string;
+        lookingForFixes: string;
+        saveFirst: string;
+        newName: string;
+        renameHint: string;
+        findingUses: string;
+        previewRename: string;
+        renameTo: (params: Readonly<{ from: string; to: string }>) => string;
+        changesInFiles: (params: Readonly<{ changes: number; files: number }>) => string;
+        renameInFiles: (params: Readonly<{ files: number }>) => string;
+        applyFix: string;
+        runsCommand: string;
+        alsoRunsCommand: string;
+        renamed: (params: Readonly<{ files: number }>) => string;
+        fixApplied: string;
+        nothingChanged: string;
+        undone: (params: Readonly<{ files: number }>) => string;
+        resultChanged: string;
+        resultSkipped: string;
+        resultFailed: (params: Readonly<{ reason: string }>) => string;
+        undoChanged: (params: Readonly<{ files: number }>) => string;
+        undoFailed: string;
+        readingFile: string;
+        changesNotShown: (params: Readonly<{ count: number }>) => string;
+        cannotRename: string;
+        noFixes: string;
+        nothingToChange: string;
+        renameUnavailable: string;
+        fixesUnavailable: string;
+        editLoading: string;
+        editFailed: string;
+        outcomeUnknown: string;
     }>;
 }>;
 
@@ -155,6 +192,8 @@ export const filesPaneTranslationsEnglish = { en: {
             goToDefinition: "Go to definition at cursor",
             showInfo: "Info at cursor",
             restartLanguageServices: "Restart language services",
+            renameSymbol: "Rename symbol",
+            quickFix: "Quick fix",
         },
         changedOnly: 'Changed only',
         showAll: 'All',
@@ -255,5 +294,40 @@ export const filesPaneTranslationsEnglish = { en: {
             artifactShareFailed: ({ team }) => "Saved for you, but it couldn’t be shared with " + team + ".",
             referencesEmpty: "Find references on a name in a file to see where it is used.",
             problemsEmpty: "Open a file to check it for problems.",
+            fix: "Fix",
+            renameTitle: "Rename",
+            fixesTitle: "Quick fixes",
+            preparingRename: "Checking this name…",
+            lookingForFixes: "Looking for fixes…",
+            saveFirst: "Save this file first: renames and fixes work on what is saved.",
+            newName: "New name",
+            renameHint: "Return shows every change before anything is written.",
+            findingUses: "Finding every use…",
+            previewRename: "Preview",
+            renameTo: ({ from, to }) => from + " → " + to,
+            changesInFiles: ({ changes, files }) => String(changes) + " " + (changes === 1 ? "change" : "changes") + " in " + String(files) + " " + (files === 1 ? "file" : "files"),
+            renameInFiles: ({ files }) => "Rename in " + String(files) + " " + (files === 1 ? "file" : "files"),
+            applyFix: "Apply fix",
+            runsCommand: "The language server makes this change when it runs. Each file it writes is listed after.",
+            alsoRunsCommand: "Then the language server runs a command, which may change more.",
+            renamed: ({ files }) => "Renamed in " + String(files) + " " + (files === 1 ? "file" : "files"),
+            fixApplied: "Fix applied",
+            nothingChanged: "Nothing was changed",
+            undone: ({ files }) => "Undone in " + String(files) + " " + (files === 1 ? "file" : "files"),
+            resultChanged: "Changed since the preview, left alone",
+            resultSkipped: "Skipped",
+            resultFailed: ({ reason }) => reason ? "Couldn’t write: " + reason : "Couldn’t write",
+            undoChanged: ({ files }) => String(files) + " " + (files === 1 ? "file has" : "files have") + " changed since, left alone",
+            undoFailed: "Undo couldn’t finish. Check the files before trying again.",
+            readingFile: "Reading…",
+            changesNotShown: ({ count }) => String(count) + " " + (count === 1 ? "change" : "changes") + "; the preview can’t be shown",
+            cannotRename: "This name can’t be renamed.",
+            noFixes: "No fixes here.",
+            nothingToChange: "Nothing to change.",
+            renameUnavailable: "Renaming needs a language server for this file.",
+            fixesUnavailable: "Fixes need a language server for this file.",
+            editLoading: "The language server is still loading the project. Try again in a moment.",
+            editFailed: "Couldn’t get the changes. Try again.",
+            outcomeUnknown: "The change may have been written. Check the files before trying again.",
         },
     } } as const satisfies Pick<Record<string, FilesPaneTranslations>, "en">;

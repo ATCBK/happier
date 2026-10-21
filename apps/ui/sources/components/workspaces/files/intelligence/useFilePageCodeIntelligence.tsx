@@ -28,7 +28,7 @@ import { readWorkspaceFileEditorHolder, subscribeFileEditorActionOwners } from '
 import { askCodeDiagnosticsToFix } from '@/sync/domains/workspaces/languageIntelligence/askCodeDiagnosticsToFix';
 import { useAskSelectionTargetContext } from '@/components/ui/code/selection/useAskSelection';
 import { selectCodeDiagnostics } from '@/sync/domains/workspaces/languageIntelligence/codeDiagnostics';
-import type { CodeIdentifier } from '@/sync/domains/workspaces/languageIntelligence/codeIdentifiers';
+import { resolveCodeIdentifier, type CodeIdentifier } from '@/sync/domains/workspaces/languageIntelligence/codeIdentifiers';
 import type {
   CodeIntelligenceController,
   CodeIntelligenceSnapshot,
@@ -60,6 +60,29 @@ import {
   type CodeIntelligencePaneProducer,
 } from './codeIntelligencePaneStore';
 import type { CodeReferenceRow } from './CodeReferencesList';
+import { CodeEditSetPopover, type CodeEditSetRequest } from './CodeEditSetPopover';
+
+/** The open rename / quick-fix flow, outside React like the card: only its leaf re-renders. */
+function createEditSetStore() {
+  let request: CodeEditSetRequest | null = null;
+  const listeners = new Set<() => void>();
+  const set = (next: CodeEditSetRequest | null) => {
+    request = next;
+    for (const listener of listeners) listener();
+  };
+  return {
+    get: () => request,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    open: (next: CodeEditSetRequest) => set(next),
+    close: () => set(null),
+  };
+}
+type EditSetStore = ReturnType<typeof createEditSetStore>;
 
 type CardState = Readonly<{
   anchor: Rect | null;
@@ -237,6 +260,7 @@ export function useFilePageCodeIntelligence(
   const searchRuntime = useOptionalUniversalSearchRuntime();
   const interaction = React.useMemo(() => createCardInteraction(), []);
   React.useEffect(() => () => interaction.dispose(), [interaction]);
+  const editSets = React.useMemo(() => createEditSetStore(), []);
 
   const workspaceRefId = React.useMemo(
     () =>
@@ -764,10 +788,55 @@ export function useFilePageCodeIntelligence(
     ),
   );
 
+  // F2 / Alt+Enter, the ⋯ menu and the card's Fix: the name at the editor's caret, else the name last pointed at.
+  const openEditSet = React.useCallback(
+    (op: CodeEditSetRequest['op']): 'handled' | 'pass' => {
+      if (!controller) return 'pass';
+      const editor = latest.current.editorHandleRef.current;
+      const cursor = editor?.getCursorPosition?.();
+      const snapshot = controller.getSnapshot();
+      const known = snapshot.querySelection ?? snapshot.selection;
+      const position = cursor
+        ? { line: cursor.line - 1, character: cursor.character }
+        : known?.position;
+      if (!position) return 'pass';
+      const identifier = cursor
+        ? resolveCodeIdentifier(latest.current.liveValue.get(), position, latest.current.language)
+        : known?.identifier ?? null;
+      if (!identifier) return 'pass';
+      // The card's anchor, else the pointer's name (a query re-reads its name without the anchor), else the caret's line.
+      const anchor = interaction.getState()?.anchor
+        ?? (cursor ? (editor?.getLineRect?.(position.line + 1) ?? null)
+          : (snapshot.selection?.anchor ?? known?.anchor ?? interaction.remembered()));
+      interaction.close();
+      editSets.open({ op, anchor, line: position.line, character: identifier.startCharacter, symbol: identifier.symbol });
+      return 'handled';
+    },
+    [controller, editSets, interaction],
+  );
+  useKeyboardShortcutHandlers(
+    React.useMemo(
+      () =>
+        input.active && controller
+          ? {
+              'code.rename': () => openEditSet('rename'),
+              'code.quickFix': () => openEditSet('fixes'),
+            }
+          : {},
+      [controller, input.active, openEditSet],
+    ),
+  );
+
   const menuCommands = React.useMemo(
     () =>
       controller
         ? {
+            'code.rename': () => {
+              openEditSet('rename');
+            },
+            'code.quickFix': () => {
+              openEditSet('fixes');
+            },
             'code.goToDefinition': () => {
               runCursor(controller, input.editorHandleRef, 'definition');
             },
@@ -787,9 +856,15 @@ export function useFilePageCodeIntelligence(
             },
           }
         : undefined,
-    [controller, input.editorHandleRef, interaction, restart, showProblems],
+    [controller, input.editorHandleRef, interaction, openEditSet, restart, showProblems],
   );
 
+  const saveThisFile = React.useCallback(async () => {
+    const current = latest.current;
+    if (!current.scope || !current.accountId) return false;
+    const saved = await readWorkspaceFileEditorHolder(current.scope, current.accountId, current.filePath)?.save();
+    return saved?.status === 'saved' || saved?.status === 'clean';
+  }, []);
   const layer = controller ? (
     <FileCodeIntelligenceCardLayer
       controller={controller}
@@ -799,6 +874,24 @@ export function useFilePageCodeIntelligence(
       filePath={input.filePath}
       scopeId={input.scopeId}
       onOpenReference={openReference}
+      onQuickFix={() => openEditSet('fixes')}
+      onRename={() => openEditSet('rename')}
+      editSets={
+        input.scope ? (
+          <FileCodeEditSetLayer
+            store={editSets}
+            controller={controller}
+            scope={input.scope}
+            accountId={input.accountId}
+            filePath={input.filePath}
+            languageId={input.language}
+            machineName={input.machineName}
+            readText={input.liveValue.get}
+            isUnsaved={input.getUnsaved}
+            save={saveThisFile}
+          />
+        ) : null
+      }
     />
   ) : null;
 
@@ -895,6 +988,10 @@ function FileCodeIntelligenceCardLayer(
     filePath: string;
     scopeId: string;
     onOpenReference: (row: CodeReferenceRow) => void;
+    onQuickFix: () => void;
+    onRename: () => void;
+    /** The rename / quick-fix leaf, mounted beside the card. */
+    editSets: React.ReactNode;
   }>,
 ) {
   const { controller, interaction } = props;
@@ -1007,9 +1104,15 @@ function FileCodeIntelligenceCardLayer(
   }, [controller, interaction]);
   const position = query?.position ?? null;
   if (state?.problems) {
-    return <CodeProblemsSheet scopeId={props.scopeId} onRequestClose={close} />;
+    return (
+      <>
+        <CodeProblemsSheet scopeId={props.scopeId} onRequestClose={close} />
+        {props.editSets}
+      </>
+    );
   }
   return (
+    <>
     <CodeIntelligenceCard
       open={open}
       anchor={state?.anchor ?? query?.anchor ?? null}
@@ -1041,6 +1144,45 @@ function FileCodeIntelligenceCardLayer(
         interaction.close();
         props.onOpenReference(row);
       }}
+      onQuickFix={props.onQuickFix}
+      onRename={props.onRename}
+    />
+    {props.editSets}
+    </>
+  );
+}
+
+/** The rename / quick-fix leaf: mounts the flow only while one is open. */
+function FileCodeEditSetLayer(
+  props: Readonly<{
+    store: EditSetStore;
+    controller: CodeIntelligenceController;
+    scope: WorkspaceScopeBase;
+    accountId: string | null;
+    filePath: string;
+    languageId: string | null;
+    machineName: string;
+    readText: () => string;
+    isUnsaved: () => boolean;
+    save: () => Promise<boolean>;
+  }>,
+) {
+  const request = React.useSyncExternalStore(props.store.subscribe, props.store.get, () => null);
+  if (!request) return null;
+  const server = readLanguageServerLabel(props.controller.getSnapshot().servers);
+  return (
+    <CodeEditSetPopover
+      key={`${request.op}:${request.line}:${request.character}`}
+      request={request}
+      scope={props.scope}
+      accountId={props.accountId}
+      filePath={props.filePath}
+      languageId={props.languageId}
+      readText={props.readText}
+      isUnsaved={props.isUnsaved}
+      save={props.save}
+      sourceLabel={server ? `${server} · ${props.machineName}` : null}
+      onRequestClose={props.store.close}
     />
   );
 }

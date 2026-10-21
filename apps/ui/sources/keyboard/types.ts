@@ -10,6 +10,8 @@ export type KeyboardCommandId =
     | 'code.problem.previous'
     | 'code.showProblems'
     | 'code.restart'
+    | 'code.rename'
+    | 'code.quickFix'
     | 'media.previous'
     | 'media.next'
     | 'media.zoomIn'
@@ -120,6 +122,8 @@ export type KeyboardCommandSettingsTitleKey = Extract<
     | 'actionPresentation.titles.code_hover_get'
     | 'actionPresentation.titles.code_diagnostics_list'
     | 'actionPresentation.titles.code_restart'
+    | 'files.pane.menu.renameSymbol'
+    | 'files.pane.menu.quickFix'
     | 'settingsKeyboard.commands.codeProblemNext'
     | 'settingsKeyboard.commands.codeProblemPrevious'
     | `settingsKeyboard.commands.media${'Previous' | 'Next' | 'ZoomIn' | 'ZoomOut' | 'Fit' | 'ActualSize' | 'PlayPause'}`

@@ -24,6 +24,14 @@ describe('search-backed code Actions', () => {
     expect(requests).toMatchObject([{ actionId: 'code.rename.apply', actionArgs: input }]);
     expect(applied).toBe(false);
   });
+  it('retains the Machine-side durable approval receipt for a semantic edit without parsing it as completed writes', async () => {
+    const pending = { kind: 'approval_request_created', artifactId: 'rename-approval', actionId: 'code.rename.apply' } as const;
+    const executor = createActionExecutor({ languageIntelligenceApply: async () => pending });
+    const input = { machineId: 'machine', rootPath: '/repo', path: 'a.ts',
+      files: [{ path: 'a.ts', expectedHash: 'a'.repeat(64), edits: [] }] };
+    expect(await executor.execute('code.rename.apply', input, { surface: 'ui', authority: 'present_user' }))
+      .toEqual({ ok: true, result: pending });
+  });
   it('exposes semantic previews safely and routes reviewed edits through the mutation Action dependency', async () => {
     const preview = ActionIdSchema.parse('code.rename.preview');
     const apply = ActionIdSchema.parse('code.rename.apply');

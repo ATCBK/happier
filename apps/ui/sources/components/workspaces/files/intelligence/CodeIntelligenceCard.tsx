@@ -110,6 +110,10 @@ export type CodeIntelligenceCardProps = Readonly<{
   onCopyPath: (path: string) => void;
   onChooseName: (name: CodeIdentifier) => void;
   onOpenReference: (row: CodeReferenceRow) => void;
+  /** Quick fixes for the problem the card leads with (Alt+Enter). */
+  onQuickFix?: () => void;
+  /** Phones: rename the name from the sheet (desktop uses F2 and the ⋯ menu). */
+  onRename?: () => void;
   /** The pointer is over the card: a hover card stays while it is read. */
   onHoverChange?: (hovered: boolean) => void;
 }>;
@@ -125,6 +129,7 @@ export function CodeIntelligenceCard(
   const { theme } = useUnistyles();
   const definitionKey = useKeyboardShortcutLabel('code.goToDefinition');
   const referencesKey = useKeyboardShortcutLabel('code.findReferences');
+  const quickFixKey = useKeyboardShortcutLabel('code.quickFix');
   const anchor = props.anchor;
   const popoverAnchor = React.useMemo(
     () =>
@@ -147,6 +152,9 @@ export function CodeIntelligenceCard(
   const cardWidth = resolveCardWidth({
     signature: props.model.hover?.signature?.code ?? null,
     actions: [
+      ...(props.model.diagnostic && props.onQuickFix
+        ? [{ label: t('files.pane.intelligence.fix'), ...(webKeys && quickFixKey ? { shortcut: quickFixKey } : {}) }]
+        : []),
       ...(props.model.outsidePath
         ? []
         : [{ label: t('files.pane.intelligence.goToDefinition'), ...(webKeys && definitionKey ? { shortcut: definitionKey } : {}) }]),
@@ -211,6 +219,7 @@ export function CodeIntelligenceCard(
                 model={props.model}
                 onDefinition={props.onDefinition}
                 onReferences={props.onReferences}
+                {...(props.onQuickFix ? { onQuickFix: props.onQuickFix } : {})}
               />
             </View>
           </FloatingOverlay>
@@ -355,10 +364,12 @@ function CodeIntelligenceFooter(
     model: CodeIntelligenceCardModel;
     onDefinition: () => void;
     onReferences: () => void;
+    onQuickFix?: () => void;
   }>,
 ) {
   const definitionKey = useKeyboardShortcutLabel('code.goToDefinition');
   const referencesKey = useKeyboardShortcutLabel('code.findReferences');
+  const quickFixKey = useKeyboardShortcutLabel('code.quickFix');
   return (
     <View
       style={[
@@ -368,6 +379,14 @@ function CodeIntelligenceFooter(
           : null,
       ]}
     >
+      {props.model.diagnostic && props.onQuickFix ? (
+        <FooterAction
+          label={t('files.pane.intelligence.fix')}
+          shortcut={quickFixKey}
+          onPress={props.onQuickFix}
+          testID="code-hover-card-fix"
+        />
+      ) : null}
       {props.model.outsidePath ? null : (
         <FooterAction
           label={t('files.pane.intelligence.goToDefinition')}
@@ -488,6 +507,9 @@ function CodeIntelligenceSheetContent(props: CodeIntelligenceCardProps) {
             accessibilityLabel={model.name?.symbol}
             testIdPrefix="code-name-sheet-action"
             options={[
+              ...(model.diagnostic && props.onQuickFix
+                ? [{ id: 'fix', title: t('files.pane.intelligence.fix'), icon: 'lightbulb' as const }]
+                : []),
               {
                 id: 'definition',
                 title: t('files.pane.intelligence.definition'),
@@ -501,9 +523,16 @@ function CodeIntelligenceSheetContent(props: CodeIntelligenceCardProps) {
                 icon: 'list',
               },
               { id: 'copy', title: t('files.pane.intelligence.copy'), icon: 'copy' },
+              ...(props.onRename && model.name
+                ? [{ id: 'rename', title: t('files.pane.intelligence.renameTitle'), icon: 'pencil-simple' as const }]
+                : []),
             ]}
             onPress={(id) =>
-              id === 'definition'
+              id === 'fix'
+                ? props.onQuickFix?.()
+                : id === 'rename'
+                  ? props.onRename?.()
+                : id === 'definition'
                 ? props.onDefinition()
                 : id === 'references'
                   ? props.onReferences()

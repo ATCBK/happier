@@ -9055,6 +9055,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             request = { ...target, operation: { kind: actionId === 'code.rename.apply' ? 'rename' : 'fileRename', files } };
           }
           const response = await deps.languageIntelligenceApply({ machineId, request, actionId }, ctx);
+          const approval = ActionApprovalRequestCreatedResultSchema.safeParse(response);
+          if (approval.success) return completeActionResult(approval.data);
           if ('ok' in response && response.ok === false && 'errorCode' in response) return completeActionResult(response);
           return completeActionResult(DaemonLspApplyResponseSchema.parse(response));
         }

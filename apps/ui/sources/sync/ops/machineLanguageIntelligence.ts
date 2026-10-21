@@ -15,6 +15,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { classifyWorkspaceFileRpcError } from './machineWorkspaceFileRpcError';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { isActionAccountScopeChangedError } from '@/sync/domains/scope/actionAccountScopeError';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { ActionApprovalRequestCreatedResultSchema, type ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 
@@ -72,6 +73,11 @@ export async function machineLanguageIntelligenceApplyAction(machineId: string, 
         if (approval.success) return { ok: false, errorCode: 'approval_required', error: 'approval_required', details: approval.data };
         const parsed = DaemonLspApplyResponseSchema.safeParse(execution.result);
         return parsed.success ? parsed.data : { status: 'unavailable', reason: 'invalid_response' };
+    } catch (error) {
+        if (options?.signal?.aborted) throw error;
+        // A changed Account is refused before dispatch; anything else may have reached the Machine.
+        if (isActionAccountScopeChangedError(error)) return { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
+        return { ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' };
     } finally { account.dispose(); }
 }
 /** File-page rename and quick-fix previews read through the same safe Actions agents use (disk text, hash-guarded). */
