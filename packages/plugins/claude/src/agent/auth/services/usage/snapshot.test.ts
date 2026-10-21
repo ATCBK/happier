@@ -27,6 +27,7 @@ describe('Claude provider account usage snapshots', () => {
         });
         const subject = resolveClaudeUsageSubjectRef({
             oauthAccountId: 'claude-account-1',
+            organizationId: 'organization-a',
             accountLabel: 'alice@example.com',
         });
 

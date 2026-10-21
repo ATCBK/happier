@@ -4,6 +4,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE } from '../native/scopes.js';
 
 describe('canonical Claude failure evidence', () => {
+  it('retains source organization with the selected provider user', async () => {
+    const { classifyClaudeConnectedServiceRuntimeAuthFailure } = await import('./failure.js');
+    expect(classifyClaudeConnectedServiceRuntimeAuthFailure({
+      serviceId: 'happier.agent.claude/claude-subscription', profileId: 'selected', groupId: null,
+      sourceProviderAccountId: 'provider-user', sourceProviderOrganizationId: 'organization-a',
+      error: 'usage limit reached',
+    })).toMatchObject({ sourceProviderAccountId: 'provider-user', sourceProviderOrganizationId: 'organization-a' });
+  });
+
   it.each([
     [{ usageLimit: { v: 1, resetAtMs: null, retryAfterMs: 1500, quotaScope: 'provider',
       recoverability: 'wait', limitCategory: 'capacity' } }, 'capacity'],
@@ -199,6 +208,78 @@ describe('Claude runtime auth service classification', () => {
       sourceProviderAccountId: 'live-account',
       sourceAccountLabel: 'live@example.com',
     });
+  });
+
+  it('proves a current direct profile locally with exact native material when organization is unknown', async () => {
+    const { createClaudeConnectedAccountNativeAuthCodec } = await import('./failure.js');
+    const codec = createClaudeConnectedAccountNativeAuthCodec();
+    const credential = createClaudeSubscriptionRecord('team');
+    const materialized = codec.materialize({ credential, selection: {
+      groupId: 'initial-only', activeProfileId: 'team', groupGeneration: 1,
+      credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa',
+    } });
+    const files = { '.credentials.json': materialized.files['.credentials.json'],
+      '.claude.json': new TextEncoder().encode(JSON.stringify({
+        oauthAccount: { accountUuid: 'team-account', organizationUuid: 'native-context-unattested' },
+      })),
+    };
+    const selection = { kind: 'profile' as const, profileId: 'team',
+      credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa' };
+    expect(codec.inspect({ credential, selection, files })).toMatchObject({ status: 'verified',
+      providerAccountId: 'team-account', credentialRevision: selection.credentialRevision,
+      credentialFingerprint: expect.stringMatching(/^sha256:[a-f0-9]{64}$/), proofStrength: 'exact', source: 'materialized_native_auth',
+    });
+    expect(codec.inspect({ credential, selection, files })).not.toHaveProperty('providerOrganizationId');
+    expect(codec.inspect({ credential, selection: { ...selection, profileId: 'another-profile' }, files })).toMatchObject({ status: 'unavailable' });
+    expect(codec.inspect({ credential, selection: { ...selection, credentialRevision: null }, files })).toMatchObject({ status: 'unavailable' });
+    expect(codec.inspect({ credential, selection, files: { ...files,
+      '.credentials.json': new TextEncoder().encode(JSON.stringify({ claudeAiOauth: { accessToken: 'different-access', scopes: [] } })),
+    } })).toMatchObject({ status: 'unavailable' });
+    expect(codec.inspect({ credential, selection, files: { ...files,
+      '.claude.json': new TextEncoder().encode(JSON.stringify({ oauthAccount: { accountUuid: 'another-user' } })),
+    } })).toMatchObject({ status: 'unavailable' });
+  });
+
+  it('reconciles and verifies the actual native organization without retaining another context cache', async () => {
+    const { createClaudeConnectedAccountNativeAuthCodec } = await import('./failure.js');
+    const codec = createClaudeConnectedAccountNativeAuthCodec();
+    const base = createClaudeSubscriptionRecord('team');
+    if (base.kind !== 'oauth') throw new Error('Expected OAuth fixture');
+    const credential = { ...base, oauth: { ...base.oauth, raw: { claudeAiOauth: { organizationUuid: 'organization-a' } } } };
+    const selection = { groupId: 'coders', activeProfileId: 'team', groupGeneration: 12,
+      credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa' };
+    const initial = codec.materialize({ credential, selection });
+    const decode = (files: Readonly<Record<string, Uint8Array>>) => {
+      const bytes = files['.claude.json'];
+      return bytes ? JSON.parse(new TextDecoder().decode(bytes)) : null;
+    };
+    expect(decode(initial.files)).toMatchObject({ oauthAccount: {
+      accountUuid: 'team-account', organizationUuid: 'organization-a', emailAddress: 'team@example.com',
+    } });
+    const existingRoot = { ...decode(initial.files), theme: 'light', projects: { project: { hasTrustDialogAccepted: true } },
+      modelAccessCache: { 'account.flag': true }, additionalModelOptionsCache: { allowed: true } };
+    const files = { ...initial.files, '.claude.json': new TextEncoder().encode(JSON.stringify(existingRoot)) };
+    const same = codec.materialize({ credential, selection, files });
+    expect(decode(same.files)).toMatchObject(existingRoot);
+    const tierChanged = { ...credential, oauth: { ...credential.oauth,
+      raw: { claudeAiOauth: { organizationUuid: 'organization-a', subscriptionType: 'max' } },
+    } };
+    expect(decode(codec.materialize({ credential: tierChanged, selection, files }).files)).not.toHaveProperty('modelAccessCache');
+
+    const changed = { ...credential, oauth: { ...credential.oauth, raw: { claudeAiOauth: { organizationUuid: 'organization-b' } } } };
+    const next = codec.materialize({ credential: changed, selection, files });
+    expect(decode(next.files)).toMatchObject({ theme: 'light', projects: existingRoot.projects,
+      oauthAccount: { accountUuid: 'team-account', organizationUuid: 'organization-b' } });
+    expect(decode(next.files)).not.toHaveProperty('modelAccessCache');
+    expect(decode(next.files)).not.toHaveProperty('additionalModelOptionsCache');
+    expect(codec.inspect({ credential: changed, selection, files: next.files })).toMatchObject({ status: 'verified' });
+    expect(codec.inspect({ credential: changed, selection, files: {
+      ...next.files, '.claude.json': files['.claude.json'],
+    } })).toMatchObject({ status: 'unavailable' });
+    const unknown = { ...credential, oauth: { ...credential.oauth, raw: null } };
+    const local = codec.materialize({ credential: unknown, selection, files });
+    expect(decode(local.files)).not.toHaveProperty('oauthAccount.organizationUuid');
+    expect(codec.inspect({ credential: unknown, selection, files: local.files })).toMatchObject({ status: 'verified' });
   });
 
   it('hot-applies Claude subscription group auth by rewriting the shared config dir', async () => {

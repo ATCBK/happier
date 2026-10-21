@@ -3,10 +3,43 @@ import { describe, expect, it, vi } from 'vitest';
 import { recordClaudeRuntimeProviderAccountUsageSnapshot } from './accountUsage.js';
 
 describe('Claude runtime provider account usage recording', () => {
+  it.each(['current', 'malformed', 'missing'])('keeps user-only native observations provisional with bounded %s local credential proof', async (credentialState) => {
+    const observations: unknown[] = [];
+    await recordClaudeRuntimeProviderAccountUsageSnapshot({
+      ctx: { agentRuntime: {
+        nativeHome: { async readFiles() { return { '.claude.json': new TextEncoder().encode(JSON.stringify({
+          oauthAccount: { accountUuid: 'provider-user' },
+        })), ...(credentialState === 'missing' ? {} : { '.credentials.json': new TextEncoder().encode(
+          credentialState === 'current' ? JSON.stringify({ claudeAiOauth: { accessToken: 'native-current-access', scopes: ['user:inference'] } }) : '{invalid',
+        ) }) }; } },
+        accountUsage: {
+          async resolveSourceContext() { return { serviceId: 'claude-subscription', profileId: 'work', bindingKind: 'profile' }; },
+          async recordSnapshot(input) { observations.push(input); return { status: 'recorded' }; },
+        },
+      }, logger: { debug() {} } },
+      sessionId: 'local-session', launchEnv: { CLAUDE_CONFIG_DIR: '/selected/native/home' },
+      evidence: { rate_limits: { five_hour: { utilization: 100 } } },
+    });
+    expect(observations).toEqual([expect.objectContaining({ snapshot: expect.objectContaining({
+      accountSubject: expect.objectContaining({ kind: 'provisionalLocalSubject' }), confidence: 'unknown',
+    }) })]);
+    if (credentialState === 'current') {
+      expect(observations[0]).toHaveProperty('source', { serviceId: 'claude-subscription' });
+      // Existing host fingerprint contract: first eight hex characters of SHA-256(accessToken).
+      expect(observations[0]).toHaveProperty('credentialProof', {
+        providerAccountId: 'provider-user', credentialFingerprint: 'sha256:32dc71ca',
+      });
+    } else {
+      expect(observations[0]).not.toHaveProperty('source');
+      expect(observations[0]).not.toHaveProperty('credentialProof');
+    }
+  });
+
   it.each(['allowed', 'rejected'])('records every %s SDK window through the qualified host usage service', async (status) => {
     const accountConfig = JSON.stringify({
       oauthAccount: {
         accountUuid: 'live-claude-account',
+        organizationUuid: 'organization-a',
         emailAddress: 'live@example.com',
       },
     });
@@ -69,6 +102,7 @@ describe('Claude runtime provider account usage recording', () => {
       },
       snapshot: expect.objectContaining({
         providerId: 'claude',
+        recordKey: { providerId: 'claude', accountSubjectId: 'live-claude-account', subjectKind: 'account', quotaScope: 'organization', quotaScopeId: 'organization-a' },
         accountSubject: {
           kind: 'providerSubject',
           id: 'live-claude-account',

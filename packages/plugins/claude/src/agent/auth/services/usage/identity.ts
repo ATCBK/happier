@@ -1,13 +1,16 @@
 import { createHash } from 'node:crypto';
 
+export const CLAUDE_ACCOUNT_USAGE_PROVIDER_ID = 'claude';
+
 export type ClaudeUsageSubjectKind = 'account' | 'subscription' | 'organization';
 
 export type ClaudeUsageSubjectRef =
     | Readonly<{
-        providerId: 'claude';
+        providerId: typeof CLAUDE_ACCOUNT_USAGE_PROVIDER_ID;
         kind: 'providerSubject';
         accountSubjectId: string;
         subjectKind: ClaudeUsageSubjectKind;
+        providerOrganizationId?: string;
         proof:
             | 'provider_account_id'
             | 'subscription_id'
@@ -16,7 +19,7 @@ export type ClaudeUsageSubjectRef =
             | 'oauth_account_uuid';
     }>
     | Readonly<{
-        providerId: 'claude';
+        providerId: typeof CLAUDE_ACCOUNT_USAGE_PROVIDER_ID;
         kind: 'provisionalLocalSubject';
         accountSubjectId: string;
         reason: 'missing_stable_provider_subject';
@@ -40,13 +43,15 @@ function stableSubject(
     accountSubjectId: string,
     subjectKind: ClaudeUsageSubjectKind,
     proof: Extract<ClaudeUsageSubjectRef, { kind: 'providerSubject' }>['proof'],
+    providerOrganizationId?: string,
 ): ClaudeUsageSubjectRef {
     return {
-        providerId: 'claude',
+        providerId: CLAUDE_ACCOUNT_USAGE_PROVIDER_ID,
         kind: 'providerSubject',
         accountSubjectId,
         subjectKind,
         proof,
+        ...(providerOrganizationId ? { providerOrganizationId } : {}),
     };
 }
 
@@ -62,23 +67,21 @@ export function resolveClaudeUsageSubjectRef(input: ResolveClaudeUsageSubjectRef
     if (subscriptionId) return stableSubject(subscriptionId, 'subscription', 'subscription_id');
 
     const organizationId = readNonEmptyString(input.organizationId);
-    if (organizationId) return stableSubject(organizationId, 'organization', 'organization_id');
-
     const providerAccountId = readNonEmptyString(input.providerAccountId);
-    if (providerAccountId) return stableSubject(providerAccountId, 'account', 'provider_account_id');
-
     const oauthAccountId = readNonEmptyString(input.oauthAccountId);
-    if (oauthAccountId) return stableSubject(oauthAccountId, 'account', 'oauth_account_id');
-
     const oauthAccountUuid = readNonEmptyString(input.oauthAccountUuid);
-    if (oauthAccountUuid) return stableSubject(oauthAccountUuid, 'account', 'oauth_account_uuid');
+    const userId = providerAccountId ?? oauthAccountId ?? oauthAccountUuid;
+    if (userId && organizationId) {
+        return stableSubject(userId, 'account', providerAccountId ? 'provider_account_id'
+            : oauthAccountId ? 'oauth_account_id' : 'oauth_account_uuid', organizationId);
+    }
 
     const discriminator = readNonEmptyString(input.provisionalDiscriminator);
     if (!discriminator) {
         throw new Error('Claude provisional subject discriminator is required when stable provider subject evidence is unavailable');
     }
     return {
-        providerId: 'claude',
+        providerId: CLAUDE_ACCOUNT_USAGE_PROVIDER_ID,
         kind: 'provisionalLocalSubject',
         accountSubjectId: `provisional:${hashProvisionalSubject(discriminator)}`,
         reason: 'missing_stable_provider_subject',

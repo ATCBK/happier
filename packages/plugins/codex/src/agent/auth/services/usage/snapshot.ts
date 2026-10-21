@@ -47,7 +47,7 @@ function normalizeTimestampMs(value: number): number {
 
 function buildRecordKey(subject: CodexUsageSubjectRef): AgentAccountUsageSnapshot['recordKey'] {
   return {
-    providerId: 'openai-codex',
+    providerId: subject.providerId,
     accountSubjectId: subject.accountSubjectId,
     subjectKind: subject.kind === 'providerSubject' ? 'account' : 'unknown',
     quotaScope: 'account',
@@ -65,7 +65,7 @@ export function mapCodexProviderHttpUsageSnapshot(
   return {
     v: 1,
     recordKey,
-    providerId: 'openai-codex',
+    providerId: params.subject.providerId,
     accountSubject: {
       kind: params.subject.kind,
       id: params.subject.accountSubjectId,
@@ -101,7 +101,7 @@ export function mapCodexRateLimitSnapshotToProviderAccountUsageSnapshot(
   return {
     v: 1,
     recordKey,
-    providerId: 'openai-codex',
+    providerId: params.subject.providerId,
     accountSubject: {
       kind: params.subject.kind,
       id: params.subject.accountSubjectId,

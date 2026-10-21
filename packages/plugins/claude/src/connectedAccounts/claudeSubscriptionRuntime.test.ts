@@ -147,25 +147,114 @@ describe('Claude Subscription Connected Account', () => {
     }
   });
 
-  it.each(['oauth', 'native-import'] as const)('retains existing plan facts through a successful %s credential refresh', async (authenticationModeId) => {
+  it.each(['oauth', 'native-import'] as const)('replaces attested context through a successful %s credential refresh', async (authenticationModeId) => {
     const runtime = activateConnectedAccountRuntime();
     const staged = credentialStore();
     const context = readContext(authenticationModeId, new Map([
       ['accessToken', 'current-access'], ['refreshToken', 'current-refresh'],
       ['subscriptionType', 'max'], ['rateLimitTier', 'max_20x'],
+      ['providerAccountId', 'provider-user'], ['organizationUuid', 'old-organization'],
     ]));
     await expect(runtime.refresh({
       ...context,
       operation: { operationId: 'refresh-plan', configurationRevision: 'configuration-1' },
       stagedCredentials: staged.store,
-      services: { exec: { agentCli: { async checkReadiness() { return { launchable: [{ agentId: 'claude', version: '2.1.296' }] }; } } }, http: { async request() {
-        return { status: 200, finalUrl: 'https://platform.claude.com/v1/oauth/token', headers: {},
+      services: { exec: { agentCli: { async checkReadiness() { return { launchable: [{ agentId: 'claude', version: '2.1.296' }] }; } } }, http: { async request(request) {
+        return { status: 200, finalUrl: request.url, headers: {},
+          body: new TextEncoder().encode(JSON.stringify(request.method === 'GET'
+            ? { account: { uuid: 'provider-user', has_claude_max: true }, organization: { uuid: 'new-organization', rate_limit_tier: 'max_5x' } }
+            : { access_token: 'new-access', refresh_token: 'new-refresh' })) };
+      } } },
+    })).resolves.toMatchObject({ status: 'connected', providerIdentity: {
+      accountId: 'provider-user', organizationId: 'new-organization',
+    } });
+    expect(staged.values.get('subscriptionType')).toBe('max');
+    expect(staged.values.get('rateLimitTier')).toBe('max_5x');
+    expect(staged.values.get('organizationUuid')).toBe('new-organization');
+    expect(staged.values.get('providerAccountId')).toBe('provider-user');
+  });
+  it('clears prior organization in staged and public metadata when a rotated grant has no context attestation', async () => {
+    const runtime = activateConnectedAccountRuntime();
+    const staged = credentialStore();
+    const context = readContext('oauth', new Map([
+      ['accessToken', 'old-access'], ['refreshToken', 'old-refresh'],
+      ['providerAccountId', 'provider-user-a'], ['organizationUuid', 'organization-a'],
+    ]));
+    const result = await runtime.refresh({ ...context,
+      operation: { operationId: 'unavailable-profile', configurationRevision: 'configuration-1' },
+      stagedCredentials: staged.store,
+      services: { ...context.services, http: { async request(request) {
+        return { status: request.method === 'GET' ? 503 : 200, finalUrl: request.url, headers: {},
           body: new TextEncoder().encode(JSON.stringify({ access_token: 'new-access', refresh_token: 'new-refresh' })) };
       } } },
-    })).resolves.toMatchObject({ status: 'connected' });
-    expect(staged.values.get('subscriptionType')).toBe('max');
-    expect(staged.values.get('rateLimitTier')).toBe('max_20x');
+    });
+    expect(result).toMatchObject({ status: 'connected', providerIdentity: { accountId: 'provider-user-a' } });
+    expect(result).toHaveProperty('providerIdentity.organizationId', null);
+    expect(staged.values.has('organizationUuid')).toBe(false);
+    expect(staged.values.get('accessToken')).toBe('new-access');
   });
+
+  it('does not replace an established user with a different user attested by a refresh response', async () => {
+    const runtime = activateConnectedAccountRuntime();
+    const staged = credentialStore();
+    const context = readContext('oauth', new Map([
+      ['accessToken', 'old-access'], ['refreshToken', 'old-refresh'],
+      ['providerAccountId', 'provider-user-a'], ['organizationUuid', 'organization-a'],
+    ]));
+    await expect(runtime.refresh({ ...context,
+      operation: { operationId: 'immutable-user', configurationRevision: 'configuration-1' },
+      stagedCredentials: staged.store,
+      services: { ...context.services, http: { async request(request) {
+        return { status: 200, finalUrl: request.url, headers: {}, body: new TextEncoder().encode(JSON.stringify({
+          access_token: 'different-user-access', refresh_token: 'different-user-refresh',
+          account: { uuid: 'provider-user-b' }, organization: { uuid: 'organization-b' },
+        })) };
+      } } },
+    })).resolves.toMatchObject({ status: 'outcomeUnknown' });
+    expect(staged.values.size).toBe(0);
+    expect(await context.credentials.get('providerAccountId')).toBe('provider-user-a');
+  });
+
+  it.each(['missing', 'known', 'unavailable', 'mismatch'] as const)(
+    'attests legacy unexpired context without rotating tokens (%s)', async scenario => {
+      const runtime = activateConnectedAccountRuntime();
+      const staged = credentialStore();
+      const original = new Map([
+        ['accessToken', 'current-access'], ['refreshToken', 'current-refresh'],
+        ['providerAccountId', 'provider-user'], ['expiresAtMs', String(Date.now() + 3_600_000)],
+        ...(scenario === 'known' ? [['organizationUuid', 'known-organization']] : []),
+      ]);
+      const context = readContext('oauth', original);
+      const requests: string[] = [];
+      expect(runtime.enrichCredentialContext).toEqual(expect.any(Function));
+      const result = await runtime.enrichCredentialContext!({
+        ...context, operation: { operationId: 'context-profile', configurationRevision: 'configuration-1' },
+        stagedCredentials: staged.store,
+        services: { ...context.services, http: { async request(request) {
+          requests.push(request.method);
+          return { status: scenario === 'unavailable' ? 503 : 200, finalUrl: request.url, headers: {},
+            body: new TextEncoder().encode(JSON.stringify({
+              account: { uuid: scenario === 'mismatch' ? 'another-user' : 'provider-user' },
+              organization: { uuid: scenario === 'known' ? 'known-organization' : 'attested-organization' },
+            })) };
+        } } },
+      });
+      expect(result.status).toBe(scenario === 'unavailable' || scenario === 'mismatch' ? 'outcomeUnknown' : 'connected');
+      expect(requests).toEqual(['GET']);
+      expect(original.get('accessToken')).toBe('current-access');
+      expect(original.get('refreshToken')).toBe('current-refresh');
+      expect(staged.values.has('accessToken')).toBe(false);
+      expect(staged.values.has('refreshToken')).toBe(false);
+      if (scenario === 'missing' || scenario === 'known') {
+        const organizationId = scenario === 'known' ? 'known-organization' : 'attested-organization';
+        expect(staged.values.get('organizationUuid')).toBe(organizationId);
+        expect(result).toMatchObject({ providerIdentity: { accountId: 'provider-user', organizationId } });
+      } else {
+        expect(staged.values.size).toBe(0);
+      }
+    },
+  );
+
   it.each([
     [429, 'outcomeUnknown'], [503, 'outcomeUnknown'], [401, 'reconnectRequired'],
   ] as const)('preserves stored credentials without staging when refresh returns %s (%s)', async (status, outcome) => {
@@ -223,7 +312,7 @@ describe('Claude Subscription Connected Account', () => {
       const callContext = context(attempted);
       const result = await mode().complete({ fields: { source: 'native' } }, callContext);
       expect(result).toMatchObject({ status: 'connected', scopes });
-      expect(result).not.toHaveProperty('providerIdentity');
+      expect(result).toHaveProperty('providerIdentity', { accountId: null, email: null, organizationId: null });
       expect(attempted.values.get('accessToken')).toBe('native-access');
       expect(attempted.values.get('refreshToken')).toBe('native-refresh');
       expect(attempted.values.get('subscriptionType')).toBe('max');
@@ -316,6 +405,7 @@ describe('Claude Subscription Connected Account', () => {
       scopes: ['user:inference'],
     });
     expect(connected).not.toHaveProperty('accountId');
+    expect(connected).toHaveProperty('providerIdentity', { accountId: null, email: null, organizationId: null });
     expect(attempted.values).toEqual(new Map([['setupToken', 'sk-ant-oat01-token']]));
   });
 
@@ -335,6 +425,7 @@ describe('Claude Subscription Connected Account', () => {
         refresh_token: 'claude-refresh',
         expires_in: 3600,
         scope: 'user:inference user:profile user:sessions:claude_code',
+        organization: { uuid: 'organization-a' },
         account: {
           uuid: 'claude-account-1',
           email_address: 'claude@example.com',
@@ -378,10 +469,10 @@ describe('Claude Subscription Connected Account', () => {
       pkceVerifier: 'verifier-1',
     }, context)).resolves.toMatchObject({
       status: 'connected',
-      accountId: 'claude-account-1',
       providerIdentity: {
         accountId: 'claude-account-1',
         email: 'claude@example.com',
+        organizationId: 'organization-a',
       },
       displayName: 'claude@example.com',
       scopes: ['user:inference', 'user:profile', 'user:sessions:claude_code'],
@@ -397,6 +488,10 @@ describe('Claude Subscription Connected Account', () => {
     expect(attempted.values.get('refreshToken')).toBe('claude-refresh');
     expect(attempted.values.get('providerAccountId')).toBe('claude-account-1');
     expect(attempted.values.get('providerEmail')).toBe('claude@example.com');
+    const reconnected = await mode.complete({ code: 'authorization-code', callbackUrl: 'https://platform.claude.com/oauth/code/callback', state: 'state-1', pkceVerifier: 'verifier-1' }, { ...context, attempt: { kind: 'reconnect', account: { service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' }, accountId: 'historical-profile' } } } as Parameters<typeof mode.complete>[1]);
+    expect(reconnected).not.toHaveProperty('accountId');
+    expect(attempted.values.get('organizationUuid')).toBe('organization-a');
+    expect(reconnected).toMatchObject({ providerIdentity: { accountId: 'claude-account-1' } });
   });
 
   it('materializes OAuth as an access-only native credential snapshot', async () => {

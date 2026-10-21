@@ -6,6 +6,7 @@ describe('resolveClaudeUsageSubjectRef', () => {
     it('uses provider-owned account or subscription evidence as a stable subject', () => {
         expect(resolveClaudeUsageSubjectRef({
             providerAccountId: 'claude-account-1',
+            organizationId: 'organization-a',
             accountLabel: 'same@example.com',
         })).toEqual({
             providerId: 'claude',
@@ -13,6 +14,7 @@ describe('resolveClaudeUsageSubjectRef', () => {
             accountSubjectId: 'claude-account-1',
             subjectKind: 'account',
             proof: 'provider_account_id',
+            providerOrganizationId: 'organization-a',
         });
 
         expect(resolveClaudeUsageSubjectRef({
@@ -23,6 +25,11 @@ describe('resolveClaudeUsageSubjectRef', () => {
             accountSubjectId: 'subscription-1',
             subjectKind: 'subscription',
         });
+    });
+
+    it('keeps missing organization context provisional despite a known user', () => {
+        const subject = resolveClaudeUsageSubjectRef({ providerAccountId: 'known-user', provisionalDiscriminator: 'local-profile' });
+        expect(subject.kind).toBe('provisionalLocalSubject');
     });
 
     it('keeps missing-account-id records provisional instead of merging by email', () => {

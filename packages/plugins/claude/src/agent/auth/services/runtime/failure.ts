@@ -1,3 +1,5 @@
+import { readClaudeOauthCredentialOrganizationId } from '@happier-dev/plugin-sdk/first-party/claude';
+import { readClaudeNativeAccountIdentity, reconcileClaudeNativeAccountConfig } from '../native/accountIdentity.js';
 import type {
     OauthCredentialRecord,
     TokenCredentialRecord,
@@ -73,6 +75,7 @@ export type ClaudeConnectedServiceRuntimeFailureClassification = Readonly<{
   groupGeneration?: number | null;
   expectedCredentialRevision?: string | null;
   sourceProviderAccountId?: string | null;
+  sourceProviderOrganizationId?: string | null;
   sourceAccountLabel?: string | null;
   resetsAtMs: number | null;
   retryAfterMs?: number | null;
@@ -121,6 +124,7 @@ export type ClassifyClaudeConnectedServiceRuntimeAuthFailureInput = Readonly<{
   groupGeneration?: number | null;
   credentialRevision?: string | null;
   sourceProviderAccountId?: string | null;
+  sourceProviderOrganizationId?: string | null;
   sourceAccountLabel?: string | null;
   error: unknown;
   normalizedDetails?: Pick<ClaudeSessionRuntimeIssue, 'usageLimit' | 'temporaryThrottle'>;
@@ -245,6 +249,8 @@ function runtimeFailureIdentity(
       : {}),
     ...(input.credentialRevision ? { expectedCredentialRevision: input.credentialRevision } : {}),
     ...(input.sourceProviderAccountId ? { sourceProviderAccountId: input.sourceProviderAccountId } : {}),
+    ...(input.sourceProviderAccountId && input.sourceProviderOrganizationId
+      ? { sourceProviderOrganizationId: input.sourceProviderOrganizationId } : {}),
     ...(input.sourceProviderAccountId && input.sourceAccountLabel ? { sourceAccountLabel: input.sourceAccountLabel } : {}),
   };
 }
@@ -314,6 +320,7 @@ function readSelectionIds(selection: unknown): Readonly<{
   groupGeneration: number | null;
   credentialRevision: string | null;
   sourceProviderAccountId: string | null;
+  sourceProviderOrganizationId: string | null;
   sourceAccountLabel: string | null;
 }> {
   const record = readRecord(selection);
@@ -327,6 +334,8 @@ function readSelectionIds(selection: unknown): Readonly<{
     credentialRevision: readString(record?.credentialRevision),
     sourceProviderAccountId:
       readString(record?.sourceProviderAccountId),
+    sourceProviderOrganizationId:
+      readString(record?.sourceProviderOrganizationId),
     sourceAccountLabel:
       readString(record?.sourceAccountLabel),
   };
@@ -362,6 +371,12 @@ function materializedCredentialMatchesRecord(params: Readonly<{
 }>): boolean {
   const built = buildClaudeCodeCredentialPayload(params.record);
   if (built.status !== 'ok') return false;
+  const rootIdentity = readClaudeNativeAccountIdentity(parseJsonFile(params.files, '.claude.json'));
+  const expectedOrganizationId = params.record.kind === 'oauth'
+    ? readClaudeOauthCredentialOrganizationId(params.record.oauth.raw) : null;
+  const expectedAccountId = readCredentialProviderAccountId(params.record);
+  if ((expectedAccountId && rootIdentity?.providerAccountId !== expectedAccountId)
+    || (expectedOrganizationId && rootIdentity?.providerOrganizationId !== expectedOrganizationId)) return false;
   const raw = parseJsonFile(params.files, '.credentials.json');
   const actual = computeClaudeCodeCredentialAccountProofFingerprint(raw);
   const expected = computeClaudeCodeCredentialAccountProofFingerprint(built.payload);
@@ -520,7 +535,7 @@ export function createClaudeConnectedServiceRuntimeAuthAdapter(): ClaudeConnecte
 
 export function createClaudeConnectedAccountNativeAuthCodec(): AgentConnectedAccountNativeAuthCodecV1 {
   return {
-    materialize({ credential, selection }) {
+    materialize({ credential, selection, files }) {
       const record = readCredentialRecord(credential);
       const groupId = readString(selection.groupId);
       const generation = readNonnegativeInteger(selection.groupGeneration ?? selection.generation);
@@ -544,6 +559,14 @@ export function createClaudeConnectedAccountNativeAuthCodec(): AgentConnectedAcc
       return {
         files: {
           '.credentials.json': encoder.encode(`${JSON.stringify(built.payload)}\n`),
+          '.claude.json': encoder.encode(`${JSON.stringify(reconcileClaudeNativeAccountConfig({
+            rootConfig: parseJsonFile(files ?? {}, '.claude.json'),
+            nativeCredential: built.payload,
+            previousCredential: parseJsonFile(files ?? {}, '.credentials.json'),
+            providerAccountId: readCredentialProviderAccountId(record),
+            providerEmail: readCredentialProviderEmail(record),
+            providerOrganizationId: readClaudeOauthCredentialOrganizationId(record.oauth.raw),
+          }))}\n`),
           [CLAUDE_CODE_NATIVE_AUTH_PROVENANCE_FILE_NAME]: encoder.encode(`${JSON.stringify(provenance)}\n`),
         },
       };
@@ -553,6 +576,20 @@ export function createClaudeConnectedAccountNativeAuthCodec(): AgentConnectedAcc
       const groupId = readString(selection.groupId);
       const generation = readNonnegativeInteger(selection.groupGeneration ?? selection.generation);
       const credentialRevision = readString(selection.credentialRevision);
+      if (!groupId && selection.kind !== 'group' && record?.kind === 'oauth'
+        && record.serviceId === 'claude-subscription' && credentialRevision
+        && readString(selection.profileId) === record.profileId) {
+        if (!materializedCredentialMatchesRecord({ record, files })) {
+          return { status: 'unavailable', retryable: true, reason: 'claude_code_runtime_account_adoption_unproven' };
+        }
+        const credentialFingerprint = computeClaudeCodeCredentialAccountProofFingerprint(parseJsonFile(files, '.credentials.json'));
+        if (!credentialFingerprint) {
+          return { status: 'unavailable', retryable: true, reason: 'claude_code_runtime_account_adoption_unproven' };
+        }
+        return { status: 'verified', providerAccountId: readCredentialProviderAccountId(record),
+          activeAccountId: readCredentialProviderEmail(record), credentialRevision, credentialFingerprint,
+          proofStrength: 'exact', source: 'materialized_native_auth' };
+      }
       if (!record || !groupId || generation === null || !credentialRevision) {
         return { status: 'unavailable', retryable: false, reason: 'claude_shared_group_auth_surface_epoch_missing' };
       }

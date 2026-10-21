@@ -3,7 +3,8 @@ import type {
   AgentAccountUsageSourceContextInput,
   AgentSessionNativeHomeService,
 } from '@happier-dev/plugin-sdk/agents/runtime';
-import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON_ENV } from '@happier-dev/plugin-sdk/connected-accounts';
+import { computeConnectedAccountAccessTokenFingerprint, HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON_ENV } from '@happier-dev/plugin-sdk/connected-accounts';
+import { readClaudeCodeNativeCredentialPayload } from '../auth/services/native/credentials.js';
 import type { ClaudeRuntimeLogger } from './dependencies.js';
 
 import { resolveClaudeConfigDirOverride } from '../environment.js';
@@ -43,6 +44,7 @@ export type ClaudeRuntimeAccountUsageService = Readonly<{
     sessionId?: string | null;
     snapshot: AgentAccountUsageSnapshot;
     source?: AgentAccountUsageSourceContextInput | null;
+    credentialProof?: Readonly<{ providerAccountId: string; credentialFingerprint: string }>;
   }>, options?: Readonly<{ signal?: AbortSignal }>): Promise<Readonly<
     | { status: 'recorded' }
     | { status: 'unavailable' | 'rejected'; reason?: string }
@@ -138,17 +140,27 @@ export async function recordClaudeRuntimeProviderAccountUsageSnapshot(
     launchEnv: params.launchEnv,
   });
   const claudeConfigDir = readClaudeConfigDir(params.launchEnv);
-  const liveAccountIdentity = await (async () => {
+  const nativeContext = await (async () => {
     try {
-      const bytes = (await params.ctx.agentRuntime.nativeHome?.readFiles(['.claude.json']))?.['.claude.json'];
-      if (!bytes) return null;
-      return readClaudeNativeAccountIdentity(
-        JSON.parse(new TextDecoder().decode(bytes)) as unknown,
-      );
+      const files = await params.ctx.agentRuntime.nativeHome?.readFiles(['.claude.json', '.credentials.json']);
+      const parseFile = (bytes: Uint8Array | undefined): unknown => {
+        if (!bytes) return null;
+        try { return JSON.parse(new TextDecoder().decode(bytes)) as unknown; }
+        catch { return null; }
+      };
+      return {
+        identity: readClaudeNativeAccountIdentity(parseFile(files?.['.claude.json'])),
+        credential: readClaudeCodeNativeCredentialPayload(parseFile(files?.['.credentials.json'])),
+      };
     } catch {
       return null;
     }
   })();
+  const liveAccountIdentity = nativeContext?.identity ?? null;
+  const credentialProof = liveAccountIdentity?.providerAccountId && nativeContext?.credential
+    ? { providerAccountId: liveAccountIdentity.providerAccountId,
+        credentialFingerprint: computeConnectedAccountAccessTokenFingerprint(nativeContext.credential.claudeAiOauth.accessToken) }
+    : null;
   const serializedConnectedServiceSelection = params.launchEnv?.[
     HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON_ENV
   ];
@@ -175,6 +187,7 @@ export async function recordClaudeRuntimeProviderAccountUsageSnapshot(
   }
   const subject = resolveClaudeUsageSubjectRef({
     oauthAccountUuid: liveAccountIdentity?.providerAccountId ?? null,
+    organizationId: liveAccountIdentity?.providerOrganizationId ?? null,
     provisionalDiscriminator: buildProvisionalDiscriminator({
       identity,
       sessionId: params.sessionId,
@@ -210,7 +223,8 @@ export async function recordClaudeRuntimeProviderAccountUsageSnapshot(
     const result = await service.recordSnapshot({
       sessionId: params.sessionId,
       snapshot,
-      ...(sourceContext
+      ...(sourceContext && credentialProof ? { credentialProof } : {}),
+      ...(sourceContext && (subject.kind === 'providerSubject' || credentialProof)
         ? { source: sourceAddress }
         : {}),
     });

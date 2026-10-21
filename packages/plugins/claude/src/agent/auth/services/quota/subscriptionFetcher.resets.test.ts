@@ -13,7 +13,7 @@ const record = buildConnectedServiceCredentialRecord({ now, serviceId: 'claude-s
 function usage(overrides: Record<string, unknown> = {}) {
  return { five_hour: { utilization: 100 }, cedar_ember: { eligible: true, next_grant_id: 'promo', cooldown_until: null, grants: [{ id: 'promo', resets_left: 2, resets_total: 3, starts_at: '2026-01-01T00:00:00Z', ends_at: '2027-01-01T00:00:00Z', usable_now: true, paused: false, clears: ['five_hour', 'seven_day'] }] }, juniper_tide: { eligible: false }, ...overrides };
 }
-function network(payload = usage(), post: unknown = { result: 'reset' }, profile: unknown = { organization: { uuid: 'organization-123' } }) {
+function network(payload = usage(), post: unknown = { result: 'reset' }, profile: unknown = { account: { uuid: 'account-not-organization' }, organization: { uuid: 'organization-123' } }) {
  const requests: Array<{ url: string; method: string; headers: Headers; body: unknown }> = [];
  const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
   const request = { url: String(url), method: init?.method ?? 'GET', headers: new Headers(init?.headers), body: init?.body ? JSON.parse(String(init.body)) : undefined };
@@ -51,8 +51,9 @@ describe('Claude reset HTTP vertical', () => {
  });
 });
 
-function context() {
- const values = new Map([['accessToken', 'test-token'], ['scopes', JSON.stringify(['user:inference', 'user:sessions:claude_code'])]]);
+function context(identity?: Readonly<{ accountId: string; organizationId: string }>) {
+ const values = new Map([['accessToken', 'test-token'], ['scopes', JSON.stringify(['user:inference', 'user:sessions:claude_code'])],
+  ...(identity ? [['providerAccountId', identity.accountId], ['organizationUuid', identity.organizationId]] : [])]);
  const account = { service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' }, accountId: 'work' };
  // Public host service/credential boundaries are supplied; all provider logic remains real.
  return { account, configuration: { target: { kind: 'account', account, modeId: 'oauth' }, revision: 'r1', values: {}, async getSecret() { return null; } }, signal,
@@ -93,6 +94,22 @@ describe.each(['legacy', 'qualified'] as const)('%s real HTTP reset adapter', ki
   const observed = await adapter(kind).read();
   expect(observed).toMatchObject({ availableCount: 0, credits: [{ status: 'unknown' }] });
   if (kind === 'qualified') expect(observed).toMatchObject({ recoveryCreditDetails: { promo: { remainingCount: 2, unavailableReason: 'provider_unavailable' } } });
+ });
+ it('does not debit another organization for the same selected user', async () => {
+  const { requests } = network(usage(), { result: 'reset' }, {
+   account: { uuid: 'account-not-organization' }, organization: { uuid: 'another-organization' },
+  });
+  if (record.kind !== 'oauth') throw new Error('Expected OAuth record');
+  const selected = { ...record, oauth: { ...record.oauth,
+   raw: { claudeAiOauth: { organizationUuid: 'selected-organization' } },
+  } };
+  const request = { idempotencyKey: 'organization-bound-reset', providerCreditId: 'promo' };
+  const operation = kind === 'legacy'
+   ? createClaudeSubscriptionQuotaFetcher().consumeRecoveryCredit({ ...request, record: selected, now, signal })
+   : claudeSubscriptionConnectedAccountRuntime.recoveryCredits!.consume(request,
+     context({ accountId: 'account-not-organization', organizationId: 'selected-organization' }));
+  await expect(operation).rejects.toMatchObject({ recoveryCreditConsumeOutcomeUnknown: false });
+  expect(requests.filter(request => request.method === 'POST')).toHaveLength(0);
  });
  it('requires profile organization identity before any POST', async () => {
   const { requests } = network(usage(), { result: 'reset' }, { account: { uuid: 'account-not-organization' } });

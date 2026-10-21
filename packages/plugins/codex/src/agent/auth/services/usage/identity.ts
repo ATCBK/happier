@@ -10,15 +10,17 @@ import type {
   CodexAuthStoreProviderAccountIdProof,
 } from '../runtime/auth/accountId.js';
 
+export const CODEX_ACCOUNT_USAGE_PROVIDER_ID = 'openai-codex' as const;
+
 export type CodexUsageSubjectRef =
   | Readonly<{
-      providerId: 'openai-codex';
+      providerId: typeof CODEX_ACCOUNT_USAGE_PROVIDER_ID;
       kind: 'providerSubject';
       accountSubjectId: string;
       proof: 'live_app_server_account_id' | 'connected_service_provider_account_id' | 'auth_store_chatgpt_account_id';
     }>
   | Readonly<{
-      providerId: 'openai-codex';
+      providerId: typeof CODEX_ACCOUNT_USAGE_PROVIDER_ID;
       kind: 'provisionalLocalSubject';
       accountSubjectId: string;
       reason:
@@ -53,7 +55,7 @@ function readLiveProviderAccountId(account: CodexActiveProviderAccount | null | 
 
 function hashProvisionalSubject(discriminator: string): string {
   return createHash('sha256')
-    .update(`openai-codex:${discriminator}`)
+    .update(`${CODEX_ACCOUNT_USAGE_PROVIDER_ID}:${discriminator}`)
     .digest('hex')
     .slice(0, 24);
 }
@@ -71,7 +73,7 @@ export function resolveCodexUsageSubjectRef(input: ResolveCodexUsageSubjectRefIn
   const liveProviderAccountId = readLiveProviderAccountId(input.liveProviderAccount);
   if (liveProviderAccountId) {
     return {
-      providerId: 'openai-codex',
+      providerId: CODEX_ACCOUNT_USAGE_PROVIDER_ID,
       kind: 'providerSubject',
       accountSubjectId: liveProviderAccountId,
       proof: 'live_app_server_account_id',
@@ -90,7 +92,7 @@ export function resolveCodexUsageSubjectRef(input: ResolveCodexUsageSubjectRefIn
     )
   ) {
     return {
-      providerId: 'openai-codex',
+      providerId: CODEX_ACCOUNT_USAGE_PROVIDER_ID,
       kind: 'provisionalLocalSubject',
       accountSubjectId: `provisional:${hashProvisionalSubject(readProvisionalDiscriminator(input))}`,
       reason: authStoreProof.status === 'conflict'
@@ -100,7 +102,7 @@ export function resolveCodexUsageSubjectRef(input: ResolveCodexUsageSubjectRefIn
   }
   if (effectiveConnectedServiceProviderAccountId) {
     return {
-      providerId: 'openai-codex',
+      providerId: CODEX_ACCOUNT_USAGE_PROVIDER_ID,
       kind: 'providerSubject',
       accountSubjectId: effectiveConnectedServiceProviderAccountId,
       proof: 'connected_service_provider_account_id',
@@ -109,7 +111,7 @@ export function resolveCodexUsageSubjectRef(input: ResolveCodexUsageSubjectRefIn
 
   if (authStoreProof?.status === 'resolved') {
     return {
-      providerId: 'openai-codex',
+      providerId: CODEX_ACCOUNT_USAGE_PROVIDER_ID,
       kind: 'providerSubject',
       accountSubjectId: authStoreProof.accountId,
       proof: 'auth_store_chatgpt_account_id',
@@ -117,7 +119,7 @@ export function resolveCodexUsageSubjectRef(input: ResolveCodexUsageSubjectRefIn
   }
 
   return {
-    providerId: 'openai-codex',
+    providerId: CODEX_ACCOUNT_USAGE_PROVIDER_ID,
     kind: 'provisionalLocalSubject',
     accountSubjectId: `provisional:${hashProvisionalSubject(readProvisionalDiscriminator(input))}`,
     reason: authStoreProof?.status === 'conflict'

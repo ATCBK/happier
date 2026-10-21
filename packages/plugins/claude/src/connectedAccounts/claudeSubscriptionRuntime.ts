@@ -1,3 +1,5 @@
+import { reconcileClaudeNativeAccountConfig } from '../agent/auth/services/native/accountIdentity.js';
+import { normalizeClaudeOauthProfileEntitlement, type ClaudeOauthCredentialMetadata } from '@happier-dev/plugin-sdk/first-party/claude';
 import { CLAUDE_SUBSCRIPTION_MATERIALIZATION_CONTRACT_V1 } from '@happier-dev/plugin-sdk/first-party/connected-accounts';
 import {
   type ConnectedAccountAuthenticationContext as PluginConnectedAccountAuthenticationContext,
@@ -45,6 +47,13 @@ async function createRuntimeQuotaClient(context: QuotaContext, signal: AbortSign
     if (!versionUnavailable && !execUnavailable) throw error;
     context.services.logger.warn('Claude CLI version is unavailable; ordinary usage remains available.', { code: error.code });
   }
+  return createRuntimeHttpClient(context, installedVersion);
+}
+
+function createRuntimeHttpClient(
+  context: Pick<PluginConnectedAccountAuthenticationContext, 'services' | 'signal'>,
+  installedVersion?: string,
+) {
   return createClaudeSubscriptionHttpClient({ userAgent: resolveClaudeCodeUsageUserAgent({ installedVersion }), runtimeFetch: async ({ url, method, headers, body, signal }) => {
     const response = await context.services.http.request({ url, method: method ?? 'GET', headers,
       ...(body === undefined ? {} : { body: new TextEncoder().encode(JSON.stringify(body)) }), redirect: 'error' }, { signal });
@@ -67,6 +76,7 @@ const EXPIRES_AT_MS_KEY = 'expiresAtMs';
 const SCOPES_KEY = 'scopes';
 const SUBSCRIPTION_TYPE_KEY = 'subscriptionType';
 const RATE_LIMIT_TIER_KEY = 'rateLimitTier';
+const ORGANIZATION_UUID_KEY = 'organizationUuid';
 const ANTHROPIC_API_ORIGIN = 'https://api.anthropic.com';
 
 type ClaudeTokens = Readonly<{
@@ -76,6 +86,7 @@ type ClaudeTokens = Readonly<{
   providerEmail: string;
   expiresAtMs: number | null;
   scopes: readonly string[];
+  metadata?: ClaudeOauthCredentialMetadata;
 }>;
 type CredentialStore = PluginConnectedAccountAuthenticationContext['attemptCredentials'];
 type ConnectedAccountCredentialReader =
@@ -152,11 +163,19 @@ async function writeOptionalCredential(
   }
 }
 
+async function writeMetadata(store: CredentialStore, metadata: ClaudeOauthCredentialMetadata,
+  options?: Readonly<{ signal?: AbortSignal }>): Promise<void> {
+  await writeOptionalCredential(store, SUBSCRIPTION_TYPE_KEY, metadata.subscriptionType ?? '', options);
+  await writeOptionalCredential(store, RATE_LIMIT_TIER_KEY, metadata.rateLimitTier ?? '', options);
+  await writeOptionalCredential(store, ORGANIZATION_UUID_KEY, metadata.organizationUuid ?? '', options);
+}
+
 async function writeTokens(
   store: CredentialStore,
   tokens: ClaudeTokens,
   options?: Readonly<{ signal?: AbortSignal }>,
 ): Promise<void> {
+  await writeMetadata(store, tokens.metadata ?? {}, options);
   await store.set(ACCESS_TOKEN_KEY, tokens.accessToken, options);
   await store.set(REFRESH_TOKEN_KEY, tokens.refreshToken, options);
   await writeOptionalCredential(store, PROVIDER_ACCOUNT_ID_KEY, tokens.providerAccountId, options);
@@ -169,19 +188,15 @@ async function writeTokens(
   }
 }
 
-function connectedResult(tokens: ClaudeTokens) {
+function connectedResult(tokens: Pick<ClaudeTokens, 'providerAccountId' | 'providerEmail' | 'scopes' | 'metadata'>) {
   const displayName = tokens.providerEmail || tokens.providerAccountId || 'Claude';
   return {
     status: 'connected' as const,
-    ...(tokens.providerAccountId ? { accountId: tokens.providerAccountId } : {}),
-    ...((tokens.providerAccountId || tokens.providerEmail)
-      ? {
-          providerIdentity: {
-            ...(tokens.providerAccountId ? { accountId: tokens.providerAccountId } : {}),
-            ...(tokens.providerEmail ? { email: tokens.providerEmail } : {}),
-          },
-        }
-      : {}),
+    providerIdentity: {
+      accountId: tokens.providerAccountId || null,
+      ...(tokens.providerEmail ? { email: tokens.providerEmail } : tokens.providerAccountId ? {} : { email: null }),
+      organizationId: tokens.metadata?.organizationUuid ?? null,
+    },
     displayName,
     scopes: tokens.scopes,
   };
@@ -244,7 +259,13 @@ async function exchangeTokens(
   const account = isRecord(body?.account) ? body.account : null;
   const accessToken = readString(body?.access_token);
   const refreshToken = readString(body?.refresh_token) || params.fallbackRefreshToken || '';
-  const providerAccountId = readString(account?.uuid) || params.fallbackProviderAccountId || '';
+  const responseProviderAccountId = readString(account?.uuid);
+  if (params.fallbackProviderAccountId && responseProviderAccountId
+    && responseProviderAccountId !== params.fallbackProviderAccountId) {
+    return { status: 'outcomeUnknown', diagnostic: diagnostic('claude_subscription_oauth_identity_mismatch',
+      'Claude returned a different account for the existing credential.') };
+  }
+  const providerAccountId = responseProviderAccountId || params.fallbackProviderAccountId || '';
   const providerEmail = readString(account?.email_address) || params.fallbackProviderEmail || '';
   const scopes = parseScopes(body?.scope);
   if (!accessToken || !refreshToken) {
@@ -256,13 +277,36 @@ async function exchangeTokens(
       ),
     };
   }
+  let metadata = normalizeClaudeOauthProfileEntitlement(body)?.claudeAiOauth ?? {};
+  let attestedProviderAccountId = providerAccountId;
+  let attestedProviderEmail = providerEmail;
+  if (!metadata.organizationUuid || !providerAccountId) {
+    try {
+      const profile = await createRuntimeHttpClient(context).readProfileContext({
+        accessToken, expectedProviderAccountId: providerAccountId || null, now: Date.now(), signal,
+      });
+      if (profile.status === 'identityMismatch') return {
+        status: 'outcomeUnknown', diagnostic: diagnostic('claude_subscription_profile_identity_mismatch',
+          'Claude profile did not match the credential account.'),
+      };
+      if (profile.status === 'accepted') {
+        metadata = { ...metadata, ...profile.metadata };
+        attestedProviderAccountId = profile.providerAccountId || providerAccountId;
+        attestedProviderEmail = profile.providerEmail || providerEmail;
+      }
+    } catch (error) {
+      signal.throwIfAborted();
+      context.services.logger?.warn('Claude credential context could not be attested.', { code: 'claude_subscription_profile_unavailable' });
+    }
+  }
   return {
     status: 'success',
     tokens: {
       accessToken,
       refreshToken,
-      providerAccountId,
-      providerEmail,
+      providerAccountId: attestedProviderAccountId,
+      providerEmail: attestedProviderEmail,
+      metadata,
       expiresAtMs: readExpiresAtMs(body?.expires_in, Date.now()),
       scopes: scopes.length > 0 ? scopes : params.fallbackScopes ?? [],
     },
@@ -411,6 +455,7 @@ const claudeSubscriptionRuntimeDefinition: PluginConnectedAccountRuntime = {
             ...(context.attempt.kind === 'reconnect'
               ? { accountId: context.attempt.account.accountId }
               : {}),
+            providerIdentity: { accountId: null, email: null, organizationId: null },
             displayName: 'Claude setup token',
             scopes: CLAUDE_CODE_SETUP_TOKEN_SCOPES,
           };
@@ -496,16 +541,29 @@ const claudeSubscriptionRuntimeDefinition: PluginConnectedAccountRuntime = {
     }
     if (exchanged.status !== 'success') return exchanged;
     await writeTokens(context.stagedCredentials, exchanged.tokens, options);
-    const plan = await readPlanMetadata(context.credentials, options);
-    await writeOptionalCredential(context.stagedCredentials, SUBSCRIPTION_TYPE_KEY, plan.subscriptionType ?? '', options);
-    await writeOptionalCredential(context.stagedCredentials, RATE_LIMIT_TIER_KEY, plan.rateLimitTier ?? '', options);
-    return {
-      status: 'connected',
-      displayName: exchanged.tokens.providerEmail
-        || exchanged.tokens.providerAccountId
-        || 'Claude',
-      scopes: exchanged.tokens.scopes,
-    };
+    return connectedResult(exchanged.tokens);
+  },
+  async enrichCredentialContext(context, options) {
+    if (!usesClaudeOAuthCredentials(modeId(context))) return readHealth(modeId(context), context.credentials, options);
+    const signal = options?.signal ?? context.signal;
+    const accessToken = await readCredential(context.credentials, ACCESS_TOKEN_KEY, options);
+    const expected = await readCredential(context.credentials, PROVIDER_ACCOUNT_ID_KEY, options);
+    try {
+      const profile = await createRuntimeHttpClient(context).readProfileContext({
+        accessToken, expectedProviderAccountId: expected || null, now: Date.now(), signal,
+      });
+      if (profile.status === 'accepted' && profile.providerAccountId && profile.metadata.organizationUuid) {
+        await writeMetadata(context.stagedCredentials, profile.metadata, options);
+        await writeOptionalCredential(context.stagedCredentials, PROVIDER_ACCOUNT_ID_KEY, profile.providerAccountId, options);
+        await writeOptionalCredential(context.stagedCredentials, PROVIDER_EMAIL_KEY, profile.providerEmail, options);
+        return connectedResult({ providerAccountId: profile.providerAccountId, providerEmail: profile.providerEmail,
+          scopes: await readScopes(context.credentials, options), metadata: profile.metadata });
+      }
+    } catch (error) {
+      signal.throwIfAborted();
+    }
+    return { status: 'outcomeUnknown', diagnostic: diagnostic('claude_subscription_profile_context_unavailable',
+      'Claude credential context could not be attested.') };
   },
   async revoke() {
     return { status: 'remoteUnsupported' };
@@ -532,7 +590,9 @@ const claudeSubscriptionRuntimeDefinition: PluginConnectedAccountRuntime = {
     const payload = await (await createRuntimeQuotaClient(context, signal)).readUsage({ accessToken, now: Date.now(), signal });
     const limits = parseClaudeSubscriptionConnectedAccountQuotaLimits(payload);
     const planLabel = resolveClaudeSubscriptionPlanLabelFromMetadata(await readPlanMetadata(context.credentials, options));
-    return { observedAtMs: Date.now(), limits, ...(planLabel ? { planLabel } : {}) };
+    const providerOrganizationId = await readCredential(context.credentials, ORGANIZATION_UUID_KEY, options);
+    return { observedAtMs: Date.now(), limits, ...(planLabel ? { planLabel } : {}),
+      ...(providerOrganizationId ? { providerOrganizationId } : {}) };
   },
   recoveryCredits: {
     async read(context, options) {
@@ -564,7 +624,9 @@ const claudeSubscriptionRuntimeDefinition: PluginConnectedAccountRuntime = {
       const scopes = await readScopes(context.credentials, options);
       if (!scopes.includes('user:inference') || !scopes.includes('user:sessions:claude_code')) return { status: 'not_available' };
       const status = await (await createRuntimeQuotaClient(context, options?.signal ?? context.signal)).consume({ ...request, accessToken, now: Date.now(),
-        signal: options?.signal ?? context.signal });
+        signal: options?.signal ?? context.signal,
+        expectedProviderAccountId: await readCredential(context.credentials, PROVIDER_ACCOUNT_ID_KEY, options) || null,
+        expectedProviderOrganizationId: await readCredential(context.credentials, ORGANIZATION_UUID_KEY, options) || null });
       return { status };
     },
   },
@@ -644,11 +706,14 @@ const claudeSubscriptionRuntimeDefinition: PluginConnectedAccountRuntime = {
     if (!request.fileIds.includes(CLAUDE_CREDENTIAL_FILE_ID)) return { kind: 'files', files };
     // These fields belong to the same admitted credential revision. Each read
     // keeps the host's currentness checks; none depends on another field.
-    const [accessToken, expiresAtValue, planMetadata, scopes] = await Promise.all([
+    const [accessToken, expiresAtValue, planMetadata, scopes, providerAccountId, providerEmail, organizationUuid] = await Promise.all([
       readCredential(context.credentials, ACCESS_TOKEN_KEY, options),
       readCredential(context.credentials, EXPIRES_AT_MS_KEY, options),
       readPlanMetadata(context.credentials, options),
       readScopes(context.credentials, options),
+      readCredential(context.credentials, PROVIDER_ACCOUNT_ID_KEY, options),
+      readCredential(context.credentials, PROVIDER_EMAIL_KEY, options),
+      readCredential(context.credentials, ORGANIZATION_UUID_KEY, options),
     ]);
     if (!accessToken) throw new Error('Claude OAuth credentials are unavailable');
     const expiresAt = Number(expiresAtValue);
@@ -661,6 +726,12 @@ const claudeSubscriptionRuntimeDefinition: PluginConnectedAccountRuntime = {
       },
     };
     files[CLAUDE_CREDENTIAL_FILE_ID] = new TextEncoder().encode(JSON.stringify(payload));
+    if (request.fileIds.includes('.claude.json')) {
+      files['.claude.json'] = new TextEncoder().encode(JSON.stringify(reconcileClaudeNativeAccountConfig({
+        rootConfig: null, providerAccountId: providerAccountId || null, providerEmail: providerEmail || null,
+        providerOrganizationId: organizationUuid || null,
+      })));
+    }
     return { kind: 'files', files };
   },
 };

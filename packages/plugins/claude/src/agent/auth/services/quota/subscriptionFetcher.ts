@@ -1,3 +1,4 @@
+import { normalizeClaudeOauthProfileEntitlement, readClaudeOauthCredentialOrganizationId } from '@happier-dev/plugin-sdk/first-party/claude';
 import { resolveConnectedServiceQuotaMeterLabel } from '@happier-dev/plugin-sdk/connected-accounts';
 import type {
     AgentAccountUsageMeter,
@@ -685,6 +686,7 @@ function buildClaudeProviderHttpQuotaSnapshot(input: Readonly<{
     return mapClaudeProviderHttpUsageSnapshot({
         subject: resolveClaudeUsageSubjectRef({
             providerAccountId,
+            organizationId: input.record.kind === 'oauth' ? readClaudeOauthCredentialOrganizationId(input.record.oauth.raw) : null,
             provisionalDiscriminator: `${input.record.serviceId}:${input.record.profileId}`,
             accountLabel: input.accountLabel,
         }),
@@ -776,7 +778,10 @@ export function createClaudeSubscriptionQuotaFetcher(params?: Readonly<{
                     quotaFetchErrorCode: 'auth_failure', recoveryCreditConsumeOutcomeUnknown: false,
                 });
             }
-            return client.consume({ ...request, accessToken: record.oauth.accessToken, now, signal });
+            return client.consume({ ...request, accessToken: record.oauth.accessToken, now, signal,
+                expectedProviderAccountId: record.oauth.providerAccountId,
+                expectedProviderOrganizationId: readClaudeOauthCredentialOrganizationId(record.oauth.raw),
+            });
         },
         loadQuota: async ({ record, now, signal }) => {
             if (record.kind !== 'oauth') return null;
@@ -877,6 +882,18 @@ export function createClaudeSubscriptionHttpClient(params: Readonly<{
             statusText: response.statusText, headers: response.headers, body: await response.text().catch(() => ''), nowMs: input.now });
         return response.json();
     }
+    async function readProfileContext(input: Input & Readonly<{ expectedProviderAccountId?: string | null }>) {
+        const profile = await get(new URL('./profile', usageUrl).toString(), input);
+        const account = isRecord(profile) && isRecord(profile.account) ? profile.account : null;
+        const providerAccountId = typeof account?.uuid === 'string' ? account.uuid.trim() : '';
+        const providerEmail = typeof account?.email_address === 'string' ? account.email_address.trim()
+            : typeof account?.email === 'string' ? account.email.trim() : '';
+        const expected = input.expectedProviderAccountId?.trim();
+        if (expected && !providerAccountId) return { status: 'unavailable' as const };
+        if (expected && providerAccountId !== expected) return { status: 'identityMismatch' as const };
+        return { status: 'accepted' as const, providerAccountId, providerEmail,
+            metadata: normalizeClaudeOauthProfileEntitlement(profile)?.claudeAiOauth ?? {} };
+    }
     async function readResets(input: Input) {
         const url = new URL(usageUrl);
         url.searchParams.set('cedar_ember', '1'); url.searchParams.set('at_wall', '1'); url.searchParams.set('skip_spend', '1');
@@ -886,7 +903,8 @@ export function createClaudeSubscriptionHttpClient(params: Readonly<{
     return {
         readUsage: (input: Input) => get(usageUrl, input, true),
         readResets,
-        async consume(input: Input & Readonly<{ idempotencyKey: string; providerCreditId?: string; providerLimitIds?: readonly string[] }>): Promise<ClaudeResetConsumeStatus> {
+        readProfileContext,
+        async consume(input: Input & Readonly<{ idempotencyKey: string; providerCreditId?: string; providerLimitIds?: readonly string[]; expectedProviderAccountId?: string | null; expectedProviderOrganizationId?: string | null }>): Promise<ClaudeResetConsumeStatus> {
             let selected: ConnectedServiceQuotaRecoveryCreditV1 | undefined;
             let organizationId: string;
             try {
@@ -901,10 +919,13 @@ export function createClaudeSubscriptionHttpClient(params: Readonly<{
                         .map(meter => meter.providerLimitId ?? meter.meterId));
                     if (!input.providerLimitIds.some(id => clears.includes(id) && exhausted.has(id))) return 'not_available';
                 }
-                const profile = await get(new URL('./profile', usageUrl).toString(), input);
-                organizationId = isRecord(profile) && isRecord(profile.organization) && typeof profile.organization.uuid === 'string'
-                    ? profile.organization.uuid.trim() : '';
+                const profile = await readProfileContext(input);
+                organizationId = profile.status === 'accepted' ? profile.metadata.organizationUuid ?? '' : '';
                 if (!organizationId) throw new Error('Claude reset organization is unavailable');
+                const expectedOrganizationId = input.expectedProviderOrganizationId?.trim();
+                if (expectedOrganizationId && organizationId !== expectedOrganizationId) {
+                    throw new Error('Claude reset organization changed from the selected credential context');
+                }
                 input.signal.throwIfAborted();
             } catch (error) {
                 if (error instanceof ConnectedServiceQuotaFetchError) throw new ConnectedServiceQuotaFetchError(error.message, {

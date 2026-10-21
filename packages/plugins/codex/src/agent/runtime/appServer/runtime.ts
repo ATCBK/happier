@@ -58,7 +58,7 @@ import {
 } from '../../auth/services/runtime/auth/accountId.js';
 import { readCodexAuthTokensFromNativeHome } from '../../cli/auth/environment.js';
 import { readCodexRuntimeRateLimitsSnapshot } from '../../auth/services/quota/runtimeRateLimits.js';
-import { resolveCodexUsageSubjectRef } from '../../auth/services/usage/identity.js';
+import { CODEX_ACCOUNT_USAGE_PROVIDER_ID, resolveCodexUsageSubjectRef } from '../../auth/services/usage/identity.js';
 import {
   mapCodexRateLimitSnapshotToProviderAccountUsageSnapshot,
 } from '../../auth/services/usage/snapshot.js';
@@ -1385,7 +1385,7 @@ export function createCodexAppServerRuntime(
       });
       const subject = appliedIdentity
         ? {
-            providerId: 'openai-codex' as const,
+            providerId: CODEX_ACCOUNT_USAGE_PROVIDER_ID,
             kind: 'providerSubject' as const,
             accountSubjectId: appliedIdentity.providerAccountId,
             proof: 'connected_service_provider_account_id' as const,

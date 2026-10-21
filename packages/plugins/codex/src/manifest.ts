@@ -1,6 +1,7 @@
 import { projectAgentCapabilitiesV2FromDefinition } from '@happier-dev/plugin-sdk/agents';
 import { definePlugin } from '@happier-dev/plugin-sdk';
 import { OPENAI_CODEX_OAUTH_PROFILE } from './connectedAccounts/openAiCodexProfile.js';
+import { CODEX_ACCOUNT_USAGE_PROVIDER_ID } from './agent/auth/services/usage/identity.js';
 import type { HookHandler } from '@happier-dev/plugin-sdk/hooks';
 
 import { AGENT_DEFINITION, AGENT_STATE_SHARING_DESCRIPTOR } from './agent/definition.js';
@@ -24,7 +25,7 @@ import { CODEX_PREFLIGHT_SESSION_CONTROLS } from './agent/lifecycle/preflight/se
 import { shouldUseCodexDeferredBootstrap } from './agent/lifecycle/deferredStartup.js';
 import { readCodexMcpConfigServers } from './agent/mcp/configServers.js';
 import { CODEX_PROVIDER_BINDING_ADAPTER_V1 } from './agent/providerBinding/adapter.js';
-import { createCodexAgentRuntime } from './agent/runtime/engine.js';
+import { createCodexAgentRuntime } from './agent/runtime/factory.js';
 import {
   createCodexConnectedAccountNativeAuthCodec,
   createCodexConnectedServiceRuntimeAuthAdapter,
@@ -119,6 +120,7 @@ export const CODEX_PLUGIN = definePlugin({
       declaration: {
         // The account people have is ChatGPT; "Codex" stays the agent's name.
         title: 'ChatGPT',
+        usageIdentity: { providerId: CODEX_ACCOUNT_USAGE_PROVIDER_ID },
         recoveryCredits: { supported: true },
         authentication: {
           defaultModeId: 'oauth',
@@ -423,7 +425,7 @@ export const CODEX_PLUGIN = definePlugin({
         resolveReachability: resolveCodexAttachReachability,
       },
       sessionRunnerFactory: {
-        module: './agent/runtime/engine',
+        module: './agent/runtime/factory',
         export: 'createCodexAgentRuntime',
         runtimeApiVersion: 1,
         externalSessionsExport: 'codexExternalSessionsContribution',

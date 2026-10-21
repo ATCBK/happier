@@ -1,3 +1,4 @@
+import { CLAUDE_ACCOUNT_USAGE_PROVIDER_ID } from './agent/auth/services/usage/identity.js';
 import { projectAgentCapabilitiesV2FromDefinition } from '@happier-dev/plugin-sdk/agents';
 import { definePlugin } from '@happier-dev/plugin-sdk';
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
@@ -38,7 +39,7 @@ import {
 } from './agent/providerBinding/adapter.js';
 import { CLAUDE_PREFLIGHT_CATALOGS } from './agent/preflight/catalogs.js';
 import { resolveClaudeNativePluginSkillRoots } from './agent/preflight/pluginSkillRoots.js';
-import { createClaudeAgentRuntime } from './agent/runtime/nativeRuntime.js';
+import { createClaudeAgentRuntime } from './agent/runtime/factory.js';
 import { createClaudePromptSubmitVerificationPolicy } from './agent/runtime/terminal/unified/promptSubmitVerification.js';
 import { claudeExternalSessionsContribution } from './agent/surfaces/sessions/external/contribution.js';
 import { claudeExternalSessionHooksContribution } from './agent/surfaces/sessions/external/hooks.js';
@@ -217,6 +218,7 @@ export const CLAUDE_PLUGIN = definePlugin({
         // Claude Pro/Max web billing, not the separate Anthropic API account.
         billingUrl: 'https://claude.ai/settings/billing',
         recoveryCredits: { supported: true },
+        usageIdentity: { providerId: CLAUDE_ACCOUNT_USAGE_PROVIDER_ID, requiredContext: 'organization' },
         authentication: {
           defaultModeId: CLAUDE_SUBSCRIPTION_MATERIALIZATION_CONTRACT_V1
             .setupToken.authenticationModeId,
@@ -531,7 +533,7 @@ export const CLAUDE_PLUGIN = definePlugin({
       },
       providerBinding: CLAUDE_PROVIDER_BINDING_ADAPTER_V1,
       sessionRunnerFactory: {
-        module: './agent/runtime/nativeRuntime',
+        module: './agent/runtime/factory',
         export: 'createClaudeAgentRuntime',
         runtimeApiVersion: 1,
         externalSessionsExport: 'claudeExternalSessionsContribution',

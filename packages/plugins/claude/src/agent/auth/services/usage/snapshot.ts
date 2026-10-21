@@ -61,13 +61,15 @@ function buildRecordKey(
     subject: ClaudeUsageSubjectRef,
     quotaScope?: AgentAccountUsageSnapshot['recordKey']['quotaScope'],
 ): AgentAccountUsageSnapshot['recordKey'] {
+    const organizationId = subject.kind === 'providerSubject' ? subject.providerOrganizationId : undefined;
+    const resolvedScope = quotaScope === 'provider' ? 'provider' : organizationId ? 'organization'
+        : subject.kind === 'provisionalLocalSubject' ? 'unknown' : quotaScope ?? 'account';
     return {
-        providerId: 'claude',
+        providerId: subject.providerId,
         accountSubjectId: subject.accountSubjectId,
         subjectKind: subject.kind === 'providerSubject' ? subject.subjectKind : 'unknown',
-        quotaScope: quotaScope ?? (subject.kind === 'providerSubject' && subject.subjectKind === 'organization'
-            ? 'organization'
-            : 'account'),
+        quotaScope: resolvedScope,
+        ...(resolvedScope === 'organization' && organizationId ? { quotaScopeId: organizationId } : {}),
     };
 }
 
@@ -166,7 +168,7 @@ function buildSnapshot(params: Readonly<{
     return {
         v: 1,
         recordKey,
-        providerId: 'claude',
+        providerId: params.subject.providerId,
         accountSubject: {
             kind: params.subject.kind,
             id: params.subject.accountSubjectId,
