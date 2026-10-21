@@ -2123,7 +2123,7 @@ async function executeStepBlock(
     try {
       admitted = await context.deps.store.ensureIntent({
         key, recordId: context.deps.allocateInvocationRecordId(), acceptedAtMs: Date.now(), runId: context.runId, blockId: step.id, memberOrdinal, ...(parentKey ? { parentKey } : {}),
-        path, blockKind: 'step', attempt: 0, lifecycle: 'pending',
+        path, blockKind: 'step', attempt: 0, lifecycle: 'pending', resultContract: step.result,
       });
     } catch (error) {
       // A parent CAS can lose to an external pause/cancel after the

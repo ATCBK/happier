@@ -10,13 +10,21 @@ import {
   prepareWorkflowRunDataKeyV1,
   type AvailableAutomationAccountEncryptionV1,
   type WorkflowDefinitionV1,
+  buildBackendTargetKeyV2,
+  materializeWorkflowAcceptedSnapshotV1,
+  resolveBuiltinWorkflowDefinitionV1,
+  createWorkflowAccountRunActionOwner,
+  WorkflowResultContractSchema,
+  ActionIdSchema, getActionSpec, freezeActionCompletionContractV1, zodSchemaToJsonSchemaObject, StrictJsonValueSchema,
 } from '@happier-dev/protocol';
+import { decodeExecutionRunResultObservation } from '@happier-dev/protocol/execution/runs/resultContract';
 import { DurableWorkflowCoordinatorStore, createProductionWorkflowRunCoordinator } from './production';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions';
 import { classifyWorkflowAbort, workflowInvocationKey } from './coordinator';
 import { executeClaimedRun } from '../automation/automationRunExecutor';
 import { createWorkflowRunStorageTestkit } from './workflowRunStorage.testkit';
 import { createWorkflowAcceptedAuthorizationCurrentness } from './daemonRuntime';
+import { bindAutomationWorkflowInputs } from './input';
 
 
 const runId = '11111111-1111-4111-8111-111111111111';
@@ -45,6 +53,84 @@ async function harness(acceptedEnvelope = 'opaque', paused = false) {
 }
 
 describe('durable review coordinator', () => {
+  it('round-trips a Panel contract from production admission into the Account review reader', async () => {
+    const definition = resolveBuiltinWorkflowDefinitionV1('plan-with-a-panel')!.definition;
+    const inputs = bindAutomationWorkflowInputs({ definition, evidence: { request: 'A text-only plan' } });
+    const engine = buildBackendTargetKeyV2(generationAgentTarget);
+    const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition, context: {
+      source: { kind: 'inline' }, inputs, machineId: 'machine', executionTarget: { kind: 'detached_run' },
+      workspaceTarget: { project: workspace }, origin: { kind: 'direct' }, authorization: { principal: { kind: 'host' } },
+    }, roleSelection: { defaultEngine: { agentTargetKey: engine }, availableAgentTargetKeys: [engine] },
+    admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true,
+      readActionContract: async id => {
+        const spec = getActionSpec(ActionIdSchema.parse(id));
+        const outputSchema = spec.completion?.terminalOutputSchema ?? spec.outputSchema;
+        if (!outputSchema) return null;
+        return { inputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.inputSchema, { target: 'draft-7' })),
+          outputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(outputSchema, { target: 'draft-7' })),
+          ...(spec.completion ? { completion: freezeActionCompletionContractV1(spec.completion) } : {}) };
+      } } });
+    if (!accepted.ok) throw new Error(JSON.stringify(accepted.error));
+    const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: accepted.snapshot }));
+    const boundary = createWorkflowRunStorageTestkit({ runId, accountId, machineId: 'machine', origin: { kind: 'direct' },
+      acceptedEnvelope, state: 'claimed' });
+    const value = { document: 'A plan with risks and open questions.' };
+    let localInputId = '';
+    const nativeRunId = 'panel-native-run';
+    // Only the native execution transport is replaced; Action admission, the
+    // production coordinator, durable store, crypto and Account reader are real.
+    const nativeBoundary = {
+      executionRunCheckProtocolV2: async () => ({ ok: true }),
+      executionRunStart: async (_sessionId, request) => {
+        if (typeof request.localInputId !== 'string') throw new Error('Missing native input identity');
+        localInputId = request.localInputId;
+        return { runId: nativeRunId, callId: 'call', sidechainId: 'sidechain' };
+      },
+      executionRunGet: async () => ({ run: { runId: nativeRunId, callId: 'call', sidechainId: 'sidechain',
+        intent: 'agent', backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, permissionMode: 'read_only',
+        retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'request_response', status: 'running', startedAtMs: 1,
+        inputTurns: { occurrenceId: 'occurrence', last: { turnId: 'turn', inputIds: [localInputId], state: 'completed',
+          result: { kind: 'json', value } } } } }),
+    } satisfies Partial<ActionExecutorDeps>;
+    const coordinate = createProductionWorkflowRunCoordinator({ token: 'token', accountId, machineId: 'machine', storage: boundary,
+      resolveAccountEncryption: async () => ({ kind: 'available', witness: encryption.witness }),
+      resolveControllerContext: async () => ({ surface: 'cli', authority: 'account_automation', callerPermissionMode: 'yolo' }),
+      isAcceptedAuthorizationCurrent: async () => true, onReviewEntered: async () => {}, onCommittedTransition: async () => {},
+      workspaceScm: { inspectLocation: async () => ({ inspection: { rootPath: '/repo' } }), verifyRecordedWorkspace: async () => 'available' },
+      execution: { credentials: { token: 'token', encryption: null }, serverId: 'server',
+        machineAdmissionTransport: async () => { throw new Error('Panel must stay detached'); },
+        resolveExistingSessionConversation: async () => null,
+        detachedRun: {
+          // Unused native ports deliberately remain absent at this transport fixture.
+          actionExecutor: createActionExecutor(nativeBoundary as ActionExecutorDeps),
+          buildActionContext: () => ({ surface: 'cli', authority: 'account_automation' }),
+        } },
+    });
+    expect(await coordinate({ runId, attempt: 0, expectedRevision: boundary.run().revision,
+      acceptedEnvelope, accountCurrentness: encryption.witness })).toMatchObject({ state: 'waiting_for_review' });
+    const reader = createWorkflowAccountRunActionOwner({ resolveAccountId: async () => accountId,
+      resolveEncryption: async () => ({ kind: 'available', witness: encryption.witness }),
+      normalizeAbsolutePath: path => path, randomBytes: () => { throw new Error('Plain Account needs no keys'); },
+      definitions: { get: async () => { throw new Error('Accepted Panel needs no definition lookup'); } }, storage: boundary });
+    const page = await reader.execute({ actionId: 'workflow.run.invocations.list', input: { runId, includeContent: true },
+      context: { surface: 'ui', authority: 'present_user' } });
+    const held = page.invocationDetails?.find(row => row.progress.invocationPath.blockId === 'synthesis');
+    expect(held?.index.lifecycle).toBe('waiting_for_review');
+    if (!held) throw new Error('Missing Panel synthesis');
+    if (held.progress.result === undefined) throw new Error('Missing Panel result');
+    const synthesis = definition.blocks.find(block => block.id === 'synthesis');
+    if (synthesis?.kind !== 'step') throw new Error('Missing synthesis definition');
+    expect(held.progress.resultContract).toEqual(synthesis.result);
+    const contract = WorkflowResultContractSchema.parse(held.progress.resultContract);
+    // These are the exact typed contract and decoder used by the review card.
+    expect(decodeExecutionRunResultObservation({ encoding: 'typed', value: held.progress.result }, contract))
+      .toMatchObject({ ok: true, value });
+    // Mis-wiring the reader to an absent/text contract reproduces the live
+    // rejection: matching JSON bytes alone cannot make a result reviewable.
+    expect(decodeExecutionRunResultObservation({ encoding: 'typed', value: held.progress.result }, undefined))
+      .toMatchObject({ ok: false, reason: 'not_text' });
+  });
   it.each(['transport', 'revoked'] as const)('keeps heartbeat uncertainty reclaimable and distinguishes authoritative revocation (%s)', async outcome => {
     const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [
       { kind: 'wait', id: 'human', document: { text: 'Continue', references: [], attachments: [] } },

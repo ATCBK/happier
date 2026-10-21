@@ -722,7 +722,9 @@ describe('built-ins through accepted materialization and native leaf adapters', 
     const result = await h.run(builtin('plan-with-a-panel'), { request: 'Plan it', engines: [engine, otherEngine] }, origin);
     expect(result, JSON.stringify({ result, events: h.events, rows: h.store.list().filter((row) => row.lifecycle === 'failed') })).toMatchObject({ state: 'waiting_for_review' });
     expect(h.launches.every(({ sessionId }) => sessionId === null)).toBe(true);
-    expect(h.store.list().find((row) => row.blockId === 'synthesis')).toMatchObject({ lifecycle: 'waiting_for_review', result: { document: 'A plan' } });
+    expect(h.store.list().filter((row) => row.blockId === 'plan')).toHaveLength(2);
+    expect(h.store.list().find((row) => row.blockId === 'synthesis')).toMatchObject({ lifecycle: 'waiting_for_review',
+      result: { document: 'A plan' }, resultContract: { kind: 'json' } });
   });
   it('plans with request alone and no manufactured Session or planner leaves', async () => {
     const h = harness();

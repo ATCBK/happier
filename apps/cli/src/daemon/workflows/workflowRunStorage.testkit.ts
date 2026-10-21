@@ -366,6 +366,7 @@ export function createWorkflowRunStorageTestkit(params: Readonly<{
           invocations: page.map((row) => row.index),
           parentRevision: revision,
           ...(operation.progressEnvelopes === true ? {
+            keyCensus,
             progressEnvelopesByInvocationId: Object.fromEntries(page.map(row => [row.index.id, row.contentEnvelope])),
           } : {}),
           ...(hasMore && lastInspected ? { nextCursor: encodeCursor(positionOf(lastInspected)) } : {}),
