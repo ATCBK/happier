@@ -1,5 +1,4 @@
 import type { RpcHandlerRegistrar, RpcHandlerContext } from '@/api/rpc/types';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { run as runRipgrep } from '@/integrations/ripgrep/index';
@@ -39,14 +38,13 @@ function fileResultBytes(result: FileResult): number {
   return size;
 }
 
-export function registerWorkspaceFileReplaceHandlers(
-  registrar: RpcHandlerRegistrar,
+/** Native read reached after canonical Action admission. */
+export async function previewWorkspaceFileReplace(
+  raw: unknown,
   workingDirectory: string,
-  opts?: Readonly<{ accessPolicy?: FilesystemAccessPolicy; machineId?: string;
-    resolveActionExecutor?: () => RpcActionExecutor | null; actionExecutor?: RpcActionExecutor }>,
-): void {
-  const accessPolicy = opts?.accessPolicy ?? { kind: 'osUser' as const };
-  registrar.registerHandler<unknown, DaemonWorkspaceFileReplacePreviewResponse>(RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW, async (raw, context) => {
+  accessPolicy: FilesystemAccessPolicy,
+  context?: Pick<RpcHandlerContext, 'signal'>,
+): Promise<DaemonWorkspaceFileReplacePreviewResponse> {
     const parsed = DaemonWorkspaceFileReplacePreviewRequestSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: 'invalid_pattern' };
     const request = parsed.data;
@@ -123,10 +121,17 @@ export function registerWorkspaceFileReplaceHandlers(
       if (readErrorCode(error) === 'WORKSPACE_ROOT_NOT_FOUND') return { ok: false, code: 'root_not_found' };
       return { ok: false, code: error instanceof SyntaxError ? 'invalid_pattern' : 'ripgrep_failed' };
     }
-  });
+}
+
+export function registerWorkspaceFileReplaceHandlers(
+  registrar: RpcHandlerRegistrar,
+  _workingDirectory: string,
+  opts?: Readonly<{ accessPolicy?: FilesystemAccessPolicy; machineId?: string;
+    resolveActionExecutor?: () => RpcActionExecutor | null; actionExecutor?: RpcActionExecutor }>,
+): void {
   registerActionSpecRpcHandlers({
     rpcHandlerManager: registrar,
-    actionIds: ['workspace.files.replace'],
+    actionIds: ['workspace.files.replace.preview', 'workspace.files.replace'],
     ...(opts?.machineId ? { targetMachineId: opts.machineId, defaultMachineTarget: true } : {}),
     resolveActionExecutor: () => opts?.resolveActionExecutor?.() ?? opts?.actionExecutor ?? {
       execute: async () => ({ ok: false, errorCode: 'workspace_file_replace_action_owner_unavailable', error: 'Workspace replacement Action admission is unavailable' }),
