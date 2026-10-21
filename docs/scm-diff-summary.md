@@ -902,6 +902,15 @@ Run identity. Overlay changes make no model call. `review.explain_findings` is a
 explicit targeted refinement through the existing result owner; ReviewComment
 continues to own persisted dispositions.
 
+Review findings bound to a captured comparison materialize their comment snapshots
+from its immutable file blobs, including the before side of a deletion or rename.
+Later working-tree edits or moves do not change those snapshots. If the captured
+path, object or exact line range cannot be verified, the durable comment uses a
+finding-level anchor with no code snapshot; the Review publication keeps the
+finding's reported location. This leaves it reachable as unmapped without failing
+the Review. Comment authorization, encryption and persistence failures still
+produce partial or failed materialization.
+
 Post-hoc continuation uses effective findings, including follow-ups, in both its
 private narration context and queued instructions. Its provenance carries the
 review publication evidence and available receipts through the canonical schema.

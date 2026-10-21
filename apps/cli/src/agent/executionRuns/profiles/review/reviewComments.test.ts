@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import axios from 'axios';
@@ -35,6 +35,8 @@ import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/creat
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
 import { createExecutionRunRpcActionDeps } from '@/rpc/handlers/executionRuns/dispatchExecutionRunRpcAction';
+import { captureScmComparison } from '@/scm/comparisons/captureScmComparison';
+import { createLocalScmRepositoryFixture } from '@/testkit/scm/scmBackendContractFixtures';
 
 // Only HTTP and environment configuration are substituted. Snapshot, protocol,
 // signing, event envelopes, triage mapping, and terminalization remain real.
@@ -47,6 +49,7 @@ vi.mock('@/configuration', async (importOriginal) => {
 
 let root = '';
 const terminalWrites = new Map<string, Promise<void>>();
+const repositories: string[] = [];
 const signingKeys = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(7));
 const workspace = { machineId: 'machine-1', path: '/repo' };
 const findings = [
@@ -106,9 +109,72 @@ beforeEach(async () => {
 afterEach(async () => {
   await Promise.all(terminalWrites.values());
   await rm(root, { recursive: true, force: true });
+  await Promise.all(repositories.splice(0).map(path => rm(path, { recursive: true, force: true })));
 });
 
 describe('canonical review Run comments', () => {
+  it.each(['moved', 'changed', 'deleted'] as const)('publishes a finding against its captured comparison after the file is %s', async (change) => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'review-historical-' });
+    repositories.push(fixture.rootPath);
+    await writeFile(join(fixture.rootPath, fixture.trackedPath), 'historical input();\n');
+    const captured = await captureScmComparison({ cwd: fixture.rootPath, sessionId: 'session-1', source: { kind: 'workingTree' } });
+    if (change === 'moved') await rename(join(fixture.rootPath, fixture.trackedPath), join(fixture.rootPath, 'moved.ts'));
+    else if (change === 'deleted') await rm(join(fixture.rootPath, fixture.trackedPath));
+    else await writeFile(join(fixture.rootPath, fixture.trackedPath), 'different live input();\n');
+    const requests: unknown[] = [];
+    vi.mocked(axios.post).mockImplementation(async (_url, body) => {
+      requests.push(body);
+      return { status: 200, data: { comment: commentForCreate(body), replayed: false } };
+    });
+    const initial = { ...run(), runClass: 'long_lived' as const, retentionPolicy: 'resumable' as const,
+      launch: { cwd: fixture.rootPath },
+      intentInput: { cwd: fixture.rootPath, comparisonId: captured.comparison.id, comparison: captured.comparison } };
+    const controller = { kind: 'backend', cancelled: false } as ExecutionRunBackendController;
+    const runs = new Map([[initial.runId, initial]]);
+    await publishExecutionRunTurn({ runId: initial.runId, turnId: 'historical-review', controller,
+      controllers: new Map([[initial.runId, controller]]), runs,
+      rawText: JSON.stringify({ summary: 'Findings', findings: [{ ...findings[0], filePath: fixture.trackedPath }] }),
+      finishedAtMs: 2, parentProvider: 'claude', reviewComments: service(), sendAcp: async () => {} });
+    expect(requests).toMatchObject([{ anchor: { kind: 'line', filePath: fixture.trackedPath, line: 1, side: 'after' },
+      snapshot: { kind: 'text', source: 'diffSide', selectedLines: ['historical input();'],
+        diffContext: { side: 'after', baseSha: captured.comparison.endpoints.before, headSha: captured.comparison.endpoints.after } } }]);
+    expect(runs.get(initial.runId)?.latestToolResult).toMatchObject({ materialization: { kind: 'complete' },
+      findings: [{ comment: { id: 'comment-file-finding' } }] });
+    expect(runs.get(initial.runId)?.error).toBeUndefined();
+  });
+
+  it.each(['deleted', 'renamed'] as const)('uses the before side when the comparison path was %s', async (change) => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'review-before-' });
+    repositories.push(fixture.rootPath);
+    const original = await readFile(join(fixture.rootPath, fixture.trackedPath), 'utf8');
+    if (change === 'renamed') await rename(join(fixture.rootPath, fixture.trackedPath), join(fixture.rootPath, 'renamed.txt'));
+    else await rm(join(fixture.rootPath, fixture.trackedPath));
+    const captured = await captureScmComparison({ cwd: fixture.rootPath, sessionId: 'session-1', source: { kind: 'workingTree' } });
+    await writeFile(join(fixture.rootPath, fixture.trackedPath), 'unrelated replacement\n');
+    const requests: unknown[] = [];
+    vi.mocked(axios.post).mockImplementation(async (_url, body) => {
+      requests.push(body);
+      return { status: 200, data: { comment: commentForCreate(body), replayed: false } };
+    });
+    const result = await service().materialize({ run: { ...run(), launch: { cwd: fixture.rootPath },
+      intentInput: { comparisonId: captured.comparison.id } }, findings: [{ ...findings[0], filePath: fixture.trackedPath }], reviewedFingerprint: null });
+    expect(result).toMatchObject({ status: 'materialized', failures: [] });
+    expect(requests).toMatchObject([{ anchor: { kind: 'line', filePath: fixture.trackedPath, line: 1, side: 'before' },
+      snapshot: { kind: 'text', source: 'diffSide', selectedLines: [original.split(/\r?\n/)[0]], diffContext: { side: 'before' } } }]);
+  });
+
+  it('never substitutes current bytes when the selected comparison is unavailable', async () => {
+    const requests: unknown[] = [];
+    vi.mocked(axios.post).mockImplementation(async (_url, body) => {
+      requests.push(body);
+      return { status: 200, data: { comment: commentForCreate(body), replayed: false } };
+    });
+    const result = await service().materialize({ run: { ...run(), intentInput: { comparisonId: 'f'.repeat(64) } },
+      findings: [findings[0]], reviewedFingerprint: null });
+    expect(result).toMatchObject({ status: 'materialized', failures: [] });
+    expect(requests).toMatchObject([{ anchor: { kind: 'finding', runId: 'review-run', findingId: 'file-finding' }, snapshot: { kind: 'none' } }]);
+  });
+
   it.each(['bounded', 'retained'] as const)('preserves admitted target invocation scope through %s findings and re-raise transport', async (mode) => {
     const workflowScope = { actionRequestId: 'workflow-1/invocation-1/0', invocationId: 'invocation-1',
       sessions: [{ serverId: 'home', sessionId: 'target-B' }] };
@@ -242,7 +308,12 @@ describe('canonical review Run comments', () => {
     expect(runs.get(initial.runId)).toMatchObject({ status: 'running', latestToolResult: { materialization: { kind: 'complete' } } });
   });
   it('carries persisted findings and partial materialization into the same retained narration input', async () => {
-    vi.mocked(axios.post).mockImplementation(async (_url, body) => ({ status: 200, data: { comment: commentForCreate(body), replayed: false } }));
+    vi.mocked(axios.post).mockImplementation(async (_url, body) => {
+      const input = ReviewCommentCreateRequestV1Schema.parse(body);
+      return input.findingId === 'global-finding'
+        ? { status: 409, data: { error: 'review_comment_conflict' } }
+        : { status: 200, data: { comment: commentForCreate(body), replayed: false } };
+    });
     const comparison = ScmComparisonSchema.parse({ id: 'comparison', source: { kind: 'workingTree' }, repository: { rootPath: root },
       endpoints: {}, inventory: { state: 'complete', reasons: [], files: [] } });
     const initial = { ...run(), runClass: 'long_lived' as const, retentionPolicy: 'resumable' as const,
@@ -328,10 +399,15 @@ describe('canonical review Run comments', () => {
     expect(projectReviewRunTriage([comment])).toEqual({ findings: [] });
   });
 
-  it('reports a file snapshot failure instead of representing it as a global finding with no snapshot', async () => {
-    const result = await service().materialize({ run: run(), findings: [{ ...findings[0], filePath: 'missing.ts' }], reviewedFingerprint: null });
-    expect(result).toMatchObject({ status: 'failed', failures: [{ findingId: 'file-finding', errorCode: 'review_comment_snapshot_unavailable' }] });
-    expect(axios.post).not.toHaveBeenCalled();
+  it.each([{ filePath: 'missing.ts' }, { filePath: 'a.ts', startLine: 999 }])('keeps an unanchorable finding reachable without claiming exact code: %j', async (location) => {
+    const requests: unknown[] = [];
+    vi.mocked(axios.post).mockImplementation(async (_url, body) => {
+      requests.push(body);
+      return { status: 200, data: { comment: commentForCreate(body), replayed: false } };
+    });
+    const result = await service().materialize({ run: run(), findings: [{ ...findings[0], ...location }], reviewedFingerprint: null });
+    expect(result).toMatchObject({ status: 'materialized', commentIds: ['comment-file-finding'], failures: [] });
+    expect(requests).toMatchObject([{ anchor: { kind: 'finding', runId: 'review-run', findingId: 'file-finding' }, snapshot: { kind: 'none' } }]);
   });
   it('records a live run\'s triage only in ReviewComment and never rewrites or re-publishes the review result', async () => {
     const created = commentForCreate({ workspace, sessionId: 'session-1', runId: 'review-run', engineId: 'claude', findingId: 'file-finding', anchor: { kind: 'file', filePath: 'a.ts' }, snapshot: { kind: 'none', capturedAt: 1 }, body: 'Reject invalid input.', clientMutationId: 'fixture' }, 'proposed');

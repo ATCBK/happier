@@ -9,6 +9,15 @@ import { buildReviewCommentTextSnapshotHashes } from '@happier-dev/protocol';
 import { resolveReviewCommentSnapshot } from './snapshots';
 
 describe('resolveReviewCommentSnapshot', () => {
+    it('does not relocate an out-of-range selection onto the final line', async () => {
+        const root = join(tmpdir(), `happier-review-snapshot-range-${Date.now()}-${Math.random()}`);
+        await mkdir(root, { recursive: true });
+        await writeFile(join(root, 'example.ts'), 'only line\n');
+        await expect(resolveReviewCommentSnapshot({ cwd: root,
+            anchor: { kind: 'range', filePath: 'example.ts', startLine: 1, endLine: 999 },
+        })).resolves.toBeNull();
+    });
+
     it('resolves text snapshots through the canonical review comment snapshot policy', async () => {
         const root = join(tmpdir(), `happier-review-snapshot-${Date.now()}-${Math.random()}`);
         await mkdir(join(root, 'src'), { recursive: true });

@@ -10,6 +10,7 @@ import type { ReviewCommentAnchorV1, ReviewCommentCreateRequestV1, ReviewComment
 import type { ReviewCommentActionExecutor } from '@/agent/reviews/comments/executor';
 import { resolveReviewCommentSnapshot } from '@/agent/reviews/comments/snapshots';
 import type { ExecutionRunActionResult, ExecutionRunState } from '@/agent/runtime/bridges/executionRun/executionRunTypes';
+import { readCapturedScmComparison } from '@/scm/comparisons/captureScmComparison';
 
 export type ReviewRunMaterialization = Readonly<{
   engineId: string;
@@ -77,15 +78,25 @@ export function createReviewRunCommentService(deps: Readonly<{
       const reviewGroupId = params.run.display?.groupId;
       const comments: Array<ReviewRunMaterialization['comments'][number]> = [];
       const failures: Array<{ findingId: string; errorCode: string }> = [];
+      const input = record(params.run.intentInput);
+      const cwd = params.run.launch?.cwd ?? deps.cwd;
+      const comparison = typeof input?.comparisonId === 'string'
+        ? await readCapturedScmComparison({ cwd, comparisonId: input.comparisonId,
+          ...(params.run.sessionId ? { sessionId: params.run.sessionId } : {}) }).then(captured => captured.comparison, () => null)
+        : undefined;
       for (const finding of params.findings) {
         try {
           if (!params.run.sessionId && !params.workflowRunId) throw Object.assign(new Error('Review scope is unavailable'), { code: 'review_comment_session_unavailable' });
           const scope = deps.scope.workspace && params.run.launch?.cwd
             ? { ...deps.scope, workspace: { ...deps.scope.workspace, path: params.run.launch.cwd } }
             : deps.scope;
-          const anchor = findingAnchor(finding, params.run.runId);
-          const resolvedSnapshot = await resolveReviewCommentSnapshot({ cwd: params.run.launch?.cwd ?? deps.cwd, anchor });
-          if (!resolvedSnapshot && 'filePath' in anchor) throw Object.assign(new Error('File snapshot is unavailable'), { code: 'review_comment_snapshot_unavailable' });
+          let anchor = findingAnchor(finding, params.run.runId);
+          const resolvedSnapshot = await resolveReviewCommentSnapshot({ cwd, anchor, comparison });
+          // Preserve the finding and its original location in the Review payload,
+          // without inventing a code location when its evidence cannot be verified.
+          if (!resolvedSnapshot && 'filePath' in anchor) anchor = { kind: 'finding', runId: params.run.runId, findingId: finding.id };
+          else if (resolvedSnapshot?.kind === 'text' && resolvedSnapshot.diffContext
+            && (anchor.kind === 'line' || anchor.kind === 'range')) anchor = { ...anchor, side: resolvedSnapshot.diffContext.side };
           const snapshot = resolvedSnapshot ?? { kind: 'none' as const, capturedAt: Date.now() };
           const fingerprint: ReviewCommentFingerprintV1 = {
             normalizedMessageHash: createReviewFindingMessageHashV1(finding.summary), engineId,
