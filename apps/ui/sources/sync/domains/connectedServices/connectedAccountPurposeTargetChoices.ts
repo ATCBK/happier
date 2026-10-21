@@ -28,9 +28,13 @@ import {
 } from './qualifiedConnectedAccountTargetPresentation';
 
 function withEligibilityReason(presentation: QualifiedConnectedAccountTargetPresentation,
-  result: ReturnType<typeof describeConnectedAccountPurposeTargetEligibility>): QualifiedConnectedAccountTargetPresentation {
+  result: ReturnType<typeof describeConnectedAccountPurposeTargetEligibility>,
+  descriptorsLoading: boolean): QualifiedConnectedAccountTargetPresentation {
   if (result.reason === null) return presentation;
-  const reason = t(`connectedServices.purposeTargets.${result.reason}`);
+  // A descriptor read still in flight is not a failed check; it says Loading until it settles.
+  const reason = result.reason === 'serviceLookupFailed' && descriptorsLoading
+    ? t('common.loading')
+    : t(`connectedServices.purposeTargets.${result.reason}`);
   return { ...presentation,
     unavailableReason: reason,
     unavailableReasonCode: result.reason,
@@ -141,6 +145,8 @@ export function buildConnectedAccountPurposeTargetChoices(input: Readonly<{
   /** Applied descriptor title for the declaration service, never an installed-manifest guess. */
   serviceTitle: string;
   sourceNegotiation?: ConnectedAccountUiNegotiation;
+  /** The descriptor registry is still answering: an unreadable descriptor reads Loading, not failed. */
+  descriptorsLoading?: boolean;
   presentIdentity?: ConnectedAccountIdentityPresenter;
   resolveAuthentication: (
     service: PluginContributionIdentityV1,
@@ -200,7 +206,7 @@ export function buildConnectedAccountPurposeTargetChoices(input: Readonly<{
         labelsByKey: input.labelsByKey,
         serviceTitle: input.serviceTitle,
         presentIdentity: input.presentIdentity,
-      }), result),
+      }), result, input.descriptorsLoading === true),
       kind: 'account',
       eligibility: result.eligibility,
       selectable: result.eligibility === 'usable',
@@ -236,7 +242,7 @@ export function buildConnectedAccountPurposeTargetChoices(input: Readonly<{
         labelsByKey: input.labelsByKey,
         serviceTitle: input.serviceTitle,
         presentIdentity: input.presentIdentity,
-      }), result),
+      }), result, input.descriptorsLoading === true),
       kind: 'group',
       eligibility: result.eligibility,
       selectable: result.eligibility === 'usable',
@@ -325,7 +331,7 @@ export function buildConnectedAccountPurposeTargetChoices(input: Readonly<{
         ? presentation : withEligibilityReason(presentation, describeConnectedAccountPurposeTargetEligibility({
           target: input.selectedTarget, declaredServices, accounts: input.accounts, groups: input.groups,
           resolveAuthentication: input.resolveAuthentication,
-        })),
+        }), input.descriptorsLoading === true),
       kind: input.sourceNegotiation === 'indeterminate'
         ? 'hydrating'
         : input.sourceNegotiation === 'legacy'

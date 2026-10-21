@@ -160,7 +160,7 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
    * unused gateway slot). Defaults to "Not set"; never a dash.
    */
   noneLabel?: string;
-  /** Re-read the targets. Offered once, inside the picker sheet, not as a page row. */
+  /** Re-read the owner's targets, together with the followed descriptors. Offered once, inside the picker sheet, not as a page row. */
   onReload?: () => Promise<void> | void;
   /** The owner's current status (for example the Provider's), shown next to Refresh in the sheet. */
   reloadSubtitle?: string;
@@ -230,6 +230,7 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
     labelsByKey,
     serviceTitle,
     sourceNegotiation: effectiveAccountTransport,
+    descriptorsLoading: registry.status === 'loading',
     presentIdentity: present,
     resolveAuthentication: service => getConnectedAccountAuthentication(service, registry),
     teamResources,
@@ -310,18 +311,20 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
     pickerModalIdRef.current = null;
   }, []);
   const onReload = props.onReload;
+  // Refresh is offered when there is something to re-read: the owner's reload or the followed descriptors.
+  const canReload = Boolean(onReload || reloadDescriptors);
   const reload = React.useCallback(async () => {
-    if (!onReload || reloadingRef.current) return;
+    if (!canReload || reloadingRef.current) return;
     reloadingRef.current = true;
     setReloading(true);
     try {
       reloadDescriptors?.();
-      await onReload();
+      await onReload?.();
     } finally {
       reloadingRef.current = false;
       setReloading(false);
     }
-  }, [onReload, reloadDescriptors]);
+  }, [canReload, onReload, reloadDescriptors]);
   // Consumers pass inline handlers; the open sheet updates only when what it shows changes.
   const onChangeRef = React.useRef(props.onChange);
   onChangeRef.current = props.onChange;
@@ -332,7 +335,7 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
     selectedOptionId: selected?.selectable ? selected.id : null,
     accessibilityLabel: purposeTitle,
     testID: props.testID,
-    refresh: onReload
+    refresh: canReload
       ? {
           ...(props.reloadSubtitle ? { status: props.reloadSubtitle } : {}),
           refreshing: reloading,
@@ -345,7 +348,7 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
       const choice = choices.find((candidate) => candidate.id === id);
       if (choice?.selectable) onChangeRef.current(choice.target, choice.teamResource);
     },
-  }), [choices, onReload, props.reloadSubtitle, props.testID, purposeTitle, reload, reloading, rootStep, selected]);
+  }), [canReload, choices, props.reloadSubtitle, props.testID, purposeTitle, reload, reloading, rootStep, selected]);
   React.useEffect(() => {
     if (pickerModalIdRef.current) Modal.update(pickerModalIdRef.current, pickerProps);
   }, [pickerProps]);

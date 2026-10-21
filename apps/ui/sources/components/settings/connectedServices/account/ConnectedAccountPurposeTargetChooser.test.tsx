@@ -33,6 +33,7 @@ const localizationSpies = vi.hoisted(() => ({ resolve: vi.fn((_pluginId: string,
   typeof value === 'string' ? value : `localized:${value.key}`
 )) }));
 const descriptorReload = vi.hoisted(() => vi.fn());
+const descriptorSource = vi.hoisted(() => ({ readable: true, status: 'ready' as 'ready' | 'loading' }));
 const connectedServiceRegistryState = vi.hoisted(() => ({
   entries: [{
     serviceId: 'acme-gateway-account',
@@ -95,7 +96,7 @@ async function renderScreen(element: React.ReactElement) {
 }
 vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', () => ({
   useProjectedConnectedServicesRegistry: () => ({
-    scopeKey: 'server-a', status: 'ready', errorReason: null, entries: connectedServiceRegistryState.entries,
+    scopeKey: 'server-a', status: descriptorSource.status, errorReason: null, entries: connectedServiceRegistryState.entries,
   }),
   useProjectedPluginLocalizedTextResolver: () => localizationSpies.resolve,
   useAppShellPluginUiProjection: () => ({ reloadConnectedAccountProjection: descriptorReload }),
@@ -109,7 +110,7 @@ vi.mock('@/sync/domains/features/featureDecisionRuntime', () => ({
   }),
 }));
 vi.mock('@/sync/domains/connectedServices/connectedServiceRegistry', () => ({
-  getConnectedAccountAuthentication: () => ({
+  getConnectedAccountAuthentication: () => (descriptorSource.readable ? {
     defaultModeId: 'oauth',
     modes: [{
       id: 'oauth',
@@ -118,7 +119,7 @@ vi.mock('@/sync/domains/connectedServices/connectedServiceRegistry', () => ({
       pkce: 'required',
       outcomeReconciliation: 'none',
     }],
-  }),
+  } : null),
   getQualifiedConnectedServiceRegistryEntry: () => null,
   getGeneratedLegacyConnectedServiceRegistryFallback: () => null,
   getLegacyConnectedServiceRegistryEntry: () => ({
@@ -139,7 +140,9 @@ afterEach(() => {
   modalSpies.hide.mockClear();
   modalSpies.update.mockClear();
   localizationSpies.resolve.mockClear();
-  descriptorReload.mockClear();
+  descriptorReload.mockReset();
+  descriptorSource.readable = true;
+  descriptorSource.status = 'ready';
 });
 
 type CapturedPurposeTargetModalConfig = Readonly<{
@@ -515,6 +518,52 @@ describe('ConnectedAccountPurposeTargetChooser', () => {
     await act(async () => { shown.onRefresh(); });
     expect(onReload).toHaveBeenCalledTimes(1);
     expect(descriptorReload).toHaveBeenCalledTimes(1);
+  });
+
+  it('turns an unreadable-descriptor choice usable in the same open sheet once Refresh re-reads a recovered source', async () => {
+    const { ConnectedAccountPurposeTargetChooser } = await import('./ConnectedAccountPurposeTargetChooser');
+    descriptorSource.readable = false;
+    descriptorReload.mockImplementation(() => { descriptorSource.readable = true; });
+    const testID = 'agent-connected-account-purpose:primary';
+    const screen = await renderScreen(<ConnectedAccountPurposeTargetChooser
+      testID={testID}
+      localizedTextPluginId="acme.provider.author"
+      declaration={{ purpose: 'primary', service: { pluginId: 'acme.managed.provider', localId: 'gateway' }, required: false }}
+      value={null}
+      onChange={vi.fn()}
+      onReload={() => new Promise<void>((resolve) => { setTimeout(resolve, 0); })}
+    />);
+    await act(async () => { findItemByTestId(screen, testID)?.props.onPress(); });
+    type Opts = Readonly<{ rootStep: { sections: ReadonlyArray<{ options: ReadonlyArray<{ id: string; subtitle?: string; disabled?: boolean }> }> };
+      refresh: { onRefresh: () => void } }>;
+    const account = (props: Opts) => props.rootStep.sections[0]!.options.find((option) => option.subtitle?.includes('Personal OpenAI') || option.id.includes('35f1d8ec'))!;
+    const opened = modalSpies.show.mock.calls.at(-1)?.[0] as { props: Opts };
+    expect(account(opened.props).disabled).toBe(true);
+    expect(account(opened.props).subtitle).toContain(t('connectedServices.purposeTargets.serviceLookupFailed'));
+    await act(async () => { opened.props.refresh.onRefresh(); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    const refreshed = modalSpies.update.mock.calls.at(-1)?.[1] as Opts;
+    expect(account(refreshed).disabled).toBe(false);
+    expect(modalSpies.show).toHaveBeenCalledTimes(1);
+  });
+
+  it('says Loading, not a failed check, while the descriptor registry is still answering', async () => {
+    const { ConnectedAccountPurposeTargetChooser } = await import('./ConnectedAccountPurposeTargetChooser');
+    descriptorSource.readable = false;
+    descriptorSource.status = 'loading';
+    const testID = 'agent-connected-account-purpose:primary';
+    const screen = await renderScreen(<ConnectedAccountPurposeTargetChooser
+      testID={testID}
+      localizedTextPluginId="acme.provider.author"
+      declaration={{ purpose: 'primary', service: { pluginId: 'acme.managed.provider', localId: 'gateway' }, required: false }}
+      value={null}
+      onChange={vi.fn()}
+    />);
+    await act(async () => { findItemByTestId(screen, testID)?.props.onPress(); });
+    const opened = modalSpies.show.mock.calls.at(-1)?.[0] as { props: { rootStep: { sections: ReadonlyArray<{ options: ReadonlyArray<{ subtitle?: string }> }> } } };
+    const subtitles = opened.props.rootStep.sections[0]!.options.map((option) => option.subtitle ?? '').join('|');
+    expect(subtitles).toContain(t('common.loading'));
+    expect(subtitles).not.toContain(t('connectedServices.purposeTargets.serviceLookupFailed'));
   });
 
   it('does not reload another registry scope when the surface supplies its own registry', async () => {
