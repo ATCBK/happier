@@ -12247,7 +12247,8 @@ describe('runHostSessionRuntime', () => {
         workspaceTarget: { project: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' } },
         origin: { kind: 'direct', originSessionId: 'session-1' },
         authorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'default' },
-        resultDelivery: { kind: 'originating_session', originSessionId: 'session-1' }, workDepth: 1,
+        resultDelivery: { kind: 'originating_session', originSessionId: 'session-1',
+          ...(delivery === 'wake' ? { reportPolicy: { preset: 'everything' as const } } : {}) }, workDepth: 1,
       },
     }));
     const resultEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowFinalResultStoredEnvelopeV1({
@@ -12922,7 +12923,7 @@ describe('runHostSessionRuntime', () => {
       mentionedAccountIds: [], addressingV1: { throughSeq: 2, participantSessionIds: [destination] } };
     const features = FeaturesResponseSchema.parse({ features: {
       sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } },
-    }, capabilities: {} });
+    }, capabilities: { serverIdentity: { serverIdentityId: 'srv_discussion_reobserve' } } });
     const home = 'https://discussion-reobserve.example';
     const originalFetch = globalThis.fetch;
     const fetchBoundary = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {

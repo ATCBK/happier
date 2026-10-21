@@ -64,8 +64,10 @@ export async function fulfillExecutionRunInputReply(args: Readonly<{
         // pending rather than replacing a known partial with bare cancellation.
         outcome = committed?.type === 'found' && committed.message.sidechainId === nativeResult.sidechainId
             && committed.message.localId === nativeResult.localId
-            ? { kind: args.outcome?.kind === 'cancelled' ? 'cancelled' : 'answer',
-                result: { sessionId: session.sessionId, messageId: committed.message.id } } : undefined;
+            ? (() => {
+                const result = { sessionId: session.sessionId, messageId: committed.message.id };
+                return args.outcome?.kind === 'cancelled' ? { kind: 'cancelled' as const, result } : { kind: 'answer' as const, result };
+            })() : undefined;
     }
     for (const localId of args.inputIds) {
         if (!args.isCurrent()) return;

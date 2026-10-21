@@ -34,6 +34,11 @@ import { createSessionDaemonAuthorityFixture } from './runtime/sessionDaemonAuth
 import { configuration } from '@/configuration';
 import { HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY, readCurrentRunnerAgentRuntimeDaemonServiceAuthority } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
 import { resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { createDaemonSessionAccountActionExecutor } from '@/daemon/agentRuntime/createDaemonSessionAccountActionExecutor';
+import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
+import { createServerUrlServerFeaturesSnapshotStore } from '@/features/serverFeaturesSnapshotStore';
+import { ApprovalRequestV2Schema, decodePlainArtifactStoredContent } from '@happier-dev/protocol';
+import { deriveSessionMessageReplyReturnLocalIdV1, SessionMessageReplyReadResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 
 const env = process.env;
 
@@ -198,6 +203,96 @@ describe('createHappierMcpServer real host admission', () => {
   beforeEach(resetEnvironment);
   afterEach(unmockCaseModules);
   afterEach(() => vi.restoreAllMocks());
+
+  it.each(['ready', 'missing_identity'] as const)('prepares an explicit addressed reply through the daemon async Home snapshot and original custody (%s)', async snapshotKind => {
+    const sessionId = 'c777777777777777777777777';
+    const serverIdentityId = 'srv_explicit_reply_home';
+    const binding = { serverId: `reply-profile-${snapshotKind}`, serverUrl: `https://explicit-reply-${snapshotKind.replace('_', '-')}.test` };
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
+    const credentials = { token, encryption: null };
+    const addressing = { discussionId: 'discussion', messageId: 'question', throughSeq: 14, participantSessionId: sessionId };
+    const witness = { turnId: 'native-turn', inputId: 'original-input', userMessageSeq: 3, userMessageSeqs: [3],
+      agentStartCaller: { kind: 'session' as const, sessionId, starterDepth: 0, turnDepth: 0 }, discussionAddressing: addressing };
+    const features = FeaturesResponseSchema.parse({ features: {
+      sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } },
+    }, capabilities: snapshotKind === 'ready' ? { serverIdentity: { serverIdentityId } } : {} });
+    const app = fastify();
+    const restoreHttp = installAxiosFastifyAdapter({ app, origin: binding.serverUrl });
+    app.get('/v1/features', async () => features);
+    app.get('/v2/sessions/:sessionId', async () => ({ session: createSessionRecordFixture({ id: sessionId, share: null, encryptionMode: 'plain' }) }));
+    app.get('/v1/discussions/discussion/participants', async () => ({ discussionId: 'discussion', ownerAccountId: 'owner', access: 'owner', grants: [],
+      participants: [{ participant: { kind: 'session', sessionId }, answerPolicy: 'when_addressed', createdAt: 1 }] }));
+    app.get(`/v2/sessions/${sessionId}/messages/by-local-id/original-input/reply`, async () => SessionMessageReplyReadResultV1Schema.parse({
+      v: 1, status: 'available', progress: { v: 1, mode: 'return', disposition: 'observing', acceptedTurnId: witness.turnId, discussion: addressing },
+    }));
+    app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
+    app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode: 'plain' }));
+    app.get('/v1/artifacts', async () => []);
+    app.get('/v1/artifacts/:artifactId', async (_request, reply) => reply.code(404).send({ error: 'Artifact not found' }));
+    const captured: ReturnType<typeof ApprovalRequestV2Schema.parse>[] = [];
+    app.post('/v1/artifacts', async request => {
+      const body = z.object({ id: z.string(), body: z.string() }).parse(request.body);
+      const content = z.object({ body: z.string() }).parse(decodePlainArtifactStoredContent(body.body));
+      captured.push(ApprovalRequestV2Schema.parse(JSON.parse(content.body)));
+      return { id: body.id, headerVersion: 1, bodyVersion: 1 };
+    });
+    const originalFetch = globalThis.fetch;
+    // Home HTTP is the boundary. Daemon capability TCP and all MCP/Action,
+    // feature-store, original-custody and approval-codec logic remain real.
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      if (new URL(String(url)).origin !== binding.serverUrl) return originalFetch(url, init);
+      const response = await app.inject({ method: 'GET', url: new URL(String(url)).pathname });
+      return new Response(response.body, { status: response.statusCode, headers: { 'Content-Type': 'application/json' } });
+    });
+    const store = createServerUrlServerFeaturesSnapshotStore({ serverUrl: binding.serverUrl, token });
+    const settings = createActionSettingsProvider({ accountSettings: accountSettingsParse({}) });
+    let publications = 0;
+    const execute = createDaemonSessionAccountActionExecutor({ serverId: binding.serverId, serverHttpBaseUrl: binding.serverUrl,
+      token, credentials, machineId: 'machine-1', resolveServerFeaturesSnapshot: () => store.refresh(),
+      createExecutor: (_depth, _current, postAgentDiscussionMessage) => createCliActionExecutor({ token, credentials,
+        sessionId, mode: 'plain', ctx: null, serverId: binding.serverId, serverIdentityId, serverHttpBaseUrl: binding.serverUrl,
+        resolveServerFeaturesSnapshot: () => store.refresh(), actionsSettingsProvider: settings, postAgentDiscussionMessage,
+        pluginActionExecutionOwner: 'current_process' }),
+      postAgentDiscussionMessage: async () => { publications += 1; return { v: 1, ok: false, error: 'discussion_post_denied' }; },
+    });
+    const daemon = await createSessionDaemonAuthorityFixture({ sessionId, execute: operation => execute(operation,
+      { sessionId, isCurrent: async () => true }) });
+    await store.refresh();
+    const runtime = createHappierMcpServer(hostClient(sessionId, { getServerBinding: () => binding, getActiveTurnAdmissionWitness: () => witness,
+      getServerFeaturesSnapshot: () => store.getSnapshot() }), { credentials: null, sessionCredentials: credentials,
+      requiredDirectActionIds: ['discussion.reply'], actionsSettingsProvider: settings });
+    try {
+      expect(await store.refresh()).toMatchObject({ status: 'ready', features });
+      expect(runtime.toolNames).toContain('discussion_reply');
+      await withMcpClient(runtime, async client => {
+        const result = await client.callTool({ name: 'discussion_reply', arguments: { discussionId: addressing.discussionId,
+          replyTarget: { kind: 'message', messageId: addressing.messageId },
+          content: { v: 1, parts: [{ t: 'text', text: 'The explicit requested answer' }] } } });
+        if (snapshotKind === 'missing_identity') expect(result).toMatchObject({ isError: true,
+          content: expect.arrayContaining([expect.objectContaining({ type: 'text', text: expect.stringContaining('discussion_content_unavailable') })]) });
+        else expect(result.isError ?? false, JSON.stringify(result)).toBe(false);
+      });
+      if (snapshotKind === 'missing_identity') {
+        expect(captured).toHaveLength(0);
+        expect(publications).toBe(0);
+        return;
+      }
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toMatchObject({ actionId: 'discussion.reply', actionArgs: {
+        localId: deriveSessionMessageReplyReturnLocalIdV1({ sessionId, localId: witness.inputId, acceptedTurnId: witness.turnId }),
+        replyTarget: { kind: 'message', messageId: addressing.messageId },
+        content: { v: 1, parts: [{ t: 'text', text: 'The explicit requested answer' }] },
+      }, executionOriginV1: { serverId: binding.serverId, serverIdentityId,
+        sessionInputSource: { sourceSessionId: sessionId, sourceTurnId: witness.turnId, sourceInputId: witness.inputId, discussionAddressing: addressing },
+        discussionReplyReturn: { serverId: serverIdentityId, requestLocalId: witness.inputId, acceptedTurnId: witness.turnId } } });
+      expect(publications).toBe(0);
+    } finally {
+      await runtime.mcp.close();
+      await daemon.close();
+      restoreHttp();
+      await app.close();
+    }
+  });
 
   it('discovers complete widget and Board inputs over MCP and reads output schemas explicitly', async () => {
     const sessionId = 'c666666666666666666666666';

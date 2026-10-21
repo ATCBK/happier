@@ -435,7 +435,7 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
                     result = pageLanguageServerReferences(result);
                 if (requestedGeneration !== root.generation || ready.some(({ session, answer }) => session.status().generation !== answer.generation || answer.version !== document.version || session.document(localPath(session, root, input.path))?.version !== answer.version || session.document(localPath(session, root, input.path))?.text !== document.text))
                     return { status: 'error', errorCode: 'stale_query' };
-                const isEmpty = result.kind === 'hover' ? result.sections.length === 0 : result.kind === 'documentSymbols' ? result.symbols.length === 0 : result.kind === 'diagnostics' ? result.diagnostics.length === 0 : result.kind === 'prepareRename' ? result.targets.length === 0 : result.kind === 'codeActions' ? result.actions.length === 0 : result.kind === 'rename' || result.kind === 'willRenameFiles' ? result.files.length === 0 : result.locations.length === 0;
+                const isEmpty = result.kind === 'hover' ? result.sections.length === 0 : result.kind === 'documentSymbols' ? result.symbols.length === 0 : result.kind === 'diagnostics' ? result.diagnostics.length === 0 : result.kind === 'prepareRename' ? result.targets.length === 0 : result.kind === 'codeActions' ? result.actions.length === 0 : 'files' in result ? result.files.length === 0 : result.locations.length === 0;
                 return isEmpty && ready.some(answer => answer.answer.loading) ? { status: 'loading' } : result;
             }
             catch (error) {

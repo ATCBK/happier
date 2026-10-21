@@ -635,8 +635,8 @@ export function createNativeInactiveCatalogAdapter(params: Readonly<{
       };
     },
     unavailable: (code) => operation === 'vendorPlugins'
-      ? { unsupported: true, vendorPlugins: [], diagnostic: code }
-      : { unsupported: true, skills: [], diagnostic: code },
+      ? { unsupported: true as const, vendorPlugins: [], diagnostic: code }
+      : { unsupported: true as const, skills: [], diagnostic: code },
   });
   return Object.freeze({
     ...(params.native.vendorPlugins ? {

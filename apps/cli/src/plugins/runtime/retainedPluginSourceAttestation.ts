@@ -338,25 +338,26 @@ export async function attestRetainedPluginSource(params: Readonly<{
     if (!isMachinePluginSourceCustody(params.custody)) {
         throw new Error('Retained plugin custody does not establish a Machine executable source');
     }
-    const generation = params.custody.kind === 'managed'
+    const custody = params.custody;
+    const generation = custody.kind === 'managed'
         ? await readPreparedImmutablePluginGeneration({
             paths: params.paths,
-            immutableGenerationId: params.custody.immutableGenerationId,
+            immutableGenerationId: custody.immutableGenerationId,
         })
         : null;
     if (generation && generation.record.pluginId !== params.pluginId) {
         throw new Error('Retained plugin source custody identity mismatch');
     }
-    const bundledRoot = params.custody.kind === 'bundled_first_party'
+    const bundledRoot = custody.kind === 'bundled_first_party'
         ? await (params.resolveBundledPluginRoot ?? resolveRetainedBundledPluginRoot)({
             pluginId: params.pluginId,
-            custody: params.custody,
+            custody: custody,
         })
         : null;
-    const developmentRoot = params.custody.kind === 'development'
-        ? await realpath(params.custody.registeredRootId)
+    const developmentRoot = custody.kind === 'development'
+        ? await realpath(custody.registeredRootId)
         : null;
-    const runnerSourceRoot = params.custody.kind === 'development'
+    const runnerSourceRoot = custody.kind === 'development'
         ? resolveRunnerPathSourceRoot(params.runnerSnapshotIdentity ?? '')
         : null;
     if (developmentRoot) {
@@ -378,7 +379,7 @@ export async function attestRetainedPluginSource(params: Readonly<{
         );
     }
     const rootPath = await realpath(generation?.rootPath ?? bundledRoot?.rootPath ?? developmentRoot!);
-    const manifestAuthority = params.custody.kind === 'bundled_first_party' || params.custody.kind === 'development'
+    const manifestAuthority = custody.kind === 'bundled_first_party' || custody.kind === 'development'
         ? 'bundled_first_party' as const
         : params.manifestAuthority ?? 'external' as const;
     const manifest = developmentRoot && runnerSourceRoot
@@ -404,18 +405,18 @@ export async function attestRetainedPluginSource(params: Readonly<{
         manifest: manifest.manifest,
         managedGeneration: generation,
         assertStillAvailable: async () => {
-            if (params.custody.kind === 'managed') {
+            if (custody.kind === 'managed') {
                 const current = await readPreparedImmutablePluginGeneration({
                     paths: params.paths,
-                    immutableGenerationId: params.custody.immutableGenerationId,
+                    immutableGenerationId: custody.immutableGenerationId,
                 });
                 if (current.record.pluginId !== params.pluginId) {
                     throw new Error('Retained plugin source custody identity changed during attestation');
                 }
                 return;
             }
-            if (params.custody.kind === 'development') {
-                const currentRoot = await realpath(params.custody.registeredRootId);
+            if (custody.kind === 'development') {
+                const currentRoot = await realpath(custody.registeredRootId);
                 const currentRunnerSourceRoot = resolveRunnerPathSourceRoot(params.runnerSnapshotIdentity ?? '');
                 if (!currentRunnerSourceRoot
                     || currentRoot !== rootPath
@@ -426,7 +427,7 @@ export async function attestRetainedPluginSource(params: Readonly<{
                 return;
             }
             const resolved = await (params.resolveBundledPluginRoot ?? resolveRetainedBundledPluginRoot)({
-                pluginId: params.pluginId, custody: params.custody,
+                pluginId: params.pluginId, custody: custody,
             });
             if (
                 resolved.cacheIdentity !== bundledRoot!.cacheIdentity

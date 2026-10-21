@@ -147,8 +147,6 @@ export type ExecutionRunManagerStartParams = Readonly<{
   notifyParentOnCompletion?: boolean;
   /** Captured at creation by the owning Account host; never accepted from Run request input. */
   runReportPolicy?: FollowPolicyV1;
-  /** Permission-store projection for the retained content-free Follow frontier; never resume authority. */
-  attention?: ExecutionRunPublicState['attention'];
   profileId?: string | null;
   profileSourceCustody?: import('@happier-dev/protocol').PluginSourceCustodyV1 | null;
   // Internal runtime override for bounded-run timeouts. Not part of the public RPC contract.
@@ -266,6 +264,8 @@ export type ExecutionRunState = Readonly<{
     last?: import('@happier-dev/protocol').ExecutionRunInputTurnV1;
   }>;
   resumeHandle?: ExecutionRunResumeHandle | null;
+  /** Permission-store projection for the retained content-free Follow frontier; never resume authority. */
+  attention?: ExecutionRunPublicState['attention'];
   voiceAgentConfig?: Readonly<{
     profileId?: string | null;
     chatModelId: string;

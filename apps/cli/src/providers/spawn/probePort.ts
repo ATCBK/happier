@@ -342,16 +342,15 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
           }),
         };
       }
+      const { deployment } = resolution.record;
+      const resolveBindingIntent = input.resolveManagedPurposeBindingIntent;
       try {
         managedPurposeBindingResolution = await awaitAbortableWithinProviderOperation(
           signal => resolveManagedProviderPurposeBindingSnapshot({
-            implementationIdentity:
-              resolution.record.deployment.implementationIdentity,
-            connectedAccounts:
-              resolution.record.deployment.managedRuntime.connectedAccounts ?? [],
-            purposeBindingIntents:
-              resolution.record.deployment.purposeBindingIntents,
-            resolveBindingIntent: input.resolveManagedPurposeBindingIntent,
+            implementationIdentity: deployment.implementationIdentity,
+            connectedAccounts: deployment.managedRuntime.connectedAccounts ?? [],
+            purposeBindingIntents: deployment.purposeBindingIntents,
+            resolveBindingIntent,
             signal,
           }),
           operationScope.lifetime,

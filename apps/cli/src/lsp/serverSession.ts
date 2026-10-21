@@ -507,7 +507,7 @@ export function createServerSession(options: CreateServerSessionOptions): Server
                             : { textDocument: { uri: uri(input.path) }, ...(input.position ? { position: input.position } : {}),
                                 ...(input.kind === 'references' ? { context: { includeDeclaration: input.includeDeclaration ?? true } } : {}),
                                 ...(input.kind === 'rename' ? { newName: input.newName } : {}),
-                                ...(input.kind === 'codeActions' ? { range: input.range ?? { start: input.position, end: input.position }, context: codeActionContext } : {}) }, { signal: input.signal });
+                                ...(input.kind === 'codeActions' && codeActionContext ? { range: input.range ?? { start: input.position!, end: input.position! }, context: codeActionContext } : {}) }, { signal: input.signal });
                     if (input.kind === 'codeActions' && codeActionResolve && Array.isArray(value)) {
                         value = await Promise.all(value.map(async action => {
                             const object = readLspObject(action);

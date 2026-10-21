@@ -666,11 +666,12 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
               failedAuthorizations.push(authorization);
             }
           }
-          if (input.catalogFallback && dependencies.localCatalogFallback) {
+          const catalogFallback = input.catalogFallback;
+          if (catalogFallback && dependencies.localCatalogFallback) {
             const fallbackAuthorization = failedAuthorizations.find((candidate) =>
-              candidate.source.endpointTemplateId === input.catalogFallback?.endpointTemplateId);
+              candidate.source.endpointTemplateId === catalogFallback?.endpointTemplateId);
             const fallbackEndpointUrl = launched.endpointUrl(
-              input.catalogFallback.endpointTemplateId,
+              catalogFallback.endpointTemplateId,
             );
             if (fallbackAuthorization && fallbackEndpointUrl) {
               const fallbackValidation = await revalidateAll();
@@ -679,7 +680,7 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
               }
               if (contributionRetired()) return contributionUnavailable();
               const fallback = await observeProviderOperationPhase(operationScope?.lifetime, 'catalog_dispatch', () => dependencies.localCatalogFallback!.run({
-                descriptor: input.catalogFallback,
+                descriptor: catalogFallback,
                 endpointUrl: fallbackEndpointUrl,
                 lifetime: operationScope?.lifetime ?? {
                   signal: input.signal,
@@ -959,11 +960,12 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
       }
       if (input.mode === 'health') return { status: 'error', error: lastError };
 
-      if (input.catalogFallback && dependencies.localCatalogFallback) {
+      const catalogFallback = input.catalogFallback;
+      if (catalogFallback && dependencies.localCatalogFallback) {
         const fallbackAuthorization = failedAuthorizations.find((candidate) =>
-          candidate.request.endpointTemplateId === input.catalogFallback?.endpointTemplateId);
+          candidate.request.endpointTemplateId === catalogFallback?.endpointTemplateId);
         const fallbackEndpoint = input.endpoints.find((candidate) =>
-          candidate.endpointTemplateId === input.catalogFallback?.endpointTemplateId);
+          candidate.endpointTemplateId === catalogFallback?.endpointTemplateId);
         if (!fallbackAuthorization || !fallbackEndpoint) {
           throw new TypeError('Provider catalog fallback does not match an authorized failed probe endpoint');
         }
@@ -975,7 +977,7 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
         if (!validation.ok) return { status: 'error', error: validation.error };
         if (contributionRetired()) return contributionUnavailable();
         const fallback = await observeProviderOperationPhase(operationScope?.lifetime, 'catalog_dispatch', () => dependencies.localCatalogFallback!.run({
-          descriptor: input.catalogFallback,
+          descriptor: catalogFallback,
           endpointUrl: fallbackEndpoint.normalizedUrl,
           lifetime: operationScope?.lifetime ?? {
             signal: input.signal,

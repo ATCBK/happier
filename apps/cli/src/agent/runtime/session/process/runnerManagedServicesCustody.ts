@@ -27,6 +27,7 @@ import { z } from 'zod/mini';
 
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import { asHostProtocolZod } from '@/plugins/runtime/protocolComposableZodAdapter';
+import { isMachinePluginSourceCustody } from '@/plugins/runtime/sourceAuthority';
 import type {
     ManagedProviderEndpointAccessProjection,
 } from '@/plugins/runtime/invocation/services/managedServicesAdapter';
@@ -1265,7 +1266,12 @@ export function createRunnerManagedServicesCustodyPort(input: Readonly<{
         entry: CustodyEntry,
     ): RunnerManagedProviderRetainedAuthorityV1 => Object.freeze({
         pluginId: entry.scope.pluginId,
-        sourceCustody: entry.scope.sourceCustody,
+        sourceCustody: isMachinePluginSourceCustody(entry.scope.sourceCustody)
+            ? entry.scope.sourceCustody
+            : fail(
+                'plugin_managed_service_unavailable',
+                'Runner managed-services custody requires a Machine executable plugin source',
+            ),
         manifestAuthority: entry.scope.manifestAuthority,
         hardRevocationRevisionAtAdmission:
             entry.providerPluginHardRevocationRevisionAtAdmission,

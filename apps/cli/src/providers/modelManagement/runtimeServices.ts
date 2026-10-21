@@ -1504,7 +1504,9 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
             connectionResolution.status === 'resolved'
             && connectionResolution.record.deployment.kind === 'managedLocal'
           ) {
-            if (!input.resolveManagedPurposeBindingIntent) {
+            const { deployment } = connectionResolution.record;
+            const resolveBindingIntent = input.resolveManagedPurposeBindingIntent;
+            if (!resolveBindingIntent) {
               const error = createProviderErrorV1(
                 'provider_connection_invalid',
                 errorContext,
@@ -1515,15 +1517,15 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
               managedPurposeBindingSnapshot =
                 await observeProviderOperationPhase(operationLifetime, 'purpose_bindings', () =>
                   awaitAbortableWithinProviderOperation(signal => resolveManagedProviderPurposeBindingSnapshot({
-                    implementationIdentity: connectionResolution.record.deployment.implementationIdentity,
-                    connectedAccounts: connectionResolution.record.deployment.managedRuntime.connectedAccounts,
-                    purposeBindingIntents: connectionResolution.record.deployment.purposeBindingIntents,
-                    resolveBindingIntent: input.resolveManagedPurposeBindingIntent,
+                    implementationIdentity: deployment.implementationIdentity,
+                    connectedAccounts: deployment.managedRuntime.connectedAccounts,
+                    purposeBindingIntents: deployment.purposeBindingIntents,
+                    resolveBindingIntent,
                     signal,
                   }), operationLifetime));
               managedProviderRuntime = await observeProviderOperationPhase(operationLifetime, 'managed_runtime', () =>
                 awaitWithinProviderOperation(Promise.resolve(lease.registry.acquireManagedProviderRuntime?.(
-                  connectionResolution.record.deployment.implementationIdentity,
+                  deployment.implementationIdentity,
                 )), operationLifetime)) ?? undefined;
               if (!managedProviderRuntime?.isCurrent()) {
                 throw new Error('Managed Provider runtime is unavailable');

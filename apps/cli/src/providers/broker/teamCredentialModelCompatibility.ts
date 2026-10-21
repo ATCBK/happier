@@ -45,12 +45,12 @@ export async function resolveTeamCredentialModelCompatibility(input: Readonly<{
       const context = input.providerSettingsOperationContext;
       const readSnapshot = () => context ? context.readSnapshot() : getActiveAccountSettingsSnapshot();
       const captured = readSnapshot();
-      if (captured) {
+      if (captured?.scopeKey) {
         const catalog = await prepareProviderConnectionsCatalogForCli({ expectedScopeKey: captured.scopeKey,
           operationContext: context, signal: input.signal });
         input.signal?.throwIfAborted();
         const current = readSnapshot();
-        if (catalog.status !== 'ready' || current?.scopeKey !== captured.scopeKey) {
+        if (catalog.status !== 'ready' || !current || current.scopeKey !== captured.scopeKey) {
           throw Object.assign(new Error('Provider catalog authority is unavailable'), createProviderErrorV1('provider_settings_invalid'));
         }
         settings = readProviderSettingsForCli(current).settings;
