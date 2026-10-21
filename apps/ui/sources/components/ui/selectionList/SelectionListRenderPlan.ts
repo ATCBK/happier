@@ -247,7 +247,8 @@ export function synthesizeSelectionListRenderPlan(
                 // staleness) and SUPPRESS skeleton rows entirely. Skeletons
                 // only surface on first load (no prior data) — otherwise
                 // they cause a visible flicker between consecutive fetches
-                // (e.g. typing "d" then "de" briefly empties the list).
+                // when refreshing the same seed. The dynamic owner suppresses
+                // prior-seed rows before they reach this plan.
                 const stale = options;
                 const hasStale = stale.length > 0;
                 // RUX-11.2: on a TRUE first load (no stale cache), hide the

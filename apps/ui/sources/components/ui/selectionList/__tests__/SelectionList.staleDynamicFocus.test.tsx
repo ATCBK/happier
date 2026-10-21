@@ -71,6 +71,34 @@ afterEach(async () => {
  * pure errors (error without stale), `empty`, and `notFound`.
  */
 describe('SelectionList stale dynamic row keyboard focus + a11y (FR4-2)', () => {
+    it('removes the previous Files query rows before the replacement query resolves', async () => {
+        const { act } = await import('react-test-renderer');
+        const onSelect = vi.fn();
+        const root = makeStep({
+            id: 'files',
+            resolverKey: 'workspace-files',
+            resultFiltering: 'provider',
+            debounceMs: 100,
+            resolve: async (seed) => seed === 'retry'
+                ? { options: [{ id: 'retry.ts', label: 'retry.ts' }] }
+                : new Promise(() => {}),
+        });
+        const { SelectionList } = await import('../SelectionList');
+        const screen = await renderScreen(<SelectionList {...defaultProps(root, { onSelect })} />);
+        await act(async () => { screen.findByTestId('sl:header:input')!.props.onChangeText('retry'); });
+        await act(async () => { vi.advanceTimersByTime(101); });
+        expect(screen.findByTestId('sl:root:option-wrapper:retry.ts')).not.toBeNull();
+
+        await act(async () => { screen.findByTestId('sl:header:input')!.props.onChangeText('settingsdrawer'); });
+        expect(screen.findByTestId('sl:root:option-wrapper:retry.ts') === null).toBe(true);
+        await act(async () => { vi.advanceTimersByTime(101); });
+        expect(screen.findByTestId('sl:root:option-wrapper:retry.ts') === null).toBe(true);
+        await act(async () => {
+            screen.findByTestId('sl:header:input')!.props.onKeyPress({ key: 'Enter', preventDefault() {}, stopPropagation() {} });
+        });
+        expect(onSelect).not.toHaveBeenCalled();
+    });
+
     it('arrow keys + Enter activate stale options in a loading-with-stale dynamic section', async () => {
         const { act } = await import('react-test-renderer');
 

@@ -26,7 +26,7 @@ export type DynamicSectionState = Readonly<{
     error?: Error;
     /** The seed used for the most recently dispatched (or last successful) request. */
     seed?: string;
-    /** Last-known-good options preserved across loading / error transitions. */
+    /** Last-known-good options for this seed, preserved across loading / error transitions. */
     lastSuccessOptions?: ReadonlyArray<SelectionListOption>;
     /**
      * RUX-1 Issue 6: the most recent successful resolve reported the target
@@ -431,7 +431,8 @@ export function useSelectionListDynamicSections(params: {
                 setStateMap((prev) => {
                     const next = new Map(prev);
                     const previous = prev.get(id);
-                    const lastSuccess =
+                    const sameSeed = previous?.seed === seed;
+                    const lastSuccess = !sameSeed ? undefined :
                         previous?.status === 'success'
                             ? previous.options
                             : previous?.lastSuccessOptions;
@@ -440,7 +441,7 @@ export function useSelectionListDynamicSections(params: {
                         options: makeSkeletonOptions(skeletonCount),
                         seed,
                         lastSuccessOptions: lastSuccess,
-                        resultHint: previous?.resultHint,
+                        resultHint: sameSeed ? previous?.resultHint : undefined,
                     });
                     return next;
                 });
@@ -536,5 +537,17 @@ export function useSelectionListDynamicSections(params: {
         // eslint-disable-next-line react-hooks/exhaustive-deps -- recompute when inputs change
     }, [inputValue, sectionIdsKey, inputBehavior, descriptorIdentityKey, visibilityKey]);
 
-    return stateMap;
+    // Input paints before the dispatch effect (and before its debounce). Never
+    // expose selectable rows from a different seed during that interval.
+    let visibleState: Map<string, DynamicSectionState> | null = null;
+    for (const section of dynamicSections) {
+        const state = stateMap.get(section.id);
+        const seed = deriveSeed(section, inputBehavior, inputValue);
+        if (!state || state.seed === undefined || state.seed === seed) continue;
+        visibleState ??= new Map(stateMap);
+        visibleState.set(section.id, {
+            status: 'loading', options: [], seed,
+        });
+    }
+    return visibleState ?? stateMap;
 }

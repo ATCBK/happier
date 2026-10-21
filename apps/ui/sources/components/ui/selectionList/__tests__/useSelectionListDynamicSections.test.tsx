@@ -334,6 +334,8 @@ describe('useSelectionListDynamicSections', () => {
         let attempt = 0;
         const section: SelectionListDynamicSection = {
             id: 's1',
+            // Typing within one folder refreshes the same listing; another seed cannot reuse it.
+            seedFromInput: () => '/workspace',
             resolve: async () => {
                 attempt += 1;
                 if (attempt === 1) return { options: [{ id: 'cached-a', label: 'Cached A' }] };
