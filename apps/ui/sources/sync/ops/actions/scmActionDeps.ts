@@ -9,6 +9,7 @@ import { runSessionScmRpc } from '@/sync/ops/sessionScm';
 import type { LazyActionAccountContext } from './actionAccountContext';
 import { createAccountKvJsonTransport } from '@/sync/ops/account/accountKvJsonTransport';
 import { scmReviewComparisonMatchesSource } from '@/sync/domains/scm/diffSummary/selection';
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
 
 /** Admission and schemas belong to Actions; repository policy belongs to SCM. */
 export function createUiScmAction(
@@ -16,7 +17,7 @@ export function createUiScmAction(
     options?: Readonly<{ onDispatched?: () => void }>,
 ): NonNullable<ActionExecutorDeps['scmActionExecute']> {
     return async ({ actionId, input, context }) => {
-        context.signal?.throwIfAborted();
+        throwIfAborted(context.signal);
         account?.assertCurrent();
         const method = getActionSpec(actionId).bindings?.rpcMethod;
         if (!method) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
@@ -84,7 +85,7 @@ export function createUiScmAction(
             if (!evidence) return { success: false, errorCode: 'reviewed_marks_unavailable', error: 'The selected change evidence is unavailable for this caller.' };
             const { encryption } = await account.resolveAccountEncryption();
             account.assertCurrent();
-            const shouldContinue = () => { try { account.assertCurrent(); context.signal?.throwIfAborted(); return true; } catch { return false; } };
+            const shouldContinue = () => { try { account.assertCurrent(); throwIfAborted(context.signal); return true; } catch { return false; } };
             const scope = 'id' in evidence ? { repositoryRootPath: evidence.repository.rootPath, source: evidence.source } : evidence;
             const transport = createAccountKvJsonTransport({ key: buildScmReviewedMarksKey(buildScmReviewScopeId(scope)), credentials: account.credentials,
                 request: account.request, encryption, shouldContinue });
@@ -103,7 +104,7 @@ export function createUiScmAction(
                 const selection = ScmDiffSummaryResultClearInputSchema.parse(input);
                 const deleted: Extract<ScmDiffSummaryResultClearResponse, { success: true }>['deleted'] = [];
                 const failures: Extract<ScmDiffSummaryResultClearResponse, { success: true }>['failures'] = [];
-                const current = () => { context.signal?.throwIfAborted(); account?.assertCurrent(); };
+                const current = () => { throwIfAborted(context.signal); account?.assertCurrent(); };
                 for (const item of selection.results) {
                     try {
                         current();

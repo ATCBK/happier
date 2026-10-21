@@ -4,6 +4,7 @@ import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { subscribeAcknowledgedWorkspaceFileWrites } from '@/sync/domains/workspaces/files/workspaceFileAcknowledgements';
+import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 const rpc = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: rpc }));
@@ -129,7 +130,7 @@ describe('SCM Action target binding', () => {
             input: { cwd: '/repo', resultId: 'saved', expectedRevision: 1, edit: { kind: 'renameWalkthrough', title: 'Draft' } },
             context: { externalActionTarget: { kind: 'machine', machineId: 'machine' } }, executeCanonicalAction,
         });
-        expect(response).toMatchObject({ success: false, errorCode: 'COMMAND_OUTCOME_UNKNOWN' });
+        expect(ActionExecuteFailureSchema.parse(response)).toMatchObject({ ok: false, errorCode: 'COMMAND_OUTCOME_UNKNOWN' });
         expect(response).not.toHaveProperty('outcome');
     });
     it('sends strict saved-result requests without Git mutation envelope fields', async () => {
