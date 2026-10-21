@@ -62,6 +62,19 @@ describe('workflow library run summaries', () => {
     const item = { sourceArtifactId, lastRun: null, recent: [], needsYouCount: 1, needsYouRunId: 'private-run-a' };
     const reply = { ok: true, result: { summaries: [item], remainingSourceArtifactIds: [] } };
 
+    it('preserves opaque Automation ids containing the former demand delimiter', async () => {
+        const automationId = 'habit\u0000x';
+        executeMock.mockImplementation(async (_actionId, input) => ({ ok: true, result: {
+            automationSummaries: input.automationIds.map((id: string) => ({ automationId: id, lastRun: null })),
+            remainingAutomationIds: [],
+        } }));
+        const hook = await renderHook(() => useWorkflowAutomationSummaries([automationId]));
+        await waitForHomeGovernance(() => expect(executeMock.mock.calls).toHaveLength(1));
+        expect(executeMock.mock.calls[0]?.[1]).toEqual({ automationIds: [automationId] });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().summaries?.has(automationId)).toBe(true));
+        expect(hook.getCurrent().summaries?.size).toBe(1);
+    });
+
     it('batches trigger-only latest statuses without acquiring full Runs or private content', async () => {
         const automationIds = ['habit-b', 'habit-a', 'habit-empty'];
         const succeeded = { id: 'run-a', state: 'succeeded', workflowCustodyState: null, attentionRequired: false, createdAt: '2026-10-21T03:00:00.000Z' };
