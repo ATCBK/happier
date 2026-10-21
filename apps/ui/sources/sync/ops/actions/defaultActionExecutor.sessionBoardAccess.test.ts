@@ -318,7 +318,7 @@ describe('Session Board Action access gate', () => {
         const { PluginDeclarativeDocumentV1Schema } = await import('@happier-dev/protocol');
         const document = PluginDeclarativeDocumentV1Schema.parse({ version: 1, root: { kind: 'metric', label: 'Checks',
             data: { kind: 'value', value: 7 }, value: { path: [], type: 'number' } } });
-        const capture = () => ({ document, current: true, digests: [], refresh: async () => {}, frozenByPath: new Map() });
+        const capture = () => ({ document, current: true, readIdentity: 'checks', readAuthorized: true, digests: [], refresh: async () => {}, frozenByPath: new Map() });
         // The new item's record read (its id is the confirm's own); the layout keeps its exact answer.
         harness.answer(serverId, `GET /v2/sessions/${SESSION_ID}/system-records/record`, { body: { record: null } });
         // The Board acknowledges the item the confirm created, by its own id.
@@ -354,7 +354,7 @@ describe('Session Board Action access gate', () => {
         if (document.root.kind !== 'metric') throw new Error('expected a metric document');
         const root = document.root;
         let shown = 7;
-        const capture = () => ({ document, current: true, digests: ['source-version-1'], refresh: async () => {},
+        const capture = () => ({ document, current: true, readIdentity: 'checks', readAuthorized: true, digests: ['source-version-1'], refresh: async () => {},
             frozenByPath: new Map([['root', freezePluginDeclarativeDataNodeV1(root, { passed: shown, secret: 'never' })]]) });
         let done = 0;
         const screen = await renderScreen(createElement(WidgetSnapshotConfirmPanel, {

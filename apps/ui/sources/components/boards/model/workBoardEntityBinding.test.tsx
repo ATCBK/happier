@@ -27,6 +27,12 @@ import { selectBuiltinWidgetCandidates } from '@/components/widgets/widgetCatalo
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { AddToBoardPopover, type AddToBoardWidgets } from '@/components/boards/header/AddToBoardPopover';
 import { runWidgetSetupCommand } from '@/components/widgets/surface/widgetSurfaceSetup';
+import { BoardWidgetCard } from '../cards/BoardWidgetCard';
+import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
+import type { ItemAction } from '@/components/ui/lists/itemActions';
+import { WidgetSetupPopover } from '@/components/widgets/add/WidgetSetupPopover';
+import { describeAuthoredWidgetDefinitionV1 } from '@/components/widgets/widgetCatalog';
+import { Modal } from '@/modal';
 
 // HTTP, device credential storage and native theme are system boundaries.
 const runtimeFetch = vi.hoisted(() => vi.fn());
@@ -34,6 +40,9 @@ vi.mock('@/utils/system/runtimeFetch', () => ({ runtimeFetch: (...args: unknown[
 // Successful mutation scenarios consent at the physical dialog boundary; Action policy stays real.
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+// Window measurement and the native portal are physical presentation boundaries.
+vi.mock('@/components/ui/popover', async original =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(original));
 vi.mock('react-native', async () => {
     const native = await import('@/dev/testkit/mocks/reactNative');
     // The platform list renders its items; retain the real Collection and widget body below it.
@@ -124,6 +133,56 @@ async function mountAccount(name: string, boards: readonly WorkBoardV1[], enable
 }
 
 describe('mounted WorkBoard Action settlement', () => {
+    it.each(['pending', 'applied', 'refused'] as const)('keeps %s custody through widget Edit inputs, Rename and the drop adapter', async disposition => {
+        const instance = { v: 1 as const, id: 'copy', definition: { kind: 'inline' as const, definition: {
+            v: 1 as const, id: 'checks', name: 'Checks', provenance: { source: { kind: 'authored' as const } },
+            sizeDeclaration: { sizes: ['medium'] as ['medium'], defaultSize: 'medium' as const },
+            inputs: { fields: [{ path: 'repo', title: 'Repository', widget: 'text' as const }] },
+            inputSchema: { type: 'object' as const, properties: { repo: { type: 'string' as const } }, additionalProperties: false },
+            body: { kind: 'declarative' as const, document: { version: 1 as const, root: { kind: 'text' as const, text: 'Checks' } } },
+        } }, bindings: { repo: { kind: 'value' as const, value: 'main' } } };
+        const boardId = `board-card-${disposition}`;
+        const b = await mountAccount(`card-${disposition}`, []);
+        const scope = { serverId: b.home.id, accountId: 'board-account', owner: { kind: 'workBoard' as const, boardId } };
+        const placement = { kind: 'widget' as const, ref: { surface: scope, instanceId: instance.id }, instance, size: 'medium' as const };
+        const board: WorkBoardV1 = { ...createWorkBoardV1({ id: boardId, name: 'Checks' }), widgets: [placement] };
+        b.rows.set(boardId, { id: boardId, ownerAccountId: 'board-account', access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
+            dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, header: encodePlainArtifactStoredContent(buildWorkBoardArtifactHeaderV1(board)),
+            body: encodePlainArtifactStoredContent({ body: JSON.stringify(board) }), headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+        storage.setState({ settings: { ...storage.getState().settings, actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
+            actions: { 'boards.apply': { enabled: disposition !== 'refused', ...(disposition === 'pending' ? { approvalRequiredSurfaces: ['ui'] } : {}) } } }) } });
+        const binding = await renderHook(() => ({ board: useWorkBoard(boardId), binding: useWorkBoardEntityBinding({ board,
+            membership: projectBoardMembership(board, { isHomeMounted: () => true, sections: {}, filtered: null }), isHomeMounted: () => true }) }), { wrapper: b.wrapper });
+        function Card() {
+            const dispatch = useDispatchWorkBoardIntent();
+            return <BoardWidgetCard boardId={boardId} placement={placement} scope={scope} descriptor={describeAuthoredWidgetDefinitionV1(instance.definition.definition, instance.definition)}
+                size="medium" index={0} count={1} dispatch={dispatch} active={false} testID="card" />;
+        }
+        const alert = vi.spyOn(Modal, 'alert');
+        const screen = await renderScreen(<Card />, { wrapper: b.wrapper });
+        const action = (id: string) => (screen.findByType(ItemRowActions).props.actions as ItemAction[]).find(item => item.id === id)!;
+        await act(async () => { action('editInputs').onPress?.(); });
+        const setup = screen.findByType(WidgetSetupPopover).props.setup();
+        await act(async () => { expect.soft(await setup.submit({ bindings: { repo: { kind: 'value', value: 'release' } } }))
+            .toMatchObject(disposition === 'pending' ? { ok: true, approvalPending: true } : { ok: disposition === 'applied' }); });
+        await act(async () => { action('rename').onPress?.(); });
+        await act(async () => { screen.findByTestId('card-title-input')!.props.onChangeText('Release checks'); });
+        await act(async () => { screen.findByTestId('card-title-input')!.props.onSubmitEditing(); });
+        await vi.waitFor(() => expect(screen.findByTestId('card-title-input')?.props.editable).not.toBe(false));
+        expect.soft(alert.mock.calls.length).toBe(disposition === 'refused' ? 1 : 0);
+        if (disposition === 'pending' || disposition === 'applied') expect.soft(screen.findByTestId('card-title-input')).toBeNull();
+        let drop;
+        await act(async () => { drop = await binding.getCurrent().binding!.execute({ actionId: 'boards.apply', input: { intent: { kind: 'add_items', boardId,
+            refs: [{ kind: 'machine', qualifiedId: { serverId: b.home.id, id: 'machine' } }] } }, preview: { verb: 'Add', target: 'Checks' } }); });
+        expect.soft(drop).toMatchObject({ status: disposition === 'pending' ? 'unknown' : disposition });
+        const stored = binding.getCurrent().board!;
+        expect(stored.widgets?.[0]?.instance).toMatchObject(disposition === 'applied'
+            ? { displayName: 'Release checks', bindings: { repo: { kind: 'value', value: 'release' } } } : instance);
+        if (disposition === 'pending') {
+            expect(readPresentationNotice()).toMatchObject({ severity: 'info' });
+            expect(b.rows.size).toBe(4); // Original board plus one approval for each intent.
+        }
+    });
     it('keeps the unknown outcome through the rendered Board add handler when read-back is unavailable', async () => {
         const board = createWorkBoardV1({ id: 'board-add-unknown-message', name: 'Pending add' });
         const b = await mountAccount('add-unknown-message', [board]);

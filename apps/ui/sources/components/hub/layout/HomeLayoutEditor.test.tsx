@@ -13,6 +13,7 @@ import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } 
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 
 installSettingsViewCommonModuleMocks({ storage: 'real' });
 installDisconnectedServerSocketBoundary();
@@ -435,7 +436,7 @@ describe('Home Customize entity reorder binding', () => {
         }));
         await import('@/sync/syncEngine');
         restoreActionLoader = await installRealActionExecutorModuleLoader();
-        connection = await restoreServerAccountForTest({ serverUrl: 'https://home-setup-write.test', accountId: 'account-a', request: async (url, init) => {
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://home-setup-write.test', accountId: 'account-a', request: createSessionReadBatchFetchBoundary(async (url, init) => {
             const path = new URL(String(url)).pathname;
             requestedPaths.push(path);
             // The native Session input admits both exact-record access and membership
@@ -456,7 +457,7 @@ describe('Home Customize entity reorder binding', () => {
                 return Response.json({ error: 'forbidden' }, { status: 403 });
             }
             return artifact.request(url, init);
-        } });
+        }) });
         const scope = { serverId: connection.home.id, accountId: 'account-a', owner: { kind: 'home' as const } };
         storage.setState({ isDataReady: true, profileScope: scope, settingsScope: scope });
         let layout: ReturnType<typeof useHomeHubLayout> | undefined;

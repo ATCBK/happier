@@ -168,7 +168,7 @@ function BoardWidgetGallery(props: Readonly<{
     initialEntryId?: string;
     onRequestClose: () => void;
 }>): React.ReactElement {
-    const { sections } = useAccountWidgetAddSections({ scope: props.widgets.scope, instances: props.widgets.instances,
+    const { sections, pendingSections } = useAccountWidgetAddSections({ scope: props.widgets.scope, instances: props.widgets.instances,
         addInstance: props.addWidget, labels: BOARD_WIDGET_LABELS, testID: 'board-add.gallery' });
     return (
         <WidgetAddSurface
@@ -180,6 +180,7 @@ function BoardWidgetGallery(props: Readonly<{
             searchPlaceholder={t('widgetAdd.searchWidgets')}
             addLabel={t('boards.header.add')}
             sections={sections}
+            pendingSections={pendingSections}
             {...(props.initialEntryId ? { initialEntryId: props.initialEntryId } : {})}
             {...(props.widgets.scope ? { serverId: props.widgets.scope.serverId } : {})}
             testID="board-add.gallery"

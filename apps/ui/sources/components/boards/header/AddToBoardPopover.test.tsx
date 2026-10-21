@@ -75,6 +75,56 @@ afterEach(async () => {
 });
 
 describe('AddToBoardPopover library recovery', () => {
+    it('shows delayed and refused saved-widget inventory in Gallery and recovers on Retry without closed reads', async () => {
+        const definitionPath = '/v1/artifacts?limit=500&kind=widget_definition';
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        expect(await createDefaultActionExecutor().execute('widgets.definition.create', {
+            account: { serverId, accountId: 'account-a' }, artifactId: 'board-checks', definition: {
+                name: 'Checks on main', body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Checks' } } },
+                inputs: { fields: [] }, inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+                sizeDeclaration: { sizes: ['small'], defaultSize: 'small' },
+            },
+        }, { serverId, surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: true });
+        const recovered = await harness.home.artifacts(serverId).handle(definitionPath);
+        if (!recovered) throw new Error('Expected the canonical Artifact list boundary');
+        const recoveredInventory: unknown = await recovered.json();
+        const pending = createDeferred<void>();
+        harness.home.answer(serverId, definitionPath, { status: 403, body: { error: 'forbidden' }, respondAfter: pending.promise });
+        harness.home.answer(serverId, ARTIFACT_LIST_PATH, { body: [] });
+        harness.home.answer(serverId, RUN_STORAGE_PATH, { body: await boardRunStoragePage([]) });
+        const button = picker(false);
+        const widgets: React.ComponentProps<typeof AddToBoardPopover>['widgets'] = {
+            scope: { serverId, accountId: 'account-a', owner: { kind: 'workBoard', boardId: 'board' } },
+            instances: [], addInstance: async () => {},
+        };
+        function Gallery({ open }: { open: boolean }) {
+            const [visible, setVisible] = React.useState(open);
+            React.useEffect(() => { setVisible(open); }, [open]);
+            return React.cloneElement(button, { widgets, open: visible, onOpenChange: setVisible });
+        }
+        const reads = () => harness.home.requestsFor(definitionPath).length;
+        const before = reads();
+        const screen = await renderScreen(<Gallery open={false} />);
+        try {
+            expect(reads()).toBe(before);
+            await screen.update(<Gallery open />);
+            await act(async () => { screen.findByType(SelectionList).props.onSelect('widgets:gallery'); });
+            await waitForHomeGovernance(() => expect(reads()).toBeGreaterThan(before));
+            expect(screen.findHostByTestId('board-add.gallery.pending.yours')).not.toBeNull();
+            expect(screen.findHostByTestId('board-add.gallery.pending.yours.failed')).toBeNull();
+            await act(async () => { screen.changeTextByTestId('board-add.gallery.search', 'Checks on main'); });
+            expect(screen.findHostByTestId('board-add.gallery.noMatch')).toBeNull();
+            await act(async () => { pending.resolve(); });
+            await waitForHomeGovernance(() => expect(screen.findHostByTestId('board-add.gallery.pending.yours.failed')).not.toBeNull());
+            expect(screen.findHostByTestId('board-add.gallery.noMatch')).toBeNull();
+            harness.home.answer(serverId, definitionPath, { body: recoveredInventory });
+            await screen.pressByTestIdAsync('board-add.gallery.pending.yours.retry');
+            await waitForHomeGovernance(() => expect(screen.getTextContent()).toContain('Checks on main'));
+            expect(reads()).toBeGreaterThan(before + 1);
+            expect(screen.findHostByTestId('board-add.gallery.pending.yours')).toBeNull();
+        } finally { pending.resolve(); await screen.unmount(); }
+    });
+
     it('says which groups are loading and settles each independently', async () => {
         const definitions = createDeferred<void>();
         const runs = createDeferred<void>();
