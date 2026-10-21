@@ -28,13 +28,11 @@ describe('local command acquisition lifecycle', () => {
     let baseUrl = '';
     const server = http.createServer((req, res) => {
       requests += 1;
-      if (outcome === 'download' && req.url?.startsWith('/repos/')) {
+      if (outcome === 'download' && req.url?.startsWith('/happier-dev/happier/releases/expanded_assets/')) {
         const os = process.platform === 'win32' ? 'windows' : process.platform;
         const archive = `happier-v0.3.0-${os}-${process.arch}.tar.gz`;
         const checksums = 'checksums-happier-v0.3.0.txt';
-        res.end(JSON.stringify({ assets: [archive, checksums, `${checksums}.minisig`].map((name) => ({
-          name, browser_download_url: `${baseUrl.replace('http://', 'http://fixture-user:fixture-password@')}/${name}?token=fixture-secret`,
-        })) }));
+        res.end(`<ul>${[archive, checksums, `${checksums}.minisig`].map((name) => `<li><a href="/happier-dev/happier/releases/download/cli-stable/${name}">${name}</a><clipboard-copy value="sha256:${'a'.repeat(64)}"></clipboard-copy></li>`).join('')}</ul>`);
         return;
       }
       if (outcome === 'cancel' && requests === 1) controller.abort();
@@ -47,7 +45,7 @@ describe('local command acquisition lifecycle', () => {
     // Only the external HTTP boundary is redirected; acquisition and executor logic stay real.
     vi.spyOn(https, 'request').mockImplementation((url, options, callback) => {
       const parsed = new URL(String(url));
-      if (parsed.hostname !== 'api.github.com') throw new Error(`Unexpected request: ${parsed.origin}`);
+      if (parsed.hostname !== 'api.github.com' && parsed.hostname !== 'github.com') throw new Error(`Unexpected request: ${parsed.origin}`);
       return http.request(`http://127.0.0.1:${address.port}${parsed.pathname}`, options, callback);
     });
     syncBuiltinESMExports();

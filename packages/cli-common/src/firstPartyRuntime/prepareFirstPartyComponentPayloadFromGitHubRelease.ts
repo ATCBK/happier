@@ -93,6 +93,10 @@ export async function resolveFirstPartyComponentRelease(params: Readonly<{
     githubRepo,
     apiBaseUrl: source.apiBaseUrl,
     tag: releaseTag,
+    // Public release asset pages carry the names and SHA-256 digests this
+    // asset-only consumer needs, without spending GitHub's shared-IP REST
+    // quota. Authenticated and development-mirror sources keep the API path.
+    assetsOnly: !githubToken && source.apiBaseUrl === undefined,
     githubToken,
     userAgent,
     signal: params.signal,

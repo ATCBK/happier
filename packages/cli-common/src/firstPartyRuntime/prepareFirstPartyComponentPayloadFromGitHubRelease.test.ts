@@ -28,11 +28,25 @@ vi.mock('./extractReleasePayloadRootFromArchive.js', () => ({
     extractReleasePayloadRootFromArchive: extractReleasePayloadRootFromArchiveMock,
 }));
 
-import { prepareFirstPartyComponentPayloadFromGitHubRelease } from './prepareFirstPartyComponentPayloadFromGitHubRelease.js';
+import { prepareFirstPartyComponentPayloadFromGitHubRelease, resolveFirstPartyComponentRelease } from './prepareFirstPartyComponentPayloadFromGitHubRelease.js';
 
 describe('prepareFirstPartyComponentPayloadFromGitHubRelease', () => {
     afterEach(() => {
         vi.clearAllMocks();
+    });
+
+    it('resolves unauthenticated public release assets without spending the GitHub REST quota', async () => {
+        fetchGitHubReleaseByTagMock.mockResolvedValue({ assets: [] });
+        resolveReleaseAssetBundleMock.mockReturnValue({ version: '1.2.3' });
+
+        await resolveFirstPartyComponentRelease({ componentId: 'happier-cli', channel: 'stable', os: 'linux', arch: 'x64' });
+
+        expect(fetchGitHubReleaseByTagMock).toHaveBeenCalledWith(expect.objectContaining({
+            githubRepo: 'happier-dev/happier',
+            tag: 'cli-stable',
+            githubToken: '',
+            assetsOnly: true,
+        }));
     });
 
     it('uses an explicit GitHub release source override when provided', async () => {
@@ -77,12 +91,13 @@ describe('prepareFirstPartyComponentPayloadFromGitHubRelease', () => {
 
         const result = await prepareFirstPartyComponentPayloadFromGitHubRelease(params);
 
-        expect(fetchGitHubReleaseByTagMock).toHaveBeenCalledWith({
+        expect(fetchGitHubReleaseByTagMock).toHaveBeenCalledWith(expect.objectContaining({
             githubRepo: 'acme/private-hstack',
             tag: 'stack-stable',
             githubToken: 'secret-token',
             userAgent: 'custom-agent',
-        });
+            assetsOnly: false,
+        }));
         expect(result).toMatchObject({
             componentId: 'hstack',
             channel: 'stable',
@@ -128,12 +143,13 @@ describe('prepareFirstPartyComponentPayloadFromGitHubRelease', () => {
                 arch: 'x64',
             });
 
-            expect(fetchGitHubReleaseByTagMock).toHaveBeenCalledWith({
+            expect(fetchGitHubReleaseByTagMock).toHaveBeenCalledWith(expect.objectContaining({
                 githubRepo: 'acme/env-hstack',
                 tag: 'stack-stable',
                 githubToken: 'env-secret-token',
                 userAgent: 'env-agent',
-            });
+                assetsOnly: false,
+            }));
         } finally {
             if (previousRepo === undefined) {
                 delete process.env.HAPPIER_FIRST_PARTY_RELEASE_REPO;
