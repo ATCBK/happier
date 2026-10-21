@@ -930,6 +930,8 @@ export type MemoryActionResultById = {
             };
             state: 'disabled' | 'error' | 'ready' | 'indexing';
             indexedThroughMs?: number | undefined;
+            errorCode?: string | undefined;
+            errorReason?: string | undefined;
         }[] | undefined;
     };
     readonly "memory.clear_index": {
