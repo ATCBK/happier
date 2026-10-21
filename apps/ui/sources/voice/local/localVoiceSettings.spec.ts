@@ -5,20 +5,16 @@ vi.mock('react-native', async () => {
   return createReactNativeWebMock({ Platform: { OS: 'ios' } });
 });
 
-describe('resolveLocalSttProvider', () => {
-  function settingsWithStt(stt: unknown) {
-    return { voice: { providerId: 'local_direct', adapters: { local_direct: { stt } } } };
-  }
-
+describe('resolveConfiguredLocalSttProvider', () => {
   it('keeps the chosen provider when an unrelated provider sub-config is malformed', async () => {
-    const { resolveLocalSttProvider } = await import('./localVoiceSettings');
+    const { resolveConfiguredLocalSttProvider } = await import('./localVoiceSettings');
 
-    expect(resolveLocalSttProvider(settingsWithStt({ provider: 'local_neural', openaiCompat: { baseUrl: 42 } }))).toBe('local_neural');
+    expect(resolveConfiguredLocalSttProvider({ provider: 'local_neural', openaiCompat: { baseUrl: 42 } })).toBe('local_neural');
   });
 
   it('maps the legacy device toggle through the settings schema migration', async () => {
-    const { resolveLocalSttProvider } = await import('./localVoiceSettings');
+    const { resolveConfiguredLocalSttProvider } = await import('./localVoiceSettings');
 
-    expect(resolveLocalSttProvider(settingsWithStt({ baseUrl: 'http://x', useDeviceStt: true }))).toBe('device');
+    expect(resolveConfiguredLocalSttProvider({ baseUrl: 'http://x', useDeviceStt: true })).toBe('device');
   });
 });

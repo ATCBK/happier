@@ -11,6 +11,7 @@ import {
   isHandsFreeSttEnabled,
   resolveHandsFreeTurnEndpointPolicy,
   resolveLocalVoiceAdapterSettings,
+  type LocalVoiceSettingsInput,
 } from '@/voice/local/localVoiceSettings';
 import { fileUriToNativePath } from '@/voice/modelPacks/nativePath';
 
@@ -102,7 +103,7 @@ function getOptionalSherpaNativeModule(): SherpaNativeModuleLike | null {
 }
 
 
-function resolvePackId(settings: unknown): string {
+function resolvePackId(settings: LocalVoiceSettingsInput): string {
   const { config } = resolveLocalVoiceAdapterSettings(settings);
   const parsed = VoiceLocalSttSchema.safeParse(config?.stt ?? {});
   const stt = parsed.success ? parsed.data : VoiceLocalSttSchema.parse({});

@@ -1,4 +1,6 @@
 import { Platform } from 'react-native';
+import type { Settings } from '@/sync/domains/settings/settings';
+import type { VoiceSettings } from '@/sync/domains/settings/voiceSettings';
 
 import {
   VoiceLocalSttProviderSchema,
@@ -7,9 +9,11 @@ import {
 } from '@/sync/domains/settings/voiceLocalSttSettings';
 import { normalizeTurnEndpointPolicy, type TurnEndpointPolicy } from '@/voice/input/TurnEndpointDetector';
 
-export function resolveLocalVoiceAdapterSettings(settings: any): {
+export type LocalVoiceSettingsInput = Readonly<Pick<Settings, 'voice'>>;
+
+export function resolveLocalVoiceAdapterSettings(settings: LocalVoiceSettingsInput): {
   adapterId: 'local_direct' | 'local_conversation';
-  config: any;
+  config: Readonly<Partial<VoiceSettings['adapters']['local_conversation']>>;
 } {
   const voice = settings?.voice ?? null;
   const providerId = voice?.providerId;
@@ -50,7 +54,7 @@ export function resolveEffectiveLocalSttProvider(
   return configured;
 }
 
-export function resolveLocalSttProvider(settings: any): VoiceLocalSttProvider {
+export function resolveLocalSttProvider(settings: LocalVoiceSettingsInput): VoiceLocalSttProvider {
   const { config } = resolveLocalVoiceAdapterSettings(settings);
   return resolveEffectiveLocalSttProvider(resolveConfiguredLocalSttProvider(config?.stt));
 }
@@ -63,12 +67,12 @@ export function localSttProviderSupportsHandsFree(provider: VoiceLocalSttProvide
   return provider === 'device' || provider === 'local_neural';
 }
 
-export function isHandsFreeSttEnabled(settings: any): boolean {
+export function isHandsFreeSttEnabled(settings: LocalVoiceSettingsInput): boolean {
   const { config } = resolveLocalVoiceAdapterSettings(settings);
   return config?.handsFree?.enabled === true && localSttProviderSupportsHandsFree(resolveLocalSttProvider(settings));
 }
 
-export function resolveHandsFreeTurnEndpointPolicy(settings: any): TurnEndpointPolicy {
+export function resolveHandsFreeTurnEndpointPolicy(settings: LocalVoiceSettingsInput): TurnEndpointPolicy {
   const { config } = resolveLocalVoiceAdapterSettings(settings);
   return normalizeTurnEndpointPolicy({
     silenceMs: config?.handsFree?.endpointing?.silenceMs ?? 450,
@@ -80,14 +84,14 @@ export function resolveHandsFreeTurnEndpointPolicy(settings: any): TurnEndpointP
  * Android API-key restrictions need the app signing certificate SHA-1. It is an app-wide fact that
  * is configured once, in the Google Cloud TTS settings; Gemini STT reuses that value.
  */
-export function resolveGoogleAndroidCertSha1(settings: any): string | null {
+export function resolveGoogleAndroidCertSha1(settings: LocalVoiceSettingsInput): string | null {
   const { config } = resolveLocalVoiceAdapterSettings(settings);
   const raw = config?.tts?.googleCloud?.androidCertSha1;
   return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
 }
 
 /** Barge-in defaults to on, matching the `bargeInEnabled` settings schema default. */
-export function isVoiceBargeInEnabled(settings: any): boolean {
+export function isVoiceBargeInEnabled(settings: LocalVoiceSettingsInput): boolean {
   const { config } = resolveLocalVoiceAdapterSettings(settings);
   return config?.tts?.bargeInEnabled !== false;
 }
