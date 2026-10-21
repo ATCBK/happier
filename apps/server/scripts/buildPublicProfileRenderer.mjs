@@ -28,16 +28,23 @@ export async function buildPublicProfileRenderer({ projectDir = defaultProjectDi
     } else await writeFile(target, source);
 }
 
-/** The runtime bundle resolves local faces next to its entry/chunks, never through the UI source tree. */
+/** One physical input list owns font staging and source-bundle capture. */
+export async function readPublicProfileAssetFiles({ projectDir = defaultProjectDir } = {}) {
+    const interRoot = resolve(projectDir, '../ui/sources/assets/fonts');
+    const source = resolve(projectDir, 'assets/public-profile');
+    return [
+        ...['Inter-Regular.ttf', 'Inter-Medium.ttf', 'Inter-SemiBold.ttf'].map(filename => ({ filename, sourcePath: resolve(interRoot, filename) })),
+        ...(await readdir(source)).map(filename => ({ filename, sourcePath: resolve(source, filename) })),
+    ];
+}
+
+/** Retain the exact shipped faces and licenses, without a runtime source-tree dependency. */
 export async function stagePublicProfileAssets({ projectDir = defaultProjectDir, outDir }) {
     const target = resolve(outDir, 'assets/public-profile');
     await mkdir(target, { recursive: true });
-    const interRoot = resolve(projectDir, '../ui/sources/assets/fonts');
-    for (const file of ['Inter-Regular.ttf', 'Inter-Medium.ttf', 'Inter-SemiBold.ttf']) {
-        await copyFile(resolve(interRoot, file), resolve(target, file));
-    }
-    const source = resolve(projectDir, 'assets/public-profile');
-    for (const file of await readdir(source)) await copyFile(resolve(source, file), resolve(target, file));
+    const files = await readPublicProfileAssetFiles({ projectDir });
+    for (const { filename, sourcePath } of files) await copyFile(sourcePath, resolve(target, filename));
+    return files.map(({ filename }) => resolve(target, filename));
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

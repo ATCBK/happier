@@ -1,2 +1,3 @@
 export function buildPublicProfileRenderer(input?: { projectDir?: string; check?: boolean }): Promise<void>;
-export function stagePublicProfileAssets(input: { projectDir?: string; outDir: string }): Promise<void>;
+export function readPublicProfileAssetFiles(input?: { projectDir?: string }): Promise<Array<{ filename: string; sourcePath: string }>>;
+export function stagePublicProfileAssets(input: { projectDir?: string; outDir: string }): Promise<string[]>;

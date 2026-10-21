@@ -141,6 +141,14 @@ export async function readSourceComponentBuildInputs({ repoDir, component }) {
     if (existsSync(path)) files.add(relative(repoDir, path).split(sep).join('/'));
     watchPaths.add(path);
   }
+  if (component === 'server' && existsSync(join(repoDir, 'apps/server/sources/app/account/profile/render/publicProfileFonts.ts'))) {
+    const { readPublicProfileAssetFiles } = await import('../../../../server/scripts/buildPublicProfileRenderer.mjs');
+    for (const { sourcePath } of await readPublicProfileAssetFiles({ projectDir: join(repoDir, 'apps/server') })) {
+      files.add(relative(repoDir, sourcePath).split(sep).join('/'));
+      watchPaths.add(sourcePath);
+      watchPaths.add(dirname(sourcePath));
+    }
+  }
   if (existsSync(join(repoDir, 'yarn.lock'))) files.add('yarn.lock');
   watchPaths.add(join(repoDir, 'yarn.lock'));
   return { files: [...files].sort(), workspaceDirs: owners.map(({ root }) => relative(repoDir, root)),

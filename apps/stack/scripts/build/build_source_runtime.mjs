@@ -19,6 +19,7 @@ import { captureBuildInputFiles, mountCapturedWorkspaceDependencies, readBuildIn
 import { probeCliDistRuntimeImport } from '../utils/cli/cliDistIntegrity.mjs';
 import { retainPendingSourcePreparation, updatePendingSourcePreparationPhase } from '../runtime/shared/pending_source_start.mjs';
 import { readBundledPluginPackageResourceRelativePaths } from '../../../../packages/cli-common/bundledPluginResources.mjs';
+import { stagePublicProfileAssets } from '../../../server/scripts/buildPublicProfileRenderer.mjs';
 
 import { SOURCE_CONDITION, SOURCE_RUNTIME_OUTPUT_OPTIONS, sourceExport, readWorkspacePackages, resolveWorkspaceSource, workspaceSourceCompilerPaths, packageNameOfSpecifier, readCliSourceEntries, createWorkspaceSourceResolver, bundleCliSourceSidecars, runtimePackageExports } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
 export { readWorkspacePackages, resolveWorkspaceSource } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
@@ -760,6 +761,13 @@ async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, 
   const plugin = {
     name: 'source-runtime-boundaries',
     setup(builder) {
+      if (component === 'server') builder.onLoad({ filter: /publicProfileFonts\.ts$/ }, async args => {
+        if (args.path !== join(projectDir, 'sources/app/account/profile/render/publicProfileFonts.ts')) return;
+        // This physical asset reader belongs to the retained server package,
+        // regardless of the main/shared chunk esbuild places its code in.
+        return { contents: (await readSourceInput(args.path)).toString('utf8').replaceAll('import.meta.url',
+          JSON.stringify(pathToFileURL(join(runtimeDir, 'package.json')).href)), loader: 'ts', resolveDir: dirname(args.path) };
+      });
       if (sqliteMigration) {
         builder.onResolve({ filter: /^source-runtime:sqlite-migration$/ }, () => ({ path: 'sqlite-migration', namespace: 'source-runtime' }));
         builder.onLoad({ filter: /.*/, namespace: 'source-runtime' }, () => ({
@@ -946,7 +954,10 @@ async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, 
     const assets = join(projectDir, 'src/plugins/projection/registry/static-assets');
     if (existsSync(assets)) await cp(assets, join(runtimeDir, 'package-dist/plugins/projection/registry/static-assets'), { recursive: true });
   } else {
-    for (const name of ['generated', 'assets']) await linkInstalledDirectory(join(installedProjectDir, name), join(runtimeDir, name));
+    await linkInstalledDirectory(join(installedProjectDir, 'generated'), join(runtimeDir, 'generated'));
+    if (existsSync(join(projectDir, 'sources/app/account/profile/render/publicProfileFonts.ts'))) {
+      retainedCodeFiles.push(...await stagePublicProfileAssets({ projectDir, outDir: runtimeDir }));
+    } else await linkInstalledDirectory(join(installedProjectDir, 'assets'), join(runtimeDir, 'assets'));
     const copyPrismaInputs = async (source, destination) => {
       await mkdir(destination, { recursive: true });
       for (const name of await readdir(source)) {

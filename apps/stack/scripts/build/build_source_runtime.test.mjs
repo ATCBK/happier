@@ -2880,6 +2880,45 @@ test('source server refuses reuse of copied SQL consumed during an editor undo',
   assert.equal((await build(options)).entrypoint, second.entrypoint, 'settled SQL keeps warm reuse');
 });
 
+test('source server retains the shipped public-profile fonts after source inputs retire', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-source-public-profile-fonts-' });
+  const repoDir = fixture.path('repo');
+  const server = join(repoDir, 'apps/server');
+  const renderer = 'sources/app/account/profile/render/publicProfileFonts.ts';
+  await Promise.all(['sources/app/account/profile/render', 'scripts', 'node_modules'].map(path => mkdir(join(server, path), { recursive: true })));
+  await writeFile(join(server, 'package.json'), JSON.stringify({ name: '@happier-dev/server', type: 'module' }));
+  await writeFile(join(server, 'tsconfig.json'), '{}');
+  await cp(fileURLToPath(new URL(`../../../server/${renderer}`, import.meta.url)), join(server, renderer));
+  await writeFile(join(server, 'sources/main.ts'), `export { readPublicProfileFont, PUBLIC_PROFILE_FONT_FILES } from './app/account/profile/render/publicProfileFonts';`);
+  await writeFile(join(server, 'scripts/migrate.full.deploy.ts'), `export { readPublicProfileFont } from '../sources/app/account/profile/render/publicProfileFonts';`);
+  await cp(fileURLToPath(new URL('../../../server/assets/public-profile', import.meta.url)), join(server, 'assets/public-profile'), { recursive: true });
+  const fonts = join(repoDir, 'apps/ui/sources/assets/fonts');
+  await mkdir(fonts, { recursive: true });
+  for (const name of ['Inter-Regular.ttf', 'Inter-Medium.ttf', 'Inter-SemiBold.ttf']) {
+    await cp(fileURLToPath(new URL(`../../../ui/sources/assets/fonts/${name}`, import.meta.url)), join(fonts, name));
+  }
+  const expectedBytes = new Map();
+  for (const directory of [fonts, join(server, 'assets/public-profile')]) {
+    for (const name of await readdir(directory)) expectedBytes.set(name, await readFile(join(directory, name)));
+  }
+  await symlink(dirname(createRequire(import.meta.url).resolve('esbuild/package.json')), join(server, 'node_modules/esbuild'), process.platform === 'win32' ? 'junction' : 'dir');
+  const runtime = await buildSourceRuntimeBundle({ repoDir, outputDir: fixture.path('output'), component: 'server', serverComponent: 'happier-server', dbProvider: 'postgres' });
+  assert.ok((await readdir(join(runtime.runtimeDir, 'src/chunks'))).some(name => name.startsWith('chunk-')),
+    'the physical reader also works from the shared chunk used by both entrypoints');
+  await rename(join(server, 'assets'), fixture.path('retired-server-assets'));
+  await rename(fonts, fixture.path('retired-ui-fonts'));
+  const loaded = await import(pathToFileURL(runtime.entrypoint));
+  for (const face of ['regular', 'medium', 'semiBold', 'cjk', 'arabic', 'emoji']) {
+    const font = await loaded.readPublicProfileFont(face);
+    assert.deepEqual(font.bytes, expectedBytes.get(loaded.PUBLIC_PROFILE_FONT_FILES[face]),
+      `exact shipped ${face} remains readable without source assets`);
+    assert.ok(font.path.startsWith(runtime.runtimeDir + sep), 'physical font path belongs to the retained runtime');
+  }
+  for (const name of ['LICENSE-Inter.txt', 'LICENSE-NotoSansCJK.txt', 'LICENSE-NotoSansArabic.txt', 'LICENSE-NotoEmoji.txt']) {
+    assert.match(await readFile(join(runtime.runtimeDir, 'assets/public-profile', name), 'utf8'), /SIL OPEN FONT LICENSE/);
+  }
+});
+
 test('source server retains migration source assets without copying checkout database files', async (context) => {
   const repoDir = await mkdtemp(join(tmpdir(), 'happier-source-runtime-'));
   context.after(() => rm(repoDir, { recursive: true, force: true }));
