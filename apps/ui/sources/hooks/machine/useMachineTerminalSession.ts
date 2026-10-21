@@ -61,6 +61,7 @@ import { buildMachineTerminalSessionRequest } from './machineTerminalSessionRequ
 import { useMachineTerminalActionAdmission } from './useMachineTerminalActionAdmission';
 import { delay } from '@/utils/timing/time';
 import { useTerminalActionOperationState } from '@/sync/domains/actionOperations/useActionOperations';
+import { refreshTerminalActionOperation } from '@/sync/domains/actionOperations/actionOperationRuntime';
 
 export type TerminalStatus = EmbeddedTerminalPaneStatus;
 
@@ -129,6 +130,14 @@ export function useMachineTerminalSession(params: Readonly<{
     const [error, setError] = React.useState<string | null>(null);
     const [exitCode, setExitCode] = React.useState<number | null>(retainedExit?.exitCode ?? null);
     const [exitSignal, setExitSignal] = React.useState<number | null>(retainedExit?.signal ?? null);
+    const operationLifetime = admission.lifetime;
+    React.useEffect(() => {
+        if (status !== 'exited' || !params.readOnly || !operationLifetime?.isCurrent()) return;
+        void refreshTerminalActionOperation({
+            serverId: operationLifetime.scope.serverId, accountId: operationLifetime.scope.accountId,
+            machineId: params.machineId, terminalId: params.attachedTerminalId ?? null,
+        }, operationLifetime);
+    }, [status, operationState, operationLifetime, params.readOnly, params.machineId, params.attachedTerminalId]);
     // A terminal that streamed once and then failed lost its connection; it did not fail to start.
     const everConnectedRef = React.useRef(false);
     const [terminalTitle, setTerminalTitle] = React.useState<string | null>(null);

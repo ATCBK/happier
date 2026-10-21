@@ -274,6 +274,7 @@ export const ProjectScriptRow = React.memo(function ProjectScriptRow(
   const outputBody = expanded && props.operation && attachment?.terminalId ? (
     <ProjectCommandOutputPane
       operation={props.operation}
+      operationStopPending={stop.pending || stop.stopRequested}
       title={props.name}
       {...(output.opensInTerminal ? { onOpenInTerminal: openDetail } : { onOpenDetail: openDetail })}
     />

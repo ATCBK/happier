@@ -18,6 +18,7 @@ export type WorkspaceEmbeddedTerminalPaneProps = Readonly<{
     serverId: string;
     terminalInstanceId?: string;
     attachedTerminalId?: string | null;
+    operationStopPending?: boolean;
     toolbarActionsStart?: React.ReactNode;
     closeOnUnmount?: boolean;
     workspace?: WorkspaceAddressV1;
@@ -57,7 +58,8 @@ export const WorkspaceEmbeddedTerminalPane = React.memo(function WorkspaceEmbedd
     const restart = React.useCallback(() => {
         if (props.terminalInstanceId) void execute('session.terminals.restart', { terminalId: props.terminalInstanceId });
     }, [execute, props.terminalInstanceId]);
-    const surfaceController = React.useMemo(() => ({ ...controller, requestRestart: restart, onOpenApproval: presentation.onOpenApproval }), [controller, restart, presentation.onOpenApproval]);
+    const surfaceController = React.useMemo(() => ({ ...controller, operationStopPending: props.operationStopPending,
+        requestRestart: restart, onOpenApproval: presentation.onOpenApproval }), [controller, props.operationStopPending, restart, presentation.onOpenApproval]);
     // No Session here: Ask goes where the Account's "Ask without a session" setting says (D-3).
     const askSelection = React.useMemo(() => props.rootPath
         ? { scopeId: props.scopeId, sessionId: null,

@@ -50,6 +50,8 @@ const terminalOps = vi.hoisted(() => ({
     streamAcknowledge: vi.fn(),
     streamSendInput: vi.fn(),
     close: vi.fn(),
+    operationGet: vi.fn(),
+    operationCancel: vi.fn(),
     input: vi.fn(),
     resize: vi.fn(),
 }));
@@ -100,8 +102,11 @@ function readWriteGeneration(value: unknown): number | null {
 
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
     const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
+    const { ACTION_OPERATION_RPC_METHODS_V1, ACTION_OPERATION_RPC_METHODS_V2 } = await import('@happier-dev/protocol/actions/operations/v1');
     const { TerminalStreamReadRequestSchema } = await import('@happier-dev/protocol/terminal/stream');
     const responses = new Map<string, typeof terminalOps.ensure>([
+        [ACTION_OPERATION_RPC_METHODS_V2.get, terminalOps.operationGet],
+        [ACTION_OPERATION_RPC_METHODS_V1.cancel, terminalOps.operationCancel],
         [RPC_METHODS.DAEMON_TERMINAL_ENSURE, terminalOps.ensure],
         [RPC_METHODS.DAEMON_TERMINAL_RESTART, terminalOps.restart],
         [RPC_METHODS.DAEMON_TERMINAL_STREAM_READ, terminalOps.streamRead],
@@ -185,6 +190,7 @@ describe('useMachineTerminalSession', () => {
             featureToggles: { 'terminal.embeddedPty': true },
             actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: {
                 'machines.terminal.open': ['ui'], 'machines.terminal.restart': ['ui'],
+                'action.operations.cancel': ['ui'],
             } },
         };
         servedHomes = await serveActionHomes({
@@ -217,6 +223,8 @@ describe('useMachineTerminalSession', () => {
         terminalOps.streamAcknowledge.mockReset();
         terminalOps.streamSendInput.mockReset();
         terminalOps.close.mockReset();
+        terminalOps.operationGet.mockReset();
+        terminalOps.operationCancel.mockReset();
         terminalOps.input.mockReset();
         terminalOps.resize.mockReset();
         terminalOps.streamAcknowledge.mockResolvedValue({ ok: true });
@@ -245,9 +253,14 @@ describe('useMachineTerminalSession', () => {
         { exitCode: null, signal: 15, outcome: 'Stopped' },
         { exitCode: null, signal: null, outcome: null },
         { exitCode: 0, signal: 0, outcome: 'Stopped', cancelled: true },
-    ])('renders a finished worker Script with native outcome $exitCode / $signal / $cancelled through the real output pane', async ({ exitCode, signal, outcome, cancelled }) => {
+        { exitCode: 0, signal: 0, outcome: 'Stopping', stopping: true },
+        { exitCode: 0, signal: 0, outcome: 'Stopped', remoteSettlement: 'cancelled' as const },
+        { exitCode: 0, signal: 0, outcome: 'Exit code: 0', remoteSettlement: 'succeeded' as const },
+        { exitCode: 0, signal: 0, outcome: 'Stopped', stopping: true, remoteSettlement: 'cancelled' as const, phone: true },
+        { exitCode: 0, signal: 0, outcome: 'Completed', stopping: true, remoteSettlement: 'succeeded' as const, phone: true },
+    ])('renders a finished worker Script with native outcome $exitCode / $signal / $cancelled / $stopping / $remoteSettlement / phone $phone through the real output pane', async ({ exitCode, signal, outcome, cancelled, stopping, remoteSettlement, phone }) => {
         vi.useRealTimers();
-        const terminalId = `finished-worker-${exitCode}-${signal}-${cancelled ?? false}`;
+        const terminalId = `finished-worker-${exitCode}-${signal}-${cancelled ?? false}-${stopping ?? false}-${remoteSettlement ?? false}`;
         const { storage } = await import('@/sync/domains/state/storage');
         storage.getState().applyMachines([createMachineFixture({ id: 'machine', activeAt: Date.now() })]);
         storage.setState({ projectAccountRows: {
@@ -258,9 +271,10 @@ describe('useMachineTerminalSession', () => {
             ], relationships: [], organizations: [], revisionsByPhysicalKey: {},
         } });
         const snapshot = ActionOperationSnapshotV1Schema.parse({
-            version: 1, operationId: `worker-output-${exitCode}-${signal}-${cancelled ?? false}`, revision: 2, actionId: 'projects.script.run',
-            state: cancelled ? 'cancelled' : exitCode === 0 ? 'succeeded' : 'failed', scope: { accountId: 'terminal-account', machineId: 'machine' },
-            title: 'Script', createdAt: 1, startedAt: 2, settledAt: 3, cancellation: 'supported',
+            version: 1, operationId: `worker-output-${terminalId}`, revision: 2, actionId: 'projects.script.run',
+            state: stopping || remoteSettlement ? 'running' : cancelled ? 'cancelled' : exitCode === 0 ? 'succeeded' : 'failed',
+            scope: { accountId: 'terminal-account', machineId: remoteSettlement ? 'source-machine' : 'machine' },
+            title: 'Script', createdAt: 1, startedAt: 2, ...(stopping || remoteSettlement ? {} : { settledAt: 3 }), cancellation: 'supported',
             ...(exitCode === 0 ? {} : { error: { errorCode: 'project_command_step_failed', error: 'project_command_step_failed' } }),
             domainRef: { kind: 'projectCommand', purpose: 'script', serverId: homeIds.primary,
                 machineId: 'machine', workspaceRefId: 'worker-checkout', cwd: '/worker/repo', terminalId,
@@ -270,22 +284,93 @@ describe('useMachineTerminalSession', () => {
         });
         const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
         actionOperationStore.mergeSnapshots({ serverId: homeIds.primary, snapshots: [snapshot] });
+        const settlement = createDeferred<unknown>();
+        terminalOps.operationGet.mockImplementation(() => settlement.promise);
         terminalOps.streamReadBytes.mockResolvedValue(TerminalStreamReadResponseSchema.parse({ ok: true, terminalId, frames: [
             { t: 'bytes', terminalId, seq: 1, byteOffset: 0, byteLength: 9, encoding: 'base64', data: 'UUFfRkFJTA0K' },
             { t: 'exit', terminalId, byteOffset: 9, exitCode, signal },
         ], nextByteOffset: 9, availableByteOffset: 9, droppedBeforeByteOffset: 0, done: true }));
         const { ProjectCommandOutputPane } = await import('@/components/inbox/actionOperations/ProjectCommandOutputPane');
+        const { ProjectScriptRow } = await import('@/components/projects/projectSetup/ProjectScriptRow');
+        const { ProjectCommandOutputPage } = await import('@/components/inbox/actionOperations/ProjectCommandOutputPage');
         const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
         const React = await import('react');
-        const renderOutput = () => renderScreen(React.createElement(AppPaneProvider, null, React.createElement(ProjectCommandOutputPane, {
+        const outputProps = {
             operation: { serverId: homeIds.primary, observation: 'available', isUnavailableProjection: false, snapshot }, title: 'Script',
-        })));
+        } satisfies React.ComponentProps<typeof ProjectCommandOutputPane>;
+        const renderOutput = async () => {
+            const rendered = await renderScreen(React.createElement(AppPaneProvider, null, phone
+            ? React.createElement(ProjectCommandOutputPage, { serverId: homeIds.primary, operationId: snapshot.operationId,
+                name: 'Script', command: 'printf QA_FAIL', onClose: () => {} })
+            : stopping
+            ? React.createElement(ProjectScriptRow, { testID: 'script', workspace: {
+                serverId: homeIds.primary, machineId: 'machine', workspaceId: 'worker-checkout', rootPath: '/worker/repo',
+            }, name: 'Script', badge: null, command: 'printf QA_FAIL', portable: false, operation: outputProps.operation,
+            idleText: '', pending: false, failureCode: null, compact: false, onRun: () => {} })
+            : React.createElement(ProjectCommandOutputPane, outputProps)));
+            if (phone) await act(async () => {
+                // Native layout is the external boundary that mounts the page's output body.
+                const layout = rendered.findAll(node => typeof node.type === 'string' && typeof node.props.onLayout === 'function')[0];
+                if (!layout) throw new Error('Phone output layout is missing');
+                layout.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 390, height: 600 } } });
+            });
+            return rendered;
+        };
         const screen = await renderOutput();
+        const cancellation = createDeferred<unknown>();
+        if (stopping) {
+            if (!phone) await screen.pressByTestIdAsync('script');
+            terminalOps.operationCancel.mockImplementation(() => cancellation.promise);
+            await screen.pressByTestIdAsync(phone ? 'project-command-output-page.stop' : 'script.run');
+            // Pending RPC and accepted Stop both retain Stopping, before the
+            // independent settlement observation arrives.
+            await vi.waitFor(() => expect(phone ? screen.getTextContent()
+                : screen.findByTestId('workspace-embedded-terminal-state-line-text')?.props.children).toContain('Stopping'));
+            if (!phone) await act(async () => cancellation.resolve({ kind: 'requested' }));
+        }
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('QA_FAIL'));
+        if (remoteSettlement) {
+            await vi.waitFor(() => expect(terminalOps.operationGet).toHaveBeenCalledWith('source-machine',
+                { operationId: snapshot.operationId, waitForTerminal: true }, expect.objectContaining({ serverId: homeIds.primary, accountId: 'terminal-account' })));
+            const otherViewer = await renderOutput();
+            await vi.waitFor(() => expect(otherViewer.getTextContent()).toContain('QA_FAIL'));
+            expect(otherViewer.getTextContent()).not.toContain('Exit code:');
+            expect(screen.getTextContent()).not.toContain('Exit code:');
+            expect(terminalOps.operationGet).toHaveBeenCalledTimes(1);
+            await act(async () => settlement.resolve({ kind: 'found', operation: ActionOperationSnapshotV1Schema.parse({
+                ...snapshot, revision: 3, state: remoteSettlement, settledAt: 3,
+            }) }));
+            await vi.waitFor(() => expect(otherViewer.getTextContent()).toContain(outcome));
+            // The canonical read settles both viewers even while the initiating
+            // phone's cancel RPC has not acknowledged. Native exit alone did not settle it.
+            if (phone) {
+                await vi.waitFor(() => expect(screen.getTextContent()).toContain(outcome));
+                expect(screen.getTextContent()).not.toContain('Stopping');
+                await act(async () => cancellation.resolve({ kind: 'requested' }));
+                expect(screen.getTextContent()).toContain(outcome);
+            }
+            await otherViewer.unmount();
+        }
         expect(screen.findByTestId('workspace-embedded-terminal-state-card')).toBeNull();
-        if (outcome) expect(screen.getTextContent()).toContain(outcome);
-        if (exitCode === null || signal || cancelled) expect(screen.getTextContent()).not.toContain('Exit code:');
+        if (outcome) await vi.waitFor(() => expect(screen.getTextContent()).toContain(outcome));
+        if (exitCode === null || signal || cancelled || stopping || remoteSettlement === 'cancelled') expect(screen.getTextContent()).not.toContain('Exit code:');
+        if (remoteSettlement) {
+            expect([...actionOperationStore.getSnapshot().operationsByKey.values()].find(value => value.snapshot.operationId === snapshot.operationId)?.snapshot.state).toBe(remoteSettlement);
+        }
         expect(terminalOps.streamReadBytes).toHaveBeenCalledWith('machine', expect.objectContaining({ terminalId }), expect.objectContaining({ serverId: homeIds.primary }));
+        if (stopping) {
+            if (phone) {
+                await screen.unmount();
+                return;
+            }
+            await act(async () => settlement.resolve({ kind: 'found', operation: ActionOperationSnapshotV1Schema.parse({
+                ...snapshot, revision: 3, state: 'cancelled', settledAt: 3,
+            }) }));
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain('Stopped'));
+            expect(screen.getTextContent()).not.toContain('Exit code:');
+            await screen.unmount();
+            return;
+        }
         await screen.unmount();
         // Returning from phone width remounts the inline pane. Its retained bytes
         // and native outcome must be visible before the daemon answers the new read.

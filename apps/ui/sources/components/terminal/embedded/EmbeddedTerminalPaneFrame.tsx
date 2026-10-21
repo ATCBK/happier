@@ -12,6 +12,7 @@ import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import { resolveTerminalErrorCopy } from '@/components/sessions/terminal/terminalErrorCopy';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { describeActionOperationStatusLabel } from '@/components/inbox/actionOperations/actionOperationPresentation';
 import { embeddedTerminalPaneStyles } from './embeddedTerminalPaneStyles';
 import type { EmbeddedTerminalPaneController } from './types';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -74,17 +75,29 @@ function resolveTerminalFrameState(props: EmbeddedTerminalPaneFrameProps): Termi
         case 'not-open': return { kind: 'not-open' };
         case 'idle':
         case 'connecting': return { kind: 'line', reason: t('terminalWorkspace.states.connecting'), busy: true };
-        case 'exited': return {
-            kind: 'line',
-            // Native PTYs may pair a signal with a placeholder zero exit code. A signal
-            // establishes termination; it must not be presented as a successful exit.
-            reason: controller.operationState === 'cancelled' || controller.exitSignal != null && controller.exitSignal !== 0
-                ? joinHappierFacts(props.title, t('localServices.rowStatus.stopped'))
-                : joinHappierFacts(t('terminalWorkspace.states.exited', { title: props.title }),
-                    controller.exitCode == null ? null : `${t('tools.structuredResult.exit')}: ${controller.exitCode}`),
-            // A borrowed view cannot restart a process it does not own.
-            ...(controller.readOnly ? {} : { action: { label: t('terminalWorkspace.states.restart'), onPress: () => controller.requestRestart() } }),
-        };
+        case 'exited': {
+            // A native step may exit before its operation settles, including a Stop
+            // requested on another device. Only that owner can establish its outcome.
+            const operationActive = controller.operationState === 'accepted' || controller.operationState === 'running';
+            if (controller.operationStopPending && (operationActive || controller.operationState == null)) return {
+                kind: 'line', reason: t('projects.scripts.run.stopping'),
+            };
+            if (operationActive) return {
+                kind: 'line',
+                reason: describeActionOperationStatusLabel({ kind: 'host', value: controller.operationState }),
+            };
+            return {
+                kind: 'line',
+                // Native PTYs may pair a signal with a placeholder zero exit code. A signal
+                // establishes termination; it must not be presented as a successful exit.
+                reason: controller.operationState === 'cancelled' || controller.exitSignal != null && controller.exitSignal !== 0
+                    ? joinHappierFacts(props.title, t('localServices.rowStatus.stopped'))
+                    : joinHappierFacts(t('terminalWorkspace.states.exited', { title: props.title }),
+                        controller.exitCode == null ? null : `${t('tools.structuredResult.exit')}: ${controller.exitCode}`),
+                // A borrowed view cannot restart a process it does not own.
+                ...(controller.readOnly ? {} : { action: { label: t('terminalWorkspace.states.restart'), onPress: () => controller.requestRestart() } }),
+            };
+        }
         case 'error': {
             if (controller.error === MACHINE_UNREACHABLE_ERROR) {
                 return {

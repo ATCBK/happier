@@ -21,6 +21,8 @@ export type EmbeddedTerminalPaneController = Readonly<{
     exitSignal?: number | null;
     /** Canonical operation outcome, when this borrowed PTY belongs to an operation. */
     operationState?: ActionOperationSnapshotV1['state'] | null;
+    /** The existing Stop control is pending or has an accepted request, not settlement. */
+    operationStopPending?: boolean;
     /** `error` that followed a connected stream: the terminal started, then its connection dropped. */
     connectionLost?: boolean;
     detectedUrl: EmbeddedTerminalDetectedUrl;

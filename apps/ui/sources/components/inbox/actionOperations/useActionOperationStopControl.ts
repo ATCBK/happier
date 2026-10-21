@@ -113,6 +113,8 @@ export function useActionOperationStopControl(
             });
     }, [operation, request, approval.requestApproval, stopRequested]);
 
-    return { pending: pending && !awaitingApproval, feedback, failureCode, stopRequested, retryUnconfirmedStop, requestStop,
+    // A late cancel acknowledgement cannot override the operation owner's settled
+    // outcome. Keep request custody until it returns, but stop presenting it as work.
+    return { pending: live && pending && !awaitingApproval, feedback, failureCode, stopRequested, retryUnconfirmedStop, requestStop,
         pendingApproval: approval.approvalId ? { artifactId: approval.approvalId, serverId: operation?.serverId } : null } as const;
 }
