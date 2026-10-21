@@ -415,7 +415,8 @@ describe('server profiles', () => {
     await withTempDir('happier-cli-home-url-distinct-', async (homeDir) => {
       envScope.patch({ HAPPIER_HOME_DIR: homeDir, HAPPIER_SERVER_URL: undefined, HAPPIER_WEBAPP_URL: undefined });
       vi.resetModules();
-      const { adoptServerProfileHomeConnectionDescriptor, listServerProfiles } = await import('./serverProfiles');
+      const { adoptServerProfileHomeConnectionDescriptor, listServerProfiles,
+        upsertServerProfileByUrl, setServerProfileEndpointsById, getServerProfile } = await import('./serverProfiles');
       const base = { v: 1 as const, canonicalServerUrl: 'https://shared.example.test', revision: 1, endpoints: [{ kind: 'https' as const, url: 'https://shared.example.test' }] };
       const first = await adoptServerProfileHomeConnectionDescriptor({
         descriptor: { ...base, homeServerIdentityId: 'srv_home_alpha' }, suggestedName: 'Alpha', observation: 'exact',
@@ -430,6 +431,17 @@ describe('server profiles', () => {
       expect(second.profile.id).not.toBe(first.profile.id);
       expect((await listServerProfiles()).filter((profile) => profile.serverUrl === 'https://shared.example.test')).toHaveLength(2);
       expect(existsSync(join(homeDir, 'servers', second.profile.id, 'access.key'))).toBe(false);
+      expect(await readFile(join(firstCredentialDir, 'access.key'), 'utf8')).toBe('alpha-secret');
+
+      const urlOnly = await upsertServerProfileByUrl({ name: 'custom', serverUrl: base.canonicalServerUrl,
+        localServerUrl: 'http://127.0.0.1:48540', webappUrl: base.canonicalServerUrl, use: true });
+      expect([first.profile.id, second.profile.id]).not.toContain(urlOnly.id);
+      expect(existsSync(join(homeDir, 'servers', urlOnly.id, 'access.key'))).toBe(false);
+      const updated = await setServerProfileEndpointsById({ id: first.profile.id, serverUrl: base.canonicalServerUrl,
+        localServerUrl: 'http://127.0.0.1:48540', webappUrl: base.canonicalServerUrl, use: true });
+      expect(updated.id).toBe(first.profile.id);
+      expect(updated.homeConnectionDescriptor).toEqual(first.profile.homeConnectionDescriptor);
+      expect((await getServerProfile(second.profile.id)).localServerUrl).toBeUndefined();
       expect(await readFile(join(firstCredentialDir, 'access.key'), 'utf8')).toBe('alpha-secret');
     });
   });

@@ -227,8 +227,8 @@ export function resolveServerSelection(params: Readonly<{
       return {
         activeServerId: resolveActiveServerId(active.id),
         serverUrl: canonical,
-        apiServerUrl,
-        webappUrl: active.webappUrl,
+        apiServerUrl: normalizeUrl(params.envLocalServerUrl) ?? apiServerUrl,
+        webappUrl: normalizeUrl(params.envWebappUrl) ?? active.webappUrl,
       };
     }
   }

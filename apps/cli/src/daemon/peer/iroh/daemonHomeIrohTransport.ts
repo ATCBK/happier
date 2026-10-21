@@ -69,11 +69,23 @@ class DaemonHomeReadinessError extends Error {
 
 type DaemonHomeProfile = Pick<ServerProfile, 'serverUrl' | 'localServerUrl' | 'homeConnectionDescriptor' | 'homeConnectionDescriptorAuthority'> & Readonly<{ id?: string }>;
 
+function withInvocationEndpoints(profile: ServerProfile): ServerProfile {
+  // Configuration owns environment precedence. Retain the saved identity and
+  // re-read ordinary endpoint edits on reconnect when no override was supplied.
+  if (profile.id !== configuration.activeServerId
+    || createServerUrlComparableKey(profile.serverUrl) !== createServerUrlComparableKey(configuration.serverUrl)) return profile;
+  return {
+    ...profile,
+    ...(process.env.HAPPIER_LOCAL_SERVER_URL?.trim() ? { localServerUrl: configuration.apiServerUrl } : {}),
+    ...(process.env.HAPPIER_WEBAPP_URL?.trim() ? { webappUrl: configuration.webappUrl } : {}),
+  };
+}
+
 /** Retain the invocation's URL-only metadata before transport starts reading it.
  * Only authenticated publication may subsequently establish Home authority. */
 export async function resolveCurrentDaemonHomeProfile(): Promise<ServerProfile> {
   const target = await resolveCurrentCliHomeTarget();
-  if (target.profileId) return await getServerProfile(target.profileId);
+  if (target.profileId) return withInvocationEndpoints(await getServerProfile(target.profileId));
   return await setServerProfileEndpointsById({
     id: configuration.activeServerId,
     serverUrl: target.canonicalAuthUrl,
@@ -192,7 +204,7 @@ function withReacquisition(
       reacquireInFlight = (async (): Promise<ReadinessProbeResult> => {
         try {
           const currentProfile = await (input.readProfile ?? (async () => input.profile.id
-            ? await getServerProfile(input.profile.id)
+            ? withInvocationEndpoints(await getServerProfile(input.profile.id))
             : input.profile))();
           if (active.carrier === 'iroh' && !currentProfile.homeConnectionDescriptor) {
             return {

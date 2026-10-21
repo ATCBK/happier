@@ -4,7 +4,7 @@ import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { configuration, reloadConfiguration } from '@/configuration';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
-import { addServerProfile, getServerProfile, isServerProfileHomeIdentity, removeServerProfile, useServerProfile } from '@/server/serverProfiles';
+import { addServerProfile, adoptServerProfileHomeConnectionDescriptor, getServerProfile, isServerProfileHomeIdentity, removeServerProfile, useServerProfile } from '@/server/serverProfiles';
 import { resolveCurrentCliHomeTarget } from '@/server/homeTarget';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
@@ -23,6 +23,49 @@ const descriptor = {
 };
 
 describe('prepareDaemonHomeIrohTransport', () => {
+  it('uses invocation endpoint overrides for the same saved Home through reconnect without persisting them', async () => {
+    const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL',
+      'HAPPIER_LOCAL_SERVER_URL', 'HAPPIER_PUBLIC_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
+    try {
+      await withTempDir('happier-daemon-forward-override-', async homeDir => {
+        envScope.patch({ HAPPIER_HOME_DIR: homeDir, HAPPIER_ACTIVE_SERVER_ID: undefined,
+          HAPPIER_SERVER_URL: undefined, HAPPIER_LOCAL_SERVER_URL: undefined,
+          HAPPIER_PUBLIC_SERVER_URL: undefined, HAPPIER_WEBAPP_URL: undefined });
+        reloadConfiguration();
+        const saved = await addServerProfile({ name: 'retained-forward', serverUrl: descriptor.canonicalServerUrl,
+          localServerUrl: 'http://127.0.0.1:46821', webappUrl: descriptor.canonicalServerUrl, use: true });
+        await adoptServerProfileHomeConnectionDescriptor({ expectedProfileId: saved.id, observation: 'exact',
+          descriptor: { ...descriptor, endpoints: [{ kind: 'https', url: saved.serverUrl }] } });
+        envScope.patch({ HAPPIER_LOCAL_SERVER_URL: 'http://127.0.0.1:48540', HAPPIER_WEBAPP_URL: 'http://127.0.0.1:48540' });
+        reloadConfiguration();
+        expect(configuration.activeServerId).toBe(saved.id);
+        expect(configuration.serverUrl).toBe(saved.serverUrl);
+        expect(configuration.apiServerUrl).toBe('http://127.0.0.1:48540');
+        expect(configuration.webappUrl).toBe('http://127.0.0.1:48540');
+        const { readDaemonStatusSnapshot } = await import('@/daemon/statusSnapshot');
+        expect((await readDaemonStatusSnapshot()).server.localServerUrl).toBe(configuration.apiServerUrl);
+        const profile = await resolveCurrentDaemonHomeProfile();
+        expect(profile.localServerUrl).toBe(configuration.apiServerUrl);
+        const transport = await prepareDaemonHomeIrohTransport({ runtime: null, profile,
+          applicationCarrierEligibility: 'standard_only', probe: async ({ serverUrl }) => {
+            expect(serverUrl).toBe('http://127.0.0.1:48540');
+            return { status: 'ready' };
+          } });
+        try {
+          expect(resolveServerHttpBaseUrl()).toBe('http://127.0.0.1:48540');
+          await expect(transport.reacquire()).resolves.toEqual({ status: 'ready' });
+          expect(resolveServerHttpBaseUrl()).toBe('http://127.0.0.1:48540');
+          expect((await getServerProfile(saved.id)).localServerUrl).toBe(saved.localServerUrl);
+        } finally {
+          await transport.release();
+        }
+      });
+    } finally {
+      envScope.restore();
+      reloadConfiguration();
+    }
+  });
+
   it('reconnects an env scope before exact binding and fails closed after its profile is removed', async () => {
     const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL',
       'HAPPIER_LOCAL_SERVER_URL', 'HAPPIER_PUBLIC_SERVER_URL', 'HAPPIER_WEBAPP_URL']);

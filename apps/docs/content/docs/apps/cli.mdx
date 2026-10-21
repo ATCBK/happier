@@ -891,6 +891,17 @@ coding Agents still run on the machine that owns the session. Changing the
 default profile selects that Home's Account context. It does not migrate an
 Account, sessions, or settings from the previous Home.
 
+In the unreleased 0.3 CLI, a URL-only `server set` updates only a profile without
+an established Home identity. Two Homes may share a URL, so refreshing an existing
+Home's forwarded endpoint uses its exact profile ID:
+
+```bash
+hdev server set --server-id company --server-url https://api.company.example --local-server-url http://127.0.0.1:48540 --webapp-url https://app.company.example
+```
+
+Use the ID shown by `server list`. This preserves that profile's credentials and
+Machine mapping. A URL-only write may create a separate profile instead.
+
 ### Target a server for one command
 
 Use per-invocation targeting when you do not want to switch the default:
@@ -906,6 +917,11 @@ You can also use URL flags:
 happier --server-url https://api.company.example --webapp-url https://app.company.example auth login
 happier --server-url https://api.company.example --webapp-url https://app.company.example auth pair-remote --ssh user@host --json
 ```
+
+In unreleased 0.3 builds, `HAPPIER_LOCAL_SERVER_URL` and `HAPPIER_WEBAPP_URL` can
+also override the selected saved profile for one invocation, including daemon
+startup. They leave its canonical Home URL and saved endpoints unchanged; daemon
+reconnect and status use the same invocation override.
 
 ## Background service
 

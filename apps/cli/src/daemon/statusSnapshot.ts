@@ -5,7 +5,7 @@ import type { DoctorSnapshot } from '@happier-dev/protocol';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { configuration } from '@/configuration';
 import { resolveActiveServerAuthReadiness } from '@/auth/resolveActiveServerAuthReadiness';
-import { readDaemonState, readSettings } from '@/persistence';
+import { readDaemonState } from '@/persistence';
 import { resolveDaemonServiceInstallationSnapshotFromEnv } from '@/daemon/service/cli';
 
 export type DaemonStatusSnapshot = NonNullable<DoctorSnapshot['daemonStatus']>;
@@ -23,17 +23,14 @@ function resolveComparableKey(rawUrl: string): string | null {
 }
 
 export async function readDaemonStatusSnapshot(): Promise<DaemonStatusSnapshot> {
-  const [settings, readiness, daemonState] = await Promise.all([
-    readSettings(),
+  const [readiness, daemonState] = await Promise.all([
     resolveActiveServerAuthReadiness(),
     readDaemonState().catch(() => null),
   ]);
 
   const activeServerId = configuration.activeServerId;
-  const activeServer = settings.servers?.[activeServerId];
-  const localServerUrl = typeof activeServer?.localServerUrl === 'string' && activeServer.localServerUrl.trim()
-    ? activeServer.localServerUrl.trim()
-    : null;
+  const localServerUrl = configuration.apiServerUrl !== configuration.serverUrl
+    ? configuration.apiServerUrl : null;
 
   const pid = typeof daemonState?.pid === 'number' ? daemonState.pid : null;
   const daemonRunning = pid != null && isPidPresent(pid);

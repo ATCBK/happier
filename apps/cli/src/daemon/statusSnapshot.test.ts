@@ -3,21 +3,12 @@ import type { StoredCredentials } from '@/persistence';
 import type { ActiveServerAuthReadiness } from '@/auth/resolveActiveServerAuthReadiness';
 
 const {
-    readSettingsMock,
     readCredentialsMock,
     readStoredCredentialsMock,
     readDaemonStateMock,
     resolveDaemonServiceInstallationSnapshotFromEnvMock,
     resolveActiveServerAuthReadinessMock,
 } = vi.hoisted(() => ({
-    readSettingsMock: vi.fn(async () => ({
-        servers: {
-            cloud: {
-                id: 'cloud',
-                localServerUrl: 'http://127.0.0.1:53288',
-            },
-        },
-    })),
     readCredentialsMock: vi.fn(async () => null),
     readStoredCredentialsMock: vi.fn(
         async (): Promise<StoredCredentials | null> => null,
@@ -59,13 +50,13 @@ vi.mock('@/configuration', () => ({
     configuration: {
         activeServerId: 'cloud',
         serverUrl: 'http://127.0.0.1:53288',
+        apiServerUrl: 'http://127.0.0.1:53288',
         publicServerUrl: 'http://127.0.0.1:53288',
         webappUrl: 'http://127.0.0.1:19364',
     },
 }));
 
 vi.mock('@/persistence', () => ({
-    readSettings: () => readSettingsMock(),
     readCredentials: () => readCredentialsMock(),
     readStoredCredentials: () => readStoredCredentialsMock(),
     readDaemonState: () => readDaemonStateMock(),
@@ -82,7 +73,6 @@ vi.mock('@/auth/resolveActiveServerAuthReadiness', () => ({
 
 describe('readDaemonStatusSnapshot', () => {
     afterEach(() => {
-        readSettingsMock.mockClear();
         readCredentialsMock.mockClear();
         readStoredCredentialsMock.mockClear();
         readDaemonStateMock.mockClear();
