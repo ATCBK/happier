@@ -141,18 +141,21 @@ export function createCuaNativeFacts(native: CuaNativeClient) {
                 .map((runtimeId) => {
                     const disk = image.disk.kind === 'known' ? image.disk.value.find((value) => value.arch === nativeArch)?.bytes : undefined;
                     const size = selectors.size;
-                    const sizing = !size || (size.memoryBytes % 1024 ** 2 === 0
+                    // The native disk follows the image unless a Space on QEMU is given its own.
+                    const diskBytes = size ? size.diskBytes ?? disk : undefined;
+                    const sizing = !size || (size.memoryBytes % 1024 ** 2 === 0 && diskBytes !== undefined
                         && (localId === 'local-space' && runtimeId === 'qemu'
-                            ? size.diskBytes % 1024 ** 3 === 0 && size.diskBytes / 1024 ** 3 <= 4_294_967_295
-                            : size.diskBytes === disk));
+                            ? diskBytes % 1024 ** 3 === 0 && diskBytes / 1024 ** 3 <= 4_294_967_295
+                            : diskBytes === disk));
                     const available = image.spacesd && image.os !== 'windows' && image.architectures.includes(nativeArch)
                         && doctor.value.runtimes.some((value) => value.id === runtimeId && value.ready) && sizing;
                     return { id: `${runtimeId}:${image.imageId}`, title: `${image.imageId} (${runtimeId})`, available,
                         nativeFacts: { image: { id: image.imageId, title: image.imageId },
                             location: { id: runtimeId, title: runtimeId },
-                            ...(size ? { size: { id: `${size.cpu}:${size.memoryBytes}:${size.diskBytes}`, title: `${size.cpu} CPU`,
-                                cpuCores: size.cpu, memoryBytes: size.memoryBytes, diskBytes: size.diskBytes } } : {}) },
-                        ...(size && available ? { launch: { on: 'local' as const, runtimeId, imageId: image.imageId, size } } : {}) };
+                            ...(size ? { size: { id: `${size.cpu}:${size.memoryBytes}:${size.diskBytes ?? 'image'}`, title: `${size.cpu} CPU`,
+                                cpuCores: size.cpu, memoryBytes: size.memoryBytes, ...(diskBytes === undefined ? {} : { diskBytes }) } } : {}) },
+                        ...(size && available && diskBytes !== undefined ? { launch: { on: 'local' as const, runtimeId, imageId: image.imageId,
+                            size: { cpu: size.cpu, memoryBytes: size.memoryBytes, diskBytes } } } : {}) };
                 })) };
         },
     };

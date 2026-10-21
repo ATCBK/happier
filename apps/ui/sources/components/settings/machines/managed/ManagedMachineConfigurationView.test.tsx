@@ -519,12 +519,20 @@ describe('mounted managed configurator', () => {
         const sizes = screen.tree.findAll(node => node.props.testID === 'managed-config.sizes' && typeof node.props.onChange === 'function')[0];
         expect(sizes?.props.sizes[0]).toMatchObject({ id: 'small', name: 'Small', cpu: '2' });
         await act(async () => sizes?.props.onChange('small'));
+        // Picking among the returned choices is local: the answer on screen is not asked for again, and the controller's
+        // projection is described once for this visit, not per click.
+        const reads = () => ({ options: harness.requests.filter(request => request.path === '/v1/actions/machines.provisioners.options').length,
+            describes: nativeBoundary.rpc.mock.calls.filter(([request]) => request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE).length });
+        const beforeClicks = reads();
+        expect(beforeClicks.describes).toBe(1);
         expect(screen.tree.findAll(node => node.props.testID === 'managed-config.images').length).toBeGreaterThan(0);
         expect(screen.tree.findAll(node => node.props.testID === 'managed-config.locations').length).toBeGreaterThan(0);
         const images = screen.tree.findAll(node => node.props.testID === 'managed-config.images' && typeof node.props.onChange === 'function')[0];
         const locations = screen.tree.findAll(node => node.props.testID === 'managed-config.locations' && typeof node.props.onChange === 'function')[0];
         await act(async () => images?.props.onChange('linux'));
         await act(async () => locations?.props.onChange('west'));
+        await flushHookEffects({ cycles: 5 });
+        expect(reads()).toEqual(beforeClicks);
         expect(screen.tree.findAll(node => node.props.model?.facts?.some((fact: { id: string; value: string }) => fact.id === 'image' && fact.value === 'Linux')).length).toBeGreaterThan(0);
         expect(harness.requests.some(request => request.path.endsWith('/acquire'))).toBe(false);
         await screen.unmount();

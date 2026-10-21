@@ -123,6 +123,18 @@ describe('Cua native read facts', () => {
         expect(JSON.stringify(facts)).not.toContain('private');
     });
 
+    it('takes the image\'s own disk when a query omits one, so a size needs only CPU and memory', async () => {
+        const h = harness();
+        const size = { cpu: 2, memoryBytes: 4 * 1024 ** 3 };
+        const [choice] = (await h.facts.options(undefined, { size })).choices;
+        expect(choice).toMatchObject({ available: true, nativeFacts: { size: { id: `2:${4 * 1024 ** 3}:image`, diskBytes: 21474836480 } },
+            launch: { on: 'local', runtimeId: 'qemu', imageId: image.ref, size: { ...size, diskBytes: 21474836480 } } });
+        // An explicit disk that is not the image's still refuses a sandbox.
+        const [mismatch] = (await h.facts.options(undefined, { size: { ...size, diskBytes: 40 * 1024 ** 3 } })).choices;
+        expect(mismatch).toMatchObject({ available: false });
+        expect(mismatch).not.toHaveProperty('launch');
+    });
+
     it('leaves macOS VMs to the Lume plugin: no Lume runtime or Lume-only image is offered', async () => {
         // Native doctor still reports its Lume backend; Cua here neither projects nor offers it.
         const h = harness({ ...doctor, backends: doctor.backends.map((entry) => ({ ...entry, ready: true })),

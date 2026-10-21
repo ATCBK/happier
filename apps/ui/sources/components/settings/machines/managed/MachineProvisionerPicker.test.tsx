@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -84,6 +85,27 @@ describe('provisioner picker demand', () => {
     expect(scope.getCurrent().selection?.state.kind).toBe('replaced');
     expect(scope.getCurrent().selection?.resolveExecutionTarget()).toBeNull();
     await scope.unmount();
+  });
+  it('starts the next Add visit on the controller the person last picked', async () => {
+    const serverId = await harness.addHome({ name: 'Build', serverUrl: 'https://build.example', serverIdentityId: 'srv_build', accountId: 'owner', currentAccount: true });
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { useManagedControllerScope } = await import('./useManagedControllerScope');
+    const online = (id: string) => createMachineFixture({ id, installationId: `${id}-installation`, activeAt: Date.now(), metadata: null });
+    await act(async () => storage.setState({ machineListByServerId: { srv_build: [online('a'), online('z')] }, machineListStatusByServerId: { srv_build: 'idle' } }));
+    // The remembered pick is a device-local Account setting, written through the sync runtime like every other target memory.
+    const syncRuntime = await import('@/sync/syncEngine');
+    (createRequire(import.meta.url)('../../../../sync/sync.ts') as typeof import('@/sync/sync')).registerSyncRuntime(syncRuntime);
+    const previousSettings = storage.getState().settings;
+    onTestFinished(() => storage.setState({ settings: previousSettings, settingsScope: null }));
+    await act(async () => storage.setState({ settingsScope: { serverId, accountId: 'owner' } }));
+    const first = await renderHook(() => useManagedControllerScope({ serverId, testIDPrefix: 'scope-probe' }));
+    expect(first.getCurrent().controller?.machineId).toBe('a');
+    const target = first.getCurrent().selection?.pickerRows.find(row => row.candidate.target.machineId === 'z')?.candidate.target;
+    await act(async () => first.getCurrent().selection?.selectTarget(target!));
+    await first.unmount();
+    const second = await renderHook(() => useManagedControllerScope({ serverId, testIDPrefix: 'scope-probe' }));
+    expect(second.getCurrent().controller?.machineId).toBe('z');
+    await second.unmount();
   });
   it('moves an automatic controller choice after a failed request proves it unreachable', async () => {
     const serverId = await harness.addHome({ name: 'Build', serverUrl: 'https://build.example', serverIdentityId: 'srv_build', accountId: 'owner', currentAccount: true });

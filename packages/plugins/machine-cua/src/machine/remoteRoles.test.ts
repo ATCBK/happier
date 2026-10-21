@@ -17,7 +17,7 @@ function processResult(value: unknown): PluginProcessResult {
         stderr: new Uint8Array(), stdoutTruncated: false, stderrTruncated: false };
 }
 async function harness(options: { lostCreateReply?: boolean; cleanupFailure?: 'registry' | 'delete-reply'; cliVersion?: string;
-    cliMissing?: boolean; noAccount?: boolean; cloudConnected?: boolean; cloudStatusUnreadable?: boolean } = {}) {
+    cliMissing?: boolean; cliStatusFailed?: boolean; noAccount?: boolean; cloudConnected?: boolean; cloudStatusUnreadable?: boolean } = {}) {
     const actions = new Map<string, ActionHandler>();
     const processRequests: PluginExecSpawnRequest[] = [];
     const purposes: string[] = [];
@@ -30,7 +30,7 @@ async function harness(options: { lostCreateReply?: boolean; cleanupFailure?: 'r
     await CUA_PLUGIN.activate({ actions: { register(id: string, handler: ActionHandler) { actions.set(id, handler); return { dispose() {} }; } },
         connectedAccounts: { register() { return { dispose() {} }; } } } as unknown as PluginApi);
     const context = { invokedAtMs: Date.parse('2026-10-09T00:30:00Z'), signal: new AbortController().signal, services: {
-        managedServices: { dependencies: { status: async () => options.cliMissing ? { state: 'missing' } : ({ state: 'ready', version: options.cliVersion ?? '0.5.0', executable: { kind: 'managedDependency', id: { pluginId: CUA_PLUGIN.manifest.id, localId: 'cua-cli' } } }) } },
+        managedServices: { dependencies: { status: async () => options.cliMissing ? { state: 'missing' } : options.cliStatusFailed ? { state: 'failed', code: 'timed_out' } : ({ state: 'ready', version: options.cliVersion ?? '0.5.0', executable: { kind: 'managedDependency', id: { pluginId: CUA_PLUGIN.manifest.id, localId: 'cua-cli' } } }) } },
         connectedAccounts: {
             async materialize(purpose: string, request: { kind: string; keys?: readonly string[] }) {
                 purposes.push(purpose);
@@ -131,6 +131,10 @@ describe('activated Cua remote contributions', () => {
         expect(connected.result).toMatchObject({ available: true, status: { key: 'machineCua.presentation.ready' } });
         // The one read is the unfiltered cloud status, never a provider-specific or mutating command.
         expect(connected.processRequests.map(request => request.args)).toEqual([['--json', '--embedded', 'cloud', 'status']]);
+    });
+    it('local check says "not installed" only for a missing cua; an unreadable dependency status fails the check instead', async () => {
+        expect(await (await harness({ cliMissing: true })).invoke('sandbox-check', {})).toMatchObject({ available: false, code: 'cua_native_unavailable' });
+        await expect((await harness({ cliStatusFailed: true })).invoke('sandbox-check', {})).rejects.toThrow('cua_native_status_unreadable');
     });
     it('acquires and privately bootstraps exact BYOC compute with both captured purposes and deletes only that created identity', async () => {
         const h = await harness();

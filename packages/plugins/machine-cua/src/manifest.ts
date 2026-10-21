@@ -13,6 +13,7 @@ import { remoteAccounts, remoteProvisioner, remoteRoles } from './machine/remote
 import { CUA_DEPENDENCY_ID as dependencyId, resolveCuaExecutable } from './machine/nativeDependency.js';
 
 const pluginId = 'happier.machine.cua';
+const GIB = 1024 ** 3;
 const processAccess = 'cua-native-process';
 const defaults = { scopes: ['machine'], surfaces: ['cli', 'plugin'], hostAccess: [processAccess] } as const;
 
@@ -45,8 +46,11 @@ function roles(id: CuaLocalProvisionerId) {
                 const requirement = { kind: 'managedDependency' as const, id: { pluginId, localId: dependencyId } };
                 try { return machineCheckPresentation({ ...await (await provider(id, context)).check(), prerequisites: [{ requirement, status: 'available' as const }] }); }
                 catch (error) {
-                    return machineCheckPresentation({ available: false, prerequisites: [{ requirement, status: 'unavailable' as const }],
-                        code: error instanceof Error && error.message === 'cua_native_outdated' ? 'cua_native_outdated' : 'cua_native_unavailable' });
+                    // Only a definitive answer about the CLI is a check result. A failed, aborted or timed-out read
+                    // propagates as a failed check, so the surface offers Retry instead of claiming "Not installed".
+                    const code = error instanceof Error ? error.message : '';
+                    if (code !== 'cua_native_outdated' && code !== 'cua_native_unavailable') throw error;
+                    return machineCheckPresentation({ available: false, prerequisites: [{ requirement, status: 'unavailable' as const }], code });
                 }
             } },
         options: { ...defaults, title: 'Read Cua local image and runtime choices', dangerLevel: 'safe' as const,
@@ -54,9 +58,10 @@ function roles(id: CuaLocalProvisionerId) {
             inputHints: { fields: [
                 { path: 'runtimeId', title: configurationLabel('runtimeId'), widget: 'text' as const },
                 { path: 'imageId', title: configurationLabel('imageId'), widget: 'text' as const },
-                { path: 'size.cpu', title: configurationLabel('cpu'), widget: 'integer' as const, required: true },
-                { path: 'size.memoryBytes', title: configurationLabel('memoryBytes'), widget: 'integer' as const, required: true },
-                { path: 'size.diskBytes', title: configurationLabel('diskBytes'), widget: 'integer' as const, required: true },
+                { path: 'size.cpu', title: configurationLabel('cpu'), widget: 'integer' as const, required: true, defaultValue: 2 },
+                { path: 'size.memoryBytes', title: configurationLabel('memoryBytes'), widget: 'integer' as const, required: true, defaultValue: 4 * GIB },
+                // The disk follows the chosen image; only a Space may be given its own.
+                ...(id === 'local-space' ? [{ path: 'size.diskBytes', title: configurationLabel('diskBytes'), widget: 'integer' as const }] : []),
             ] },
             async run(input: CuaLocalOptionsQueryV1, context: PluginInvocationContext) {
                 return (await provider(id, context)).options(input);

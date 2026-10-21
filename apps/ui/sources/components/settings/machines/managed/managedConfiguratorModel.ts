@@ -14,6 +14,8 @@ import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/
 import type { MachineRetentionDefaultsV1, MachineRetentionOverrideV1 } from '@happier-dev/protocol/account/settings/machineRetentionDefaultsV1';
 import type { MachineProvisionerCheckResultV1 } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 import { isMachineProvisionerCredentialPurposeRequiredV1 } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
+import type { InputHints } from '@happier-dev/protocol/inputs/inputFields';
+import { seedInputByFieldHints } from '@happier-dev/protocol/inputs/inputFieldRuntime';
 import type { MachineEnvironmentV1 } from '@happier-dev/protocol/machines/managed/machineEnvironmentV1';
 
 export type ManagedConfiguratorDraft = Readonly<{
@@ -104,11 +106,13 @@ export function createManagedConfiguratorDraft(input: Pick<ManagedConfiguratorDr
         choicesSchema: createPluginJsonSchemaZodValueAdapter(input.provisioner.descriptor.launchSchema) };
 }
 /** Saved recipes use the existing persistence projection; current edits remain strictly admitted. */
-export function managedConfiguratorOptionsSelectors(draft: ManagedConfiguratorDraft, inputSchema: PluginJsonSchemaV2) {
+export function managedConfiguratorOptionsSelectors(draft: ManagedConfiguratorDraft, inputSchema: PluginJsonSchemaV2, hints?: InputHints) {
     const schema = createPluginJsonSchemaZodValueAdapter(inputSchema);
-    const parsed = draft.optionsSelectors !== undefined ? schema.safeParse(draft.optionsSelectors)
+    // A fresh recipe starts from the provider's declared field defaults; a saved one reads only what it stored.
+    const seeded = (value: Readonly<Record<string, unknown>>) => hints ? seedInputByFieldHints({ inputHints: hints }, value) : value;
+    const parsed = draft.optionsSelectors !== undefined ? schema.safeParse(seeded(draft.optionsSelectors))
         : draft.preset && draft.selected ? createStoredReadSchema(schema).safeParse(draft.selected.launch)
-            : schema.safeParse({});
+            : schema.safeParse(seeded({}));
     return parsed.success ? PluginJsonValueV2Schema.parse(parsed.data) : null;
 }
 export function setManagedConfiguratorOptionsSelectors(draft: ManagedConfiguratorDraft,

@@ -21,8 +21,11 @@ export const CuaLocalNameSchema = defineProtocolString({ minLength: 1, pattern: 
 const localId = defineProtocolString({ minLength: 1, pattern: localIdPattern.source });
 export const CuaLocalSizeV1Schema = defineProtocolObject({ cpu: defineProtocolNumber({ integer: true, minimum: 1, maximum: 4_294_967_295 }),
     memoryBytes: bytes, diskBytes: bytes }, closed);
+// A query omits the disk to take the chosen image's own: the native disk follows the image, so asking for it is not a person's input.
+export const CuaLocalOptionsSizeV1Schema = defineProtocolObject({ cpu: defineProtocolNumber({ integer: true, minimum: 1, maximum: 4_294_967_295 }),
+    memoryBytes: bytes, diskBytes: bytes.optional() }, closed);
 export const CuaLocalOptionsQueryV1Schema = defineProtocolObject({
-    runtimeId: CuaLocalRuntimeSchema.optional(), imageId: nativeId.optional(), size: CuaLocalSizeV1Schema.optional(),
+    runtimeId: CuaLocalRuntimeSchema.optional(), imageId: nativeId.optional(), size: CuaLocalOptionsSizeV1Schema.optional(),
 }, closed);
 export type CuaLocalOptionsQueryV1 = ProtocolSchemaOutput<typeof CuaLocalOptionsQueryV1Schema>;
 export const CuaLocalLaunchV1Schema = defineProtocolObject({

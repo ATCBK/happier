@@ -41,6 +41,7 @@ export const MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 = Object.freeze({
     pets: 'pets.settings',
     providers: 'providers.settings',
     actions: 'actions.settings',
+    managedMachines: 'machines.managed',
 } as const);
 
 /**

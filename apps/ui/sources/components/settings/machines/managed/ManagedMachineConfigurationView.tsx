@@ -11,6 +11,7 @@ import { QualifiedConnectedAccountRefSchema, type QualifiedConnectedAccountRef }
 import { qualifiedPurposeKey } from '@happier-dev/protocol/connect/connectedAccountPurposeBindings';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { readInputPath } from '@happier-dev/protocol/inputs';
+import { seedInputByFieldHints } from '@happier-dev/protocol/inputs/inputFieldRuntime';
 import { isMachineRetainedWakeEligibleV1, resolveMachineRetentionPolicyV1, supportedMachineRetentionEffectsV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
 import { useMachineListForServer } from '@/sync/domains/state/storage';
 import { useIsMachineListSettled } from '@/sync/store/hooks';
@@ -167,18 +168,23 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     const presentation = useManagedProvisionerPresentation({ serverId: props.serverId, controller: catalogController, provisioner });
     const optionsInput = useManagedProvisionerOptionsInput({ binding: catalog.binding, controller: catalogController, provisioner: catalogProvisioner,
         projection: presentation.projection, projectionReady: presentation.projectionReady });
+    const optionHints = React.useMemo(() => optionsInput.kind === 'ready'
+        ? resolvePluginProjectedActionPresentation({ pluginId: optionsInput.action.pluginId,
+            presentation: optionsInput.action, projection: presentation.projection }).inputHints ?? undefined : undefined,
+        [optionsInput, presentation.projection]);
     const selectors = React.useMemo(() => draft && optionsInput.kind === 'ready'
-        ? managedConfiguratorOptionsSelectors(draft, optionsInput.schema) : null,
-        [draft?.optionsSelectors, draft?.selected, draft?.preset, optionsInput]);
+        ? managedConfiguratorOptionsSelectors(draft, optionsInput.schema, optionHints) : null,
+        [draft?.optionsSelectors, draft?.selected, draft?.preset, optionsInput, optionHints]);
     const selectorKey = JSON.stringify(selectors);
-    const fieldInput = React.useMemo<Record<string, unknown>>(() => draft?.optionsSelectors ? { ...draft.optionsSelectors }
-        : selectors && typeof selectors === 'object' && !Array.isArray(selectors) ? { ...selectors } : {}, [draft?.optionsSelectors, selectorKey]);
-    const fields = React.useMemo(() => {
-        if (optionsInput.kind !== 'ready') return [];
-        const resolved = resolvePluginProjectedActionPresentation({ pluginId: optionsInput.action.pluginId,
-            presentation: optionsInput.action, projection: presentation.projection });
-        return resolveEffectiveActionInputFields({ inputHints: resolved.inputHints ?? undefined }, fieldInput);
-    }, [optionsInput, presentation.projection, fieldInput]);
+    // The fields show what the read is asked with: the person's values over the provider's declared defaults.
+    const fieldInput = React.useMemo<Record<string, unknown>>(() => {
+        const base = draft?.optionsSelectors ? { ...draft.optionsSelectors }
+            : selectors && typeof selectors === 'object' && !Array.isArray(selectors) ? { ...selectors } : {};
+        return draft?.preset ? base : seedInputByFieldHints({ inputHints: optionHints }, base);
+    }, [draft?.optionsSelectors, draft?.preset, selectorKey, optionHints]);
+    const fields = React.useMemo(() => optionsInput.kind === 'ready'
+        ? resolveEffectiveActionInputFields({ inputHints: optionHints }, fieldInput) : [],
+        [optionsInput, optionHints, fieldInput]);
     const fieldRequests = React.useMemo(() => optionsInput.kind === 'ready' ? fields.map(field => ({ field,
         actionId: buildQualifiedPluginContributionKey({ pluginId: optionsInput.action.pluginId, localId: optionsInput.action.id }), draftInput: fieldInput })) : [],
         [fields, fieldInput, optionsInput]);
@@ -661,7 +667,9 @@ function ManagedConfiguratorNativeChoices(props: Readonly<{
     const { draft } = props;
     const pluginId = draft.provisioner.contribution.pluginId;
     const selected = managedConfiguratorDimensionSelection(draft);
-    const unavailable = (available: boolean) => !available || props.disabled ? t('managedMachines.options.unavailable') : undefined;
+    // While a read is running, the last answer stands: a row is only gone once a settled read lacks it.
+    const settled = draft.optionStatus !== 'loading';
+    const unavailable = (available: boolean) => !available && settled || props.disabled ? t('managedMachines.options.unavailable') : undefined;
     const sizes = managedConfiguratorDimensionChoices(draft, 'size').flatMap(({ choice, available, selectable }) => {
         const size = choice.nativeFacts?.size;
         if (!size) return [];

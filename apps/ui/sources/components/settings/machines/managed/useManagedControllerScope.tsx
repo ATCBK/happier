@@ -14,10 +14,15 @@ import {
 } from '@/sync/domains/machines/administration/useTargetSelection';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { useMachineListForServer, useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { useMachineListForServer, useActiveServerAccountScope, useSetting } from '@/sync/domains/state/storage';
 import { useIsMachineListSettled, useMachineListStatusForServer } from '@/sync/store/hooks';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { t } from '@/text';
+import { storage } from '@/sync/domains/state/storageStore';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
+import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
+import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1, setMachineAdministrationTargetPreference } from '@/sync/domains/machines/administration/selectionPreferences';
 import { readMachineRequestReachabilityObservation } from '@/sync/domains/machines/reachability/machineReachability';
 
 export type ManagedControllerScope = Readonly<{
@@ -68,6 +73,9 @@ export function useManagedControllerScope(
   const { binding } = useServerCredentialAccountScopeBinding(input.serverId);
   const rows = useMachineAdministrationTargetPickerRows();
   const thisMachineId = useThisComputerMachineId();
+  // The person's last explicit pick on this device, so re-entering Add starts where they left off.
+  const rememberedTarget = useSetting('machineAdministrationTargetsLocalV1')[MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.managedMachines];
+  const settingsScope = useAccountSettingsScope();
   const [chosen, setChosen] = React.useState<Readonly<{
     serverId: string; accountId: string | undefined; controller: ManagedControllerV1; explicit: boolean;
   }>>();
@@ -119,11 +127,18 @@ export function useManagedControllerScope(
             isMachineAdministrationCandidateSelectable(row.candidate),
         ),
     ).sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
-    const machine = online.find((candidate) => candidate.id === thisMachineId) ?? online[0];
+    const remembered = rememberedTarget ? online.find((candidate) => candidate.id === rememberedTarget.machineId
+      && scopedRows.some((row) => row.candidate.target.machineId === candidate.id
+        && row.candidate.target.serverIdentityId === rememberedTarget.serverIdentityId)) : undefined;
+    // Otherwise a machine whose last request did not fail, so the first frame is a catalog that can be read.
+    const readScope = binding?.isCurrent() ? binding.scope : null;
+    const readable = online.filter((candidate) => readMachineRequestReachabilityObservation(readScope, candidate.id)?.outcome !== 'failed');
+    const machine = remembered ?? (readable.length > 0 ? readable : online).find((candidate) => candidate.id === thisMachineId)
+      ?? (readable.length > 0 ? readable : online)[0];
     return machine?.installationId
       ? { machineId: machine.id, installationId: machine.installationId }
       : undefined;
-  }, [retained?.machineId, retained?.installationId, eligible, scopedRows, thisMachineId]);
+  }, [retained?.machineId, retained?.installationId, eligible, scopedRows, thisMachineId, rememberedTarget?.machineId, rememberedTarget?.serverIdentityId]);
   const controllerMachineId = preferred?.machineId;
   const controllerInstallationId = preferred?.installationId;
   const controller = React.useMemo(
@@ -175,12 +190,18 @@ export function useManagedControllerScope(
             installationId: machine.installationId,
           };
           setChosen({ serverId: input.serverId, accountId, controller: next, explicit: true });
+          const current = storage.getState();
+          if (settingsScope && areAccountSettingsScopesEqual(settingsScope, current.settingsScope)) {
+            getSyncSingleton().applySettings({ machineAdministrationTargetsLocalV1: setMachineAdministrationTargetPreference(
+              current.settings.machineAdministrationTargetsLocalV1, MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.managedMachines, target) },
+              { expectedSettingsScope: settingsScope, source: 'ui' });
+          }
           onSelect?.(next);
         },
         clearTarget: () => {},
         resolveExecutionTarget,
       };
-    }, [binding, controller?.machineId, controller?.installationId, eligible, onSelect, scopedRows, activeAccountScope?.serverId, input.serverId, accountId]);
+    }, [binding, controller?.machineId, controller?.installationId, eligible, onSelect, scopedRows, activeAccountScope?.serverId, input.serverId, accountId, settingsScope]);
 
   const chip =
     scopedRows.length > 0 ? (

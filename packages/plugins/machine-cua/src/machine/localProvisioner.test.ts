@@ -81,9 +81,16 @@ describe('consumed Cua local provisioner roles', () => {
         const h = await activated();
         const options = CUA_PLUGIN.manifest.contributes.actions?.find(action => action.id === `${prefix}-options`);
         const paths = options?.inputHints?.fields.map(field => field.path) ?? [];
-        expect(paths).toEqual(expect.arrayContaining(['runtimeId', 'imageId', 'size.cpu', 'size.memoryBytes', 'size.diskBytes']));
+        expect(paths).toEqual(expect.arrayContaining(['runtimeId', 'imageId', 'size.cpu', 'size.memoryBytes']));
+        // The disk follows the image, so only a Space is asked for one.
+        expect(paths.includes('size.diskBytes')).toBe(prefix === 'space');
+        expect(options?.inputHints?.fields.filter(field => field.required).map(field => [field.path, field.defaultValue]))
+            .toEqual([['size.cpu', 2], ['size.memoryBytes', 4 * 1024 ** 3]]);
         const choices = await h.action(`${prefix}-options`)({ runtimeId: launch.runtimeId, imageId: launch.imageId, size }, h.context);
         expect(choices).toMatchObject({ choices: [{ available: true, launch }] });
+        const { diskBytes: _imageDisk, ...withoutDisk } = size;
+        expect(await h.action(`${prefix}-options`)({ runtimeId: launch.runtimeId, imageId: launch.imageId, size: withoutDisk }, h.context))
+            .toMatchObject({ choices: [{ available: true, launch }] });
         const parsed = choices as { choices: { launch: unknown }[] };
         expect(CuaLocalLaunchV1Schema.parse(parsed.choices[0].launch)).toEqual(launch);
         expect(h.requests.every(request => !(request.args ?? []).includes('create'))).toBe(true);

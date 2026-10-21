@@ -63,6 +63,18 @@ describe('managed configurator draft owner', () => {
         }), selectors);
         expect(managedConfiguratorOptionsSelectors(draft, action.inputSchema!)).toEqual(values);
     });
+    it('starts a Cua sandbox recipe from the provider\u2019s declared size defaults, so its options read is complete without typing', () => {
+        const descriptor = MachineProvisionerContributionV1Schema.parse(CUA_PLUGIN.manifest.contributes.machineProvisioners?.find(entry => entry.id === 'local-sandbox'));
+        const action = PluginActionContributionV2Schema.parse(CUA_PLUGIN.manifest.contributes.actions?.find(entry => entry.id === descriptor.actions.options));
+        const hints = normalizePluginActionInputHintsV2(action.inputHints);
+        const draft = createManagedConfiguratorDraft({ provisioner: { contribution: { pluginId: CUA_PLUGIN.manifest.id, localId: descriptor.id }, occurrenceId: 'cua', descriptor },
+            controller, name: 'Sandbox' });
+        expect(managedConfiguratorOptionsSelectors(draft, action.inputSchema!)).toEqual({});
+        expect(managedConfiguratorOptionsSelectors(draft, action.inputSchema!, hints)).toEqual({ size: { cpu: 2, memoryBytes: 4 * 1024 ** 3 } });
+        // What the person typed wins over the default; an unfilled field is still seeded.
+        const edited = setManagedConfiguratorOptionsSelectors(draft, { size: { cpu: 8 } });
+        expect(managedConfiguratorOptionsSelectors(edited, action.inputSchema!, hints)).toEqual({ size: { cpu: 8, memoryBytes: 4 * 1024 ** 3 } });
+    });
     it('qualifies saved BYOC recipes using the current selected native variant, with descriptor fallback', () => {
         const descriptor = MachineProvisionerContributionV1Schema.parse(CUA_PLUGIN.manifest.contributes.machineProvisioners?.find(entry => entry.id === 'byoc'));
         const byoc = { contribution: { pluginId: CUA_PLUGIN.manifest.id, localId: descriptor.id }, occurrenceId: 'byoc', descriptor };
