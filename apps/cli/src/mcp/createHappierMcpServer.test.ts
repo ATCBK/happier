@@ -546,7 +546,7 @@ describe('createHappierMcpServer real host admission', () => {
           corpora: selection === 'mixed-corpus' ? ['sessions', 'documents'] : ['documents'] },
       } });
       if (selection === 'project') {
-        expect(result).toMatchObject({ ok: true, result: { ok: false, errorCode: 'memory_project_scope_unsupported' } });
+        expect(result).toMatchObject({ ok: false, errorCode: 'memory_project_scope_unsupported' });
       } else expect(result).toEqual({ ok: true, result: {
         v: 1, ok: true, hits: selection === 'mixed-corpus' ? [{ sessionId: 'bound-session', seqFrom: 1, seqTo: 1,
           createdAtFromMs: 1, createdAtToMs: 1, summary: 'readable', score: 1 }] : [], documents: { state: 'unavailable' },
@@ -589,6 +589,8 @@ describe('createHappierMcpServer real host admission', () => {
     ['plain', false, 1, 2], ['e2ee', false, 1, 2], ['plain', true, 1, 2], ['e2ee', true, 1, 2],
     ['plain', false, 3, 0],
   ] as const)('admits a %s cross-session send from the real MCP host (background run: %s; starter depth: %s; turn depth: %s)', async (mode, backgroundRun, starterDepth, turnDepth) => {
+    // Daemon IPC is a genuine external boundary: the daemon contributes no plugin tools here.
+    vi.spyOn(daemonControlClient, 'readDaemonPluginCatalog').mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
     const origin = 'http://cross-session-home.test';
     const app = fastify();
     const restore = installAxiosFastifyAdapter({ app, origin });
@@ -696,10 +698,10 @@ describe('createHappierMcpServer real host admission', () => {
         } },
       });
       if (backgroundRun) {
-        const start = await client.callTool({ name: 'execution_run_start', arguments: {
-          intent: 'review', backendTarget: source.getBackendTarget(), instructions: 'Review the change',
+        const start = await client.callTool({ name: 'action_execute', arguments: { actionId: 'execution.run.start', input: {
+          sessionId: source.sessionId, intent: 'review', backendTarget: source.getBackendTarget(), instructions: 'Review the change',
           permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response',
-        } });
+        } } });
         // Parent depth is 1, but this Run is at the limit (4): the real MCP ->
         // Action -> admission path must not start a child at the parent's depth.
         expect(JSON.stringify(start)).toContain('work_depth_exceeded');

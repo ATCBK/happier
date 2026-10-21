@@ -13,6 +13,7 @@ import {
 } from './compiledCommands';
 import { buildActionCliHelpModel } from './commandHelp';
 import { readActionCliServerId } from './actionServerTarget';
+import { stripTransportTokens } from './executeCommand';
 import {
   resolveCompiledActionCliCompletionCandidates,
   resolveCompiledActionCliCompletionCandidatesWithDynamicOptions,
@@ -420,7 +421,8 @@ describe('Project worker exact-Home CLI projection', () => {
     const [command] = compileActionCliCommands([{ spec, binding }]);
     expect(command).toBeDefined();
     const argv = [...binding.path, '--server-id', 'home-b', '--input-json', JSON.stringify(input)];
-    const parsed = parseActionCliCommandInput(command!, argv);
+    // The Home selector is CLI transport, removed before Action input is parsed.
+    const parsed = parseActionCliCommandInput(command!, stripTransportTokens(command!, argv));
     expect(parsed, JSON.stringify(parsed)).toMatchObject({ ok: true, canonicalBase: input });
     expect(readActionCliServerId(argv, command!.acceptsServerId)).toBe('home-b');
   });

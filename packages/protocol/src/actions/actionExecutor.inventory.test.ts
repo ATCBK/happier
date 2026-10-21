@@ -1684,7 +1684,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       machineId: 'm1',
     });
 
-    expect(res).toEqual({ ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' });
+    expect(res).toEqual({ ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters', details: { issues: expect.any(Array) } });
     expect(deps.agentsModelsList).not.toHaveBeenCalled();
   });
 
@@ -1697,7 +1697,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       machineId: 'm1',
     });
 
-    expect(res).toEqual({ ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' });
+    expect(res).toEqual({ ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters', details: { issues: expect.any(Array) } });
     expect(deps.agentsModelsList).not.toHaveBeenCalled();
   });
 
@@ -1781,9 +1781,9 @@ describe('createActionExecutor (inventory/discovery)', () => {
     const executor = createActionExecutor(deps);
 
     await expect(executor.execute('session.target.primary.set', { sessionId: 'same' }))
-      .resolves.toEqual({ ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' });
+      .resolves.toEqual({ ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters', details: { issues: expect.any(Array) } });
     await expect(executor.execute('session.target.primary.set', { sessionTitle: 'Target Session' }))
-      .resolves.toEqual({ ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' });
+      .resolves.toEqual({ ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters', details: { issues: expect.any(Array) } });
     expect(deps.sessionTargetPrimarySet).not.toHaveBeenCalled();
   });
 

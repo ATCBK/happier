@@ -3781,7 +3781,7 @@ describe('Action Spec Registry', () => {
       expect(spec.bindings?.sdkMethod ?? null).toBe(sdkMethod);
       expect(spec.surfaces.rpc).toBe(true);
       expect(spec.surfaces.api).toBe(api);
-      const automated = ['sessions.external.candidates.list', 'sessions.external.candidate.delete', 'sessions.external.link.ensure'].includes(id);
+      const automated = ['sessions.external.candidates.list', 'sessions.external.candidate.delete', 'sessions.external.link.ensure', 'sessions.external.transcript.page'].includes(id);
       expect(spec.surfaces.mcp).toBe(automated);
       expect(spec.surfaces.agent).toBe(automated);
       expect(spec.surfaces.voice).toBe(false);
@@ -5139,7 +5139,8 @@ describe('Action Spec Registry', () => {
     expect(byVoiceToolName.has('listSessions')).toBe(true);
     expect(byVoiceToolName.has('getSessionActivity')).toBe(true);
     expect(byVoiceToolName.has('getSessionTranscript')).toBe(true);
-    expect(byVoiceToolName.has('getSessionRecentMessages')).toBe(false);
+    // The Coordination Voice corridor keeps the deprecated reader reachable (actionSpecs.coordinationVoice.test.ts).
+    expect(byVoiceToolName.has('getSessionRecentMessages')).toBe(true);
     expect(byVoiceToolName.has('teleportVoiceAgentToSessionRoot')).toBe(true);
 
     // Inventory + discovery tools (safe by default; may be gated by user settings in the UI).

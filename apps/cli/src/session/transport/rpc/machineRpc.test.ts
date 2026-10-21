@@ -1610,8 +1610,8 @@ describe('callMachineRpc', () => {
     const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
       sessionId: 'cli-global', serverId: 'home', serverHttpBaseUrl: 'https://api.example.test', mode: 'plain', ctx: null }));
     await expect(executor.execute('workspace.files.replace', { machineId: 'replace-machine', rootPath: '/workspace',
-      query: 'old', replacement: 'new', matchCase: true, regex: false,
-      files: ['a.txt', 'b.txt'].map(path => ({ path, expectedHash: 'a'.repeat(64) })),
+      operation: { kind: 'replace', matcher: { query: 'old', replacement: 'new', matchCase: true, regex: false },
+        files: ['a.txt', 'b.txt'].map(path => ({ path, expectedHash: 'a'.repeat(64) })) },
     }, { surface: 'ui', authority: 'present_user', serverId: 'home', signal: controller.signal })).resolves.toEqual({ ok: true, result });
     expect(socket.close).toHaveBeenCalled();
   });
@@ -1686,7 +1686,7 @@ describe('callMachineRpc', () => {
         await pending;
         if (outcome === 'acknowledged') expect(result).toEqual({ ok: true, result: status });
         else {
-          expect(result).toMatchObject({ ok: false, errorCode: 'action_failed' });
+          expect(result).toMatchObject({ ok: false, errorCode: 'SOCKET_RPC_ABORTED' });
           const call = socket.emit.mock.calls.find(([event]) => event === SOCKET_RPC_EVENTS.CALL)![1];
           expect(socket.emit.mock.calls.find(([event]) => event === SOCKET_RPC_EVENTS.CANCEL)?.[1])
             .toEqual({ requestId: call.requestId });

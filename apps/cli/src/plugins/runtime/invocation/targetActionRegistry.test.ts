@@ -414,14 +414,16 @@ describe('target action invocation registry', () => {
             const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write() {} } });
             const scopes: Parameters<typeof owners.beginDiagnosticScope>[0][] = [];
             let stored: TargetActionApprovalRequestV1 | undefined;
+            let settled: TargetActionApprovalRequestV1 | undefined;
             const adapter = createTargetActionCurrentIntentAdapter({
                 create: async request => {
+                    settled = undefined;
                     stored = StoredTargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
                     return { artifactId: `parser-${surface}` };
                 },
-                update: async () => ({ ok: true }),
-                read: async () => stored ? { ...stored, status: 'approved',
-                    decision: { kind: 'approve', decidedAtMs: stored.updatedAtMs } } : null,
+                update: async ({ request }) => { settled = request; return { ok: true }; },
+                read: async () => settled ?? (stored ? { ...stored, status: 'approved',
+                    decision: { kind: 'approve', decidedAtMs: stored.updatedAtMs } } : null),
             });
             const reject = () => {
                 if (phase === 'result') expect(owners.redactDiagnosticText(scopes.at(-1)!, secret)).toBe('[REDACTED]');
@@ -464,18 +466,20 @@ describe('target action invocation registry', () => {
             });
             const scopes: Parameters<typeof owners.beginDiagnosticScope>[0][] = [];
             let stored: TargetActionApprovalRequestV1 | undefined;
+            let settled: TargetActionApprovalRequestV1 | undefined;
             const adapter = createTargetActionCurrentIntentAdapter({
                 create: async request => {
+                    settled = undefined;
                     for (const secret of secrets) {
                         expect(owners.redactDiagnosticText(scopes.at(-1)!, secret)).toBe('[REDACTED]');
                     }
                     stored = StoredTargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
                     return { artifactId: `confidential-egress-${surface}` };
                 },
-                update: async () => ({ ok: true }),
-                read: async () => stored ? {
+                update: async ({ request }) => { settled = request; return { ok: true }; },
+                read: async () => settled ?? (stored ? {
                     ...stored, status: 'approved', decision: { kind: 'approve', decidedAtMs: stored.updatedAtMs },
-                } : null,
+                } : null),
             });
             for (const failure of ['error', 'pluginError'] as const) {
                 let context: PluginInvocationContext | undefined;
@@ -577,15 +581,18 @@ describe('target action invocation registry', () => {
             } },
         });
         const requests: TargetActionApprovalRequestV1[] = [];
+        let settled: TargetActionApprovalRequestV1 | undefined;
         const adapter = createTargetActionCurrentIntentAdapter({
             now: () => 1,
             create: async request => {
+                    settled = undefined;
                 requests.push(StoredTargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request))));
                 return { artifactId: `confidential-rotation-${surface}` };
             },
-            update: async () => ({ ok: true }),
+            update: async ({ request }) => { settled = request; return { ok: true }; },
             read: async () => {
                 const request = requests.at(-1);
+                if (settled) return settled;
                 return request ? { ...request, status: 'approved', updatedAtMs: 2, decision: { kind: 'approve', decidedAtMs: 2 } } : null;
             },
         });
@@ -621,15 +628,18 @@ describe('target action invocation registry', () => {
     it.each(['agent', 'mcp', 'cli'] as const)('requires a confidential approval for a declared hidden releaseTag on %s', async surface => {
         const requests: TargetActionApprovalRequestV1[] = [];
         let executedInput: JsonValue | undefined;
+        let settled: TargetActionApprovalRequestV1 | undefined;
         const adapter = createTargetActionCurrentIntentAdapter({
             now: () => 1,
             create: async request => {
+                    settled = undefined;
                 requests.push(StoredTargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request))));
                 return { artifactId: `confidential-release-${surface}` };
             },
-            update: async () => ({ ok: true }),
+            update: async ({ request }) => { settled = request; return { ok: true }; },
             read: async () => {
                 const request = requests.at(-1);
+                if (settled) return settled;
                 return request ? { ...request, status: 'approved', updatedAtMs: 2, decision: { kind: 'approve', decidedAtMs: 2 } } : null;
             },
         });

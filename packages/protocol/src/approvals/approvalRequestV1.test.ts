@@ -1445,11 +1445,13 @@ describe('requiresExactDaemonApprovalReplay', () => {
   }
 
   it.each([
-    { actionId: 'mcp.servers.signIn.start', input: { serverId: 'oauth-server' } },
+    // Its person-supplied OAuth client is live-only input: no stored input exists
+    // for the deciding Home, so even a deferred proposal stays at its daemon.
+    { actionId: 'mcp.servers.signIn.start', input: { serverId: 'oauth-server' }, deferredReplaysAtDaemon: true },
     { actionId: 'teams.credentials.externalKeys.create', input: {
       resourceId: 'resource-1', teamMembershipId: 'membership-1', label: 'CLI key',
-    } },
-  ] as const)('keeps a blocking $actionId result at its originating daemon', ({ actionId, input }) => {
+    }, deferredReplaysAtDaemon: false },
+  ] as const)('keeps a blocking $actionId result at its originating daemon', ({ actionId, input, deferredReplaysAtDaemon }) => {
     const request = hostCliRequest(actionId, input);
     expect(getActionSpec(actionId).approvalResultCustody).toBe('live_only');
     expect(requiresExactDaemonApprovalReplay({ ...request,
@@ -1457,10 +1459,11 @@ describe('requiresExactDaemonApprovalReplay', () => {
       executionOriginV1: { ...request.executionOriginV1, machineId: 'origin-machine' },
     })).toBe(true);
     // A deliberately deferred proposal has no original live result recipient.
-    // Its deciding human retains the existing one-shot result path.
+    // Its deciding human retains the existing one-shot result path unless the
+    // Action's input itself is live-only.
     expect(requiresExactDaemonApprovalReplay({ ...request,
       approval: { flow: 'deferred', result: 'required' },
-    })).toBe(false);
+    })).toBe(deferredReplaysAtDaemon);
   });
 
   it('replays an unsigned host CLI Account effect at the deciding Home without inventing a Machine', () => {

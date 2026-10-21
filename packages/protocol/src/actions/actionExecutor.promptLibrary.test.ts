@@ -1212,7 +1212,9 @@ describe('createActionExecutor (prompt library actions)', () => {
   it.each(['ui', 'agent', 'mcp'] as const)('PARITY2 keeps %s waived registry installation pinned and partial-effect aware', async (surface) => {
     const { store, artifacts } = createStoredLibrary(), fetched = fetchedRegistrySkill();
     let rules: SkillRuleV1[] = [], revision = 1, readBackUnavailable = false;
-    const skills = createSkillActionExecuteV1({ store: { ...store, read: async (id, options) => readBackUnavailable && artifacts.has(id) ? null : store.read(id, options) },
+    const skills = createSkillActionExecuteV1({ store: { ...store, read: async (id, options) => readBackUnavailable && artifacts.has(id) ? null : store.read(id, options),
+        // Held-source detection is not this test's subject: once read-back is unavailable the index holds nothing, so the repeat install is a fresh effect.
+        list: async () => ({ coverage: 'complete', items: readBackUnavailable ? [] : [...artifacts.values()].map(artifact => ({ id: artifact.id, header: artifact.header, updatedAtMs: 1 })) }) },
       randomId: () => 'rule', nowMs: () => 4,
       skillRules: { serverId: 'home', assertCurrent: () => {}, ruleWriteContext: () => ({ nowMs: 4, newId: () => 'rule' }),
         listSkills: signal => readSkillLibraryCatalog({ list: async () => ({ coverage: 'complete', items: [...artifacts.values()].map(artifact => ({

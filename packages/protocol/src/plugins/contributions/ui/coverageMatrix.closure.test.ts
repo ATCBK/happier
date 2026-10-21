@@ -745,11 +745,8 @@ const MAINTAINED_AUTHORED_DESTINATION_DECLARATIONS_V1 = [
   },
   {
     slotKey: 'servicesPanel:services',
-    sourcePath: 'packages/plugins/inspector/src/manifest.ts',
-    codeIdentifier: [
-      "    container: 'servicesPanel' as const,",
-      "    target: { kind: 'services' as const },",
-    ].join('\n'),
+    sourcePath: 'packages/plugin-sdk/examples/public-authoring/definition.ts',
+    codeIdentifier: ["    placement: 'servicesPanel',", "    target: { kind: 'services' },"].join('\n'),
   },
 ] as const satisfies readonly Readonly<{
   slotKey: DestinationSlotKey;
@@ -790,9 +787,10 @@ const DESTINATION_SLOTS_WITHOUT_MAINTAINED_AUTHORED_DECLARATION = [] as const sa
  * ceiling below still claimed nobody authored it, and the GAIN half could not
  * fail. Anything after `kind` up to the target's own closing brace is skipped.
  * App-page declarations may place their widget-area schema before the target.
+ * A public `defineUiSurfaceDefinition` spells the container `placement`.
  */
 const AUTHORED_DESTINATION_TUPLE_PATTERN =
-  /container:\s*'([A-Za-z]+)'(?:\s+as\s+const)?,\s*(?:widgetAreas:[\s\S]*?\]\s*,\s*)?target:\s*\{\s*kind:\s*'([A-Za-z]+)'(?:\s+as\s+const)?(?:\s*,[^{}]*)?\s*\}/gu;
+  /(?:container|placement):\s*'([A-Za-z]+)'(?:\s+as\s+const)?,\s*(?:widgetAreas:[\s\S]*?\]\s*,\s*)?target:\s*\{\s*kind:\s*'([A-Za-z]+)'(?:\s+as\s+const)?(?:\s*,[^{}]*)?\s*\}/gu;
 
 /**
  * Every destination slot a maintained producer AUTHORS TODAY, re-derived from
