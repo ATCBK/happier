@@ -115,6 +115,11 @@ function errorSnapshot(snapshot: PersonalHomeBootstrapSnapshot, error: Error): P
     };
 }
 
+/** The Home and sign-in a failed operation was acting on. */
+function operationTargetOf(facts: PersonalHomeFacts): string {
+    return `${facts.localHomeIdentity ?? ''}:${facts.localHomeAuth}`;
+}
+
 export function usePersonalHomeBootstrapController(
     options: PersonalHomeBootstrapControllerOptions,
 ): PersonalHomeBootstrapController {
@@ -127,6 +132,10 @@ export function usePersonalHomeBootstrapController(
     const [refreshVersion, setRefreshVersion] = React.useState(0);
     const operationKeyRef = React.useRef<string | null>(null);
     const operationInFlightRef = React.useRef(false);
+    // An issued operation's failure outlives successful status reads: facts that merely look healthy
+    // do not prove the mutation's unfinished work succeeded. A retry or a refresh clears it, and so do
+    // facts showing a different Home or sign-in than the one the failed operation was acting on.
+    const operationFailureTargetRef = React.useRef<string | null>(null);
     const mountedRef = React.useRef(true);
     const latestReadFactsRef = React.useRef(options.readFacts);
     const factsReadSequenceRef = React.useRef(0);
@@ -142,6 +151,7 @@ export function usePersonalHomeBootstrapController(
     const refresh = React.useCallback(() => {
         if (operationInFlightRef.current) return;
         operationKeyRef.current = null;
+        operationFailureTargetRef.current = null;
         setHasAuthoritativeFacts(false);
         setError(null);
         setRefreshVersion((value) => value + 1);
@@ -157,7 +167,11 @@ export function usePersonalHomeBootstrapController(
                 if (cancelled || !mountedRef.current || readSequence !== factsReadSequenceRef.current) return;
                 setFacts(nextFacts);
                 setHasAuthoritativeFacts(true);
-                setError(null);
+                const failureTarget = operationFailureTargetRef.current;
+                if (failureTarget === null || failureTarget !== operationTargetOf(nextFacts)) {
+                    operationFailureTargetRef.current = null;
+                    setError(null);
+                }
             })
             .catch((cause: unknown) => {
                 if (cancelled || !mountedRef.current || readSequence !== factsReadSequenceRef.current) return;
@@ -185,6 +199,7 @@ export function usePersonalHomeBootstrapController(
         if (!enabled || !facts || operationInFlightRef.current) return false;
         const startedFromExistingRuntimeDecision = derivedSnapshot.action === 'choose-existing-runtime';
         operationInFlightRef.current = true;
+        operationFailureTargetRef.current = null;
         setIsOperating(true);
 
         let operationError: Error | null = null;
@@ -220,6 +235,7 @@ export function usePersonalHomeBootstrapController(
         operationInFlightRef.current = false;
         if (!mountedRef.current) return operationError == null;
         if (nextFacts) setFacts(nextFacts);
+        operationFailureTargetRef.current = operationError ? operationTargetOf(nextFacts ?? facts) : null;
         setError(operationError);
         setIsOperating(false);
         return operationError == null;
