@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes as nodeRandomBytes, randomUUID } from 'node:crypto';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import { computePluginUiArtifactSha256DigestV1 } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
+import { readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityCollectionWritersClaimActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability/actions';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
@@ -775,6 +776,10 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                     await assertCurrentAccount(input.credentials, input.operationSignal);
                 }
                 if (response.status >= 200 && response.status < 300) return response.data;
+                const rollback = readHomeDomainConfirmedRollbackV1(response.status, response.data);
+                if (rollback) {
+                    throw dataError(rollback.code, 'Account Collection transaction rolled back', false, rollback.details);
+                }
                 throw input.parseError(response.data, response.status)
                     ?? (input.kind === 'mutation' ? dataError(
                         'plugin_collection_outcome_unknown',

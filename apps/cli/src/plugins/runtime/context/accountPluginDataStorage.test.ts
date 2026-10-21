@@ -1886,6 +1886,39 @@ describe('Account plugin Data storage host', () => {
         expect(post).toHaveBeenCalledOnce();
     });
 
+    it.each(['put', 'forget'] as const)('preserves a confirmed server rollback for Collection %s', async (operation) => {
+        const account = bindHost({
+            post: async () => ({
+                status: 503,
+                data: { error: 'database_transaction_conflict_exhausted', statusCode: 503 },
+            }),
+        });
+        const collection = account.collection(collectionDefinition);
+        const result = operation === 'forget'
+            ? collection.forget('task-1', { expectedRevision: 1 })
+            : collection.put({ id: 'task-1', status: 'open', privateNote: 'keep private' }, { expectedRevision: 1 });
+
+        await expect(result).rejects.toMatchObject({
+            code: 'database_transaction_conflict_exhausted',
+            details: { error: 'database_transaction_conflict_exhausted', statusCode: 503 },
+            retryable: false,
+        } satisfies Partial<PluginError>);
+    });
+
+    it.each([
+        { status: 500, data: { error: 'database_transaction_conflict_exhausted', statusCode: 503 } },
+        { status: 503, data: { error: 'database_transaction_conflict_exhausted' } },
+        { status: 503, data: { error: 'database_connection_unavailable', statusCode: 503 } },
+    ])('keeps an unconfirmed server mutation failure unknown ($status/$data.error)', async (response) => {
+        const account = bindHost({ post: async () => response });
+
+        await expect(account.collection(collectionDefinition).put({
+            id: 'task-1', status: 'open', privateNote: 'keep private',
+        }, { expectedRevision: 1 })).rejects.toMatchObject({
+            code: 'plugin_collection_outcome_unknown', retryable: false,
+        } satisfies Partial<PluginError>);
+    });
+
     it('preserves typed Collection quota errors from the server', async () => {
         const account = bindHost({
             post: async () => ({
