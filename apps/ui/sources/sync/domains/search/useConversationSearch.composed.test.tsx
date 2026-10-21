@@ -129,7 +129,7 @@ describe('conversation search through real Account/store wiring', () => {
         try {
             hook = await renderHook(useConversationSearch, { initialProps: input });
             await vi.waitFor(() => expect(hook!.getCurrent().result?.machines).toMatchObject([
-                { machineId: 'selected', status: 'offline', standardSearchEnabled: false },
+                { machineId: 'selected', status: 'offline' },
             ]));
             await act(async () => { recordMachineRequestSucceeded(observation); });
             expect(isMachineReachable(scope, createMachineFixture({ id: 'selected', activeAt: Date.now() }))).toBe(true);

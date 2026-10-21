@@ -3,6 +3,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { DEFAULT_MEMORY_SETTINGS } from '@happier-dev/protocol/memory/memorySettings';
 import type { MemorySearchHitV1 } from '@happier-dev/protocol/memory/memorySearch';
 import { MemorySearchQueryV1Schema } from '@happier-dev/protocol/memory/memorySearch';
+import { SearchConversationsResultV1Schema } from '@happier-dev/protocol/actions/actionSpecs';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
@@ -59,6 +60,31 @@ beforeEach(async () => {
 });
 afterEach(async () => { await connection?.dispose(); connection = undefined; });
 describe('conversation search fan-out', () => {
+    it('reports an unread standard-search setting as unknown through the strict Action result', async () => {
+        const healthy = rpc.getMockImplementation()!;
+        rpc.mockImplementation(async call => {
+            if (call.machineId === 'two' && call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET) {
+                throw Object.assign(new Error('private transport message'), { rpcErrorCode: 'RPC_REQUEST_TIMEOUT' });
+            }
+            return healthy(call);
+        });
+        const result = await searchConversations(input);
+        const unread = result.machines.find(machine => machine.machineId === 'two')!;
+        expect(unread.status).toBe('partial');
+        expect(unread).not.toHaveProperty('standardSearchEnabled');
+        expect(isConversationSearchOnDemandOff(result, 'two')).toBe(false);
+        expect(hasConversationSearchScanFallback({ hits: [], machines: [unread] })).toBe(false);
+        expect(SearchConversationsResultV1Schema.parse(result)).toEqual(result);
+        expect(result.machines.find(machine => machine.machineId === 'one')).toMatchObject({ standardSearchEnabled: true });
+        expect(JSON.stringify(result)).not.toContain('private transport message');
+    });
+    it('skips 41 offline Machines without issuing transport calls', async () => {
+        const machines = [...Array.from({ length: 41 }, (_, index) => ({ id: `offline-${index}`, online: false })), input.machines[0]];
+        const result = await searchConversations({ ...input, machines, concurrencyLimit: 1 });
+        expect(result.machines.filter(machine => machine.status === 'offline')).toHaveLength(41);
+        expect(result.hits).toMatchObject([{ machineId: 'one', hit: { sessionId: 'one' } }]);
+        expect(rpc.mock.calls.every(([call]) => call.machineId === 'one')).toBe(true);
+    });
     it('keeps healthy Machine hits when another Machine loses its RPC outcome', async () => {
         const healthy = rpc.getMockImplementation()!;
         rpc.mockImplementation(async call => {
@@ -366,7 +392,7 @@ describe('conversation search fan-out', () => {
         expect(result.machines).toMatchObject([
             { machineId: 'one', status: 'ok', standardSearchEnabled: true },
             { machineId: 'two', status: 'ok', standardSearchEnabled: true },
-            { machineId: 'offline', status: 'offline', standardSearchEnabled: false },
+            { machineId: 'offline', status: 'offline' },
         ]);
         expect(requests.every(request => !request.method.startsWith('offline:'))).toBe(true);
         const admissions = homes.requests.filter(request => request.path.startsWith('/v1/machines/'));

@@ -124,6 +124,7 @@ describe('createActionExecutor (memory)', () => {
     const input = { query: { v: 1, query: 'needle', scope: { type: 'global' }, mode: 'deep' }, mode: 'auto' };
     const result = SearchConversationsResultV1Schema.parse({ hits: [], machines: [
       { machineId: 'offline-machine', status: 'offline', standardSearchEnabled: true },
+      { machineId: 'unread-machine', status: 'partial' },
     ] });
     // The remote mounted-client transport is the boundary; Protocol admission and result validation stay real.
     deps.clientActionExecute = async ({ actionId, input: admitted }) => {

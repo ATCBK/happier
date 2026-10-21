@@ -217,7 +217,7 @@ refreshes do not erase that initial coverage. Read failures, replacement,
 revisions, budget eviction and clearing still invalidate readiness; it is not
 a promise that every concurrent append is already searchable. Happier Session
 readiness follows the queue's completed `indexed` or `empty` outcome, unless a
-transcript revision or an active indexing operation is pending. Session inventory
+transcript revision or an active transcript indexing operation is pending. Session inventory
 sequences can include non-message events; they do not reopen a completed
 transcript scan. Status reads do not create or update indexing cursors, so they
 can read the WAL snapshot while another connection owns the writer. Native
@@ -425,6 +425,8 @@ abort fences while the remaining work stays loading. Only a settled result is
 cached across mounts, and document failure retains the conversation hits with
 unavailable document coverage.
 Machine statuses are `ok`, `offline`, `outdated`, `partial`, or `disabled-by-settings`;
+`standardSearchEnabled` is present only after a successful settings read. An
+omitted value means unknown, never an explicit off setting or permission to scan.
 `conversationSearchCoverage.ts` owns the palette/scan coverage wording. Standard
 scans cannot apply message-date bounds and report partial coverage rather than
 substituting conversation update times. History supplies its selected Agent/source

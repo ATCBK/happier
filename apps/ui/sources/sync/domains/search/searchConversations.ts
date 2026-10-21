@@ -18,7 +18,7 @@ export type ConversationSearchSource = Readonly<{ agentId: string; sourceKey: st
 export type ConversationSearchHit =
     | Readonly<{ machineId: string | null; mode: 'indexed'; hit: MemorySearchResultHitV1 }>
     | Readonly<{ machineId: string; mode: 'standard'; agentId: string; sourceKey: string; source: ExternalSessionsSource; candidate: ExternalSessionCandidateV1 }>;
-export type ConversationSearchMachineStatus = Readonly<{ machineId: string; status: 'ok' | 'offline' | 'outdated' | 'partial' | 'disabled-by-settings'; standardSearchEnabled: boolean; documents?: MemoryDocumentSearchCoverageV1['state'] }>;
+export type ConversationSearchMachineStatus = Readonly<{ machineId: string; status: 'ok' | 'offline' | 'outdated' | 'partial' | 'disabled-by-settings'; standardSearchEnabled?: boolean; documents?: MemoryDocumentSearchCoverageV1['state'] }>;
 export type ConversationSearchResult = Readonly<{
     hits: readonly ConversationSearchHit[];
     machines: readonly ConversationSearchMachineStatus[];
@@ -43,7 +43,7 @@ export function hasConversationSearchScanFallback(result: ConversationSearchResu
 /** A read setting explicitly blocks the standard fallback needed for this search. */
 export function isConversationSearchOnDemandOff(result: ConversationSearchResult | null, machineId: string | null | undefined): boolean {
     const machine = result?.machines.find(value => value.machineId === machineId);
-    return machine?.status === 'disabled-by-settings' && !machine.standardSearchEnabled;
+    return machine?.status === 'disabled-by-settings' && machine.standardSearchEnabled === false;
 }
 
 function indexedRows(machineId: string | null, hits: readonly MemorySearchResultHitV1[]): ConversationSearchHit[] {
@@ -157,15 +157,15 @@ export async function searchConversations(input: Readonly<{
         : null;
     const searchMachine = async (machine: ConversationSearchMachine): Promise<ConversationSearchMachineStatus> => {
         input.signal?.throwIfAborted();
-        if (!machine.online && input.retryUnreachableMachines !== true) return { machineId: machine.id, status: 'offline', standardSearchEnabled: false };
+        if (!machine.online && input.retryUnreachableMachines !== true) return { machineId: machine.id, status: 'offline' };
         const target = { serverId: input.serverId, accountId: input.accountId, machineId: machine.id, signal: input.signal };
-        // False fails closed on a read failure; only disabled-by-settings
-        // establishes that a successfully read setting blocks search.
-        let standardSearchEnabled = false;
+        // An unread setting is unknown. Only a successful read can establish
+        // that standard search is enabled or disabled on this Machine.
+        let standardSearchEnabled: boolean | undefined;
         try {
             const settingsRead = await fetchDaemonMemorySettings(target);
             input.signal?.throwIfAborted();
-            if (!settingsRead.supported) return { machineId: machine.id, status: 'outdated', standardSearchEnabled: false };
+            if (!settingsRead.supported) return { machineId: machine.id, status: 'outdated' };
             const settings = settingsRead.settings;
             standardSearchEnabled = settings.conversationSearch.standardSearch.enabled;
             let sourcesUnavailable = false;
@@ -336,7 +336,8 @@ export async function searchConversations(input: Readonly<{
         } catch (error) {
             input.signal?.throwIfAborted();
             return { machineId: machine.id,
-                status: isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error) ? 'outdated' : 'partial', standardSearchEnabled };
+                status: isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error) ? 'outdated' : 'partial',
+                ...(standardSearchEnabled === undefined ? {} : { standardSearchEnabled }) };
         }
     };
     const machineWork = runTasksWithLimit(input.machines.filter(machine => (!continuation || continuation.machineId === machine.id)

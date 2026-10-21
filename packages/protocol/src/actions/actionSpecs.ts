@@ -3145,7 +3145,7 @@ export const SearchConversationsResultV1Schema = lazyZodSchema(() => z.strictObj
       source: ExternalSessionsSourceSchema, candidate: ExternalSessionCandidateV1Schema }),
   ])),
   machines: z.array(z.strictObject({ machineId: z.string(), status: z.enum(['ok', 'offline', 'outdated', 'partial', 'disabled-by-settings']),
-    standardSearchEnabled: z.boolean(), documents: z.optional(MemoryDocumentSearchCoverageV1Schema.shape.state) })),
+    standardSearchEnabled: z.optional(z.boolean()), documents: z.optional(MemoryDocumentSearchCoverageV1Schema.shape.state) })),
   sources: z.optional(z.array(z.strictObject({ machineId: z.string(), agentId: z.string(), sourceKey: z.string(),
     source: ExternalSessionsSourceSchema, contentSearch: z.boolean(), indexReady: z.optional(z.boolean()),
     key: z.optional(z.string()), label: z.optional(z.string()), detail: z.optional(z.string()),
