@@ -265,6 +265,9 @@ Native forks observe the same attestation inside their fork owner's child
 cleanup scope. The shared Project startup wrapper returns the physical child
 identity to that owner, which attempts the existing Stop and archival cleanup
 for a refused or exited child before reporting fork failure.
+An attested refusal carries its captured runner witness into that same cleanup
+scope. Cleanup uses local exact-runner Stop even when the child has a Machine;
+incomplete or throwing Stop preserves the refusal without Session-wide fallback.
 The existing retained-settlement owner reoffers a failed terminal-block write on
 its normal connection/materialization wakes, without redelivering input. Generic
 plugin errors, generation retirement and native-resume failures retain their
