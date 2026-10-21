@@ -43,7 +43,10 @@ export function useScmCommitMessageSuggestion(host: CommitMessageHostV1 | null, 
                 instructions: typeof instructions === 'string' ? instructions : undefined,
                 scopePaths,
             });
-        if (!binding.isCurrent() || currentKeyRef.current !== key) return { ok: false as const,
+        // The Action front door retires its in-flight call as soon as the Account changes, which can precede this
+        // hook's own rerender; both are the same retired scope and neither may disclose the old Account's outcome.
+        const retiredByAction = !result.ok && result.errorCode === 'action_account_scope_changed';
+        if (!binding.isCurrent() || currentKeyRef.current !== key || retiredByAction) return { ok: false as const,
             error: t('common.unavailable'), errorCode: 'SCM_COMMIT_MESSAGE_SCOPE_RETIRED' };
         if (!result.ok && result.runId && result.outcome) {
             pendingRef.current = { host: resolvedHost, key, runId: result.runId };
