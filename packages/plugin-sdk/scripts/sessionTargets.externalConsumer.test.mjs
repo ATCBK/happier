@@ -88,7 +88,8 @@ test('generated external Action clients accept shared targets without widening e
     void inboxType; void inboxView; void inboxRead; void inboxPage; void inboxSource; void inboxCoverage; void invalidInboxType;
     void narrowInbox; void readyInbox; void partialInbox; void sourceCoverage;
   `);
-  const invocation = resolveTypeScriptCliInvocation({ repoRoot: process.cwd(), workspaceDir: process.cwd() });
+  // Attribute compiler admission to the SDK package that owns this fixture.
+  const invocation = resolveTypeScriptCliInvocation({ repoRoot: process.cwd(), workspaceDir: resolve('packages/plugin-sdk') });
   const compiled = spawnSync(invocation.command, [...invocation.argsPrefix, '--ignoreConfig', '--strict', '--skipLibCheck',
     '--noEmit', '--target', 'ES2022', '--module', 'ESNext', '--moduleResolution', 'Bundler', '--types', 'node',
     resolve(root, 'consumer.ts')], { encoding: 'utf8' });
