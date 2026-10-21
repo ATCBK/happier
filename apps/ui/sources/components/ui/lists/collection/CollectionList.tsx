@@ -236,7 +236,7 @@ export const CollectionNavigationRow = React.memo(function CollectionNavigationR
             onPress={props.onPress}
         />
     );
-    return props.href ? <WorkspaceDestinationRow href={props.href}>{row}</WorkspaceDestinationRow> : row;
+    return props.href ? <WorkspaceDestinationRow href={props.href}>{actions => React.cloneElement(row, { onLongPress: actions.openMenu })}</WorkspaceDestinationRow> : row;
 });
 
 /** Host styles for rows inside a collection list. */
