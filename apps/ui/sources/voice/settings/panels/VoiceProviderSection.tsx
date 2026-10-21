@@ -42,7 +42,6 @@ import { inspectVoiceProviderReadiness, projectVoiceRawSpeechReadinessTargets } 
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import {
   readVoiceProviderSettingsConfig,
-  voiceSettingsParse,
   writeVoiceProviderSettingsConfig,
   type VoiceSettings,
 } from '@/sync/domains/settings/voiceSettings';
@@ -356,7 +355,9 @@ export function useVoiceConversationsReadinessModel(props: {
     props.setVoice(next);
   };
 
-  const voice = voiceSettingsParse(props.voice);
+  // Account settings already materialize this typed projection. Re-parsing here
+  // replaces unchanged provider inputs on every unrelated presentation update.
+  const voice = props.voice;
   const availability = resolveVoiceProviderAvailability({
     happierVoiceSupported: props.happierVoiceSupported,
     platformOs: props.platformOs,

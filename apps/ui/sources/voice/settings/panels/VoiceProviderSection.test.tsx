@@ -386,11 +386,11 @@ await import('./VoiceProviderSection');
 await import('./BundledConversationSettingsSection');
 
 describe('VoiceProviderSection', () => {
-    it('normalizes Voice settings once per readiness derivation while retaining Machine-version invalidation', async () => {
+    it('retains normalized Voice input identity while propagating Machine and settings changes', async () => {
         const { useVoiceConversationsReadinessModel } = await import('./VoiceProviderSection');
         const voiceSettings = await import('@/sync/domains/settings/voiceSettings');
         accountFixture.replaceVoice({ ...accountFixture.settings.voice, providerId: 'local_conversation' });
-        const voice = accountFixture.settings.voice;
+        let voice = accountFixture.settings.voice;
         const machine = createMachineFixture({ id: 'normalization-machine', activeAt: Date.now(),
             daemonStateVersion: 1, daemonState: { status: 'running' } });
         const source = { sourceServerId: accountFixture.scope.serverId, sourceAccountId: accountFixture.scope.accountId };
@@ -398,13 +398,14 @@ describe('VoiceProviderSection', () => {
         // Observe the real parser without replacing normalization, migration or provider readers.
         const normalize = vi.spyOn(voiceSettings, 'voiceSettingsParse');
         onTestFinished(() => normalize.mockRestore());
-        const frames: Array<Readonly<{ normalizations: number; checkKey: string | null; readiness: unknown }>> = [];
+        const frames: Array<Readonly<{ normalizations: number; retainedVoice: boolean; isOff: boolean; checkKey: string | null; readiness: unknown }>> = [];
         function ReadinessNormalizationProbe() {
             const before = normalize.mock.calls.length;
             const model = useVoiceConversationsReadinessModel({ voice, setVoice: accountFixture.replaceVoice,
                 executionMachineId: machine.id, executionMachineSelectedId: machine.id,
                 executionMachineSelectionKind: 'resolved', happierVoiceSupported: true, platformOs: 'web' });
             const frame = { normalizations: normalize.mock.calls.length - before,
+                retainedVoice: model.voice === voice, isOff: model.isOff,
                 checkKey: model.selectedReadinessCheckKey, readiness: model.selectedProviderReadiness };
             frames.push(frame);
             return React.createElement('ReadinessNormalizationProbe', frame);
@@ -412,6 +413,17 @@ describe('VoiceProviderSection', () => {
         const screen = await renderScreen(<ReadinessNormalizationProbe />);
         const first = frames.at(-1)!;
         expect(first.checkKey).toEqual(expect.any(String));
+        expect(first.retainedVoice).toBe(true);
+        await act(async () => {
+            storage.getState().applyMachines([createMachineFixture({ id: 'unrelated-machine',
+                activeAt: Date.now(), daemonStateVersion: 9 })], false, source);
+        });
+        // Home's setup ancestor may render for other inventory even though this
+        // model's selected Machine and normalized settings are unchanged.
+        await screen.update(<ReadinessNormalizationProbe />);
+        expect(frames.at(-1)!.retainedVoice).toBe(true);
+        expect(frames.at(-1)!.checkKey).toBe(first.checkKey);
+        expect(frames.at(-1)!.normalizations).toBe(0);
         frames.length = 0;
         await act(async () => {
             storage.getState().applyMachines([{ ...machine, daemonStateVersion: 2,
@@ -424,7 +436,17 @@ describe('VoiceProviderSection', () => {
         expect(next!.checkKey).not.toBe(first.checkKey);
         expect(next!.readiness).toEqual(first.readiness);
         expect(storage.getState().settings.voice).toBe(voice);
-        expect(next!.normalizations).toBe(1);
+        expect(next!.retainedVoice).toBe(true);
+        expect(next!.normalizations).toBe(0);
+        await act(async () => {
+            accountFixture.replaceVoice({ ...voice, providerId: null });
+            voice = accountFixture.settings.voice;
+        });
+        await screen.update(<ReadinessNormalizationProbe />);
+        const changedSettings = frames.at(-1)!;
+        expect(changedSettings.retainedVoice).toBe(true);
+        expect(changedSettings.isOff).toBe(true);
+        expect(changedSettings.checkKey).toBeNull();
         await screen.unmount();
     });
 
