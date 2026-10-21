@@ -64,6 +64,34 @@ describe('Git repository worktree status enrichment', () => {
         await Promise.all(cleanups.map((cleanup) => cleanup().catch(() => undefined)));
     });
 
+    it.each([false, true])('requires hosting runtime services only when the repository has a remote ($0)', async (hasRemote) => {
+        const repoRoot = await initRepoWithCommit('git-snap-hosting-');
+        cleanups.push(() => rm(repoRoot, { recursive: true, force: true }));
+        await writeFile(join(repoRoot, 'README.md'), 'changed\n');
+        if (hasRemote) await runGit(repoRoot, ['remote', 'add', 'origin', 'https://example.test/repo.git']);
+
+        // Install only the real OS/Git boundary. Hosting runtime services are
+        // genuinely absent; no internal registry or resolver is replaced.
+        const pending = runWithGitScmCommandRunner(
+            createRealGitScmBackendRuntimeServices().runCommand,
+            () => getGitSnapshot({ context: buildContext(repoRoot) }),
+        );
+        if (hasRemote) {
+            await expect(pending).rejects.toThrow(/host-injected SCM hosting provider registry/);
+            return;
+        }
+        const response = await pending;
+        expect(response).toMatchObject({
+            success: true,
+            snapshot: {
+                entries: [{ path: 'README.md', stats: { pendingAdded: 1, pendingRemoved: 1 } }],
+                totals: { pendingFiles: 1, pendingAdded: 1, pendingRemoved: 1 },
+                hostingProvider: null,
+                pullRequestStatus: { provider: null, headBranch: 'main', baseBranch: null, openPullRequest: null, authState: 'unsupported' },
+            },
+        });
+    });
+
     it.each(['included', 'pending'] as const)('marks tracked statistics incomplete when %s numstat fails', async (area) => {
         const repoRoot = await initRepoWithCommit('git-snap-failed-stats-');
         cleanups.push(() => rm(repoRoot, { recursive: true, force: true }));

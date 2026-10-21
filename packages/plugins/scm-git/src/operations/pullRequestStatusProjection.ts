@@ -79,7 +79,7 @@ function readAuthState(entry: ReturnType<PrStatusCache['getFreshForAnyAuthProfil
 
 export function projectPullRequestStatus(input: Readonly<{
     snapshot: ScmWorkingSnapshot;
-    registry: PullRequestStatusProjectionRegistry;
+    registry?: PullRequestStatusProjectionRegistry;
     cache?: PrStatusCache;
     now?: () => number;
 }>): ScmWorkingSnapshot {
@@ -88,7 +88,7 @@ export function projectPullRequestStatus(input: Readonly<{
     const cache = input.cache ?? defaultPrStatusCache;
     const headBranch = snapshot.branch.head;
     const baseBranch = resolvePullRequestBaseBranch(snapshot);
-    const provider = selectHostingProvider(snapshot, registry);
+    const provider = registry ? selectHostingProvider(snapshot, registry) : null;
 
     if (!provider || !headBranch) {
         return {
@@ -113,7 +113,7 @@ export function projectPullRequestStatus(input: Readonly<{
         headBranch,
         state: 'open',
     });
-    const compareUrl = baseBranch
+    const compareUrl = baseBranch && registry
         ? registry.buildCompareUrl({ provider, base: baseBranch, head: headBranch })
         : { kind: 'unsupported' as const };
     const openPullRequest = cached?.kind === 'success'

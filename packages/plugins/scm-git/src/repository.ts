@@ -19,6 +19,7 @@ import { readGitBranchOperationState } from './operations/branchOperationState.j
 import { parseGitStatusPorcelainV2Z } from './statusParser.js';
 import { parseGitWorktreeListPorcelain } from './worktreeListParser.js';
 import { inspectGitOrphanWorktree, readGitRetentionFacts, resolveGitRetainedWorktreeRepository } from './operations/worktreeRetentionFacts.js';
+import { projectPullRequestStatus, resolveDefaultPullRequestStatusProjectionRegistry } from './operations/pullRequestStatusProjection.js';
 
 function resolveMainWorktreePathFromCheckoutIdentity(
     checkoutIdentity: Awaited<ReturnType<typeof inspectGitCheckoutIdentity>>,
@@ -172,9 +173,6 @@ export async function getGitSnapshot(input: {
     });
     const checkoutIdentity = await inspectGitCheckoutIdentity({ cwd: context.cwd });
     const operationState = await readGitBranchOperationState(context);
-    const { resolveDefaultPullRequestStatusProjectionRegistry } = await import('./operations/pullRequestStatusProjection.js');
-    const hostingProviderRegistry = await resolveDefaultPullRequestStatusProjectionRegistry();
-
     const statusRaw = statusResult.stdout ?? '';
     const parsedStatus = parseGitStatusPorcelainV2Z(statusRaw);
     const upstreamOidResult = parsedStatus.branch.upstream ? await runScmCommand({
@@ -183,7 +181,7 @@ export async function getGitSnapshot(input: {
     const untrackedPaths = parsedStatus.notAdded;
     const untrackedStatsByPath = repoRoot && untrackedPaths.length > 0 ? await readUntrackedFileStats(repoRoot, untrackedPaths) : {};
 
-    const snapshot = buildGitSnapshot({
+    const baseSnapshot = buildGitSnapshot({
         projectKey: context.projectKey,
         fetchedAt: Date.now(),
         rootPath: context.detection.rootPath,
@@ -201,7 +199,14 @@ export async function getGitSnapshot(input: {
         remoteHeadRefsOutput: remoteHeadRefsResult.success ? (remoteHeadRefsResult.stdout ?? '') : '',
         operationState: request?.operationStateVersion === 1 ? operationState : operationState && (operationState.kind === 'merge' || operationState.kind === 'rebase') ? { kind: operationState.kind, sourceRef: operationState.sourceRef, canContinue: operationState.canContinue, canAbort: operationState.canAbort } : null,
         ...(request?.operationStateVersion === 1 ? { operationStateVersion: 1 as const } : {}),
-        hostingProviderRegistry,
+    });
+    // Without a remote, hosting cannot contribute any facts. Local status must
+    // not wait for the host's external Connected Account deployment inventory.
+    const snapshot = projectPullRequestStatus({
+        snapshot: baseSnapshot,
+        ...(baseSnapshot.repo.remotes.length > 0
+            ? { registry: await resolveDefaultPullRequestStatusProjectionRegistry() }
+            : {}),
     });
 
     if (request?.includeWorktreeStatus === true && snapshot.repo.worktrees.length > 0) {
