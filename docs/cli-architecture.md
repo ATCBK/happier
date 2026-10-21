@@ -4357,6 +4357,11 @@ its outcome is pending; user cancellation remains authoritative. Authentication,
 quota, and non-capacity transport recovery retain their own classifications and
 policies.
 
+Feature observations keep caller deadlines and cancellation active through response-body
+consumption, including the authenticated-to-public compatibility fallback. No feature-owned
+default deadline is added. Diagnostic artifact collection likewise retains its existing
+request deadline until the server response body has been consumed.
+
 ### Control server (local IPC)
 
 ```mermaid
