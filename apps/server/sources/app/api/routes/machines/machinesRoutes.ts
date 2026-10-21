@@ -56,6 +56,7 @@ import { registerManagedMachineRoutes } from "@/app/machines/managed/managedRout
 import { requireManagedMachineRegistrationInTx, linkManagedEnrollmentInTx } from "@/app/machines/managed/managedMutations";
 import { ManagedMachineError, readMachineDevcontainerChildInTx, readMachineDevcontainerChildrenInTx } from "@/app/machines/managed/managedRows";
 import { MachineContentKeyTransitionInputV1Schema, MachineContentKeyTransitionResultV1Schema, MachinePublishedRowV1Schema } from "@happier-dev/protocol/machines/machineContentKeyTransitionV1";
+import { MachineReadBatchRequestV1Schema, MachineReadBatchResponseV1Schema } from '@happier-dev/protocol/machines/machineReadBatchV1';
 import { transitionMachineContentKeyInTx, readMachineContentKeySnapshotInTx } from "@/app/machines/transitionMachineContentKeyInTx";
 import { readCurrentManagedGuestActivityInTx } from '@/app/auth/externalActionExecutionAuthorization';
 import { registerMachineAccessRoutes } from './machineAccessRoutes';
@@ -63,15 +64,6 @@ import {
     listMachineCandidatesInTx,
     readAccessibleMachineOpeningsInTx,
 } from '@/app/machines/machineAccess';
-
-async function readAccessibleMachineProjectionInTx(
-    tx: Tx,
-    input: Readonly<{ actorAccountId: string; machineId: string; request: FastifyRequest }>,
-) {
-    const machine = await tx.machine.findUnique({ where: { id: input.machineId } });
-    if (!machine) return null;
-    return (await readAccessibleMachineProjectionsInTx(tx, { ...input, machines: [machine] }))[0] ?? null;
-}
 
 async function readAccessibleMachineProjectionsInTx(
     tx: Tx,
@@ -90,6 +82,35 @@ async function readAccessibleMachineProjectionsInTx(
                 readAccountStoredContentCompatibilityForHttpRequest(input.request).declaration?.protocolVersion,
         }) }];
     });
+}
+
+/** Exact Machine reads share one admission path, whether transported singly or in a batch. */
+async function readRequestedMachineProjectionsInTx(
+    tx: Tx,
+    request: FastifyRequest,
+    machineIds: readonly string[],
+) {
+    let actorAccountId = request.userId;
+    let admittedIds = machineIds;
+    const guestProof = request.externalActionManagedGuestActivity;
+    if (guestProof) {
+        const binding = request.externalActionExecutionAuthorizationBinding;
+        if (!binding || request.externalActionExecutionAuthorized !== true) return [];
+        admittedIds = machineIds.filter(id => id === guestProof.machineId);
+        if (!admittedIds.length) return [];
+        const current = await readCurrentManagedGuestActivityInTx(tx, binding, guestProof.machineId);
+        if (!current || current.installationId !== guestProof.installationId) return [];
+        // Only this verified controller's exact guest can borrow its custody.
+        actorAccountId = binding.custodianAccountId;
+    }
+    const machines = await tx.machine.findMany({ where: { id: { in: [...admittedIds] } } });
+    const projections = await readAccessibleMachineProjectionsInTx(tx, { actorAccountId, machines, request });
+    if (guestProof) {
+        const binding = request.externalActionExecutionAuthorizationBinding;
+        const current = binding ? await readCurrentManagedGuestActivityInTx(tx, binding, guestProof.machineId) : null;
+        if (!current || current.installationId !== guestProof.installationId) return [];
+    }
+    return projections;
 }
 
 function bytesEqual(a: Uint8Array | null, b: Uint8Array | null) {
@@ -965,6 +986,25 @@ export function machinesRoutes(app: Fastify) {
         return accessible.map(({ projection }) => projection);
     });
 
+    app.post('/v1/machines/read-batch', {
+        preHandler: app.authenticate,
+        config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, "machines") },
+        schema: { body: MachineReadBatchRequestV1Schema },
+    }, async (request, reply) => {
+        const ids = [...new Set(request.body.machineIds)];
+        const accessible = await inReadSnapshot(tx => readRequestedMachineProjectionsInTx(tx, request, ids));
+        if (accessible.some(result => result.access.resourceMode === 'plain')
+            && !readAccountStoredContentCompatibilityForHttpRequest(request).supportsCurrentProtocol) {
+            await enforceCurrentAccountStoredContentCompatibilityForHttpRequest(request, reply);
+            return;
+        }
+        const byId = new Map(accessible.map(result => [result.machine.id, result.projection]));
+        return MachineReadBatchResponseV1Schema.parse({ results: ids.map(machineId => {
+            const machine = byId.get(machineId);
+            return machine ? { machineId, status: 'found', machine } : { machineId, status: 'not_found' };
+        }) });
+    });
+
     // GET /v1/machines/:id - Get single machine by ID
     app.get('/v1/machines/:id', {
         preHandler: app.authenticate,
@@ -977,30 +1017,8 @@ export function machinesRoutes(app: Fastify) {
             })
         }
     }, async (request, reply) => {
-        const userId = request.userId;
         const { id } = request.params;
-
-        const result = await inReadSnapshot(async (tx) => {
-            let actorAccountId = userId;
-            const guestProof = request.externalActionManagedGuestActivity;
-            if (guestProof) {
-                const binding = request.externalActionExecutionAuthorizationBinding;
-                if (!binding || request.externalActionExecutionAuthorized !== true || guestProof.machineId !== id) return null;
-                const current = await readCurrentManagedGuestActivityInTx(tx, binding, id);
-                if (!current || current.installationId !== guestProof.installationId) return null;
-                // The verified controller owns this guest's Machine custody.
-                // Original requester/root/row admission is rechecked above;
-                // no requester Account material is borrowed for the RPC codec.
-                actorAccountId = binding.custodianAccountId;
-            }
-            const projection = await readAccessibleMachineProjectionInTx(tx, { actorAccountId, machineId: id, request });
-            if (guestProof) {
-                const binding = request.externalActionExecutionAuthorizationBinding;
-                const current = binding ? await readCurrentManagedGuestActivityInTx(tx, binding, id) : null;
-                if (!current || current.installationId !== guestProof.installationId) return null;
-            }
-            return projection;
-        });
+        const result = await inReadSnapshot(async tx => (await readRequestedMachineProjectionsInTx(tx, request, [id]))[0] ?? null);
 
         if (!result) {
             return reply.code(404).send({ error: 'Machine not found' });

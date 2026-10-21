@@ -46,7 +46,7 @@ export function registerSessionReadBatchRoute(app: Fastify) {
                     return SessionReadBatchDetailV1Schema.parse({ ...detail,
                         body: projectSessionTurnWaitingCompatibility(detail.body, storedContentCompatibility) });
                 });
-                if (result.detail.status === 200) {
+                if (result.detail.status === 200 && request.body.includeTurns !== false) {
                     result.turns = await readComponent(async () => {
                         const turns = await readSessionTurns(input);
                         return SessionReadBatchTurnsV1Schema.parse({ ...turns,

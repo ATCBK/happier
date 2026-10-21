@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { SessionReadBatchRequestV1Schema, SessionReadBatchResponseV1Schema } from './sessionReadBatchV1.js';
 
 describe('Session read batch V1', () => {
+  it('admits explicit detail-only demand without weakening snapshot or messages-only defaults', () => {
+    expect(SessionReadBatchRequestV1Schema.safeParse({ sessionIds: ['session'], includeSnapshot: true, includeTurns: false }).success).toBe(true);
+    expect(SessionReadBatchRequestV1Schema.safeParse({ sessionIds: ['session'], includeSnapshot: false, includeMessages: true }).success).toBe(true);
+    expect(SessionReadBatchRequestV1Schema.safeParse({ sessionIds: ['session'], includeSnapshot: false, includeMessages: true, includeTurns: true }).success).toBe(false);
+    expect(SessionReadBatchRequestV1Schema.safeParse({ sessionIds: ['session'], includeTurns: 'false' }).success).toBe(false);
+  });
+
   it('admits independent snapshot and message demands without an id-count cutoff', () => {
     expect(SessionReadBatchRequestV1Schema.parse({ sessionIds: ['session'] })).toEqual({
       sessionIds: ['session'], includeSnapshot: true, includeMessages: false,

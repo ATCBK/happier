@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { SessionReadBatchResponseV1Schema } from '@happier-dev/protocol/sessions/read/sessionReadBatchV1';
 
 import { db } from '@/storage/db';
+import { withSqliteReadSnapshot } from '@/storage/prisma';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 import { createSignedAccountContentBinding } from '@/testkit/accountEncryption';
 import { withAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
@@ -15,7 +16,40 @@ describe('Session id-batched reads (SQLite integration)', () => {
             HAPPIER_FEATURE_AUTH_LOGIN__KEY_CHALLENGE_ENABLED: '1',
         } });
     }, 120_000);
-    afterAll(async () => { await harness.close(); vi.unstubAllEnvs(); });
+    afterAll(async () => { await harness?.close(); vi.unstubAllEnvs(); });
+
+    it('omits turns for explicit encryption-context demand while default full snapshots retain admitted turns', async () => {
+        const owner = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: 'plain' } });
+        const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), metadata: '{}', encryptionMode: 'plain' } });
+        await db.sessionTurn.create({ data: { sessionId: session.id, turnId: 'required-turn', status: 'completed',
+            startedAt: 10n, updatedAt: 20n, terminalAt: 20n } });
+        // Observe the genuine SQLite query delegate; route/admission/serialization remain real.
+        const turnReads = await withSqliteReadSnapshot(async reader => vi.spyOn(reader.sessionTurn, 'findMany'));
+        try {
+            await withAuthenticatedTestApp(sessionRoutes, async app => {
+                const headers = { 'x-test-user-id': owner.id, 'x-happier-account-stored-content-protocol': '4' };
+                const read = (includeTurns?: boolean) => app.inject({ method: 'POST', url: '/v2/sessions/read-batch', headers,
+                    payload: { sessionIds: [session.id, 'unreadable'], accessProjectionVersion: 1,
+                        ...(includeTurns === undefined ? {} : { includeTurns }) } });
+                const complete = await read();
+                expect(complete.statusCode, complete.body).toBe(200);
+                expect(SessionReadBatchResponseV1Schema.parse(complete.json()).results[0]).toMatchObject({
+                    turns: { status: 200, body: { turns: [{ turnId: 'required-turn' }] } },
+                });
+                expect(turnReads).toHaveBeenCalled();
+                turnReads.mockClear();
+                const context = await read(false);
+                expect(context.statusCode, context.body).toBe(200);
+                const { results } = SessionReadBatchResponseV1Schema.parse(context.json());
+                expect(results[0]?.detail).toEqual(complete.json().results[0].detail);
+                expect(results[0]?.turns).toBeUndefined();
+                expect(results[0]?.messages).toBeUndefined();
+                expect(results[1]).toMatchObject({ sessionId: 'unreadable', detail: { status: 404 } });
+                expect(results[1]?.turns).toBeUndefined();
+                expect(turnReads).not.toHaveBeenCalled();
+            });
+        } finally { turnReads.mockRestore(); }
+    });
 
     it('returns the existing admitted snapshot and first message page independently for mixed ids and modes', async () => {
         const owner = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: 'plain' } });

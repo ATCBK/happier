@@ -89,6 +89,8 @@ const MachinePublishedRowCanonicalV1Schema = lazyZodSchema(() => z.strictObject(
 }));
 export const MachinePublishedRowV1Schema = createStoredReadSchema(MachinePublishedRowCanonicalV1Schema);
 export type MachinePublishedRowV1 = z.infer<typeof MachinePublishedRowV1Schema>;
+/** The same row parser with a closed wire envelope and a bounded public declaration. */
+export const MachinePublishedRowWireV1Schema: z.ZodMiniType<MachinePublishedRowV1> = MachinePublishedRowCanonicalV1Schema;
 export const MachineContentKeyTransitionResultV1Schema = lazyZodSchema(() =>
   createMachineContentKeyTransitionResultV1Schema(MachinePublishedRowV1Schema));
 

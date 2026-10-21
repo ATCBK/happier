@@ -80,6 +80,34 @@ describe("machinesRoutes API-token admission (integration)", () => {
         }
     });
 
+    it("batches selected exact Machine reads without widening admission or omitting temporary targets", async () => {
+        const account = await db.account.create({ data: { publicKey: null, encryptionMode: "e2ee" } });
+        const other = await db.account.create({ data: { publicKey: null, encryptionMode: "e2ee" } });
+        await db.machine.createMany({ data: [
+            { id: "batch-persistent", accountId: account.id, metadata: "encrypted" },
+            { id: "batch-temporary", accountId: account.id, metadata: "encrypted", kind: "ephemeral_session_runner" },
+            { id: "batch-revoked", accountId: account.id, metadata: "encrypted", revokedAt: new Date(1234) },
+            { id: "batch-foreign", accountId: other.id, metadata: "private" },
+        ] });
+        const token = await auth.createToken(account.id, undefined, { kind: "account", authority: "present_user" });
+        const app = createTestApp();
+        await app.ready();
+        try {
+            const headers = { authorization: `Bearer ${token}` };
+            const ids = ["batch-persistent", "batch-temporary", "batch-revoked", "batch-foreign", "batch-missing"];
+            const exact = await Promise.all(ids.map(id => app.inject({ method: "GET", url: `/v1/machines/${id}`, headers })));
+            const batch = await app.inject({ method: "POST", url: "/v1/machines/read-batch", headers, payload: { machineIds: ids } });
+            expect(batch.statusCode).toBe(200);
+            expect(batch.json()).toEqual({ results: ids.map((machineId, index) => exact[index]!.statusCode === 200
+                ? { machineId, status: "found", machine: exact[index]!.json().machine }
+                : { machineId, status: "not_found" }) });
+            expect(exact[1]!.statusCode).toBe(200);
+            expect(exact[3]!.statusCode).toBe(404);
+            expect((await app.inject({ method: "POST", url: "/v1/machines/read-batch", headers,
+                payload: { machineIds: ids, actorAccountId: other.id } })).statusCode).toBe(400);
+        } finally { await app.close(); }
+    });
+
     it("returns scoped PAT callers only the strict machine-selection bootstrap projection", async () => {
         const account = await db.account.create({
             data: { publicKey: null, encryptionMode: "plain" },
@@ -156,6 +184,10 @@ describe("machinesRoutes API-token admission (integration)", () => {
             });
             expect(detail.statusCode).toBe(403);
             expect(detail.json()).toEqual({ error: "present_user_required" });
+            const batch = await app.inject({ method: "POST", url: "/v1/machines/read-batch",
+                headers: { authorization: `Bearer ${pat.token}` }, payload: { machineIds: ["machine-1"] } });
+            expect(batch.statusCode).toBe(403);
+            expect(batch.json()).toEqual({ error: "present_user_required" });
         } finally {
             await app.close();
         }

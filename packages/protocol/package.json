@@ -5405,6 +5405,11 @@
       "types": "./dist/machines/machineContentKeyTransitionV1.d.ts",
       "default": "./dist/machines/machineContentKeyTransitionV1.js"
     },
+    "./machines/machineReadBatchV1": {
+      "happier-source": "./src/machines/machineReadBatchV1.ts",
+      "types": "./dist/machines/machineReadBatchV1.d.ts",
+      "default": "./dist/machines/machineReadBatchV1.js"
+    },
     "./machines/prepareMachineDataKeyEnvelopesV1": {
       "happier-source": "./src/machines/prepareMachineDataKeyEnvelopesV1.ts",
       "types": "./dist/machines/prepareMachineDataKeyEnvelopesV1.d.ts",
