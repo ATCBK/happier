@@ -1,19 +1,25 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SpeechOptions } from 'expo-speech';
+import { createKokoroWorkerBoundary } from '@/dev/testkit/harness/kokoroWorker';
+import { createWebAudioBoundary } from '@/dev/testkit/harness/webAudio';
+import { deriveSettingsSecretsKey } from '@/sync/encryption/secretSettings';
+import { sync } from '@/sync/sync';
 
 // Boundaries only: platform speech (expo-speech), audio player (expo-audio), file system,
-// network (fetch), secret decryption, and the Kokoro synthesis runtime (native module / web worker).
+// network (fetch), and browser Worker/Web Audio APIs. Secret encryption and decryption stay real.
 const speech = vi.hoisted(() => ({
-  speak: vi.fn<(text: string, options: any) => void>(),
+  speak: vi.fn<(text: string, options?: SpeechOptions) => void>(),
   stop: vi.fn<() => void>(),
 }));
 vi.mock('expo-speech', () => ({
-  speak: (text: string, options: any) => speech.speak(text, options),
+  speak: (text: string, options?: SpeechOptions) => speech.speak(text, options),
   stop: () => speech.stop(),
 }));
 
+const platform = vi.hoisted(() => ({ OS: 'ios' }));
 vi.mock('react-native', async () => {
   const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-  return createReactNativeWebMock({ Platform: { OS: 'ios' } });
+  return createReactNativeWebMock({ Platform: { get OS() { return platform.OS; } } });
 });
 
 vi.mock('expo-file-system', async () => {
@@ -39,23 +45,13 @@ vi.mock('expo-audio', () => ({
   },
 }));
 
-vi.mock('@/sync/sync', () => ({
-  sync: { decryptSecretValue: (value: unknown) => (value ? 'secret-key' : null) },
-}));
-
-const kokoroRuntime = vi.hoisted(() => ({
-  stream: vi.fn<(opts: any) => AsyncIterable<{ wavBytes: ArrayBuffer; sentenceText: string }>>(),
-}));
-vi.mock('@/voice/kokoro/runtime/kokoroSupport', () => ({ isKokoroRuntimeSupported: () => true }));
-vi.mock('@/voice/kokoro/runtime/synthesizeKokoroWav', () => ({
-  streamKokoroWavSentences: (opts: any) => kokoroRuntime.stream(opts),
-}));
-
 import { speakAssistantText } from '@/voice/output/speakAssistantText';
 import { createTtsChunker } from '@/voice/output/TtsChunker';
 import { getLocalVoiceState, patchLocalVoiceState } from '@/voice/local/localVoiceState';
 
-const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<unknown>>();
+const fetchMock = vi.fn<typeof fetch>();
+const kokoroWorker = createKokoroWorkerBoundary();
+const webAudio = createWebAudioBoundary();
 
 beforeEach(() => {
   patchLocalVoiceState({ error: null });
@@ -63,13 +59,22 @@ beforeEach(() => {
   speech.stop.mockReset();
   playedSources.length = 0;
   fetchMock.mockReset();
-  (globalThis as any).fetch = fetchMock;
-  kokoroRuntime.stream.mockReset().mockImplementation(() => ({
-    async *[Symbol.asyncIterator]() {
-      yield { wavBytes: new Uint8Array([1]).buffer, sentenceText: 'hello' };
-    },
-  }));
+  platform.OS = 'ios';
+  kokoroWorker.messages.length = 0;
+  webAudio.decodedBytes.length = 0;
+  webAudio.sources.length = 0;
+  vi.stubGlobal('fetch', fetchMock);
+  vi.stubGlobal('Worker', kokoroWorker.Worker);
+  vi.stubGlobal('AudioContext', webAudio.AudioContext);
 });
+afterEach(() => { vi.unstubAllGlobals(); });
+
+async function readKokoroStream() {
+  await vi.waitFor(() => expect(kokoroWorker.messages[0]?.type).toBe('stream'));
+  const request = kokoroWorker.messages[0];
+  if (!request || request.type !== 'stream') throw new Error('Expected Kokoro stream request');
+  return request;
+}
 
 function settingsWithTts(tts: Record<string, unknown>) {
   return {
@@ -93,7 +98,7 @@ function settingsWithTts(tts: Record<string, unknown>) {
 const GOOGLE_TTS = {
   provider: 'google_cloud',
   googleCloud: {
-    apiKey: { _isSecretValue: true, encryptedValue: { t: 'enc-v1', c: 'x' } },
+    apiKey: null,
     voiceName: 'en-US-Wavenet-D',
     languageCode: 'en-US',
     format: 'mp3',
@@ -118,9 +123,15 @@ async function speak(text: string, tts: Record<string, unknown>, registerPlaybac
 }
 
 describe('speakAssistantText', () => {
+  it('speaks inline-code link labels as visible text while preserving literal links in code', async () => {
+    await speak('See [`parser`](https://example.test/docs) and literal `[x](url)`.', { provider: 'device' });
+    expect(speech.speak).toHaveBeenCalledWith('See parser and literal [x](url).', expect.anything());
+  });
+
   it.each([
     ['Call `f(*args, **kwargs)` and then **continue speaking**.', 'Call f(*args, **kwargs) and then continue speaking.'],
     [`${'a'.repeat(31)}\`\`f(*args, \`literal\`, **kwargs)\`\` then **done**.`, `${'a'.repeat(31)}f(*args, \`literal\`, **kwargs) then done.`],
+    ['Before first. See [`parser`](u). Then `left [x](url) right` continues afterward.', 'Before first. See parser. Then left [x](url) right continues afterward.'],
   ])('preserves inline code across supported streamed cuts: %s', async (text, expected) => {
     const chunker = createTtsChunker(32);
     const speechTextContext = { emphasis: [] };
@@ -221,7 +232,7 @@ describe('speakAssistantText', () => {
   });
 
   it('synthesizes and plays OpenAI-compatible speech', async () => {
-    fetchMock.mockResolvedValue({ ok: true, arrayBuffer: async () => new Uint8Array([1, 2]).buffer });
+    fetchMock.mockResolvedValue(new Response(new Uint8Array([1, 2])));
 
     await speak('hello', OPENAI_TTS);
 
@@ -231,7 +242,7 @@ describe('speakAssistantText', () => {
   });
 
   it('reports cloud TTS failures in the local voice state', async () => {
-    fetchMock.mockResolvedValue({ ok: false, status: 500 });
+    fetchMock.mockResolvedValue(new Response(null, { status: 500 }));
 
     await speak('hello', OPENAI_TTS);
 
@@ -240,39 +251,54 @@ describe('speakAssistantText', () => {
   });
 
   it('synthesizes and plays Google Cloud speech', async () => {
-    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ audioContent: 'Zm9v' }) });
+    fetchMock.mockResolvedValue(Response.json({ audioContent: 'Zm9v' }));
+    const previousWriteKey = Reflect.get(sync, 'settingsSecretsKey');
+    const previousReadKeys = Reflect.get(sync, 'settingsSecretsReadKeys');
+    const key = await deriveSettingsSecretsKey(new Uint8Array(32).fill(7));
+    Reflect.set(sync, 'settingsSecretsKey', key);
+    Reflect.set(sync, 'settingsSecretsReadKeys', [key]);
+    try {
+      const apiKey = sync.encryptSecretValue('secret-key');
+      expect(apiKey).not.toBeNull();
+      await speak('hello', { ...GOOGLE_TTS, googleCloud: { ...GOOGLE_TTS.googleCloud, apiKey } });
 
-    await speak('hello', GOOGLE_TTS);
-
-    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('texttospeech.googleapis.com');
-    expect(playedSources.length).toBe(1);
-    expect(getLocalVoiceState().error).toBe(null);
+      expect(String(fetchMock.mock.calls[0]?.[0])).toContain('texttospeech.googleapis.com');
+      expect(new URL(String(fetchMock.mock.calls[0]?.[0])).searchParams.get('key')).toBe('secret-key');
+      expect(playedSources.length).toBe(1);
+      expect(getLocalVoiceState().error).toBe(null);
+    } finally {
+      Reflect.set(sync, 'settingsSecretsKey', previousWriteKey);
+      Reflect.set(sync, 'settingsSecretsReadKeys', previousReadKeys);
+    }
   });
 
   it('reports a Kokoro failure instead of silently switching to the device voice', async () => {
-    kokoroRuntime.stream.mockImplementation(() => ({
-      async *[Symbol.asyncIterator]() {
-        throw new Error('model_pack_not_installed');
-      },
-    }));
-
-    await speak('hello', {
+    platform.OS = 'web';
+    const speaking = speak('hello', {
       provider: 'local_neural',
       localNeural: { model: 'kokoro', assetId: 'kokoro-82m', voiceId: 'af_heart', speed: 1 },
     });
-
+    const request = await readKokoroStream();
+    kokoroWorker.emit({ id: request.id, type: 'error', message: 'model_pack_not_installed' });
+    await speaking;
     expect(speech.speak).not.toHaveBeenCalled();
+    expect(webAudio.sources).toHaveLength(0);
     expect(getLocalVoiceState()).toMatchObject({ error: 'tts_failed', errorMessage: 'model_pack_not_installed' });
   });
 
   it('passes no Kokoro voice when none is configured so each platform picks its own default', async () => {
-    await speak('hello', {
+    platform.OS = 'web';
+    const speaking = speak('hello', {
       provider: 'local_neural',
       localNeural: { model: 'kokoro', assetId: null, voiceId: null, speed: null },
     });
-
-    expect(kokoroRuntime.stream).toHaveBeenCalledWith(expect.objectContaining({ text: 'hello', voiceId: null }));
-    expect(playedSources.length).toBe(1);
+    const request = await readKokoroStream();
+    expect(request).toMatchObject({ text: 'hello', voiceId: null });
+    kokoroWorker.emit({ id: request.id, type: 'stream_chunk', wavBytes: new Uint8Array([1]).buffer, sentenceText: 'hello' });
+    kokoroWorker.emit({ id: request.id, type: 'stream_end' });
+    await speaking;
+    expect(webAudio.sources[0]?.started).toBe(true);
+    expect(webAudio.sources[0]?.disconnected).toBe(true);
   });
 
   it('speaks plain text instead of markdown and code', async () => {
