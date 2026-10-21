@@ -60,13 +60,6 @@ const CONNECTED_ACCOUNT_PROJECTION_UNSUPPORTED = Object.freeze({
     reason: 'unsupported' as const,
 });
 
-type ProjectionConnectionState = Readonly<{
-    targetKey: string | null;
-    online: boolean;
-    reconnectSequence: number;
-    reloadRevision: number;
-}>;
-
 /**
  * A projection's explicit consumer-facing establishment state. Consumers must
  * branch on this owner-provided fact rather than treating an empty model or a
@@ -133,31 +126,6 @@ export type PluginUiProjectionCurrentness = Readonly<{
 export { resolvePluginUiProjectionPlatform };
 
 export { resolvePluginUiClientExecutablePlatform } from './projection';
-
-function advanceProjectionConnectionState(
-    previous: ProjectionConnectionState,
-    input: Readonly<{ targetKey: string | null; online: boolean; reloadRevision: number }>,
-): ProjectionConnectionState {
-    if (previous.targetKey !== input.targetKey) {
-        return {
-            targetKey: input.targetKey,
-            online: input.online,
-            reconnectSequence: 0,
-            reloadRevision: input.reloadRevision,
-        };
-    }
-    if (previous.online === input.online && previous.reloadRevision === input.reloadRevision) {
-        return previous;
-    }
-    return {
-        targetKey: input.targetKey,
-        online: input.online,
-        reconnectSequence: previous.reconnectSequence + (
-            !previous.online && input.online ? 1 : 0
-        ),
-        reloadRevision: input.reloadRevision,
-    };
-}
 
 function createEmptyLoadedProjectionState(
     targetKey: string | null,
@@ -234,8 +202,10 @@ function isAccountLifetimeCurrent(
 
 /**
  * Canonical client owner for daemon-described plugin UI/browser projection
- * currentness. A locally observed reconnect advances an owner-scoped request
- * epoch even when transport timestamps and daemon versions do not change.
+ * currentness. A reconnect or replaced daemon advances the machine's projection
+ * revision (the one endpoint-identity signal), which starts a fresh request even when transport
+ * timestamps and daemon versions do not change. A lapsed heartbeat that resumes on the same
+ * endpoint is not a new endpoint: the confirmed projection is current again as soon as presence is.
  */
 export function usePluginUiProjectionCurrentness(params: Readonly<{
     machineId?: string | null;
@@ -289,21 +259,6 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
         && (!usesFocusedEndpoint || endpointStatus === 'online')
         && machineCliDetectionTarget.isOnline,
     );
-    const [connectionState, setConnectionState] = React.useState<ProjectionConnectionState>(() => ({
-        targetKey,
-        online,
-        reconnectSequence: 0,
-        reloadRevision: params.reloadRevision ?? 0,
-    }));
-    const nextConnectionState = advanceProjectionConnectionState(connectionState, {
-        targetKey,
-        online,
-        reloadRevision: params.reloadRevision ?? 0,
-    });
-    if (nextConnectionState !== connectionState) {
-        setConnectionState(nextConnectionState);
-    }
-
     const subscribeProjectionInvalidation = React.useCallback((listener: () => void) => (
         target && accountLifetimeCurrent
             ? subscribeMachineContributionRegistryProjectionInvalidation(target, listener)
@@ -322,8 +277,7 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
     const authorityKey = targetKey && online && accountLifetimeCurrent
         ? [
             targetKey,
-            nextConnectionState.reconnectSequence,
-            nextConnectionState.reloadRevision,
+            params.reloadRevision ?? 0,
             projectionInvalidationRevision,
             locale,
         ].join(':')

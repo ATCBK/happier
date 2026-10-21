@@ -1626,6 +1626,32 @@ describe('usePluginUiProjectionCurrentness', () => {
             .toEqual({ en: { title: 'Last known good' } });
     });
 
+    it('returns to current as soon as a lapsed heartbeat resumes, without re-establishing a daemon that never reconnected', async () => {
+        projectionRuntime.describe
+            .mockResolvedValueOnce(supportedProjection('Confirmed'))
+            .mockImplementation(() => new Promise(() => {}));
+        const rendered = await renderHook(() => usePluginUiProjectionCurrentness({
+            machineId: 'machine-1',
+            serverId: serverIdentityId,
+        }));
+        await flushHookEffects();
+        expect(rendered.getCurrent()).toMatchObject({ phase: 'current', interactionEnabled: true });
+
+        // A late heartbeat lapses presence; the daemon socket itself never reconnected, so the
+        // endpoint identity (the projection revision) is unchanged when presence resumes.
+        setMachine({ active: false });
+        await act(async () => { await rendered.rerender(); });
+        await flushHookEffects();
+        expect(rendered.getCurrent()).toMatchObject({ phase: 'retainedOffline', interactionEnabled: false });
+
+        setMachine({ active: true });
+        await act(async () => { await rendered.rerender(); });
+        await flushHookEffects();
+        expect(rendered.getCurrent()).toMatchObject({ phase: 'current', interactionEnabled: true });
+        expect(rendered.getCurrent().pluginUiProjection?.translationsByPluginId['acme.preview']?.bundles)
+            .toEqual({ en: { title: 'Confirmed' } });
+    });
+
     it('resolves a cold unreachable projection as unavailable while still recovering after transport timeouts', async () => {
         vi.useFakeTimers();
         try {
