@@ -9,7 +9,7 @@ import { createManagedServicesOwner } from '@/plugins/runtime/invocation/service
 import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/invocation/services/managedProcessSupervisor';
 import { buildLocalServiceRows } from '../../../../../../../apps/ui/sources/sync/domains/local/services/serviceRow';
 import { createProjectServiceRelocation } from '@/workspaces/execution/projectServiceRelocation';
-import { LocalServiceManagedServiceActionTargetV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
+import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { join } from 'node:path';
 
 function inventoryEntry(
@@ -79,7 +79,7 @@ describe('createLocalServiceLauncherFeed', () => {
         });
         const owner = createOwner();
         const oldOwner = createOwner();
-        const workspace = { id: `${destination}-ref`, serverId: 'home', machineId: destination,
+        const workspace: WorkspaceRefV1 = { id: `${destination}-ref`, serverId: 'home', machineId: destination,
             rootPath: process.cwd(), createdAtMs: 1 };
         const oldWorkspace = { ...workspace, id: `${destination}-old-ref`, machineId: destination === 'source' ? 'worker' : 'source' };
         let release!: () => void;
@@ -98,8 +98,8 @@ describe('createLocalServiceLauncherFeed', () => {
                     env: {}, release: async () => undefined };
             },
         });
-        const targetFor = (handle: Awaited<ReturnType<typeof supervise>>) => LocalServiceManagedServiceActionTargetV1Schema.parse({
-            kind: 'managed_service', machineId: handle.workspace.machineId, workspaceId: handle.workspace.id,
+        const targetFor = (handle: Awaited<ReturnType<typeof supervise>>) => ({
+            kind: 'managed_service' as const, machineId: handle.workspace.machineId, workspaceId: handle.workspace.id,
             managedServiceId: handle.instanceId, declaration: handle.declaration, cwd: handle.cwd,
         });
         const feed = createLocalServiceLauncherFeed({ machineId: destination, projectManagedServices: owner,

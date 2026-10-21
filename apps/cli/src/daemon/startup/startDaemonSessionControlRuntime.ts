@@ -264,7 +264,7 @@ import { createLocalServicesDaemonRuntimeActionExecutor } from '@/daemon/local/s
 import { createProjectServiceRelocationRoute } from '@/daemon/local/services/actions/projectServiceRelocationRoute';
 import { createLocalServicesDaemonFeatureGate } from '@/daemon/local/services/featureGate';
 import { pluginReloadController as localServicesPluginRuntimeController } from '@/plugins/runtime/reload/singleton';
-import type { createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
+import type { createManagedServicesOwner, ProjectManagedServiceHandle } from '@/plugins/runtime/invocation/services/managedServicesOwner';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
 import {
   dispatchManagedSessionStart,
@@ -11723,6 +11723,17 @@ export async function startDaemonSessionControlRuntime(
       fetchServerFeaturesSnapshot({
         serverUrl: resolveServerHttpBaseUrl(),
       });
+  function listProjectServices(): readonly ProjectManagedServiceHandle[];
+  function listProjectServices(options: Readonly<{ requireComplete: true; workspaceRoot?: string }>): Promise<readonly ProjectManagedServiceHandle[]>;
+  function listProjectServices(options?: Readonly<{ requireComplete: true; workspaceRoot?: string }>) {
+    const owner = localServicesPluginRuntimeController.getState().activeRegistry?.projectManagedServices;
+    if (options) {
+      if (!owner) return Promise.reject(Object.assign(new Error('Project service native owner is unavailable'),
+        { code: 'project_service_bindings_unavailable' }));
+      return owner.listProjectServices(options);
+    }
+    return owner?.listProjectServices() ?? [];
+  }
   const projectManagedServices: Pick<
     ReturnType<typeof createManagedServicesOwner>,
     'listProjectServices' | 'resolveProjectService' | 'readProcessRoots'
@@ -11730,18 +11741,7 @@ export async function startDaemonSessionControlRuntime(
     readProcessRoots: () =>
       localServicesPluginRuntimeController.getState().activeRegistry
         ?.projectManagedServices.readProcessRoots() ?? [],
-    listProjectServices: (options) => {
-      const owner =
-        localServicesPluginRuntimeController.getState().activeRegistry
-          ?.projectManagedServices;
-      if (!owner && options?.requireComplete) {
-        throw Object.assign(
-          new Error('Project service native owner is unavailable'),
-          { code: 'project_service_bindings_unavailable' },
-        );
-      }
-      return owner?.listProjectServices(options) ?? [];
-    },
+    listProjectServices,
     resolveProjectService: (target) =>
       localServicesPluginRuntimeController
         .getState()
