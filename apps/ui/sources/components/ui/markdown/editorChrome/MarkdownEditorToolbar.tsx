@@ -41,6 +41,9 @@ export type MarkdownEditorToolbarProps = Readonly<{
      *   it must read as part of the field's own header, not as a floating footer.
      */
     variant?: 'panel' | 'inline';
+    /** Panel only: pinned keys before and after the chips (the phone key row's hide-keyboard and Save, ED1mp). */
+    leading?: React.ReactNode;
+    trailing?: React.ReactNode;
     testID?: string;
 }>;
 
@@ -218,7 +221,8 @@ function MarkdownEditorToolbarInner(props: MarkdownEditorToolbarProps): React.Re
     };
 
     return (
-        <EditorAccessoryBar testID={testID} variant={variant}>
+        <EditorAccessoryBar testID={testID} variant={variant}
+            leading={variant === 'panel' ? props.leading : undefined} trailing={variant === 'panel' ? props.trailing : undefined}>
             {chipSpecs.map(renderChip)}
 
             {selectionState.isLinkActive ? (

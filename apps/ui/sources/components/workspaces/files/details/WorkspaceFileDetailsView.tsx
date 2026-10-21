@@ -33,7 +33,7 @@ import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerS
 import type { FileChangesScope } from '@happier-dev/protocol/scm';
 import { FileViewerFindSurface } from './FileViewerFindSurface';
 import { useFindSurfaceRuntime } from '@/keyboard/KeyboardShortcutProvider';
-import { FileEditorPanel, type FileEditorPanelProps } from '@/components/workspaces/files/file/editor/FileEditorPanel';
+import { FileEditorPanel, FileMarkdownEditorPanel, type FileEditorPanelProps } from '@/components/workspaces/files/file/editor/FileEditorPanel';
 import { FileEditorAskControls } from '@/components/workspaces/files/file/editor/FileEditorAskControls';
 import { FileReadAskControls } from '@/components/workspaces/files/file/FileReadAskControls';
 import { FileEditorNoticeLine } from '@/components/workspaces/files/file/editor/FileEditorNoticeLine';
@@ -83,7 +83,6 @@ import { tryBuildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceSc
 import { useWorkspaceFileEditorState, type WorkspaceFileEditStart } from '@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceFileEditorState';
 import { readCodeViewReadingLine } from '@/components/ui/code/view/readCodeViewReadingLine';
 import { readWorkspaceFileEditorDraft, type WorkspaceFileEditorDraft } from '@/components/workspaces/files/details/workspaceFileDetails/workspaceFileEditorDraft';
-import { MarkdownCodeEditorField } from '@/components/ui/markdown/editor/MarkdownCodeEditorField';
 import { useWorkspaceFileEditorCommands } from './workspaceFileDetails/useWorkspaceFileEditorCommands';
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import {
@@ -1233,12 +1232,17 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         onReplacedUnsavedEdits: cancelEditingFile,
         offerWholeTurnRollback,
     });
+    // The peek names who made the change: the agent, and its turn when the marks come from one turn (ED3 "Claude, turn 3").
+    const peekTurnNumber = changesReview.scopeKind === 'turn' ? changesReview.turnNumber : null;
+    const peekAttribution = editorAttribution.agentName
+        ? peekTurnNumber !== null ? `${editorAttribution.agentName}, ${t('hunkReview.turn', { turn: peekTurnNumber })}` : editorAttribution.agentName
+        : null;
     const editorPeek = React.useMemo<FileEditorPanelProps['peek']>(() => ({
         dirty: editorDirty,
-        attribution: editorAttribution.agentName,
+        attribution: peekAttribution,
         resolveChangeActions: (marker, context) => changesReview.controller.changeActionsForKey(marker.key,
             context.dirty ? { discardInDraft: () => context.revertInDraft(marker) } : undefined),
-    }), [editorDirty, editorAttribution.agentName, changesReview.controller.changeActionsForKey]);
+    }), [editorDirty, peekAttribution, changesReview.controller.changeActionsForKey]);
     // P7: one controller per File page; regions handed to this page (header fact, note, card, ⋯ commands).
     const codeIntelligence = useFilePageCodeIntelligence({
         scopeId: props.scopeId, scope, filePath, language,
@@ -1316,7 +1320,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         onSave: saveFileEdits,
         onCancel: cancelEditingFile,
         machineUnreachable: checkoutReachability.unreachable,
-        keyRowCarriesSave: editorAccessory !== null,
+        // Only a mounted key row carries Save: both editor bodies (code and Markdown) mount it in Edit (B1-PE-03).
+        keyRowCarriesSave: editorAccessory !== null && displayMode === 'file' && isEditorSelected,
     });
     // The phone's bottom toolbar steps aside while something else holds the bottom edge: the editor's key row
     // (ED1p) or the review bar in Changes (rvp P1). The header then carries the view choice and Done itself.
@@ -1610,12 +1615,14 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                             </View>
                         ) : <FileLoadingState filePath={filePath} />
                 ) : displayMode === 'file' && isEditorSelected && isMarkdownFile ? (
-                    <MarkdownCodeEditorField
+                    <FileMarkdownEditorPanel
+                        peek={editorPeek}
                         {...codeGeometry}
                         value={editorSeedText} resetKey={String(editorResetKey)} filePath={filePath} language={language}
                         onChange={onEditorChange} editorRef={editorHandleRef} liveValue={liveValue}
                         findSurfaceId={findSurfaceId} active={isActive} focusRootRef={findFocusRoot}
                         findSeed={props.findSeed} onFindSeedConsumed={props.onFindSeedConsumed}
+                        accessory={editorAccessory}
                         changeMarkers={changeMarkers}
                         wrapLines={effectiveWrapLines} showLineNumbers={showLineNumbers}
                         changeDebounceMs={typeof filesEditorChangeDebounceMs === 'number' ? filesEditorChangeDebounceMs : undefined}

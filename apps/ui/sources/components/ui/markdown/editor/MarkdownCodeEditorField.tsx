@@ -14,6 +14,13 @@ import type { MarkdownLiveValueStore } from './useMarkdownLiveValue';
 import type { MarkdownEditorController } from '@/components/ui/markdown/editor/markdownEditorTypes';
 import { MarkdownEditModeMenu } from '@/components/ui/markdown/editorChrome/MarkdownEditModeMenu';
 import { MarkdownEditorToolbar } from '@/components/ui/markdown/editorChrome/MarkdownEditorToolbar';
+import {
+    CodeEditorAccessoryBar,
+    EditorAccessoryHideKeyboardKey,
+    EditorAccessorySaveKey,
+    type EditorAccessorySave,
+} from '@/components/ui/code/editor/chrome/CodeEditorAccessoryBar';
+import { EditorAccessoryBar } from '@/components/ui/code/editor/chrome/EditorAccessoryBar';
 
 /**
  * Reusable drop-in replacement for `CodeEditor` on markdown-capable screens
@@ -69,6 +76,13 @@ export type MarkdownCodeEditorFieldProps = Readonly<{
     reviewLaneWidth?: number;
     changeMarkers?: EditorChangeMarkerSeed;
     onChangeMarkersChange?: (controller: EditorChangeMarkersController | null) => void;
+    /** The raw source editor's handle (null in rich mode), for a host that hangs UI from its lines (the change peek). */
+    onEditorHandleChange?: (handle: TextEditorHandle | null) => void;
+    /**
+     * Phone composition (files lab ED1mp): the one key row on the keyboard with Save pinned. Rich mode puts
+     * its formatting chips there (instead of the field header); raw mode gets the code editor's key row.
+     */
+    accessory?: Readonly<{ save: EditorAccessorySave }> | null;
 }>;
 
 const TOOLBAR_SLOT_STYLE = { flex: 1, minWidth: 0, overflow: 'hidden' } as const;
@@ -155,7 +169,28 @@ export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
     // slot empty: showing format chips while raw is displayed would be misleading
     // (they'd dispatch into a hidden surface) and the field has no toolbar to
     // offer for plain code editing.
-    const showInlineToolbar = showRich && richController !== null && props.readOnly !== true;
+    const accessory = props.readOnly === true ? null : props.accessory ?? null;
+    const showInlineToolbar = showRich && richController !== null && props.readOnly !== true && accessory === null;
+    // The raw surface's live handle drives the key row's history (Undo) and its commands.
+    const [rawHandle, setRawHandle] = React.useState<TextEditorHandle | null>(null);
+    const onHostHandleChange = props.onEditorHandleChange;
+    const onRawHandleChange = React.useCallback((handle: TextEditorHandle | null) => {
+        setRawHandle(handle);
+        onHostHandleChange?.(handle);
+    }, [onHostHandleChange]);
+    const accessoryTestID = props.testID ? `${props.testID}-accessory` : 'markdown-editor-accessory';
+    const keyRow = accessory === null ? null
+        : !showRich ? <CodeEditorAccessoryBar editor={rawHandle} save={accessory.save} testID={accessoryTestID} />
+        : richController ? (
+            <MarkdownEditorToolbar controller={richController} variant="panel" testID={accessoryTestID}
+                leading={<EditorAccessoryHideKeyboardKey testID={accessoryTestID} />}
+                trailing={<EditorAccessorySaveKey testID={accessoryTestID} save={accessory.save} />} />
+        ) : (
+            // Save stays in reach while the rich surface is still coming up.
+            <EditorAccessoryBar testID={accessoryTestID}
+                leading={<EditorAccessoryHideKeyboardKey testID={accessoryTestID} />}
+                trailing={<EditorAccessorySaveKey testID={accessoryTestID} save={accessory.save} />}>{null}</EditorAccessoryBar>
+        );
 
     return (
         <View style={{ flex: 1 }} testID={props.testID}>
@@ -235,6 +270,7 @@ export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
                         onFindSeedConsumed={props.onFindSeedConsumed}
                         changeMarkers={props.changeMarkers}
                         onChangeMarkersChange={props.onChangeMarkersChange}
+                        onEditorHandleChange={accessory || onHostHandleChange ? onRawHandleChange : undefined}
                         changeDebounceMs={props.changeDebounceMs}
                         bridgeMaxChunkBytes={props.bridgeMaxChunkBytes}
                         onReady={props.onReady}
@@ -246,6 +282,7 @@ export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
                     />
                 )}
             </View>
+            {keyRow}
         </View>
     );
 }

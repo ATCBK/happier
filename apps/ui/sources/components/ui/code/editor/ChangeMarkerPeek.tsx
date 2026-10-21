@@ -4,7 +4,11 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { IconButton } from '@/components/ui/buttons/IconButton';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
+import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import {
@@ -35,13 +39,12 @@ export type ChangeMarkerPeekProps = Readonly<{
   attribution?: string | null;
   dirty: boolean;
   controller: EditorChangeMarkersController;
+  /** The review owner's keyed actions for this change (Keep · Discard · Ask · Copy, P5); the peek draws them. */
   resolveChangeActions?: (marker: EditorChangeMarker, context: ChangeMarkerActionContext) => HunkReviewChangeActions<EditorChangeRevertResult> | null;
-  /** The review owner's actions for this change (Keep · Discard · Ask · Copy), P5's slot. */
-  renderChangeActions?: (
-    marker: EditorChangeMarker,
-    context: ChangeMarkerActionContext,
-  ) => React.ReactNode;
 }>;
+
+/** Below this frame width the actions leave the header for a row of their own under the removed lines. */
+const ONE_ROW_MIN_WIDTH = 440;
 
 function markerSummary(marker: EditorChangeMarker): string {
   const removed = marker.removedLines?.length ?? 0;
@@ -66,7 +69,13 @@ export const ChangeMarkerPeek = React.memo(function ChangeMarkerPeek(
   const { marker, controller } = props;
   const removed = marker.removedLines ?? [];
   const context = { dirty: props.dirty, revertInDraft: controller.revertInDraft };
-  const actions = props.resolveChangeActions?.(marker, context);
+  const actions = props.resolveChangeActions?.(marker, context) ?? null;
+  const [oneRow, setOneRow] = React.useState(true);
+  const onFrameLayout = React.useCallback((event: { nativeEvent: { layout: { width: number } } }) => {
+    const next = event.nativeEvent.layout.width >= ONE_ROW_MIN_WIDTH;
+    setOneRow((previous) => (previous === next ? previous : next));
+  }, []);
+  const actionRow = actions ? <ChangeMarkerPeekActions marker={marker} actions={actions} /> : null;
   const header = (
     <View style={stylesheet.header}>
       <Text style={stylesheet.summary} numberOfLines={1}>
@@ -74,7 +83,7 @@ export const ChangeMarkerPeek = React.memo(function ChangeMarkerPeek(
         {props.attribution ? ` · ${props.attribution}` : ''}
       </Text>
       <View style={stylesheet.headerActions}>
-        {props.renderChangeActions?.(marker, { ...context, actions }) ?? null}
+        {oneRow ? actionRow : null}
         <IconButton
           testID="change-marker-peek-previous"
           variant="plain"
@@ -110,9 +119,13 @@ export const ChangeMarkerPeek = React.memo(function ChangeMarkerPeek(
       testID="change-marker-peek"
       style={[stylesheet.frame, props.placement ? { bottom: undefined, ...props.placement } : null]}
       pointerEvents="box-none"
+      onLayout={onFrameLayout}
+      role="group"
+      aria-label={markerSummary(marker)}
     >
       <FloatingOverlay
         header={header}
+        footer={!oneRow && actionRow ? <View style={stylesheet.footer}>{actionRow}</View> : undefined}
         maxHeight={CHANGE_MARKER_PEEK_MAX_HEIGHT}
         scrollEnabled={removed.length > 6}
       >
@@ -153,6 +166,108 @@ export const ChangeMarkerPeek = React.memo(function ChangeMarkerPeek(
   );
 });
 
+/** One presentation notice key for a refused draft Discard whose peek has already closed. */
+const REFUSAL_NOTICE_KEY = 'change-marker-peek-refusal';
+
+function refusalMessage(result: unknown): string | null {
+  if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== false) return null;
+  return 'reason' in result && result.reason === 'moved_on'
+    ? t('files.editing.youEditedThisChange')
+    : t('hunkReview.noticeUnsupported');
+}
+
+/**
+ * The change's review verbs in the peek, from P5's keyed actions (the same Keep / Discard as a Changes
+ * row, ED3 E1). Discard on an unsaved buffer is one undoable editor edit (offline too); when the person
+ * already edited those lines it is refused in place ("You edited this change") and nothing is written.
+ */
+const ChangeMarkerPeekActions = React.memo(function ChangeMarkerPeekActions(
+  props: Readonly<{ marker: EditorChangeMarker; actions: HunkReviewChangeActions<EditorChangeRevertResult> }>,
+) {
+  const { theme } = useUnistyles();
+  const { actions, marker } = props;
+  const [refusal, setRefusal] = React.useState<Readonly<{ key: string; message: string }> | null>(null);
+  const mountedRef = React.useRef(true);
+  React.useEffect(() => () => { mountedRef.current = false; }, []);
+  const { markCopied, isCopied } = useHappierCopyFeedback();
+  const copied = isCopied();
+  const kept = actions.state === 'kept';
+  const busy = actions.state === 'discarding';
+  const refused = refusal?.key === marker.key ? refusal.message : null;
+  const discardReason = actions.discard ? refused ?? actions.disabledReason('discard') : null;
+  const keepReason = actions.disabledReason('keep');
+  const shownReason = discardReason ?? keepReason;
+  const discard = actions.discard;
+  const onDiscard = React.useCallback(async () => {
+    if (!discard) return;
+    const message = refusalMessage(await discard());
+    if (!message) return;
+    if (mountedRef.current) setRefusal({ key: marker.key, message });
+    else publishPresentationNotice({ key: REFUSAL_NOTICE_KEY, message, severity: 'info' });
+  }, [discard, marker.key]);
+  const onCopy = React.useCallback(() => {
+    actions.copy();
+    markCopied();
+  }, [actions.copy, markCopied]);
+  return (
+    <View style={stylesheet.actions}>
+      {shownReason ? (
+        <Text variant="micro" numberOfLines={1} style={[stylesheet.reason, { color: theme.colors.text.secondary }]}>
+          {shownReason}
+        </Text>
+      ) : null}
+      {actions.ask ? (
+        <IconButton
+          testID="change-marker-peek-ask"
+          variant="plain"
+          size={28}
+          iconSize={14}
+          iconName="sparkle"
+          tooltip={t('hunkReview.askAbout')}
+          accessibilityLabel={t('hunkReview.askAbout')}
+          onPress={actions.ask}
+        />
+      ) : null}
+      <IconButton
+        testID="change-marker-peek-copy"
+        variant="plain"
+        size={28}
+        iconSize={14}
+        tooltip={t('hunkReview.copy')}
+        accessibilityLabel={t('hunkReview.copy')}
+        onPress={onCopy}
+        icon={(
+          <Icon
+            name={copied ? 'check' : 'copy'}
+            size={14}
+            color={copied ? theme.colors.state.success.foreground : theme.colors.text.secondary}
+          />
+        )}
+      />
+      {discard && !kept ? (
+        <RoundButton
+          testID="change-marker-peek-discard"
+          size="mini"
+          display="inverted"
+          title={t('hunkReview.discard')}
+          disabled={busy || discardReason !== null}
+          accessibilityHint={discardReason ?? undefined}
+          onPress={() => { void onDiscard(); }}
+        />
+      ) : null}
+      <RoundButton
+        testID="change-marker-peek-keep"
+        size="mini"
+        display={kept ? 'inverted' : 'secondary'}
+        title={kept ? t('hunkReview.kept') : t('hunkReview.keep')}
+        disabled={busy || keepReason !== null}
+        accessibilityHint={keepReason ?? undefined}
+        onPress={actions.keep}
+      />
+    </View>
+  );
+});
+
 const stylesheet = StyleSheet.create((theme) => ({
   frame: {
     position: 'absolute',
@@ -183,7 +298,29 @@ const stylesheet = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.space.s4,
-    flexShrink: 0,
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  actions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: theme.space.s6,
+    flexShrink: 1,
+    minWidth: 0,
+    marginRight: theme.space.s4,
+  },
+  reason: {
+    flexShrink: 1,
+    minWidth: 0,
+    marginRight: theme.space.s2,
+  },
+  footer: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingLeft: theme.space.s12,
+    paddingRight: theme.space.s8,
+    paddingVertical: theme.space.s8,
   },
   removed: {
     paddingBottom: theme.space.s4,

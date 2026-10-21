@@ -30,16 +30,18 @@ const SYMBOL_KEYS = [
   '&',
 ] as const;
 
+/** The editor's Save: primary once dirty, quiet while the Machine can't take it, hidden during a conflict. */
+export type EditorAccessorySave = Readonly<{
+  visible: boolean;
+  enabled: boolean;
+  tone: 'primary' | 'default';
+  busy?: boolean;
+  onPress(): void;
+}>;
+
 export type CodeEditorAccessoryBarProps = Readonly<{
   editor: TextEditorHandle | null;
-  /** The editor's Save: primary once dirty, quiet while the Machine can't take it, hidden during a conflict. */
-  save: Readonly<{
-    visible: boolean;
-    enabled: boolean;
-    tone: 'primary' | 'default';
-    busy?: boolean;
-    onPress(): void;
-  }>;
+  save: EditorAccessorySave;
   /** Present when the file has change marks: steps to the next change and opens its peek. */
   onChanges?: () => void;
   testID?: string;
@@ -66,6 +68,34 @@ function hideKeyboard() {
     document.activeElement.blur();
 }
 
+/** The key row's first key, pinned before the scrolling keys: put the keyboard away. */
+export function EditorAccessoryHideKeyboardKey(props: Readonly<{ testID: string }>) {
+  return (
+    <EditorAccessoryChip
+      testID={`${props.testID}-hide-keyboard`}
+      icon="keyboard"
+      label={t('files.editing.hideKeyboard')}
+      onPress={hideKeyboard}
+    />
+  );
+}
+
+/** The key row's pinned Save, the one Save of the phone editor (code and Markdown alike, ED1p/ED1mp). */
+export function EditorAccessorySaveKey(props: Readonly<{ testID: string; save: EditorAccessorySave }>) {
+  if (!props.save.visible) return null;
+  return (
+    <ToolbarButton
+      testID={`${props.testID}-save`}
+      label={t('common.save')}
+      size="md"
+      tone={props.save.tone}
+      disabled={!props.save.enabled}
+      busy={props.save.busy}
+      onPress={props.save.onPress}
+    />
+  );
+}
+
 /**
  * The phone editor's one key row above the keyboard (files lab ED1p, ade-shell Ep, P4-R7): hide
  * keyboard, Tab and outdent, the code symbols, the caret arrows, Find and Changes, with Undo and Save
@@ -87,14 +117,7 @@ export const CodeEditorAccessoryBar = React.memo(
       <EditorAccessoryBar
         testID={testID}
         accessibilityLabel={t('files.editing.editorKeys')}
-        leading={
-          <EditorAccessoryChip
-            testID={`${testID}-hide-keyboard`}
-            icon="keyboard"
-            label={t('files.editing.hideKeyboard')}
-            onPress={hideKeyboard}
-          />
-        }
+        leading={<EditorAccessoryHideKeyboardKey testID={testID} />}
         trailing={
           <>
             <EditorAccessoryChip
@@ -104,17 +127,7 @@ export const CodeEditorAccessoryBar = React.memo(
               disabled={!history.canUndo}
               onPress={() => run('undo')}
             />
-            {props.save.visible ? (
-              <ToolbarButton
-                testID={`${testID}-save`}
-                label={t('common.save')}
-                size="md"
-                tone={props.save.tone}
-                disabled={!props.save.enabled}
-                busy={props.save.busy}
-                onPress={props.save.onPress}
-              />
-            ) : null}
+            <EditorAccessorySaveKey testID={testID} save={props.save} />
           </>
         }
       >

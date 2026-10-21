@@ -19,15 +19,21 @@ import {
 import type { EditorChangeMarkersController } from '@/components/ui/code/editor/useEditorChangeMarkers';
 import type { TextEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
 import { CODE_CANVAS_CONTENT_PADDING } from '@/components/ui/code/editor/codeEditorFontMetrics';
+import {
+  MarkdownCodeEditorField,
+  type MarkdownCodeEditorFieldProps,
+} from '@/components/ui/markdown/editor/MarkdownCodeEditorField';
+
+/** The gutter peek's facts and the review owner's keyed actions (ade-shell ED3). */
+export type FileEditorPeekProps = Pick<ChangeMarkerPeekProps, 'attribution' | 'resolveChangeActions'> &
+  Readonly<{ dirty: boolean }>;
 
 export type FileEditorPanelProps = CodeEditorWithFindProps &
   Readonly<{
     theme?: unknown;
     /** Phone composition: the key row sits on the keyboard with Save pinned (files lab ED1p). */
     accessory?: Readonly<{ save: CodeEditorAccessoryBarProps['save'] }> | null;
-    /** The gutter peek's facts and the review owner's action slot (ade-shell ED3). */
-    peek?: Pick<ChangeMarkerPeekProps, 'attribution' | 'renderChangeActions' | 'resolveChangeActions'> &
-      Readonly<{ dirty: boolean }>;
+    peek?: FileEditorPeekProps;
   }>;
 
 /**
@@ -42,15 +48,13 @@ export const FileEditorPanel = React.memo(function FileEditorPanel(
     React.useState<EditorChangeMarkersController | null>(null);
   const [handle, setHandle] = React.useState<TextEditorHandle | null>(null);
   const hasMarkers = (props.changeMarkers?.items.length ?? 0) > 0;
-  const regionRef = React.useRef<View>(null);
-  const placement = useChangeMarkerPeekPlacement(regionRef, handle, markers?.selected ?? null);
   const onChanges = React.useMemo(
     () => (hasMarkers && markers ? markers.next : undefined),
     [hasMarkers, markers],
   );
   return (
     <View style={{ flex: 1, minHeight: 0 }}>
-      <View ref={regionRef} style={{ flex: 1, minHeight: 0 }}>
+      <FileEditorPeekRegion markers={markers} handle={handle} peek={peek}>
         <CodeEditorWithFind
           {...editorProps}
           presentation={editorProps.presentation ?? 'canvas'}
@@ -61,18 +65,7 @@ export const FileEditorPanel = React.memo(function FileEditorPanel(
           onChangeMarkersChange={setMarkers}
           onEditorHandleChange={setHandle}
         />
-        {markers?.selected ? (
-          <ChangeMarkerPeek
-            marker={markers.selected}
-            controller={markers}
-            placement={placement}
-            dirty={peek?.dirty ?? false}
-            attribution={peek?.attribution}
-            renderChangeActions={peek?.renderChangeActions}
-            resolveChangeActions={peek?.resolveChangeActions}
-          />
-        ) : null}
-      </View>
+      </FileEditorPeekRegion>
       {accessory ? (
         <CodeEditorAccessoryBar
           editor={handle}
@@ -83,6 +76,52 @@ export const FileEditorPanel = React.memo(function FileEditorPanel(
     </View>
   );
 });
+
+/**
+ * The raw Markdown editor on the File page with the same change gutter peek as code (P4-R9): its marker
+ * controller and handle come from the raw source editor, so rich mode (no gutter) shows no peek.
+ */
+export const FileMarkdownEditorPanel = React.memo(function FileMarkdownEditorPanel(
+  props: MarkdownCodeEditorFieldProps & Readonly<{ peek?: FileEditorPeekProps }>,
+) {
+  const { peek, ...fieldProps } = props;
+  const [markers, setMarkers] = React.useState<EditorChangeMarkersController | null>(null);
+  const [handle, setHandle] = React.useState<TextEditorHandle | null>(null);
+  return (
+    <FileEditorPeekRegion markers={markers} handle={handle} peek={peek}>
+      <MarkdownCodeEditorField {...fieldProps} onChangeMarkersChange={setMarkers} onEditorHandleChange={setHandle} />
+    </FileEditorPeekRegion>
+  );
+});
+
+/** The editor region the one peek hangs in: the peek is measured against this box and its marked line. */
+function FileEditorPeekRegion(
+  props: Readonly<{
+    markers: EditorChangeMarkersController | null;
+    handle: TextEditorHandle | null;
+    peek?: FileEditorPeekProps;
+    children: React.ReactNode;
+  }>,
+) {
+  const { markers, peek } = props;
+  const regionRef = React.useRef<View>(null);
+  const placement = useChangeMarkerPeekPlacement(regionRef, props.handle, markers?.selected ?? null);
+  return (
+    <View ref={regionRef} style={{ flex: 1, minHeight: 0 }}>
+      {props.children}
+      {markers?.selected ? (
+        <ChangeMarkerPeek
+          marker={markers.selected}
+          controller={markers}
+          placement={placement}
+          dirty={peek?.dirty ?? false}
+          attribution={peek?.attribution}
+          resolveChangeActions={peek?.resolveChangeActions}
+        />
+      ) : null}
+    </View>
+  );
+}
 
 /** Gap between the peek and the code column's left edge, so its first words sit just before the text. */
 const PEEK_LEADING_OFFSET = 4;

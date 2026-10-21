@@ -209,4 +209,24 @@ describe('MarkdownCodeEditorField', () => {
         );
         expect(tree.findAllByType('MarkdownEditorToolbar' as any).length).toBe(0);
     });
+
+    it('carries the phone Save on its key row in raw and rich mode (ED1mp)', async () => {
+        const onSave = vi.fn();
+        const save = { visible: true, enabled: true, tone: 'primary' as const, onPress: onSave };
+        setHook({ markdownEditMode: 'raw', resetKey: 'base:raw:0' });
+        const raw = await renderScreen(
+            <MarkdownCodeEditorField value="raw" onChange={vi.fn()} resetKey="base" language="markdown" accessory={{ save }} />,
+        );
+        await raw.pressByTestIdAsync('markdown-editor-accessory-save');
+        expect(onSave).toHaveBeenCalledTimes(1);
+
+        setHook({ markdownEditMode: 'rich', resetKey: 'base:rich:0' });
+        const rich = await renderScreen(
+            <MarkdownCodeEditorField value="# Doc" onChange={vi.fn()} resetKey="base" language="markdown" accessory={{ save }} />,
+        );
+        // The formatting chips move from the field header to the key row, which pins Save at its end.
+        const toolbars = rich.tree.findAllByType('MarkdownEditorToolbar' as any);
+        expect(toolbars.map((toolbar: any) => toolbar.props.variant)).toEqual(['panel']);
+        expect(toolbars[0].props.trailing).toBeTruthy();
+    });
 });
