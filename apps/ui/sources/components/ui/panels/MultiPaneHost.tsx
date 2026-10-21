@@ -170,7 +170,9 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
     // the private focus boundary instead of asking plugin surfaces to infer
     // their own presentation state.
     const mainFocusEligible = activeMainBoundary === null;
-    const mainRegionVisible = mainFocusEligible && hideMain !== true && (layout.main !== 'overlay' || mainModalActive);
+    // Presented is not focusable: a docked column under another pane's overlay is still on screen.
+    const mainPresented = hideMain !== true && (layout.main !== 'overlay' || mainModalActive);
+    const mainRegionVisible = mainFocusEligible && mainPresented;
     const mainRegionFocus = usePaneRegionFocusBoundary('main', mainRegionVisible);
     const detailsOverlayFocusEligible = detailsModalActive && !detailsPresence.closing;
     const rightOverlayFocusEligible = rightModalActive && !rightPresence.closing;
@@ -283,7 +285,7 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
                         style={{ flex: 1, minWidth: 0, minHeight: 0 }}
                         {...(mainModalActive ? mainModalBoundary.overlayProps : activeMainBoundary?.underlayProps ?? {})}
                     >
-                        <PluginSurfaceFocusEligibilityProvider active={mainFocusEligible}>
+                        <PluginSurfaceFocusEligibilityProvider active={mainFocusEligible} presentationActive={mainPresented}>
                             <PaneMainComposerReporterContext.Provider value={reportMainComposer}>
                                 {main}
                             </PaneMainComposerReporterContext.Provider>
@@ -528,9 +530,9 @@ function PaneColumn(props: Readonly<{
                         style={{ flex: 1, minHeight: 0, minWidth: 0 }}
                     >
                         {/* Docked and in the column the pane is page; over the page it is a sheet that floats (DESIGN.md →
-                            "Flat edge in flow; the rim only for what floats"): the floating panel material and its rim. The
-                            tree is the same in both, so a change of presentation never remounts the pane. */}
-                        <GlassSurface surfaceGroup={overlay ? 'floating' : 'content'} floatingRole={overlay ? 'panel' : undefined}
+                            "Flat edge in flow; the rim only for what floats"): the floating paint, finish and rim. It keeps the
+                            content material, so a transcript read in it stays as legible as in the column (lab FB1). */}
+                        <GlassSurface surfaceGroup="content"
                             solidColor={overlay ? theme.colors.edge.floatingFill : theme.colors.surface.base}
                             finishRole={overlay ? 'floating' : null} nested={docked || inMain} style={{
                             flex: 1, minHeight: 0, minWidth: 0,
@@ -539,7 +541,7 @@ function PaneColumn(props: Readonly<{
                             borderLeftColor: theme.colors.border.subtle, borderRightColor: theme.colors.border.subtle,
                             overflow: 'hidden',
                         }}>
-                            <PluginSurfaceFocusEligibilityProvider active={props.focusEligible}>
+                            <PluginSurfaceFocusEligibilityProvider active={props.focusEligible} presentationActive={!hidden}>
                                 {props.children}
                             </PluginSurfaceFocusEligibilityProvider>
                             {overlay ? (

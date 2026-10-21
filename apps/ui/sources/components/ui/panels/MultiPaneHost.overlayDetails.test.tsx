@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
 import { MultiPaneHost } from './MultiPaneHost';
 import { renderScreen } from '@/dev/testkit';
+import { useLayoutPresentationActive, usePluginSurfaceFocusEligibility } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -37,6 +38,33 @@ describe('MultiPaneHost (overlayDetails)', () => {
             await vi.runAllTimersAsync();
         });
         expect(onCloseDetails).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('MultiPaneHost (presentation under an overlay)', () => {
+    it('keeps the docked panes presented, though not focusable, while the details overlay is open', async () => {
+        const seen: Record<string, { presented: boolean; focusable: boolean }> = {};
+        const Probe = (props: { name: string }) => {
+            seen[props.name] = { presented: useLayoutPresentationActive(), focusable: usePluginSurfaceFocusEligibility() };
+            return React.createElement(props.name);
+        };
+        await renderScreen(<MultiPaneHost
+                main={<Probe name="main" />}
+                rightPane={<Probe name="right" />}
+                detailsPane={<Probe name="details" />}
+                layout={{ main: 'docked', kind: 'twoPane', right: 'docked', details: 'overlay' }}
+                rightDockWidthPx={360}
+                detailsDockWidthPx={520}
+                onCloseRight={() => {}}
+                onCloseDetails={() => {}}
+                onCommitRightDockWidthPx={() => {}}
+                onCommitDetailsDockWidthPx={() => {}}
+            />);
+        expect(seen).toEqual({
+            main: { presented: true, focusable: false },
+            right: { presented: true, focusable: false },
+            details: { presented: true, focusable: true },
+        });
     });
 });
 
