@@ -8,6 +8,36 @@ type PageOptions = Readonly<{ cursor?: string; coarseKind?: string }>;
 const encodeCursor = (row: Readonly<{ artifactId: string }>) => row.artifactId;
 
 describe('Artifact coarse selection', () => {
+  it.each(['single-page', 'inventory'] as const)('selects %s rows with a native method-absent AbortSignal', async mode => {
+    const controller = new AbortController();
+    // React Native's installed abort-controller exposes events/aborted, not this method.
+    Object.defineProperty(controller.signal, 'throwIfAborted', { value: undefined });
+    const result = await listArtifactHeadersV1({ options: { signal: controller.signal,
+      ...(mode === 'single-page' ? { limit: 1 } : {}) }, encodeCursor,
+      readPage: async () => ({ items: [prompt] }) });
+    expect(result.items).toEqual([prompt]);
+    expect(result.coverage).toBe('complete');
+  });
+
+  it.each(['before-read', 'after-read', 'after-read-without-reason'] as const)('keeps native cancellation authoritative %s', async when => {
+    const controller = new AbortController();
+    Object.defineProperty(controller.signal, 'throwIfAborted', { value: undefined });
+    const reason = new Error('Caller cancelled');
+    if (when === 'before-read') controller.abort(reason);
+    let reads = 0;
+    const result = listArtifactHeadersV1({ options: { signal: controller.signal }, encodeCursor,
+      readPage: async () => {
+        reads++; controller.abort(reason);
+        // The native abort-controller also has no AbortSignal.reason property.
+        if (when === 'after-read-without-reason') Object.defineProperty(controller.signal, 'reason', { value: undefined });
+        return { items: [prompt] };
+      },
+    });
+    if (when === 'after-read-without-reason') await expect(result).rejects.toMatchObject({ name: 'AbortError' });
+    else await expect(result).rejects.toBe(reason);
+    expect(reads).toBe(when === 'before-read' ? 0 : 1);
+  });
+
   it.each([
     ['widget_area_layout', 'widget-area-layout.v1'], ['widget_definition', 'widget-definition.v1'],
     ['widget_layout_fragment', 'widget-layout-fragment.v1'],

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createPromptDocInLibrary, createPromptBundleInLibrary, updatePromptDocInLibrary, listPromptLibrary } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
+import NativeAbortController from 'abort-controller';
+import { createPromptDocInLibrary, createPromptBundleInLibrary, updatePromptDocInLibrary, listPromptLibrary, readPromptDocInLibrary } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import {
   ARTIFACT_PLAIN_DATA_KEY_MARKER,
   encodePlainArtifactStoredContent,
@@ -346,14 +347,22 @@ describe('UI qualified prompt-library Artifact authority', () => {
     expect(result).toMatchObject({ revision: { headerVersion: row.headerVersion, bodyVersion: row.bodyVersion } });
     expect(storage.getState().artifacts[result.artifactId]).toMatchObject({ id: result.artifactId });
   });
-  it('keeps finite reads observational while explicit Artifact refresh publishes the captured row', async () => {
+  it('keeps native-signal finite reads observational while explicit Artifact refresh publishes the captured row', async () => {
     const f = await home();
     storage.setState({ artifacts: {}, artifactsLoaded: false });
     await withUiPromptLibraryArtifactStore(async (store, account) => {
-      const read = await store.read('current');
-      expect(read).toMatchObject({ id: 'current', header: { title: 'Current' } });
+      const controller = new NativeAbortController();
+      // React Native installs this genuine platform signal without modern convenience methods.
+      const signal = controller.signal as unknown as AbortSignal;
+      expect(signal.throwIfAborted).toBeUndefined();
+      const read = await readPromptDocInLibrary({ store, artifactId: 'current', signal });
+      expect(read).toMatchObject({ ok: true, artifactId: 'current', title: 'Current', markdown: 'original' });
       expect(storage.getState().artifacts.current).toBeUndefined();
       expect(storage.getState().artifactsLoaded).toBe(false);
+      const requestsBeforeAbort = f.requests.length;
+      controller.abort();
+      await expect(readPromptDocInLibrary({ store, artifactId: 'current', signal })).rejects.toMatchObject({ name: 'AbortError' });
+      expect(f.requests).toHaveLength(requestsBeforeAbort);
       await account.fetchArtifact('current');
       expect(storage.getState().artifacts.current).toMatchObject({ id: 'current' });
       expect(storage.getState().artifactsLoaded).toBe(false);

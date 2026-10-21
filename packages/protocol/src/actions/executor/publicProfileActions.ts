@@ -1,4 +1,5 @@
 import { z } from 'zod/mini';
+import { throwIfAborted } from '../../abortSignal.js';
 import { getUsageQueryKey, normalizeUsageQuery, type UsageQuery } from '../../inputs/usageQuery.js';
 import { PublicProfilePolicyV1Schema, type PublicProfilePolicyV1,
   type PublicProfileMetadataV1, PublicProfileLinkV1Schema } from '../../account/publicProfile.js';
@@ -71,13 +72,13 @@ export class PublicProfileAccountScopeError extends Error {
   constructor() { super('action_account_scope_changed'); }
 }
 async function check(ports: PublicProfileActionPorts, context: ActionExecutorContext) {
-  context.signal?.throwIfAborted();
+  throwIfAborted(context.signal);
   try { await ports.assertCurrent(context); }
   catch (error) {
-    context.signal?.throwIfAborted();
+    throwIfAborted(context.signal);
     throw new PublicProfileAccountScopeError();
   }
-  context.signal?.throwIfAborted();
+  throwIfAborted(context.signal);
 }
 
 async function resolveMetadata(input: PublicProfileMetadataSelectionV1, policy: PublicProfilePolicyV1,

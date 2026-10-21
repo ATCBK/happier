@@ -1,4 +1,5 @@
 import { deriveArtifactCoarseKindV1, type ArtifactCoarseKindV1 } from './artifactKindV1.js';
+import { throwIfAborted } from '../abortSignal.js';
 
 export type ArtifactListSelectionOptionsV1 = Readonly<{
   limit?: number; cursor?: string; search?: string; kind?: string;
@@ -20,13 +21,13 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
   encodeCursor: (item: T) => string;
 }>): Promise<Readonly<{ items: readonly T[]; nextCursor?: string; coverage: 'complete' | 'partial' }>> {
   const options = params.options;
-  options?.signal?.throwIfAborted();
+  throwIfAborted(options?.signal);
   // The incumbent /v1/artifacts route admits at most 500 structural rows per request.
   if (!options || (options.limit !== undefined && options.limit <= 500
     && options.search === undefined && options.kind === undefined && options.coarseKind === undefined
     && (options.sort === undefined || options.sort === 'updated_desc'))) {
     const page = await params.readPage(options);
-    options?.signal?.throwIfAborted();
+    throwIfAborted(options?.signal);
     return { ...page, coverage: page.coverage ?? 'complete' };
   }
   const all: T[] = [];
@@ -37,7 +38,7 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
     const page = await params.readPage({ limit: 500, ...(cursor ? { cursor } : {}),
       ...(coarseKind ? { coarseKind } : {}),
       ...(options.includeBody && !params.readBodies ? { includeBody: true } : {}), ...(options.signal ? { signal: options.signal } : {}) });
-    options.signal?.throwIfAborted();
+    throwIfAborted(options.signal);
     // Widget families originate in the one-way 0.3 cut: their writers always
     // classify them. Unclassified predecessor documents cannot be widgets.
     // Reclassifying pre-cut development rows belongs to the existing inventory
@@ -65,7 +66,7 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
   const matching = all.filter(matchesKind);
   // Open selected bodies before sorting/cursors so a fresh read keeps content and revisions aligned.
   const selected = options.includeBody && params.readBodies ? await params.readBodies(matching) : matching;
-  options.signal?.throwIfAborted();
+  throwIfAborted(options.signal);
   const items = selected.filter(item => matchesKind(item)
     && (!search || title(item).toLocaleLowerCase().includes(search)));
   items.sort((left, right) => {
