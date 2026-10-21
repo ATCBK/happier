@@ -1,5 +1,6 @@
 import renderer, { act } from 'react-test-renderer';
 import * as React from 'react';
+import { publishDaemonMergedProjectionInputs } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
@@ -415,6 +416,17 @@ describe('useNewSessionComposerDocument', () => {
     it('projects New Session regions through the shared host on the app target', async () => {
         pluginSurfaceHostSpy.mockClear();
         const promptStore = createNewSessionPromptStore('Draft prompt');
+        const projectionInputs = publishDaemonMergedProjectionInputs({
+            projection: PluginProjectionV2Schema.parse({
+                v: 2,
+                generation: 5,
+                installedPackagesById: {},
+                familiesById: {
+                    composerRegions: { family: 'composerRegions', entriesById: { [newSessionRegion.id]: newSessionRegion } },
+                },
+            }),
+            composerSurfaceCatalog: [newSessionComposerCatalogEntry()],
+        });
         const hook = await renderHook(() => useNewSessionComposerDocument({
             promptStore,
             persistedAttachments: [],
@@ -423,18 +435,7 @@ describe('useNewSessionComposerDocument', () => {
                 machineId: 'machine-1',
                 serverId: 'server-1',
                 phase: 'ready',
-                inputs: {
-                    pluginProjectionById: {},
-                    pluginProjectionV2: {
-                        v: 2,
-                        generation: 5,
-                        installedPackagesById: {},
-                        familiesById: {
-                            composerRegions: { entriesById: { [newSessionRegion.id]: newSessionRegion } },
-                        },
-                    } as PluginProjectionV2,
-                    composerSurfaceCatalog: [newSessionComposerCatalogEntry()],
-                },
+                inputs: projectionInputs,
             },
             scopeKey: 'server-a/account-a',
             canSubmitRef: { current: true },
