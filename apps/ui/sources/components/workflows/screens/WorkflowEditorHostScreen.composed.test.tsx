@@ -2686,7 +2686,7 @@ describe('WorkflowEditorHostScreen composition', () => {
             const screen = await renderScreen(<WorkflowEditorHostScreen source={{ kind: 'new' }} />);
             await selectMachine();
             const section = readBodyProps()?.triggersSection as React.ReactElement<{ whereSummary: string | null }> | undefined;
-            expect(section?.props.whereSummary).toMatch(/ \/ ~\/project$/u);
+            expect(section?.props.whereSummary).toMatch(/~\/project$/u);
             expect(section?.props.whereSummary).not.toContain('/Users/me');
             await screen.unmount();
         });

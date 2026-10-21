@@ -64,6 +64,33 @@ describe('session trigger form', () => {
         const then = readTriggerThen(retained);
         expect(buildTriggerTarget(then, 'account')).toEqual(retained);
     });
+    it.each(['defaults', 'step'] as const)('preserves a retained %s destination across editor scopes, but accepts a deliberate change', async (placement) => {
+        const { TriggerTargetV1Schema } = await import('@happier-dev/protocol/workflows/triggers/triggerTargetV1');
+        const created = buildTriggerTarget({ kind: 'sendPrompt', prompt: 'Review', selection }, 'account');
+        if (created?.kind !== 'inline') throw new Error('expected an inline target');
+        const conversation = { kind: 'existing_session' as const, sessionId: 'destination', machineId: 'machine' };
+        const retained = TriggerTargetV1Schema.parse({ ...created, definition: { ...created.definition,
+            ...(placement === 'defaults' ? { defaults: { ...created.definition.defaults, conversation } } : {}),
+            blocks: created.definition.blocks.map(block => block.kind === 'step' && placement === 'step'
+                ? { ...block, execution: { ...block.execution, conversation } } : block),
+        } });
+        const then = readTriggerThen(retained);
+        if (then.kind !== 'sendPrompt') throw new Error('expected a prompt form');
+        expect(TriggerTargetV1Schema.parse(buildTriggerTarget(then, 'session'))).toEqual(retained);
+        const changed = TriggerTargetV1Schema.parse(buildTriggerTarget({ ...then,
+            runsIn: { kind: 'session', sessionId: 'chosen-destination', machineId: 'other-machine' },
+        }, 'account'));
+        if (changed.kind !== 'inline') throw new Error('expected an inline target');
+        const step = changed.definition.blocks[0];
+        expect(resolveWorkflowStepSelectionV1({ defaults: changed.definition.defaults,
+            step: step?.kind === 'step' ? step.execution : undefined, purpose: 'authoring' }).selection.conversation)
+            .toEqual({ kind: 'existing_session', sessionId: 'chosen-destination', machineId: 'other-machine' });
+    });
+    it('keeps a retained origin-session prompt when edited from the Account surface', () => {
+        const target = buildTriggerTarget({ kind: 'sendPrompt', prompt: 'Continue here' }, 'session');
+        if (!target) throw new Error('expected an inline target');
+        expect(buildTriggerTarget(readTriggerThen(target), 'account')).toEqual(target);
+    });
     it('writes a configured plugin event through the shared trigger form without requiring a session', async () => {
         const { AutomationTriggerDefinitionInputSchema } = await import('@happier-dev/protocol/automations/automationTriggerDefinition');
         const trigger = AutomationTriggerDefinitionInputSchema.parse({

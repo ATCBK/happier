@@ -140,10 +140,10 @@ export function buildTriggerDefinition(params: Readonly<{
         if (expression.length === 0) return null;
         return { kind: 'schedule', enabled, schedule: { kind: 'cron', scheduleExpr: expression, everyMs: null, timezone: when.timezone } };
     }
-    if (when.kind === 'prComment' || when.kind === 'ciFailed') {
+    if ('pullRequest' in when) {
         return params.sessionId === null || when.pullRequest === null ? null : { kind: when.kind, enabled, pullRequest: when.pullRequest };
     }
-    const sourceSessionId = when.sourceSessionId ?? params.sessionId;
+    const sourceSessionId = ('sourceSessionId' in when ? when.sourceSessionId : undefined) ?? params.sessionId;
     if (sourceSessionId === null) return null;
     return {
         kind: 'sessionLifecycle',
@@ -199,11 +199,18 @@ export function buildTriggerTarget(then: TriggerThenValue, scope: 'session' | 'a
             // A schedule-only edit must not normalize a retained Agent prompt's bytes.
             const prompt = only?.kind === 'step' && only.document.text === then.prompt ? then.prompt : then.prompt.trim();
             if (prompt.trim().length === 0) return null;
-            const conversation = scope === 'session'
-                ? { kind: 'origin_session' }
-                : then.runsIn?.kind === 'session'
-                    ? { kind: 'existing_session', sessionId: then.runsIn.sessionId, machineId: then.runsIn.machineId }
-                    : { kind: 'fresh' };
+            const storedConversation = only?.kind === 'step' ? only.execution?.conversation ?? source?.defaults.conversation : undefined;
+            // Viewing a retained Habit in a Session does not make that Session its destination.
+            // Preserve both authored conversation locations until Runs in actually changes.
+            const keepConversation = source !== undefined && (then.runsIn === undefined
+                || (then.runsIn.kind === 'session'
+                    ? storedConversation?.kind === 'existing_session'
+                        && storedConversation.sessionId === then.runsIn.sessionId
+                        && storedConversation.machineId === then.runsIn.machineId
+                    : storedConversation?.kind === 'fresh'));
+            const conversation = then.runsIn?.kind === 'session'
+                ? { kind: 'existing_session', sessionId: then.runsIn.sessionId, machineId: then.runsIn.machineId }
+                : then.runsIn !== undefined || scope === 'account' ? { kind: 'fresh' } : { kind: 'origin_session' };
             const selection = then.selection;
             let defaults = source?.defaults ?? {};
             let execution = only?.kind === 'step' ? only.execution : undefined;
@@ -215,13 +222,13 @@ export function buildTriggerTarget(then: TriggerThenValue, scope: 'session' | 'a
                 }
             }
             const effective = resolveWorkflowStepSelectionV1({ defaults, step: execution, purpose: 'authoring' }).selection;
-            if (scope === 'account' && conversation.kind === 'fresh' && effective.agentTarget == null
+            if (!keepConversation && scope === 'account' && conversation.kind === 'fresh' && effective.agentTarget == null
                 && execution?.engine === undefined && defaults.engine === undefined) return null;
             const definition = normalizeInline(source && only?.kind === 'step'
-                ? { ...source, defaults: { ...defaults, conversation }, blocks: [{ ...only,
+                ? { ...source, defaults: { ...defaults, ...(keepConversation ? {} : { conversation }) }, blocks: [{ ...only,
                     document: { ...only.document, text: prompt },
                     ...(execution ? { execution: { ...execution,
-                        ...(execution.conversation ? { conversation } : {}),
+                        ...(!keepConversation && execution.conversation ? { conversation } : {}),
                     } } : {}),
                 }] }
                 : { version: 1, defaults: { ...defaults, conversation }, blocks: [prompt] });

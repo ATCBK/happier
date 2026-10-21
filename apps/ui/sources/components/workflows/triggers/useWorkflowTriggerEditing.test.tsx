@@ -1,11 +1,13 @@
+import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WorkflowTriggerSetV1Schema, AutomationDefinitionCreateRequestSchema, AutomationDefinitionDetailSchema,
     AutomationDefinitionListResponseSchema, AutomationDefinitionReconcileRequestSchema, AutomationStoredWorkflowDefinitionRecipeV2Schema,
+    AutomationStoredWorkflowDefinitionV2Schema,
     ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent, WorkflowDefinitionArtifactHeaderV1Schema,
     WorkflowDefinitionArtifactBodyV1Schema, AutomationTriggerIdSchema, type AutomationDefinitionDetail,
     type AutomationTriggerDefinitionInput, type WorkflowTriggerSetV1 } from '@happier-dev/protocol';
-import { createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
+import { createDeferred, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -17,6 +19,10 @@ import { WORKFLOW_STARTER_EXAMPLES_V1, materializeWorkflowStarterExample } from 
 
 // Native confirmation is the user-input boundary; these Save/history cases accept it.
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
+// Native portal and vendor Markdown are platform boundaries; the editor and Actions stay real.
+vi.mock('@/components/ui/popover', async importOriginal =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal, { maxHeight: 640, maxWidth: 280, placement: 'bottom' }));
+vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({ splitStreamingRevealTextParts: () => [] }));
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
@@ -28,6 +34,7 @@ const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRu
 const { useWorkflowTriggerEditing } = await import('./useWorkflowTriggerEditing');
 const { editWorkflowTriggerDraft } = await import('./workflowTriggerDraft');
 const { useWorkflowTriggerSets } = await import('./useWorkflowTriggerSets');
+const { SessionTriggersSection } = await import('./SessionTriggersSection');
 
 const definitionId = '00000000-0000-4000-8000-000000000001';
 const projectTarget = { machineId: 'm1', directory: '/repo' };
@@ -203,6 +210,136 @@ describe('workflow trigger editing lifetime', () => {
         await act(async () => { expect(await hook.getCurrent().save(definitionId, () => true)).toBe('stale'); });
         expect(writes).toHaveLength(1);
     });
+    it.each([
+        { unfocusedBeforeSave: false, delayedRead: false },
+        { unfocusedBeforeSave: true, delayedRead: false },
+        { unfocusedBeforeSave: true, delayedRead: true },
+        { unfocusedBeforeSave: false, delayedRead: true },
+    ])('retains an acknowledged trigger across an addressed Home focus change (unfocused: $unfocusedBeforeSave, delayed read: $delayedRead)', async ({ unfocusedBeforeSave, delayedRead }) => {
+        const otherServerId = await home.addHome({ name: 'Other triggers', serverUrl: 'https://acknowledged-trigger-other-home.test',
+            accountId: 'account-b', active: false });
+        const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
+        const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+        const hook = await renderHook(() => {
+            const { binding } = useServerCredentialAccountScopeBinding(serverId);
+            return { binding, ...useWorkflowTriggerEditing({ definitionId, sourceKey: 'saved', projectTarget,
+                accountLifetime: binding ?? null }) };
+        });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().status).toBe('ready'));
+        const binding = hook.getCurrent().binding;
+        const focusOtherHome = async () => {
+            await act(async () => {
+                await setActiveServerId(otherServerId, { scope: 'tab' });
+                publishAppliedActiveServerSnapshot(getActiveServerSnapshot(), true);
+                storage.setState({ profileScope: { serverId: otherServerId, accountId: 'account-b' },
+                    settingsScope: { serverId: otherServerId, accountId: 'account-b' } });
+                resetTriggerSets();
+                storage.getState().upsertWorkflowTriggerSet({ set: { ...set, automationId: 'other-account-set' },
+                    queryKey: `workflow:${definitionId}` });
+            });
+        };
+        if (unfocusedBeforeSave) await focusOtherHome();
+        const pendingRead = createDeferred<void>();
+        if (delayedRead) {
+            let holdNextList = true;
+            listReply = async () => {
+                const page = listRows();
+                if (holdNextList) { holdNextList = false; await pendingRead.promise; }
+                return page;
+            };
+            await act(async () => hook.getCurrent().retry());
+            await waitForHomeGovernance(() => expect(holdNextList).toBe(false));
+        }
+        await act(async () => hook.getCurrent().setDraft(editWorkflowTriggerDraft(hook.getCurrent().draft,
+            { kind: 'add', clientId: 'new-trigger', trigger })));
+        await act(async () => { expect(await hook.getCurrent().save(definitionId, () => true)).toBe('saved'); });
+        const acknowledged = hook.getCurrent().captureSnapshot();
+        expect(acknowledged.rows).toMatchObject([{ trigger }]);
+        if (delayedRead) {
+            await act(async () => { pendingRead.resolve(); await pendingRead.promise; });
+            expect(hook.getCurrent().captureSnapshot()).toEqual(acknowledged);
+        }
+        if (!unfocusedBeforeSave) await focusOtherHome();
+        expect(hook.getCurrent().binding).toBe(binding);
+        expect(binding?.isCurrent()).toBe(true);
+        expect(hook.getCurrent().captureSnapshot()).toEqual(acknowledged);
+        expect(hook.getCurrent().dirty).toBe(false);
+        if (unfocusedBeforeSave && delayedRead) {
+            const saved = rows[0]!;
+            const releaseOldList = createDeferred<void>();
+            let oldListRequested = false;
+            listReply = async () => {
+                const page = listRows();
+                oldListRequested = true;
+                await releaseOldList.promise;
+                return page;
+            };
+            await act(async () => hook.getCurrent().retry());
+            await waitForHomeGovernance(() => expect(oldListRequested).toBe(true));
+            listReply = undefined;
+            await act(async () => hook.getCurrent().setDraft(editWorkflowTriggerDraft(hook.getCurrent().draft,
+                { kind: 'remove', triggerId: saved.triggers[0]!.id })));
+            await act(async () => { expect(await hook.getCurrent().save(definitionId, () => true)).toBe('saved'); });
+            expect(hook.getCurrent().captureSnapshot().rows).toEqual([]);
+            expect(hook.getCurrent().dirty).toBe(false);
+            await act(async () => { releaseOldList.resolve(); await releaseOldList.promise; });
+            expect(hook.getCurrent().captureSnapshot().rows).toEqual([]);
+        }
+        const staleSave = hook.getCurrent().save;
+        await act(async () => {
+            // The replacement Account owns a different Automation collection.
+            rows = [];
+            await home.switchAccount(serverId, 'replacement-account');
+        });
+        expect(binding?.isCurrent()).toBe(false);
+        expect(hook.getCurrent().captureSnapshot().rows).toEqual([]);
+        await act(async () => { expect(await staleSave(definitionId, () => true)).toBe('stale'); });
+        expect(writes).toHaveLength(unfocusedBeforeSave && delayedRead ? 2 : 1);
+    });
+    it('keeps reads started during Save from replacing its receipt across default and addressed lifetimes', async () => {
+        const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+        const { listWorkflowTriggerSets } = await import('@/sync/domains/workflows/workflowTriggerActions');
+        const hook = await renderHook(() => {
+            const { binding } = useServerCredentialAccountScopeBinding(serverId);
+            return { binding, ...useWorkflowTriggerEditing({ definitionId, sourceKey: 'saved', projectTarget,
+                accountLifetime: binding ?? null }) };
+        });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().status).toBe('ready'));
+        const binding = hook.getCurrent().binding;
+        if (!binding) throw new Error('Expected the real addressed Account binding');
+        const releaseWrite = createDeferred<void>();
+        beforeWrite = () => releaseWrite.promise;
+        await act(async () => hook.getCurrent().setDraft(editWorkflowTriggerDraft(hook.getCurrent().draft,
+            { kind: 'add', clientId: 'new-trigger', trigger })));
+        let saving!: ReturnType<ReturnType<typeof hook.getCurrent>['save']>;
+        await act(async () => { saving = hook.getCurrent().save(definitionId, () => true); });
+        await waitForHomeGovernance(() => expect(writes).toHaveLength(1));
+        const releaseReads = createDeferred<void>();
+        let readsStarted = 0;
+        listReply = async () => {
+            const page = listRows();
+            readsStarted += 1;
+            await releaseReads.promise;
+            return page;
+        };
+        const ordinary = listWorkflowTriggerSets({ workflow: definitionId });
+        const addressed = listWorkflowTriggerSets({ workflow: definitionId }, { accountLifetime: binding });
+        await waitForHomeGovernance(() => expect(readsStarted).toBe(2));
+        await act(async () => { releaseWrite.resolve(); expect(await saving).toBe('saved'); });
+        const acknowledged = hook.getCurrent().captureSnapshot();
+        expect(acknowledged.rows).toMatchObject([{ trigger }]);
+        await act(async () => {
+            releaseReads.resolve();
+            expect(await ordinary).toEqual([]);
+            expect(await addressed).toEqual([]);
+        });
+        expect(hook.getCurrent().captureSnapshot()).toEqual(acknowledged);
+        // A new read after acknowledgement still has authority to observe deletion.
+        rows = [];
+        listReply = undefined;
+        await act(async () => { expect(await listWorkflowTriggerSets({ workflow: definitionId })).toEqual([]); });
+        expect(hook.getCurrent().captureSnapshot().rows).toEqual([]);
+    });
     it('keeps an unfocused addressed Home independent of the focused Account trigger projection', async () => {
         seed(set);
         const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
@@ -225,7 +362,7 @@ describe('workflow trigger editing lifetime', () => {
             expect(hook.getCurrent().sets.map(value => value.automationId)).toEqual([set.automationId]);
         });
     });
-    it.each([null, 'session-b'])('reads and edits a Habit bound here through its existing owner (scope %s)', async (scopeSessionId) => {
+    it.each([null, 'session-b'])('edits a bound Habit schedule through its real form and Action without changing scope or admission (scope %s)', async (scopeSessionId) => {
         const example = WORKFLOW_STARTER_EXAMPLES_V1.find(value => value.key === 'daily-summary-in-session')!;
         const selection = materializeWorkflowStarterExample(example, { session: { sessionId: 'session-a', machineId: 'm1' } });
         if (selection.status !== 'ready') throw new Error('Session-bound example required');
@@ -237,18 +374,83 @@ describe('workflow trigger editing lifetime', () => {
             executionRecipe: { v: 2, templateVersion: 1, triggerEvidence: null, workflow: { t: 'plain', v: {
                 workspace: { directory: '/repo' }, executionTarget: { kind: 'session' }, inlineDefinition: selection.example.definition,
             } } } }));
+        home.answer(serverId, '/v1/plugins/data/query', { status: 503, body: { error: 'unavailable' } });
         const { useSessionTriggers } = await import('./useSessionTriggers');
         const hook = await renderHook(() => useSessionTriggers('session-a'));
         expect(hook.getCurrent().status).toBe('ready');
         expect(hook.getCurrent().sets.map(value => value.automationId)).toEqual([set.automationId]);
         expect(hook.getCurrent().sets[0]?.scopeSessionId).toBe(scopeSessionId);
         expect(hook.getCurrent().sets[0]?.destinations?.targetSessionIds).toEqual(['session-a']);
-        await act(async () => { await hook.getCurrent().update({ triggerId: AutomationTriggerIdSchema.parse('t1'), expectedRevision: 1, patch: { enabled: false } }); });
+        expect(hook.getCurrent().pullRequestLinks).toMatchObject({ status: 'unavailable' });
+        const originalTarget = hook.getCurrent().sets[0]!.target;
+        const screen = await renderScreen(<SessionTriggersSection sessionId="session-a" serverId={serverId} />);
+        expect(screen.findByTestId('session-work-trigger:set-1:t1-switch')?.props.disabled).not.toBe(true);
+        await screen.pressByTestIdAsync('session-work-trigger:set-1:t1');
+        await waitForHomeGovernance(() => expect(screen.findByTestId('session-work-trigger-popover-submit')).not.toBeNull());
+        const clock = screen.findAll(node => typeof node.props.onCommit === 'function' && node.props.testID === 'session-work-trigger-popover-at')[0];
+        expect(clock).toBeDefined();
+        await act(async () => { clock!.props.onCommit('10:30'); });
+        await screen.pressByTestIdAsync('session-work-trigger-popover-submit');
+        await waitForHomeGovernance(() => expect(rows[0]?.triggers[0]).toMatchObject({ schedule: { scheduleExpr: '30 10 * * *' } }));
+        expect(rows[0]?.scopeSessionId).toBe(scopeSessionId);
+        expect.soft(hook.getCurrent().sets[0]?.target).toEqual(originalTarget);
+        const recipe = rows[0]!.executionRecipe;
+        if (recipe?.v !== 2 || recipe.workflow.t !== 'plain') throw new Error('Expected saved plain recipe');
+        const savedWorkflow = AutomationStoredWorkflowDefinitionV2Schema.parse(recipe.workflow.v);
+        if (!savedWorkflow.inlineDefinition) throw new Error('Expected saved inline definition');
+        const { materializeWorkflowAcceptedSnapshotV1 } = await import('@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1');
+        const admission = await materializeWorkflowAcceptedSnapshotV1({ definition: savedWorkflow.inlineDefinition,
+            context: { source: { kind: 'inline' }, inputs: {}, machineId: 'm1', executionTarget: { kind: 'session' },
+                workspaceTarget: { project: { machineId: 'm1', directory: '/repo', checkoutRootPath: '/repo' } },
+                origin: { kind: 'direct' }, authorization: { principal: { kind: 'host' } } },
+            admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true } });
+        expect(admission).toMatchObject({ ok: true, snapshot: { materializedLeaves: [{ selection: {
+            conversation: { kind: 'existing_session', sessionId: 'session-a', machineId: 'm1' },
+        } }] } });
+        await act(async () => { await hook.getCurrent().update({ triggerId: AutomationTriggerIdSchema.parse('t1'), expectedRevision: 2, patch: { enabled: false } }); });
         expect(hook.getCurrent().sets[0]?.triggers[0]?.enabled).toBe(false);
         expect(rows[0]?.scopeSessionId).toBe(scopeSessionId);
         await act(async () => { await hook.getCurrent().remove('t1'); });
         expect(hook.getCurrent().sets).toEqual([]);
         expect(rows[0]?.triggers).toEqual([]);
+    });
+    it('keeps ordinary Habits usable without a section-level band when the real pull-request read is unavailable', async () => {
+        seed(set);
+        home.answer(serverId, '/v1/plugins/data/query', { status: 503, body: { error: 'unavailable' } });
+        const { useSessionTriggers } = await import('./useSessionTriggers');
+        const hook = await renderHook(() => useSessionTriggers('session-a'));
+        expect(hook.getCurrent().pullRequestLinks).toMatchObject({ status: 'unavailable' });
+        // This saved Workflow is an Account set; bind it here through its actual scope.
+        rows = rows.map(row => AutomationDefinitionDetailSchema.parse({ ...row, scopeSessionId: 'session-a' }));
+        await act(async () => hook.getCurrent().retry());
+        const screen = await renderScreen(<SessionTriggersSection sessionId="session-a" serverId={serverId} />);
+        expect(screen.findHostByTestId('session-work-trigger-links-unavailable')).toBeNull();
+        expect(screen.findByTestId('session-work-trigger:set-1:t1-switch')?.props.disabled).not.toBe(true);
+        await screen.pressByTestIdAsync('session-work-trigger:set-1:t1');
+        expect(screen.findByTestId('session-work-trigger-popover-submit')?.props.disabled).toBe(false);
+    });
+    it('keeps a Session trigger receipt when its pre-Save reads finish after the replacement read', async () => {
+        const { useSessionTriggers } = await import('./useSessionTriggers');
+        const hook = await renderHook(() => useSessionTriggers('session-a'));
+        expect(hook.getCurrent().status).toBe('ready');
+        const releaseReads = createDeferred<void>();
+        let pendingReads = 0;
+        listReply = async () => {
+            const page = listRows();
+            if (pendingReads < 2) { pendingReads += 1; await releaseReads.promise; }
+            return page;
+        };
+        await act(async () => hook.getCurrent().retry());
+        await waitForHomeGovernance(() => expect(pendingReads).toBe(2));
+        await act(async () => { await hook.getCurrent().add({ target: { kind: 'inline',
+            definition: createWorkflowDefinitionFixture({ blocks: [{ kind: 'wait', id: 'wait',
+                document: { text: 'Continue', references: [], attachments: [] } }] }) },
+            executionTarget: { kind: 'session' }, trigger }); });
+        expect(hook.getCurrent().sets).toMatchObject([{ scopeSessionId: 'session-a', triggers: [{ kind: 'schedule' }] }]);
+        const acknowledged = hook.getCurrent().sets;
+        await act(async () => { releaseReads.resolve(); await releaseReads.promise; });
+        expect(hook.getCurrent().sets).toBe(acknowledged);
+        expect(hook.getCurrent().status).toBe('ready');
     });
     it('renews a pending Session-trigger read after same-Account retirement', async () => {
         const { useSessionTriggers } = await import('./useSessionTriggers');
