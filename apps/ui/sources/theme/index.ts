@@ -350,8 +350,10 @@ const lightThemeBase = {
                 foreground: '#005CC5',
             },
             leadingSpaceDot: '#E8E8E8',
+            // An ink-alpha wash like dark's, so a word mark reads the same weight as its removed sibling on
+            // a plain row (Replace) and deepens over the added row tint (diffs); lab `--dl-addw`.
             inlineAdded: {
-                background: '#ACFFA6',
+                background: 'rgba(52, 199, 89, 0.28)',
                 foreground: '#0A3F0A',
             },
             inlineRemoved: {
