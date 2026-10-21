@@ -24,6 +24,7 @@ import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider
 import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 
+import { formatPlaybackTime, type FilePageMediaInfo } from './filePageMediaFacts';
 import { useFileAudioPlayer } from './useFileAudioPlayer';
 import { useMediaPlaybackLifecycle } from './useMediaPlaybackLifecycle';
 
@@ -35,6 +36,8 @@ export type MediaPlayerBodyProps = Readonly<{
   title: string;
   source: UseFilePreviewSourceInput;
   isActive: boolean;
+  /** The length (and a video's frame) once the player has loaded the file: the page writes them in its meta row. */
+  onMediaInfo?: (info: FilePageMediaInfo) => void;
   onDownload?: () => void;
   onOpenInDefaultApp?: () => void;
   /** The stage reuses the body's held bytes for handoff; it never starts another materializer. */
@@ -42,15 +45,6 @@ export type MediaPlayerBodyProps = Readonly<{
   testID?: string;
 }>;
 
-function formatPlaybackTime(seconds: number): string {
-  const total = Math.max(0, Math.floor(Number.isFinite(seconds) ? seconds : 0));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const rest = String(total % 60).padStart(2, '0');
-  return hours > 0
-    ? `${hours}:${String(minutes).padStart(2, '0')}:${rest}`
-    : `${minutes}:${rest}`;
-}
 
 function CantPlayState(
   props: Readonly<{
@@ -104,6 +98,7 @@ function VideoPlayer(
     slot: PlayerSlot;
     onFullscreenChange: (fullscreen: boolean) => void;
     onError: (message: string) => void;
+    onMediaInfo?: (info: FilePageMediaInfo) => void;
   }>,
 ) {
   const { theme } = useUnistyles();
@@ -115,7 +110,7 @@ function VideoPlayer(
     instance.timeUpdateEventInterval = 0;
   });
   const [status, setStatus] = React.useState<VideoPlayerStatus>(player.status);
-  const { onError, slot } = props;
+  const { onError, onMediaInfo, slot } = props;
   React.useEffect(() => {
     const subscription = player.addListener('statusChange', (event) => {
       setStatus(event.status);
@@ -125,6 +120,16 @@ function VideoPlayer(
     setStatus(player.status);
     return () => subscription.remove();
   }, [onError, player]);
+  // Once loaded, the player knows the length; the frame size only where the platform reports its track (not web).
+  React.useEffect(() => {
+    if (status !== 'readyToPlay' || !onMediaInfo) return;
+    const durationSeconds = player.duration;
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return;
+    const size = player.videoTrack?.size;
+    onMediaInfo(size && size.width > 0 && size.height > 0
+      ? { durationSeconds, width: size.width, height: size.height }
+      : { durationSeconds });
+  }, [onMediaInfo, player, status]);
   const pause = React.useCallback(
     (target: ExpoVideoPlayer = player) => {
       try {
@@ -191,6 +196,7 @@ function AudioRow(
     title: string;
     isActive: boolean;
     onError: (message: string) => void;
+    onMediaInfo?: (info: FilePageMediaInfo) => void;
   }>,
 ) {
   const { theme } = useUnistyles();
@@ -198,10 +204,14 @@ function AudioRow(
     uri: props.uri,
     isActive: props.isActive,
   });
-  const { onError } = props;
+  const { onError, onMediaInfo } = props;
   React.useEffect(() => {
     if (audio.error) onError(audio.error);
   }, [audio.error, onError]);
+  const loadedDuration = audio.status === 'ready' && Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : null;
+  React.useEffect(() => {
+    if (loadedDuration !== null) onMediaInfo?.({ durationSeconds: loadedDuration });
+  }, [loadedDuration, onMediaInfo]);
   const toggle = React.useCallback(() => {
     if (audio.playing) audio.pause();
     else void audio.play();
@@ -377,6 +387,7 @@ export function MediaPlayerBody(props: MediaPlayerBodyProps) {
         slot={slot}
         onFullscreenChange={setFullscreen}
         onError={setPlaybackError}
+        onMediaInfo={props.onMediaInfo}
       />
     ) : (
       <AudioRow
@@ -385,6 +396,7 @@ export function MediaPlayerBody(props: MediaPlayerBodyProps) {
         title={props.title}
         isActive={props.isActive}
         onError={setPlaybackError}
+        onMediaInfo={props.onMediaInfo}
       />
     )
   ) : downloading ? (
@@ -403,11 +415,12 @@ export function MediaPlayerBody(props: MediaPlayerBodyProps) {
   // A failed or unplayable file is a page state (lab FV6e): it stands on the page, not inside the player's frame.
   const failed = Boolean(playbackError) || preview.status === 'error';
   return (
-    <View testID={props.testID} style={styles.page}>
+    // A phone video runs the full width with no side insets (lab FV6 spec); its downloading line keeps the gutter.
+    <View testID={props.testID} style={[styles.page, phone && props.kind === 'video' && !failed ? styles.pagePhoneVideo : null]}>
       {failed ? body : props.kind === 'video' ? (
         <View style={styles.videoColumn}>
-          <View style={styles.videoWell}>{body}</View>
-          {downloading}
+          <View style={[styles.videoWell, phone ? styles.videoWellPhone : null]}>{body}</View>
+          {downloading ? <View style={phone ? styles.phoneGutter : null}>{downloading}</View> : null}
         </View>
       ) : (
         <View
@@ -434,6 +447,16 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: 'center',
     padding: theme.space.s32,
     backgroundColor: theme.colors.surface.inset,
+  },
+  pagePhoneVideo: {
+    paddingHorizontal: 0,
+  },
+  videoWellPhone: {
+    borderRadius: 0,
+    borderWidth: 0,
+  },
+  phoneGutter: {
+    paddingHorizontal: theme.space.s16,
   },
   videoColumn: {
     width: '100%',

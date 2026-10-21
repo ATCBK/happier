@@ -3224,6 +3224,14 @@ const fileViewerTranslations = { 'zh-Hant': {
         machO: "Mach-O 執行檔",
         office: "Office 文件",
         font: "字型",
+        mp4: "MPEG-4 影片",
+        mov: "QuickTime 影片",
+        webm: "WebM 影片",
+        mp3: "MP3 音訊",
+        wav: "WAV 音訊",
+        flac: "FLAC 音訊",
+        aac: "AAC 音訊",
+        ogg: "Ogg 音訊",
     },
 } } satisfies Pick<Record<string, FileViewerTranslations>, "zh-Hant">;
 

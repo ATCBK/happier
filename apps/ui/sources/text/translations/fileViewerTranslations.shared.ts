@@ -89,7 +89,15 @@ export type FileViewerTranslations = Readonly<{
       | 'elf'
       | 'machO'
       | 'office'
-      | 'font',
+      | 'font'
+      | 'mp4'
+      | 'mov'
+      | 'webm'
+      | 'mp3'
+      | 'wav'
+      | 'flac'
+      | 'aac'
+      | 'ogg',
       string
     >
   >;
@@ -185,6 +193,14 @@ export const fileViewerTranslationsEnglish = {
       machO: 'Mach-O executable',
       office: 'Office document',
       font: 'Font',
+      mp4: 'MPEG-4 video',
+      mov: 'QuickTime video',
+      webm: 'WebM video',
+      mp3: 'MP3 audio',
+      wav: 'WAV audio',
+      flac: 'FLAC audio',
+      aac: 'AAC audio',
+      ogg: 'Ogg audio',
     },
   },
 } satisfies Pick<Record<string, FileViewerTranslations>, 'en'>;

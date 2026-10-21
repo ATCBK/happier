@@ -3224,6 +3224,14 @@ const fileViewerTranslations = { 'zh-Hans': {
         machO: "Mach-O 可执行文件",
         office: "Office 文档",
         font: "字体",
+        mp4: "MPEG-4 视频",
+        mov: "QuickTime 视频",
+        webm: "WebM 视频",
+        mp3: "MP3 音频",
+        wav: "WAV 音频",
+        flac: "FLAC 音频",
+        aac: "AAC 音频",
+        ogg: "Ogg 音频",
     },
 } } satisfies Pick<Record<string, FileViewerTranslations>, "zh-Hans">;
 

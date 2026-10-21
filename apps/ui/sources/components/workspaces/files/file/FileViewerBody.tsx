@@ -15,6 +15,7 @@ import { SessionPaneLazyLoader } from '@/components/sessions/panes/SessionPaneLa
 import type { FileViewerClass } from '@/scm/utils/filePresentation';
 import { t } from '@/text';
 
+import type { FilePageMediaInfo } from './filePageMediaFacts';
 import type { MediaPlayerBodyProps } from './MediaPlayerBody';
 import type { PdfViewerProps } from '@/components/ui/media/pdf/PdfViewerStates';
 
@@ -42,6 +43,8 @@ export type FileViewerBodyProps = Readonly<{
   /** Hands the file to the viewer chooser's built-in text viewer (binary kinds). */
   onOpenAsText?: () => void;
   onImageInfo?: (info: ImageWellInfo) => void;
+  /** A video's or a recording's length (and a video's frame) once its player has loaded it, for the meta row. */
+  onMediaInfo?: (info: FilePageMediaInfo) => void;
   /** Set while this kind can open in the Media stage (image, SVG, PDF, video). */
   stageRef?: React.Ref<FileViewerStageHandle | null>;
   pdf?: Readonly<{
@@ -184,6 +187,7 @@ export function FileViewerBody(props: FileViewerBodyProps) {
             title: props.title,
             source: props.source,
             isActive: props.isActive,
+            ...(props.onMediaInfo ? { onMediaInfo: props.onMediaInfo } : {}),
             ...(props.onDownload ? { onDownload: props.onDownload } : {}),
             ...(props.onOpenInDefaultApp
               ? { onOpenInDefaultApp: props.onOpenInDefaultApp }

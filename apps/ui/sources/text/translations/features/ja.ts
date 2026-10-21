@@ -3229,6 +3229,14 @@ const fileViewerTranslations = { ja: {
         machO: "Mach-O 実行ファイル",
         office: "Office 書類",
         font: "フォント",
+        mp4: "MPEG-4 動画",
+        mov: "QuickTime 動画",
+        webm: "WebM 動画",
+        mp3: "MP3 音声",
+        wav: "WAV 音声",
+        flac: "FLAC 音声",
+        aac: "AAC 音声",
+        ogg: "Ogg 音声",
     },
 } } satisfies Pick<Record<string, FileViewerTranslations>, "ja">;
 

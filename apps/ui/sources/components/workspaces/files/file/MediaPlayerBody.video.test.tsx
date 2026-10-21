@@ -36,7 +36,7 @@ vi.mock('expo-video', async () => {
         VideoView: (props: Record<string, unknown>) => React.createElement('VideoView', props),
         useVideoPlayer: (uri: string, setup: (player: VideoPlayer) => void) => {
             const player = React.useMemo(() => {
-                const value = { pause: vi.fn(), released: false, status: 'readyToPlay', loop: true, muted: true, staysActiveInBackground: true, addListener: () => ({ remove: () => {} }) };
+                const value = { pause: vi.fn(), released: false, status: 'readyToPlay', loop: true, muted: true, staysActiveInBackground: true, duration: 4, videoTrack: { size: { width: 1280, height: 720 } }, addListener: () => ({ remove: () => {} }) };
                 // Native SDK boundary fixture exposes the playback subset used by this surface.
                 setup(value as unknown as VideoPlayer);
                 boundary.players.push(value);
@@ -71,9 +71,10 @@ let currentScreen: Awaited<ReturnType<typeof renderScreen>> | null = null;
 async function waitForPlayer(screen: Awaited<ReturnType<typeof renderScreen>>) {
     await vi.waitFor(async () => { await flushHookEffects(); expect(screen.root.findAllByType('VideoView'), screen.getTextContent()).toHaveLength(1); });
 }
-function file(revision = '[12,123]', focused = true, isActive = true) {
+function file(revision = '[12,123]', focused = true, isActive = true, onMediaInfo?: (info: unknown) => void) {
     return <DestinationInstanceHost tabId="video" ref={{ kind: 'newTab', params: {} }} pathname="/" focused={focused} visible>
-        <MediaPlayerBody kind="video" title="clip.mp4" source={videoSource(harness.scope, revision)} isActive={isActive} />
+        <MediaPlayerBody kind="video" title="clip.mp4" source={videoSource(harness.scope, revision)} isActive={isActive}
+            {...(onMediaInfo ? { onMediaInfo } : {})} />
     </DestinationInstanceHost>;
 }
 // Keep retained-details publication, workspace stat routing and encrypted prepared transfer real.
@@ -191,6 +192,12 @@ describe('workspace file video', () => {
         expect(screen.root.findAllByType('VideoView')).toHaveLength(0);
         expect(boundary.players[1]!.released).toBe(true);
         expect(fileSystem.current!.files.size).toBe(0);
+    });
+    it('tells the page the length and frame size once the player has loaded the video (P2 media facts, lab FV6)', async () => {
+        const onMediaInfo = vi.fn();
+        const screen = currentScreen = await renderScreen(file('[12,123]', true, true, onMediaInfo));
+        await waitForPlayer(screen);
+        await vi.waitFor(() => expect(onMediaInfo).toHaveBeenLastCalledWith({ durationSeconds: 4, width: 1280, height: 720 }));
     });
     it('aborts an inactive preview and disposes a late transfer result without mounting a player', async () => {
         const pending = harness.deferNextChunk();
