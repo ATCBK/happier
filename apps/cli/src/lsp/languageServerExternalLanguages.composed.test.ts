@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
 import {
@@ -40,7 +40,7 @@ describe('installed external language through UI and Action ingress', () => {
                         filePatterns: ['*.happier-novel-language'], executable: { kind: 'systemTool', id: 'native' },
                         args: [resolve('src/lsp/__fixtures__/languageServer.cjs'), logPath, JSON.stringify({ requiredLanguageId: lspLanguage })] }],
                     // The scripted child is the external process boundary; the resolver, Exec, codec and supervisor remain real.
-                    systemTools: [{ id: 'native', title: 'Fixture executable', executableNames: [basename(process.execPath)] }],
+                    systemTools: [{ id: 'native', title: 'Fixture executable', executableNames: [process.execPath] }],
                 },
             }));
             const happyHomeDir = join(rootPath, 'home');
