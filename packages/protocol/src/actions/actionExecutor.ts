@@ -7995,7 +7995,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ctx.signal,
             sessionId === null ? ctx.defaultSessionId : undefined,
             sessionId === null ? ctx.executionRunTargetMachineId : undefined,
-            undefined,
+            sessionId === null ? ctx.executionRunPermissionRequestStore : undefined,
             undefined,
             ctx,
           );
