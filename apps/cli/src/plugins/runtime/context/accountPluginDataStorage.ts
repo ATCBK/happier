@@ -19,7 +19,7 @@ import { compilePluginJsonSchema, createPluginJsonSchemaZodValueAdapter, prepare
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 import { decodePluginCollectionLogicalRowV1, encodePluginCollectionLogicalValueV1, preparePluginCollectionLogicalMutationRequestV1 } from '@happier-dev/protocol/plugins/data/collectionLogicalCodecV1';
-import { normalizeStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { normalizeStrictJsonValue, sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import {
     isPluginError,
     PluginError,
@@ -150,7 +150,10 @@ type AdmittedCollection = {
         accountLifetimeToken: number;
         mode: 'plain' | 'e2ee';
         material: AccountScopedCryptoMaterial | null;
-        rows: Map<string, PluginCollectionRow<PluginAccountCollectionValue<PluginAccountCollectionDefinition>>>;
+        rows: Map<string, Readonly<{
+            row: PluginCollectionRow<PluginAccountCollectionValue<PluginAccountCollectionDefinition>>;
+            validatedWireRow: JsonValue;
+        }>>;
     }>;
 };
 
@@ -2021,15 +2024,20 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                         try { assertPluginCollectionContentEnvelopeForModeV1(row.content, mode); }
                         catch { throw collectionDecodeFailureError('content-mode-mismatch'); }
                     }
-                    if (retained?.revision === row.revision) {
-                        return Object.freeze({ ...retained, value: structuredClone(retained.value) }) as PluginCollectionRow<PluginAccountCollectionValue<TDefinition>>;
+                    if (retained?.row.revision === row.revision && sameStrictJsonValue(retained.validatedWireRow, row)) {
+                        return Object.freeze({ ...retained.row, value: structuredClone(retained.row.value) }) as PluginCollectionRow<PluginAccountCollectionValue<TDefinition>>;
                     }
                     const decoded = mergeLogicalRow<PluginAccountCollectionValue<TDefinition>>({
                         collection, row, encryptionMode: mode, material,
                     });
-                    // A plugin cannot mutate the retained validated value through
-                    // a previously returned object. No second JSON/schema walk.
-                    rows?.set(row.rowId, { ...decoded, value: structuredClone(decoded.value) });
+                    // Private immutable wire witness covers both the exact content
+                    // envelope and its projection. Equal revisions alone do not
+                    // prove that the retained logical row still corresponds.
+                    // Returned values cannot mutate either retained snapshot.
+                    rows?.set(row.rowId, {
+                        row: { ...decoded, value: structuredClone(decoded.value) },
+                        validatedWireRow: normalizeStrictJsonValue(row),
+                    });
                     return decoded;
                 };
 

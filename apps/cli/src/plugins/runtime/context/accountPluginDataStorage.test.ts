@@ -684,6 +684,47 @@ describe('Account plugin Data storage host', () => {
         } finally { decode.mockRestore(); }
     });
 
+    it.each([plainCredentials, encryptedCredentials])('revalidates changed same-revision content and projection on $token', async credentials => {
+        const decode = vi.spyOn(collectionCodec, 'decodePluginCollectionLogicalRowV1');
+        let privateNote: string | number = 'first';
+        let status = 'open';
+        const host = createAccountPluginDataStorageHost({
+            contracts: [admitted], readCredentials: async () => credentials,
+            isCurrentAccount: () => true, resolveAccountScopeKey: () => ACCOUNT_SCOPE_KEY,
+            resolveBaseUrl: () => 'https://data.example.test',
+            resolveAccountEncryptionCurrentness: async value => currentnessFor(value),
+            http: { get: async () => ({ status: 200, data: {} }), post: async () => ({ status: 200, data: {
+                row: { rowId: 'task-witness', revision: 3, projection: { status }, content: credentials.encryption === null
+                    ? { t: 'plain', v: { privateNote } }
+                    : { t: 'encrypted', c: sealPluginCollectionPrivatePayloadV1({
+                        payload: { privateNote }, material: { type: 'dataKey', machineKey: encryptedMachineKey },
+                        randomBytes: length => new Uint8Array(length).fill(3),
+                    }) } }, absenceEpoch: 0,
+            } }) },
+        });
+        const account = host.bind({ pluginId: PLUGIN_ID, occurrenceId: '1',
+            signal: new AbortController().signal, isOccurrenceCurrent: () => true });
+        if (!account) throw new Error('Expected Account Data binding');
+        const collection = account.collection(collectionDefinition);
+        try {
+            expect((await collection.get('task-witness'))?.value.privateNote).toBe('first');
+            privateNote = 'second';
+            expect((await collection.get('task-witness'))?.value.privateNote).toBe('second');
+            expect(decode).toHaveBeenCalledTimes(2);
+            status = 'closed';
+            expect((await collection.get('task-witness'))?.value.status).toBe('closed');
+            expect(decode).toHaveBeenCalledTimes(3);
+            await collection.get('task-witness');
+            expect(decode).toHaveBeenCalledTimes(3);
+            privateNote = 42;
+            await expect(collection.get('task-witness')).rejects.toBeInstanceOf(PluginError);
+            expect(decode).toHaveBeenCalledTimes(4);
+            privateNote = 'second';
+            expect((await collection.get('task-witness'))?.value.privateNote).toBe('second');
+            expect(decode).toHaveBeenCalledTimes(4); // A rejected envelope did not replace the validated witness.
+        } finally { decode.mockRestore(); }
+    });
+
     it('retains a static Collection binding without losing declaration or occurrence admission', async () => {
         const controller = new AbortController();
         const post = vi.fn(async () => ({ status: 200, data: { row: null, absenceEpoch: 0 } }));
