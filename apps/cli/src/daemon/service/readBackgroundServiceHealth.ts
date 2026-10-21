@@ -92,6 +92,46 @@ export function readBackgroundServiceActivity(params: Readonly<{
   return 'unknown';
 }
 
+/** Positive exit/failure evidence for a finite startup wait; unknown/queued startup is not failure. */
+export function hasBackgroundServiceStartupFailed(params: Readonly<{
+  platform: NodeJS.Platform;
+  uid: number | null;
+  label: string;
+  mode: DaemonServiceMode;
+  startedAtMs: number;
+  /** A newly bootstrapped launchd job starts at zero; kickstart retains its prior runs. */
+  priorLaunchdRuns?: number | null;
+}>): boolean {
+  if (params.platform === 'linux') {
+    const status = tryReadSystemdStatus({ unitName: normalizeSystemdUnitName(params.label), mode: params.mode, uid: params.uid });
+    if (!status) return false;
+    return status.activeState === 'failed' || status.activeState === 'inactive'
+      || (status.subState === 'auto-restart' && isFaultedSystemdUnit(status));
+  }
+  if (params.platform === 'darwin') {
+    if (params.uid === null) return false;
+    const output = tryReadLaunchctl(params.uid, params.label);
+    if (output === null) return false;
+    if (!output) return true;
+    const state = /^\s*state\s*=\s*(.+)$/m.exec(output)?.[1]?.trim();
+    const { runs, lastExitCode } = parseLaunchctlFields(output);
+    return (state === 'waiting' || state === 'not running' || state === 'exited')
+      && params.priorLaunchdRuns != null && runs !== null && runs > params.priorLaunchdRuns && lastExitCode !== null;
+  }
+  if (params.platform === 'win32') {
+    const status = tryReadScheduledTaskStatus(params.label);
+    if (!status) return false;
+    if (!status.exists) return true;
+    if (status.active || status.stateValue === 2) return false;
+    // Task Scheduler can report the preceding run while the accepted /Run is
+    // queued. Only completion of this invocation proves its wrapper exited.
+    return status.stateValue === 3 && Date.parse(status.lastRunTime) >= params.startedAtMs
+      && status.lastTaskResult !== null
+      && ![0x41300, 0x41301, 0x41303, 0x41325].includes(status.lastTaskResult);
+  }
+  return false;
+}
+
 function tryReadScheduledTaskActivity(label: string): BackgroundServiceActivity {
   const status = tryReadScheduledTaskStatus(label);
   if (!status) return 'unknown';

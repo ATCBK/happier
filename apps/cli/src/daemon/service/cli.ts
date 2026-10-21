@@ -69,7 +69,7 @@ import { writeJsonStdout } from '@/cli/output/jsonEnvelope';
 import { discoverInstalledDaemonServiceEntries } from './discoverInstalledDaemonServiceEntries';
 import { isInstalledDaemonServiceForHappierHome, isValidInstalledDaemonServiceFile, resolveInstalledDaemonServiceDefinitionPath } from './discoverInstalledDaemonServiceEntries';
 import { readInstalledDaemonServiceAutostartMode, readInstalledDaemonServiceInstallOptions, readInstalledDaemonServiceManagedBy } from './discoverInstalledDaemonServiceEntries';
-import { readBackgroundServiceAutostartMode } from './readBackgroundServiceHealth';
+import { hasBackgroundServiceStartupFailed, readBackgroundServiceAutostartMode, readBackgroundServiceHealth } from './readBackgroundServiceHealth';
 import { resolveDaemonServiceDiscoveryTargets } from './resolveDaemonServiceDiscoveryTargets';
 import type { DaemonServiceInstallStrategy } from './daemonInstallConflict';
 import { assertDaemonServiceModeSupported } from './assertDaemonServiceModeSupported';
@@ -198,6 +198,7 @@ function parseDaemonServiceCliInvocation(argv: readonly string[]): Readonly<{
     replaceExisting: 'ring' | 'all' | null;
     ring: PublicReleaseRingId | null;
     instanceId: string | null;
+    waitTimeoutMs: number | null;
   }>;
   action: DaemonServiceCliAction;
   mode: DaemonServiceMode;
@@ -215,9 +216,17 @@ function parseDaemonServiceCliInvocation(argv: readonly string[]): Readonly<{
   let replaceExisting: 'ring' | 'all' | null = null;
   let ring: PublicReleaseRingId | null = null;
   let instanceId: string | null = null;
+  let waitTimeoutMs: number | null = null;
 
   for (let i = 0; i < argv.length; i += 1) {
     const a = String(argv[i] ?? '');
+
+    if (a === '--wait-timeout-ms') {
+      const value = Number(argv[++i]);
+      if (!Number.isSafeInteger(value) || value <= 0) throw new Error('Invalid --wait-timeout-ms value.');
+      waitTimeoutMs = value;
+      continue;
+    }
 
     if (a === '--mode') {
       const next = String(argv[i + 1] ?? '');
@@ -353,6 +362,7 @@ function parseDaemonServiceCliInvocation(argv: readonly string[]): Readonly<{
       replaceExisting,
       ring,
       instanceId,
+      waitTimeoutMs,
     },
     action,
     mode,
@@ -563,11 +573,15 @@ async function waitForExpectedDaemonServiceOwnership(params: Readonly<{
   timeoutMs: number;
   pollMs: number;
   stableMs: number;
+  /** A containing operation's finite deadline, rather than a startup checkpoint. */
+  deadlineMs?: number;
+  startupObservation?: Readonly<{ uid: number | null; mode: DaemonServiceMode; startedAtMs: number; priorLaunchdRuns?: number | null }>;
   expectedInstalledServiceContents?: string | null;
   installedServicePath?: string | null;
   healthCommand?: Readonly<{ cmd: string; args: readonly string[] }> | null;
 }>): Promise<boolean> {
   let stableSince: number | null = null;
+  let terminalFailure = false;
   return await waitForDaemonRunningWithinBudget({
     timeoutMs: params.timeoutMs,
     pollMs: params.pollMs,
@@ -575,11 +589,23 @@ async function waitForExpectedDaemonServiceOwnership(params: Readonly<{
     // Native print/query commands only prove a loaded job/task, not a running one.
     // Reuse the daemon owner's checkpoint only with active evidence; a conflicting
     // owner or stopped service ends this wait, and the command owns cancellation.
-    isStillStarting: async () => Boolean(params.platform === 'linux'
+    shouldAbort: () => terminalFailure,
+    isStillStarting: async () => Boolean(params.deadlineMs === undefined && params.platform === 'linux'
       && params.healthCommand
       && runCommandCaptureBestEffort(params.healthCommand).ok
       && (await evaluateCurrentDaemonOwner()).kind === 'none'),
     isRunning: async () => {
+      if (params.deadlineMs !== undefined) {
+        if (Date.now() >= params.deadlineMs) return false;
+        // A stopped/crashed service or a different owner is terminal evidence,
+        // whereas an active service without a published owner is still starting.
+        if (params.startupObservation && hasBackgroundServiceStartupFailed({
+          platform: params.platform, label: params.expectedServiceLabel, ...params.startupObservation,
+        })) {
+          terminalFailure = true;
+          return false;
+        }
+      }
       const ownership = await evaluateCurrentDaemonOwner();
       if (ownership.kind === 'none') {
         const waitingForInitialAuth = await isExpectedDaemonServiceWaitingForInitialAuth({
@@ -597,20 +623,24 @@ async function waitForExpectedDaemonServiceOwnership(params: Readonly<{
         if (stableSince === null) {
           stableSince = now;
         }
-        return now - stableSince >= params.stableMs;
+        return now - stableSince >= params.stableMs
+          && (params.deadlineMs === undefined || now < params.deadlineMs);
       }
 
       if (ownership.kind !== 'compatible') {
+        terminalFailure = params.deadlineMs !== undefined;
         stableSince = null;
         return false;
       }
 
       if (ownership.owner.serviceManaged !== true) {
+        terminalFailure = params.deadlineMs !== undefined;
         stableSince = null;
         return false;
       }
 
       if (ownership.owner.state.serviceLabel !== params.expectedServiceLabel) {
+        terminalFailure = params.deadlineMs !== undefined;
         stableSince = null;
         return false;
       }
@@ -645,7 +675,8 @@ async function waitForExpectedDaemonServiceOwnership(params: Readonly<{
         stableSince = now;
       }
 
-      return now - stableSince >= params.stableMs;
+      return now - stableSince >= params.stableMs
+        && (params.deadlineMs === undefined || now < params.deadlineMs);
     },
   });
 }
@@ -670,6 +701,8 @@ async function assertExpectedDaemonServiceOwnership(params: Readonly<{
   platform: SupportedPlatform;
   commandPath: string;
   expectedServiceLabel: string;
+  deadlineMs?: number;
+  startupObservation?: Readonly<{ uid: number | null; mode: DaemonServiceMode; startedAtMs: number; priorLaunchdRuns?: number | null }>;
   expectedInstalledServiceContents?: string | null;
   installedServicePath?: string | null;
   healthCommand?: Readonly<{ cmd: string; args: readonly string[] }> | null;
@@ -687,7 +720,9 @@ async function assertExpectedDaemonServiceOwnership(params: Readonly<{
 }>): Promise<void> {
   const waitTimeoutOverrideRaw = String(process.env.HAPPIER_DAEMON_SERVICE_OWNERSHIP_WAIT_TIMEOUT_MS ?? '').trim();
   const defaultTimeoutMs = params.platform === 'win32' ? 120_000 : 15_000;
-  const timeoutMs = readPositiveIntEnv('HAPPIER_DAEMON_SERVICE_OWNERSHIP_WAIT_TIMEOUT_MS', defaultTimeoutMs);
+  const timeoutMs = params.deadlineMs === undefined
+    ? readPositiveIntEnv('HAPPIER_DAEMON_SERVICE_OWNERSHIP_WAIT_TIMEOUT_MS', defaultTimeoutMs)
+    : Math.max(0, params.deadlineMs - Date.now());
   // Task Scheduler can return before the wrapper actually relaunches the managed runtime on Windows.
   // Give Windows an extra default grace window, while still letting explicit env overrides take precedence.
   const defaultActiveGraceTimeoutMs = waitTimeoutOverrideRaw
@@ -695,16 +730,18 @@ async function assertExpectedDaemonServiceOwnership(params: Readonly<{
     : params.platform === 'win32'
       ? 60_000
       : timeoutMs;
-  const activeGraceTimeoutMs = readPositiveIntEnv(
+  const activeGraceTimeoutMs = params.deadlineMs === undefined ? readPositiveIntEnv(
     'HAPPIER_DAEMON_SERVICE_OWNERSHIP_ACTIVE_GRACE_TIMEOUT_MS',
     defaultActiveGraceTimeoutMs,
-  );
+  ) : 0;
   const pollMs = readPositiveIntEnv('HAPPIER_DAEMON_SERVICE_OWNERSHIP_WAIT_POLL_MS', 100);
   const stableMs = readPositiveIntEnv('HAPPIER_DAEMON_SERVICE_OWNERSHIP_STABLE_MS', 1000);
-  const expectedOwnerObserved = await waitForExpectedDaemonServiceOwnership({
+  const expectedOwnerObserved = timeoutMs > 0 && await waitForExpectedDaemonServiceOwnership({
     platform: params.platform,
     expectedServiceLabel: params.expectedServiceLabel,
     timeoutMs,
+    deadlineMs: params.deadlineMs,
+    startupObservation: params.startupObservation,
     pollMs,
     stableMs,
     expectedInstalledServiceContents: params.expectedInstalledServiceContents,
@@ -1373,6 +1410,10 @@ export async function runDaemonServiceCliCommand(params: Readonly<{
 }>): Promise<void> {
   const parsed = parseDaemonServiceCliInvocation(params.argv);
   const flags = parsed.flags;
+  // Start charging before preflight, OS installation and launch; ownership does
+  // not receive a new budget when those phases finish.
+  const serviceCommandStartedAtMs = Date.now();
+  const ownershipDeadlineMs = flags.waitTimeoutMs === null ? undefined : serviceCommandStartedAtMs + flags.waitTimeoutMs;
   const mode = parsed.mode;
   const systemUser = parsed.systemUser;
   const targetMode: DaemonServiceTargetMode =
@@ -1700,12 +1741,18 @@ export async function runDaemonServiceCliCommand(params: Readonly<{
         shouldTakeOverManualOwner: takeoverNotice !== null,
         action: 'install',
         run: async (beforeApply) => {
+          let priorLaunchdRuns: number | null = null;
           await installDaemonService({
             managedBy: requestedManagedBy,
             autostart: flags.autostart ?? undefined,
             bundleId: requestedBundleId,
             beforeApply: async () => {
               await beforeApply();
+              if (ownershipDeadlineMs !== undefined && installRuntime.platform === 'darwin') {
+                priorLaunchdRuns = shouldKickstartCurrentDarwinInstall
+                  ? readBackgroundServiceHealth({ platform: installRuntime.platform, uid: installRuntime.uid,
+                    label: paths.label, mode, errLogPath: null }).runs : 0;
+              }
               await stopCurrentWindowsServiceOwnerIfNeeded({
                 platform: installRuntime.platform,
                 ownership,
@@ -1740,6 +1787,8 @@ export async function runDaemonServiceCliCommand(params: Readonly<{
           if (standingByFor.length > 0 || (enablement === 'disabled' && !preserveRunningWhenDisabled)) return;
           await assertExpectedDaemonServiceOwnership({
             action: 'install',
+            deadlineMs: ownershipDeadlineMs,
+            startupObservation: { uid: installRuntime.uid, mode, startedAtMs: serviceCommandStartedAtMs, priorLaunchdRuns },
             platform: installRuntime.platform,
             commandPath,
             expectedServiceLabel: paths.label,
@@ -2158,10 +2207,18 @@ export async function runDaemonServiceCliCommand(params: Readonly<{
           ) {
             refreshDarwinLaunchAgentDefinitionForBootstrap(paths.installedPath);
           }
+          const priorLaunchdRuns = ownershipDeadlineMs !== undefined && runtime.platform === 'darwin'
+            ? plan.commands.some((command) => command.cmd === 'launchctl' && command.args[0] === 'bootstrap')
+              ? 0
+              : readBackgroundServiceHealth({ platform: runtime.platform, uid: runtime.uid,
+                label: paths.label, mode, errLogPath: null }).runs
+            : null;
           runDaemonServiceCommands(plan.commands, { failureMode: 'strict' });
           if (standingByFor.length > 0) return;
           await assertExpectedDaemonServiceOwnership({
             action,
+            deadlineMs: ownershipDeadlineMs,
+            startupObservation: { uid: runtime.uid, mode, startedAtMs: serviceCommandStartedAtMs, priorLaunchdRuns },
             platform: runtime.platform,
             commandPath,
             expectedServiceLabel: paths.label,
