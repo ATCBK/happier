@@ -11,6 +11,7 @@ import { HappierUiEnvironmentProvider } from '../../environment/context.js';
 import { projectHappierUiEnvironment } from '../../environment/projectEnvironment.js';
 import { mountThroughReactNativeWeb } from '../../rnwMount.testSupport.js';
 import { createSurfaceContext } from '../../surfaceFixture.testSupport.js';
+import type { UsageDayLabels } from '../usage/charts/UsageDayInAgents.js';
 import {
   HAPPIER_PUBLIC_PROFILE_HERO_METRICS,
   HappierPublicProfile,
@@ -114,6 +115,91 @@ function render(policy = { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1,
 }
 
 describe('HappierPublicProfile', () => {
+  it.each([true, false])('feeds only permitted period records and anonymous durations to the existing shared records body (recorded: %s)', recorded => {
+    const view = projectPublicProfile({ context, policy: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1,
+      fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, activeDays: false, currentStreak: true,
+        bestStreak: false, peakParallel: false, sessionDurations: true } }, metadata: {},
+      snapshot: PublicProfileSnapshotV1Schema.parse({ ...snapshot,
+        facts: { activeDays: 17, bestStreakDays: 51, peakParallel: 9876,
+          ...(recorded ? { currentStreakDays: 3,
+            sessionDurations: [{ agentId: 'codex', durationMs: 60000 }, { agentId: 'codex', durationMs: 120000 }] } : {}) } }),
+      appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1,
+      layout: { v: 1, items: [{ kind: 'widget', id: 'records', title: 'Records this period', size: 'wide', frameStyle: 'plain',
+        presentation: { kind: 'usage', widgetId: 'usage_recap', inputs: { style: 'personalRecords' } } }] },
+    });
+    if (!view) throw new Error('expected a published view');
+    const mounted = mountThroughReactNativeWeb(createElement(HappierUiEnvironmentProvider, {
+      environment: projectHappierUiEnvironment(createSurfaceContext()),
+      children: createElement(HappierPublicProfile, { view, labels, usage: {
+        paint: { accent: '#007aff', paper: '#ffffff', dark: false },
+        agent: id => ({ id, name: id, color: '#007aff' }),
+        labels: { chartLabel: () => 'Period records', unavailable: 'Records not recorded', records: {
+          format: (kind: string, value: number) => ({ title: kind, detail: 'In this period', value: String(value) }),
+          caption: 'Observed during the shared period',
+        } },
+      } }),
+    }));
+    try {
+      const block = mounted.container.querySelector('[data-testid="public-profile-block-records"]');
+      if (recorded) {
+        expect(block?.textContent).toContain('currentStreakDaysIn this period3');
+        expect(block?.textContent).toContain('longestTurnMsIn this period120000');
+        expect(block?.textContent).toContain('Observed during the shared period');
+      } else {
+        expect(block?.textContent).toContain('Records not recorded');
+        expect(block?.textContent).not.toContain('longestTurnMs');
+      }
+      expect(block?.textContent).not.toContain('activeDays');
+      expect(block?.textContent).not.toContain('bestStreakDays');
+      expect(block?.textContent).not.toContain('peakParallel');
+      expect(block?.textContent).not.toContain('9876');
+    } finally { mounted.unmount(); }
+  });
+  it.each([
+    { peak: 0, selected: true, state: 'known' },
+    { peak: undefined, selected: true, state: 'missing' },
+    { peak: 9876, selected: false, state: 'hidden' },
+  ] as const)('renders the shared period peak body without fabricating a day ($state)', ({ peak, selected, state }) => {
+    const view = projectPublicProfile({ context, policy: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1,
+      fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, peakParallel: selected } }, metadata: {},
+      snapshot: PublicProfileSnapshotV1Schema.parse({ ...snapshot, facts: peak === undefined ? {} : { peakParallel: peak } }),
+      appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1,
+      layout: { v: 1, items: [{ kind: 'widget', id: 'parallel', title: 'At once', size: 'medium', frameStyle: 'plain',
+        presentation: { kind: 'usage', widgetId: 'usage_parallel', inputs: { style: 'peak' } } }] },
+    });
+    if (!view) throw new Error('expected a published view');
+    const parallel: UsageDayLabels = {
+      unknownAgent: 'Unknown agent', peakOnlyCaption: 'The witnessed peak for this period; no timeline is shared.',
+      clock: hour => `${hour}:00`, duration: ms => `${ms} ms`, atOnce: 'At once', turns: 'Turns', agentTime: 'Agent time',
+      peak: (count, hour) => `${count} at once at ${hour}:00`, peakCount: count => `${count} at once`,
+      peakLine: (hour, agents) => `${hour}:00 ${agents.map(agent => agent.name).join(', ')}`,
+      waiting: 'Waiting for you', caption: { lanes: 'Day lanes', dial: 'Day dial' },
+      values: { show: 'Show values', hide: 'Hide values', agentColumn: 'Agent', agentTimeColumn: 'Agent time',
+        spansColumn: 'Spans', formatSpan: (from, to) => `${from}:00–${to}:00` },
+    };
+    const mounted = mountThroughReactNativeWeb(createElement(HappierUiEnvironmentProvider, {
+      environment: projectHappierUiEnvironment(createSurfaceContext()),
+      children: createElement(HappierPublicProfile, { view, labels, usage: {
+        paint: { accent: '#007aff', paper: '#ffffff', dark: false },
+        agent: id => ({ id, name: id, color: '#007aff' }),
+        labels: { chartLabel: () => 'Period peak', unavailable: 'Peak not recorded', parallel },
+      } }),
+    }));
+    try {
+      const block = mounted.container.querySelector('[data-testid="public-profile-block-parallel"]');
+      if (state === 'known') {
+        expect(block?.textContent).toContain('0 at once');
+        expect(block?.textContent).toContain(parallel.peakOnlyCaption);
+        expect(block?.querySelector('svg')).toBeNull();
+        expect(block?.textContent).not.toContain('Day lanes');
+        expect(block?.textContent).not.toContain('Waiting for you');
+      } else if (state === 'missing') {
+        expect(block?.textContent).toContain('Peak not recorded');
+        expect(block?.textContent).not.toContain('0 at once');
+      } else expect(block).toBeNull();
+      expect(mounted.container.textContent).not.toContain('9876');
+    } finally { mounted.unmount(); }
+  });
   it.each([false, true])('reserves the atmosphere band, lays the identity over its edge and credits the picture (phone: %s)', singleColumn => {
     const view = projectPublicProfile({ context, policy: DEFAULT_PUBLIC_PROFILE_POLICY_V1, metadata: {}, snapshot,
       appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1, layout: { v: 1, items: [] } });

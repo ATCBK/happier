@@ -2,7 +2,7 @@ import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_PUBLIC_PROFILE_POLICY_V1, PublicProfileSnapshotV1Schema } from '@happier-dev/protocol/account/publicProfile';
 import { projectPublicProfile } from '@happier-dev/protocol/account/projectPublicProfile';
-import { DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1 } from '@happier-dev/protocol/account/publicProfilePublication';
+import { DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1, PublicProfileLayoutV1Schema } from '@happier-dev/protocol/account/publicProfilePublication';
 
 import { renderScreen } from '@/dev/testkit';
 import { t } from '@/text';
@@ -17,7 +17,7 @@ const context = { handle: 'leeroy', identity: { name: 'Leeroy Brun' }, service: 
     card: 'https://happier.dev/@leeroy/card.svg', og: 'https://happier.dev/@leeroy/og.png', report: 'mailto:ops@happier.dev' } };
 const metric = (id: string, field: string) => ({ kind: 'widget', id, size: 'medium', frameStyle: 'card', title: id, presentation: { kind: 'declarative',
   document: { version: 1, root: { kind: 'metric', label: id, data: { kind: 'value', value: { kind: 'public_profile' } }, value: { path: ['snapshot', 'facts', field], type: 'number' } } } } }) as const;
-const layout = { v: 1 as const, items: [metric('tokens', 'tokens'), metric('days', 'activeDays')] };
+const layout = PublicProfileLayoutV1Schema.parse({ v: 1, items: [metric('tokens', 'tokens'), metric('days', 'activeDays')] });
 const view = (tokens: boolean) => projectPublicProfile({ context, metadata: {}, snapshot, layout, appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1,
   policy: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, tokens } } })!;
 const pageLabels = { identityLine: '@leeroy', periodTitle: 'Last 90 days', periodDetail: 'Jul – Oct', emptyLayout: 'Empty', footerNote: 'Note',

@@ -67,7 +67,7 @@ describe('Account public profile durable lifecycle', () => {
         expect(JSON.parse(row.policyJson!).fields.tokens).toBe(false);
         expect(JSON.parse(row.layoutJson!).items[0].id).toBe('offline-applied');
         const read = await readPublicProfile('stale_owner', publicationEnv, deps);
-        expect(read.kind).toBe('unavailable');
+        expect(read.kind).toBe('published');
         expect(JSON.stringify(read)).not.toContain('987654321');
         expect((await pausePublicProfile(account.id)).kind).toBe('updated');
         expect(await refreshPublicProfile(account.id, { query, snapshot }, publicationEnv, deps)).toEqual({ kind: 'unavailable', reason: 'not_published' });
@@ -148,7 +148,8 @@ describe('Account public profile durable lifecycle', () => {
     });
 
 
-    it('keeps owner recovery and revocation reachable through the production API when the feature producer is absent', async () => {
+    it('keeps owner recovery and revocation reachable through the production API when publication is disabled', async () => {
+        harness.resetEnv({ ...publicationEnv, HAPPIER_FEATURE_ACCOUNT_PUBLIC_PROFILES__ENABLED: '0' });
         const { registerApiRoutes } = await import('@/app/api/api');
         const account = await db.account.create({ data: { publicKey: 'public-profile-api-composition', username: 'root_owner' } });
         await publishPublicProfile(account.id, body(), publicationEnv, deps);

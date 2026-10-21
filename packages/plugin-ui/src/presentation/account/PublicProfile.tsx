@@ -12,7 +12,8 @@ import { HappierInfoState, HappierInfoTile } from '../state/InfoState.js';
 import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
 import { HAPPIER_WIDGET_FRAME_METRICS, HappierWidgetFrame } from '../layout/WidgetFrame.js';
 import { PublicProfileUsageBody, type HappierPublicProfileUsageHost } from './PublicProfileUsage.js';
-import { projectPublicUsageChartModels, type PublicUsageChartModels } from '../usage/charts/publicUsageChartModels.js';
+import { projectPublicUsageChartModels, projectPublicUsageRecords, type PublicUsageChartModels } from '../usage/charts/publicUsageChartModels.js';
+import type { UsageRecordsModel } from '../usage/charts/UsageWorkCharts.js';
 export type { HappierPublicProfileUsageHost, HappierPublicProfileUsageLabels } from './PublicProfileUsage.js';
 import {
   packWidgetGroupBands,
@@ -116,6 +117,9 @@ function PublishedPublicProfile(props: PublishedPublicProfileProps) {
   const theme = useHappierUiTheme();
   const { view, labels } = props;
   const usageModels = useMemo(() => projectPublicUsageChartModels(view.snapshot), [view.snapshot]);
+  const formatRecord = props.usage?.labels.records?.format;
+  const usageRecords = useMemo(() => formatRecord ? projectPublicUsageRecords(view.snapshot, formatRecord) : null,
+    [view.snapshot, formatRecord]);
   const testID = props.testID ?? 'public-profile';
   const columns = props.singleColumn ? 1 : 2;
   const bands = packWidgetGroupBands(
@@ -139,6 +143,7 @@ function PublishedPublicProfile(props: PublishedPublicProfileProps) {
         item={item}
         labels={labels}
         usageModels={usageModels}
+        usageRecords={usageRecords}
         usage={props.usage}
         owner={props.owner}
         singleColumn={columns === 1}
@@ -306,6 +311,7 @@ function PublicProfileItem(
     item: ViewItem;
     labels: HappierPublicProfileLabels;
     usageModels: PublicUsageChartModels;
+    usageRecords: UsageRecordsModel | null;
     usage?: HappierPublicProfileUsageHost;
     owner?: HappierPublicProfileOwner;
     singleColumn: boolean;
@@ -319,6 +325,7 @@ function PublicProfileItem(
         widget={item}
         labels={props.labels}
         usageModels={props.usageModels}
+        usageRecords={props.usageRecords}
         usage={props.usage}
         owner={props.owner}
         testID={props.testID}
@@ -353,6 +360,7 @@ function PublicProfileItem(
                 widget={child}
                 labels={props.labels}
                 usageModels={props.usageModels}
+                usageRecords={props.usageRecords}
                 usage={props.usage}
                 owner={props.owner}
                 testID={props.testID}
@@ -371,6 +379,7 @@ function PublicProfileBlock(
     widget: ViewWidget;
     labels: HappierPublicProfileLabels;
     usageModels: PublicUsageChartModels;
+    usageRecords: UsageRecordsModel | null;
     usage?: HappierPublicProfileUsageHost;
     owner?: HappierPublicProfileOwner;
     testID: string;
@@ -385,7 +394,7 @@ function PublicProfileBlock(
     </View>
   ) : null;
   const body = props.widget.presentation.kind === 'usage'
-    ? props.usage ? <PublicProfileUsageBody presentation={props.widget.presentation} models={props.usageModels}
+    ? props.usage ? <PublicProfileUsageBody presentation={props.widget.presentation} models={props.usageModels} records={props.usageRecords}
       host={props.usage} testID={`${props.testID}-usage-${props.widget.id}`} /> : null
     : renderInertDeclarativeView(props.widget.presentation.document.root, theme, props.labels.inert);
   const shownBody = onlyYou ? <View style={styles.quieted}>{body}</View> : body;

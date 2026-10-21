@@ -8,7 +8,7 @@ import type { PublicProfileServerDependencies } from '@/app/account/profile/publ
 import { publicProfileServerDependencies } from '@/app/account/profile/publicProfileDependencies';
 import { renderPublicProfileHtml } from '@/app/account/profile/render/publicProfileHtml';
 import { renderPublicProfileSvg, publicProfileBadgeMessage } from '@/app/account/profile/render/publicProfileSvg';
-import { renderPublicProfileOg } from '@/app/account/profile/render/publicProfileOg';
+import { renderPublicProfileCardPng, renderPublicProfileOg } from '@/app/account/profile/render/publicProfileOg';
 import { PUBLIC_PROFILE_ASSET_LABELS } from '@/app/account/profile/render/publicProfileLabels';
 import { PUBLIC_PROFILE_PALETTES } from '@/app/account/profile/render/publicProfileEnvironment';
 import { publicProfileFontFaceForFilename, readPublicProfileFont } from '@/app/account/profile/render/publicProfileFonts';
@@ -77,12 +77,15 @@ export function registerPublicProfileReadRoutes(app: Fastify, deps: PublicProfil
             return reply.send(body);
         } catch { return reply.header('Cache-Control', 'no-store').code(503).send({ kind: 'unavailable' }); }
     });
-    app.get('/@:handle/og.png', { schema: { params: z.strictObject({ handle: z.string() }), querystring: z.object({ v: z.optional(z.string()) }) } }, async (request, reply) => {
+    for (const kind of ['card', 'og'] as const) {
+    app.get(`/@:handle/${kind}.png`, { schema: { params: z.strictObject({ handle: z.string() }),
+        querystring: z.object({ v: z.optional(z.string()), theme: z.optional(z.enum(['auto', 'light', 'dark'])) }) } }, async (request, reply) => {
         reply.header('X-Content-Type-Options', 'nosniff').header('X-Robots-Tag', 'noindex').header('Referrer-Policy', 'no-referrer');
         try {
             const delivery = await readPublicProfileDelivery(request.params.handle, await readRequestHomeEnv(request), deps);
-            const body = await renderPublicProfileOg(delivery.result, { ...assetOptions,
-                ...(delivery.picture ? { picture: delivery.picture.bytes } : {}) });
+            const options = { ...assetOptions, ...(delivery.picture ? { picture: delivery.picture.bytes } : {}) };
+            const body = kind === 'og' ? await renderPublicProfileOg(delivery.result, options)
+                : await renderPublicProfileCardPng(delivery.result, { ...options, theme: request.query.theme ?? 'auto' });
             reply.header('Cache-Control', 'public, no-cache, must-revalidate').type('image/png');
             if (delivery.result.kind === 'unavailable') return reply.send(body);
             const etag = publicProfileRepresentationEtag(body);
@@ -91,6 +94,7 @@ export function registerPublicProfileReadRoutes(app: Fastify, deps: PublicProfil
             return reply.send(body);
         } catch { return reply.header('Cache-Control', 'no-store').code(503).send({ kind: 'unavailable' }); }
     });
+    }
     app.get('/@:handle/background', { schema: { params: z.strictObject({ handle: z.string() }), querystring: z.strictObject({}) } }, async (request, reply) => {
         reply.header('X-Content-Type-Options', 'nosniff').header('X-Robots-Tag', 'noindex').header('Referrer-Policy', 'no-referrer');
         try {

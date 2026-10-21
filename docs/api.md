@@ -52,14 +52,15 @@ These additions describe development source, not released availability.
 
 ## Public-profile integration status (0.3 development)
 
-Public-profile publication is an unfinished 0.3 capability. The source now
+Public-profile publication is a development-only 0.3 capability. The source
 contains the closed `PublicProfileV1` disclosure contracts, a single policy
-projector and an Account-associated publication lifecycle. The supporting server
-feature resolver is deliberately absent: declaring `account.publicProfiles`
-does not advertise support, and a missing enabled bit fails closed. The canonical
-eligible-fact builder is bound at the authenticated UI/CLI Action hosts; complete
-shared-body/output integration and loaded-runtime proof remain required before
-publication can be offered. This is not a released endpoint guarantee.
+projector and an Account-associated publication lifecycle. The canonical
+`account.publicProfiles` server producer defaults on, independently of Friends;
+`HAPPIER_FEATURE_ACCOUNT_PUBLIC_PROFILES__ENABLED=0` is its live Home-configurable
+opt-out. Missing or malformed enabled bits still fail closed on clients. The
+eligible-fact builder is bound at authenticated UI/CLI Action hosts. Editor,
+visual and loaded-runtime acceptance remain tracked separately; this is not a
+released endpoint guarantee.
 
 `account/publicProfile.ts` owns field consent, snapshot facts and tolerant stored
 readers; writes reject unknown fields recursively. `projectPublicProfile` masks
@@ -106,20 +107,21 @@ string admitting HTTPS or mailto destinations; there is no Cloud default.
 Current Account identity and the effective service configuration supply URLs,
 including any public path prefix. Request Host and private Artifact/KV references
 are not publication authority. Anonymous representation admission must precede
-ETag comparison; renderer and loaded-runtime proof remain outstanding. See
+ETag comparison. See
 [Actions](actions.md) and the published
 [development guide](../apps/docs/content/docs/accounts/public-profiles.mdx).
 
 The development anonymous route owner is independent of an optional UI mount.
 Its HTML adapter cold-renders the portable `HappierPublicProfile` with RNW CSS;
-badge/card SVG and fixed-dark OG PNG use the current projected visitor result,
+badge/card SVG, card PNG and fixed-dark OG PNG use the current projected visitor result,
 Brand geometry and in-process Sharp. The SVG glyph layer embeds locally shaped
 PNG pixels from packaged Inter/Noto faces, with explicit font selection rather
 than system fallback. The runtime build copies those faces and their OFL
-licenses. This source integration does not advertise capability support while
-the shared atmosphere header and complete responsive built-in body integration
-are unfinished; positive publication/read/revalidation and loaded-runtime
-acceptance remain required at that boundary.
+licenses. Card PNG rasterizes the same 495×195 scene as card SVG: explicit light
+or dark selects that edition, and automatic/default rasterization uses light.
+OG remains 1200×630 and dark regardless of query theme. Every representation
+reads current admission before comparing its ETag; an unavailable edition has
+no reusable validator. An older OG cache-buster never selects historical data.
 
 Reviewed picture Apply uses the existing Account private-file custody owner:
 normalize/write before the winning publication transaction, then settle and bind

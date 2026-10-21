@@ -4,7 +4,7 @@ import { resolveUsageCalendarDateStart } from '@happier-dev/protocol/usage/usage
 import { formatTokenCountLong, formatUsageCalendarDate, formatUsageChartClock,
     formatUsageDuration, formatUsageSharePercent } from '@happier-dev/protocol/usage/usageFormatting';
 import { readBuiltinUsagePublicPresentationDescriptorV1 } from '@happier-dev/protocol/widgets/builtinWidgetDescriptorV1';
-import { PUBLIC_PROFILE_LOCALE } from './publicProfileLabels';
+import { PUBLIC_PROFILE_ASSET_LABELS, PUBLIC_PROFILE_LOCALE } from './publicProfileLabels';
 
 /** Anonymous host wording for the shared bodies; only the already public view supplies its calendar. */
 export function publicProfileUsageLabels(view: PublicProfileViewV1): HappierPublicProfileUsageLabels {
@@ -23,6 +23,9 @@ export function publicProfileUsageLabels(view: PublicProfileViewV1): HappierPubl
     const levelNames = ['No activity', 'Quiet', 'Steady', 'Busy', 'Busiest'];
     const levelName = (value: number) => levelNames[value] ?? 'Not recorded';
     const values = { show: 'Show values', hide: 'Hide values' };
+    const recordTitles = { activeDays: 'Active days', currentStreakDays: 'Current streak', bestStreakDays: 'Best streak',
+        peakParallel: 'Most at once', longestTurnMs: 'Longest closed turn' };
+    const recordPeriod = PUBLIC_PROFILE_ASSET_LABELS.period(view.snapshot.period);
     const labels = {
         chartLabel: widgetId => readBuiltinUsagePublicPresentationDescriptorV1(widgetId)?.title ?? 'Public activity',
         unavailable: 'Not shared or not recorded',
@@ -50,6 +53,21 @@ export function publicProfileUsageLabels(view: PublicProfileViewV1): HappierPubl
             // The public punch may be absent even when the night share is known; never invent a peak hour.
             caption: () => 'Each column is an hour of the day; taller marks stronger shared intensity.',
             values: { ...values, hourColumn: 'Hour', valueColumn: 'Activity level', formatValue: levelName, levelNames },
+        },
+        parallel: {
+            unknownAgent: 'Unknown agent',
+            peakOnlyCaption: 'Most turns running at once in the period. A day, clock and agent timeline are not shared.',
+            clock: formatUsageChartClock, duration, atOnce: 'At once', turns: 'turns', agentTime: 'Agent time',
+            peak: (total, atHour) => `${count(total)} at once · ${formatUsageChartClock(atHour)}`,
+            peakCount: total => `${count(total)} at once`,
+            peakLine: (atHour, byAgent) => `${formatUsageChartClock(atHour)} · ${byAgent.map(entry => `${entry.name} ${count(entry.count)}`).join(', ')}`,
+            waiting: 'Waiting for you',
+            caption: {
+                lanes: 'Each lane is an agent’s closed turns; hatched is waiting for you. The curve is turns running at once.',
+                dial: 'Around the clock from 00 at the top. The filled shape is turns running at once; gaps are waits for you.',
+            },
+            values: { ...values, agentColumn: 'Agent', agentTimeColumn: 'Agent time', spansColumn: 'Worked',
+                formatSpan: (from, to) => `${formatUsageChartClock(from)}–${formatUsageChartClock(to)}` },
         },
         orbit: { percent: formatUsageSharePercent, unknown: names => `${names} · share unknown` },
         crew: { percent: formatUsageSharePercent, days: days => `${count(days)} days` },
@@ -81,6 +99,11 @@ export function publicProfileUsageLabels(view: PublicProfileViewV1): HappierPubl
             caption: 'One dot per shared duration observation. Bold is the median, thin is the 90th percentile.',
             values: { ...values, agentColumn: 'Agent', medianColumn: 'Median', p90Column: '90th percentile',
                 samplesColumn: 'Observations', formatCount: count },
+        },
+        records: {
+            format: (kind, value) => ({ title: recordTitles[kind], detail: `Within the supplied period · ${recordPeriod}`,
+                value: kind === 'longestTurnMs' ? duration(value) : kind === 'peakParallel' ? `${count(value)} at once` : `${count(value)} days` }),
+            caption: 'Shared records within the period shown.',
         },
     } satisfies Required<HappierPublicProfileUsageLabels>;
     return labels;

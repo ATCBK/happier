@@ -2,22 +2,25 @@ import type { BuiltinUsagePublicPresentationV1 } from '@happier-dev/plugin-sdk';
 
 import { useHappierUiTheme } from '../../environment/context.js';
 import { HappierText } from '../text/Text.js';
-import type { PublicUsageChartModels } from '../usage/charts/publicUsageChartModels.js';
+import type { projectPublicUsageRecords, PublicUsageChartModels } from '../usage/charts/publicUsageChartModels.js';
 import type { UsageChartAgent, UsageChartPaint } from '../usage/charts/chartKit.js';
 import type { UsagePlanetSlot } from '../usage/charts/usagePlanetSlot.js';
 import { UsageSkyOfDays, type UsageSkyLabels } from '../usage/charts/UsageSkyOfDays.js';
+import { UsageDayInAgents, type UsageDayLabels } from '../usage/charts/UsageDayInAgents.js';
 import { UsageDaylight, UsageWeekTide, type UsageDaylightLabels, type UsageWeekTideLabels } from '../usage/charts/UsageRhythmEncodings.js';
 import {
   UsageAgentRiver, UsageConstellation, UsageCrew, UsageOrbit, UsageShipped,
   type UsageConstellationLabels, type UsageCrewLabels, type UsageOrbitLabels, type UsageRiverLabels, type UsageShippedLabels,
 } from '../usage/charts/UsageAgentsCharts.js';
-import { UsagePlanetPortrait, UsageRunLength, type UsagePortraitLabels, type UsageRunLengthLabels } from '../usage/charts/UsageWorkCharts.js';
+import { UsagePersonalRecords, UsagePlanetPortrait, UsageRunLength, type UsagePortraitLabels, type UsageRecordsModel, type UsageRunLengthLabels } from '../usage/charts/UsageWorkCharts.js';
 
 /** Host localization for the same chart bodies used by private Usage. */
 export type HappierPublicProfileUsageLabels = Readonly<{
   chartLabel: (widgetId: BuiltinUsagePublicPresentationV1['widgetId']) => string;
   unavailable: string;
   sky?: UsageSkyLabels;
+  parallel?: UsageDayLabels;
+  records?: Readonly<{ format: Parameters<typeof projectPublicUsageRecords>[1]; caption: string }>;
   weekTide?: UsageWeekTideLabels;
   daylight?: UsageDaylightLabels;
   orbit?: UsageOrbitLabels;
@@ -42,17 +45,26 @@ export type PublicProfileUsageBodyProps = Readonly<{
   presentation: BuiltinUsagePublicPresentationV1;
   /** Already projected by projectPublicProfile; this adapter has no policy or query authority. */
   models: PublicUsageChartModels;
+  records: UsageRecordsModel | null;
   host: HappierPublicProfileUsageHost;
   testID: string;
 }>;
 
 /** A thin model/host adapter; shared Usage bodies own all chart markup and geometry. */
-export function PublicProfileUsageBody({ presentation, models, host, testID }: PublicProfileUsageBodyProps) {
+export function PublicProfileUsageBody({ presentation, models, records, host, testID }: PublicProfileUsageBodyProps) {
   const theme = useHappierUiTheme();
   const { labels } = host;
   const base = { theme, paint: host.paint, width: host.width, label: labels.chartLabel(presentation.widgetId), testID };
   const agents = (ids: readonly string[]) => [...new Set(ids)].map(host.agent);
   switch (presentation.widgetId) {
+    case 'usage_recap':
+      if (presentation.inputs.style === 'personalRecords' && records?.length && labels.records)
+        return <UsagePersonalRecords {...base} model={records} caption={labels.records.caption} />;
+      break;
+    case 'usage_parallel':
+      if (models.peak !== null && labels.parallel) return <UsageDayInAgents {...base}
+        model={{ kind: 'peakOnly', count: models.peak }} agents={[]} style="lanes" labels={labels.parallel} />;
+      break;
     case 'usage_rhythm':
       switch (presentation.inputs.style) {
         case 'sky':

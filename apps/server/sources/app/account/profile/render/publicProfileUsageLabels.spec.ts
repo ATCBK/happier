@@ -28,5 +28,8 @@ describe('anonymous Usage chart labels', () => {
         expect(labels.daylight?.night(23, 7, 0)).toBe('Night · 23:00–07:00 · 0%');
         expect(labels.runLength?.detail(59_500, 1234)).toBe('p90 1 min · 1,234');
         expect(labels.shipped?.countLine(1234)).toContain('1,234');
+        expect(labels.records?.format('peakParallel', 1234).value.match(/[\d,]+/)?.[0]).toBe('1,234');
+        expect(labels.records?.format('longestTurnMs', 59_500).value).toBe('1 min');
+        expect(labels.records?.format('activeDays', 0).value.match(/\d+/)?.[0]).toBe('0');
     });
 });

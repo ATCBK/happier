@@ -171,7 +171,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingVertical: theme.space.s10,
     borderRadius: theme.borderRadius.lg,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.divider,
+    borderColor: theme.colors.border.default,
   },
   bannerText: { flex: 1, minWidth: 0, gap: theme.space.s2 },
   secondary: { color: theme.colors.text.secondary },
