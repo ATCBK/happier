@@ -77,6 +77,7 @@ import {
   type WorkflowProductionExecutionDeps,
 } from './production';
 import { executeClaimedRun } from '@/daemon/automation/automationRunExecutor';
+import { resolveAutomationPollingConfig } from '@/daemon/automation/automationScheduler';
 import {  workflowInvocationKey } from './coordinator';
 import { AgentStateRequestStore } from '@/agent/permissions/agentStateRequestStore';
 import { publishServerHttpRuntimeOrigin } from '@/api/client/serverHttpBaseUrl';
@@ -230,6 +231,76 @@ async function commandOutputAdmissionFixture(mode: 'plain' | 'e2ee', fault?: 're
 }
 
 describe('production workflow coordinator', () => {
+  it('keeps renewing a claimed Workflow during slow native admission and an overlapping Account currentness read', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(0);
+    let releaseNative!: () => void;
+    const nativeOpen = new Promise<void>(resolve => { releaseNative = resolve; });
+    let releaseCurrentness!: () => void;
+    const currentnessRead = new Promise<void>(resolve => { releaseCurrentness = resolve; });
+    let nativeEntered = false;
+    let currentnessEntered = false;
+    const witness = { mode: 'plain' as const, version: 1, contentKeyFingerprint: null };
+    const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {
+      agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.test', localId: 'test' } },
+      conversation: { kind: 'existing_session', sessionId: 'session-1', machineId },
+    }, blocks: [onlyStep] };
+    const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition,
+      context: { source: { kind: 'inline' }, inputs: {}, machineId, executionTarget: { kind: 'session' },
+        workspaceTarget: { project: { machineId, directory: '/repo', checkoutRootPath: '/repo' } },
+        origin: { kind: 'direct' }, authorization: { principal: { kind: 'host' } } },
+      admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true } });
+    if (!accepted.ok) throw new Error(accepted.error.code);
+    const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({
+      mode: 'plain', binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: accepted.snapshot,
+    }));
+    const boundary = createWorkflowRunStorageTestkit({ runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
+    const enqueue = vi.fn(async (request: Parameters<NonNullable<WorkflowProductionExecutionDeps['sessionInput']>['enqueue']>[0]) => {
+      nativeEntered = true;
+      await nativeOpen;
+      return { status: 'accepted' as const, localId: deriveWorkflowSessionInputLocalIdV2(request.workflow) };
+    });
+    const coordinate = createProductionWorkflowRunCoordinator({ token: 'token', accountId, machineId, storage: boundary,
+      resolveControllerContext: async () => ({ surface: 'cli', authority: 'account_automation', callerPermissionMode: 'yolo' }),
+      resolveAccountEncryption: async () => {
+        if (nativeEntered) { currentnessEntered = true; await currentnessRead; }
+        return { kind: 'available', witness };
+      },
+      isAcceptedAuthorizationCurrent: async () => true,
+      execution: productionExecution({ enqueue, observe: async ({ sessionId, localId }) => ({
+        ok: true, sessionId, localId, result: { kind: 'final_text', text: 'done' },
+      }) }),
+      workspaceScm: { inspectLocation: async () => null, verifyRecordedWorkspace: async () => 'available' },
+    });
+    const polling = resolveAutomationPollingConfig({});
+    const heartbeatRun = vi.fn(async () => Date.now() + polling.leaseDurationMs);
+    const running = executeClaimedRun({ machineId, coordinateWorkflowRun: coordinate,
+      ...polling,
+      claimClient: { heartbeatRun, failRun: async () => { throw new Error('unexpected refusal'); } },
+      claimed: { protocol: 'v3', automation: null, accountCurrentness: witness,
+        run: { id: runId, automationId: null, attempt: 0, revision: 0, leaseExpiresAt: polling.leaseDurationMs,
+          origin: { kind: 'direct' }, triggerId: null, workflowAcceptedSnapshotEnvelope: acceptedEnvelope } },
+    });
+    try {
+      // The actual coordinator reaches the machine input boundary before time advances.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(nativeEntered).toBe(true);
+      const elapsed = polling.leaseDurationMs * 6;
+      await vi.advanceTimersByTimeAsync(elapsed);
+      expect(currentnessEntered).toBe(true);
+      expect(heartbeatRun).toHaveBeenCalledTimes(elapsed / polling.heartbeatMs);
+      releaseCurrentness();
+      releaseNative();
+      await running;
+      expect(boundary.run().state).toBe('succeeded');
+      expect(enqueue).toHaveBeenCalledOnce();
+    } finally {
+      releaseCurrentness(); releaseNative();
+      await running;
+      vi.useRealTimers();
+    }
+  });
+
   it.each(['none', 'lost_ack', 'denied'] as const)('materializes authorized Discussion history and repairs lost publication acknowledgements (publication=%s)', async scenario => {
     const publication = scenario !== 'none';
     const discussion = { serverId: 'server-1', discussionId: 'discussion-1' };
