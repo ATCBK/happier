@@ -51,6 +51,127 @@ export type CodeIntelligenceActionInputById = {
         machineId: string;
         serverId?: string | undefined;
     };
+    readonly "code.rename.preview": {
+        machineId: string;
+        rootPath: string;
+        path: string;
+        line: number;
+        newName?: string | undefined;
+        symbol?: string | undefined;
+        occurrence?: number | undefined;
+        character?: number | undefined;
+        languageId?: string | undefined;
+    };
+    readonly "code.file.rename.preview": {
+        newPath: string;
+        machineId: string;
+        rootPath: string;
+        path: string;
+        languageId?: string | undefined;
+    };
+    readonly "code.codeActions.list": {
+        machineId: string;
+        rootPath: string;
+        path: string;
+        line: number;
+        symbol?: string | undefined;
+        occurrence?: number | undefined;
+        character?: number | undefined;
+        languageId?: string | undefined;
+    };
+    readonly "code.rename.apply": {
+        files: {
+            path: string;
+            expectedHash: string;
+            edits: {
+                range: {
+                    start: {
+                        line: number;
+                        character: number;
+                    };
+                    end: {
+                        line: number;
+                        character: number;
+                    };
+                };
+                text: string;
+            }[];
+            renameTo?: string | undefined;
+        }[];
+        machineId: string;
+        rootPath: string;
+        path: string;
+        languageId?: string | undefined;
+    };
+    readonly "code.file.rename.apply": {
+        files: {
+            path: string;
+            expectedHash: string;
+            edits: {
+                range: {
+                    start: {
+                        line: number;
+                        character: number;
+                    };
+                    end: {
+                        line: number;
+                        character: number;
+                    };
+                };
+                text: string;
+            }[];
+            renameTo?: string | undefined;
+        }[];
+        machineId: string;
+        rootPath: string;
+        path: string;
+        languageId?: string | undefined;
+    };
+    readonly "code.codeAction.apply": {
+        operation: {
+            kind: 'codeAction';
+            action: {
+                serverId: string;
+                title: string;
+                range: {
+                    start: {
+                        line: number;
+                        character: number;
+                    };
+                    end: {
+                        line: number;
+                        character: number;
+                    };
+                };
+                files: {
+                    path: string;
+                    expectedHash: string;
+                    edits: {
+                        range: {
+                            start: {
+                                line: number;
+                                character: number;
+                            };
+                            end: {
+                                line: number;
+                                character: number;
+                            };
+                        };
+                        text: string;
+                    }[];
+                    renameTo?: string | undefined;
+                }[];
+                hasCommand: boolean;
+                kind?: string | undefined;
+                disabledReason?: string | undefined;
+            };
+            expectedHash: string;
+        };
+        machineId: string;
+        rootPath: string;
+        path: string;
+        languageId?: string | undefined;
+    };
 };
 export type CodeIntelligenceActionResultById = {
     readonly "code.hover.get": {
@@ -147,6 +268,91 @@ export type CodeIntelligenceActionResultById = {
             source?: string | undefined;
         }[];
         hasMore: boolean;
+        status: "ok";
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: "prepareRename";
+        targets: {
+            serverId: string;
+            range?: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            } | undefined;
+            placeholder?: string | undefined;
+        }[];
+        status: "ok";
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: "rename" | "willRenameFiles";
+        files: {
+            path: string;
+            expectedHash: string;
+            edits: {
+                range: {
+                    start: {
+                        line: number;
+                        character: number;
+                    };
+                    end: {
+                        line: number;
+                        character: number;
+                    };
+                };
+                text: string;
+            }[];
+            renameTo?: string | undefined;
+        }[];
+        status: "ok";
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: "codeActions";
+        actions: {
+            serverId: string;
+            title: string;
+            range: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            };
+            files: {
+                path: string;
+                expectedHash: string;
+                edits: {
+                    range: {
+                        start: {
+                            line: number;
+                            character: number;
+                        };
+                        end: {
+                            line: number;
+                            character: number;
+                        };
+                    };
+                    text: string;
+                }[];
+                renameTo?: string | undefined;
+            }[];
+            hasCommand: boolean;
+            kind?: string | undefined;
+            disabledReason?: string | undefined;
+        }[];
         status: "ok";
         fileHash?: string | undefined;
         version?: number | undefined;
@@ -289,6 +495,91 @@ export type CodeIntelligenceActionResultById = {
         version?: number | undefined;
         generation?: string | undefined;
     } | {
+        kind: "prepareRename";
+        targets: {
+            serverId: string;
+            range?: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            } | undefined;
+            placeholder?: string | undefined;
+        }[];
+        status: "ok";
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: "rename" | "willRenameFiles";
+        files: {
+            path: string;
+            expectedHash: string;
+            edits: {
+                range: {
+                    start: {
+                        line: number;
+                        character: number;
+                    };
+                    end: {
+                        line: number;
+                        character: number;
+                    };
+                };
+                text: string;
+            }[];
+            renameTo?: string | undefined;
+        }[];
+        status: "ok";
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: "codeActions";
+        actions: {
+            serverId: string;
+            title: string;
+            range: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            };
+            files: {
+                path: string;
+                expectedHash: string;
+                edits: {
+                    range: {
+                        start: {
+                            line: number;
+                            character: number;
+                        };
+                        end: {
+                            line: number;
+                            character: number;
+                        };
+                    };
+                    text: string;
+                }[];
+                renameTo?: string | undefined;
+            }[];
+            hasCommand: boolean;
+            kind?: string | undefined;
+            disabledReason?: string | undefined;
+        }[];
+        status: "ok";
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
         status: "loading";
     } | {
         status: "unavailable";
@@ -421,6 +712,91 @@ export type CodeIntelligenceActionResultById = {
             source?: string | undefined;
         }[];
         hasMore: boolean;
+        status: "ok";
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: "prepareRename";
+        targets: {
+            serverId: string;
+            range?: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            } | undefined;
+            placeholder?: string | undefined;
+        }[];
+        status: "ok";
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: "rename" | "willRenameFiles";
+        files: {
+            path: string;
+            expectedHash: string;
+            edits: {
+                range: {
+                    start: {
+                        line: number;
+                        character: number;
+                    };
+                    end: {
+                        line: number;
+                        character: number;
+                    };
+                };
+                text: string;
+            }[];
+            renameTo?: string | undefined;
+        }[];
+        status: "ok";
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: "codeActions";
+        actions: {
+            serverId: string;
+            title: string;
+            range: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            };
+            files: {
+                path: string;
+                expectedHash: string;
+                edits: {
+                    range: {
+                        start: {
+                            line: number;
+                            character: number;
+                        };
+                        end: {
+                            line: number;
+                            character: number;
+                        };
+                    };
+                    text: string;
+                }[];
+                renameTo?: string | undefined;
+            }[];
+            hasCommand: boolean;
+            kind?: string | undefined;
+            disabledReason?: string | undefined;
+        }[];
         status: "ok";
         fileHash?: string | undefined;
         version?: number | undefined;
@@ -563,6 +939,91 @@ export type CodeIntelligenceActionResultById = {
         version?: number | undefined;
         generation?: string | undefined;
     } | {
+        kind: "prepareRename";
+        targets: {
+            serverId: string;
+            range?: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            } | undefined;
+            placeholder?: string | undefined;
+        }[];
+        status: "ok";
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: "rename" | "willRenameFiles";
+        files: {
+            path: string;
+            expectedHash: string;
+            edits: {
+                range: {
+                    start: {
+                        line: number;
+                        character: number;
+                    };
+                    end: {
+                        line: number;
+                        character: number;
+                    };
+                };
+                text: string;
+            }[];
+            renameTo?: string | undefined;
+        }[];
+        status: "ok";
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: "codeActions";
+        actions: {
+            serverId: string;
+            title: string;
+            range: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            };
+            files: {
+                path: string;
+                expectedHash: string;
+                edits: {
+                    range: {
+                        start: {
+                            line: number;
+                            character: number;
+                        };
+                        end: {
+                            line: number;
+                            character: number;
+                        };
+                    };
+                    text: string;
+                }[];
+                renameTo?: string | undefined;
+            }[];
+            hasCommand: boolean;
+            kind?: string | undefined;
+            disabledReason?: string | undefined;
+        }[];
+        status: "ok";
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
         status: "loading";
     } | {
         status: "unavailable";
@@ -700,6 +1161,91 @@ export type CodeIntelligenceActionResultById = {
         version?: number | undefined;
         generation?: string | undefined;
     } | {
+        kind: "prepareRename";
+        targets: {
+            serverId: string;
+            range?: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            } | undefined;
+            placeholder?: string | undefined;
+        }[];
+        status: "ok";
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: "rename" | "willRenameFiles";
+        files: {
+            path: string;
+            expectedHash: string;
+            edits: {
+                range: {
+                    start: {
+                        line: number;
+                        character: number;
+                    };
+                    end: {
+                        line: number;
+                        character: number;
+                    };
+                };
+                text: string;
+            }[];
+            renameTo?: string | undefined;
+        }[];
+        status: "ok";
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: "codeActions";
+        actions: {
+            serverId: string;
+            title: string;
+            range: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            };
+            files: {
+                path: string;
+                expectedHash: string;
+                edits: {
+                    range: {
+                        start: {
+                            line: number;
+                            character: number;
+                        };
+                        end: {
+                            line: number;
+                            character: number;
+                        };
+                    };
+                    text: string;
+                }[];
+                renameTo?: string | undefined;
+            }[];
+            hasCommand: boolean;
+            kind?: string | undefined;
+            disabledReason?: string | undefined;
+        }[];
+        status: "ok";
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
         status: "loading";
     } | {
         status: "unavailable";
@@ -756,5 +1302,716 @@ export type CodeIntelligenceActionResultById = {
         candidates: string[];
     } | {
         status: 'ok';
+    };
+    readonly "code.rename.preview": {
+        kind: 'hover';
+        sections: {
+            serverId: string;
+            label: string;
+            markdown: string;
+            range?: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            } | undefined;
+        }[];
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'definition';
+        locations: {
+            serverId: string;
+            path: string;
+            range: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            };
+            outsideWorkspace?: boolean | undefined;
+        }[];
+        hasMore: boolean;
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'references';
+        locations: {
+            serverId: string;
+            path: string;
+            range: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            };
+            lineText: string;
+        }[];
+        hasMore: boolean;
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'documentSymbols';
+        symbols: LanguageIntelligenceDocumentSymbol[];
+        hasMore: boolean;
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'diagnostics';
+        diagnostics: {
+            serverId: string;
+            path: string;
+            range: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            };
+            severity: 'error' | 'warning' | 'information' | 'hint';
+            message: string;
+            code?: string | number | undefined;
+            source?: string | undefined;
+        }[];
+        hasMore: boolean;
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'prepareRename';
+        targets: {
+            serverId: string;
+            range?: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            } | undefined;
+            placeholder?: string | undefined;
+        }[];
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'rename' | 'willRenameFiles';
+        files: {
+            path: string;
+            expectedHash: string;
+            edits: {
+                range: {
+                    start: {
+                        line: number;
+                        character: number;
+                    };
+                    end: {
+                        line: number;
+                        character: number;
+                    };
+                };
+                text: string;
+            }[];
+            renameTo?: string | undefined;
+        }[];
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'codeActions';
+        actions: {
+            serverId: string;
+            title: string;
+            range: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            };
+            files: {
+                path: string;
+                expectedHash: string;
+                edits: {
+                    range: {
+                        start: {
+                            line: number;
+                            character: number;
+                        };
+                        end: {
+                            line: number;
+                            character: number;
+                        };
+                    };
+                    text: string;
+                }[];
+                renameTo?: string | undefined;
+            }[];
+            hasCommand: boolean;
+            kind?: string | undefined;
+            disabledReason?: string | undefined;
+        }[];
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        status: 'loading';
+    } | {
+        status: 'unavailable';
+        reason: 'no_capable_server' | 'server_missing' | 'start_failed' | 'unsupported_root' | 'session_unavailable' | 'crashed' | 'method_unavailable' | 'update_required' | 'transport_failed' | 'invalid_response';
+    } | {
+        status: 'error';
+        errorCode: 'session_unavailable' | 'cancelled' | 'document_out_of_sync' | 'stale_query' | 'request_failed' | 'unsupported' | 'invalid_position' | 'invalid_request' | 'path_not_allowed' | 'root_not_found';
+    } | {
+        status: 'error';
+        errorCode: 'unsaved_editor_changes';
+        diskHash: string;
+    } | {
+        status: 'error';
+        errorCode: 'symbol_not_found';
+        candidates: string[];
+    };
+    readonly "code.file.rename.preview": {
+        kind: 'hover';
+        sections: {
+            serverId: string;
+            label: string;
+            markdown: string;
+            range?: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            } | undefined;
+        }[];
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'definition';
+        locations: {
+            serverId: string;
+            path: string;
+            range: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            };
+            outsideWorkspace?: boolean | undefined;
+        }[];
+        hasMore: boolean;
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'references';
+        locations: {
+            serverId: string;
+            path: string;
+            range: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            };
+            lineText: string;
+        }[];
+        hasMore: boolean;
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'documentSymbols';
+        symbols: LanguageIntelligenceDocumentSymbol[];
+        hasMore: boolean;
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'diagnostics';
+        diagnostics: {
+            serverId: string;
+            path: string;
+            range: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            };
+            severity: 'error' | 'warning' | 'information' | 'hint';
+            message: string;
+            code?: string | number | undefined;
+            source?: string | undefined;
+        }[];
+        hasMore: boolean;
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'prepareRename';
+        targets: {
+            serverId: string;
+            range?: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            } | undefined;
+            placeholder?: string | undefined;
+        }[];
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'rename' | 'willRenameFiles';
+        files: {
+            path: string;
+            expectedHash: string;
+            edits: {
+                range: {
+                    start: {
+                        line: number;
+                        character: number;
+                    };
+                    end: {
+                        line: number;
+                        character: number;
+                    };
+                };
+                text: string;
+            }[];
+            renameTo?: string | undefined;
+        }[];
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'codeActions';
+        actions: {
+            serverId: string;
+            title: string;
+            range: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            };
+            files: {
+                path: string;
+                expectedHash: string;
+                edits: {
+                    range: {
+                        start: {
+                            line: number;
+                            character: number;
+                        };
+                        end: {
+                            line: number;
+                            character: number;
+                        };
+                    };
+                    text: string;
+                }[];
+                renameTo?: string | undefined;
+            }[];
+            hasCommand: boolean;
+            kind?: string | undefined;
+            disabledReason?: string | undefined;
+        }[];
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        status: 'loading';
+    } | {
+        status: 'unavailable';
+        reason: 'no_capable_server' | 'server_missing' | 'start_failed' | 'unsupported_root' | 'session_unavailable' | 'crashed' | 'method_unavailable' | 'update_required' | 'transport_failed' | 'invalid_response';
+    } | {
+        status: 'error';
+        errorCode: 'session_unavailable' | 'cancelled' | 'document_out_of_sync' | 'stale_query' | 'request_failed' | 'unsupported' | 'invalid_position' | 'invalid_request' | 'path_not_allowed' | 'root_not_found';
+    } | {
+        status: 'error';
+        errorCode: 'unsaved_editor_changes';
+        diskHash: string;
+    } | {
+        status: 'error';
+        errorCode: 'symbol_not_found';
+        candidates: string[];
+    };
+    readonly "code.codeActions.list": {
+        kind: 'hover';
+        sections: {
+            serverId: string;
+            label: string;
+            markdown: string;
+            range?: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            } | undefined;
+        }[];
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'definition';
+        locations: {
+            serverId: string;
+            path: string;
+            range: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            };
+            outsideWorkspace?: boolean | undefined;
+        }[];
+        hasMore: boolean;
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'references';
+        locations: {
+            serverId: string;
+            path: string;
+            range: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            };
+            lineText: string;
+        }[];
+        hasMore: boolean;
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'documentSymbols';
+        symbols: LanguageIntelligenceDocumentSymbol[];
+        hasMore: boolean;
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'diagnostics';
+        diagnostics: {
+            serverId: string;
+            path: string;
+            range: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            };
+            severity: 'error' | 'warning' | 'information' | 'hint';
+            message: string;
+            code?: string | number | undefined;
+            source?: string | undefined;
+        }[];
+        hasMore: boolean;
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'prepareRename';
+        targets: {
+            serverId: string;
+            range?: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            } | undefined;
+            placeholder?: string | undefined;
+        }[];
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'rename' | 'willRenameFiles';
+        files: {
+            path: string;
+            expectedHash: string;
+            edits: {
+                range: {
+                    start: {
+                        line: number;
+                        character: number;
+                    };
+                    end: {
+                        line: number;
+                        character: number;
+                    };
+                };
+                text: string;
+            }[];
+            renameTo?: string | undefined;
+        }[];
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        kind: 'codeActions';
+        actions: {
+            serverId: string;
+            title: string;
+            range: {
+                start: {
+                    line: number;
+                    character: number;
+                };
+                end: {
+                    line: number;
+                    character: number;
+                };
+            };
+            files: {
+                path: string;
+                expectedHash: string;
+                edits: {
+                    range: {
+                        start: {
+                            line: number;
+                            character: number;
+                        };
+                        end: {
+                            line: number;
+                            character: number;
+                        };
+                    };
+                    text: string;
+                }[];
+                renameTo?: string | undefined;
+            }[];
+            hasCommand: boolean;
+            kind?: string | undefined;
+            disabledReason?: string | undefined;
+        }[];
+        status: 'ok';
+        fileHash?: string | undefined;
+        version?: number | undefined;
+        generation?: string | undefined;
+    } | {
+        status: 'loading';
+    } | {
+        status: 'unavailable';
+        reason: 'no_capable_server' | 'server_missing' | 'start_failed' | 'unsupported_root' | 'session_unavailable' | 'crashed' | 'method_unavailable' | 'update_required' | 'transport_failed' | 'invalid_response';
+    } | {
+        status: 'error';
+        errorCode: 'session_unavailable' | 'cancelled' | 'document_out_of_sync' | 'stale_query' | 'request_failed' | 'unsupported' | 'invalid_position' | 'invalid_request' | 'path_not_allowed' | 'root_not_found';
+    } | {
+        status: 'error';
+        errorCode: 'unsaved_editor_changes';
+        diskHash: string;
+    } | {
+        status: 'error';
+        errorCode: 'symbol_not_found';
+        candidates: string[];
+    };
+    readonly "code.rename.apply": {
+        status: 'loading';
+    } | {
+        status: 'unavailable';
+        reason: 'no_capable_server' | 'server_missing' | 'start_failed' | 'unsupported_root' | 'session_unavailable' | 'crashed' | 'method_unavailable' | 'update_required' | 'transport_failed' | 'invalid_response';
+    } | {
+        status: 'error';
+        errorCode: 'session_unavailable' | 'cancelled' | 'document_out_of_sync' | 'stale_query' | 'request_failed' | 'unsupported' | 'invalid_position' | 'invalid_request' | 'path_not_allowed' | 'root_not_found';
+    } | {
+        status: 'error';
+        errorCode: 'unsaved_editor_changes';
+        diskHash: string;
+    } | {
+        status: 'error';
+        errorCode: 'symbol_not_found';
+        candidates: string[];
+    } | {
+        ok: true;
+        results: {
+            path: string;
+            status: 'replaced' | 'restored' | 'changed' | 'skipped' | 'failed';
+            hash?: string | undefined;
+            matchCount?: number | undefined;
+            edits?: {
+                startUtf16: number;
+                deleteLength: number;
+                insertText: string;
+                originalText: string;
+            }[] | undefined;
+            reason?: string | undefined;
+            renameTo?: string | undefined;
+        }[];
+        cancelled?: string[] | undefined;
+    } | {
+        ok: false;
+        code: 'invalid_request' | 'invalid_pattern' | 'root_not_allowed';
+    };
+    readonly "code.file.rename.apply": {
+        status: 'loading';
+    } | {
+        status: 'unavailable';
+        reason: 'no_capable_server' | 'server_missing' | 'start_failed' | 'unsupported_root' | 'session_unavailable' | 'crashed' | 'method_unavailable' | 'update_required' | 'transport_failed' | 'invalid_response';
+    } | {
+        status: 'error';
+        errorCode: 'session_unavailable' | 'cancelled' | 'document_out_of_sync' | 'stale_query' | 'request_failed' | 'unsupported' | 'invalid_position' | 'invalid_request' | 'path_not_allowed' | 'root_not_found';
+    } | {
+        status: 'error';
+        errorCode: 'unsaved_editor_changes';
+        diskHash: string;
+    } | {
+        status: 'error';
+        errorCode: 'symbol_not_found';
+        candidates: string[];
+    } | {
+        ok: true;
+        results: {
+            path: string;
+            status: 'replaced' | 'restored' | 'changed' | 'skipped' | 'failed';
+            hash?: string | undefined;
+            matchCount?: number | undefined;
+            edits?: {
+                startUtf16: number;
+                deleteLength: number;
+                insertText: string;
+                originalText: string;
+            }[] | undefined;
+            reason?: string | undefined;
+            renameTo?: string | undefined;
+        }[];
+        cancelled?: string[] | undefined;
+    } | {
+        ok: false;
+        code: 'invalid_request' | 'invalid_pattern' | 'root_not_allowed';
+    };
+    readonly "code.codeAction.apply": {
+        status: 'loading';
+    } | {
+        status: 'unavailable';
+        reason: 'no_capable_server' | 'server_missing' | 'start_failed' | 'unsupported_root' | 'session_unavailable' | 'crashed' | 'method_unavailable' | 'update_required' | 'transport_failed' | 'invalid_response';
+    } | {
+        status: 'error';
+        errorCode: 'session_unavailable' | 'cancelled' | 'document_out_of_sync' | 'stale_query' | 'request_failed' | 'unsupported' | 'invalid_position' | 'invalid_request' | 'path_not_allowed' | 'root_not_found';
+    } | {
+        status: 'error';
+        errorCode: 'unsaved_editor_changes';
+        diskHash: string;
+    } | {
+        status: 'error';
+        errorCode: 'symbol_not_found';
+        candidates: string[];
+    } | {
+        ok: true;
+        results: {
+            path: string;
+            status: 'replaced' | 'restored' | 'changed' | 'skipped' | 'failed';
+            hash?: string | undefined;
+            matchCount?: number | undefined;
+            edits?: {
+                startUtf16: number;
+                deleteLength: number;
+                insertText: string;
+                originalText: string;
+            }[] | undefined;
+            reason?: string | undefined;
+            renameTo?: string | undefined;
+        }[];
+        cancelled?: string[] | undefined;
+    } | {
+        ok: false;
+        code: 'invalid_request' | 'invalid_pattern' | 'root_not_allowed';
     };
 };

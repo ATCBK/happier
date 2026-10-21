@@ -101,6 +101,9 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "browser.workspace.open",
   "bugreport.submit",
   "clipboard.write",
+  "code.codeAction.apply",
+  "code.file.rename.apply",
+  "code.rename.apply",
   "code.restart",
   "composer.attachments.pick",
   "composer.transaction.apply",
@@ -619,6 +622,7 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "session.runtime.refresh",
   "session.spawn_new",
   "session.status.set_reason",
+  "session.stop",
   "session.tags.create",
   "session.tags.delete",
   "session.tags.rename",
@@ -1069,17 +1073,33 @@ export type GeneratedActions = Readonly<{
     readonly write: (input: PublicActionInputById["clipboard.write"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"clipboard.write">>;
   }> ;
   readonly code: Readonly<{
+    readonly codeAction: Readonly<{
+      readonly apply: (input: PublicActionInputById["code.codeAction.apply"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"code.codeAction.apply">>;
+    }> ;
+    readonly codeActions: Readonly<{
+      readonly list: (input: PublicActionInputById["code.codeActions.list"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"code.codeActions.list">>;
+    }> ;
     readonly definition: Readonly<{
       readonly get: (input: PublicActionInputById["code.definition.get"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"code.definition.get">>;
     }> ;
     readonly diagnostics: Readonly<{
       readonly list: (input: PublicActionInputById["code.diagnostics.list"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"code.diagnostics.list">>;
     }> ;
+    readonly file: Readonly<{
+      readonly rename: Readonly<{
+        readonly apply: (input: PublicActionInputById["code.file.rename.apply"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"code.file.rename.apply">>;
+        readonly preview: (input: PublicActionInputById["code.file.rename.preview"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"code.file.rename.preview">>;
+      }> ;
+    }> ;
     readonly hover: Readonly<{
       readonly get: (input: PublicActionInputById["code.hover.get"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"code.hover.get">>;
     }> ;
     readonly references: Readonly<{
       readonly list: (input: PublicActionInputById["code.references.list"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"code.references.list">>;
+    }> ;
+    readonly rename: Readonly<{
+      readonly apply: (input: PublicActionInputById["code.rename.apply"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"code.rename.apply">>;
+      readonly preview: (input: PublicActionInputById["code.rename.preview"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"code.rename.preview">>;
     }> ;
     readonly restart: (input: PublicActionInputById["code.restart"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"code.restart">>;
     readonly symbols: Readonly<{
@@ -3461,17 +3481,33 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
       write: (input: PublicActionInputById["clipboard.write"], options?: ActionExecutionOptions) => execute("clipboard.write", input, options),
     },
     code: {
+      codeAction: {
+        apply: (input: PublicActionInputById["code.codeAction.apply"], options?: ActionExecutionOptions) => execute("code.codeAction.apply", input, options),
+      },
+      codeActions: {
+        list: (input: PublicActionInputById["code.codeActions.list"], options?: ActionExecutionOptions) => execute("code.codeActions.list", input, options),
+      },
       definition: {
         get: (input: PublicActionInputById["code.definition.get"], options?: ActionExecutionOptions) => execute("code.definition.get", input, options),
       },
       diagnostics: {
         list: (input: PublicActionInputById["code.diagnostics.list"], options?: ActionExecutionOptions) => execute("code.diagnostics.list", input, options),
       },
+      file: {
+        rename: {
+          apply: (input: PublicActionInputById["code.file.rename.apply"], options?: ActionExecutionOptions) => execute("code.file.rename.apply", input, options),
+          preview: (input: PublicActionInputById["code.file.rename.preview"], options?: ActionExecutionOptions) => execute("code.file.rename.preview", input, options),
+        },
+      },
       hover: {
         get: (input: PublicActionInputById["code.hover.get"], options?: ActionExecutionOptions) => execute("code.hover.get", input, options),
       },
       references: {
         list: (input: PublicActionInputById["code.references.list"], options?: ActionExecutionOptions) => execute("code.references.list", input, options),
+      },
+      rename: {
+        apply: (input: PublicActionInputById["code.rename.apply"], options?: ActionExecutionOptions) => execute("code.rename.apply", input, options),
+        preview: (input: PublicActionInputById["code.rename.preview"], options?: ActionExecutionOptions) => execute("code.rename.preview", input, options),
       },
       restart: (input: PublicActionInputById["code.restart"], options?: ActionExecutionOptions) => execute("code.restart", input, options),
       symbols: {

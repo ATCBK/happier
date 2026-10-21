@@ -47,6 +47,114 @@ export type ComposerIngressActionInputById = {
                     end: number;
                 };
             } | {
+                kind: 'reviewComment.add';
+                comment: {
+                    id: string;
+                    filePath: string;
+                    source: 'file' | 'diff';
+                    anchor: {
+                        kind: 'fileLine';
+                        startLine: number;
+                        lineHash?: `lh1:${string}` | undefined;
+                    } | {
+                        kind: 'diffLine';
+                        startLine: number;
+                        side: 'before' | 'after';
+                        oldLine: number | null;
+                        newLine: number | null;
+                        lineHash?: `lh1:${string}` | undefined;
+                    } | {
+                        kind: 'line';
+                        filePath: string;
+                        line: number;
+                        side?: 'before' | 'after' | undefined;
+                        lineHash?: `lh1:${string}` | undefined;
+                    } | {
+                        kind: 'range';
+                        filePath: string;
+                        startLine: number;
+                        endLine: number;
+                        side?: 'before' | 'after' | undefined;
+                        startLineHash?: `lh1:${string}` | undefined;
+                        endLineHash?: `lh1:${string}` | undefined;
+                        selectedTextHash?: `lh1:${string}` | undefined;
+                    };
+                    snapshot: {
+                        selectedLines: string[];
+                        beforeContext: string[];
+                        afterContext: string[];
+                    };
+                    body: string;
+                    createdAt: number;
+                    anchorResolution?: {
+                        filePath: string;
+                        originalAnchor: {
+                            kind: 'fileLine';
+                            startLine: number;
+                            lineHash?: `lh1:${string}` | undefined;
+                        } | {
+                            kind: 'diffLine';
+                            startLine: number;
+                            side: 'before' | 'after';
+                            oldLine: number | null;
+                            newLine: number | null;
+                            lineHash?: `lh1:${string}` | undefined;
+                        } | {
+                            kind: 'line';
+                            filePath: string;
+                            line: number;
+                            side?: 'before' | 'after' | undefined;
+                            lineHash?: `lh1:${string}` | undefined;
+                        } | {
+                            kind: 'range';
+                            filePath: string;
+                            startLine: number;
+                            endLine: number;
+                            side?: 'before' | 'after' | undefined;
+                            startLineHash?: `lh1:${string}` | undefined;
+                            endLineHash?: `lh1:${string}` | undefined;
+                            selectedTextHash?: `lh1:${string}` | undefined;
+                        };
+                        status: 'exact' | 'hash' | 'context' | 'ambiguous' | 'stale' | 'missing' | 'unsupported';
+                        confidence: number;
+                        id?: string | undefined;
+                        resolvedAnchor?: {
+                            kind: 'fileLine';
+                            startLine: number;
+                            lineHash?: `lh1:${string}` | undefined;
+                        } | {
+                            kind: 'diffLine';
+                            startLine: number;
+                            side: 'before' | 'after';
+                            oldLine: number | null;
+                            newLine: number | null;
+                            lineHash?: `lh1:${string}` | undefined;
+                        } | {
+                            kind: 'line';
+                            filePath: string;
+                            line: number;
+                            side?: 'before' | 'after' | undefined;
+                            lineHash?: `lh1:${string}` | undefined;
+                        } | {
+                            kind: 'range';
+                            filePath: string;
+                            startLine: number;
+                            endLine: number;
+                            side?: 'before' | 'after' | undefined;
+                            startLineHash?: `lh1:${string}` | undefined;
+                            endLineHash?: `lh1:${string}` | undefined;
+                            selectedTextHash?: `lh1:${string}` | undefined;
+                        } | undefined;
+                        reason?: string | undefined;
+                        preview?: {
+                            selectedLines: string[];
+                            beforeContext: string[];
+                            afterContext: string[];
+                        } | undefined;
+                    } | undefined;
+                    includeInPrompt?: boolean | undefined;
+                };
+            } | {
                 kind: 'attachment.add';
                 attachmentLocalId: string;
                 value: {
@@ -55,7 +163,7 @@ export type ComposerIngressActionInputById = {
                     presentation: {
                         label: string;
                         description?: string | undefined;
-                        icon?: 'file' | 'error' | 'check' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'terminal' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
+                        icon?: 'file' | 'error' | 'check' | 'preview' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'terminal' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     };
                 };
@@ -87,7 +195,7 @@ export type ComposerIngressActionInputById = {
                     presentation?: {
                         label: string;
                         description?: string | undefined;
-                        icon?: 'file' | 'error' | 'check' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'terminal' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
+                        icon?: 'file' | 'error' | 'check' | 'preview' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'terminal' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     } | undefined;
                 };

@@ -1429,6 +1429,10 @@ export type ExecutionRunControlActionInputById = {
                 attention?: {
                     kind: 'permission_required';
                     requestIds: string[];
+                    requests?: {
+                        requestId: string;
+                        createdAt: number;
+                    }[] | undefined;
                 } | undefined;
                 lifecycle?: {
                     v: 1;
@@ -1843,6 +1847,10 @@ export type ExecutionRunControlActionResultById = {
                     attention?: {
                         kind: 'permission_required';
                         requestIds: string[];
+                        requests?: {
+                            requestId: string;
+                            createdAt: number;
+                        }[] | undefined;
                     } | undefined;
                     lifecycle?: {
                         v: 1;
@@ -2295,6 +2303,10 @@ export type ExecutionRunControlActionResultById = {
                     attention?: {
                         kind: 'permission_required';
                         requestIds: string[];
+                        requests?: {
+                            requestId: string;
+                            createdAt: number;
+                        }[] | undefined;
                     } | undefined;
                     lifecycle?: {
                         v: 1;
@@ -2747,6 +2759,10 @@ export type ExecutionRunControlActionResultById = {
                     attention?: {
                         kind: 'permission_required';
                         requestIds: string[];
+                        requests?: {
+                            requestId: string;
+                            createdAt: number;
+                        }[] | undefined;
                     } | undefined;
                     lifecycle?: {
                         v: 1;
@@ -3203,6 +3219,10 @@ export type ExecutionRunControlActionResultById = {
                     attention?: {
                         kind: 'permission_required';
                         requestIds: string[];
+                        requests?: {
+                            requestId: string;
+                            createdAt: number;
+                        }[] | undefined;
                     } | undefined;
                     lifecycle?: {
                         v: 1;
@@ -3667,6 +3687,10 @@ export type ExecutionRunControlActionResultById = {
             attention?: {
                 kind: 'permission_required';
                 requestIds: string[];
+                requests?: {
+                    requestId: string;
+                    createdAt: number;
+                }[] | undefined;
             } | undefined;
             lifecycle?: {
                 v: 1;
@@ -3997,6 +4021,10 @@ export type ExecutionRunControlActionResultById = {
             attention?: {
                 kind: 'permission_required';
                 requestIds: string[];
+                requests?: {
+                    requestId: string;
+                    createdAt: number;
+                }[] | undefined;
             } | undefined;
             lifecycle?: {
                 v: 1;
@@ -4546,6 +4574,10 @@ export type ExecutionRunControlActionResultById = {
                 attention?: {
                     kind: 'permission_required';
                     requestIds: string[];
+                    requests?: {
+                        requestId: string;
+                        createdAt: number;
+                    }[] | undefined;
                 } | undefined;
                 lifecycle?: {
                     v: 1;
@@ -4998,6 +5030,10 @@ export type ExecutionRunControlActionResultById = {
                 attention?: {
                     kind: 'permission_required';
                     requestIds: string[];
+                    requests?: {
+                        requestId: string;
+                        createdAt: number;
+                    }[] | undefined;
                 } | undefined;
                 lifecycle?: {
                     v: 1;
@@ -5450,6 +5486,10 @@ export type ExecutionRunControlActionResultById = {
                 attention?: {
                     kind: 'permission_required';
                     requestIds: string[];
+                    requests?: {
+                        requestId: string;
+                        createdAt: number;
+                    }[] | undefined;
                 } | undefined;
                 lifecycle?: {
                     v: 1;
@@ -5906,6 +5946,10 @@ export type ExecutionRunControlActionResultById = {
                 attention?: {
                     kind: 'permission_required';
                     requestIds: string[];
+                    requests?: {
+                        requestId: string;
+                        createdAt: number;
+                    }[] | undefined;
                 } | undefined;
                 lifecycle?: {
                     v: 1;

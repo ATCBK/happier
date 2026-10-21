@@ -384,7 +384,7 @@ export type ProjectExecutionActionResultById = {
                 exitCode?: number | undefined;
             } | {
                 kind: 'projectService';
-                purpose: 'relocation';
+                purpose: 'start' | 'relocation';
                 workspace: {
                     serverId: string;
                     workspaceId: string;
@@ -688,7 +688,7 @@ export type ProjectExecutionActionResultById = {
                 exitCode?: number | undefined;
             } | {
                 kind: 'projectService';
-                purpose: 'relocation';
+                purpose: 'start' | 'relocation';
                 workspace: {
                     serverId: string;
                     workspaceId: string;
@@ -992,7 +992,7 @@ export type ProjectExecutionActionResultById = {
                 exitCode?: number | undefined;
             } | {
                 kind: 'projectService';
-                purpose: 'relocation';
+                purpose: 'start' | 'relocation';
                 workspace: {
                     serverId: string;
                     workspaceId: string;

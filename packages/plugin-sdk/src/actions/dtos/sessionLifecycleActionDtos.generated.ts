@@ -2845,6 +2845,8 @@ export type SessionLifecycleActionResultById = {
             kind: 'launch_error';
             code: string;
             message: string;
+            rpcErrorCode?: 'MACHINE_RPC_TIMEOUT' | 'RPC_OUTCOME_UNKNOWN' | undefined;
+            connectionPhase?: 'reachability-start' | 'reachability-wait' | 'socket-connect' | undefined;
         } | undefined;
     } | {
         type: 'success';
@@ -2894,6 +2896,11 @@ export type SessionLifecycleActionResultById = {
         type: 'pending';
         retryWithSameCreationKey: true;
         outcome: 'unknown' | 'accepted';
+        operation?: {
+            operationId: string;
+            serverId: string;
+            machineId: string;
+        } | undefined;
     } | {
         type: 'error';
         code: 'update_required';

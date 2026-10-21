@@ -27,20 +27,38 @@ export type WorkspaceFileSearchActionInputById = {
         regex?: boolean | undefined;
     };
     readonly "workspace.files.replace": {
+        operation: {
+            kind: 'replace';
+            matcher: {
+                query: string;
+                replacement: string;
+                matchCase?: boolean | undefined;
+                regex?: boolean | undefined;
+            };
+            files: {
+                path: string;
+                expectedHash: string;
+                excludedMatches?: {
+                    line: number;
+                    column16: number;
+                }[] | undefined;
+            }[];
+        } | {
+            kind: 'restore';
+            files: {
+                path: string;
+                expectedHash: string;
+                edits: {
+                    startUtf16: number;
+                    deleteLength: number;
+                    insertText: string;
+                    originalText: string;
+                }[];
+                renameTo?: string | undefined;
+            }[];
+        };
         machineId: string;
         rootPath: string;
-        files: {
-            path: string;
-            expectedHash: string;
-            excludedMatches?: {
-                line: number;
-                column16: number;
-            }[] | undefined;
-        }[];
-        query: string;
-        replacement: string;
-        matchCase?: boolean | undefined;
-        regex?: boolean | undefined;
     };
 };
 export type WorkspaceFileSearchActionResultById = {
@@ -107,10 +125,17 @@ export type WorkspaceFileSearchActionResultById = {
                 originalText: string;
             }[] | undefined;
             reason?: string | undefined;
+            renameTo?: string | undefined;
         }[];
         cancelled?: string[] | undefined;
     } | {
         ok: false;
         code: 'invalid_pattern' | 'root_not_allowed' | 'invalid_request';
+    } | {
+        operation: {
+            operationId: string;
+            waitForTerminal?: true | undefined;
+            includeSetupReview?: true | undefined;
+        };
     };
 };

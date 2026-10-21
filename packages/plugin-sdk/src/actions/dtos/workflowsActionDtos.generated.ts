@@ -125,6 +125,7 @@ export type WorkflowsActionInputById = {
     readonly "workflow.run.list": {
         cursor?: string | undefined;
         limit?: number | undefined;
+        projection?: 'membership' | undefined;
         runId?: string | undefined;
         runIds?: string[] | undefined;
         invocationProvenance?: {
@@ -3870,6 +3871,7 @@ export type WorkflowsActionResultById = {
             kind: 'unavailable';
             reason: 'missing_reference' | 'invalid_reference_scope' | 'invalid_input' | 'target_unavailable' | 'run_not_found' | 'not_authenticated' | 'subtree_denied' | 'role_target_unavailable' | 'role_runs_as_mismatch' | 'policy_denied_field' | 'permission_exceeds_ceiling' | 'work_depth_exceeded' | 'definition_exceeds_authority' | 'run_access_denied' | 'currentness_conflict' | 'workflow_input_too_large' | 'workflow_outcome_unresolved' | 'workflow_http_error' | 'workflow_interaction_capacity_exceeded' | 'workflow_conversation_unavailable' | 'continuation_unavailable' | 'workflow_workspace_restore_unavailable' | 'workflow_workspace_restore_failed' | 'workflow_wait_self_dependency' | 'ineligible_state' | 'custody_pending' | 'content_unavailable' | 'source_unavailable' | 'legacy_conversion_unsupported' | 'history_not_readable' | 'encryption_setup_required' | 'waiting_for_keys' | 'storage_unavailable' | 'native_goal_owner' | 'session_already_started';
         }>;
+        projection?: 'membership' | undefined;
         supportsAnotherRoundByRunId?: Record<string, boolean> | undefined;
         callerAccessByRunId?: Record<string, {
             canEdit: boolean;
@@ -10423,6 +10425,12 @@ export type WorkflowsActionResultById = {
                         messageId: string;
                     };
                 } | {
+                    kind: 'cancelled';
+                    result: {
+                        sessionId: string;
+                        messageId: string;
+                    };
+                } | {
                     kind: 'failed' | 'cancelled' | 'pass' | 'terminal_no_result' | 'declined';
                 } | undefined;
                 review?: {
@@ -11175,6 +11183,12 @@ export type WorkflowsActionResultById = {
                             serverId: string;
                             discussionId: string;
                         };
+                        messageId: string;
+                    };
+                } | {
+                    kind: 'cancelled';
+                    result: {
+                        sessionId: string;
                         messageId: string;
                     };
                 } | {
@@ -12172,6 +12186,12 @@ export type WorkflowsActionResultById = {
                             serverId: string;
                             discussionId: string;
                         };
+                        messageId: string;
+                    };
+                } | {
+                    kind: 'cancelled';
+                    result: {
+                        sessionId: string;
                         messageId: string;
                     };
                 } | {

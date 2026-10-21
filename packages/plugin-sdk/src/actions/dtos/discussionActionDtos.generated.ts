@@ -1688,7 +1688,13 @@ export type DiscussionActionResultById = {
                     messageId: string;
                 };
             } | {
-                kind: 'pass' | 'failed' | 'cancelled' | 'terminal_no_result' | 'declined';
+                kind: 'cancelled';
+                result: {
+                    sessionId: string;
+                    messageId: string;
+                };
+            } | {
+                kind: 'cancelled' | 'pass' | 'failed' | 'terminal_no_result' | 'declined';
             } | undefined;
             returnedInputLocalId?: string | undefined;
         };
@@ -2313,7 +2319,7 @@ export type DiscussionActionResultById = {
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
-                        outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
+                        outcome: 'answer' | 'cancelled' | 'pass' | 'failed' | 'terminal_no_result';
                         acceptedTurnId?: string | undefined;
                         workflow?: {
                             runId: string;
@@ -2621,7 +2627,7 @@ export type DiscussionActionResultById = {
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
-                        outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
+                        outcome: 'answer' | 'cancelled' | 'pass' | 'failed' | 'terminal_no_result';
                         acceptedTurnId?: string | undefined;
                         workflow?: {
                             runId: string;
@@ -2785,7 +2791,7 @@ export type DiscussionActionResultById = {
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
-                        outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
+                        outcome: 'answer' | 'cancelled' | 'pass' | 'failed' | 'terminal_no_result';
                         acceptedTurnId?: string | undefined;
                         workflow?: {
                             runId: string;
@@ -3093,7 +3099,7 @@ export type DiscussionActionResultById = {
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
-                        outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
+                        outcome: 'answer' | 'cancelled' | 'pass' | 'failed' | 'terminal_no_result';
                         acceptedTurnId?: string | undefined;
                         workflow?: {
                             runId: string;
@@ -3349,7 +3355,7 @@ export type DiscussionActionResultById = {
                 replyReturn?: {
                     serverId: string;
                     requestLocalId: string;
-                    outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
+                    outcome: 'answer' | 'cancelled' | 'pass' | 'failed' | 'terminal_no_result';
                     acceptedTurnId?: string | undefined;
                     workflow?: {
                         runId: string;
@@ -3501,7 +3507,7 @@ export type DiscussionActionResultById = {
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
-                        outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
+                        outcome: 'answer' | 'cancelled' | 'pass' | 'failed' | 'terminal_no_result';
                         acceptedTurnId?: string | undefined;
                         workflow?: {
                             runId: string;
@@ -3809,7 +3815,7 @@ export type DiscussionActionResultById = {
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
-                        outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
+                        outcome: 'answer' | 'cancelled' | 'pass' | 'failed' | 'terminal_no_result';
                         acceptedTurnId?: string | undefined;
                         workflow?: {
                             runId: string;
@@ -4055,7 +4061,7 @@ export type DiscussionActionResultById = {
                 replyReturn?: {
                     serverId: string;
                     requestLocalId: string;
-                    outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
+                    outcome: 'answer' | 'cancelled' | 'pass' | 'failed' | 'terminal_no_result';
                     acceptedTurnId?: string | undefined;
                     workflow?: {
                         runId: string;
@@ -4292,7 +4298,7 @@ export type DiscussionActionResultById = {
                 replyReturn?: {
                     serverId: string;
                     requestLocalId: string;
-                    outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
+                    outcome: 'answer' | 'cancelled' | 'pass' | 'failed' | 'terminal_no_result';
                     acceptedTurnId?: string | undefined;
                     workflow?: {
                         runId: string;
@@ -4442,7 +4448,7 @@ export type DiscussionActionResultById = {
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
-                        outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
+                        outcome: 'answer' | 'cancelled' | 'pass' | 'failed' | 'terminal_no_result';
                         acceptedTurnId?: string | undefined;
                         workflow?: {
                             runId: string;
@@ -4750,7 +4756,7 @@ export type DiscussionActionResultById = {
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
-                        outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
+                        outcome: 'answer' | 'cancelled' | 'pass' | 'failed' | 'terminal_no_result';
                         acceptedTurnId?: string | undefined;
                         workflow?: {
                             runId: string;
@@ -4917,7 +4923,7 @@ export type DiscussionActionResultById = {
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
-                        outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
+                        outcome: 'answer' | 'cancelled' | 'pass' | 'failed' | 'terminal_no_result';
                         acceptedTurnId?: string | undefined;
                         workflow?: {
                             runId: string;
@@ -5225,7 +5231,7 @@ export type DiscussionActionResultById = {
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
-                        outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
+                        outcome: 'answer' | 'cancelled' | 'pass' | 'failed' | 'terminal_no_result';
                         acceptedTurnId?: string | undefined;
                         workflow?: {
                             runId: string;
@@ -5392,7 +5398,7 @@ export type DiscussionActionResultById = {
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
-                        outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
+                        outcome: 'answer' | 'cancelled' | 'pass' | 'failed' | 'terminal_no_result';
                         acceptedTurnId?: string | undefined;
                         workflow?: {
                             runId: string;
@@ -5700,7 +5706,7 @@ export type DiscussionActionResultById = {
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
-                        outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
+                        outcome: 'answer' | 'cancelled' | 'pass' | 'failed' | 'terminal_no_result';
                         acceptedTurnId?: string | undefined;
                         workflow?: {
                             runId: string;
@@ -5964,7 +5970,7 @@ export type DiscussionActionResultById = {
                 replyReturn?: {
                     serverId: string;
                     requestLocalId: string;
-                    outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
+                    outcome: 'answer' | 'cancelled' | 'pass' | 'failed' | 'terminal_no_result';
                     acceptedTurnId?: string | undefined;
                     workflow?: {
                         runId: string;
@@ -6932,6 +6938,8 @@ export type DiscussionActionResultById = {
                 kind: 'launch_error';
                 code: string;
                 message: string;
+                rpcErrorCode?: 'MACHINE_RPC_TIMEOUT' | 'RPC_OUTCOME_UNKNOWN' | undefined;
+                connectionPhase?: 'reachability-start' | 'reachability-wait' | 'socket-connect' | undefined;
             } | undefined;
         } | {
             type: 'success';
@@ -6981,6 +6989,11 @@ export type DiscussionActionResultById = {
             type: 'pending';
             retryWithSameCreationKey: true;
             outcome: 'unknown' | 'accepted';
+            operation?: {
+                operationId: string;
+                serverId: string;
+                machineId: string;
+            } | undefined;
         } | {
             type: 'error';
             code: 'update_required';

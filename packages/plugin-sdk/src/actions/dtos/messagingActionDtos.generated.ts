@@ -155,6 +155,17 @@ export type MessagingActionResultById = {
                 };
                 messageId: string;
             };
+        } | {
+            kind: 'cancelled';
+            partialText: string;
+            messageRef: {
+                kind: 'session';
+                session: {
+                    serverId: string;
+                    sessionId: string;
+                };
+                messageId: string;
+            };
         };
         inputMessageRef?: {
             kind: 'session';
@@ -236,6 +247,17 @@ export type MessagingActionResultById = {
                             discussion: {
                                 serverId: string;
                                 discussionId: string;
+                            };
+                            messageId: string;
+                        };
+                    } | {
+                        kind: 'cancelled';
+                        partialText: string;
+                        messageRef: {
+                            kind: 'session';
+                            session: {
+                                serverId: string;
+                                sessionId: string;
                             };
                             messageId: string;
                         };
@@ -345,6 +367,12 @@ export type MessagingActionResultById = {
                         serverId: string;
                         discussionId: string;
                     };
+                    messageId: string;
+                };
+            } | {
+                kind: 'cancelled';
+                result: {
+                    sessionId: string;
                     messageId: string;
                 };
             } | undefined;
