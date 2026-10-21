@@ -37,6 +37,13 @@ export type ComposerEditorControllerOptions = Readonly<{
     renderChip?: ComposerChipRenderer;
 }>;
 
+function drawDropCaret(): HTMLElement {
+    const caret = document.createElement('span');
+    caret.setAttribute('data-composer-drop-caret', '');
+    caret.setAttribute('aria-hidden', 'true');
+    return caret;
+}
+
 /** Owns editor transactions; bindings stay on node identity across steps and undo. */
 export function createComposerEditorController(element: HTMLElement, initial: ComposerEditorControllerOptions) {
     let options = initial;
@@ -131,12 +138,8 @@ export function createComposerEditorController(element: HTMLElement, initial: Co
                                 }
                             });
                         }
-                        if (dropOffset !== null) decorations.push(Decoration.widget(current.offsetToPosition(dropOffset), () => {
-                            const caret = document.createElement('span');
-                            caret.setAttribute('data-composer-drop-caret', '');
-                            caret.setAttribute('aria-hidden', 'true');
-                            return caret;
-                        }));
+                        // A keyed widget keeps its node across unrelated updates, so the caret's fade-in plays once.
+                        if (dropOffset !== null) decorations.push(Decoration.widget(current.offsetToPosition(dropOffset), drawDropCaret, { key: 'composer-drop-caret' }));
                         return DecorationSet.create(state.doc, decorations);
                     },
                 },
