@@ -2197,8 +2197,9 @@ describe('AppShellPluginUiProjectionProvider', () => {
         const { AppShellPluginUiProjectionProvider } = await import('./AppShellPluginUiProjection');
         await renderScreen(<AppShellPluginUiProjectionProvider><ProjectionProbe /></AppShellPluginUiProjectionProvider>);
         await flushHookEffects({ cycles: 5 });
-        expect(getConnectedServiceRegistrySnapshot()).toMatchObject({ status: 'loading', errorReason: null });
-        expect(getProjectedEntry('acme.same')).toMatchObject({ projectedDescriptor: expect.objectContaining({ pluginId: 'acme.same' }) });
+        expect(getConnectedServiceRegistrySnapshot()).toMatchObject({ status: 'stale', errorReason: 'partial_machine_failure' });
+        expect(getProjectedEntry('acme.same')).toMatchObject({ executable: true, projectionStatus: 'ready',
+            projectedDescriptor: expect.objectContaining({ pluginId: 'acme.same' }) });
         await act(async () => pending.resolve({ supported: true, projection: projectionWithConnectedAccount({ serviceId: 'bitbucket', pluginId: 'acme.same' }) }));
         await flushHookEffects({ cycles: 5 });
         expect(getConnectedServiceRegistrySnapshot()).toMatchObject({ status: 'ready', errorReason: null });
@@ -2346,7 +2347,7 @@ describe('AppShellPluginUiProjectionProvider', () => {
         failMachineB = true;
         await act(async () => { projectionRefreshState.publish(); });
         await flushHookEffects({ cycles: 4 });
-        expect(getConnectedServiceRegistrySnapshot()).toMatchObject({ status: 'loading', errorReason: null });
+        expect(getConnectedServiceRegistrySnapshot()).toMatchObject({ status: 'ready', errorReason: null });
         expect(getProjectedEntry('acme.plugin.a')).toMatchObject({
             projectionStatus: 'ready',
             executable: true,
@@ -2514,7 +2515,7 @@ describe('AppShellPluginUiProjectionProvider', () => {
         expect(getProjectedEntry('acme.plugin.a')).toBeNull();
     });
 
-    it('retains last-known-good through all-machine transport failure and recovers stale to ready', async () => {
+    it('retains admitted last-known-good through all-machine transport failure and refreshes on recovery', async () => {
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2026-07-13T00:00:00Z'));
         storageState.machines = [
@@ -2536,7 +2537,7 @@ describe('AppShellPluginUiProjectionProvider', () => {
         mode = 'failed';
         await act(async () => { projectionRefreshState.publish(); });
         await flushHookEffects({ cycles: 4 });
-        expect(getConnectedServiceRegistrySnapshot()).toMatchObject({ status: 'stale', errorReason: 'transport' });
+        expect(getConnectedServiceRegistrySnapshot()).toMatchObject({ status: 'ready', errorReason: null });
         expect(getProjectedEntry('acme.plugin.a')?.projectedDescriptor).toEqual(expect.objectContaining({ pluginId: 'acme.plugin.a' }));
 
         mode = 'ready';
@@ -2570,7 +2571,7 @@ describe('AppShellPluginUiProjectionProvider', () => {
         mode = 'rejected';
         await act(async () => { projectionRefreshState.publish(); });
         await flushHookEffects({ cycles: 4 });
-        expect(getConnectedServiceRegistrySnapshot()).toMatchObject({ status: 'stale', errorReason: 'transport' });
+        expect(getConnectedServiceRegistrySnapshot()).toMatchObject({ status: 'ready', errorReason: null });
         expect(getProjectedEntry('acme.plugin.a')?.projectedDescriptor).toBeTruthy();
 
         mode = 'unsupported';
