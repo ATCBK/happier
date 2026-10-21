@@ -331,19 +331,19 @@ export function buildSessionListIndexFromViewData(
         return null;
     }
 
-    const previousKeyPartsByHome = new Map<string, Map<string, NormalizedSessionListKeyParts>>();
+    const previousSessionsByHome = new Map<string, Map<string, Extract<SessionListIndexItem, { type: 'session' }>>>();
     const previousByKey = Array.isArray(previousIndex)
         ? (() => {
             const map = new Map<string, SessionListIndexItem>();
             for (let index = 0; index < previousIndex.length; index += 1) {
                 const item = previousIndex[index];
-                map.set(buildSessionListIndexNodeId(item), item);
                 if (item.type === 'session') {
-                    const parts = normalizeSessionListKeyParts(item.serverId, item.sessionId, item.keyParts);
-                    let bySession = previousKeyPartsByHome.get(parts.serverId);
-                    if (!bySession) previousKeyPartsByHome.set(parts.serverId, bySession = new Map());
-                    bySession.set(parts.sessionId, parts);
-                }
+                    const serverId = String(item.serverId ?? '').trim();
+                    const sessionId = String(item.sessionId ?? '').trim();
+                    let bySession = previousSessionsByHome.get(serverId);
+                    if (!bySession) previousSessionsByHome.set(serverId, bySession = new Map());
+                    bySession.set(sessionId, item);
+                } else map.set(buildSessionListIndexNodeId(item), item);
             }
             return map;
         })()
@@ -379,7 +379,8 @@ export function buildSessionListIndexFromViewData(
 
         const serverId = String(item.serverId ?? '').trim();
         const sessionId = String(item.session.id ?? '').trim();
-        const keyParts = normalizeSessionListKeyParts(serverId, sessionId, previousKeyPartsByHome.get(serverId)?.get(sessionId));
+        const previousItem = previousSessionsByHome.get(serverId)?.get(sessionId);
+        const keyParts = normalizeSessionListKeyParts(serverId, sessionId, previousItem?.keyParts);
         const nextItem: SessionListIndexItem = {
             type: 'session',
             sessionId: item.session.id,
@@ -398,9 +399,7 @@ export function buildSessionListIndexFromViewData(
             folderDepth: item.folderDepth,
             workspace: item.workspace,
         };
-        const key = buildSessionListIndexNodeId(nextItem);
-        const previousItem = previousByKey?.get(key) ?? null;
-        if (previousItem?.type === 'session' && previousItem.keyParts === keyParts
+        if (previousItem && previousItem.keyParts === keyParts
             && areSessionListIndexItemsEqual(previousItem, nextItem)) {
             return previousItem;
         }
