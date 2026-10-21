@@ -1016,9 +1016,12 @@ export function ReplaceResultSummary({
     ? <QuietLine icon="info" label={t('universalSearch.replace.undoDeclined')} />
     : model.applyError === 'outcome_unknown'
       ? <QuietLine icon="warning" tone="danger" label={t('universalSearch.replace.outcomeUnknown', { machine: machineLabel })} />
-      : model.applyError
-        ? <QuietLine icon="warning" tone="danger" label={t('universalSearch.replace.undoFailed', { machine: machineLabel })} />
-        : null;
+      // Refused before writing: nothing ran, so the result and its Undo stay as they were.
+      : model.applyError === 'unavailable'
+        ? <QuietLine icon="warning" tone="danger" label={t('universalSearch.replace.undoDidntRun', { machine: machineLabel })} />
+        : model.applyError
+          ? <QuietLine icon="warning" tone="danger" label={t('universalSearch.replace.undoFailed', { machine: machineLabel })} />
+          : null;
   const summary = summarizeReplaceResults(model.results);
   const allUndone = summary.replacedFiles === 0 && summary.restored > 0;
   const title = allUndone

@@ -1094,6 +1094,32 @@ describe('UniversalSearchController exact Home scope', () => {
         expect(previews()).toHaveLength(1);
     });
 
+    it('keeps an unchanged replace preview through a presence refresh without reissuing its read', async () => {
+        fixture.singleHome = true;
+        fixture.workspaceRefs = [{ id: 'ws-replace', serverId: HOME_B, machineId: 'machine-b', rootPath: '/repo', label: 'Replace project', createdAtMs: 1 }];
+        fixture.memoryMachine = { serverId: HOME_B, machine: { id: 'machine-b', active: true } };
+        fixture.daemonRpc.mockResolvedValue({ ok: true, files: [], skipped: { notText: 0 }, hasMore: false, coverage: 'complete' });
+        const { UniversalSearchController } = await import('./UniversalSearchController');
+        await renderScreen(<UniversalSearchController commands={[]} initialQuery="routeKey" initialSource="fileContent" initialReplace
+            initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: 'machine-b', rootPath: '/repo' }}
+            presentation="modal" onRequestClose={vi.fn()} />);
+        const presence = async (active: boolean) => act(async () => { storage.setState({ machines: {
+            'machine-b': createMachineFixture({ id: 'machine-b', active, activeAt: Date.now() }),
+        } }); });
+        await presence(true);
+        const previews = () => fixture.daemonRpc.mock.calls.filter(([call]) => call.method === RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW);
+        await vi.waitFor(() => expect(previews()).toHaveLength(1));
+        const firstPreview = previews()[0];
+        const { recordMachineRequestFailed, recordMachineRequestSucceeded, isMachineReachable } = await import('@/sync/domains/machines/reachability/machineReachability');
+        const target = { serverId: HOME_B, accountId: 'account-1', machineId: 'machine-b' };
+        await act(async () => { recordMachineRequestFailed(target); });
+        expect(isMachineReachable(target, storage.getState().machines['machine-b']!)).toBe(false);
+        await act(async () => { recordMachineRequestSucceeded(target); });
+        expect(isMachineReachable(target, storage.getState().machines['machine-b']!)).toBe(true);
+        await flushHookEffects({ cycles: 4, turns: 2 });
+        expect(previews()).toEqual([firstPreview]);
+    });
+
     it('keeps the reviewed matcher while an invalid regex loads, then shows its error', async () => {
         fixture.singleHome = true;
         fixture.workspaceRefs = [{ id: 'ws-replace', serverId: HOME_B, machineId: 'machine-b', rootPath: '/repo', label: 'Replace project', createdAtMs: 1 }];

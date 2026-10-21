@@ -807,7 +807,8 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     // Files with an unsaved editor draft are never written by replace; they are listed and skipped.
     const unsavedPaths = React.useMemo(() => unsavedWorkspaceFilePaths({ accountId: scope.accountId, details: paneDetails }), [paneDetails, scope.accountId]);
     const replaceModel = useWorkspaceReplace({
-        scope: replaceMatcher && workspaceScopeReachable && selectedCredentialIsCurrent ? workspaceScope : null,
+        scope: replaceMatcher && selectedCredentialIsCurrent ? workspaceScope : null,
+        available: workspaceScopeReachable,
         accountLifetime: selectedCredentialIsCurrent ? selectedCredentialBinding : null,
         matcher: replaceMatcher, unsavedPaths,
     });

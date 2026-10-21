@@ -428,16 +428,19 @@ function previewError(
 export function useWorkspaceReplace(
   input: Readonly<{
     scope: WorkspaceScopeBase | null;
+    /** Presence disarms new effects without changing the selected target or a pending read's intent. */
+    available?: boolean;
     accountLifetime: ServerAccountScopeLifetime | null;
     matcher: WorkspaceReplaceMatcher | null;
     unsavedPaths: readonly string[];
   }>,
 ): WorkspaceReplaceModel {
   const { scope, accountLifetime, matcher } = input;
+  const available = input.available !== false;
   const accountId = accountLifetime?.scope.accountId ?? null;
   // The mounted Account owner's approval custody: a request the person approves continues to its own
-  // answer here (preview, replace or Undo) instead of being retried. Closing the surface releases only
-  // this interest; the durable request stays in the Inbox.
+  // answer here (preview, replace or Undo) instead of being retried. Writes keep
+  // durable Inbox custody; previews retain only the current review's read intent.
   const author = useMountedActionExecution(accountLifetime?.scope ?? null);
   const authorRef = React.useRef(author);
   authorRef.current = author;
@@ -511,6 +514,7 @@ export function useWorkspaceReplace(
     [approvalDecided, storedApproval],
   );
   const applyController = React.useRef<AbortController | null>(null);
+  const previewController = React.useRef<AbortController | null>(null);
   const options = React.useMemo(
     () => (scope && accountId ? { serverId: scope.serverId, accountId } : null),
     [scope?.serverId, accountId],
@@ -523,7 +527,17 @@ export function useWorkspaceReplace(
       setError(null);
       return;
     }
+    // The review and its mounted author resolve the same real credential
+    // binding. Do not lend an unbound author's soon-to-retire signal to a read.
+    if (!author.ready) return;
+    if (!available) {
+      setLoadedKey(key);
+      setError({ key, code: 'unavailable' });
+      return;
+    }
     const controller = new AbortController();
+    previewController.current = controller;
+    setLoadingMore(false);
     let current = true;
     const interest = mergeAbortSignals([controller.signal, authorRef.current.getSignal()]);
     void machineWorkspaceFileReplacePreview(
@@ -536,7 +550,7 @@ export function useWorkspaceReplace(
         regex: matcher.regex,
         contextLines: 2,
       },
-      { ...options, signal: controller.signal, continuationSignal: interest.signal,
+      { ...options, signal: interest.signal, continuationSignal: interest.signal,
         onApprovalPending: (registration) => {
           if (!current) return;
           authorRef.current.approval.requestApproval(registration);
@@ -584,13 +598,18 @@ export function useWorkspaceReplace(
       current = false;
       controller.abort();
       interest.dispose();
+      if (previewController.current === controller) previewController.current = null;
     };
     // `matcher` and `scope` are captured through `key`, which names every field the request reads.
-  }, [key, retryVersion, options]);
+    // Presence is checked when this intent starts, not a reason to reissue an
+    // unchanged read or abandon its approval. An initially offline read exposes Retry.
+  }, [key, retryVersion, options, author.ready]);
 
   const loadMore = React.useCallback(() => {
-    if (!preview?.cursor || !scope || !options || loadingMore) return;
+    const controller = previewController.current;
+    if (!authorRef.current.ready || !available || !preview?.cursor || preview.key !== key || !scope || !options || loadingMore || !controller || controller.signal.aborted) return;
     const { matcher: reviewed, cursor, key: previewKey } = preview;
+    const interest = mergeAbortSignals([controller.signal, authorRef.current.getSignal()]);
     setLoadingMore(true);
     void machineWorkspaceFileReplacePreview(
       scope.machineId,
@@ -603,14 +622,16 @@ export function useWorkspaceReplace(
         contextLines: 2,
         cursor,
       },
-      { ...options, continuationSignal: authorRef.current.getSignal(),
+      { ...options, signal: interest.signal, continuationSignal: interest.signal,
         onApprovalPending: (registration) => {
+          if (interest.signal.aborted) return;
           authorRef.current.approval.requestApproval(registration);
           setApproval({ key: previewKey, approval: { operation: 'preview', serverId: options.serverId, status: 'waiting',
             request: createdApproval(registration, 'workspace.files.replace.preview') } });
         } },
     )
       .then((response) => {
+        if (interest.signal.aborted) return;
         const pendingApproval = readReplaceApproval(response);
         if (pendingApproval) {
           setApproval({ key: previewKey, approval: { operation: 'preview', serverId: options.serverId, status: 'waiting', request: pendingApproval } });
@@ -630,9 +651,14 @@ export function useWorkspaceReplace(
               }
             : previous,
         );
+      }, () => {
+        if (!interest.signal.aborted) setError({ key: previewKey, code: 'unavailable' });
       })
-      .finally(() => setLoadingMore(false));
-  }, [loadingMore, options, preview, scope]);
+      .finally(() => {
+        interest.dispose();
+        if (previewController.current === controller) setLoadingMore(false);
+      });
+  }, [available, key, loadingMore, options, preview, scope]);
 
   const unsavedSet = React.useMemo(
     () => new Set(input.unsavedPaths),
@@ -698,6 +724,8 @@ export function useWorkspaceReplace(
   }, []);
 
   const canApply =
+    author.ready &&
+    available &&
     !stale &&
     !loading &&
     !currentError &&

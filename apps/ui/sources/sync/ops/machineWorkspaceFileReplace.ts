@@ -21,11 +21,22 @@ export async function machineWorkspaceFileReplacePreview(machineId: string, inpu
     const payload = DaemonWorkspaceFileReplacePreviewRequestSchema.parse(input);
     try {
         const { createDefaultActionExecutor } = await import('./actions/defaultActionExecutor');
-        const execution = await createDefaultActionExecutor().execute('workspace.files.replace.preview', { machineId, ...payload }, {
+        const signal = options?.signal;
+        const scope = options?.serverId && options.accountId ? { serverId: options.serverId, accountId: options.accountId } : null;
+        const execution = await createDefaultActionExecutor(signal && scope && options?.onApprovalPending ? {
+            hostActionApprovalLifetime: { actionId: 'workspace.files.replace.preview', signal, surface: 'ui' },
+            onBlockingApprovalPending: ({ artifactId }) => {
+                if (signal.aborted || !scope) return;
+                // Presentation observes the same retained invocation; the Action
+                // lifetime owns its decision, result and withdrawal.
+                options?.onApprovalPending?.({ artifactId, scope, signal, refreshAfterExecution: false,
+                    onExecuted: async () => 'ignored' });
+            },
+        } : undefined).execute('workspace.files.replace.preview', { machineId, ...payload }, {
             surface: 'ui', authority: 'present_user', externalActionTarget: { kind: 'machine', machineId },
             ...(options?.serverId ? { serverId: options.serverId } : {}),
             ...(options?.accountId ? { expectedAccountId: options.accountId } : {}),
-            ...(options?.signal ? { signal: options.signal } : {}),
+            ...(signal ? { signal } : {}),
         });
         if (!execution.ok) return execution;
         const approval = ActionApprovalRequestCreatedResultSchema.safeParse(execution.result);
