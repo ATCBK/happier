@@ -68,11 +68,20 @@ describe('workflow library run summaries', () => {
             automationSummaries: input.automationIds.map((id: string) => ({ automationId: id, lastRun: null })),
             remainingAutomationIds: [],
         } }));
-        const hook = await renderHook(() => useWorkflowAutomationSummaries([automationId]));
+        const hook = await renderHook((props: { ids: readonly string[] }) => useWorkflowAutomationSummaries(props.ids), {
+            initialProps: { ids: [automationId] },
+        });
         await waitForHomeGovernance(() => expect(executeMock.mock.calls).toHaveLength(1));
         expect(executeMock.mock.calls[0]?.[1]).toEqual({ automationIds: [automationId] });
         await waitForHomeGovernance(() => expect(hook.getCurrent().summaries?.has(automationId)).toBe(true));
         expect(hook.getCurrent().summaries?.size).toBe(1);
+        await hook.rerender({ ids: ['habit', 'x'] });
+        await waitForHomeGovernance(() => expect(executeMock.mock.calls).toHaveLength(2));
+        expect(executeMock.mock.calls[1]?.[1]).toEqual({ automationIds: ['habit', 'x'] });
+        await waitForHomeGovernance(() => expect([...hook.getCurrent().summaries?.keys() ?? []]).toEqual(['habit', 'x']));
+        await hook.rerender({ ids: [] });
+        expect(hook.getCurrent().summaries?.size).toBe(0);
+        expect(executeMock.mock.calls).toHaveLength(2);
     });
 
     it('batches trigger-only latest statuses without acquiring full Runs or private content', async () => {

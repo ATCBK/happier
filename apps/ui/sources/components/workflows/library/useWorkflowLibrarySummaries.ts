@@ -143,10 +143,11 @@ function useWorkflowSummaries<T>(requestedIds: readonly string[], selector: Summ
     const uniqueIds = [...new Set(requestedIds)];
     // Source rows retain their incumbent canonical ordering; Automation demand and all
     // server continuations preserve input order.
-    const key = (selector.kind === 'source' ? uniqueIds.sort() : uniqueIds).join('\u0000');
-    const lifetime = key.length > 0 ? activeLifetime : null;
+    const key = JSON.stringify(selector.kind === 'source' ? uniqueIds.sort() : uniqueIds);
+    const lifetime = uniqueIds.length > 0 ? activeLifetime : null;
     const selection = React.useMemo(() => {
-        const ids = key.length > 0 ? key.split('\u0000') : [];
+        // The key is encoded immediately above; JSON preserves opaque ids and their boundaries.
+        const ids = JSON.parse(key) as string[];
         const keys = ids.map(id => `${selector.kind}:${id}`);
         let owner = lifetime ? owners.get(lifetime) : undefined;
         if (lifetime && !owner) { owner = createSummaryOwner(lifetime); owners.set(lifetime, owner); }
