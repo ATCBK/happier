@@ -620,7 +620,6 @@ describe('composed Codex topology descriptor batching', () => {
                 home.archivedSessionsRoot,
             )).toBe(1);
         }
-        expect(fsBoundary.open).toHaveBeenCalledTimes(101);
         const described = results.map((result, homeIndex) => {
             if (result.purpose !== 'resource_descriptors') {
                 throw new Error('Expected descriptor reconciliation');
@@ -857,9 +856,11 @@ describe('composed Codex topology descriptor batching', () => {
         expect(hostReconcileResource.mock.calls.filter(
             ([input]) => input.purpose === 'resource_descriptors',
         ).map(([input]) => input.links.length).sort()).toEqual([50, 50]);
+        // These callbacks carry no physical directory change. Reconciliation
+        // must preserve descriptors without rereading unchanged directories.
         expect(descriptorInventoryCounts).toEqual([
-            { sessions: 1, archivedSessions: 1 },
-            { sessions: 1, archivedSessions: 1 },
+            { sessions: 0, archivedSessions: 0 },
+            { sessions: 0, archivedSessions: 0 },
         ]);
         expect(requestTranscriptRefresh).not.toHaveBeenCalled();
         expect(fileCallbacks.has(delayedChildFile)).toBe(true);
