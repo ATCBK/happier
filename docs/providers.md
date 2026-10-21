@@ -584,18 +584,28 @@ Gateway or copy the hub's runtime catalog into its own cache.
 
 Session startup uses the authenticated native broker carrier rather than the
 probe's Machine RPC path. Opening its peer-local listener does not prove that
-the subsequent stream reached the hub application. In development source, the
-file-only `[ProviderBroker] Account connection open refused` record retains a
-bounded `discoveryCause` on endpoint-discovery failures and `httpStatus` only
-when HTTP responded. A failed per-stream Home grant refresh is retained as
+the subsequent stream reached the hub application. In development source,
+`providerBrokerEndpointDiscovery.ts` owns endpoint acquisition and failure
+classification for both Account connections and Team credentials. Its file-only
+`[ProviderBroker] Endpoint discovery refused` record retains a closed
+`discoveryCause`, `httpStatus` only when HTTP responded, `discoveryElapsedMs`,
+and the per-stream grant's `refreshOutcome` with `refreshElapsedMs` when requested.
+The refresh outcome distinguishes an unanswered refresh from an accepted,
+refused or failed refresh. Its elapsed time is the completed refresh duration,
+or the time still pending when discovery fails.
+A refused per-stream Home grant refresh is retained as
 `broker_refresh_refused` before native transport can turn it into a closed
-socket. These facts also reach the existing runner dispatch
+socket. Account failures also retain these closed cause/status facts in the
+existing `[ProviderBroker] Account connection open refused` and runner dispatch
 refusal records. The hub's `[ProviderBroker] Machine stream admission refused`
 record distinguishes transport identity, binding, signature, unavailable
 resolver/target, target failure and cancellation. Diagnostics contain fixed
 classes rather than error messages, URLs, headers, bodies or signed authority;
 the public refusal remains `provider_endpoint_unavailable`. A missing HTTP
 status alone cannot distinguish a rejected stream from a transport failure.
+Compare discovery time with the containing daemon-service request duration;
+that request also includes catalog, grant acquisition and binding revalidation.
+Its total duration is not a native stream timeout measurement.
 
 The development managed-runtime declaration can opt into
 `sharing: 'connectionMachine'`. The daemon's existing managed-services owner
@@ -627,6 +637,13 @@ Account observer; an unavailable read returns a catalog error.
 The runner keeps its own loopback access endpoint across daemon replacement.
 Each new request re-admits the captured binding before obtaining fresh access;
 transport failure does not replay inference or substitute another source.
+The native Agent can independently retry a broken response stream within its
+existing turn. Codex reports that decision with `willRetry: true`; its codec
+supersedes unfinished assistant text without resubmitting the host input or
+removing earlier completed messages. Transcript retirement must reconcile both
+the durable checkpoint and the live stream under the original item identity.
+Development outage QA still exposes a retained partial alongside the retried
+answer; physical Gateway restart alone does not verify transcript recovery.
 An access refusal withdraws that consumer projection while the Session retains
 its Provider invocation; later access must freshly authorize before rejoining.
 An unavailable exact executable source remains unavailable: retained declaration
