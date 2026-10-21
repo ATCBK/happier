@@ -329,7 +329,9 @@ jobs:
             apps/server/generated/sqlite-client apps/server/generated/mysql-client \
             apps/cli/tools/unpacked \
             apps/ui/public/monaco apps/ui/public/vendor apps/ui/public/canvaskit.wasm \
-            apps/ui/public/happier-password-kdf-worker.js \
+            apps/ui/public/happier-password-kdf-worker.js apps/ui/public/happier-crypto-worker.js \
+            apps/ui/public/happier-atmosphere-worker.js \
+            apps/ui/sources/components/atmosphere/backdropWorkletCore.generated.js \
             apps/ui/sources/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts.js \
             packages/protocol/src/features/embeddedFeaturePolicies.generated.ts; do
             if [ -e "$output" ]; then
