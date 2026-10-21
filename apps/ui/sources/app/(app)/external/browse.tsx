@@ -43,9 +43,10 @@ const ExternalSessionsBrowseRouteContent = React.memo(function ExternalSessionsB
         serverId: resolvedScope?.serverId ?? null,
         enabled: resolvedScope !== null,
     });
-    const projection = daemonMergedProjection.phase === 'ready'
-        ? daemonMergedProjection.inputs?.pluginProjectionV2
-        : null;
+    // The projection owner retains Account-scoped metadata while refreshing.
+    // Keep Browse mounted so invalidation cannot discard its query and hits;
+    // the screen still requires current daemon authority before opening a row.
+    const projection = daemonMergedProjection.inputs?.pluginProjectionV2 ?? null;
     const lockScope = React.useMemo(() => {
         if (!resolvedScope || !projection) {
             return null;

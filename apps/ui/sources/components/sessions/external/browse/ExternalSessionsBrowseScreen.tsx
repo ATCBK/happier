@@ -459,7 +459,9 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
             ...(contentSource ? { externalSource: { agentId: contentSource.agentId, sourceKey: contentSource.sourceKey } } : {}) },
         mode: explicitContentSearchSubmitted ? 'auto' : 'indexed',
         providers: memoryProvider.conversation ?? { homeSessions: false, daemonEnabled: false },
-        enabled: searchTarget === 'content' && daemonMergedProjectionReady && contentSource !== undefined,
+        // Refreshing the catalog is not new search intent. Its retained source
+        // keeps this scan and its hits; opening still checks current authority.
+        enabled: searchTarget === 'content' && contentSource !== undefined,
     });
     const contentCandidates = contentSource && effectiveSelectedMachineId
         ? projectConversationSearchCandidates(contentResults.result?.hits ?? [], { ...contentSource, machineId: effectiveSelectedMachineId }, searchQuery) : [];

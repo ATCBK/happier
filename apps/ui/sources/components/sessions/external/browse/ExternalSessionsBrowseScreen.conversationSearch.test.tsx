@@ -3,6 +3,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { DEFAULT_MEMORY_SETTINGS } from '@happier-dev/protocol/memory/memorySettings';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createDeferred, createMachineFixture, flushHookEffects, PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
@@ -46,6 +47,10 @@ const { readExternalSessionBrowseCandidateKey } = await import('./useExternalSes
 const { AppPaneProvider, useOptionalAppPaneContext } = await import('@/components/appShell/panes/AppPaneProvider');
 const { parseToken } = await import('@/utils/auth/parseToken');
 const { ExternalSessionsBrowseScreen } = await import('./ExternalSessionsBrowseScreen');
+const { WorkspaceRouteBody } = await import('@/app/(app)/external/browse');
+const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+const { publishMachineContributionRegistryProjectionInvalidation } = await import('@/sync/ops/machineContributionRegistryProjectionRevision');
+const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
 afterAll(() => network.dispose());
 
 const projection = PluginProjectionV2Schema.parse({ ...PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE,
@@ -95,6 +100,59 @@ afterEach(async () => { standardCleanup(); vi.useRealTimers(); await connection?
 async function flush() { await flushHookEffects({ runOnlyPendingTimers: true }); }
 
 describe('History unified conversation search', () => {
+    it('keeps a submitted native hit, query and mode through the scoped route projection refresh', async () => {
+        const features = createRootLayoutFeaturesResponse();
+        primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
+        storage.setState(state => ({ settings: { ...state.settings, featureToggles: { ...state.settings.featureToggles, 'sessions.direct': true } } }));
+        const refreshing = createDeferred<unknown>();
+        let refresh = false;
+        let scans = 0;
+        const push = vi.fn();
+        rpc.mockImplementation(async call => {
+            if (call.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+                return refresh ? refreshing.promise : { protocolVersion: 1, projection };
+            }
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET) return DEFAULT_MEMORY_SETTINGS;
+            if (call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST) {
+                if (call.payload.searchTarget !== 'content') return { ok: true, candidates: [], nextCursor: null };
+                scans++;
+                return ExternalSessionsCandidatesListResponseSchema.parse({ ok: true, candidates: [{ remoteSessionId: 'stable-native',
+                    linkedSessionId: 'opened-native',
+                    updatedAtMs: 1, match: { snippet: 'body phrase', sourceItemId: 'stable-message', messageIndex: 0 } }],
+                    contentCoverage: 'complete', nextCursor: null });
+            }
+            throw new Error(`Unexpected route-refresh transport ${call.method}`);
+        });
+        const screen = await renderScreen(<DestinationInstanceHost tabId="browse-refresh" focused visible pathname="/external/browse"
+            ref={{ kind: 'browseExistingSessions', params: { machineId: 'machine-1', serverId, agentId: 'acme.archive',
+                agentPluginId: 'acme.review', agentLocalId: 'archive' } }}
+            navigation={{ push, replace: () => {}, back: () => {} }}>
+            <WorkspaceRouteBody />
+        </DestinationInstanceHost>, { flushOptions: { runOnlyPendingTimers: true } });
+        await flush();
+        expect(screen.findHostByTestId('external-sessions-search-target:content'), screen.getTextContent()).not.toBeNull();
+        await screen.pressByTestIdAsync('external-sessions-search-target:content');
+        await act(async () => screen.changeTextByTestId('direct-session-candidates-search-input', 'body phrase'));
+        await waitForHomeGovernance(async () => { await flush(); expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.contentScanAvailable).toBe(true); });
+        await screen.pressByTestIdAsync('direct-session-candidates-content-submit');
+        const readList = () => screen.findAllByType(ExternalSessionBrowseCandidatesList)[0];
+        await waitForHomeGovernance(async () => { await flush(); expect(readList().props.candidates).toHaveLength(1); });
+        expect(scans).toBe(1);
+        refresh = true;
+        await act(async () => publishMachineContributionRegistryProjectionInvalidation({ serverId, machineId: 'machine-1' }));
+        await flush();
+        expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)).toHaveLength(1);
+        expect(readList().props).toMatchObject({ searchQuery: 'body phrase', searchTarget: 'content',
+            candidates: [{ remoteSessionId: 'stable-native' }] });
+        await act(async () => refreshing.resolve({ protocolVersion: 1, projection }));
+        await flush();
+        expect(readList().props.candidateActionsDisabled).toBe(false);
+        expect(readList().props).toMatchObject({ searchQuery: 'body phrase', searchTarget: 'content',
+            candidates: [{ remoteSessionId: 'stable-native' }] });
+        expect(scans).toBe(1);
+        await act(async () => readList().props.onSelectCandidate(readList().props.candidates[0], readList().props.selectionAuthorityGeneration));
+        expect(push).toHaveBeenCalledWith(expect.stringContaining('/session/opened-native'));
+    });
     it('routes a thrown title-list transport failure through the shared failure copy and Retry', async () => {
         let recovered = false;
         rpc.mockImplementation(async call => {
