@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWebAudioBoundary } from '@/dev/testkit/harness/webAudio';
+import { toSpeechText } from '@/voice/output/speechText';
 
 vi.mock('react-native', async () => {
   const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -81,12 +82,20 @@ describe('speakGoogleCloudText', () => {
     expect(audio.sources).toHaveLength(0);
   });
 
-  it('splits long input so every request stays within the 5000-byte API limit', async () => {
-    const fetchSpy = vi.fn<typeof fetch>().mockImplementation(async () => Response.json({ audioContent: 'Zm9v' }));
+  it.each([
+    ['prose', 'Das Wetter ist heute schön und überall ruhig. '.repeat(200)],
+    ['unfinished brackets', `[ ${'a'.repeat(5100)}`],
+    ['literal link syntax in code', toSpeechText(`\`[${'a'.repeat(5100)}](https://example.test/docs)\``)],
+    ['normalized long link label', toSpeechText(`[${'a'.repeat(5100)}](https://example.test/docs)`)],
+    ['multibyte hard cuts', `${'a'.repeat(4999)}😀界${'😀界'.repeat(1000)}`],
+  ])('splits %s so every request stays within the 5000-byte API limit', async (_kind, input) => {
+    const fetchSpy = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const body: { input: { text: string } } = JSON.parse(String(init?.body));
+      const status = new TextEncoder().encode(body.input.text).byteLength > 5000 ? 400 : 200;
+      return Response.json({ audioContent: 'Zm9v' }, { status });
+    });
     vi.stubGlobal('fetch', fetchSpy);
 
-    const sentence = 'Das Wetter ist heute schön und überall ruhig. ';
-    const input = sentence.repeat(200);
     const { speakGoogleCloudText } = await import('./GoogleCloudTtsController');
     await speakGoogleCloudText({
       apiKey: 'k',
@@ -109,8 +118,9 @@ describe('speakGoogleCloudText', () => {
     });
     for (const text of sentTexts) {
       expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(5000);
+      expect(text).not.toMatch(/[\uD800-\uDBFF]$|^[\uDC00-\uDFFF]/u);
     }
-    expect(sentTexts.join(' ')).toBe(input.trim());
+    expect(sentTexts.join('').replace(/\s/gu, '')).toBe(input.replace(/\s/gu, ''));
     expect(audio.sources).toHaveLength(sentTexts.length);
     expect(audio.sources.every((source) => source.started && source.disconnected)).toBe(true);
   });

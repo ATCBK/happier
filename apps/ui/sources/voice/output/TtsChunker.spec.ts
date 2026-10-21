@@ -61,6 +61,14 @@ describe('TtsChunker', () => {
             'Second, e.g. this file.ts!',
             'Third?',
         ]);
+        expect(splitSpeechSentences('[First sentence. Second sentence.', 200)).toEqual([
+            '[First sentence.',
+            'Second sentence.',
+        ]);
+        expect(splitSpeechSentences('[First sentence. Second sentence.](url)', 200)).toEqual([
+            '[First sentence.',
+            'Second sentence.](url)',
+        ]);
     });
 
     it('bounds a single very long sentence by maxChars', () => {

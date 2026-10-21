@@ -4,15 +4,31 @@ import { buildGoogleApiKeyRestrictionHeaders } from '@/voice/runtime/googleApiKe
 import type { VoicePlaybackStopperRegistrar } from '@/voice/runtime/VoicePlaybackController';
 import { playAudioBytesWithStopper } from '@/voice/output/playAudioBytesWithStopper';
 import { createStoppableSpeech } from '@/voice/output/stoppableSpeech';
-import { createTtsChunker } from '@/voice/output/TtsChunker';
 
-// Google Cloud TTS rejects `input.text` above 5000 bytes. A UTF-8 code point is at most 4 bytes,
-// so requests of at most 1250 characters always fit.
-const GOOGLE_CLOUD_TTS_MAX_INPUT_CHARS = 5000 / 4;
+// https://cloud.google.com/text-to-speech/quotas: input.text has a hard 5000-byte limit.
+const GOOGLE_CLOUD_TTS_MAX_INPUT_BYTES = 5000;
 
 function splitGoogleCloudTtsInput(input: string): string[] {
-  const chunker = createTtsChunker(GOOGLE_CLOUD_TTS_MAX_INPUT_CHARS);
-  return [...chunker.push(input), ...chunker.flush()];
+  const batches: string[] = [];
+  let remaining = input.trim();
+  while (remaining) {
+    let end = 0;
+    let bytes = 0;
+    let wordEnd = 0;
+    for (const character of remaining) {
+      const point = character.codePointAt(0)!;
+      const size = point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
+      if (bytes + size > GOOGLE_CLOUD_TTS_MAX_INPUT_BYTES) break;
+      bytes += size;
+      end += character.length;
+      if (/\s/u.test(character)) wordEnd = end;
+    }
+    // This input is already spoken text. Markdown-looking literals must never override the API cap.
+    const cut = end < remaining.length && wordEnd > 0 ? wordEnd : end;
+    batches.push(remaining.slice(0, cut));
+    remaining = remaining.slice(cut);
+  }
+  return batches;
 }
 
 /**

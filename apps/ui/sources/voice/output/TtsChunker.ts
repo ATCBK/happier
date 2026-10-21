@@ -192,18 +192,18 @@ export function createTtsChunker(chunkChars: number): TtsChunker {
 }
 
 /**
- * Splits complete text into sentence-sized parts (each at most `maxChars`, except an unsplittable
- * code fence or inline link) so synthesis can start speaking after the first sentence.
+ * Splits already-normalized speech for sequential synthesis. Markdown-looking content is literal
+ * here; only the raw assistant-delta chunker above protects Markdown spans.
  */
 export function splitSpeechSentences(text: string, maxChars: number): string[] {
     const bounded = clampChunkChars(maxChars);
     const parts: string[] = [];
     let rest = text.trim();
+    const plainLayout: FenceLayout = { closed: [], openStart: null };
 
     while (rest.length > 0) {
-        const fences = readProtectedLayout(rest, readFenceLayout(rest), true);
-        const cut = firstSentenceEndIndex(rest, bounded, fences)
-            ?? (rest.length <= bounded ? rest.length : lastBoundaryIndex(rest, bounded, fences, true));
+        const cut = firstSentenceEndIndex(rest, bounded, plainLayout)
+            ?? (rest.length <= bounded ? rest.length : lastBoundaryIndex(rest, bounded, plainLayout, true));
         const part = rest.slice(0, cut).trim();
         rest = rest.slice(cut).trim();
         if (part) parts.push(part);
