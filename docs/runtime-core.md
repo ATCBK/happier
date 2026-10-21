@@ -147,6 +147,12 @@ retains typed `noRunCreated` evidence through local and transported dispatch.
 Initial work admitted by Start remains active while Pending prepares its first
 native input, even after the runtime address exists; that preparation cannot look
 like an idle retained conversation to the replacement gate.
+Before Start reaches the runner, a Session-targeted Machine Action can still be
+preparing evidence or awaiting its acknowledgement. The receiving Action adapter
+adds its Session and Action ids to the RPC owner's existing active execution
+record. The daemon's same replacement activity projection consumes those records
+through request cleanup. Read Actions and effects targeting another Session do
+not block replacement; the refresh Action itself is excluded from its own check.
 Native turn completion also remains active while the host publishes its result.
 A profile-authored next part, including review narration, retains that activity
 through preparation and Pending admission until the native Agent accepts it or
@@ -264,6 +270,11 @@ The native-open owner records a refused outcome through its existing runner
 attestation before entering that resident refusal path. The daemon observes it
 under the same exact runner and Agent-source custody as a committed open; it
 never projects refusal as a successful native open. A cold Session startup
+refusal does not allocate a synthetic Turn: no input has been admitted, and
+the startup operation and exact Pending outcome retain its typed failure.
+Other construction failures that publish a diagnostic Turn serialize its begin
+and terminal mutations through the same lifecycle owner, including before
+daemon turn-marker callbacks exist. A cold Session startup
 operation retires the runner it spawned through the daemon's normal Stop owner
 before reporting that original failure; it does not wait for a person to Stop.
 The observation retains that exact tracked runner and its copied birth identity
