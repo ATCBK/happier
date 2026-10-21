@@ -94,6 +94,23 @@ describe('useFilePreviewSource', () => {
         expect(files.size).toBe(0);
     });
 
+    it('observes cached thumbnails without materializing bytes and follows a later shared fill', async () => {
+        const input = { enabled: true, source: { kind: 'bytes' as const, bytes: new Uint8Array([1, 2, 3]), name: 'thumbnail.png' },
+            mimeType: 'image/png', cacheScopeId: 'thumbnail-gallery', cacheKey: 'revision' };
+        const thumbnail = await renderHook(() => useFilePreviewSource({ ...input, cacheOnly: true }));
+        expect(files.size).toBe(0);
+        expect(thumbnail.getCurrent().status).toBe('disabled');
+        const picture = await renderHook(() => useFilePreviewSource(input));
+        await vi.waitFor(() => expect(picture.getCurrent().status).toBe('loaded'));
+        await vi.waitFor(() => expect(thumbnail.getCurrent().uri).toBe(picture.getCurrent().uri));
+        const uri = picture.getCurrent().uri!;
+        fixture.storage.getState().applySettingsLocal({ filesImagePreviewCacheMaxEntries: 0 });
+        await picture.unmount();
+        expect(files.get(uri)?.exists).toBe(true);
+        await thumbnail.unmount();
+        expect(files.get(uri)?.exists).toBe(false);
+    });
+
     it('releases an in-memory bytes source when its consumer unmounts', async () => {
         const bytes = new Uint8Array([1, 2, 3]);
         const hook = await renderHook(() => useFilePreviewSource({

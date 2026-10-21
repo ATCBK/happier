@@ -33,6 +33,8 @@ export type UseFilePreviewSourceInput = Readonly<{
     mimeType?: string | null;
     sizeBytes?: number | null;
     maxBytes?: number | null;
+    /** Observe already materialized bytes; never starts a transfer or a bytes sink. */
+    cacheOnly?: boolean;
 }>;
 /** The bytes of a preview still on its way: "Downloading 2.1 of 8.4 MB" (lab files FV6d, FV5l). */
 export type FilePreviewProgress = Readonly<{ receivedBytes: number; totalBytes: number }>;
@@ -71,6 +73,7 @@ function previewState(value: ImagePreviewCacheValue): FilePreviewSourceState {
 export function useFilePreviewSource(input: UseFilePreviewSourceInput): FilePreviewSourceState {
     const source = input.source;
     const enabled = input.enabled === true;
+    const cacheOnly = input.cacheOnly === true;
     const kind = source.kind;
     const sessionScope = useSessionWorkspaceTarget(enabled && source.kind === 'session' ? source.sessionId : null);
     const rawScope = source.kind === 'workspace' ? source.scope : source.kind === 'session' ? sessionScope : null;
@@ -126,6 +129,15 @@ export function useFilePreviewSource(input: UseFilePreviewSourceInput): FilePrev
         const publish = (value: ImagePreviewCacheValue) => {
             if (active) setResource({ identity, bytes, state: previewState(value) });
         };
+        if (cacheOnly) {
+            if (!key) { setResource(null); return; }
+            imagePreviewCache.retain(key);
+            const stop = imagePreviewCache.observeValue(key, value => {
+                if (value) publish(value);
+                else if (active) setResource(null);
+            });
+            return () => { active = false; stop(); imagePreviewCache.release(key); };
+        }
         const report = (value: ImagePreviewCacheProgress) => {
             if (!active) return;
             setProgress(previous => previous?.identity === identity && sameShownProgress(previous.value, value)
@@ -163,12 +175,13 @@ export function useFilePreviewSource(input: UseFilePreviewSourceInput): FilePrev
             if (key) imagePreviewCache.release(key);
             else if (uncached?.status === 'loaded') void Promise.resolve(uncached.cleanup?.()).catch(() => undefined);
         };
-    }, [enabled, identity, kind, cacheScopeId, cacheKey, filePath, mimeType, sizeBytes, normalizedMaxBytes, scope, bytes, viewer.previewable]);
+    }, [enabled, cacheOnly, identity, kind, cacheScopeId, cacheKey, filePath, mimeType, sizeBytes, normalizedMaxBytes, scope, bytes, viewer.previewable]);
 
     if (!enabled) return { status: 'disabled', uri: null, error: null };
     if (directUri !== null) return { status: 'loaded', uri: directUri, error: null };
     if (!viewer.previewable) return { status: 'disabled', uri: null, error: null };
     if (resource?.identity === identity && resource.bytes === bytes) return resource.state;
+    if (cacheOnly) return { status: 'disabled', uri: null, error: null };
     return progress?.identity === identity
         ? { status: 'loading', uri: null, error: null, progress: progress.value }
         : { status: 'loading', uri: null, error: null };

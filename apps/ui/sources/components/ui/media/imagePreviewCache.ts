@@ -11,6 +11,7 @@ export type ImagePreviewCacheValue =
 /** A shared fill's bytes so far; every consumer of the key sees the one transfer's progress. */
 export type ImagePreviewCacheProgress = Readonly<{ receivedBytes: number; totalBytes: number }>;
 type ProgressListener = (progress: ImagePreviewCacheProgress) => void;
+type ValueListener = (value: ImagePreviewCacheValue | null) => void;
 
 export type ImagePreviewCacheEntry = Readonly<{
     value: ImagePreviewCacheValue;
@@ -32,6 +33,7 @@ export class ImagePreviewCache {
     private readonly retained = new Map<string, number>();
     private readonly pending = new Map<string, { controller: AbortController; promise: Promise<ImagePreviewCacheValue>; progress: ImagePreviewCacheProgress | null }>();
     private readonly progressListeners = new Map<string, Set<ProgressListener>>();
+    private readonly valueListeners = new Map<string, Set<ValueListener>>();
     private totalBytes = 0;
     private maxEntries: number;
     private maxTotalBytes: number;
@@ -50,6 +52,19 @@ export class ImagePreviewCache {
         this.entries.delete(storageKey);
         this.entries.set(storageKey, existing);
         return existing.value;
+    }
+
+    /** A thumbnail follows existing bytes without becoming a producer of a full-size fill. */
+    observeValue(key: ImagePreviewCacheKey, listener: ValueListener): () => void {
+        const storageKey = this.toStorageKey(key);
+        const listeners = this.valueListeners.get(storageKey) ?? new Set<ValueListener>();
+        listeners.add(listener);
+        this.valueListeners.set(storageKey, listeners);
+        listener(this.get(key));
+        return () => {
+            listeners.delete(listener);
+            if (listeners.size === 0) this.valueListeners.delete(storageKey);
+        };
     }
 
     retain(key: ImagePreviewCacheKey): void {
@@ -143,6 +158,7 @@ export class ImagePreviewCache {
         };
         this.entries.set(storageKey, entry);
         this.totalBytes += byteSize;
+        for (const listener of this.valueListeners.get(storageKey) ?? []) listener(value);
         this.evictIfNeeded();
     }
 
@@ -153,6 +169,7 @@ export class ImagePreviewCache {
             this.entries.delete(storageKey);
             this.totalBytes -= entry.byteSize;
             this.cleanupValue(entry.value);
+            for (const listener of this.valueListeners.get(storageKey) ?? []) listener(null);
         }
     }
 
@@ -166,6 +183,7 @@ export class ImagePreviewCache {
             this.entries.delete(storageKey);
             this.totalBytes -= entry.byteSize;
             this.cleanupValue(entry.value);
+            for (const listener of this.valueListeners.get(storageKey) ?? []) listener(null);
         }
     }
 
@@ -202,6 +220,7 @@ export class ImagePreviewCache {
             if (oldest) {
                 this.totalBytes -= oldest.byteSize;
                 this.cleanupValue(oldest.value);
+                for (const listener of this.valueListeners.get(oldestKey) ?? []) listener(null);
             }
         }
     }

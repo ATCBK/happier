@@ -14,6 +14,12 @@ export function createExpoFileSystemFileMock(cacheUri = 'file:///cache') {
         files.set(uri, []);
     });
     const writes = vi.fn((_uri: string, _bytes: Uint8Array) => {});
+    const copies = vi.fn((source: string, destination: string) => {
+        const bytes = files.get(source);
+        if (!bytes) throw new Error('File does not exist');
+        if (files.has(destination)) throw new Error('Destination already exists');
+        files.set(destination, [...bytes]);
+    });
     const writeBytes = vi.fn((uri: string, bytes: Uint8Array, offset?: number) => {
         const content = files.get(uri);
         if (!content) throw new Error('File does not exist');
@@ -38,6 +44,7 @@ export function createExpoFileSystemFileMock(cacheUri = 'file:///cache') {
         get size() { return files.get(this.uri)?.length ?? 0; }
         create() { create(this.uri); }
         delete() { deleteFile(this.uri); }
+        copy(destination: File) { copies(this.uri, destination.uri); }
         write(content: string | Uint8Array, options?: { append?: boolean }) {
             if (!files.has(this.uri)) create(this.uri);
             const bytes = typeof content === 'string' ? new TextEncoder().encode(content) : content;
@@ -87,5 +94,5 @@ export function createExpoFileSystemFileMock(cacheUri = 'file:///cache') {
             };
         }
     }
-    return { module: { Directory, File, Paths: { cache: cacheUri } }, files, close, deleteFile, open, create, writeBytes, writes };
+    return { module: { Directory, File, Paths: { cache: cacheUri } }, files, close, deleteFile, open, create, writeBytes, writes, copies };
 }
