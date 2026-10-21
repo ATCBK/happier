@@ -1,5 +1,9 @@
 export const MACHINE_RPC_TIMEOUT_ERROR_CODE = 'MACHINE_RPC_TIMEOUT';
 
+/** Content-free progress of the scoped socket's existing connection deadline. */
+export const SCOPED_RPC_SOCKET_CONNECTION_PHASES = ['reachability-start', 'reachability-wait', 'socket-connect'] as const;
+export type ScopedRpcSocketConnectionPhase = typeof SCOPED_RPC_SOCKET_CONNECTION_PHASES[number];
+
 export function isMachineRpcTimeoutError(error: unknown): boolean {
   return Boolean(
     error

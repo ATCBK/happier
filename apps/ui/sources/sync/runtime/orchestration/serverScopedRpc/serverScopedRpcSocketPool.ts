@@ -1,5 +1,5 @@
 import { createHappierSocket } from '@happier-dev/sync-client';
-import { createRpcCallError, MACHINE_RPC_TIMEOUT_ERROR_CODE, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { createRpcCallError, MACHINE_RPC_TIMEOUT_ERROR_CODE, readRpcErrorCode, type ScopedRpcSocketConnectionPhase } from '@happier-dev/protocol/rpcErrors';
 import { armDeadlineTimer } from '@happier-dev/protocol/common/deadlineTimer';
 import { isTerminalAuthError } from '@/sync/runtime/connectivity/authErrors';
 import {
@@ -62,8 +62,6 @@ type Deps = Readonly<{
     now: () => number;
     readIdleDisconnectMs: () => number;
 }>;
-
-type ScopedRpcSocketConnectionPhase = 'reachability-start' | 'reachability-wait' | 'socket-connect';
 
 export class ScopedRpcSocketConnectionTimeoutError extends Error {
     readonly code = MACHINE_RPC_TIMEOUT_ERROR_CODE;

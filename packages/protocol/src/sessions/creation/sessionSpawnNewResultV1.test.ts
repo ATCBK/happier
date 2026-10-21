@@ -67,6 +67,16 @@ describe('Session creation Agent preconditions', () => {
 });
 
 describe('Session creation Provider recovery', () => {
+  it('retains closed content-free scoped transport diagnostics in the launch cause', () => {
+    const result = { type: 'error', code: 'spawn_failed', retryable: true,
+      launchError: { kind: 'launch_error', code: 'MACHINE_RPC_TIMEOUT', message: 'Setup timed out.',
+        rpcErrorCode: 'MACHINE_RPC_TIMEOUT', connectionPhase: 'socket-connect' } };
+    expect(SessionSpawnNewResultV1Schema.parse(result)).toEqual(result);
+    expect(SessionSpawnNewResultV1Schema.safeParse({ ...result,
+      launchError: { ...result.launchError, connectionPhase: 'private request content' } }).success).toBe(false);
+    expect(SessionSpawnNewResultV1Schema.safeParse({ ...result,
+      launchError: { ...result.launchError, rpcErrorCode: 'private credential' } }).success).toBe(false);
+  });
   it('keeps a bounded incompatibility predicate only on a nonretryable incompatible target', () => {
     const result = { type: 'error', code: 'incompatible_target', retryable: false,
       incompatibleTarget: { reason: 'target_preparation_invalid_result' } };

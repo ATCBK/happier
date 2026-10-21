@@ -16,6 +16,7 @@ import { createRpcCallError } from '@/sync/runtime/rpcErrors';
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { clearBugReportUserActionTrail, getBugReportUserActionTrail } from '@/utils/system/bugReportActionTrail';
 import { isMachineRequestReachabilityFailure } from '@/sync/domains/machines/reachability/machineReachability';
+import { ScopedRpcSocketConnectionTimeoutError } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool';
 
 import { dispatchSessionSpawnNewToMachine } from './sessionSpawnNewAction';
 
@@ -31,6 +32,17 @@ describe('session.spawn_new daemon dispatch', () => {
     beforeEach(() => {
         machineRpcWithServerScopeMock.mockReset();
         clearBugReportUserActionTrail();
+    });
+
+    it('preserves the pool timeout classification and phase without copying exception content', async () => {
+        const failure = new ScopedRpcSocketConnectionTimeoutError('reachability-wait');
+        failure.message = 'private request authentication';
+        machineRpcWithServerScopeMock.mockRejectedValue(failure);
+        const result = await dispatchSessionSpawnNewToMachine({ payload });
+        expect(result).toMatchObject({ type: 'error', code: 'spawn_failed', retryable: true,
+            launchError: { rpcErrorCode: 'MACHINE_RPC_TIMEOUT', connectionPhase: 'reachability-wait' } });
+        expect(SessionSpawnNewResultV1Schema.parse(result)).toEqual(result);
+        expect(JSON.stringify(result)).not.toContain('private request authentication');
     });
 
     it('retains content-free setup timeout evidence before projecting the spawn failure', async () => {
@@ -126,6 +138,7 @@ describe('session.spawn_new daemon dispatch', () => {
                 kind: 'launch_error',
                 code: MACHINE_RPC_TIMEOUT_ERROR_CODE,
                 message: expect.any(String),
+                ...(_kind === 'machine row setup' ? { rpcErrorCode: MACHINE_RPC_TIMEOUT_ERROR_CODE } : {}),
             },
         });
         expect(SessionSpawnNewResultV1Schema.parse(result)).toEqual(result);

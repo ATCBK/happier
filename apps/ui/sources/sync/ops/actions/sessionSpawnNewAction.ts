@@ -29,6 +29,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readSpawnSessionRpcTimeoutMsFromEnv } from '@/sync/domains/session/spawn/spawnSessionRpcTimeout';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcTimeoutError';
+import { ScopedRpcSocketConnectionTimeoutError } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool';
 import { isSocketIoAckTimeoutError, readRpcRequestDisposition } from '@happier-dev/sync-client';
 import { parseToken } from '@/utils/auth/parseToken';
 
@@ -50,7 +51,8 @@ export type SessionSpawnNewActionResult =
 
 /** Preserve recognized transport causes without copying private exception messages into the result. */
 function projectSessionSpawnSetupTransportFailure(error: unknown): Extract<SessionSpawnNewResultV1, { type: 'error' }> | null {
-    const code = readRpcErrorCode(error)
+    const rpcErrorCode = readRpcErrorCode(error);
+    const code = rpcErrorCode
         ?? (error && typeof error === 'object' && 'code' in error ? error.code : undefined);
     const timedOut = code === MACHINE_RPC_TIMEOUT_ERROR_CODE || (code === undefined && isSocketIoAckTimeoutError(error));
     if (!timedOut && code !== RPC_ERROR_CODES.OUTCOME_UNKNOWN) return null;
@@ -58,6 +60,8 @@ function projectSessionSpawnSetupTransportFailure(error: unknown): Extract<Sessi
         type: 'error', code: 'spawn_failed', retryable: true,
         launchError: { kind: 'launch_error',
             code: code === RPC_ERROR_CODES.OUTCOME_UNKNOWN ? code : MACHINE_RPC_TIMEOUT_ERROR_CODE,
+            ...(rpcErrorCode === MACHINE_RPC_TIMEOUT_ERROR_CODE || rpcErrorCode === RPC_ERROR_CODES.OUTCOME_UNKNOWN ? { rpcErrorCode } : {}),
+            ...(error instanceof ScopedRpcSocketConnectionTimeoutError ? { connectionPhase: error.connectionPhase } : {}),
             message: code === RPC_ERROR_CODES.OUTCOME_UNKNOWN
                 ? 'Session creation transport lost its acknowledgement before a spawn request was issued.'
                 : 'Session creation transport timed out before a spawn request was issued.',
