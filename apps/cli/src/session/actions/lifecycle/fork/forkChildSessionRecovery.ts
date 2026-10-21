@@ -1,5 +1,6 @@
 import { isAuthenticationError } from '@/api/client/httpStatusError';
 import type { StoredCredentials } from '@/persistence';
+import type { ExactTrackedRunnerStopWitness } from '@/daemon/sessions/stopSession';
 import { archiveSessionOnceInactive } from '@/session/services/archiveSessionOnceInactive';
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import { callMachineRpc } from '@/session/transport/rpc/machineRpc';
@@ -40,8 +41,21 @@ export async function cleanupForkChildBestEffort(
         credentials: StoredCredentials;
         fallbackStopSession: ForkStopSession;
         sessionId: string;
+        expectedTrackedRunner?: ExactTrackedRunnerStopWitness;
     }>,
 ): Promise<void> {
+    // Refusal carries a host-private generation witness. Public Stop cannot
+    // express it, and a later Session-wide fallback could select a replacement.
+    if (params.expectedTrackedRunner) {
+        try {
+            await params.fallbackStopSession(params.sessionId, {
+                expectedTrackedRunner: params.expectedTrackedRunner,
+            });
+        } catch {
+            // Preserve the initiating refusal even if exact retirement fails.
+        }
+        return;
+    }
     const rawSession = await fetchSessionByIdCompat({
         token: params.credentials.token,
         sessionId: params.sessionId,

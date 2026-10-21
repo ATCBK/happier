@@ -125,7 +125,120 @@ describe('Session startup operation custody', () => {
         error: { errorCode: 'native_agent_session_mode_unavailable' } }));
     } finally { releaseStop(); operations.runner.cancel(scope, 'refused-startup'); }
   });
-  it.each(['refused', 'runner_exited'] as const)('keeps native-fork %s cleanup inside its own open owner after requester startup', async outcome => {
+  it.each([null, 'machine-child'].flatMap(machineId =>
+    ['current', 'replacement', 'changed-birth', 'stop-throws', 'stop-incomplete'].map(scenario => ({ machineId, scenario })),
+  ))('keeps native-fork refusal cleanup bound to its observed runner ($scenario, Machine $machineId)', async ({ machineId, scenario }) => {
+      const sessionId = 'refused-fork-child';
+      const scope = { machineId: 'machine', accountId: 'account' };
+      const operations = createHostActionOperationRuntime({ ...scope, resolveAccountId: async () => scope.accountId,
+        generateOperationId: () => 'refused-fork-startup', supportsCoreCancellation: () => true });
+      const binding = createAgentSessionRunnerFactoryBinding({ v: 1, pluginId: 'acme.plugin', pluginVersion: '1.0.0',
+        agentId: 'acme-agent', localAgentId: 'acme-agent', sourceCustody: { kind: 'managed',
+          immutableGenerationId: `sha256:${'1'.repeat(64)}`, installSource: 'localPath' },
+        locator: { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
+        normalizedModulePath: '/immutable/acme/runtime.mjs', loadMode: 'immutable-js' });
+      const runner = { pid: 41001001, processStartTimeMs: 1000, processCommandHash: 'a'.repeat(64) };
+      const refused: TrackedSession = { ...runner, startedBy: 'daemon', happySessionId: sessionId,
+        runnerAgentSourceCustodyV1: binding.sourceCustody, agentRuntimeDaemonServiceAuthorityFilePath: '/fixture/p-authority' };
+      const replacement: TrackedSession = { pid: 41001002, processStartTimeMs: 2000, startedBy: 'daemon',
+        happySessionId: sessionId, agentRuntimeDaemonServiceAuthorityFilePath: '/fixture/q-authority' };
+      const tracked = new Map([[refused.pid, refused]]);
+      const selected: number[][] = [];
+      const retired: number[] = [];
+      const exitOperationStates: (string | undefined)[] = [];
+      const physical = createStopSession({ pidToTrackedSession: tracked,
+        // OS liveness/exit and terminal files are boundaries; no fake PID is signalled.
+        areTrackedRunnersExited: async ({ trackedPids }) => { selected.push([...trackedPids]); return true; },
+        waitForTrackedRunnersExit: async ({ trackedPids }) => {
+          exitOperationStates.push(operations.store.get(scope, 'refused-fork-startup')?.state);
+          if (scenario === 'stop-throws') throw new Error('OS exit observation failed');
+          if (scenario === 'stop-incomplete') return false;
+          retired.push(...trackedPids);
+          return true;
+        },
+        readHostAttachmentState: async () => ({ status: 'absent' }), readTerminalAttachmentInfo: async () => null });
+      let stopAttempts = 0;
+      const stopSession: typeof physical = (...args) => { stopAttempts += 1; return physical(...args); };
+      const runtimeDescriptorV1 = { v: 1 as const, agentId: 'acme-agent', agent: { providerSessionId: 'provider-parent' } };
+      const parentMetadata = projectCurrentAgentSessionView({ runtimeDescriptorV1 }, { agentId: 'acme-agent',
+        runtimeDescriptor: runtimeDescriptorV1, nativeResumeIdentity: { v: 1, vendorResumeId: 'provider-parent' } });
+      const child = createSessionRecordFixture({ id: sessionId, active: true, machineId });
+      const machineReads: string[] = [];
+      let archived = false;
+      const home = createServer((request, response) => {
+        response.setHeader('content-type', 'application/json');
+        if (request.url?.startsWith('/v1/machines/')) machineReads.push(request.url);
+        if (request.method === 'GET' && request.url === `/v2/sessions/${sessionId}`) {
+          response.end(JSON.stringify({ session: { ...child, active: retired.length === 0 } }));
+        } else if (request.method === 'POST' && request.url === `/v2/sessions/${sessionId}/archive` && retired.length > 0) {
+          archived = true;
+          response.end(JSON.stringify({ success: true, archivedAt: 1 }));
+        } else { response.statusCode = 404; response.end('{}'); }
+      });
+      await new Promise<void>(resolve => home.listen(0, '127.0.0.1', resolve));
+      const address = home.address();
+      if (!address || typeof address === 'string') throw new Error('Expected owned Home listener');
+      try {
+        await runWithServerHttpBaseUrl(`http://127.0.0.1:${address.port}`, async () => {
+          const response = await operations.observeExecution({ actionId: 'session.fork', input: { requestId: 'refused-fork' },
+            execute: async operation => {
+              const result = await runRequesterSessionLifecycle({ sessionId: 'parent',
+                context: { signal: operation.signal, localActionContext: operation }, stopSession,
+                spawnSession: async options => {
+                  expect(options.projectSetupOperation?.operationAcceptance?.operationId).toBe('refused-fork-startup');
+                  // Real external Agent producer -> strict private parser -> recorder -> observer.
+                  const request = AgentRuntimeDaemonServiceRequestV1Schema.parse({ v: 1,
+                    context: { token: 'a'.repeat(43), sessionId }, operation: { kind: 'session.open.attest',
+                      requestId: 'refused-fork-open', phase: 'refused', request: { kind: 'fork', sessionId,
+                        cwd: '/project', source: options.nativeForkSource }, providerSessionId: null } });
+                  if (request.operation.kind !== 'session.open.attest') throw new Error('Wrong operation');
+                  expect(await recordTrackedRunnerAgentSessionOpenAttestation({ tracked: refused, retainedAgent: binding,
+                    runner, ...request.operation, updateMarker: async () => true })).not.toBeNull();
+                  return { type: 'success', sessionId };
+                },
+                awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ ...input, getTrackedSessions: () => [...tracked.values()] }),
+                refused: () => ({ ok: false as const, errorCode: 'requester_unavailable', errorMessage: 'unavailable' }),
+                run: ({ spawnSession }) => attemptNativeForkOpen({ credentials: { token: 'test-token', encryption: null },
+                  parentSessionId: 'parent', parentMetadata, directory: '/project', forkPoint: { type: 'latest' },
+                  targetSeqInclusive: 0, effectiveCutoffSeqInclusive: 0, spawnNonce: 'refused-fork',
+                  forkBackendResolution: { ok: true, catalogAgentId: null, agentHintAgentId: 'acme-agent',
+                    backendTargetV2: { kind: 'backend', backendId: 'acme-agent' },
+                    backendTarget: { kind: 'configuredAcpBackend', backendId: 'acme-agent' }, replayFlavor: 'acme-agent', metadataOverlay: {} },
+                  inheritedForkOverrides: { spawn: {}, metadata: {} }, spawnSession, stopSession,
+                  awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ ...input, getTrackedSessions: () => {
+                    const observed = [...tracked.values()];
+                    if (scenario === 'replacement') queueMicrotask(() => { tracked.clear(); tracked.set(replacement.pid, replacement); });
+                    if (scenario === 'changed-birth') queueMicrotask(() => { refused.processStartTimeMs = 2000; });
+                    return observed;
+                  } }),
+                }),
+              });
+              expect(result, scenario).toMatchObject({ ok: false, errorMessage: 'native_agent_session_mode_unavailable' });
+              if (!result || result.ok) throw new Error('Expected native fork refusal');
+              return { ok: false, errorCode: result.errorCode, error: result.errorMessage };
+            } });
+          expect(response).toMatchObject({ ok: false, errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+            error: 'native_agent_session_mode_unavailable' });
+          expect(operations.store.get(scope, 'refused-fork-startup')).toMatchObject({ state: 'failed',
+            error: { errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED, error: 'native_agent_session_mode_unavailable' } });
+          expect(retired, scenario).toEqual(scenario === 'current' ? [refused.pid] : []);
+          expect(selected, scenario).toEqual(scenario === 'replacement' || scenario === 'changed-birth' ? [] : [[refused.pid]]);
+          expect(exitOperationStates, scenario).toEqual(scenario === 'replacement' || scenario === 'changed-birth' ? [] : ['running']);
+          expect(replacement.stopRequestedAtMs, scenario).toBeUndefined();
+          if (scenario === 'replacement' || scenario === 'changed-birth') expect(refused.stopRequestedAtMs, scenario).toBeUndefined();
+          else expect(refused.stopRequestedAtMs, scenario).toBeTypeOf('number');
+          expect(stopAttempts, scenario).toBe(1);
+          expect(machineReads, scenario).toEqual([]);
+          expect(archived, scenario).toBe(scenario === 'current');
+        });
+      } finally {
+        operations.runner.cancel(scope, 'refused-fork-startup');
+        home.closeAllConnections();
+        await new Promise<void>((resolve, reject) => home.close(error => error ? reject(error) : resolve()));
+      }
+  });
+
+  it('keeps native-fork runner exit cleanup inside its own open owner after requester startup', async () => {
     const operations = createHostActionOperationRuntime({ machineId: 'machine', resolveAccountId: async () => 'account',
       generateOperationId: () => 'native-fork-startup', supportsCoreCancellation: () => true });
     const tracked: TrackedSession = { pid: 102, startedBy: 'daemon', happySessionId: 'native-fork-child',
@@ -161,11 +274,7 @@ describe('Session startup operation custody', () => {
               context: { signal: operation.signal, localActionContext: operation },
               spawnSession: async options => {
                 expect(options.nativeForkSource).toMatchObject({ sessionId: 'parent', providerSessionId: 'provider-parent' });
-                if (outcome === 'refused') tracked.agentRuntimeDaemonServiceSessionOpenAttestation =
-                  AgentRuntimeDaemonServiceSessionOpenAttestationV1Schema.parse({ request: { kind: 'fork',
-                    sessionId: 'native-fork-child', cwd: '/project', source: options.nativeForkSource },
-                    providerSessionId: null, refusal: { code: 'native_agent_session_mode_unavailable' } });
-                else tracked.childProcess = Object.assign(new (await import('node:child_process')).ChildProcess(), { exitCode: 1 });
+                tracked.childProcess = Object.assign(new (await import('node:child_process')).ChildProcess(), { exitCode: 1 });
                 return { type: 'success', sessionId: 'native-fork-child' };
               },
               awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [tracked], ...input }),

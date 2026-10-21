@@ -6,6 +6,7 @@ import { SessionTurnProviderCheckpointV1Schema } from '@happier-dev/protocol/ses
 import type { AgentSessionOpenRequest } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import { isAuthenticationError } from '@/api/client/httpStatusError';
+import type { ExactTrackedRunnerStopWitness } from '@/daemon/sessions/stopSession';
 import { resolveProviderCheckpointForFork } from '@/session/fork/resolveProviderCheckpointForFork';
 import { createConnectedServiceForkLaunchContext } from '@/session/fork/connectedServiceForkLaunchContext';
 import {
@@ -188,6 +189,7 @@ export async function attemptNativeForkOpen(params: Readonly<{
     }
 
     const childSessionId = result.sessionId;
+    let expectedTrackedRunner: ExactTrackedRunnerStopWitness | undefined;
     const requestId = typeof params.requestId === 'string'
         && params.requestId.trim().length > 0
         ? params.requestId.trim()
@@ -215,6 +217,7 @@ export async function attemptNativeForkOpen(params: Readonly<{
             throw new Error('Child runner exited before native fork open attestation');
         }
         if (openAttestation.status === 'refused') {
+            expectedTrackedRunner = openAttestation.expectedTrackedRunner;
             throw new Error(openAttestation.code);
         }
         const openMismatch = describeNativeForkOpenMismatch(
@@ -272,6 +275,7 @@ export async function attemptNativeForkOpen(params: Readonly<{
             credentials: params.credentials,
             fallbackStopSession: params.stopSession,
             sessionId: childSessionId,
+            ...(expectedTrackedRunner ? { expectedTrackedRunner } : {}),
         });
         if (isAuthenticationError(error)) throw error;
         try {
