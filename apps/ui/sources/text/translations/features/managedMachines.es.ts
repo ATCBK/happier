@@ -146,6 +146,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             billedWhileRunning: "Solo se factura mientras se ejecuta.",
             imageDescription: "Con qué arranca. Happier se instala encima.",
             locationDescription: "Cuanto más cerca, más rápido responde al escribir.",
+            localLocationDescription: ({ computer }: { computer: string }) => `Dónde se ejecuta en ${computer}.`,
             localSizeDescription: ({ computer }: { computer: string }) => `Su parte de ${computer} mientras se ejecuta. Detenerla la libera.`,
             headroom: ({ computer }: { computer: string }) => `Queda para ${computer}`,
             notEnoughFree: "Más de lo libre",

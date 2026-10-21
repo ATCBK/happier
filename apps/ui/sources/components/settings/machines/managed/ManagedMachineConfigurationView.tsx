@@ -593,6 +593,12 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
         {approval.approvalId ? <AttentionBanner testID="managed-config.approval" title={t('approvals.title')} description={t('approvals.status.open')}
             action={{ label: t('approvals.details'), onPress: () => router.push(`/inbox/approvals/${encodeURIComponent(approval.approvalId!)}?serverId=${encodeURIComponent(props.serverId)}` as never) }} /> : null}
         {creationDisabledNotice}
+        {/* A failure leads the form column, where the choices would be: below a long page it would sit out of sight on a phone. */}
+        {error ? <ItemGroup>
+            <SurfaceStateCard kind="error" size="line" title={error === 'conflict' ? t('machinePresets.conflict') : t('managedMachines.options.error')}
+                diagnosticCode={error === 'conflict' ? undefined : error} testID="managed-config.error"
+                action={{ label: t(error === 'conflict' ? 'managedMachines.actions.review' : 'managedMachines.actions.tryAgain'), onPress: retry }} />
+        </ItemGroup> : null}
         {draft && credentialFields.length ? <ItemGroup title={t('managedMachines.receipt.account')}>
             <ActionInputFields fields={credentialFields} input={credentialInput}
                 editable={!!catalogProvisioner && !!catalogController && !busy && (!preset || props.presetOnly === true)} busy={busy}
@@ -656,11 +662,6 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
         {draft && props.presetOnly ? <ItemGroup title={t('machinePresets.runningAtOnce')} description={t('machinePresets.limitHelp')}>
             <ManagedFieldRow testID="managed-config.limit" row={managedPresetLimitRow({ limit, disabled: busy,
                 onChange: next => { if (activeBinding?.isCurrent()) setLimit(next); } })} />
-        </ItemGroup> : null}
-        {error ? <ItemGroup surface="none">
-            <SurfaceStateCard kind="error" size="line" title={error === 'conflict' ? t('machinePresets.conflict') : t('managedMachines.options.error')}
-                diagnosticCode={error === 'conflict' ? undefined : error} testID="managed-config.error"
-                action={{ label: t(error === 'conflict' ? 'managedMachines.actions.review' : 'managedMachines.actions.tryAgain'), onPress: retry }} />
         </ItemGroup> : null}
         {saved && !props.presetOnly ? <SurfaceStateCard testID="managed-config.saved" kind="success" size="line" title={t('machinePresets.saved', { name: saved.name })}
             action={{ label: t('machinePresets.openPreset'), onPress: () => router.push(`/settings/machines/presets/${encodeURIComponent(saved.id)}?serverId=${encodeURIComponent(saved.serverId)}` as never) }} /> : null}
@@ -738,7 +739,7 @@ function ManagedConfiguratorNativeChoices(props: Readonly<{
         {local ? imageSection : sizeSection}
         {local ? sizeSection : imageSection}
         {locations.length ? <ManagedLocationGroup locations={locations} value={selected.location ?? null} title={t('managedMachines.config.location')}
-            description={t('managedMachines.config.locationDescription')}
+            description={local ? t('managedMachines.config.localLocationDescription', { computer: props.computer }) : t('managedMachines.config.locationDescription')}
             onChange={id => props.onChange('location', id)} testID="managed-config.locations" /> : null}
     </>;
 }

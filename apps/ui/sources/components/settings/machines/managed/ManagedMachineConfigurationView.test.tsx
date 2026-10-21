@@ -688,6 +688,26 @@ describe('mounted managed configurator', () => {
         expect(harness.requests.some(request => request.path.endsWith('/acquire'))).toBe(false);
         await screen.unmount();
     });
+    it('describes a local machine\u2019s location as where it runs, not as a distance to the person', async () => {
+        const serverId = await harness.addHome({ name: 'Compute', serverUrl: 'https://local-location.example', serverIdentityId: 'srv_local_location', accountId: 'owner', currentAccount: true });
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'host', installationId: 'installation' })] } });
+        const local = { ...provisioner, descriptor: { ...provisioner.descriptor, billing: { location: 'local', stoppedBilling: 'not-billed' } } };
+        const nativeFacts = { image: { id: 'linux', title: 'Linux' }, location: { id: 'runc', title: 'runc' } };
+        for (const [actionId, result] of [
+            ['machines.provisioners.list', { controller: defaultController, provisioners: [local] }], ['machines.provisioners.check', { available: true }],
+            ['machines.provisioners.options', { choices: [{ id: 'runc:linux', title: 'Linux (runc)', launch: { cpu: 2 }, nativeFacts }] }],
+        ] as const) harness.answer(serverId, `/v1/actions/${actionId}`, { select: value => {
+            const request = ExternalActionRequestEnvelopeV1Schema.parse(value);
+            return { body: { v: 1, actionId, requestId: request.requestId, execution: { ok: true, result } } };
+        } });
+        const { ManagedMachineConfigurationView } = await import('./ManagedMachineConfigurationView');
+        const { t } = await import('@/text');
+        const screen = await renderScreen(<ManagedMachineConfigurationView serverId={serverId} provisioner={buildQualifiedPluginContributionKey(local.contribution)} initialController={defaultController} />);
+        await waitForHomeGovernance(() => expect(screen.findByTestId('managed-config.locations')).not.toBeNull());
+        expect(screen.getTextContent()).not.toContain(t('managedMachines.config.locationDescription'));
+        await screen.unmount();
+    });
     it('uses a reviewed one-off as composer intent without admitting a resource', async () => {
         const serverId = await harness.addHome({ name: 'Compute', serverUrl: 'https://compute.example', serverIdentityId: 'srv_compute', accountId: 'owner', currentAccount: true });
         const { storage } = await import('@/sync/domains/state/storage');

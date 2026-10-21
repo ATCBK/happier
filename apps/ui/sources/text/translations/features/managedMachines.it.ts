@@ -146,6 +146,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             billedWhileRunning: "Fatturata solo mentre gira.",
             imageDescription: "Con cosa parte. Happier si installa sopra.",
             locationDescription: "Più è vicina, più la digitazione è rapida.",
+            localLocationDescription: ({ computer }: { computer: string }) => `Dove gira su ${computer}.`,
             localSizeDescription: ({ computer }: { computer: string }) => `La sua quota di ${computer} mentre gira. Fermarla la libera.`,
             headroom: ({ computer }: { computer: string }) => `Resta per ${computer}`,
             notEnoughFree: "Più di quanto è libero",
