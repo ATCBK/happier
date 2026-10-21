@@ -309,13 +309,21 @@ export function projectCodexAppServerToolEventsFromNotification(params: Readonly
   });
 }
 
+function isYieldedCodeModeOutput(output: unknown): boolean {
+  // Codex rust-v0.162.1 CodeModeToolOutput prepends this native status to
+  // either a string or input_text content. Script-authored output follows it.
+  const first = Array.isArray(output) ? asRecord(output[0]) : null;
+  const status = typeof output === 'string' ? output : first?.type === 'input_text' ? first.text : null;
+  return typeof status === 'string' && status.startsWith('Script running with cell ID ');
+}
+
 /** One admitted turn's typed and raw views describe the same native tools. */
 export function createCodexAppServerToolEventProjector() {
   const published = new Set<string>();
   const scripts = new Map<string, {
     scopeId: string;
     call: CodexAppServerProjectedToolEvent;
-    result?: CodexAppServerProjectedToolEvent;
+    result?: Extract<CodexAppServerProjectedToolEvent, { type: 'tool-result' }>;
     hasNativeTools: boolean;
   }>();
   const eventKey = (scopeId: string, type: string, callId: string) => JSON.stringify([scopeId, type, callId]);
@@ -339,8 +347,8 @@ export function createCodexAppServerToolEventProjector() {
           if (script.scopeId !== params.scopeId) continue;
           scripts.delete(key);
           // Code-mode exec is an envelope, not a second command. Retain it
-          // only when native tools were unavailable (e.g. sandbox startup
-          // failure). Never parse its JavaScript or match command text.
+          // only when native origin is unaccounted for (including ambiguous
+          // yielded cells). Never parse its JavaScript or match command text.
           if (!script.hasNativeTools) fallback.push(script.call, ...(script.result ? [script.result] : []));
         }
         return admit(params.scopeId, fallback);
@@ -359,13 +367,17 @@ export function createCodexAppServerToolEventProjector() {
           continue;
         }
         const script = scripts.get(key);
-        if (script && event.type === 'tool-result') { script.result = event; continue; }
-        if (event.type === 'tool-call') {
-          for (const pending of scripts.values()) {
-            // A completed raw invocation cannot borrow a later script's tool
-            // evidence. Only an open envelope can contain this native call.
-            if (pending.scopeId === params.scopeId && !pending.result) pending.hasNativeTools = true;
-          }
+        if (script && event.type === 'tool-result') {
+          script.result = event;
+          continue;
+        }
+        if (event.type === 'tool-call' && !published.has(eventKey(params.scopeId, event.type, event.callId))) {
+          // A yielded response does not finish the cell. Without an originating
+          // exec id, only a single eligible envelope accounts for a native call.
+          // Typed/raw echoes of that same native identity cannot reattribute it.
+          const candidates = [...scripts.values()].filter(pending =>
+            pending.scopeId === params.scopeId && (!pending.result || isYieldedCodeModeOutput(pending.result.output)));
+          if (candidates.length === 1) candidates[0]!.hasNativeTools = true;
         }
         native.push(event);
       }

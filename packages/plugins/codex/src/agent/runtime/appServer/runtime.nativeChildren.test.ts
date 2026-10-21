@@ -44,7 +44,11 @@ describe('managed Codex native children', () => {
     { child: false, failureFirst: false },
     { child: true, failureFirst: true },
     { child: true, failureFirst: false },
-  ])('retains an independent script failure (child=$child, failureFirst=$failureFirst)', async ({ child, failureFirst }) => {
+    { child: false, failureFirst: false, yielded: true },
+    { child: true, failureFirst: false, yielded: true },
+    { child: false, failureFirst: false, yielded: true, nativeBeforeYield: true },
+    { child: true, failureFirst: false, yielded: true, nativeBeforeYield: true },
+  ])('retains an independent script failure (child=$child, failureFirst=$failureFirst, yielded=$yielded, nativeBeforeYield=$nativeBeforeYield)', async ({ child, failureFirst, yielded, nativeBeforeYield }) => {
     const f = fixture();
     try {
       await startCodexAppServerRuntime(f.runtime);
@@ -61,13 +65,29 @@ describe('managed Codex native children', () => {
       };
       const nativeScript = async () => {
         await notify({ type: 'custom_tool_call', call_id: 'successful-script', name: 'exec', input: 'await tools.exec_command({cmd:"pwd"});' });
+        if (nativeBeforeYield) {
+          await notify({ type: 'function_call', call_id: 'native-command', name: 'exec_command', arguments: '{"cmd":"pwd"}' });
+        }
+        if (yielded) {
+          // rust-v0.162.1 execute_handler.rs keeps a yielded cell running;
+          // delegate.rs dispatches its native tool independently of the next exec.
+          await notify({ type: 'custom_tool_call_output', call_id: 'successful-script', output: [
+            { type: 'input_text', text: 'Script running with cell ID 1\nWall time 0.1 seconds\nOutput:\n' },
+          ] });
+          await notify({ type: 'custom_tool_call', call_id: 'failed-script', name: 'exec', input: 'throw new Error("failed before dispatch")' });
+        }
         await notify({ type: 'function_call', call_id: 'native-command', name: 'exec_command', arguments: '{"cmd":"pwd"}' });
         await notify({ type: 'commandExecution', id: 'native-command', command: 'pwd' }, 'item/started');
         await notify({ type: 'function_call_output', call_id: 'native-command', output: '{"exit_code":0,"output":"/workspace"}' });
         await notify({ type: 'commandExecution', id: 'native-command', command: 'pwd', exitCode: 0 }, 'item/completed');
-        await notify({ type: 'custom_tool_call_output', call_id: 'successful-script', output: 'Script completed' });
+        if (yielded) {
+          await notify({ type: 'custom_tool_call_output', call_id: 'failed-script', output: 'Script failed before a native command existed' });
+        } else {
+          await notify({ type: 'custom_tool_call_output', call_id: 'successful-script', output: 'Script completed' });
+        }
       };
-      if (failureFirst) { await failedScript(); await nativeScript(); }
+      if (yielded) await nativeScript();
+      else if (failureFirst) { await failedScript(); await nativeScript(); }
       else { await nativeScript(); await failedScript(); }
       await f.notify('turn/completed', { threadId: scope.threadId, turn: { id: scope.turnId, status: 'completed' } });
       if (!child) await waitForCodexAppServerRuntimeTurnCompletion(f.runtime);
@@ -76,6 +96,12 @@ describe('managed Codex native children', () => {
       expect(tools).toEqual([
         expect.objectContaining({ kind: 'tool-call', toolCallId: 'native-command', toolName: 'Bash' }),
         expect.objectContaining({ kind: 'tool-result', toolCallId: 'native-command', output: { exit_code: 0, output: '/workspace' } }),
+        // The native stream has no originating exec id. Ambiguous wrappers
+        // remain visible rather than losing the independent failure.
+        ...(yielded && !nativeBeforeYield ? [
+          expect.objectContaining({ kind: 'tool-call', toolCallId: 'successful-script', toolName: 'exec' }),
+          expect.objectContaining({ kind: 'tool-result', toolCallId: 'successful-script', output: expect.any(Array) }),
+        ] : []),
         expect.objectContaining({ kind: 'tool-call', toolCallId: 'failed-script', toolName: 'exec' }),
         expect.objectContaining({ kind: 'tool-result', toolCallId: 'failed-script', output: 'Script failed before a native command existed' }),
       ]);

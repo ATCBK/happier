@@ -1532,9 +1532,11 @@ These are development-source contracts, not certification of a loaded runner.
 
 Codex app-server transcript projection also has one owner for native tool
 identity. Typed commands and their raw echoes share that identity; code-mode
-`exec` envelopes are suppressed only by native tools observed while that invocation
-is open. An independently completed raw-only result remains visible when another
-invocation in the same turn produces native tools.
+`exec` envelopes are suppressed only when a newly observed native tool has one
+eligible same-turn invocation. Yielded cells remain eligible after returning their
+initial result. When several invocations could own the tool, their envelopes stay
+visible, preserving independent failure evidence. A raw or typed echo of an
+already observed native call cannot be attributed to another invocation.
 Native approval subjects carry the tool call identity to the host permission
 owner, while transient interaction custody remains host-stamped. Plain native
 Sessions bind app-server model discovery to the host model publication service;
