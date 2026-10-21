@@ -232,20 +232,17 @@ describe('SessionWidgetHost chrome', () => {
         expect(label).toContain('Release plan');
     });
 
-    it('carries the name the card shows, never the stored title or the item id', async () => {
-        const runtime = (await renderHook(() => useEntityDragDropRuntime())).getCurrent();
+    it('publishes the name it shows, not the stored title, for the Board to describe it by, and withdraws it on leaving', async () => {
         const installed = unavailableInstalledItem();
         if (installed.state.kind !== 'ready' || installed.state.item.source.kind !== 'widget') throw new Error('Expected a widget fixture');
         const named: SessionBoardItemProjection = { ...installed, state: { kind: 'ready', item: { ...installed.state.item, title: 'counter',
             source: { kind: 'widget', instance: { ...installed.state.item.source.instance, displayName: 'Directory count' } } } } };
-        const screen = await renderCard({ item: named, entityDrag: { ...entityDrag(), title: 'counter' } });
+        const onDisplayTitle = vi.fn();
+        const screen = await renderCard({ item: named, onDisplayTitle });
         expect(String(screen.findHostByTestId('widget-title')?.props.children)).toBe('Directory count');
-        const pan = findGestureByKind(screen.tree.root.findByType('GestureDetector' as never).props.gesture, 'pan');
-        try {
-            await act(async () => { pan?.__handlers.onStart?.({ absoluteX: 50, absoluteY: 50 }); });
-            const sourceId = runtime.getSnapshot().sourceId!;
-            expect(runtime.describeSource(sourceId)?.title).toBe('Directory count');
-        } finally { await act(async () => { runtime.cancel(); }); }
+        expect(onDisplayTitle).toHaveBeenLastCalledWith('Directory count');
+        await screen.unmount();
+        expect(onDisplayTitle).toHaveBeenLastCalledWith(null, 'Directory count');
     });
 
     it('starts a card carry from exactly one gesture owner: the card\'s browser drag on a hover pointer, the grip pan only where there is none', async () => {

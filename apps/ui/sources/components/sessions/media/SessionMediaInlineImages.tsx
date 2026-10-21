@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
-import { Image } from 'expo-image';
-import { HappierStoredImage, type HappierStoredImageHost } from '@happier-dev/plugin-ui/presentation';
+import { HappierStoredImage } from '@happier-dev/plugin-ui/presentation';
+import { STORED_IMAGE_HOST } from '@/components/ui/media/StoredImagePicture';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { t } from '@/text';
@@ -57,14 +57,6 @@ function inlineVideoPreviewInput(media: SessionMediaInlineVideoAvailableSummary,
 type SessionMediaInlineRenderableSummary =
     | SessionMediaInlineImageSummary
     | SessionMediaInlineMediaSummary;
-
-const inlineImageFillStyle = {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-} as const;
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
@@ -200,7 +192,7 @@ function SessionMediaInlineImageTile(props: Readonly<{
             status={preview.status}
             uri={preview.uri}
             dimensions={props.media}
-            host={SESSION_STORED_IMAGE_HOST}
+            host={STORED_IMAGE_HOST}
             borderColor={theme.colors.border.default}
             backgroundColor={theme.colors.surface.elevated}
             imageTestID={`${props.testIdPrefix}-inline-image-preview:${props.media.path}`}
@@ -229,11 +221,6 @@ function SessionMediaInlineImageTile(props: Readonly<{
         </View>
     );
 }
-
-export const SESSION_STORED_IMAGE_HOST: HappierStoredImageHost = Object.freeze({
-    renderImage: ({ uri, testID, onLoad }) => <Image testID={testID} source={{ uri }} contentFit="contain"
-        onLoad={(event) => onLoad(event.source)} style={inlineImageFillStyle} />,
-} satisfies HappierStoredImageHost);
 
 function SessionMediaInlineInertTile(props: Readonly<{
     media: SessionMediaInlineImageAvailableSummary | SessionMediaInlineVideoAvailableSummary;

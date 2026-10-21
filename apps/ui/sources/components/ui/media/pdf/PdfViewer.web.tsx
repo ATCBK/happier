@@ -82,8 +82,13 @@ function usePdfPageStylesheet() {
  * (`createPdfCanvasViewer`, loader, find model) owns lifetimes; this owns states and chrome.
  */
 export function PdfViewer(props: PdfViewerProps) {
-  usePdfPageStylesheet();
   const [attempt, retry] = React.useReducer((value: number) => value + 1, 0);
+  return <PdfViewerBody key={attempt} {...props} onRetry={retry} />;
+}
+
+// Keep the original source/cache identity while restarting its consumer on an explicit retry.
+function PdfViewerBody(props: PdfViewerProps & Readonly<{ onRetry(): void }>) {
+  usePdfPageStylesheet();
   // Cancel stops the transfer until the person loads again (lab FV5l: the page keeps its hand-off).
   const [stopped, setStopped] = React.useState(false);
   const preview = useFilePreviewSource({
@@ -103,6 +108,13 @@ export function PdfViewer(props: PdfViewerProps) {
   const [scale, setScale] = React.useState<number | null>(null);
   const latest = React.useRef(props);
   latest.current = props;
+  const progress = preview.status === 'loading' ? preview.progress : undefined;
+  const byteLength = preview.status === 'loaded' ? preview.byteLength : undefined;
+  const mimeType = preview.status === 'loaded' ? preview.mimeType : undefined;
+  React.useEffect(() => {
+    props.onPreviewChange?.(preview);
+    // Loading states are transient objects; report their facts without feeding render identity back to the stage.
+  }, [props.onPreviewChange, preview.status, preview.uri, preview.error, progress?.receivedBytes, progress?.totalBytes, byteLength, mimeType]);
 
   const element = () => containerRef.current as unknown as HTMLElement | null;
   const scaleFor = React.useCallback(() => {
@@ -246,7 +258,7 @@ export function PdfViewer(props: PdfViewerProps) {
       controller.abort();
       void loader?.dispose();
     };
-  }, [applyScale, attempt, preview.status, preview.uri, scaleFor]);
+  }, [applyScale, preview.status, preview.uri, scaleFor]);
 
   // The header's zoom menu (or a fit mode re-resolved on resize) sets the absolute scale.
   React.useEffect(() => {
@@ -310,7 +322,7 @@ export function PdfViewer(props: PdfViewerProps) {
         <MediaLoadStoppedState
           testID="pdf-viewer-stopped"
           title={props.title}
-          onLoadAgain={() => setStopped(false)}
+          onLoadAgain={props.onRetry}
           {...(props.onOpenInDefaultApp
             ? { handoff: { label: t('files.viewer.openInDefaultApp'), onPress: props.onOpenInDefaultApp } }
             : {})}
@@ -320,7 +332,7 @@ export function PdfViewer(props: PdfViewerProps) {
           failure={failed.failure}
           title={props.title}
           diagnosticCode={failed.code}
-          onRetry={retry}
+          onRetry={props.onRetry}
           onOpenInDefaultApp={props.onOpenInDefaultApp}
         />
       ) : state.status === 'loading' ? (

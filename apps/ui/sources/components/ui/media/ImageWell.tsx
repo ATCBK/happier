@@ -3,6 +3,7 @@ import { Platform, View, type LayoutChangeEvent } from 'react-native';
 import Svg, { Defs, Pattern, Rect } from 'react-native-svg';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -151,6 +152,14 @@ function ImageWellPicture(
         })
       : null;
   const { onImageInfo } = props;
+  const { onOpenStage } = props;
+  const expandGesture = React.useMemo(() => Gesture.Pinch()
+    .withTestId('image-well-expand')
+    .enabled(Boolean(onOpenStage))
+    .runOnJS(true)
+    .onStart(event => {
+      if (event.numberOfPointers === 2) onOpenStage?.();
+    }), [onOpenStage]);
   React.useEffect(() => {
     if (natural && fit && fit.scale > 0)
       onImageInfo?.({
@@ -220,6 +229,7 @@ function ImageWellPicture(
   );
   if (!props.onOpenStage) return picture;
   return (
+    <GestureDetector gesture={expandGesture}>
     <HappierPressable
       accessibilityRole="button"
       accessibilityLabel={props.title}
@@ -230,6 +240,7 @@ function ImageWellPicture(
     >
       {picture}
     </HappierPressable>
+    </GestureDetector>
   );
 }
 

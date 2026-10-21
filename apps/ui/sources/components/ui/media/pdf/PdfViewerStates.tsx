@@ -10,7 +10,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { GlassPanel } from '@/components/ui/glass/GlassPanel';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { formatPreviewProgressMegabytes } from '@/components/ui/media/MediaDownloadProgress';
-import type { FilePreviewProgress, UseFilePreviewSourceInput } from '@/components/ui/media/useFilePreviewSource';
+import type { FilePreviewProgress, FilePreviewSourceState, UseFilePreviewSourceInput } from '@/components/ui/media/useFilePreviewSource';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
@@ -45,6 +45,8 @@ export type PdfViewerProps = Readonly<{
   /** `stage`: pages stand on the Media stage's own backdrop in a reading column (lab MS1f). */
   presentation?: 'page' | 'stage';
   onOpenInDefaultApp?: () => void;
+  /** Reports the body's owned preview for stage handoffs without admitting a second source. */
+  onPreviewChange?: (preview: FilePreviewSourceState) => void;
   testID?: string;
 }>;
 

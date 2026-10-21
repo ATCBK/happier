@@ -12,7 +12,7 @@ import { WEBVIEW_INJECTED_MESSAGE_MAX_BYTES } from '@/components/ui/webview/brid
 import { t } from '@/text';
 
 import { MediaLoadStoppedState } from '../MediaDownloadProgress';
-import { useFilePreviewSource } from '../useFilePreviewSource';
+import { useFilePreviewSource, type FilePreviewSourceState } from '../useFilePreviewSource';
 import { createPdfBridgeFindModel } from './pdfBridgeFindModel';
 import {
   PDF_WEBVIEW_CSP,
@@ -56,13 +56,37 @@ type BodyState =
  * the preview cache file (RU-12), metadata back through the strict parser. Same states and chrome as web.
  */
 export function PdfViewer(props: PdfViewerProps) {
-  const { theme } = useUnistyles();
   const [attempt, retry] = React.useReducer((value: number) => value + 1, 0);
+  return <PdfViewerBody key={attempt} {...props} onRetry={retry} />;
+}
+
+// An explicit retry starts a fresh preview consumer and WebView readiness lifetime together.
+function PdfViewerBody(props: PdfViewerProps & Readonly<{ onRetry(): void }>) {
   const [stopped, setStopped] = React.useState(false);
   const preview = useFilePreviewSource({
     ...props.source,
     enabled: props.source.enabled && props.isActive && !stopped,
   });
+  const progress = preview.status === 'loading' ? preview.progress : undefined;
+  const byteLength = preview.status === 'loaded' ? preview.byteLength : undefined;
+  const mimeType = preview.status === 'loaded' ? preview.mimeType : undefined;
+  React.useEffect(() => {
+    props.onPreviewChange?.(preview);
+    // Loading states are transient objects; report their facts without feeding render identity back to the stage.
+  }, [props.onPreviewChange, preview.status, preview.uri, preview.error, progress?.receivedBytes, progress?.totalBytes, byteLength, mimeType]);
+
+  return <PdfViewerDocument key={preview.uri} {...props} preview={preview} stopped={stopped} onCancel={() => setStopped(true)} />;
+}
+
+// Document state and readiness belong to this materialized file's mounted WebView.
+function PdfViewerDocument(props: PdfViewerProps & Readonly<{
+  preview: FilePreviewSourceState;
+  stopped: boolean;
+  onCancel(): void;
+  onRetry(): void;
+}>) {
+  const { theme } = useUnistyles();
+  const { preview, stopped } = props;
   const webView = React.useRef<WebView>(null);
   const inject = React.useCallback(
     (script: string) => webView.current?.injectJavaScript(script),
@@ -128,7 +152,7 @@ export function PdfViewer(props: PdfViewerProps) {
       controller.abort();
       inject('window.__pdfDispose();true;');
     };
-  }, [attempt, inject, loaded, preview.status, preview.uri]);
+  }, [inject, loaded, preview.status, preview.uri]);
 
   React.useEffect(() => {
     if (state.status === 'ready')
@@ -197,7 +221,7 @@ export function PdfViewer(props: PdfViewerProps) {
         <MediaLoadStoppedState
           testID="pdf-viewer-stopped"
           title={props.title}
-          onLoadAgain={() => setStopped(false)}
+          onLoadAgain={props.onRetry}
           {...(props.onOpenInDefaultApp
             ? { handoff: { label: t('files.viewer.openInDefaultApp'), onPress: props.onOpenInDefaultApp } }
             : {})}
@@ -207,13 +231,13 @@ export function PdfViewer(props: PdfViewerProps) {
           failure={failed.failure}
           title={props.title}
           diagnosticCode={failed.code}
-          onRetry={retry}
+          onRetry={props.onRetry}
           onOpenInDefaultApp={props.onOpenInDefaultApp}
         />
       ) : (
         <View style={{ flex: 1 }}>
+          {preview.status === 'loaded' ? (
           <WebView
-            key={attempt}
             ref={webView}
             source={{ html }}
             style={{ flex: 1, backgroundColor: theme.colors.surface.inset }}
@@ -237,11 +261,12 @@ export function PdfViewer(props: PdfViewerProps) {
             onLoadEnd={() => setLoaded(true)}
             onMessage={onMessage}
           />
+          ) : null}
           {state.status === 'loading' ? (
             <PdfViewerLoadingState
               covers
               progress={preview.status === 'loading' ? preview.progress : null}
-              onCancel={() => setStopped(true)}
+              onCancel={props.onCancel}
             />
           ) : null}
         </View>

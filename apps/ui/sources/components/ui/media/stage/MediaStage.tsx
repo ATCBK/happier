@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { PixelRatio, Platform, Pressable, View, useWindowDimensions } from 'react-native';
+import { FlatList, PixelRatio, Platform, Pressable, View, useWindowDimensions, type ViewToken } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   useAnimatedReaction,
@@ -32,18 +32,18 @@ import { hapticsLight } from '@/components/ui/theme/haptics';
 import { Typography } from '@/constants/Typography';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { ESCAPE_LAYER_PRIORITIES, useEscapeLayer } from '@/keyboard/escape';
-import type { CustomModalInjectedProps } from '@/modal';
+import { Modal, type CustomModalInjectedProps } from '@/modal';
 import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
-import { downloadWebFile } from '@/sync/runtime/files/downloadWebFile';
-import { shareNativeCacheFile } from '@/sync/runtime/files/nativeCacheFileSink';
+import { canOpenFileInDefaultApp, saveFileUri } from '@/sync/runtime/files/saveFileBytes';
+import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import { SessionPaneLazyLoader } from '@/components/sessions/panes/SessionPaneLazyLoader';
 import type { MediaPlayerBodyProps } from '@/components/workspaces/files/file/MediaPlayerBody';
 import type { PdfViewerProps } from '../pdf/PdfViewerStates';
 import type { PdfZoom } from '../pdf/pdfZoom';
 
 import { MediaPicture, type MediaPictureSize } from '../MediaPicture';
-import { useFilePreviewSource } from '../useFilePreviewSource';
+import { useFilePreviewSource, type FilePreviewSourceState } from '../useFilePreviewSource';
 import { useWheelZoom } from '../zoom/useWheelZoom';
 import { useZoomableViewport } from '../zoom/useZoomableViewport';
 import { dismissPresentation, resolveZoomBounds } from '../zoom/zoomGeometry';
@@ -82,16 +82,6 @@ function fitRect(size: MediaPictureSize, viewport: Rect): Rect {
     width,
     height,
   };
-}
-
-/** Web saves the shown bytes as a download; native hands the preview cache file to the share sheet. */
-async function saveStageMedia(uri: string, name: string): Promise<void> {
-  if (Platform.OS === 'web') {
-    const blob = await (await fetch(uri)).blob();
-    downloadWebFile(blob, name, async () => {});
-    return;
-  }
-  await shareNativeCacheFile({ fileUri: uri, name, dialogTitle: name });
 }
 
 async function measureOrigin(item: MediaStageItem): Promise<Rect | null> {
@@ -141,6 +131,9 @@ type StageViewerProps = Readonly<{
   /** While zoomed the picture stays inside the viewport, so the title and capsules stay legible over it. */
   clip: boolean;
   onOpenFile?: () => void;
+  onPreviewChange: (index: number, preview: FilePreviewSourceState) => void;
+  onDownload?: () => void;
+  onOpenInDefaultApp?: () => void;
 }>;
 
 /** A fitted, non-interactive neighbour on either side of the current page. */
@@ -181,12 +174,14 @@ const StageViewer = React.forwardRef<ViewerHandle, StageViewerProps>(
     });
     const [size, setSize] = React.useState<MediaPictureSize | null>(null);
     const [failed, setFailed] = React.useState<string | null>(null);
+    const [fullResolution, setFullResolution] = React.useState(false);
     const viewportSize = React.useMemo(
       () => ({ width: props.viewport.width, height: props.viewport.height }),
       [props.viewport.width, props.viewport.height],
     );
     const { onSize, onZoomChange, onPage, onDismiss, onTap } = props;
     const index = props.index;
+    const reportPreview = React.useCallback((state: FilePreviewSourceState) => props.onPreviewChange(index, state), [index, props.onPreviewChange]);
 
     React.useEffect(() => {
       if (!picture) onSize(index, null);
@@ -221,6 +216,7 @@ const StageViewer = React.forwardRef<ViewerHandle, StageViewerProps>(
         : {}),
       onTap,
       onZoomSettled: (aboveFit: boolean) => {
+        setFullResolution(aboveFit);
         // 100% is one image pixel per device pixel: what the "1" key and a desktop click choose.
         onZoomChange(
           size && aboveFit
@@ -378,6 +374,16 @@ const StageViewer = React.forwardRef<ViewerHandle, StageViewerProps>(
                       accessible
                       accessibilityRole="image"
                       accessibilityLabel={label}
+                      accessibilityActions={[
+                        { name: 'zoomIn', label: t('files.viewer.zoomIn') },
+                        { name: 'zoomOut', label: t('files.viewer.zoomOut') },
+                        { name: 'fit', label: t('files.viewer.fit') },
+                      ]}
+                      onAccessibilityAction={(event) => {
+                        if (event.nativeEvent.actionName === 'zoomIn') zoom.zoomIn();
+                        else if (event.nativeEvent.actionName === 'zoomOut') zoom.zoomOut();
+                        else if (event.nativeEvent.actionName === 'fit') zoom.fit();
+                      }}
                     >
                       <MediaPicture
                         kind={item.kind === 'svg' ? 'svg' : 'image'}
@@ -389,6 +395,7 @@ const StageViewer = React.forwardRef<ViewerHandle, StageViewerProps>(
                         }
                         onIntrinsicSize={handleIntrinsicSize}
                         onError={setFailed}
+                        fullResolution={fullResolution}
                         testID="media-stage-image"
                       />
                     </Animated.View>
@@ -418,7 +425,10 @@ const StageViewer = React.forwardRef<ViewerHandle, StageViewerProps>(
             </GestureDetector>
           ) : (
             <View style={StyleSheet.absoluteFill}>
-              <StageDocumentItem item={item} isActive={props.phase === 'open'} />
+              <StageDocumentItem item={item} isActive={props.phase === 'open'}
+                onPreviewChange={reportPreview}
+                onDownload={props.onDownload}
+                onOpenInDefaultApp={props.onOpenInDefaultApp} />
             </View>
           )}
         </View>
@@ -432,14 +442,22 @@ const loadStageMediaPlayer = () =>
 const loadStagePdfViewer = () => import('../pdf/PdfViewer').then((module) => module.PdfViewer);
 
 /** Video and PDF items render their own bodies in the stage (lab MS1f); pictures use the zoom viewport. */
-function StageDocumentItem(props: Readonly<{ item: MediaStageItem; isActive: boolean }>) {
+function StageDocumentItem(props: Readonly<{
+  item: MediaStageItem;
+  isActive: boolean;
+  onPreviewChange: (preview: FilePreviewSourceState) => void;
+  onDownload?: () => void;
+  onOpenInDefaultApp?: () => void;
+}>) {
   const [zoom, setZoom] = React.useState<PdfZoom>('fit-width');
   if (props.item.kind === 'video') {
     return (
       <SessionPaneLazyLoader<MediaPlayerBodyProps>
         testID="media-stage-video"
         load={loadStageMediaPlayer}
-        props={{ kind: 'video', title: props.item.title, source: props.item.source, isActive: props.isActive }}
+        props={{ kind: 'video', title: props.item.title, source: props.item.source, isActive: props.isActive,
+          onPreviewChange: props.onPreviewChange,
+          onDownload: props.onDownload, onOpenInDefaultApp: props.onOpenInDefaultApp }}
       />
     );
   }
@@ -455,6 +473,8 @@ function StageDocumentItem(props: Readonly<{ item: MediaStageItem; isActive: boo
         presentation: 'stage',
         zoom,
         onZoomChange: setZoom,
+        onPreviewChange: props.onPreviewChange,
+        onOpenInDefaultApp: props.onOpenInDefaultApp,
       }}
     />
   );
@@ -482,6 +502,7 @@ function StripThumb(
   const preview = useFilePreviewSource({
     ...props.item.source,
     enabled: props.enabled && picture && props.item.source.enabled,
+    cacheOnly: true,
   });
   return (
     <Pressable
@@ -521,6 +542,44 @@ function StripThumb(
   );
 }
 
+/** Every item remains scrollable; only visible cells observe and decode already held preview bytes. */
+function StageGalleryStrip(props: Readonly<{
+  items: readonly MediaStageItem[];
+  index: number;
+  enabled: boolean;
+  width: number;
+  onSelect: (index: number) => void;
+}>) {
+  const { theme } = useUnistyles();
+  const list = React.useRef<FlatList<MediaStageItem>>(null);
+  const [visible, setVisible] = React.useState<ReadonlySet<number>>(() => new Set());
+  const onViewableItemsChanged = React.useCallback(({ viewableItems }: { viewableItems: ViewToken[] }) => {
+    const next = new Set(viewableItems.flatMap(item => item.isViewable && item.index !== null ? [item.index] : []));
+    setVisible(current => current.size === next.size && [...next].every(index => current.has(index)) ? current : next);
+  }, []);
+  React.useEffect(() => { list.current?.scrollToIndex({ index: props.index, viewPosition: 0.5, animated: false }); }, [props.index]);
+  const extraData = React.useMemo(() => ({ index: props.index, enabled: props.enabled, visible }), [props.index, props.enabled, visible]);
+  const stride = STRIP_THUMB_SIZE + theme.space.s4;
+  return <FlatList
+    ref={list}
+    testID="media-stage-gallery"
+    horizontal
+    data={props.items}
+    extraData={extraData}
+    initialScrollIndex={props.index}
+    initialNumToRender={Math.max(1, Math.ceil(props.width / stride))}
+    getItemLayout={(_items, index) => ({ length: stride, offset: stride * index, index })}
+    keyExtractor={(_item, index) => String(index)}
+    onViewableItemsChanged={onViewableItemsChanged}
+    style={{ maxWidth: props.width }}
+    contentContainerStyle={stageStyles.stripRow}
+    accessibilityRole="tablist"
+    accessibilityLabel={t('files.viewer.stageGallery', { count: props.items.length })}
+    renderItem={({ item, index }) => <StripThumb item={item} selected={index === props.index}
+      enabled={props.enabled && visible.has(index)} label={item.title} onPress={() => props.onSelect(index)} />}
+  />;
+}
+
 /**
  * The Media stage (P2 §3.4, lab files MS1): one full-screen layer for every image, SVG, PDF and video.
  * The picture flies from its thumbnail onto the page colour, zooms about the focal point, pages through a
@@ -536,6 +595,15 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
   const [phase, setPhase] = React.useState<Phase>('opening');
   const [immersive, setImmersive] = React.useState(false);
   const [zoomPercent, setZoomPercent] = React.useState<number | null>(null);
+  const [documentPreview, setDocumentPreview] = React.useState<Readonly<{ index: number; uri: string; mimeType?: string }> | null>(null);
+  const handlePreviewChange = React.useCallback((index: number, state: FilePreviewSourceState) => {
+    setDocumentPreview(current => {
+      const uri = state.status === 'loaded' ? state.uri : null;
+      if (uri === null) return current?.index === index ? null : current;
+      const mimeType = state.status === 'loaded' ? state.mimeType : undefined;
+      return current?.index === index && current.uri === uri && current.mimeType === mimeType ? current : { index, uri, mimeType };
+    });
+  }, []);
   const [flightSize, setFlightSize] = React.useState<MediaPictureSize | null>(
     null,
   );
@@ -675,6 +743,7 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
       if (next < 0 || next >= gallery.items.length || next === gallery.index)
         return;
       gallery.select(next);
+      setDocumentPreview(null);
       setZoomPercent(null);
       dragProgress.value = 0;
       const nextItem = gallery.items[next]!;
@@ -716,11 +785,19 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
     ...flightItem.source,
     enabled: isPicture(flightItem) && flightItem.source.enabled,
   });
-  const savable = flightPreview.status === 'loaded' ? flightPreview.uri : null;
-  const save = React.useCallback(() => {
+  const savable = flightPreview.status === 'loaded' ? flightPreview.uri
+    : documentPreview?.index === gallery.index ? documentPreview.uri : null;
+  const handoffMime = flightPreview.status === 'loaded' ? flightPreview.mimeType
+    : documentPreview?.index === gallery.index ? documentPreview.mimeType : undefined;
+  const handoff = React.useCallback((action?: 'open') => {
     if (!savable) return;
-    void saveStageMedia(savable, item.title);
-  }, [item.title, savable]);
+    void saveFileUri({ uri: savable, fileName: item.title, action,
+      mimeType: resolveFileViewerKind({ path: item.title, mimeType: handoffMime ?? item.source.mimeType }).mimeType })
+      .catch(error => Modal.alert(t('common.error'), error instanceof Error ? error.message : t('errors.operationFailed')));
+  }, [handoffMime, item, savable]);
+  const save = React.useCallback(() => handoff(), [handoff]);
+  const openInDefaultApp = React.useCallback(() => handoff('open'), [handoff]);
+  const toggleImmersive = React.useCallback(() => setImmersive(value => !value), []);
 
   const topInset = phone ? insets.top + theme.space.s6 : theme.space.s12;
 
@@ -728,6 +805,7 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
     <View
       style={StyleSheet.absoluteFill}
       accessibilityViewIsModal
+      onAccessibilityEscape={() => close()}
       testID="media-stage"
     >
       <StageViewer
@@ -745,7 +823,10 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
         onSize={handleSize}
         onPage={(direction) => goTo(gallery.index + direction)}
         onDismiss={(velocityY) => close(velocityY)}
-        onTap={() => setImmersive((value) => !value)}
+        onTap={toggleImmersive}
+        onPreviewChange={handlePreviewChange}
+        {...(savable ? { onDownload: save } : {})}
+        {...(savable && canOpenFileInDefaultApp() ? { onOpenInDefaultApp: openInDefaultApp } : {})}
         onZoomChange={setZoomPercent}
         clip={zoomPercent !== null && !phone && !immersive}
         {...(item.openFile ? { onOpenFile: item.openFile } : {})}
@@ -877,24 +958,8 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
               innerShadow={false}
               style={stageStyles.strip}
             >
-              <View
-                style={stageStyles.stripRow}
-                accessibilityRole="tablist"
-                accessibilityLabel={t('files.viewer.stageGallery', {
-                  count: gallery.items.length,
-                })}
-              >
-                {gallery.items.map((entry, entryIndex) => (
-                  <StripThumb
-                    key={entryIndex}
-                    item={entry}
-                    selected={entryIndex === gallery.index}
-                    enabled={phase === 'open'}
-                    label={entry.title}
-                    onPress={() => goTo(entryIndex)}
-                  />
-                ))}
-              </View>
+              <StageGalleryStrip items={gallery.items} index={gallery.index} enabled={phase === 'open'}
+                width={Math.max(STRIP_THUMB_SIZE, window.width - theme.space.s16 * 2)} onSelect={goTo} />
             </GlassPanel>
           </View>
         ) : null}

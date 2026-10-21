@@ -17,6 +17,7 @@ export type SafeExpoImageProps = Readonly<
         resizeMode?: ReactNativeImageProps['resizeMode'];
         placeholder?: Readonly<{ thumbhash: string }> | null;
         tintColor?: string;
+        allowDownscaling?: boolean;
     }
 >;
 
@@ -107,6 +108,7 @@ export const SafeExpoImage = React.memo(function SafeExpoImage(props: SafeExpoIm
         resizeMode,
         placeholder: _placeholder,
         tintColor,
+        allowDownscaling: _allowDownscaling,
         style,
         ...reactNativeImageProps
     } = props;

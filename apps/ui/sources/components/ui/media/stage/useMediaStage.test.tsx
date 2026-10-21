@@ -4,10 +4,23 @@ import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import type { MediaStageItem } from './mediaStageItems';
+import { MediaStage } from './MediaStage';
+import { MediaPicture } from '../MediaPicture';
+import { InjectedAuthProvider } from '@/auth/context/AuthContext';
+import { ModalProvider } from '@/modal';
 
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeNativeMock({ platformOS: 'ios' });
+    const { createCapturingFlatListMock } = await import('@/dev/testkit/mocks/virtualizedList');
+    return createReactNativeNativeMock({ platformOS: 'ios' }, {
+        ...createCapturingFlatListMock({ renderItems: true }).module,
+        useWindowDimensions: () => ({ width: 1024, height: 900, scale: 1, fontScale: 1 }),
+        AccessibilityInfo: { isReduceMotionEnabled: async () => true },
+    });
+});
+vi.mock('react-native-reanimated', async () => {
+    const { createReanimatedModuleMock } = await import('@/dev/testkit/mocks/reanimated');
+    return createReanimatedModuleMock({ settleTimingCallbacks: true });
 });
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -15,10 +28,50 @@ vi.mock('expo-router', async () => {
 });
 
 describe('canonical media stage opener', () => {
+    it('closes on an accessibility escape through the existing modal owner', async () => {
+        const { openMediaStage } = await import('./useMediaStage');
+        const screen = await renderScreen(<InjectedAuthProvider credentials={null}><ModalProvider><></></ModalProvider></InjectedAuthProvider>);
+        try {
+            await act(async () => { openMediaStage([{ kind: 'image', title: 'Escape.png', source: { enabled: true, source: { kind: 'uri', uri: 'blob:escape' } } }]); });
+            await act(async () => screen.findByTestId('media-stage-image')!.props.onLoad({ source: { width: 100, height: 100 } }));
+            const root = screen.findByTestId('media-stage')!;
+            expect(root.props.onAccessibilityEscape).toBeTypeOf('function');
+            await act(async () => root.props.onAccessibilityEscape());
+            expect(screen.findAllByType(MediaStage)).toHaveLength(0);
+        } finally { await screen.unmount(); }
+    });
+    it('admits only visible cached strip pictures while retaining every scrollable gallery item', async () => {
+        const { openMediaStage } = await import('./useMediaStage');
+        const screen = await renderScreen(<InjectedAuthProvider credentials={null}><ModalProvider><></></ModalProvider></InjectedAuthProvider>);
+        try {
+            const items: MediaStageItem[] = Array.from({ length: 100 }, (_, index) => ({ kind: 'image', title: `Image ${index}`, source: { enabled: true, source: { kind: 'uri', uri: `blob:gallery-${index}` } } }));
+            await act(async () => { openMediaStage(items); });
+            await act(async () => screen.findByTestId('media-stage-image')!.props.onLoad({ source: { width: 1284, height: 902 } }));
+            expect(screen.findAllByType(MediaPicture).length).toBeLessThan(items.length);
+            const list = screen.findByTestId('media-stage-gallery')!;
+            expect(list.props.data).toHaveLength(100);
+            await act(async () => list.props.onViewableItemsChanged({ viewableItems: [{ index: 99, item: items[99], isViewable: true }], changed: [] }));
+            const last = screen.findAll(node => typeof node.type === 'string' && node.props.accessibilityLabel === 'Image 99' && typeof node.props.onPress === 'function')[0];
+            await act(async () => last.props.onPress());
+            expect(screen.findByTestId('media-stage-image')!.props.source).toEqual({ uri: 'blob:gallery-99' });
+        } finally { await screen.unmount(); }
+    });
+    it('exposes screen-reader zoom and fit through the actual picture viewport', async () => {
+        const { openMediaStage } = await import('./useMediaStage');
+        const screen = await renderScreen(<InjectedAuthProvider credentials={null}><ModalProvider><></></ModalProvider></InjectedAuthProvider>);
+        try {
+            await act(async () => { openMediaStage([{ kind: 'image', title: 'Accessible.png', source: { enabled: true, source: { kind: 'uri', uri: 'blob:accessible' } } }]); });
+            await act(async () => screen.findByTestId('media-stage-image')!.props.onLoad({ source: { width: 1284, height: 902 } }));
+            const picture = screen.findAll(node => typeof node.type === 'string' && node.props.accessibilityRole === 'image' && node.props.accessibilityActions?.some((action: { name: string }) => action.name === 'zoomIn'))[0];
+            expect(picture).toBeDefined();
+            await act(async () => picture.props.onAccessibilityAction({ nativeEvent: { actionName: 'zoomIn' } }));
+            expect(screen.findAll(node => node.props.fullResolution === true).length).toBeGreaterThan(0);
+            await act(async () => picture.props.onAccessibilityAction({ nativeEvent: { actionName: 'fit' } }));
+            expect(screen.findAll(node => node.props.testID === 'media-stage-image' && node.props.fullResolution === true)).toHaveLength(0);
+        } finally { await screen.unmount(); }
+    });
     it('snapshots the selected gallery and returns its focus through the modal owner', async () => {
         const { openMediaStage } = await import('./useMediaStage');
-        const { MediaStage } = await import('./MediaStage');
-        const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
         const { ModalProvider, useModal } = await import('@/modal');
         const originRef = React.createRef<View>();
         const source = { enabled: true, source: { kind: 'uri' as const, uri: 'blob:selected' }, cacheKey: 'revision' };
@@ -45,9 +98,6 @@ describe('canonical media stage opener', () => {
 
     it('empties the origin slot while the picture is out and restores it when the stage closes', async () => {
         const { openMediaStage } = await import('./useMediaStage');
-        const { MediaStage } = await import('./MediaStage');
-        const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
-        const { ModalProvider } = await import('@/modal');
         // The thumbnail's native view handle is the platform boundary the stage drives (lab MS1d).
         const styles: Array<Readonly<{ opacity?: number }>> = [];
         const origin = {
@@ -70,7 +120,6 @@ describe('canonical media stage opener', () => {
     it('keeps stage keyboard handlers on the caller runtime across the modal host boundary', async () => {
         const { useMediaStage } = await import('./useMediaStage');
         const { KeyboardShortcutProvider, useKeyboardCommand } = await import('@/keyboard/KeyboardShortcutProvider');
-        const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
         const { ModalProvider, useModal } = await import('@/modal');
         let open!: ReturnType<typeof useMediaStage>['open'];
         let execute!: ReturnType<typeof useKeyboardCommand>;

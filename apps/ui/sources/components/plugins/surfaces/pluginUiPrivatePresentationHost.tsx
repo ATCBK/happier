@@ -48,7 +48,7 @@ import { SetupBlockTile } from '@/components/ui/setupBlocks/SetupBlockTile';
 import { SetupBlockGrid } from '@/components/ui/setupBlocks/SetupBlockGrid';
 import { PluginDictationButton } from './PluginDictationButton';
 import type { DictationButtonProps, StatusCellProps, VoiceMarkArtProps, SetupBlockTileProps, SetupBlockGridProps } from '@happier-dev/plugin-ui';
-import { SESSION_STORED_IMAGE_HOST } from '@/components/sessions/media/SessionMediaInlineImages';
+import { STORED_IMAGE_HOST } from '@/components/ui/media/StoredImagePicture';
 import type {
     HappierAgentCursorMotionDriver,
     HappierCapsuleHost,
@@ -382,7 +382,7 @@ function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDire
     renderDictationButton(input: Omit<DictationButtonProps, 'fallback'> & Readonly<{ presented: boolean }>) {
         return <PluginDictationButton {...input} />;
     },
-    storedImageHost: SESSION_STORED_IMAGE_HOST,
+    storedImageHost: STORED_IMAGE_HOST,
     renderKeyboardStickyFooter(input: Readonly<{ openedOffset: number; children: React.ReactNode }>) {
         return <KeyboardStickyFooter offset={input.openedOffset}>{input.children}</KeyboardStickyFooter>;
     },

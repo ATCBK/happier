@@ -3,17 +3,25 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { act } from 'react-test-renderer';
 import { StyleSheet } from 'react-native';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createSessionFileNativeTransferBoundary } from '@/components/sessions/files/sessionFileNativeTransferTestkit';
 import { createSessionFilesViewFixture, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
+import { transferMachine } from '@/components/sessions/files/sessionFileTransferTestkit';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 import { SessionMediaInlineImages } from './SessionMediaInlineImages';
 
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeNativeMock({ platformOS: 'ios' });
 });
-vi.mock('expo-file-system', async () => (await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock().module);
+const fileSystem = vi.hoisted(() => ({ files: new Map<string, number[]>() }));
+vi.mock('expo-file-system', async () => {
+    const boundary = (await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock();
+    fileSystem.files = boundary.files;
+    return boundary.module;
+});
 
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
@@ -39,10 +47,35 @@ let rejectDownloads = false;
 beforeAll(prepareSessionFilesViewTestkit);
 beforeEach(async () => {
     rejectDownloads = false;
+    fileSystem.files.clear();
     transfer = createSessionFileNativeTransferBoundary();
-    fixture = await createSessionFilesViewFixture({ sessionId: 's1', rootPath: '/repo', machineCarrierOrigin: transfer.origin,
-        rpc: request => rejectDownloads && request.method === getActionSpec('daemon.filesystem.download').bindings?.rpcMethod
-            ? { success: false, error: 'not_found' } : transfer.rpc(request), request: transfer.request });
+    const serverIdentityId = 'srv_session_media_images';
+    const boundary = await createExternalActionAccountHttpBoundary({ serverUrl: 'https://session-file-views.test', serverIdentityId,
+        accountId: 'alice', machineId: 'm1', actionId: 'daemon.filesystem.download', tokenEpoch: 0,
+        execute: (input, { target }) => {
+            if (target.kind !== 'machine') throw new Error('Expected a preview Machine');
+            return rejectDownloads ? { success: false, error: 'not_found' }
+                : transfer.rpc({ targetId: target.machineId,
+                    method: getActionSpec('daemon.filesystem.download').bindings!.rpcMethod!, payload: { input } });
+        },
+    });
+    const machine = transferMachine({ id: 'm1', storageMode: 'plain', installationId: boundary.machine.installationId,
+        installationPublicKey: boundary.machine.installationPublicKey, replacedByMachineId: null, access: boundary.machine.access });
+    const row = { ...boundary.machine, operationProtocolCapabilities: machine.operationProtocolCapabilities,
+        operationProtocolCapabilitiesRevision: machine.operationProtocolCapabilitiesRevision,
+        daemonState: encodePlainMachineStoredContent(machine.daemonState) };
+    fixture = await createSessionFilesViewFixture({ sessionId: 's1', rootPath: '/repo', machine, serverIdentityId,
+        credentials: { token: `e30.${Buffer.from(JSON.stringify({ sub: 'alice', provenance: { v: 1, kind: 'account', authority: 'present_user' }, tokenEpoch: 0 })).toString('base64url')}.signature` },
+        machineCarrierOrigin: transfer.origin, rpc: transfer.rpc, request: async (url, init) => {
+            const parsed = new URL(String(url));
+            if (parsed.pathname === '/v1/machines') return Response.json([row]);
+            if (parsed.pathname === '/v1/machines/m1') return Response.json({ machine: row });
+            if (parsed.pathname.startsWith('/v1/actions/')) {
+                const response = await boundary.handle(parsed, init);
+                if (response) return response;
+            }
+            return transfer.request(url, init);
+        } });
     fixture.storage.getState().applySettingsLocal({ filesImagePreviewCacheMaxEntries: 0, filesImagePreviewMaxBytes: 1_000_000 });
 });
 
@@ -202,13 +235,7 @@ describe('SessionMediaInlineImages', () => {
         const preview = screen.findByTestId(`message-session-media-inline-image-preview:${path}`);
         expect(preview?.type).toBe('ExpoImage');
         expect(preview?.props.contentFit).toBe('contain');
-        expect(preview?.props.style).toEqual({
-            position: 'absolute',
-            top: 0,
-            right: 0,
-            bottom: 0,
-            left: 0,
-        });
+        expect(fileSystem.files.get(preview?.props.source.uri)).toEqual([97, 98, 99]);
 
         await act(async () => {
             preview?.props.onLoad({

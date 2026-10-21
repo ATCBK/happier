@@ -1,6 +1,6 @@
 import * as React from 'react';
-import { Platform, View, type StyleProp, type ViewStyle } from 'react-native';
-import { Image } from 'expo-image';
+import { Platform, View, type ImageStyle, type StyleProp } from 'react-native';
+import { StoredImagePicture } from './StoredImagePicture';
 
 import { SafeNativeSvgXml, parseSafeNativeSvgXml } from './SafeNativeSvgXml';
 import { useSvgPreviewText } from './useSvgPreviewText';
@@ -15,6 +15,7 @@ export type MediaPictureProps = Readonly<{
   size: MediaPictureSize | null;
   /** Tiny images scaled to an integer factor stay crisp. */
   pixelated?: boolean;
+  fullResolution?: boolean;
   /** `cover` crops into a fixed box (gallery thumbnails); the default draws the picture at `size`. */
   fit?: 'fill' | 'cover';
   /** SVG source text the page already holds (File page Source view); skips reading the URI. */
@@ -22,20 +23,16 @@ export type MediaPictureProps = Readonly<{
   accessibilityLabel?: string;
   onIntrinsicSize?: (size: MediaPictureSize) => void;
   onError?: (message: string) => void;
-  style?: StyleProp<ViewStyle>;
+  style?: StyleProp<ImageStyle>;
   testID?: string;
 }>;
 
-const HIDDEN_PROBE: ViewStyle = {
+const HIDDEN_PROBE: ImageStyle = {
   position: 'absolute',
   width: 1,
   height: 1,
   opacity: 0,
 };
-const WEB_PIXELATED =
-  Platform.OS === 'web'
-    ? ({ imageRendering: 'pixelated' } as unknown as ViewStyle)
-    : null;
 
 function readSvgLength(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0)
@@ -109,39 +106,19 @@ function NativeSvgPicture(props: MediaPictureProps) {
  * (SVG from a pinned `image/svg+xml` Blob, scripts inert); native SVG goes through the validator.
  */
 export function MediaPicture(props: MediaPictureProps) {
-  const { onIntrinsicSize, onError } = props;
-  const handleLoad = React.useCallback(
-    (
-      event: Readonly<{ source: Readonly<{ width: number; height: number }> }>,
-    ) => {
-      const { width, height } = event.source;
-      if (width > 0 && height > 0) onIntrinsicSize?.({ width, height });
-    },
-    [onIntrinsicSize],
-  );
-  const handleError = React.useCallback(
-    (event: Readonly<{ error: string }>) => onError?.(event.error),
-    [onError],
-  );
   if (props.kind === 'svg' && Platform.OS !== 'web')
     return <NativeSvgPicture {...props} />;
   return (
-    <Image
+    <StoredImagePicture
       testID={props.testID}
-      accessibilityRole="image"
       accessibilityLabel={props.accessibilityLabel}
-      source={{ uri: props.uri }}
+      uri={props.uri}
       contentFit={props.fit ?? 'fill'}
-      transition={0}
-      onLoad={handleLoad}
-      onError={handleError}
-      style={
-        [
-          props.size ?? HIDDEN_PROBE,
-          props.pixelated ? WEB_PIXELATED : null,
-          props.style,
-        ] as never
-      }
+      onLoad={props.onIntrinsicSize}
+      onError={props.onError}
+      pixelated={props.pixelated}
+      fullResolution={props.fullResolution}
+      style={[props.size ?? HIDDEN_PROBE, props.style]}
     />
   );
 }

@@ -8,7 +8,7 @@ import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScop
 
 describe('workspace Markdown image consent wiring', () => {
     it('keeps images opted out until the document has an explicit Machine context', async () => {
-        const hook = await renderHook((scope: WorkspaceScopeBase | null) => useWorkspaceMarkdownImages({ scope, filePath: 'docs/README.md' }), { initialProps: null });
+        const hook = await renderHook<ReturnType<typeof useWorkspaceMarkdownImages>, WorkspaceScopeBase | null>(scope => useWorkspaceMarkdownImages({ scope, filePath: 'docs/README.md' }), { initialProps: null });
         try {
             expect(hook.getCurrent()).toEqual({});
             await hook.rerender({ serverId: 'markdown-home', machineId: 'markdown-machine', rootPath: '/repo' });
