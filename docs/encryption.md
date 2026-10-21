@@ -1737,6 +1737,12 @@ server persistence layer.
   crypto and CAS, not just its initial fetch; disposal refuses further use. A new
   batch obtains a fresh observation.
   This is finite read sharing, with no cross-batch TTL or mode cache.
+- Development typed batch reads retain their originating HTTP authority. Truly
+  active reads capture the installed socket configuration and retain the HTTP
+  owner's existing bounded stored-credential recovery for read-only batch POSTs.
+  Explicitly captured Account authorities retain their fixed credentials; an
+  equal bearer does not promote them to the active socket. Sharing parsed
+  transport observations never shares mutation admission or adds mutation replay.
 - Current 0.3 development stored owner/shared readers discard unknown extensions
   recursively while validating known fields; creation and mutation remain strict.
   The reversible Bot marker alone is recipient-safe. Its birth fact, memory choice
