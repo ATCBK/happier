@@ -158,6 +158,8 @@ export async function resolveAccountPluginActivationSources(input: AccountPlugin
                 accountSelection = resolvePluginAccountExecutionSelectionV1({ pluginId, intentRead: read, bundled: bundledSelection });
             }
         }
+        // Machine-only sources still supply admitted descriptors and operation
+        // declarations. Placement limits activation, not release custody.
         const selection = accountSelection;
         selected.set(pluginId, { selection, read, ...(bundledSelection ? { bundled: bundledSelection } : {}) });
         if (selection.kind !== 'available') continue;
@@ -228,6 +230,8 @@ export async function resolveAccountPluginActivationSources(input: AccountPlugin
         loadResult: { loadedPlugins: external, diagnosticsByPluginId: {} } }), projectLoadedPluginContributes({ provenance: 'first_party',
         loadResult: { loadedPlugins: bundled, diagnosticsByPluginId: {} } }));
     const activationTargets = collectActivationTargets(contributes, 'account');
-    return { contributes: { ...contributes, activationTargets }, sourcesByPluginId, isCurrent, revalidate,
+    // Resources have only a daemon registration host. Their declarations remain
+    // in the selected manifest, but cannot demand an Account activation target.
+    return { contributes: { ...contributes, resources: [], activationTargets }, sourcesByPluginId, isCurrent, revalidate,
         readSelection: pluginId => selected.get(pluginId)?.selection ?? null };
 }

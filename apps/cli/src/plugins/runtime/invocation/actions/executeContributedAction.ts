@@ -928,15 +928,17 @@ export async function executeContributedAction(params: Readonly<{
               if (refusal && !refusal.ok) throw new PluginError({ code: refusal.errorCode, message: refusal.error });
             };
             await check();
-            if (accountTarget && await runtimeRegistry.revalidateAccountExecution?.(pluginId, params.context.signal) !== true) {
-              throw new PluginError({ code: 'plugin_action_generation_retired', message: 'Account Action source is no longer current' });
-            }
             if (revalidateRequesterDecision && !await revalidateRequesterDecision()) {
               throw new PluginError({ code: 'approval_stale', message: 'approval_stale' });
             }
             if (params.context.beforeHandlerInvocation) {
               await params.context.beforeHandlerInvocation();
               await check();
+            }
+            // Caller and requester checks may await Home. Re-admit the exact
+            // callee release after those reads, immediately before its handler.
+            if (accountTarget && await runtimeRegistry.revalidateAccountExecution?.(pluginId, params.context.signal) !== true) {
+              throw new PluginError({ code: 'plugin_action_generation_retired', message: 'Account Action source is no longer current' });
             }
           } }
         : {}),

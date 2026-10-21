@@ -14,6 +14,7 @@ import { registerAccountHomeHttp } from '@/session/actions/widgetApproval.testki
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { registerAuthoredAccountActionRelease } from './accountPluginActions.testkit';
 import { readCurrentAccountPluginExecutionSelection } from './accountPluginActivationSource';
+import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionInputV1Schema } from '@happier-dev/protocol/plugins/availability';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -26,6 +27,7 @@ it.each([
     { scenario: 'uncertain', surface: 'cli' },
     { scenario: 'cancel', surface: 'cli' },
     { scenario: 'caller_retire', surface: 'cli' },
+    { scenario: 'callee_retire_during_caller_read', surface: 'cli' },
     { scenario: 'credential_rotate', surface: 'cli' },
     { scenario: 'credential_rotate_read', surface: 'cli' },
 ] as const)(
@@ -33,6 +35,7 @@ it.each([
         const app = fastify();
         const endpoint = 'http://account-approval.test';
         const rotatesCredentials = scenario === 'credential_rotate' || scenario === 'credential_rotate_read';
+        const nested = scenario === 'caller_retire' || scenario === 'callee_retire_during_caller_read';
         const serverId = rotatesCredentials ? 'account-approval-rotation' : 'account-approval';
         const accountId = `account-owner-${surface}-${scenario}`;
         const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`,
@@ -40,11 +43,11 @@ it.each([
         const rotateStoredCredentials = () => writeStoredCredentialsForServerId(serverId,
             { ...credentials, token: `${credentials.token}-rotated` });
         const { pluginId, providerPluginId, artifacts, setEnabled, setPluginEnabled } = await registerAuthoredAccountActionRelease(app, accountId,
-            { includeAccountProvider: scenario === 'caller_retire' });
-        const effectPluginId = scenario === 'caller_retire' ? providerPluginId : pluginId;
+            { includeAccountProvider: nested });
+        const effectPluginId = nested ? providerPluginId : pluginId;
         if (!effectPluginId) throw new Error('Missing separately authored Account provider');
         const features = registerAccountHomeHttp(app, { accountId, serverId,
-            ...(scenario === 'caller_retire' ? { settings: { actionsSettingsV1: setActionApprovalOverride({
+            ...(nested ? { settings: { actionsSettingsV1: setActionApprovalOverride({
                 settings: normalizeActionsSettingsV1(undefined), actionId: formatQualifiedPluginActionId({ pluginId: effectPluginId, localId: 'record' }),
                 surface: 'plugin', approvalRequired: true,
             }) } } : {}) });
@@ -58,6 +61,21 @@ it.each([
         let stored: ReturnType<typeof PluginAccountStorageReadResponseV1Schema.parse> = { status: 'absent' };
         let writes = 0;
         let rotatedDuringRead = false;
+        let retiredCalleeDuringCallerRead = false;
+        app.addHook('onSend', async (request, _reply, payload) => {
+            if (scenario !== 'callee_retire_during_caller_read' || !approvalArtifactId
+                || request.url !== PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intent.read']
+                || readApproval().qualifiedActionId !== `${effectPluginId}/actions/record`
+                || readApproval().status !== 'executing') return payload;
+            const read = PluginAvailabilityIntentReadActionInputV1Schema.parse(request.body);
+            if (read.pluginId === pluginId && !retiredCalleeDuringCallerRead) {
+                // Disable only the executing callee while the live caller's
+                // currentness read settles, regardless of validation order.
+                setPluginEnabled(effectPluginId, false);
+                retiredCalleeDuringCallerRead = true;
+            }
+            return payload;
+        });
         app.get(`/v1/account/plugin-storage/${effectPluginId}`, async request => {
             if (scenario === 'credential_rotate_read' && !rotatedDuringRead) {
                 // The handler has already entered. Home accepts its captured
@@ -109,8 +127,8 @@ it.each([
             serverApiUrl: endpoint,
             ...(rotatesCredentials ? { readCredentials: () => readStoredCredentialsForServerId(serverId) } : {}) });
         let settled = false;
-        const invoking = original.execute('action.invoke', { action: { pluginId, localId: scenario === 'caller_retire' ? 'record-source' : 'write' },
-            input: scenario === 'caller_retire' ? { key: 'approved' } : { key: 'approved', value: 'written once' } }, { surface, signal: controller.signal,
+        const invoking = original.execute('action.invoke', { action: { pluginId, localId: nested ? 'record-source' : 'write' },
+            input: nested ? { key: 'approved' } : { key: 'approved', value: 'written once' } }, { surface, signal: controller.signal,
             runtimeAccountId: accountId, serverId, serverIdentityId: serverId }).then(result => { settled = true; return result; });
         const deciding = createCliActionExecutorFromCredentials({ credentials, serverId, serverApiUrl: endpoint,
             serverIdentityId: serverId });
@@ -125,7 +143,7 @@ it.each([
         };
         try {
             let artifactId = await waitForApproval();
-            if (scenario === 'caller_retire') {
+            if (nested) {
                 expect(readApproval()).toMatchObject({ status: 'open', qualifiedActionId: `${pluginId}/actions/record-source` });
                 expect(await deciding.execute('approval.request.decide', { artifactId, decision: 'approve' }, decisionContext))
                     .toMatchObject({ ok: true });
@@ -134,7 +152,7 @@ it.each([
             expect(settled).toBe(false);
             expect(writes).toBe(0);
             expect(readApproval()).toMatchObject({ status: 'open', approvalInputCustody: 'live_only',
-                qualifiedActionId: `${effectPluginId}/actions/${scenario === 'caller_retire' ? 'record' : 'write'}` });
+                qualifiedActionId: `${effectPluginId}/actions/${nested ? 'record' : 'write'}` });
             if (scenario === 'disable') setEnabled(false);
             if (scenario === 'caller_retire') {
                 setPluginEnabled(pluginId, false);
@@ -167,6 +185,13 @@ it.each([
             const decision = await deciding.execute('approval.request.decide', decisionInput, decisionContext);
             expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true });
             const result = await invoking;
+            if (scenario === 'callee_retire_during_caller_read') {
+                expect(retiredCalleeDuringCallerRead).toBe(true);
+                expect(await readCurrentAccountPluginExecutionSelection({ credentials, serverUrl: endpoint, pluginId }))
+                    .toMatchObject({ kind: 'available' });
+                expect(await readCurrentAccountPluginExecutionSelection({ credentials, serverUrl: endpoint, pluginId: effectPluginId }))
+                    .toMatchObject({ kind: 'unavailable', code: 'plugin_disabled' });
+            }
             if (rotatesCredentials) {
                 expect(getActiveAccountSettingsSnapshotLifetimeToken()).toBe(capturedAccountLifetime);
                 expect(getActiveAccountSettingsSnapshot()?.scopeKey).toBe(capturedAccountSnapshot?.scopeKey);
@@ -177,7 +202,7 @@ it.each([
             }
             if (scenario === 'credential_rotate_read') expect(rotatedDuringRead).toBe(true);
             const noEffect = scenario === 'reject' || scenario === 'disable' || scenario === 'cancel'
-                || scenario === 'caller_retire' || rotatesCredentials;
+                || nested || rotatesCredentials;
             expect(writes).toBe(noEffect ? 0 : 1);
             if (scenario === 'cancel') {
                 expect(result).toMatchObject({ ok: false, errorCode: 'plugin_action_aborted' });
@@ -187,7 +212,7 @@ it.each([
             } else if (scenario === 'reject') {
                 expect(result).toMatchObject({ ok: false, errorCode: 'plugin_action_current_intent_rejected' });
                 expect(readApproval().status).toBe('rejected');
-            } else if (scenario === 'disable' || scenario === 'caller_retire' || scenario === 'credential_rotate') {
+            } else if (scenario === 'disable' || nested || scenario === 'credential_rotate') {
                 expect(result, JSON.stringify(result)).toMatchObject({ ok: false, errorCode: 'plugin_action_generation_retired' });
                 expect(readApproval()).toMatchObject({ status: 'failed', execution: { ok: false, effectAttempted: false } });
             } else if (scenario === 'credential_rotate_read') {

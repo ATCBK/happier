@@ -22,12 +22,56 @@ import * as daemonControlClient from '@/daemon/controlClient';
 import { executeAccountPluginAction } from '@/session/actions/executeAccountPluginAction';
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionInputV1Schema } from '@happier-dev/protocol/plugins/availability';
 import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
-import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import { ActionDiscoveryDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
 import { PLUGIN_ACTION_EXECUTE_PATH } from '@/plugins/daemon/controlRoutes';
 import * as persistence from '@/persistence';
+import { manifest as authoredAccountManifest } from '../../../../../packages/plugin-sdk/fixtures/account-actions/src/index';
 
 describe('Account activation source assembly', () => {
+    it('keeps daemon-only Resources out of Account execution while retaining their package custody', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'account-resource-realm-'));
+        const app = fastify();
+        const { pluginId } = await registerAuthoredAccountActionRelease(app, 'owner');
+        const channels = getResolvedContributionRegistry().pluginDeclarations?.find(entry => entry.pluginId === 'happier.channels');
+        if (!channels) throw new Error('Expected canonical Channels declaration');
+        const peerId = channels.pluginId;
+        const packageName = channels.sourceSpec.locator;
+        const pluginRootPath = join(home, 'daemon-resources');
+        await mkdir(pluginRootPath);
+        await writeFile(join(pluginRootPath, 'package.json'), JSON.stringify({ name: packageName }));
+        const declaration = { ...channels, pluginRootPath,
+            sourceSpec: { kind: 'bundled' as const, locator: packageName, trustPolicy: 'prompt' as const, installPolicy: 'copy' as const } };
+        app.addHook('onSend', async (request, _reply, payload) => {
+            if (request.url !== PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list']
+                || typeof payload !== 'string') return payload;
+            const page = JSON.parse(payload);
+            page.pluginIds.push(peerId);
+            page.intentReads.push({ pluginId: peerId, response: { availabilityCursor: 1,
+                hostingCapability: { enabled: false }, intent: null, release: null, uiArtifacts: [], packageAssets: [] } });
+            return JSON.stringify(page);
+        });
+        await app.ready();
+        const restore = installAxiosFastifyAdapter({ app, origin: 'http://account-resource-realm.test' });
+        let runtime: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>> | undefined;
+        try {
+            runtime = await resolveExecutablePluginRuntimeRegistry({ happyHomeDir: home,
+                contributes: createResolvedContributionRegistry(projectLoadedPluginContributes({ provenance: 'first_party',
+                    loadResult: { loadedPlugins: [declaration], diagnosticsByPluginId: {} } })),
+                accountExecution: { credentials: { token: 'fixture', encryption: null },
+                    serverUrl: 'http://account-resource-realm.test', isCurrent: () => true } });
+            const lease = { registry: runtime, source: 'ephemeral' as const, durableRevision: -1, release: async () => {} };
+            const list = createCommittedContributedActionDefinitionLister({ tryAcquireRuntimeRegistryLease: () => lease });
+            const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), listContributedActionDefinitions: list });
+            expect(await executor.execute('action.spec.search', { query: 'Echo personal' }, { surface: 'agent' }))
+                .toMatchObject({ ok: true, result: { actionSpecs: expect.arrayContaining([
+                    expect.objectContaining({ id: `${pluginId}/actions/echo`, executionPlacement: 'account' }),
+                ]) } });
+            expect(runtime.readAccountExecutionSelection?.(peerId))
+                .toMatchObject({ kind: 'available', sourceCustody: { kind: 'bundled_first_party' } });
+            expect(runtime.contributes.resources.some(resource => resource.pluginId === peerId)).toBe(false);
+        } finally { await runtime?.dispose(); restore(); await app.close(); await rm(home, { recursive: true, force: true }); }
+    });
+
     it.each(['Artifact', 'Account source census'] as const)('keeps a selected Account release refused after %s HTTP 404 instead of replaying its Action on a Machine', async phase => {
         const home = await mkdtemp(join(tmpdir(), 'account-missing-artifact-'));
         const app = fastify();
@@ -103,7 +147,7 @@ describe('Account activation source assembly', () => {
             daemonEntryPath: null, devDaemonEntryPath: null,
             sourceSpec: { kind: 'bundled' as const, locator: `@happier-dev/plugins-${name}`,
                 trustPolicy: 'prompt' as const, installPolicy: 'copy' as const },
-            manifest: normalizePluginManifestV2(createPluginManifestV2Fixture({ id: `happier.${name}` })),
+            manifest: normalizePluginManifestV2({ ...authoredAccountManifest, id: `happier.${name}` }),
         }));
         const ready = declarations[1]!;
         await mkdir(ready.pluginRootPath);
@@ -175,7 +219,7 @@ describe('Account activation source assembly', () => {
     it('refuses cold corrupt Account bytes through the CLI ingress without replaying on a Machine', async () => {
         const home = await mkdtemp(join(tmpdir(), 'account-corrupt-source-'));
         const app = fastify();
-        const { pluginId, artifactId, artifacts } = await registerAuthoredAccountActionRelease(app, 'owner');
+        const { pluginId, artifactId, artifacts, providerPluginId } = await registerAuthoredAccountActionRelease(app, 'owner', { includeAccountProvider: true });
         const artifact = artifacts.read(artifactId);
         if (!artifact) throw new Error('authored fixture artifact missing');
         artifacts.seed(artifactId, artifact.header, encodePlainArtifactStoredContent({ body: 'not an artifact archive' }));
@@ -199,6 +243,22 @@ describe('Account activation source assembly', () => {
                 .toMatchObject({ ok: false, errorCode: 'plugin_action_handler_missing' });
             expect(artifactReads).toBeGreaterThan(0);
             expect(daemon).not.toHaveBeenCalled();
+            const runtime = await resolveExecutablePluginRuntimeRegistry({ happyHomeDir: home,
+                contributes: createResolvedContributionRegistry({}), accountExecution: {
+                    credentials: { token: 'fixture', encryption: null },
+                    serverUrl: 'http://account-corrupt-source.test', isCurrent: () => true,
+                } });
+            try {
+                await runtime.activateContributionsOnDemand([{ pluginId, family: 'actions', localId: 'echo' }]);
+                expect(runtime.pluginDiagnosticsByPluginId[pluginId]).toEqual(expect.arrayContaining([
+                    expect.objectContaining({ code: 'plugin_daemon_module_load_failed', message: 'plugin_account_execution_artifact_invalid' }),
+                ]));
+                const lease = { registry: runtime, source: 'ephemeral' as const, durableRevision: -1, release: async () => {} };
+                const list = createCommittedContributedActionDefinitionLister({ tryAcquireRuntimeRegistryLease: () => lease });
+                const definitions = list();
+                expect(definitions.some(action => action.id === `${pluginId}/actions/echo`)).toBe(false);
+                expect(definitions.some(action => action.id === `${providerPluginId}/actions/record`)).toBe(true);
+            } finally { await runtime.dispose(); }
         } finally { daemon.mockRestore(); restore(); await app.close(); await rm(home, { recursive: true, force: true }); }
     });
     it('loads a current host-bundled portable declaration without an Account release or Machine installation', async () => {

@@ -78,6 +78,16 @@ describe('createHappierMcpServer plugin tools', () => {
       let bridge: Awaited<ReturnType<typeof resolveRunnerMcpServers>> | undefined;
       try {
         // No profile credential exists: the admitted requester context owns currentness.
+        // Reload 40 used the standalone stored-profile check for this requester
+        // too. Exercise that refusal without removing the live custody fence.
+        const storedProfileRuntime = createHappierMcpServer(session, {
+          credentials, accountSettings: snapshot.settings, pluginToolCatalog: [],
+        });
+        try {
+          expect(await storedProfileRuntime.executeTool({
+            toolName: 'action_spec_search', args: { query: 'Echo personal' },
+          })).toMatchObject({ ok: false, errorCode: 'plugin_action_generation_retired' });
+        } finally { await storedProfileRuntime.mcp.close(); }
         bridge = await resolveRunnerMcpServers({ session, credentials, accountCredentials: credentials,
           accountSettings: snapshot.settings, accountSettingsSnapshot: snapshot, operationContext,
           machineId: 'requester-machine', directory: homeDir, env: {}, tmpDir: null });
