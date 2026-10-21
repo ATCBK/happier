@@ -23,6 +23,8 @@ import { resolveMachineSpawnReadiness } from '@/sync/domains/machines/identity/r
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { useDiscussionInviteCandidates } from './useDiscussionInviteCandidates';
+import { SharePrincipalVisual } from '@/components/sharing/buildShareSheetSelectionStep';
+import type { SharePrincipalPresentation } from '@/components/sharing/shareSheetTypes';
 import { t } from '@/text';
 import { describeMachineReadinessCause, presentSessionReadiness } from '@/components/sessions/model/sessionReadinessPresentation';
 
@@ -78,6 +80,16 @@ export function useExecutableParticipantSections(
     /** How the viewer's sessions take part here; said once beside the section title, not on every row. */
     sessionsContext: string;
     onChoose: (selection: ExecutableParticipantSelectionV1) => void;
+    /**
+     * New Discussion: people of this Home lead the list (chosen with `onChoosePerson`), and only existing
+     * Sessions follow — a model is started only once a Discussion exists to start it in.
+     */
+    people?: Readonly<{
+      onChoose: (participant: Readonly<{ kind: 'account'; accountId: string }>) => void;
+      title: string;
+      /** Who is already chosen: listed while nothing is typed, so each can be unchosen. */
+      chosen: readonly SharePrincipalPresentation[];
+    }>;
   }>,
 ) {
   const { theme } = useUnistyles();
@@ -230,7 +242,7 @@ export function useExecutableParticipantSections(
         ),
         options: sessions,
       });
-    if (models.length)
+    if (models.length && !input.people)
       sections.push({
         kind: 'static',
         id: 'agents-models',
@@ -244,6 +256,7 @@ export function useExecutableParticipantSections(
     candidates.sessions,
     input.accountLifetime.scope,
     input.enabled,
+    input.people,
     query,
     onChoose,
     onReadinessSessionChange,
@@ -253,5 +266,37 @@ export function useExecutableParticipantSections(
     theme.colors.text.secondary,
     theme.colors.text.tertiary,
   ]);
-  return React.useMemo(() => ({ sections, sessions: candidates.sessions }), [sections, candidates.sessions]);
+  // New Discussion: the Home's people lead, found as the person types through the shared directory
+  // (its own pagination and cancellation); the viewer is never offered to themselves.
+  const people = input.people;
+  const viewerAccountId = input.accountLifetime.scope.accountId;
+  const resolvePeople = candidates.people.resolve;
+  const browsePeople = candidates.candidates;
+  const peopleSection = React.useMemo<SelectionListSectionDescriptor | null>(() => {
+    if (!people || !input.enabled) return null;
+    const toOption = (principal: SharePrincipalPresentation): ExecutableParticipantSectionOption[] => {
+      const ref = principal.ref;
+      if (ref.kind !== 'account' || ref.accountId === viewerAccountId) return [];
+      return [{ id: `account:${ref.accountId}`,
+        testID: `discussion-invite-person-${ref.accountId}`,
+        label: principal.displayName,
+        ...(principal.secondaryLabel ? { subtitle: principal.secondaryLabel } : {}),
+        accessibilityLabel: principal.accessibilityLabel,
+        icon: () => <SharePrincipalVisual principal={principal} testID={`discussion-invite-person-visual-${ref.accountId}`} />,
+        disabled: busy,
+        onSelect: () => people.onChoose({ kind: 'account', accountId: ref.accountId }) }];
+    };
+    const principals = (rows: typeof browsePeople) => rows.flatMap(candidate => candidate.kind === 'account' ? [candidate.principal] : []);
+    return {
+      kind: 'dynamic', id: 'people', title: people.title,
+      resolverKey: JSON.stringify(['people', candidates.people.resolverKey ?? 'account', busy, people.chosen.map(principal => principal.key)]),
+      resultFiltering: 'provider', resultTransition: 'none', loadingSkeletonRows: 1,
+      resolve: async (query, signal) => ({
+        options: query.trim()
+          ? principals(await resolvePeople(query, signal)).flatMap(toOption)
+          : [...people.chosen, ...principals(browsePeople).filter(principal => !people.chosen.some(chosen => chosen.key === principal.key))].flatMap(toOption),
+      }),
+    };
+  }, [browsePeople, busy, candidates.people.resolverKey, input.enabled, people, resolvePeople, viewerAccountId]);
+  return React.useMemo(() => ({ sections, peopleSection, sessions: candidates.sessions }), [sections, peopleSection, candidates.sessions]);
 }

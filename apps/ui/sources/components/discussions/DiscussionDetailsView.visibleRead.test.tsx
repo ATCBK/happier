@@ -53,7 +53,12 @@ const draftState = vi.hoisted(() => ({
     title: '', text: '', mentions: [] as readonly ComposerStructuredInputMention[], status: 'clean' as const, conflict: null,
     pendingMutationAttempt: null as SessionDiscussionDraftMutationAttempt | null,
     submitted: null as DiscussionDraftSubmittedContentV2 | null,
-    setComposer: () => undefined, setTitle: () => undefined, captureSubmittedCurrentness: (attempt?: SessionDiscussionDraftMutationAttemptInput) => {
+    setComposer: () => undefined, setTitle: () => undefined,
+    recipients: [] as readonly never[], setRecipients: () => undefined,
+    // The real draft binding with no recipients or passage: content goes out as written.
+    prepareContent: (content: DiscussionMessageContentV1) => content,
+    participants: [] as readonly never[], setParticipants: () => undefined,
+    captureSubmittedCurrentness: (attempt?: SessionDiscussionDraftMutationAttemptInput) => {
         const address = attempt?.kind === 'post' ? { kind: 'discussion' as const, discussionId: attempt.discussionId } : { kind: 'newDiscussion' as const };
         return { scope: { serverId: 'server-a', accountId: 'viewer' }, address, currentness: { address, mutationIds: {} } };
     },

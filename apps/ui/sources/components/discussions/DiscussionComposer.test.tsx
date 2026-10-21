@@ -457,6 +457,33 @@ describe('DiscussionComposer (the one composer with the discussion adapter)', ()
         }
     });
 
+    // New Discussion (C3 §6.1): before a roster exists, the chosen invitees are who `@` can address
+    // in the first message; nobody else, and no roster read.
+    it('offers only the chosen invitees before the Discussion exists', async () => {
+        const store = getStorage();
+        const previous = store.getState();
+        store.getState().applySessions([
+            createSessionFixture({ id: 'invited-bot', serverId: 'server-b', active: true }),
+            createSessionFixture({ id: 'outsider-session', serverId: 'server-b', active: true }),
+        ]);
+        const invited = { participants: [{ kind: 'session' as const, sessionId: 'invited-bot' }, { kind: 'account' as const, accountId: ALICE.accountId }],
+            accounts: new Map([[ALICE.accountId, { v: 1 as const, serverId: 'server-b', accountId: ALICE.accountId, profile: ALICE.profile }]]) };
+        const screen = await render(<DiscussionComposer scope={accountLifetime.scope} accountLifetime={accountLifetime}
+            address={{ serverId: 'server-b' }} availability="available" value={{ text: '', mentions: [] }}
+            onChange={() => undefined} disabled={false} onSend={() => undefined} invited={invited} />);
+        try {
+            const sessions = await composer().autocompleteSuggestions('@session:', new AbortController().signal);
+            expect(sessions.flatMap(({ structuredInput }) => structuredInput && 'ref' in structuredInput ? [structuredInput.ref] : []))
+                .toEqual(['session:invited-bot']);
+            const people = await composer().autocompleteSuggestions('@', new AbortController().signal);
+            expect(people.filter(row => row.kind === 'accountMention').map(row => row.key)).toEqual([ALICE.accountId]);
+            expect(readParticipants).not.toHaveBeenCalled();
+        } finally {
+            await screen.unmount();
+            store.setState(previous, true);
+        }
+    });
+
     it.each([accountLifetime.scope.accountId, ALICE.accountId])('omits the viewer from the ordinary picker with owner %s', async (ownerAccountId) => {
         readParticipants.mockResolvedValue({ kind: 'succeeded', value: DiscussionParticipantsListResponseV1Schema.parse({
             discussionId: 'discussion-1', ownerAccountId, access: 'edit', participants: [],

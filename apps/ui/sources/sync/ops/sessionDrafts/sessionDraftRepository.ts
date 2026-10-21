@@ -283,6 +283,8 @@ export type DiscussionSessionDraftPatch = Readonly<{
     passage?: DocPassageRefV1 | null;
     submission?: DiscussionDraftSubmittedContentV2 | null;
     recipients?: readonly DiscussionInitialParticipantV1[];
+    /** New-discussion only: who is invited at create. */
+    participants?: readonly DiscussionInitialParticipantV1[];
     /** New-discussion only; renaming an existing discussion is an Action. */
     title?: string;
 }>;
@@ -452,7 +454,7 @@ function isIntrinsicDraftFieldDefault(path: DraftFieldPathV1, value: StrictJsonV
     }
     if (path.kind === 'title') return typeof value === 'string' && value.trim().length === 0;
     if (path.kind === 'passage' || path.kind === 'submission') return value === null;
-    if (path.kind === 'recipients') return Array.isArray(value) && value.length === 0;
+    if (path.kind === 'recipients' || path.kind === 'participants') return Array.isArray(value) && value.length === 0;
     if (path.kind === 'composer') return Array.isArray(value) && value.length === 0;
     if (path.kind === 'routing') return value === null;
     return false;
@@ -535,6 +537,7 @@ function pathKey(path: DraftFieldPathV1): string {
     if (path.kind === 'passage') return 'passage';
     if (path.kind === 'submission') return 'submission';
     if (path.kind === 'recipients') return 'recipients';
+    if (path.kind === 'participants') return 'participants';
     if (path.kind === 'projectOpen') return path.field;
     if (path.kind === 'authoring') return `target.authoring.${path.fieldId}`;
     return `extensions.${path.pluginId}.${path.fieldId}`;
@@ -552,7 +555,7 @@ function setField(
         return parsed.success ? parsed.data : next;
     }
     if (path.kind === 'projectOpen') return next;
-    if (path.kind === 'passage' || path.kind === 'submission' || path.kind === 'recipients') {
+    if (path.kind === 'passage' || path.kind === 'submission' || path.kind === 'recipients' || path.kind === 'participants') {
         if (!isDiscussionDocument(next)) return next;
         if (!field) { delete next[path.kind]; return next; }
         return DiscussionDraftDocumentV2Schema.parse({ ...next, [path.kind]: field });
@@ -632,6 +635,7 @@ function listFieldPaths(document: SessionDraftDocumentV2): DraftFieldPathV1[] {
         if (document.passage) paths.push({ kind: 'passage' });
         if (document.submission) paths.push({ kind: 'submission' });
         if (document.recipients) paths.push({ kind: 'recipients' });
+        if (document.participants) paths.push({ kind: 'participants' });
         return paths;
     }
     if (document.target.kind === 'session') {
@@ -704,7 +708,7 @@ function hasMeaningfulContent(
     if (typeof text === 'string' && text.trim().length > 0) return true;
     if (isNonEmptyArray(value({ kind: 'composer', field: 'mentions' })) || isNonEmptyArray(value({ kind: 'composer', field: 'attachments' }))) return true;
     if (targetKind === 'discussion' || targetKind === 'newDiscussion') {
-        if (isNonEmptyArray(value({ kind: 'recipients' }))) return true;
+        if (isNonEmptyArray(value({ kind: 'recipients' })) || isNonEmptyArray(value({ kind: 'participants' }))) return true;
         if (value({ kind: 'passage' }) !== null || value({ kind: 'submission' }) !== null) return true;
         const title = value({ kind: 'title' });
         return typeof title === 'string' && title.trim().length > 0;
@@ -1497,6 +1501,10 @@ export class SessionDraftRepository {
     }>): void {
         const writes: Array<{ path: DraftFieldPathV1; value: StrictJsonValue }> = [];
         if (params.patch.recipients !== undefined) writes.push({ path: { kind: 'recipients' }, value: DiscussionInitialParticipantsV1Schema.parse(params.patch.recipients) });
+        if (params.patch.participants !== undefined) {
+            if (params.address.kind !== 'newDiscussion') throw new Error('Only a new Discussion draft carries initial participants');
+            writes.push({ path: { kind: 'participants' }, value: DiscussionInitialParticipantsV1Schema.parse(params.patch.participants) });
+        }
         if (params.patch.passage !== undefined) {
             const passage = params.patch.passage === null ? null : DocPassageRefV1Schema.parse(params.patch.passage);
             if (passage !== null && passage.ref.serverId !== params.scope.serverId) {

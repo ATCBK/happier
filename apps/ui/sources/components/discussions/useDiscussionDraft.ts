@@ -50,6 +50,9 @@ export type DiscussionDraft = Readonly<{
     mentions: readonly ComposerStructuredInputMention[];
     recipients: readonly DiscussionParticipantRefV1[];
     setRecipients(recipients: readonly DiscussionParticipantRefV1[]): void;
+    /** New Discussion only: the people and agents invited at create (never who a message addresses). */
+    participants: readonly DiscussionParticipantRefV1[];
+    setParticipants(participants: readonly DiscussionParticipantRefV1[]): void;
     passage: DocPassageRefV1 | null;
     submitted: DiscussionDraftSubmittedContentV2 | null;
     setPassage(passage: DocPassageRefV1 | null): void;
@@ -77,7 +80,7 @@ export type DiscussionDraft = Readonly<{
 }>;
 
 const COMPOSER_FIELD_IDS = ['composer.text', 'composer.mentions', 'passage', 'submission'] as const;
-const NEW_DISCUSSION_FIELD_IDS = [...COMPOSER_FIELD_IDS, 'title'] as const;
+const NEW_DISCUSSION_FIELD_IDS = [...COMPOSER_FIELD_IDS, 'title', 'participants'] as const;
 const NO_RECIPIENTS: readonly DiscussionParticipantRefV1[] = Object.freeze([]);
 
 function readDiscussionComposerSnapshot(scope: ServerAccountScope, address: DiscussionDraftAddress) {
@@ -94,6 +97,8 @@ function readDiscussionDraftFields(
     mentions: readonly ComposerStructuredInputMention[];
     recipients: readonly DiscussionParticipantRefV1[];
     recipientsMutationId?: string;
+    participants: readonly DiscussionParticipantRefV1[];
+    participantsMutationId?: string;
     passage: DocPassageRefV1 | null;
     submitted: DiscussionDraftSubmittedContentV2 | null;
 }> {
@@ -114,6 +119,8 @@ function readDiscussionDraftFields(
         mentions: parseComposerStructuredInputMentionsForText(snapshot?.composer.mentions.value, text).mentions,
         recipients: document?.recipients?.value ?? NO_RECIPIENTS,
         recipientsMutationId: document?.recipients?.mutationId,
+        participants: document?.participants?.value ?? NO_RECIPIENTS,
+        participantsMutationId: document?.participants?.mutationId,
         passage: document?.passage?.value ?? null,
         submitted: document?.submission?.value ?? null,
     };
@@ -190,6 +197,7 @@ export function useDiscussionDraft(params: Readonly<{
     // The canonical field mutation id binds its immutable value. Text edits
     // clone the private document but must not rebuild the recipient picker.
     const recipients = React.useMemo(() => fields.recipients, [fields.recipientsMutationId, scope, address]);
+    const participants = React.useMemo(() => fields.participants, [fields.participantsMutationId, scope, address]);
     const attempt = snapshot?.localSupplement.discussionMutationAttempt;
     const attemptLocalId = attempt?.kind === 'create' ? attempt.creationLocalId : attempt?.localId;
     const submitted = attemptLocalId && fields.submitted?.attemptLocalId === attemptLocalId ? fields.submitted : null;
@@ -198,6 +206,12 @@ export function useDiscussionDraft(params: Readonly<{
     }, [address, scope]);
     const setRecipients = React.useCallback((value: readonly DiscussionParticipantRefV1[]) => {
         writeDiscussionSessionDraft({ scope, address, patch: { recipients: value } });
+    }, [address, scope]);
+    const setParticipants = React.useCallback((value: readonly DiscussionParticipantRefV1[]) => {
+        if (address.kind !== 'newDiscussion') {
+            throw new Error('An existing discussion invites through the participant Action');
+        }
+        writeDiscussionSessionDraft({ scope, address, patch: { participants: value } });
     }, [address, scope]);
     const prepareContent = React.useCallback((content: DiscussionMessageContentV1,
         options?: Readonly<{ replyTarget?: DiscussionReplyTargetV1; passage?: DocPassageRefV1 | null }>): DiscussionMessageContentV1 => {
@@ -308,10 +322,15 @@ export function useDiscussionDraft(params: Readonly<{
         const titleIsCurrent = address.kind === 'newDiscussion'
             && submission.currentness.mutationIds.title !== undefined
             && current.mutationIds.title === submission.currentness.mutationIds.title;
+        // The invitees were sent with this create; a later change to them stays for the next one.
+        const participantsIsCurrent = address.kind === 'newDiscussion'
+            && submission.currentness.mutationIds.participants !== undefined
+            && current.mutationIds.participants === submission.currentness.mutationIds.participants;
         const fieldIds = [
             ...(composerIsCurrent ? COMPOSER_FIELD_IDS : []),
             ...(!composerIsCurrent ? ['submission' as const] : []),
             ...(titleIsCurrent ? ['title' as const] : []),
+            ...(participantsIsCurrent ? ['participants' as const] : []),
         ];
         // Field currentness decides which drafted fields are cleared, never
         // whether the attempt is retired. The attempt identifies a submission
@@ -354,6 +373,8 @@ export function useDiscussionDraft(params: Readonly<{
         mentions,
         recipients,
         setRecipients,
+        participants,
+        setParticipants,
         passage,
         submitted,
         setPassage,
@@ -379,6 +400,8 @@ export function useDiscussionDraft(params: Readonly<{
         mentions,
         recipients,
         setRecipients,
+        participants,
+        setParticipants,
         passage,
         submitted,
         setPassage,

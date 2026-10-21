@@ -194,6 +194,8 @@ export const DiscussionDraftDocumentV2Schema = z.strictObject({
   title: z.optional(DiscussionDraftFieldSchema(z.string())),
   /** Explicit composer defaults, retained when submitted text is cleared. Never membership authority. */
   recipients: z.optional(DiscussionDraftFieldSchema(DiscussionInitialParticipantsV1Schema)),
+  /** New Discussion only: the people and agents chosen to invite at create. Addressing stays in the message. */
+  participants: z.optional(DiscussionDraftFieldSchema(DiscussionInitialParticipantsV1Schema)),
   /** The source basis is private draft content, never local-only retry metadata. */
   passage: z.optional(DiscussionDraftFieldSchema(z.nullable(DocPassageRefV1Schema.check(
     z.refine(value => value.ref.serverId !== undefined, 'A retained passage requires its captured Home'),
@@ -205,6 +207,13 @@ export const DiscussionDraftDocumentV2Schema = z.strictObject({
       code: "custom",
       path: ['title'],
       message: 'Only a new-discussion draft carries a title field',
+    });
+  }
+  if (document.participants && document.target.kind !== 'newDiscussion') {
+    context.addIssue({
+      code: "custom",
+      path: ['participants'],
+      message: 'Only a new-discussion draft carries initial participants',
     });
   }
 }));

@@ -260,6 +260,23 @@ export function isDiscussionSourceContentRefusal(errorCode: string | null | unde
     return errorCode === 'discussion_content_unavailable' || errorCode === 'discussion_access_forbidden';
 }
 
+/** The detail surface's read-access projection, shared with its draft/presence eligibility. */
+export function selectDiscussionThreadAccessState(snapshot: DiscussionRepositorySnapshot, discussionId: string): Readonly<{
+    accessRevoked: boolean; sourceRefused: boolean;
+}> {
+    const thread = snapshot.threads[discussionId];
+    // A current resource read can admit this thread without admitting the Home
+    // list. Whole-Home access loss clears summaries; only then use its refusal.
+    const useCollectionRefusal = thread?.summary == null;
+    return {
+        accessRevoked: thread?.status === 'revoked' || useCollectionRefusal
+            && (snapshot.lists.active.status === 'revoked' || snapshot.lists.archived.status === 'revoked'),
+        sourceRefused: isDiscussionSourceContentRefusal(thread?.errorCode)
+            || useCollectionRefusal && (isDiscussionSourceContentRefusal(snapshot.lists.active.errorCode)
+                || isDiscussionSourceContentRefusal(snapshot.lists.archived.errorCode)),
+    };
+}
+
 function isExplicitAccessLoss(errorCode: string): boolean {
     return errorCode === 'forbidden'
         || errorCode === 'discussion_read_denied'

@@ -31,7 +31,9 @@ import {
   MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS,
   Popover,
 } from '@/components/ui/popover';
-import type { SelectionListSectionDescriptor } from '@/components/ui/selectionList';
+import { SelectionList, type SelectionListSectionDescriptor } from '@/components/ui/selectionList';
+import type { DiscussionInitialParticipantV1 } from '@happier-dev/protocol/discussions/participants';
+import type { TranscriptAccountActor } from '@happier-dev/session-core/messages';
 import { createDiscussionClient } from '@/sync/api/discussions/discussionActions';
 import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import type { DiscussionParticipantManagement } from './DiscussionParticipantsPopover';
@@ -650,22 +652,94 @@ const inviteStyles = StyleSheet.create((theme) => ({
   header: { paddingTop: theme.space.s8 },
 }));
 
-/**
- * The header's Invite (lab T2-A/T2-I): the one share sheet, compact, hung from the button, adding people
- * and Teams to who can read and post here.
- */
-export const DiscussionInviteButton = React.memo(
-  function DiscussionInviteButton(
-    props: Readonly<{
-      scope: ServerAccountScope;
-      accountLifetime?: ServerAccountScopeLifetime;
+/** Who a New Discussion invites, kept in its creation draft until the create is observed. */
+export type DiscussionInviteDraft = Readonly<{
+  participants: readonly DiscussionInitialParticipantV1[];
+  onChange: (participants: readonly DiscussionInitialParticipantV1[]) => void;
+  /** Names the page already resolved for the chosen people. */
+  accounts: ReadonlyMap<string, TranscriptAccountActor>;
+}>;
+
+type DiscussionInviteButtonProps = Readonly<{
+  scope: ServerAccountScope;
+  accountLifetime?: ServerAccountScopeLifetime;
+}> & (
+  | Readonly<{
+      draft?: undefined;
       discussionId: string;
       discussionTitle: string;
       roster?: DiscussionParticipantsListResponseV1 | null;
       management?: DiscussionParticipantManagement | null;
       onChanged?: () => void;
-    }>,
-  ) {
+    }>
+  /** New Discussion (lab T2-ST): the same Invite chooses people and agents before the Discussion exists. */
+  | Readonly<{ draft: DiscussionInviteDraft; accountLifetime: ServerAccountScopeLifetime }>
+);
+
+function participantKey(participant: DiscussionInitialParticipantV1): string {
+  return participant.kind === 'account' ? `account:${participant.accountId}` : `session:${participant.sessionId}`;
+}
+
+/** The pre-create body: one multiple-choice list of people, then the viewer's Sessions; each row toggles. */
+function DiscussionDraftInviteList(props: Readonly<{
+  accountLifetime: ServerAccountScopeLifetime;
+  draft: DiscussionInviteDraft;
+}>) {
+  const { draft } = props;
+  const [readinessSessionId, setReadinessSessionId] = React.useState<string | null>(null);
+  const latest = React.useRef(draft);
+  latest.current = draft;
+  const toggle = React.useCallback((participant: DiscussionInitialParticipantV1) => {
+    const current = latest.current.participants;
+    const key = participantKey(participant);
+    latest.current.onChange(current.some(entry => participantKey(entry) === key)
+      ? current.filter(entry => participantKey(entry) !== key)
+      : [...current, participant]);
+  }, []);
+  const onChoose = React.useCallback((selection: ExecutableParticipantSelectionV1) => {
+    if (selection.kind === 'session') toggle({ kind: 'session', sessionId: selection.session.sessionId });
+  }, [toggle]);
+  const viewerAccountId = props.accountLifetime.scope.accountId;
+  const people = React.useMemo(() => ({
+    title: t('session.collaboration.discussion.participants.peopleGroup'),
+    onChoose: toggle,
+    chosen: draft.participants.flatMap(participant => participant.kind === 'account'
+      ? [presentSharePrincipal({ ref: participant, profile: draft.accounts.get(participant.accountId)?.profile ?? null, viewerAccountId })] : []),
+  }), [draft.accounts, draft.participants, toggle, viewerAccountId]);
+  const { sections, peopleSection } = useExecutableParticipantSections({
+    accountLifetime: props.accountLifetime,
+    enabled: true,
+    sessionsContext: t('session.collaboration.discussion.manage.sessionCandidate'),
+    readinessSessionId,
+    onReadinessSessionChange: setReadinessSessionId,
+    onChoose,
+    people,
+  });
+  const selectedIds = React.useMemo(() => new Set(draft.participants.map(participantKey)), [draft.participants]);
+  const rootStep = React.useMemo(() => ({
+    id: 'root',
+    inputPlaceholder: t('session.collaboration.discussion.newPage.invitePlaceholder'),
+    sections: peopleSection ? [peopleSection, ...sections] : sections,
+  }), [peopleSection, sections]);
+  return (
+    <SelectionList
+      testID="discussion-new-invite-list"
+      rootStep={rootStep}
+      selection={{ kind: 'multiple', selectedIds }}
+      listAccessibilityLabel={t('session.collaboration.discussion.invite.button')}
+      onSelect={() => undefined}
+      onRequestClose={() => undefined}
+      disableTransitions
+    />
+  );
+}
+
+/**
+ * The header's Invite (lab T2-A/T2-I): the one share sheet, compact, hung from the button, adding people
+ * and Teams to who can read and post here. Before create it chooses who the new Discussion starts with.
+ */
+export const DiscussionInviteButton = React.memo(
+  function DiscussionInviteButton(props: DiscussionInviteButtonProps) {
     const { theme } = useUnistyles();
     const phone = useSurfaceStateSize() === 'phone';
     const [open, setOpen] = React.useState(false);
@@ -728,16 +802,23 @@ export const DiscussionInviteButton = React.memo(
                 header={<View style={inviteStyles.header}>
                   <DiscussionSheetHeader
                     icon="user-plus"
-                    title={t('session.collaboration.discussion.invite.title', { title: props.discussionTitle })}
-                    subtitle={t('session.collaboration.discussion.manage.inviteSubtitle')}
+                    title={props.draft
+                      ? t('session.collaboration.discussion.newPage.inviteTitle')
+                      : t('session.collaboration.discussion.invite.title', { title: props.discussionTitle })}
+                    subtitle={props.draft
+                      ? t('session.collaboration.discussion.participants.mentionNote')
+                      : t('session.collaboration.discussion.manage.inviteSubtitle')}
                   />
                 </View>}
                 // Where an agent invitation stands stays visible under any scroll position.
-                footer={props.management ? <DiscussionParticipantOperationLine
+                footer={!props.draft && props.management ? <DiscussionParticipantOperationLine
                   management={props.management}
                   serverId={props.scope.serverId}
                 /> : undefined}
               >
+                {props.draft ? (
+                  <DiscussionDraftInviteList accountLifetime={props.accountLifetime} draft={props.draft} />
+                ) : (
                 <DiscussionInviteSheet
                   scope={props.scope}
                   {...(props.accountLifetime ? { accountLifetime: props.accountLifetime } : {})}
@@ -750,6 +831,7 @@ export const DiscussionInviteButton = React.memo(
                   onChanged={props.onChanged}
                   onRequestClose={close}
                 />
+                )}
               </FloatingOverlay>
             )}
           </Popover>

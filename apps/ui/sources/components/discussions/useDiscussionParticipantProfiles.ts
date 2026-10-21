@@ -12,6 +12,8 @@ import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDi
 export function useDiscussionParticipantProfiles(input: Readonly<{
     scope: ServerAccountScope;
     roster: DiscussionParticipantsListResponseV1 | null;
+    /** Before a roster exists (a New Discussion's chosen people), the same profile read by id. */
+    accountIds?: readonly string[];
     enabled: boolean;
     accountLifetime: ServerAccountScopeLifetime | null;
 }>): Readonly<{ owner: TranscriptAccountActor | null; accounts: ReadonlyMap<string, TranscriptAccountActor> }> {
@@ -25,7 +27,7 @@ export function useDiscussionParticipantProfiles(input: Readonly<{
         () => false);
     const viewerProfile = useShareViewerProfile(scope);
     const accountIdsKey = JSON.stringify(roster ? [...new Set([roster.ownerAccountId, ...roster.grants.flatMap(grant =>
-        grant.principal.kind === 'account' ? [grant.principal.accountId] : [])])].sort() : []);
+        grant.principal.kind === 'account' ? [grant.principal.accountId] : [])])].sort() : [...new Set(input.accountIds ?? [])].sort());
     const key = serverAccountScopedResourceKey(scope, roster?.discussionId ?? '', accountIdsKey);
     const [resolved, setResolved] = React.useState<Readonly<{
         key: string; lifetime: ServerAccountScopeLifetime; profiles: ReadonlyMap<string, AccountDisplayProfileV1 | null>;

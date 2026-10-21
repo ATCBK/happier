@@ -69,6 +69,32 @@ describe('useDiscussionDraft', () => {
         expect(otherAccount.getCurrent().recipients).toEqual([]);
         await otherAccount.unmount();
     });
+    // New Discussion (C3 §6.1): the people and agents chosen before create stay in the creation draft —
+    // through remount, per Home and Account — and leave with the other captured create fields.
+    it('keeps the chosen initial participants in the new Discussion draft until the create is observed', async () => {
+        const participants = [{ kind: 'account' as const, accountId: 'ana' }, { kind: 'session' as const, sessionId: 'checkout-ui' }];
+        writeDiscussionSessionDraft({ scope, address: newAddress, patch: { title: 'Retry cap', text: 'Drop the banner?', mentions: [] } });
+        const first = await renderHook(() => useDiscussionDraft({ scope, address: newAddress }));
+        expect(first.getCurrent().participants).toEqual([]);
+        act(() => first.getCurrent().setParticipants(participants));
+        await first.unmount();
+        const restored = await renderHook(() => useDiscussionDraft({ scope, address: newAddress }));
+        expect(restored.getCurrent().participants).toEqual(participants);
+        const otherAccount = await renderHook(() => useDiscussionDraft({ scope: { ...scope, accountId: 'different-account' }, address: newAddress }));
+        expect(otherAccount.getCurrent().participants).toEqual([]);
+        await otherAccount.unmount();
+        let submitted: DiscussionDraftSubmission | null = null;
+        act(() => {
+            submitted = restored.getCurrent().captureSubmittedCurrentness({ kind: 'create',
+                creationLocalId: 'create-with-people', messageLocalId: 'create-with-people-message', participants });
+        });
+        expect(restored.getCurrent().pendingMutationAttempt).toMatchObject({ kind: 'create', participants });
+        await act(async () => { await restored.getCurrent().clearAfterObservedSuccess(submitted!); });
+        expect(restored.getCurrent().participants).toEqual([]);
+        expect(getSessionComposerDraftSnapshot(scope, newAddress)).toBeNull();
+        await restored.unmount();
+    });
+
     it('retains only the selected model slot identity across editing and remount before any Send', async () => {
         writeDiscussionSessionDraft({ scope, address: existingAddress, patch: {
             text: model, mentions: [mention('happier.discussionParticipant', 'discussion-participant:saved-model-slot', 'Model', 0)],

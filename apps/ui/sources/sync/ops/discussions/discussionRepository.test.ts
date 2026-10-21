@@ -23,8 +23,10 @@ import { DiscussionCreateResultV1Schema } from '@happier-dev/protocol/discussion
 import { DiscussionAccessGrantsListResponseV1Schema, DiscussionAccessGrantMutationResponseV1Schema, DiscussionLeaveResponseV1Schema } from '@happier-dev/protocol/discussions/access';
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { DiscussionSummaryV1Schema } from '@happier-dev/protocol/discussions/models';
+import { act, renderHook } from '@/dev/testkit';
+import { useDiscussionRepositorySnapshot } from './useDiscussionRepositorySnapshot';
 
-import { createDiscussionRepository, selectDiscussionListSearch, type DiscussionRepositoryClient } from './discussionRepository';
+import { createDiscussionRepository, selectDiscussionListSearch, selectDiscussionThreadAccessState, type DiscussionRepositoryClient } from './discussionRepository';
 import { publishMountedDiscussionChanges } from '@/sync/domains/discussions/discussionChangeWatch';
 import {
     clearDiscussionRepositoryRegistryForTests,
@@ -170,6 +172,44 @@ function storedProposalMessage(discussionId: string, seq: number) {
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
 describe('Discussion repository', () => {
+    it.each(['discussion_read_denied', 'discussion_access_forbidden'])('projects a freshly readable participant thread independently of a retained Home-list %s and still hides a real revocation', async listRefusal => {
+        let revoked = false;
+        const row = { ...storedSummary('discussion-a'), ownerAccountId: 'other-account', access: 'view' as const,
+            capabilities: { ...storedSummary('discussion-a').capabilities, postMessages: false, manageAccess: false } };
+        const repository = createDiscussionRepository({ scope, address, client: httpClient(async path => {
+            const pathname = new URL(path, 'https://home.invalid').pathname;
+            if (pathname === '/v1/discussions') return response({ error: listRefusal }, 403);
+            if (revoked) return response({ error: 'discussion_read_denied' }, 403);
+            if (pathname === '/v1/discussions/discussion-a') return response({ discussion: { ...row, messageSeq: 4 } });
+            if (pathname.endsWith('/participants')) return response({ discussionId: row.id, ownerAccountId: row.ownerAccountId,
+                access: 'view', grants: [], participants: [] });
+            if (pathname.endsWith('/messages')) return response({ messages: [1, 2, 3, 4].map(seq => storedMessage(row.id, seq)),
+                messageSeq: 4, hasMoreOlder: false });
+            return response({ error: 'not_found' }, 404);
+        }) });
+        const hook = await renderHook(() => {
+            const snapshot = useDiscussionRepositorySnapshot(repository);
+            return { ...selectDiscussionThreadAccessState(snapshot, row.id), thread: snapshot.threads[row.id] };
+        });
+        try {
+            await act(async () => { await repository.refreshList('active'); });
+            expect(hook.getCurrent().accessRevoked).toBe(true);
+            await act(async () => {
+                await expect(repository.participants(row.id)).resolves.toMatchObject({ kind: 'succeeded', value: { access: 'view' } });
+                await repository.refreshDiscussion(row.id);
+            });
+            expect(hook.getCurrent().thread).toMatchObject({ status: 'ready', incomplete: false,
+                summary: { access: 'view', capabilities: { postMessages: false } } });
+            expect(hook.getCurrent().thread?.messages).toHaveLength(4);
+            expect(hook.getCurrent()).toMatchObject({ accessRevoked: false, sourceRefused: false });
+            // A resource read does not make the Home query ready or complete.
+            expect(repository.getSnapshot().lists.active.status).toBe('revoked');
+            revoked = true;
+            await act(async () => { await repository.refreshDiscussion(row.id); });
+            expect(hook.getCurrent()).toMatchObject({ accessRevoked: true,
+                thread: { status: 'revoked', summary: null, messages: [] } });
+        } finally { await hook.unmount(); repository.clear(); }
+    });
     function docRootHistory(rootKind: 'comment' | 'closed') {
         const root = storedProposalMessage('discussion-a', 1);
         const rootMessage = rootKind === 'closed' ? { ...root, docEditProposalDispositionV1: {

@@ -84,7 +84,7 @@ import { registerDiscussionHumanPresence } from '@/sync/domains/session/humanPre
 import { useSetting } from '@/sync/domains/state/storage';
 import { writeSessionInitialPromptV1 } from '@/sync/domains/sessionInitialPrompt/sessionInitialPromptV1';
 import type { DiscussionRepository, DiscussionRepositoryMutation } from '@/sync/ops/discussions/discussionRepository';
-import { isDiscussionSourceContentRefusal } from '@/sync/ops/discussions/discussionRepository';
+import { isDiscussionSourceContentRefusal, selectDiscussionThreadAccessState } from '@/sync/ops/discussions/discussionRepository';
 import { getDiscussionRepository } from '@/sync/ops/discussions/discussionRepositoryRegistry';
 import { useDiscussionRepositorySnapshot } from '@/sync/ops/discussions/useDiscussionRepositorySnapshot';
 import { sync } from '@/sync/sync';
@@ -115,6 +115,8 @@ import { buildDiscussionContent } from '@/components/discussions/discussionCompo
 import { buildDiscussionTimelineItems, resolveReadableVisibleDiscussionSeqs, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine, resolveDiscussionReplyOutcome, type DiscussionTimelineItem, placeDiscussionRequesterApprovals } from '@/components/discussions/discussionTimelineProjection';
 import { useShareViewerProfile } from '@/components/sharing/useShareViewerProfile';
 import { useDiscussionParticipantProfiles } from './useDiscussionParticipantProfiles';
+import { joinList } from '@/utils/text/joinList';
+import { resolveAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import { useDiscussionParticipantManagement } from './useDiscussionParticipantManagement';
 import { isSelectableDiscussionMessage, prepareDiscussionSelectionHandoff } from '@/components/discussions/prepareDiscussionSelectionHandoff';
 import { sendDiscussionSelectionToSession } from '@/components/discussions/sendDiscussionSelectionToSession';
@@ -412,10 +414,31 @@ function NewDiscussion(props: Readonly<{ target: Extract<DiscussionDetailsTarget
         if (draft.passage) ids.current = { ...ids.current, creationLocalId: deriveDocCommentDiscussionCreationLocalIdV1({
             ref: { ...draft.passage.ref, serverId: props.scope.serverId }, localId: ids.current.messageLocalId,
         }) };
-        const draftSubmission = draft.captureSubmittedCurrentness({ kind: 'create', ...ids.current, ...(props.target.anchor ? { anchor: props.target.anchor } : {}) }, { content, title });
+        // Who the person chose to invite goes with this one create, and its retry reuses them.
+        const participants = draft.participants.length ? { participants: draft.participants } : {};
+        const draftSubmission = draft.captureSubmittedCurrentness({ kind: 'create', ...ids.current, ...(props.target.anchor ? { anchor: props.target.anchor } : {}), ...participants }, { content, title });
         capture.current = draftSubmission;
-        await repository.create({ ...ids.current, title, content, ...readDiscussionMentionedParticipantIdsV1(content), ...(props.target.anchor ? { anchor: props.target.anchor } : {}), draftSubmission });
+        await repository.create({ ...ids.current, title, content, ...readDiscussionMentionedParticipantIdsV1(content), ...(props.target.anchor ? { anchor: props.target.anchor } : {}), ...participants, draftSubmission });
     }, [composerBlocked, dismissRefusal, draft, mutation, props.scope.serverId, props.target.anchor, repository]);
+    const draftColumn = useLayoutMaxWidthStyle();
+    const invited = draft.participants;
+    const invitedFaces = React.useMemo(() => ({
+        accountIds: [props.scope.accountId, ...invited.flatMap((participant) => participant.kind === 'account' ? [participant.accountId] : [])],
+        agents: invited.flatMap((participant) => participant.kind === 'session' ? ['session' as const] : []),
+    }), [invited, props.scope.accountId]);
+    const invitedSessionAddresses = React.useMemo(() => invited.flatMap((participant) => participant.kind === 'session'
+        ? [{ serverId: props.scope.serverId, sessionId: participant.sessionId }] : []), [invited, props.scope.serverId]);
+    const invitedSessionTitles = useSessionDisplayTitles(invitedSessionAddresses);
+    const invitedProfiles = useDiscussionParticipantProfiles({ scope: props.scope, accountLifetime: props.accountLifetime,
+        roster: null, accountIds: invitedFaces.accountIds, enabled: invited.length > 0 });
+    // Names, not counts, say who the empty page is waiting for (lab T2-ST "Ana and Checkout UI retry states are invited").
+    const invitedNames = [
+        ...invitedFaces.accountIds.slice(1).map((accountId) => resolveAccountDisplayName({ profile: invitedProfiles.accounts.get(accountId)?.profile,
+            accountId, viewerAccountId: props.scope.accountId }).name),
+        ...invitedSessionTitles.map((title) => title ?? t('session.collaboration.discussion.participants.session')),
+    ];
+    const rosterLine = formatDiscussionRosterLine({ peopleCount: invitedFaces.accountIds.length, agentCount: invitedFaces.agents.length, inherited: false });
+    const composerInvited = React.useMemo(() => ({ participants: invited, accounts: invitedProfiles.accounts }), [invited, invitedProfiles.accounts]);
     if (accessRevoked) {
         return <SurfaceStateCard
             testID="session-discussion-details-empty-state"
@@ -426,21 +449,31 @@ function NewDiscussion(props: Readonly<{ target: Extract<DiscussionDetailsTarget
     }
     // Lab T2-ST "New Discussion": the name is the header's own title, who is here and who reads it sit on its
     // line, the page says how addressing works, and the composer starts the conversation.
-    const draftColumn = useLayoutMaxWidthStyle();
     return <View style={styles.root} testID="session-discussion-new-details">
         <DetailsTabHeader
             testID="session-discussion-new-header"
             title=""
             titleControl={<TextInput testID="session-discussion-title" style={[styles.titleInput, phone ? styles.titleInputLarge : null]} value={draft.title} onChangeText={(title) => { draft.setTitle(title); if (title.trim()) setTitleRequired(false); }} placeholder={t('session.collaboration.discussion.newPage.namePlaceholder')} accessibilityLabel={t('session.collaboration.discussion.titlePlaceholder')} aria-invalid={titleRequired} autoFocus />}
             meta={[
-                { key: 'people', text: t('session.collaboration.discussion.participants.people', { count: 1 }) },
+                { key: 'people', text: rosterLine, testID: 'session-discussion-new-roster' },
                 { key: 'audience', text: t('session.collaboration.discussion.participants.invitedOnly'), icon: 'lock' },
             ]}
+            metaLeadingKind="mark"
+            metaLeading={invited.length ? <DiscussionRosterFaces members={invitedFaces} accountActors={invitedProfiles.accounts}
+                viewerAccountId={props.scope.accountId} accessibilityLabel={rosterLine} /> : null}
+            actions={<View style={styles.headerActions}>
+                <DiscussionInviteButton scope={props.scope} accountLifetime={props.accountLifetime}
+                    draft={{ participants: invited, onChange: draft.setParticipants, accounts: invitedProfiles.accounts }} />
+            </View>}
             notice={titleRequired ? <Text testID="session-discussion-title-required" accessibilityLiveRegion="polite" style={[styles.fieldHint, styles.newNotice]}>{t('session.collaboration.discussion.titleRequired')}</Text> : undefined}
         />
         <View style={styles.newBody}>
             {mutation?.content ? <HappierThreadMessage startsGroup space={theme.space} selectionColors={theme.colors.state.active}><DiscussionMessageContent message={{ id: mutation.messageLocalId ?? mutation.localId, content: mutation.content }} serverId={props.scope.serverId} textStyle={styles.messageText} />{mutationStatusLabel(mutation) ? <Text testID={`session-discussion-message-status-${mutation.messageLocalId}`} accessibilityLiveRegion="polite" style={mutation.status === 'failed' ? styles.error : styles.deliveryStatus}>{mutationStatusLabel(mutation)}</Text> : null}<MutationRecovery mutation={mutation} onRetry={() => void repository.retry(activeCreationLocalId)} onDismiss={dismissRefusal} /></HappierThreadMessage>
-                : <EmptyState testID="session-discussion-new-empty" layout="centered" iconName="chats-circle" title={t('session.collaboration.discussion.newPage.emptyTitle')} subtitle={t('session.collaboration.discussion.newPage.emptyBody')} />}
+                : <EmptyState testID="session-discussion-new-empty" layout="centered" iconName="chats-circle"
+                    title={invitedNames.length
+                        ? t('session.collaboration.discussion.newPage.invitedTitle', { names: joinList(invitedNames), count: invitedNames.length })
+                        : t('session.collaboration.discussion.newPage.emptyTitle')}
+                    subtitle={t('session.collaboration.discussion.newPage.emptyBody')} />}
         </View>
         {/* The passage being commented on heads the composer, in the thread's column (lab K1-S). */}
         {draft.passage || sourceRefused ? <View style={[styles.draftPassage, draftColumn]}>
@@ -448,7 +481,7 @@ function NewDiscussion(props: Readonly<{ target: Extract<DiscussionDetailsTarget
         </View> : null}
         {draft.conflict ? <SessionDraftConflictResolution scope={props.scope} address={draftAddress} conflict={draft.conflict} /> : null}
         {createUnavailableLabel ? <View style={styles.stateLine}><SurfaceStateCard size="line" kind="warning" title={createUnavailableLabel} /></View> : null}
-        <DiscussionComposer scope={props.scope} accountLifetime={props.accountLifetime} address={props.target.address} availability="available" value={{ text: draft.text, mentions: draft.mentions }} onChange={draft.setComposer} disabled={createDisabled} onSend={(content) => void submit(content)} />
+        <DiscussionComposer scope={props.scope} accountLifetime={props.accountLifetime} address={props.target.address} availability="available" value={{ text: draft.text, mentions: draft.mentions }} onChange={draft.setComposer} disabled={createDisabled} onSend={(content) => void submit(content)} invited={composerInvited} />
     </View>;
 }
 
@@ -555,12 +588,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
     const { repository, snapshot } = props;
     const thread = snapshot.threads[props.target.discussionId];
     const discussion = thread?.summary ?? null;
-    const accessRevoked = snapshot.lists.active.status === 'revoked'
-        || snapshot.lists.archived.status === 'revoked'
-        || thread?.status === 'revoked';
-    const sourceRefused = isDiscussionSourceContentRefusal(thread?.errorCode)
-        || isDiscussionSourceContentRefusal(snapshot.lists.active.errorCode)
-        || isDiscussionSourceContentRefusal(snapshot.lists.archived.errorCode);
+    const { accessRevoked, sourceRefused } = selectDiscussionThreadAccessState(snapshot, props.target.discussionId);
     const hostViewed = useHostActivelyViewed();
     const visibility = useSessionSurfaceVisibilitySnapshot();
     const surfaceVisible = React.useMemo(() => !props.hostSessionAddress || isSessionSurfaceVisible(props.hostSessionAddress.sessionId, props.hostSessionAddress.serverId), [props.hostSessionAddress, visibility]);

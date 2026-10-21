@@ -96,17 +96,20 @@ const ROSTER_FACE_PX = 20;
 const ROSTER_FACE_LIMIT = 6;
 export const DiscussionRosterFaces = React.memo(function DiscussionRosterFaces(
   props: Readonly<{
-    roster: DiscussionParticipantsListResponseV1;
     accountActors: ReadonlyMap<string, TranscriptAccountActor>;
     viewerAccountId: string;
     accessibilityLabel: string;
-  }>,
+  }> & (
+    | Readonly<{ roster: DiscussionParticipantsListResponseV1; members?: undefined }>
+    /** A New Discussion's chosen people and agents, before any roster exists. */
+    | Readonly<{ roster?: undefined; members: Readonly<{ accountIds: readonly string[]; agents: readonly ('session' | 'model')[] }> }>
+  ),
 ) {
   const { theme } = useUnistyles();
-  const { roster } = props;
+  const { roster, members } = props;
   const entries = React.useMemo(() => {
-    const people = [roster.ownerAccountId];
-    for (const grant of roster.grants) {
+    const people = roster ? [roster.ownerAccountId] : [...members!.accountIds];
+    for (const grant of roster?.grants ?? []) {
       if (grant.principal.kind === 'account' && !people.includes(grant.principal.accountId)) people.push(grant.principal.accountId);
     }
     // The viewer sits last, as in the roster: the others are who you came to see.
@@ -115,15 +118,16 @@ export const DiscussionRosterFaces = React.memo(function DiscussionRosterFaces(
       key: `account:${accountId}`,
       content: <Avatar id={accountId} imageUrl={props.accountActors.get(accountId)?.profile?.avatarUrl ?? null} size={ROSTER_FACE_PX} />,
     }));
-    const agents: AvatarStackEntry[] = roster.participants.map((participant, index) => ({
-      key: participant.participant.kind === 'model' ? `model:${participant.participant.participantSlotId}` : `agent:${index}`,
+    const agentKinds = roster ? roster.participants.map((participant) => participant.participant.kind) : members!.agents;
+    const agents: AvatarStackEntry[] = agentKinds.map((kind, index) => ({
+      key: `agent:${index}`,
       avatar: false,
       content: <View style={rosterFaceStyles.agentMark}>
-        <Icon name={participant.participant.kind === 'model' ? 'sparkle' : 'robot'} size={ICON_SIZE.xs} color={theme.colors.text.secondary} />
+        <Icon name={kind === 'model' ? 'sparkle' : 'robot'} size={ICON_SIZE.xs} color={theme.colors.text.secondary} />
       </View>,
     }));
     return [...faces, ...agents].slice(0, ROSTER_FACE_LIMIT);
-  }, [props.accountActors, props.viewerAccountId, roster, theme.colors.text.secondary]);
+  }, [members, props.accountActors, props.viewerAccountId, roster, theme.colors.text.secondary]);
   return <AvatarStack testID="session-discussion-roster-faces" size={ROSTER_FACE_PX} entries={entries} accessibilityLabel={props.accessibilityLabel} />;
 });
 

@@ -10,8 +10,11 @@ import {
 } from '@/components/autocomplete/composerSuggestionKinds';
 import { getSuggestions } from '@/components/autocomplete/suggestions';
 import { matchesComposerSuggestionQuery, type ComposerSuggestionCatalogs } from '@/components/autocomplete/composerSuggestionCatalogs';
+import type { TranscriptAccountActor } from '@happier-dev/session-core/messages';
+import type { DiscussionInitialParticipantV1 } from '@happier-dev/protocol/discussions/participants';
 import type { SessionResponsibilityCandidateV1 } from '@happier-dev/protocol/sessions/access/sessionResponsibilityV1';
 import { AgentInput } from '@/components/sessions/agentInput';
+import { ComposerAuxiliaryFrame } from '@/components/sessions/shell/view/ComposerAuxiliaryFrame';
 import type { AgentInputSendOptions } from '@/components/sessions/agentInput/agentInputSendOptions';
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
 import {
@@ -86,6 +89,11 @@ export function DiscussionComposer(props: Readonly<{
     extraActionChips?: readonly AgentInputExtraActionChip[];
     /** Who this draft addresses by default (C3 DISC-18): the session Send to chip, leading the rail. */
     recipients?: RecipientMultiSelectModel<unknown>;
+    /**
+     * A New Discussion's chosen invitees: before a roster exists they are who `@` can address in the
+     * first message (C3 §6.1), with the names the page already resolved for them.
+     */
+    invited?: Readonly<{ participants: readonly DiscussionInitialParticipantV1[]; accounts: ReadonlyMap<string, TranscriptAccountActor> }>;
 }>): React.ReactElement {
     const { scope, availability, disabled, accountLifetime } = props;
     const currentContext = React.useRef({ accountLifetime, discussionId: props.discussionId, disabled, availability });
@@ -155,17 +163,20 @@ export function DiscussionComposer(props: Readonly<{
     // (useActiveSuggestions re-runs its query when the handler changes).
     const [searchRevision, setSearchRevision] = React.useState(0);
     const suggestParticipants = React.useCallback(async (query: string, signal: AbortSignal) => {
-        if (availability !== 'available' || !props.discussionId || !accountLifetime.isCurrent() || signal.aborted) return [];
-        // One current roster is the eligibility authority for both picker sections.
-        // A Session title is display only; it can never admit an outsider.
-        const outcome = await client.participants(props.discussionId, signal).catch(() => null);
+        const invited = props.discussionId ? null : props.invited ?? null;
+        if (availability !== 'available' || (!props.discussionId && !invited) || !accountLifetime.isCurrent() || signal.aborted) return [];
+        // One current roster is the eligibility authority for both picker sections; before create, the
+        // chosen invitees are. A Session title is display only; it can never admit an outsider.
+        const outcome = props.discussionId ? await client.participants(props.discussionId, signal).catch(() => null) : null;
         if (!accountLifetime.isCurrent() || signal.aborted) return [];
         const sessions: Array<NonNullable<ComposerSuggestionCatalogs['sessions']>[number]> = [];
-        if (outcome?.kind === 'succeeded') {
+        const rosterSessionIds = outcome?.kind === 'succeeded'
+            ? outcome.value.participants.map(participant => participant.participant.kind === 'session'
+                ? participant.participant.sessionId : 'sessionId' in participant ? participant.sessionId ?? null : null)
+            : invited ? invited.participants.map(participant => participant.kind === 'session' ? participant.sessionId : null) : [];
+        {
             const seen = new Set<string>();
-            for (const participant of outcome.value.participants) {
-                const sessionId = participant.participant.kind === 'session'
-                    ? participant.participant.sessionId : 'sessionId' in participant ? participant.sessionId : null;
+            for (const sessionId of rosterSessionIds) {
                 if (!sessionId || seen.has(sessionId)) continue;
                 seen.add(sessionId);
                 const display = readComposerSessionSuggestionDisplay({ serverId: scope.serverId, sessionId });
@@ -183,8 +194,19 @@ export function DiscussionComposer(props: Readonly<{
         }
         const accountMentions: ComposerAccountMentionSource = {
             search: async ({ query, limit }) => {
-                if (outcome?.kind !== 'succeeded') throw new Error('Discussion participants unavailable');
                 const people = new Map<string, SessionResponsibilityCandidateV1>();
+                if (invited) {
+                    for (const participant of invited.participants) {
+                        if (participant.kind !== 'account' || participant.accountId === scope.accountId) continue;
+                        const profile = invited.accounts.get(participant.accountId)?.profile;
+                        people.set(participant.accountId, { accountId: participant.accountId, profile: {
+                            name: profile?.name ?? null, firstName: profile?.firstName ?? null, lastName: profile?.lastName ?? null,
+                            username: profile?.username ?? null, avatarUrl: profile?.avatarUrl ?? null } });
+                    }
+                    const matches = [...people.values()].filter((person) => !query || matchesComposerSuggestionQuery(person.profile.name ?? person.profile.username ?? '', query));
+                    return { candidates: matches.slice(0, limit), hasMore: matches.length > limit };
+                }
+                if (outcome?.kind !== 'succeeded') throw new Error('Discussion participants unavailable');
                 for (const grant of outcome.value.grants) {
                     if (grant.principal.kind !== 'account' || grant.principal.accountId === scope.accountId) continue;
                     people.set(grant.principal.accountId, {
@@ -235,7 +257,7 @@ export function DiscussionComposer(props: Readonly<{
         }
         return accountLifetime.isCurrent() && !signal.aborted ? suggestions : [];
         // `searchRevision` renews the active query after the existing Retry action.
-    }, [accountLifetime, availability, client, props.discussionId, scope.serverId, scope.accountId, searchRevision]);
+    }, [accountLifetime, availability, client, props.discussionId, props.invited, scope.serverId, scope.accountId, searchRevision]);
 
     const onSendProp = props.onSend;
     const prepareParticipantMentions = props.prepareParticipantMentions;
@@ -343,9 +365,10 @@ export function DiscussionComposer(props: Readonly<{
             >{(binding, focusChanged) => <DiscussionComposerPluginContributions
                 composer={composer} lifetime={accountLifetime} enabled={availability === 'available'}
             >{slots => <>
-                {slots.beforeComposer}
+                {/* A plugin's line sits in the composer's column, as in a Session (one auxiliary frame owner). */}
+                {React.Children.count(slots.beforeComposer) > 0 ? <ComposerAuxiliaryFrame>{slots.beforeComposer}</ComposerAuxiliaryFrame> : null}
                 {renderInput({ ...binding, extraActionChips: [...mentionChips, ...slots.extraActionChips] }, focusChanged)}
-                {slots.afterComposer}
+                {React.Children.count(slots.afterComposer) > 0 ? <ComposerAuxiliaryFrame>{slots.afterComposer}</ComposerAuxiliaryFrame> : null}
             </>}</DiscussionComposerPluginContributions>}</DiscussionComposerMount> : renderInput()}
         </View>
     );
