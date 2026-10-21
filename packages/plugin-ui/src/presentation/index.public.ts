@@ -460,6 +460,10 @@ export {
   type HappierPublicProfileLabels,
   type HappierPublicProfileProps,
 } from './account/PublicProfile.js';
+export type {
+  HappierPublicProfileUsageHost,
+  HappierPublicProfileUsageLabels,
+} from './account/PublicProfileUsage.js';
 export {
   HappierPageChromeProvider,
   useHappierPageChrome,

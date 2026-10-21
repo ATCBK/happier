@@ -1,4 +1,7 @@
 export type { ActionConfirmationWhen } from './definePlugin.js';
+export { summarizeUsageRunLengthObservations, resolveUsageCalendarInstant } from './usage.js';
+export type { UsageRunLengthObservation, UsageRunLengthObservationSummary, PublicProfileSnapshotV1, PublicUsageFactsV1,
+    PublicProfileReadResultV1, PublicProfileViewV1, BuiltinUsagePublicPresentationV1 } from './usage.js';
 export type { PluginWorkItemsRuntime, PluginWorkItemV1, PluginWorkItemCategoryV1, PluginWorkItemsContributionV1, PluginWorkItemsResolveRequestV1, PluginWorkItemsResolveResultV1, PluginWorkItemsFindLinkedRequestV1, PluginWorkItemsWatchRequestV1, PluginWorkItemTransitionInputV1 } from './workItems.js';
 export { ComposerReferenceCandidateIdV1Schema } from './composerReferenceProviders.js';
 export type { ComposerReferenceCandidatePageV1 } from './composerReferenceProviders.js';

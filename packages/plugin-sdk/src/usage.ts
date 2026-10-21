@@ -1,5 +1,12 @@
 export { SessionContextUsageSnapshotV1Schema } from '@happier-dev/protocol/usage/contextUsage';
 export { UsageObservationContextSchema, UsageObservationCostSchema, UsageObservationScopeSchema, UsageObservationTokensSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
+/** Pure reducers shared by private/public and external chart producers; no Session access. */
+export { summarizeUsageRunLengthObservations } from '@happier-dev/protocol/usage/usageWorkIntervals';
+export type { UsageRunLengthObservation, UsageRunLengthObservationSummary } from '@happier-dev/protocol/usage/usageWorkIntervals';
+export { resolveUsageCalendarInstant } from '@happier-dev/protocol/usage/usageCalendar';
+export type { PublicProfileSnapshotV1, PublicUsageFactsV1 } from '@happier-dev/protocol/account/publicProfile';
+export type { PublicProfileReadResultV1, PublicProfileViewV1 } from '@happier-dev/protocol/account/publicProfilePublication';
+export type { BuiltinUsagePublicPresentationV1 } from '@happier-dev/protocol/widgets/builtinWidgetDescriptorV1';
 export type {
     SessionContextUsageSnapshotV1,
     UsageObservationContext,

@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
-import type { PublicProfileViewV1 } from '@happier-dev/protocol/account/publicProfilePublication';
+import type { PublicProfileReadResultV1, PublicProfileViewV1 } from '@happier-dev/plugin-sdk';
 
 import { useHappierUiTheme } from '../../environment/context.js';
 import {
@@ -8,8 +8,12 @@ import {
   type InertDeclarativeLabels,
 } from '../../declarative/inertDeclarativeView.js';
 import { HappierText } from '../text/Text.js';
+import { HappierInfoState, HappierInfoTile } from '../state/InfoState.js';
 import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
 import { HAPPIER_WIDGET_FRAME_METRICS, HappierWidgetFrame } from '../layout/WidgetFrame.js';
+import { PublicProfileUsageBody, type HappierPublicProfileUsageHost } from './PublicProfileUsage.js';
+import { projectPublicUsageChartModels, type PublicUsageChartModels } from '../usage/charts/publicUsageChartModels.js';
+export type { HappierPublicProfileUsageHost, HappierPublicProfileUsageLabels } from './PublicProfileUsage.js';
 import {
   packWidgetGroupBands,
   resolveWidgetGroupCells,
@@ -42,15 +46,24 @@ export type HappierPublicProfileLabels = Readonly<{
   inert: InertDeclarativeLabels;
 }>;
 
-export type HappierPublicProfileProps = Readonly<{
-  view: PublicProfileViewV1;
+type PublishedPublicProfileProps = Readonly<{
+  view: Omit<PublicProfileViewV1, 'appearance'>;
   labels: HappierPublicProfileLabels;
   /** The applied atmosphere band (picture, planet or nothing), painted by the host's own adapter. */
   renderHero?: () => ReactNode;
   /** The admitted avatar or the planet mark; omitted when the owner shares neither. */
   renderAvatar?: () => ReactNode;
+  /** Paint, localization and identity marks for the shared Usage bodies. */
+  usage?: HappierPublicProfileUsageHost;
   /** One column: a phone host or a narrow window. Wider pages still wrap a pair that cannot fit. */
   singleColumn?: boolean;
+  testID?: string;
+}>;
+
+export type HappierPublicProfileProps = PublishedPublicProfileProps | Readonly<{
+  /** Withdrawal states have no fabricated snapshot, period, coverage or applied blocks. */
+  result: Exclude<PublicProfileReadResultV1, { kind: 'published' }>;
+  labels: Readonly<{ paused: string; unavailable: string }>;
   testID?: string;
 }>;
 
@@ -61,8 +74,25 @@ export type HappierPublicProfileProps = Readonly<{
  * from `view`, never filtered here.
  */
 export function HappierPublicProfile(props: HappierPublicProfileProps) {
+  if ('result' in props) {
+    const paused = props.result.kind === 'paused' ? props.result : null;
+    return <View testID={props.testID ?? 'public-profile'} style={styles.page}>
+      <View style={styles.column}>
+        <HappierInfoState size="page">
+          <HappierInfoTile size="page"
+            title={paused ? paused.identity.name ?? `@${paused.handle}` : props.labels.unavailable}
+            description={paused ? props.labels.paused : undefined} />
+        </HappierInfoState>
+      </View>
+    </View>;
+  }
+  return <PublishedPublicProfile {...props} />;
+}
+
+function PublishedPublicProfile(props: PublishedPublicProfileProps) {
   const theme = useHappierUiTheme();
   const { view, labels } = props;
+  const usageModels = useMemo(() => projectPublicUsageChartModels(view.snapshot), [view.snapshot]);
   const testID = props.testID ?? 'public-profile';
   const columns = props.singleColumn ? 1 : 2;
   const bands = packWidgetGroupBands(
@@ -85,6 +115,8 @@ export function HappierPublicProfile(props: HappierPublicProfileProps) {
         key={item.id}
         item={item}
         labels={labels}
+        usageModels={usageModels}
+        usage={props.usage}
         singleColumn={columns === 1}
         testID={testID}
       />
@@ -204,6 +236,8 @@ function PublicProfileItem(
   props: Readonly<{
     item: ViewItem;
     labels: HappierPublicProfileLabels;
+    usageModels: PublicUsageChartModels;
+    usage?: HappierPublicProfileUsageHost;
     singleColumn: boolean;
     testID: string;
   }>,
@@ -214,6 +248,8 @@ function PublicProfileItem(
       <PublicProfileBlock
         widget={item}
         labels={props.labels}
+        usageModels={props.usageModels}
+        usage={props.usage}
         testID={props.testID}
       />
     );
@@ -245,6 +281,8 @@ function PublicProfileItem(
                 key={child.id}
                 widget={child}
                 labels={props.labels}
+                usageModels={props.usageModels}
+                usage={props.usage}
                 testID={props.testID}
                 bare
               />
@@ -260,22 +298,24 @@ function PublicProfileBlock(
   props: Readonly<{
     widget: ViewWidget;
     labels: HappierPublicProfileLabels;
+    usageModels: PublicUsageChartModels;
+    usage?: HappierPublicProfileUsageHost;
     testID: string;
     bare?: boolean;
   }>,
 ) {
   const theme = useHappierUiTheme();
-  const body = renderInertDeclarativeView(
-    props.widget.presentation.document.root,
-    theme,
-    props.labels.inert,
-  );
+  const body = props.widget.presentation.kind === 'usage'
+    ? props.usage ? <PublicProfileUsageBody presentation={props.widget.presentation} models={props.usageModels}
+      host={props.usage} testID={`${props.testID}-usage-${props.widget.id}`} /> : null
+    : renderInertDeclarativeView(props.widget.presentation.document.root, theme, props.labels.inert);
   if (props.bare)
     return (
       <View
         testID={`${props.testID}-block-${props.widget.id}`}
         style={styles.bareBlock}
       >
+        {props.widget.title ? <HappierText variant="heading" tone="neutral">{props.widget.title}</HappierText> : null}
         {body}
       </View>
     );
@@ -283,7 +323,7 @@ function PublicProfileBlock(
     <HappierWidgetFrame
       frameStyle={props.widget.frameStyle}
       placement="home"
-      title={null}
+      title={props.widget.title ?? null}
       testID={`${props.testID}-block-${props.widget.id}`}
     >
       {body}

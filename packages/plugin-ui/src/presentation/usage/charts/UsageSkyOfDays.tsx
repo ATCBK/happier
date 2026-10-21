@@ -25,7 +25,10 @@ export type UsageSkyDay = Readonly<{
   leader?: UsageSkyLeader | null;
 }>;
 
-export type UsageSkyRun = Readonly<{ startDate: string; endDate: string; days: number }>;
+export type UsageSkyRun = Readonly<{ days: number }> & (
+  | Readonly<{ startDate: string; endDate: string }>
+  | Readonly<{ startDate?: never; endDate?: never }>
+);
 
 export type UsageSkyModel = Readonly<{
   /** `amount` = the private metric (labelled guides); `ordinal` = levels only, never an amount axis. */
@@ -247,7 +250,7 @@ function layoutSky(model: UsageSkyModel, width: number, height: number, small: b
     }
     if (average.length > 4) milkyWay = usageSmoothPath(average);
   }
-  const indexOf = (date: string) => days.findIndex((day) => day.date === date);
+  const indexOf = (date: string | undefined) => date === undefined ? -1 : days.findIndex((day) => day.date === date);
   const isNamed = (start: number, end: number) => [model.best, model.current].some((run) => run && indexOf(run.startDate) === start && indexOf(run.endDate) === end);
   const runs: { path: string; named: boolean }[] = [];
   let start = -1;

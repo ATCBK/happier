@@ -91,9 +91,9 @@ export type UsageSteeringTideModel = Readonly<{
   rows: readonly Readonly<{
     agentId: string | null;
     /** Accepted steers in each hour of the day (24). */
-    steersByHour: readonly number[];
+    steersByHour: readonly (number | null)[];
     /** Permission answers given from a phone (iOS/Android) in each hour (24). */
-    phoneAnswersByHour: readonly number[];
+    phoneAnswersByHour: readonly (number | null)[];
     steers: number | null; busyMs: number | null; perBusyHour: number | null; phoneAnswers: number | null;
   }>[];
 }>;
@@ -116,7 +116,7 @@ export function UsageSteeringTide(props: UsageChartBaseProps & Readonly<{ agents
   const figuresWidth = phone ? 0 : 300;
   const name = (id: string | null) => agentOf(props.agents, id)?.shortName ?? agentOf(props.agents, id)?.name ?? (id ?? props.labels.unknownAgent);
   const colour = (id: string | null) => agentOf(props.agents, id)?.color ?? ink.neutral;
-  const max = Math.max(1, ...rows.flatMap((row) => row.steersByHour));
+  const max = Math.max(1, ...rows.flatMap((row) => row.steersByHour.filter((value): value is number => value !== null)));
   const chartWidth = width === null ? 0 : phone ? width : width - figuresWidth - 24;
   const axis = phone ? 0 : 98;
   const plot = chartWidth - axis;
@@ -131,13 +131,14 @@ export function UsageSteeringTide(props: UsageChartBaseProps & Readonly<{ agents
           {nightSpans.map(([from, to], index) => <Rect key={`n${index}`} x={r1(axis + (from! / 24) * plot)} y={0} width={r1(((to! - from!) / 24) * plot)} height={height - 18} rx={6} fill={wash} />)}
           {rows.map((row, index) => {
             const base = (index + 1) * rowHeight - 6, amplitude = rowHeight * 0.72;
-            const points = row.steersByHour.map((value, hour) => [axis + ((hour + 0.5) / 24) * plot, base - Math.pow(value / max, 0.6) * amplitude] as const);
-            const curve = usageSmoothPath(points);
+            const points = row.steersByHour.map((value, hour) => [axis + ((hour + 0.5) / 24) * plot, base - Math.pow((value ?? 0) / max, 0.6) * amplitude] as const);
+            // Missing input observations have no curve, rather than a measured zero line.
+            const curve = row.steersByHour.some(value => value !== null) ? usageSmoothPath(points) : null;
             return <G key={row.agentId ?? 'unknown'}>
-              <Path d={`${curve}L${r1(axis + (23.5 / 24) * plot)},${base}L${r1(axis + (0.5 / 24) * plot)},${base}Z`} fill={colour(row.agentId)} fillOpacity={0.14} />
-              <Path d={curve} fill="none" stroke={colour(row.agentId)} strokeWidth={1.4} />
+              {curve ? <Path d={`${curve}L${r1(axis + (23.5 / 24) * plot)},${base}L${r1(axis + (0.5 / 24) * plot)},${base}Z`} fill={colour(row.agentId)} fillOpacity={0.14} /> : null}
+              {curve ? <Path d={curve} fill="none" stroke={colour(row.agentId)} strokeWidth={1.4} /> : null}
               <Path d={`M${axis},${base}H${axis + plot}`} stroke={ink.base} strokeWidth={1} />
-              {row.phoneAnswersByHour.flatMap((answers, hour) => Array.from({ length: Math.min(4, Math.round(answers / 2)) }, (_, j) =>
+              {row.phoneAnswersByHour.flatMap((answers, hour) => Array.from({ length: answers === null ? 0 : Math.min(4, Math.round(answers / 2)) }, (_, j) =>
                 <Circle key={`${hour}-${j}`} cx={r1(points[hour]![0])} cy={r1(points[hour]![1] - 5 - j * 4.4)} r={1.6} fill={ink.text} fillOpacity={0.7} />))}
               {phone ? svgText.draw({ x: 4, y: base - amplitude + 6, text: name(row.agentId), tone: 'strong', size: 'body', halo: props.paint.paper })
                 : svgText.draw({ x: 0, y: base - 6, text: name(row.agentId), tone: 'strong', size: 'body' })}
@@ -179,8 +180,8 @@ export function UsageSteeringTide(props: UsageChartBaseProps & Readonly<{ agents
 
 export type UsageRunLengthModel = Readonly<{
   rows: readonly Readonly<{ agentId: string | null; samples: number; medianMs: number; p90Ms: number; durationsMs: readonly number[] }>[];
-  openCount: number;
-  croppedCount: number;
+  openCount: number | null;
+  croppedCount: number | null;
 }>;
 export type UsageRunLengthLabels = Readonly<{
   duration: (ms: number) => string; unknownAgent: string;

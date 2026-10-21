@@ -20,14 +20,14 @@ export type UsageScoreModel = Readonly<{
   weekStart: string;
   /** `minutes`: dot strength = busy minutes in that hour (private). `presence`: busy in the hour only. */
   encoding: 'minutes' | 'presence';
-  rows: readonly Readonly<{ agentId: string; hours: readonly (readonly number[])[] }>[];
+  rows: readonly Readonly<{ agentId: string; hours: readonly (readonly (number | null)[])[] }>[];
 }>;
 export type UsageScoreLabels = Readonly<{
   /** "Mon 7". */
   day: (dayIndex: number) => string;
   clock: (hour: number) => string;
   key: Readonly<{ light: string; medium: string; strong: string; presence: string; presenceNote: string }>;
-  values: UsageChartValuesLabels & Readonly<{ agentColumn: string; dayColumn: string; hoursColumn: string; formatHours: (minutesByHour: readonly number[]) => string }>;
+  values: UsageChartValuesLabels & Readonly<{ agentColumn: string; dayColumn: string; hoursColumn: string; formatHours: (minutesByHour: readonly (number | null)[]) => string }>;
 }>;
 const scoreOpacity = (encoding: UsageScoreModel['encoding'], minutes: number) => encoding === 'presence' ? (minutes ? 0.9 : 0)
   : minutes > 40 ? 1 : minutes > 15 ? 0.66 : minutes ? 0.36 : 0;
@@ -70,7 +70,7 @@ export function UsageScore(props: AgentsProps & Readonly<{ model: UsageScoreMode
         const height = 6 + rows.length * 7 + 4;
         return <Svg key={day} width={width} height={height}>
           {svgText.draw({ x: 0, y: 12, text: props.labels.day(day), tone: 'secondary', size: 'body' })}
-          {rows.map((row, index) => (row.hours[day] ?? []).map((minutes, hour) => <Circle key={`${index}-${hour}`} cx={r1(label + (hour + 0.5) * step)} cy={6 + index * 7}
+          {rows.map((row, index) => (row.hours[day] ?? []).map((minutes, hour) => minutes === null ? null : <Circle key={`${index}-${hour}`} cx={r1(label + (hour + 0.5) * step)} cy={6 + index * 7}
             r={2.1} fill={minutes ? colour(row.agentId) : ink.track} fillOpacity={minutes ? scoreOpacity(props.model.encoding, minutes) : 1} />))}
         </Svg>;
       })}
@@ -174,8 +174,9 @@ export function UsageCrew(props: AgentsProps & Readonly<{ model: readonly UsageA
 
 export type UsageRiverModel = Readonly<{
   /** `amount`: width = the week's metric total; `level`: width = the week's labelled intensity (public), never an amount. */
-  width: 'amount' | 'level';
-  weeks: readonly Readonly<{ start: string; total: number; shares: Readonly<Record<string, number>> }>[];
+  width: 'amount' | 'level' | 'share';
+  /** Null in composition-only mode: equal width, with no implied weekly amount. */
+  weeks: readonly Readonly<{ start: string; total: number | null; shares: Readonly<Record<string, number>> }>[];
 }>;
 export type UsageRiverLabels = Readonly<{ week: (start: string) => string; inline: (name: string, share: number) => string; caption: string;
   values: UsageChartValuesLabels & Readonly<{ weekColumn: string; totalColumn: string; formatTotal: (total: number) => string; percent: (share: number) => string }> }>;
@@ -184,20 +185,21 @@ export function UsageAgentRiver(props: AgentsProps & Readonly<{ model: UsageRive
   const [width, onLayout] = useUsageChartWidth(props.width);
   const svgText = useUsageChartSvgText(props.theme);
   const weeks = props.model.weeks;
+  const weight = (week: UsageRiverModel['weeks'][number]) => props.model.width === 'share' ? 1 : week.total ?? 0;
   const height = width !== null && width < 480 ? 150 : 190;
   const order = props.agents.map((agent) => agent.id).filter((id) => weeks.some((week) => (week.shares[id] ?? 0) > 0))
-    .sort((a, b) => weeks.reduce((sum, week) => sum + (week.shares[a] ?? 0) * week.total, 0) - weeks.reduce((sum, week) => sum + (week.shares[b] ?? 0) * week.total, 0));
-  const rows = weeks.map((week) => [props.labels.week(week.start), props.labels.values.formatTotal(week.total),
+    .sort((a, b) => weeks.reduce((sum, week) => sum + (week.shares[a] ?? 0) * weight(week), 0) - weeks.reduce((sum, week) => sum + (week.shares[b] ?? 0) * weight(week), 0));
+  const rows = weeks.map((week) => [props.labels.week(week.start), week.total === null ? '—' : props.labels.values.formatTotal(week.total),
     ...order.slice().reverse().map((id) => props.labels.values.percent(week.shares[id] ?? 0))] as const);
   return <UsageChartColumn testID={props.testID} onLayout={onLayout}>
     <View style={{ height }} accessible accessibilityRole="image" accessibilityLabel={props.label}>
       {width !== null && weeks.length >= 2 ? (() => {
-        const max = Math.max(...weeks.map((week) => week.total)) || 1;
+        const max = Math.max(...weeks.map(weight)) || 1;
         const mid = (height - 20) / 2, half = mid - 6, x = (index: number) => 4 + (index / (weeks.length - 1)) * (width - 8);
-        let floor = weeks.map((week) => -(week.total / max) * half);
+        let floor = weeks.map((week) => -(weight(week) / max) * half);
         const bands = order.map((id) => {
           const low = floor.slice();
-          const high = weeks.map((week, index) => low[index]! + ((week.shares[id] ?? 0) * week.total / max) * half * 2);
+          const high = weeks.map((week, index) => low[index]! + ((week.shares[id] ?? 0) * weight(week) / max) * half * 2);
           floor = high;
           return { id, low, high };
         });
@@ -304,7 +306,7 @@ export type UsageConstellationModel = Readonly<{
   nodes: readonly Readonly<{ agentId: string; share: number | null }>[];
   /** Null = no collaboration summary: nodes only, said plainly; never co-running time as a stand-in. */
   edges: readonly Readonly<{ from: string; to: string; kind: 'session' | 'run' | 'native'; count: number }>[] | null;
-  unknownStarts: number;
+  unknownStarts: number | null;
 }>;
 export type UsageConstellationLabels = Readonly<{ kinds: Readonly<{ session: string; run: string; native: string }>; arrowNote: string;
   unknownStarts: (count: number) => string; nodesOnly: string }>;
@@ -370,6 +372,6 @@ export function UsageConstellation(props: AgentsProps & Readonly<{ model: UsageC
       })() : null}
     </View>
     {props.model.edges ? <UsageChartKey theme={props.theme} items={keyItems} note={props.labels.arrowNote} /> : <UsageChartCaption theme={props.theme}>{props.labels.nodesOnly}</UsageChartCaption>}
-    {props.model.edges && props.model.unknownStarts > 0 ? <UsageChartCaption theme={props.theme}>{props.labels.unknownStarts(props.model.unknownStarts)}</UsageChartCaption> : null}
+    {props.model.edges && props.model.unknownStarts !== null && props.model.unknownStarts > 0 ? <UsageChartCaption theme={props.theme}>{props.labels.unknownStarts(props.model.unknownStarts)}</UsageChartCaption> : null}
   </UsageChartColumn>;
 }

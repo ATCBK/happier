@@ -10,6 +10,11 @@ import {
 import * as usage from './usage.js';
 
 describe('stable usage surface', () => {
+  it('shares the canonical anonymous duration reducer with external chart producers', () => {
+    const result = usage.summarizeUsageRunLengthObservations([{ agentId: 'unrelated-dataset', durationMs: 10 },
+      { agentId: 'unrelated-dataset', durationMs: 50 }, { agentId: 'unrelated-dataset', durationMs: 20 }]);
+    expect(result.byAgent).toEqual([{ agentId: 'unrelated-dataset', sampleCount: 3, medianMs: 20, p90Ms: 50, durationsMs: [10, 20, 50] }]);
+  });
   it('preserves the canonical portable Protocol schema identities', () => {
     expect(usage.SessionContextUsageSnapshotV1Schema)
       .toBe(SessionContextUsageSnapshotV1Schema);

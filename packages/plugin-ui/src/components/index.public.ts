@@ -1,4 +1,9 @@
 export * from './Action.js';
+export * from './UsageCharts.js';
+export { HappierPublicProfile, type HappierPublicProfileLabels, type HappierPublicProfileProps,
+  type HappierPublicProfileUsageHost, type HappierPublicProfileUsageLabels } from '../presentation/account/PublicProfile.js';
+export { projectPublicUsageChartModels, projectPublicUsageRecords, type PublicUsageChartModels,
+  type PublicUsageRecordKind } from '../presentation/usage/charts/publicUsageChartModels.js';
 export { ApprovalPendingNotice, type ApprovalPendingNoticeProps } from './ApprovalPendingNotice.js';
 export { ApprovalPrompt, type ApprovalPromptProps } from './ApprovalPrompt.js';
 export * from './Button.js';

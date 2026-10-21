@@ -10,19 +10,20 @@ import {
 export type UsageDayModel = Readonly<{
   date: string;
   lanes: readonly Readonly<{
-    agentId: string;
-    /** Closed busy spans; `waits` are the waits for you inside them. */
+    agentId: string | null;
+    /** Witnessed work/wait spans; `waits` identify the hatched part, excluded from Agent-time/concurrency. */
     spans: readonly Readonly<{ fromHour: number; toHour: number; waits: readonly (readonly [number, number])[] }>[];
     /** That Agent's agent time that day (turns running together add up). */
     agentTimeMs: number;
   }>[];
   /** Turns running at once, evenly binned over the 24 hours (the shared boundary sweep's display bins). */
   atOnce: readonly number[];
-  peak: Readonly<{ count: number; atHour: number; byAgent: readonly Readonly<{ agentId: string; count: number }>[] }>;
+  peak: Readonly<{ count: number; atHour: number; byAgent: readonly Readonly<{ agentId: string | null; count: number }>[] }>;
   waitCount: number;
 }>;
 
 export type UsageDayLabels = Readonly<{
+  unknownAgent: string;
   clock: (hour: number) => string;
   duration: (ms: number) => string;
   atOnce: string;
@@ -56,15 +57,16 @@ const PHONE_BELOW_PX = 440;
 export function UsageDayInAgents(props: UsageDayInAgentsProps) {
   const [width, onLayout] = useUsageChartWidth(props.width);
   const agents = new Map(props.agents.map((agent) => [agent.id, agent]));
+  const agent = (id: string | null) => id === null ? undefined : agents.get(id);
   const ink = resolveUsageChartInk(props.theme, props.paint);
   const lanes = props.model.lanes.filter((lane) => lane.agentTimeMs > 0 || lane.spans.length > 0);
-  const name = (id: string) => agents.get(id)?.shortName ?? agents.get(id)?.name ?? id;
+  const name = (id: string | null) => agent(id)?.shortName ?? agent(id)?.name ?? id ?? props.labels.unknownAgent;
   const keyItems = [
-    ...lanes.map((lane) => ({ id: lane.agentId, label: name(lane.agentId), value: props.style === 'dial' ? props.labels.duration(lane.agentTimeMs) : undefined,
-      swatch: { kind: 'dot' as const, color: agents.get(lane.agentId)?.color ?? ink.neutral } })),
+    ...lanes.map((lane) => ({ id: JSON.stringify(lane.agentId), label: name(lane.agentId), value: props.style === 'dial' ? props.labels.duration(lane.agentTimeMs) : undefined,
+      swatch: { kind: 'dot' as const, color: agent(lane.agentId)?.color ?? ink.neutral } })),
     { id: 'waiting', label: props.labels.waiting, value: String(props.model.waitCount), swatch: { kind: 'hatch' as const, color: ink.text } },
   ];
-  const rows = lanes.map((lane) => [agents.get(lane.agentId)?.name ?? lane.agentId, props.labels.duration(lane.agentTimeMs),
+  const rows = lanes.map((lane) => [agent(lane.agentId)?.name ?? name(lane.agentId), props.labels.duration(lane.agentTimeMs),
     lane.spans.map((span) => props.labels.values.formatSpan(span.fromHour, span.toHour)).join(', ')] as const);
   const phone = width !== null && width < PHONE_BELOW_PX;
   return <UsageChartColumn testID={props.testID} onLayout={onLayout}>
@@ -78,7 +80,7 @@ export function UsageDayInAgents(props: UsageDayInAgentsProps) {
   </UsageChartColumn>;
 }
 
-type DayDrawProps = UsageDayInAgentsProps & Readonly<{ width: number; lanes: UsageDayModel['lanes']; name: (id: string) => string }>;
+type DayDrawProps = UsageDayInAgentsProps & Readonly<{ width: number; lanes: UsageDayModel['lanes']; name: (id: string | null) => string }>;
 
 function DayLanes(props: DayDrawProps & Readonly<{ phone: boolean }>) {
   const ink = resolveUsageChartInk(props.theme, props.paint);
@@ -98,7 +100,7 @@ function DayLanes(props: DayDrawProps & Readonly<{ phone: boolean }>) {
   const px = x(model.peak.atHour + 12 / bins), py = cy(model.peak.count);
   const right = px > label + plot * 0.62;
   const hatch = `usage-day-hatch-${props.testID ?? 'day'}`;
-  const colour = (id: string) => props.agents.find((agent) => agent.id === id)?.color ?? ink.neutral;
+  const colour = (id: string | null) => props.agents.find((agent) => agent.id === id)?.color ?? ink.neutral;
   return <View style={{ height }} accessible accessibilityRole="image" accessibilityLabel={props.label}>
     <Svg width={width} height={height}>
       <Defs>
@@ -121,7 +123,7 @@ function DayLanes(props: DayDrawProps & Readonly<{ phone: boolean }>) {
       {svgText.draw({ x: width, y: top + curveHeight + 2, anchor: 'end', text: props.labels.agentTime }, 'agent-time')}
       {props.lanes.map((lane, index) => {
         const y = top + curveHeight + 10 + index * (laneHeight + gap);
-        return <G key={lane.agentId}>
+        return <G key={JSON.stringify(lane.agentId)}>
           {svgText.draw({ x: 0, y: y + laneHeight - 3, text: props.name(lane.agentId), tone: 'secondary', size: 'body' })}
           <Rect x={label} y={y} width={r1(plot)} height={laneHeight} rx={laneHeight / 2} fill={ink.track} />
           {lane.spans.map((span, spanIndex) => <G key={spanIndex}>
@@ -148,7 +150,7 @@ function DayDial(props: DayDrawProps) {
   const at = (radius: number, hour: number) => [center + radius * Math.cos(angle(hour)), center + radius * Math.sin(angle(hour))] as const;
   const bins = model.atOnce.length || 1;
   const shape = model.atOnce.map((count, index) => at(inner + ((outer - inner) * Math.min(6, count)) / 6, ((index + 0.5) / bins) * 24));
-  const colour = (id: string) => props.agents.find((agent) => agent.id === id)?.color ?? ink.neutral;
+  const colour = (id: string | null) => props.agents.find((agent) => agent.id === id)?.color ?? ink.neutral;
   const peakAt = at(inner + ((outer - inner) * Math.min(6, model.peak.count)) / 6, model.peak.atHour + 12 / bins);
   const peakLine = props.labels.peakLine(model.peak.atHour, model.peak.byAgent.map((entry) => ({ name: props.name(entry.agentId), count: entry.count })));
   const arc = (radius: number, from: number, to: number) => {
@@ -190,7 +192,7 @@ function DayDial(props: DayDrawProps) {
               for (const [from, to] of span.waits) { if (from > cursor) segments.push(arc(radius, cursor, from)); cursor = to; }
               if (span.toHour > cursor) segments.push(arc(radius, cursor, span.toHour));
             }
-            return <G key={lane.agentId}>
+            return <G key={JSON.stringify(lane.agentId)}>
               <Circle cx={center} cy={center} r={r1(radius)} fill="none" stroke={ink.grid} strokeWidth={trackWidth} />
               {segments.map((d, segment) => <Path key={segment} d={d} fill="none" stroke={colour(lane.agentId)} strokeWidth={trackWidth} />)}
             </G>;
