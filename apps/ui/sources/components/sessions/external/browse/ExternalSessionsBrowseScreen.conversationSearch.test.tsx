@@ -100,7 +100,52 @@ afterEach(async () => { standardCleanup(); vi.useRealTimers(); await connection?
 async function flush() { await flushHookEffects({ runOnlyPendingTimers: true }); }
 
 describe('History unified conversation search', () => {
-    it.each(['ready', 'failed'] as const)('keeps a submitted native hit, query and mode through a %s scoped route projection refresh', async outcome => {
+    it.each(['control', 'return'] as const)('admits an explicit %s submit during indexed lookup and settles a partial hit or complete empty scan', async submit => {
+        const pendingStatus = createDeferred<unknown>();
+        let statusReads = 0;
+        const terms: string[] = [];
+        rpc.mockImplementation(async call => {
+            if (call.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { protocolVersion: 1, projection };
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET) return { ...DEFAULT_MEMORY_SETTINGS, enabled: true };
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_STATUS) {
+                statusReads++;
+                if (statusReads > 1) return pendingStatus.promise;
+                return { v: 1, enabled: true, indexMode: 'deep', hintsIndexReady: false, deepIndexReady: false,
+                    activeIndexReady: false, embeddingsEnabled: false, embeddingsMode: 'disabled', embeddingsPresetId: null,
+                    embeddingsProviderKind: null, embeddingsModelId: null, embeddingsRuntimeState: 'unavailable', embeddingsUsingFallback: false,
+                    tier1DbPath: null, deepDbPath: null, tier1DbBytes: null, deepDbBytes: null };
+            }
+            if (call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST) {
+                terms.push(call.payload.searchTerm);
+                return ExternalSessionsCandidatesListResponseSchema.parse({ ok: true,
+                    candidates: submit === 'control' ? [{ remoteSessionId: 'pending-native-hit', updatedAtMs: 1,
+                        match: { snippet: 'unmatched copper fern', sourceItemId: 'owned-message', messageIndex: 0 } }] : [],
+                    contentCoverage: submit === 'control' ? 'partial' : 'complete', nextCursor: submit === 'control' ? 'remaining' : null });
+            }
+            throw new Error(`Unexpected pending-query transport ${call.method}`);
+        });
+        const screen = await renderScreen(<ExternalSessionsBrowseScreen
+            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" />,
+        { flushOptions: { runOnlyPendingTimers: true } });
+        const readList = () => screen.findAllByType(ExternalSessionBrowseCandidatesList)[0];
+        await waitForHomeGovernance(async () => { await flush(); expect(readList().props.contentScanAvailable).toBe(true); });
+        await act(async () => screen.changeTextByTestId('direct-session-candidates-search-input', 'unmatched copper fern'));
+        await waitForHomeGovernance(async () => { await flush(); expect(statusReads).toBeGreaterThan(1); });
+        expect(readList().props.loading).toBe(true);
+        if (submit === 'control') await screen.pressByTestIdAsync('direct-session-candidates-content-submit');
+        else await act(async () => readList().props.onSearchSubmit('unmatched copper fern'));
+        expect(readList().props.contentSearchSubmitted).toBe(true);
+        await act(async () => pendingStatus.resolve({ v: 1, enabled: true, indexMode: 'deep', hintsIndexReady: false, deepIndexReady: false,
+            activeIndexReady: false, embeddingsEnabled: false, embeddingsMode: 'disabled', embeddingsPresetId: null,
+            embeddingsProviderKind: null, embeddingsModelId: null, embeddingsRuntimeState: 'unavailable', embeddingsUsingFallback: false,
+            tier1DbPath: null, deepDbPath: null, tier1DbBytes: null, deepDbBytes: null }));
+        await waitForHomeGovernance(async () => { await flush(); expect(readList().props.loading).toBe(false); expect(terms).toEqual(['unmatched copper fern']); });
+        expect(readList().props).toMatchObject({ contentSearchSubmitted: true,
+            candidates: submit === 'control' ? [{ remoteSessionId: 'pending-native-hit', match: { sourceItemId: 'owned-message' } }] : [],
+            contentCoverage: submit === 'control' ? 'partial' : 'complete', error: null });
+        expect(screen.findHostByTestId('direct-session-candidates:content-unsearched')).toBeNull();
+    });
+    it.each(['ready', 'failed', 'home-profile'] as const)('keeps a submitted native hit, query and mode through a %s scoped route projection refresh', async outcome => {
         const features = createRootLayoutFeaturesResponse();
         primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
         storage.setState(state => ({ settings: { ...state.settings, featureToggles: { ...state.settings.featureToggles, 'sessions.direct': true } } }));
@@ -147,6 +192,15 @@ describe('History unified conversation search', () => {
         const readList = () => screen.findAllByType(ExternalSessionBrowseCandidatesList)[0];
         await waitForHomeGovernance(async () => { await flush(); expect(readList().props.candidates).toHaveLength(1); });
         expect(scans).toBe(1);
+        if (outcome === 'home-profile') {
+            const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
+            await act(async () => { await upsertServerProfile({ serverUrl: 'https://history-index.example.test', name: 'Renamed Home' }); });
+            await flush();
+            expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)).toHaveLength(1);
+            expect(readList().props).toMatchObject({ searchQuery: 'body phrase', searchTarget: 'content',
+                candidates: [{ remoteSessionId: 'stable-native' }] });
+            return;
+        }
         refresh = true;
         await act(async () => publishMachineContributionRegistryProjectionInvalidation({ serverId, machineId: 'machine-1' }));
         await flush();

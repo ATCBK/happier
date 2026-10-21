@@ -542,11 +542,15 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
         && publishedSearchTerm === (searchTarget === 'content' ? searchQuery : searchQuery.trim());
     const handleContentSearchSubmit = React.useCallback((query: string) => {
         const term = query;
-        if (searchTarget !== 'content' || !contentScanAvailable || !term.trim() || loading || loadingMore) return;
+        // A typed-query indexed read is background work, not a submitted scan.
+        // Record the person's intent now; the search owner reads current settings
+        // before admitting any native scan, even if that read is still pending.
+        if (searchTarget !== 'content' || !contentSearchSupported || contentOnDemandOff || !term.trim()
+            || (explicitContentSearchSubmitted && (loading || loadingMore))) return;
         setSubmittedContentScopeKey(candidateActionAuthorityKey);
         if (candidateSearchTerm === term && explicitContentSearchSubmitted) void reload();
         else setCandidateSearchTerm(term);
-    }, [candidateActionAuthorityKey, candidateSearchTerm, explicitContentSearchSubmitted, contentScanAvailable, loading, loadingMore, reload, searchTarget]);
+    }, [candidateActionAuthorityKey, candidateSearchTerm, explicitContentSearchSubmitted, contentSearchSupported, contentOnDemandOff, loading, loadingMore, reload, searchTarget]);
     const candidateActionAuthorityRef = React.useRef({
         key: candidateActionAuthorityKey,
         generation: 0,
