@@ -21,7 +21,7 @@ import {
     type ScopedUsageContribution,
     type ScopedUsageEventRow,
 } from "./query/resolveScopedUsageContributions";
-import { readScopedUsageAccountingEvidence, toScopedUsageEventRow } from "./query/scopedUsageEventRow";
+import { isPublicEligibleUsageRow, readScopedUsageAccountingEvidence, toScopedUsageEventRow } from "./query/scopedUsageEventRow";
 import { addUsageTokens, createEmptyUsageCost, createEmptyUsageTokens, normalizeLegacyUsageCost, normalizeLegacyUsageTokens } from "./usageMetrics";
 import { addUsageCostForMode, resolveUsageCostMode, withEffectiveUsageCost, type UsageCostMode } from "./query/resolveUsageCostMode";
 import { TEAM_CREDENTIAL_ONLY_USAGE_SOURCES } from "./usageSourceClassifier";
@@ -250,7 +250,7 @@ export async function captureUsageAnalyticsInTx(
     // Reconciliation may exclude candidates. Capture their counts now and sum
     // only the selected Sessions after commit, preserving publication ceilings.
     let messageCountsBySession: ReadonlyMap<string, number> | undefined;
-    if (request.includeMessageStats || request.includeInsights) {
+    if (request.population !== 'public_eligible_personal' && (request.includeMessageStats || request.includeInsights)) {
         const sessionIds = new Set<string>();
         for (const row of rows) if (row.sessionId) sessionIds.add(row.sessionId);
         for (const report of legacyReports) if (report.sessionId) sessionIds.add(report.sessionId);
@@ -264,9 +264,14 @@ export function projectUsageAnalytics(snapshot: UsageAnalyticsSnapshot, request:
     const scopedRows = [...snapshot.rows.map(toScopedUsageEventRow), ...resolveRetainedLegacyUsageRows(snapshot.legacyReports, snapshot.rows)
         .map((row) => ({ ...row, accountingEvidence: readScopedUsageAccountingEvidence(row) }))];
     const resolved = resolveScopedUsageContributions(scopedRows, request.dateRange);
+    // Keep every counter baseline until reconciliation has established the
+    // individual requests. Excluding raw rows first would manufacture residuals.
+    const publicPopulation = request.population === 'public_eligible_personal';
+    const population = publicPopulation ? resolved.totalContributions.filter(isPublicEligibleUsageRow) : resolved.totalContributions;
+    const populationExcluded = population.length !== resolved.totalContributions.length;
     const costMode = resolveUsageCostMode(request.costMode);
     const priceCatalog = resolveCapturedUsageModelPriceCatalog(snapshot.priceCatalog);
-    const totalContributions = resolved.totalContributions.filter((row) => matchesUsageFilters(row, request.filters)).map((row) => ({
+    const totalContributions = population.filter((row) => matchesUsageFilters(row, request.filters)).map((row) => ({
         ...row, cost: repriceUsageObservationCost(row.cost, row.modelId,
             resolveUsageTokenCategories(row.tokens, readScopedUsageAccountingEvidence(row).accounting), priceCatalog, {}, costMode),
     }));
@@ -279,7 +284,7 @@ export function projectUsageAnalytics(snapshot: UsageAnalyticsSnapshot, request:
             premiumRows.flatMap((row) => (row.sessionId ? [row.sessionId] : [])),
         ),
     );
-    const capturedMessageCounts = snapshot.messageCountsBySession;
+    const capturedMessageCounts = publicPopulation ? undefined : snapshot.messageCountsBySession;
     const messageCounts = capturedMessageCounts
         ? { messageCount: sessionIds.reduce((count, sessionId) => count + (capturedMessageCounts.get(sessionId) ?? 0), 0) }
         : undefined;
@@ -298,9 +303,15 @@ export function projectUsageAnalytics(snapshot: UsageAnalyticsSnapshot, request:
             return acc;
         }, {})
         : undefined;
-    const selectedSubjects = new Set(totalContributions.map(usageAccountingSubjectKey));
-    const evidenceRows = scopedRows.filter((row) => selectedSubjects.has(usageAccountingSubjectKey(row))
-        || matchesUsageFilters({ ...row, contributingEventIds: [row.id] }, request.filters));
+    let evidenceRows = scopedRows;
+    if (publicPopulation) {
+        const selectedEventIds = new Set(totalContributions.flatMap(row => row.contributingEventIds));
+        evidenceRows = scopedRows.filter(row => selectedEventIds.has(row.id) && isPublicEligibleUsageRow(row));
+    } else {
+        const selectedSubjects = new Set(totalContributions.map(usageAccountingSubjectKey));
+        evidenceRows = scopedRows.filter((row) => selectedSubjects.has(usageAccountingSubjectKey(row))
+            || matchesUsageFilters({ ...row, contributingEventIds: [row.id] }, request.filters));
+    }
     const rankedDimensions = new Set(request.breakdowns ?? []);
     if (request.includeLeaders) for (const dimension of ['agent', 'model', 'session', 'project', 'workspace', 'backendMode'] as const) rankedDimensions.add(dimension);
     const modelTimeline = request.includeModelTimeline ? buildUsageModelTimeline(premiumBucketRows,
@@ -331,6 +342,7 @@ export function projectUsageAnalytics(snapshot: UsageAnalyticsSnapshot, request:
     const projection = buildUsageResultProjection({
         contributions: totalContributions, evidenceRows,
         coverageReasons: [...totalContributions.flatMap((row) => row.coverageReasons ?? []),
+            ...(populationExcluded ? ['incomplete_history' as const] : []),
             ...(truncatedTimeline ? ['ranked_truncation' as const] : [])], request, ranked,
     });
     if (!projection.costPresentation) {

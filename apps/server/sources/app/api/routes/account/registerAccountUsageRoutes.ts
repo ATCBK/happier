@@ -11,6 +11,7 @@ import { accountUsageRoutePaths } from "./accountUsageRoutePaths";
 import { readUsageModelPriceCatalog, refreshUsageModelPriceCatalog } from '@/app/usage/usageModelPriceCatalog';
 import { readCurrentSessionIdsInTx } from '@/app/session/access/sessionReadAdmission';
 import { readSessionAccessAuthenticationFromRequest, type SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
+import { isServerFeatureEnabledForHome } from '@/app/features/catalog/serverFeatureGate';
 
 const LegacyUsageReportRouteResponseSchema = z.object({
     success: z.literal(true),
@@ -98,13 +99,17 @@ export function registerAccountUsageRoutes(app: Fastify): void {
             body: UsageAnalyticsQueryRequestSchema,
             response: {
                 200: UsageAnalyticsQueryResponseSchema,
-                404: z.object({ error: z.literal('Session not found') }),
+                404: z.object({ error: z.enum(['Session not found', 'not_found']) }),
                 500: z.object({ error: z.literal('Failed to query usage analytics') }),
             },
         },
         preHandler: app.authenticate,
     }, async (request, reply) => {
         try {
+            if (request.body.population === 'public_eligible_personal'
+                && !await isServerFeatureEnabledForHome('account.publicProfiles', { request })) {
+                return reply.code(404).send({ error: 'not_found' });
+            }
             const snapshot = await inTx(async tx => {
                 if (request.body.filters?.sessionIds?.length) {
                     const isReadable = await ensureReadableSessionIds(tx, request.userId, request.body.filters.sessionIds,

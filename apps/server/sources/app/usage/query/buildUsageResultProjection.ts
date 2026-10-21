@@ -100,7 +100,7 @@ export function buildUsageResultProjection(input: UsageResultProjectionInput): {
     }
     const sourceRows = [...sources.values()];
     const historyComplete = sourceRows.length > 0 && sourceRows.every((source) => source.status === "available" && source.historyComplete === true)
-        && !["missing_baseline", "counter_discontinuity", "ambiguous_overlap"].some((reason) => reasons.has(reason as UsageAccountingCoverageReason));
+        && !["missing_baseline", "counter_discontinuity", "ambiguous_overlap", "incomplete_history"].some((reason) => reasons.has(reason as UsageAccountingCoverageReason));
     const status = sourceRows.length === 0 || sourceRows.every((source) => source.status === "unknown") ? "unknown"
         : reasons.size > 0 || missingDimensions.length > 0 ? "partial" : "complete";
     const mode = resolveUsageCostMode(input.request.costMode);

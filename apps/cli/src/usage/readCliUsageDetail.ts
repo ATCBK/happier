@@ -115,7 +115,8 @@ export async function readCliUsageDetail(input: Readonly<{
                 const access = rawSession.effectiveAccess ?? (role === 'owner' ? { capabilities: { submitAgentInput: true } } : undefined);
                 const machineId = typeof ownerMetadata?.machineId === 'string' ? ownerMetadata.machineId : null;
                 const cwd = typeof ownerMetadata?.path === 'string' ? ownerMetadata.path : null;
-                sessions.set(sessionId, { session: { id: sessionId, metadata, agentState: agentState.success ? agentState.data : null, sessionTurns },
+                sessions.set(sessionId, { session: { id: sessionId, createdAt: rawSession.createdAt, origin: rawSession.origin,
+                    manager: rawSession.manager, metadata, agentState: agentState.success ? agentState.data : null, sessionTurns },
                     remedySession: { id: sessionId, serverId: input.serverId, active: rawSession.active, access,
                         ownerMetadata, agentTarget: readAcpConfiguredBackendV1FromMetadata(ownerMetadata)?.backendId ? null
                             : resolveAgentExecutionTargetFromSessionMetadata(ownerMetadata) },

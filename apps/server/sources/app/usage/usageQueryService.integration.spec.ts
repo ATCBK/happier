@@ -85,6 +85,48 @@ describe("usageQueryService scoped aggregation", () => {
         ]);
     });
 
+    it('admits only exact personal requests after reconciliation, without admitting mixed-Session evidence', async () => {
+        const owner = await createUsageOwner('public-population');
+        const rows = [
+            { at: 0, tokens: 100, scope: 'session_cumulative', turnId: null, accountScope: undefined, team: false },
+            { at: 110, tokens: 10, scope: 'turn_delta', turnId: 'personal', accountScope: 'personal', team: false },
+            { at: 120, tokens: 20, scope: 'turn_delta', turnId: 'workspace', accountScope: 'workspace', team: false },
+            { at: 130, tokens: 30, scope: 'turn_delta', turnId: 'unknown', accountScope: undefined, team: false },
+            { at: 140, tokens: 40, scope: 'turn_delta', turnId: 'team-credential', accountScope: 'personal', team: true },
+            { at: 200, tokens: 200, scope: 'session_cumulative', turnId: null, accountScope: undefined, team: false },
+        ] as const;
+        await db.usageEvent.createMany({ data: rows.map(row => ({
+            ...buildUsageEvent({ ...owner, observedAt: new Date(row.at).toISOString(), scope: row.scope, totalTokens: row.tokens }),
+            turnId: row.turnId, source: row.turnId ?? 'counter',
+            teamCredentialActorAccountId: row.team ? owner.accountId : null,
+            metadata: {
+                usageAccounting: { path: 'runtime', status: 'available', historyComplete: true },
+                ...(row.accountScope ? { usageAttribution: { v: 1, turnId: row.turnId,
+                    source: { kind: 'native', connectedAccount: null, accountScope: row.accountScope } } } : {}),
+            },
+        })) });
+        await db.sessionMessage.createMany({ data: [115, 125].map((at, index) => ({
+            sessionId: owner.sessionId, seq: index + 1, content: { t: 'encrypted', c: 'ciphertext' }, createdAt: new Date(at),
+        })) });
+        const clauses = { dateRange: { startMs: 100, endMs: 300 }, breakdowns: ['source'],
+            includeActivity: true, includeLeaders: true, includeModelTimeline: true, includeMessageStats: true, includeInsights: true };
+        const ordinary = await querySession(owner.accountId, owner.sessionId, clauses);
+        expect(ordinary.totals.tokens.total).toBe(100);
+        expect(ordinary.messageStats?.messageCount).toBe(2);
+        const admitted = await querySession(owner.accountId, owner.sessionId, { ...clauses, population: 'public_eligible_personal' });
+        expect(admitted.totals.tokens.total).toBe(10);
+        expect(admitted.series?.reduce((sum, row) => sum + row.tokens.total, 0)).toBe(10);
+        expect(admitted.contributions?.map(row => row.turnId)).toEqual(['personal']);
+        expect(admitted.breakdowns?.source?.map(row => row.key)).toEqual(['personal']);
+        expect(admitted.coverage?.sources.map(row => row.source)).toEqual(['personal']);
+        expect(admitted.coverage).toMatchObject({ status: 'partial', range: { complete: false }, reasons: expect.arrayContaining(['incomplete_history']) });
+        expect(admitted.activity?.calendarDays?.[0]?.eventCount).toBe(1);
+        // A Session can contain both admitted and excluded requests. Whole-Session
+        // message counts cannot establish public exact-request detail membership.
+        expect(admitted.messageStats).toBeUndefined();
+        expect(admitted.insights).toBeUndefined();
+    });
+
     it("counts real messages only within their Account, publication ceiling and half-open query range", async () => {
         const owner = await createUsageOwner("message-publication");
         const partial = await db.session.create({ data: {

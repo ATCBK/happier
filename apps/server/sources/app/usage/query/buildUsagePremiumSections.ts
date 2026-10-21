@@ -7,6 +7,7 @@ import { buildUsageLeaderList, type UsageLeaderDimension } from '@happier-dev/pr
 import { resolveUsageBucketBounds as resolveBucketBounds, resolveUsageCalendarInstant } from '@happier-dev/protocol/usage/usageCalendar';
 import { resolveUsageContributionDimensionKey } from '@happier-dev/protocol/usage/usageCostFacts';
 import { resolveUsageCostMode } from "./resolveUsageCostMode";
+import { resolveUsageDayStreaks } from '@happier-dev/protocol/usage/usageActivitySummary';
 
 type UsageEventRow = Pick<
     ScopedUsageContribution,
@@ -125,34 +126,6 @@ export function buildUsageActivity(
     };
 }
 
-function countLongestStreak(dayKeys: string[]): number {
-    if (dayKeys.length === 0) {
-        return 0;
-    }
-
-    const timestamps = dayKeys
-        .map((key) => new Date(`${key}T00:00:00.000Z`).getTime())
-        .sort((left, right) => left - right);
-
-    let longest = 1;
-    let current = 1;
-
-    for (let index = 1; index < timestamps.length; index += 1) {
-        const previous = timestamps[index - 1];
-        const next = timestamps[index];
-        if (next - previous === 24 * 60 * 60 * 1000) {
-            current += 1;
-            longest = Math.max(longest, current);
-            continue;
-        }
-        if (next !== previous) {
-            current = 1;
-        }
-    }
-
-    return longest;
-}
-
 function buildTopKeyedLabel(values: Map<string, number>): { key: string; label: string } | undefined {
     if (values.size === 0) {
         return undefined;
@@ -221,9 +194,11 @@ export function buildUsageInsights(
         cacheSavingsUsd += row.cost.breakdown?.cacheSavingsUsd ?? 0;
     }
 
+    const daySummary = resolveUsageDayStreaks({ days: [...activeDays].map(date => ({ date, eventCount: 1 })),
+        referenceMs: Date.now(), timeZoneOffsetMinutes });
     return {
-        activeDays: activeDays.size,
-        longestStreakDays: countLongestStreak(Array.from(activeDays.values())),
+        activeDays: daySummary.activeDays ?? 0,
+        longestStreakDays: daySummary.longestStreakDays ?? 0,
         sessionsUsed: sessions.size,
         messagesUsed: messageCounts.messageCount,
         modelsTried: models.size,

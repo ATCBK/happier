@@ -1,6 +1,6 @@
 import type { UsageAccountingMetadata, UsageNativeAccountingSubject, UsageObservationCost } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import { readUsageAccountingMetadata, UsageNativeAccountingSubjectSchema, UsageObservationCostSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
+import { readUsageAccountingMetadata, readUsageRequestAttribution, UsageNativeAccountingSubjectSchema, UsageObservationCostSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { resolveUsageCostBasis } from '@happier-dev/protocol/usage/usageCostFacts';
 
 import type { ScopedUsageEventRow } from "./resolveScopedUsageContributions";
@@ -11,6 +11,16 @@ export interface ScopedUsageAccountingEvidence {
 }
 
 const nativeSubjectReadSchema = createStoredReadSchema(UsageNativeAccountingSubjectSchema);
+
+/** Reconciled request facts only: neither a current plan nor missing Team markers proves personal usage. */
+export function isPublicEligibleUsageRow(row: ScopedUsageEventRow): boolean {
+    if (!row.sessionId || row.scope !== 'turn_delta' || row.isCumulative
+        || row.teamCredentialResourceId || row.teamCredentialActorAccountId
+        || row.teamCredentialExternalApiKeyId || row.teamCredentialSourceCredentialId) return false;
+    const attribution = readUsageRequestAttribution(row.metadata);
+    return attribution?.turnId === row.turnId && attribution.source.kind === 'native'
+        && attribution.source.accountScope === 'personal';
+}
 
 /** Keep parsed evidence on the row, including the neutral parser's normalized JSON snapshots. */
 export function readScopedUsageAccountingEvidence(

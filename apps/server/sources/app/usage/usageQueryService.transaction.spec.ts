@@ -63,6 +63,15 @@ describe('Usage snapshot transaction lifetime', () => {
         expect(projectionBeforeCommit).not.toContain(true);
     });
 
+    it('refuses the public population when the real supporting capability is unavailable', async () => {
+        await withAuthenticatedTestApp(app => registerAccountUsageRoutes(app), async app => {
+            const response = await app.inject({ method: 'POST', url: '/v2/usage/query',
+                headers: { 'x-test-user-id': 'account' }, payload: { population: 'public_eligible_personal' } });
+            expect(response.statusCode).toBe(404);
+            expect(response.json()).toEqual({ error: 'not_found' });
+        });
+    });
+
     it.each(['/v1/usage/query', '/v2/usage/query'])('replies from %s only after a successful retry commits', async url => {
         retry = true;
         const repliesBeforeCommit: boolean[] = [];
