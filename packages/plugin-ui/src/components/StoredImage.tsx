@@ -45,8 +45,9 @@ export function StoredImage({ image, accessibilityLabel, testID, expandable = tr
   const current: typeof preview = preview.identity === identity ? preview : { identity, status: 'loading' };
   const stage = presentationHost?.mediaStage;
   const uri = current.uri;
-  const activate = expandable && stage && current.status === 'loaded' && uri
-    ? () => stage.open([{ kind: 'image', uri, title: accessibilityLabel }], 0)
+  const loadedImage = current.image;
+  const activate = expandable && stage && current.status === 'loaded' && uri && loadedImage
+    ? () => stage.open([{ kind: 'image', uri, title: accessibilityLabel, mimeType: loadedImage.mimeType }], 0)
     : onPress;
   return <HappierStoredImage identity={identity} status={current.status} uri={current.uri}
     dimensions={current.image} accessibilityLabel={accessibilityLabel} testID={testID}

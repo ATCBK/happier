@@ -14,7 +14,7 @@ vi.mock('expo-router', async () => {
 });
 
 describe('mounted same-realm media stage', () => {
-    it('opens a StoredImage through the private physical port into the real modal stage', async () => {
+    it('uses the admitted PNG result for StoredImage stage backing', async () => {
         const { StoredImage } = await import('@happier-dev/plugin-ui');
         const { PluginUiProvider } = await import('@happier-dev/plugin-ui/advanced');
         const { CorePluginUiPresentationScope } = await import('./CorePluginUiPresentationScope');
@@ -45,8 +45,10 @@ describe('mounted same-realm media stage', () => {
             await screen.pressByTestIdAsync('stored-capture');
             expect(modal.state.modals).toHaveLength(1);
             expect(screen.findAllByType(MediaStage)).toHaveLength(1);
-            expect(screen.findByType(MediaStage).props.items).toEqual([{ kind: 'image', title: 'Capture',
-                source: { enabled: true, source: { kind: 'uri', uri: 'data:image/png;base64,cG5n' } } }]);
+            await act(async () => screen.findByTestId('media-stage-image')!.props.onLoad({ source: { width: 100, height: 60 } }));
+            expect(screen.findAllHostsByTestId('media-stage-image-checkerboard')).toHaveLength(1);
+            expect(screen.findByType(MediaStage).props.items).toEqual([{ kind: 'image', title: 'Capture', alphaCapable: true,
+                source: { enabled: true, mimeType: 'image/png', source: { kind: 'uri', uri: 'data:image/png;base64,cG5n' } } }]);
             await act(async () => modal.hideAllModals());
             expect(screen.findAllByType(MediaStage)).toHaveLength(0);
         } finally {

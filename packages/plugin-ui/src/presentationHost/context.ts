@@ -210,7 +210,7 @@ export type PluginUiPresentationHost = Readonly<{
   storedImageHost?: HappierStoredImageHost;
   /** Same-realm presentation of an already admitted image; no read or modal authority crosses this port. */
   mediaStage?: Readonly<{
-    open(items: readonly Readonly<{ kind: 'image'; uri: string; title: string }>[], index: number): void;
+    open(items: readonly Readonly<{ kind: 'image'; uri: string; title: string; mimeType?: string }>[], index: number): void;
   }>;
   /**
    * Keep a pushed detail's pinned footer above the on-screen keyboard through the host's keyboard

@@ -31,7 +31,7 @@ describe('authorized StoredImage reference presentation', () => {
     try {
       const press = () => act(() => { mount.container.querySelector<HTMLElement>('[aria-label="Capture"]')?.click(); });
       press();
-      expect(open).toHaveBeenCalledWith([{ kind: 'image', uri: 'data:image/png;base64,cG5n', title: 'Capture' }], 0);
+      expect(open).toHaveBeenCalledWith([{ kind: 'image', uri: 'data:image/png;base64,cG5n', title: 'Capture', mimeType: 'image/png' }], 0);
       expect(onPress).not.toHaveBeenCalled();
       await mount.render(render(true, false));
       press();
