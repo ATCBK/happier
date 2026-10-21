@@ -3,7 +3,7 @@ import * as React from 'react';
 import { act } from 'react';
 import { afterEach, expect, it } from 'vitest';
 import { createPluginUiTestkit, createSurfaceContextFixture, type PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
-import { defineUiSurface } from '@happier-dev/plugin-ui';
+import { defineUiSurface, Text } from '@happier-dev/plugin-ui';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
 import type { PluginUiTargetedContributionsV1 } from '@happier-dev/plugin-sdk/ui';
 import { createTriageSourceV1Fixture } from '@happier-dev/triage-protocol/testing/v1';
@@ -13,8 +13,11 @@ import { TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1, TRIAGE_SOURCES_CONTRIBUTION_PR
 import { testkitEntryRef, testkitObservation } from '../../corpus/testkit/observations.test-support.js';
 import { foldTriageListWindow, TRIAGE_LIST_DEFAULT_LENS_V1 } from '../../projection/listWindow.js';
 import { TriageCreateTaskActionInputV1Schema, TriageEditTaskActionInputV1Schema } from '../../actions/tasksProtocol.js';
+import { TriageListEntriesInputV1Schema } from '../../actions/listEntriesProtocol.js';
 import type { TriageMountedConfiguredSourceV1 } from '../configuration/useTriageConfiguredSources.js';
 import { readTriageSelectedObservationV1 } from '../window/selectedObservation.js';
+import { useTriageListWindow } from '../window/useTriageListWindow.js';
+import { createTriageEphemeralSharedScopeFixture } from '../window/ephemeralSharedScope.test-support.js';
 import { TriageCreateTaskFields, TriageEditTaskScope, TriageTaskRowStatusControl, useTriageTaskCommit } from './taskFields.js';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -102,6 +105,73 @@ it.each([false, true])('submits a create through the Account aggregate without a
   expect(saved).toHaveLength(1);
   expect(saved[0]?.fields).toEqual({ title: 'Fix reconnect handling' });
   expect(saved[0]?.sourceInstanceId).toBe(source.configuredInstance.instance.sourceInstanceId);
+});
+
+it('opens the created task before a mounted aggregate reread settles and preserves the applied write when that read fails', async () => {
+  const source = createTriageSourceV1Fixture();
+  const scope = createTriageEphemeralSharedScopeFixture();
+  const saved: ReturnType<typeof TriageCreateTaskActionInputV1Schema.parse>[] = [];
+  let readStarted!: () => void;
+  const reading = new Promise<void>(resolve => { readStarted = resolve; });
+  let rejectRead!: (error: Error) => void;
+  const heldRead = new Promise<never>((_resolve, reject) => { rejectRead = reject; });
+  let window!: ReturnType<typeof useTriageListWindow>;
+  let fixture!: PluginUiTestkit;
+  await act(async () => {
+    fixture = await createPluginUiTestkit({ identity: { instanceId: 'created-task', mountNonce: 'held-read' },
+      authorPlugin: { id: 'happier.triage', version: '0.0.0' },
+      surface: defineUiSurface(() => {
+        window = useTriageListWindow();
+        const [created, setCreated] = React.useState<TriageEntryRefV1 | null>(null);
+        return created === null ? <TriageCreateTaskFields sources={[{
+          sourceInstanceId: source.configuredInstance.instance.sourceInstanceId,
+          configured: source.configuredInstance, displayLabel: 'Engineering',
+        }]} sourcesLoaded sourcesUnavailableReason={null} draft={{ title: 'Saved Account task' }}
+          onApplied={() => window.refresh('manual')} onClose={() => undefined}
+          onCreated={result => setCreated(result.entryRef)} />
+          : <Text value={created.entryId} />;
+      }),
+      surfaceContext: createSurfaceContextFixture({
+        targetedContributions: targetedTaskSource(source.configuredInstance.instance.source, 'issue', 'create'),
+        machineConnectionPending: true, machineExecutionReady: false,
+      }),
+      adapter: createPluginUiRnwSemanticSurfaceAdapter({ ephemeralSharedScope: scope }),
+      // The SDK host request is the genuine boundary. Commit, form and mounted
+      // refresh/coalescing owners are real; only the aggregate transport is held.
+      handlers: { executeAction: ({ action, input }) => {
+        if (action === 'tasks/create-v1') {
+          saved.push(TriageCreateTaskActionInputV1Schema.parse(input));
+          return { kind: 'applied', observation: source.getResult };
+        }
+        expect(action).toBe('entries/list-v1');
+        TriageListEntriesInputV1Schema.parse(input);
+        readStarted();
+        return heldRead;
+      } },
+    });
+  });
+  mounted.push(fixture);
+  await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Engineering' })); });
+  let submission: Promise<void> | undefined;
+  try {
+    await act(async () => {
+      submission = fixture.press(await fixture.getByRole('button', { name: 'Create task' }));
+      await reading;
+    });
+    expect(saved).toHaveLength(1);
+    expect(window.snapshot.pending).not.toBe('idle');
+    expect(document.querySelector('[role="form"]')).toBeNull();
+    expect(document.body.textContent).toContain(source.getResult.localRef.entryId);
+  } finally {
+    await act(async () => {
+      rejectRead(new Error('Another source could not finish its aggregate read'));
+      await submission;
+    });
+  }
+  expect(window.snapshot.error).toBeDefined();
+  expect(document.querySelector('[role="form"]')).toBeNull();
+  expect(document.body.textContent).toContain(source.getResult.localRef.entryId);
+  expect(saved).toHaveLength(1);
 });
 
 async function mountEditor(options: Readonly<{ readOnly?: boolean; uncertain?: boolean; truncated?: boolean; readFailed?: boolean;

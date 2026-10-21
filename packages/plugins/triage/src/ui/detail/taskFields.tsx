@@ -52,13 +52,16 @@ export function useTriageTaskCommit(onApplied: () => Promise<void>) {
     // before that render has committed the disabled state.
     uncertain.current = next.kind === 'uncertain';
     setResult(next);
-    // A failed reread must never turn a confirmed write into a retryable write failure.
-    try { if (next.kind === 'applied' || next.kind === 'uncertain') await onApplied(); }
-    catch {
-      host.diagnostic({ code: 'triage_task_reread_unavailable', severity: 'warning',
-        message: 'The task write settled, but its authoritative reread was unavailable.' });
+    // The source settled the write. The shared window's aggregate-idle barrier
+    // can still await other sources, so it must not hold this commit open.
+    if (next.kind === 'applied' || next.kind === 'uncertain') {
+      void Promise.resolve().then(onApplied).catch(() => {
+        host.diagnostic({ code: 'triage_task_reread_unavailable', severity: 'warning',
+          message: 'The task write settled, but its authoritative reread was unavailable.' });
+      });
     }
-    finally { pending.current = false; setBusy(false); }
+    pending.current = false;
+    setBusy(false);
     return next;
   };
   return { result, busy, commit };
