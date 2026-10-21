@@ -82,6 +82,12 @@ Use this when you want:
 
 TTS can still stay enabled here, so Happier can read replies back to you.
 
+In 0.3 development, automatic playback waits for the final reply of the turn
+that accepted your message, including when it steers a turn already running.
+Progress narration and thinking text are not spoken as the answer. A slow
+session reply has no fixed sixty-second cutoff; **End** or interruption cancels
+the wait.
+
 ### Agent
 
 In **Agent** mode, your speech first goes through a dedicated voice agent.
