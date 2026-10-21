@@ -661,7 +661,7 @@ describe('Session Team credential Provider binding', () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
-  it('fails currentness before Agent materialization and closes the carrier', async () => {
+  it('fails currentness before acquiring the carrier or materializing the Agent', async () => {
     const close = vi.fn(async () => undefined);
     const adapter: ProviderAdapter = {
       v: 1, adapterVersion: 1,
@@ -671,6 +671,8 @@ describe('Session Team credential Provider binding', () => {
     const readCatalog = vi.fn()
       .mockResolvedValueOnce([row])
       .mockResolvedValueOnce([{ ...row, sourceRevision: 'catalog:changed' }]);
+    const openTunnel = vi.fn(async () => ({ localPort: 43123, localCapability: 'c'.repeat(64), observedPath: 'direct' as const,
+      retire: async () => undefined, close }));
     await expect(openSessionTeamCredentialProviderBinding({
       sessionId: 'session-1', machineId: 'worker-1', agentId: 'codex',
       agentTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-5',
@@ -679,10 +681,11 @@ describe('Session Team credential Provider binding', () => {
       signal: new AbortController().signal, readCatalog,
       openBroker: async () => ({ ok: true, authority,
         target: { custodianAccountId: 'account-2', brokerMachineId: 'broker-1', endpointId: 'b'.repeat(64), endpointRevision: 1, endpoint: { endpointId: 'b'.repeat(64) } } }),
-      openTunnel: async () => ({ localPort: 43123, localCapability: 'c'.repeat(64), observedPath: 'direct', retire: async () => undefined, close }),
+      openTunnel,
     })).rejects.toThrow('selection_changed');
     expect(adapter.materialize).not.toHaveBeenCalled();
-    expect(close).toHaveBeenCalledOnce();
+    expect(openTunnel).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
   });
 
   it.each(['missing declaration', 'non-204', 'cancelled', 'selection changed'] as const)(

@@ -762,6 +762,8 @@ export function registerPeerTcpTunnelRelayTerminator(
         } finally {
             clearTimeout(admissionTimer);
             if (openingTunnels.get(tunnelId) === admission) {
+                // Failed admission still owns any unclaimed application target.
+                admission.abort();
                 openingTunnels.delete(tunnelId);
                 pendingFramesByOpeningTunnel.delete(tunnelId);
             }

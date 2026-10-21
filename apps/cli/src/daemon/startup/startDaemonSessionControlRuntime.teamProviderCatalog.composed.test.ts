@@ -1,6 +1,11 @@
 import axios from 'axios';
+import { createServer } from 'node:http';
 import { join, resolve } from 'node:path';
-import { afterEach, expect, it, vi } from 'vitest';
+import tweetnacl from 'tweetnacl';
+import { MACHINE_CONTROL_TIMEOUT_MS } from '@happier-dev/iroh-native';
+import { createProviderBrokerRouteGrantSigningInputV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { DIRECT_ROUTE_GRANT_TTL_MS } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantCachePolicyV1';
+import { afterEach, expect, it, onTestFailed, onTestFinished, vi } from 'vitest';
 import { DEFAULT_PROVIDER_SETTINGS_V1, ProviderConnectionIdSchema, splitProviderSettingsV1 } from '@happier-dev/protocol';
 import { ProviderModelBindingSourceV1Schema, ProviderModelConfirmationSourceV1Schema } from '@happier-dev/protocol/providers/binding-compatibility';
 import { setProviderExperimentalConfirmationV1 } from '@happier-dev/protocol/providers/settings/operationsV1';
@@ -23,6 +28,9 @@ import { openCurrentRunnerTeamCredentialProviderBinding } from '@/agent/runtime/
 import { readSessionPreparationFailureDiagnostic } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { AGENT_RUNTIME_DAEMON_SERVICES_PATH } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import { logger } from '@/ui/logger';
+import { createDaemonMachineIrohRuntime } from '@/daemon/peer/iroh/daemonMachineIrohRuntime';
+import { createProviderBrokerMachineCarrierTunnelOpen } from '@/daemon/peer/iroh/providerBrokerMachineCarrierTunnelOpen';
+import { startPeerMediationLoopbackServer } from '@/daemon/peer/mediation/loopback/server';
 
 const nativeFetch = fetch;
 const boundary = vi.hoisted(() => ({ control: null as Parameters<typeof startDaemonControlServer>[0] | null, port: 0,
@@ -49,22 +57,56 @@ vi.mock('@/daemon/controlServer', async importOriginal => {
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); boundary.control = null; });
 
-it.each(['ready', 'missing declaration', 'non-204', 'socket closed', 'refresh refused'] as const)(
+it.each(['ready', 'missing declaration', 'non-204', 'socket closed', 'refresh refused', 'slow catalog'] as const)(
   'opens the real Codex Team binder with the tracked recipient catalog, never custodian consent (%s)', async metadata => {
   let h: Awaited<ReturnType<typeof createInstalledProjectAgentDaemonFixture>>;
   let model: TeamCredentialProviderModelCatalogEntryV1;
   let brokerOpens = 0;
+  let catalogReads = 0;
   let refreshStream: (() => Promise<unknown>) | undefined;
+  let nativeTunnelOpen: ReturnType<typeof createProviderBrokerMachineCarrierTunnelOpen> | undefined;
+  let workerEndpoint: import('@happier-dev/protocol').IrohEndpointDescriptorV1 | undefined;
+  let brokerEndpoint: import('@happier-dev/protocol').IrohEndpointDescriptorV1 | undefined;
+  const signingKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(91));
+  const cleanup: Array<() => Promise<void>> = [];
+  onTestFinished(async () => { for (const close of cleanup.reverse()) await close(); });
   const warnings = vi.spyOn(logger, 'warnLocalFile');
+  if (metadata === 'slow catalog') onTestFailed(() => console.error('Team native discovery', {
+    catalogReads, brokerOpens, warnings: warnings.mock.calls.filter(([label]) =>
+      label === '[ProviderBroker] Endpoint discovery refused' || label === '[ProviderBroker] Machine stream admission refused'),
+  }));
   h = await createInstalledProjectAgentDaemonFixture(() => boundary.control, 'codex', false, undefined, undefined, {
     openTeamCredentialProviderBinding: async input => {
       const opened = await openSessionTeamCredentialProviderBinding({ ...input, machineId: 'machine',
         binding: { v: 1, slot: { kind: 'provider_model' }, resourceId: input.resourceId, expectedResourceRevision: input.expectedResourceRevision,
           deliveryMode: input.deliveryMode, teamId: input.teamId }, lease: h.plugin.lease,
-        materializationBaseDir: join(h.f.directory, 'materialized'), readCatalog: async () => [model],
+        materializationBaseDir: join(h.f.directory, 'materialized'), readCatalog: async () => {
+          // This is the Home catalog transport boundary. A valid read can
+          // outlive native's pre-application custody window; it must not leave
+          // an unused connection waiting for its first stream throughout it.
+          if (++catalogReads === 2 && metadata === 'slow catalog') {
+            await new Promise(resolve => setTimeout(resolve, MACHINE_CONTROL_TIMEOUT_MS + 1));
+          }
+          return [model];
+        },
         openBroker: async request => {
           brokerOpens++;
           if (request.refreshAuthority && metadata === 'refresh refused') return { ok: false, reasonCode: 'broker_unavailable' };
+          if (workerEndpoint && brokerEndpoint) {
+            const issuedAt = Date.now();
+            const payload = { v: 1 as const, aud: 'happier-provider-broker-route-v1' as const,
+              grantId: 'grant', issuedAt, expiresAt: issuedAt + DIRECT_ROUTE_GRANT_TTL_MS.directTcpTunnel,
+              teamId: 'team', resourceId: request.resourceId, sourceRevision: request.sourceRevision,
+              brokerPlacementFingerprint: 'c'.repeat(64), initiatorTokenEpoch: 0,
+              initiator: { accountId: 'requester', machineId: 'machine', endpointId: workerEndpoint.endpointId },
+              target: { custodianAccountId: 'source-owner', machineId: 'broker', endpointId: brokerEndpoint.endpointId },
+              consumer: request.consumer, application: request.application };
+            return { ok: true, target: { custodianAccountId: 'source-owner', brokerMachineId: 'broker',
+              endpointId: brokerEndpoint.endpointId, endpointRevision: 1, endpoint: brokerEndpoint },
+              authority: { payload, signature: { alg: 'Ed25519', keyId: 'home', valueBase64Url: Buffer.from(
+                tweetnacl.sign.detached(Buffer.from(createProviderBrokerRouteGrantSigningInputV1(payload)), signingKey.secretKey),
+              ).toString('base64url') } } };
+          }
           return { ok: true, target: { custodianAccountId: 'source-owner', brokerMachineId: 'broker', endpointId: 'b'.repeat(64),
             endpointRevision: 1, endpoint: { endpointId: 'b'.repeat(64) } }, authority: { payload: { v: 1,
               aud: 'happier-provider-broker-route-v1', grantId: 'grant', issuedAt: 1, expiresAt: 2,
@@ -75,7 +117,9 @@ it.each(['ready', 'missing declaration', 'non-204', 'socket closed', 'refresh re
               consumer: request.consumer, application: request.application },
               signature: { alg: 'Ed25519', keyId: 'home', valueBase64Url: 'A'.repeat(86) } } };
         },
-        openTunnel: async ({ refreshBrokerOpen }) => {
+        openTunnel: async request => {
+          if (nativeTunnelOpen) return await nativeTunnelOpen(request);
+          const { refreshBrokerOpen } = request;
           refreshStream = refreshBrokerOpen;
           return { localPort: 43123, localCapability: 'synthetic-consumer-token', observedPath: 'direct',
             retire: async () => undefined, close: async () => undefined };
@@ -127,11 +171,49 @@ it.each(['ready', 'missing declaration', 'non-204', 'socket closed', 'refresh re
     return get(url, options);
   });
   const fetchBoundary = vi.mocked(fetch).getMockImplementation()!;
+  if (metadata === 'slow catalog') {
+    // The target HTTP service is the external boundary. Keep real signed
+    // cross-Account admission, native Iroh and capability gating in the path.
+    const http = createServer((request, response) => {
+      if (request.url === PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH) {
+        response.writeHead(204, { [PROVIDER_BROKER_ENDPOINT_PATH_HEADER]: '/v1' }).end();
+      } else response.writeHead(204).end();
+    });
+    await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve));
+    cleanup.push(() => new Promise<void>((resolve, reject) => {
+      http.close(error => error ? reject(error) : resolve()); http.closeAllConnections();
+    }));
+    const address = http.address();
+    if (!address || typeof address === 'string') throw new Error('Missing broker HTTP target');
+    const worker = await createDaemonMachineIrohRuntime({ happyHomeDir: h.f.directory, identity: 'ephemeral',
+      relayConfig: { relayPolicy: 'disabled', relayUrls: [] } });
+    cleanup.push(worker.shutdown);
+    const broker = await createDaemonMachineIrohRuntime({ happyHomeDir: h.f.directory, identity: 'ephemeral',
+      relayConfig: { relayPolicy: 'disabled', relayUrls: [] } });
+    cleanup.push(broker.shutdown);
+    if (!worker.available || !broker.available) throw new Error('Expected native Team endpoints');
+    workerEndpoint = worker.endpoint;
+    brokerEndpoint = broker.endpoint;
+    const trustRoots = [{ keyId: 'home', publicKey: Buffer.from(signingKey.publicKey).toString('base64url') }];
+    const admission = await startPeerMediationLoopbackServer({ nowMs: Date.now,
+      expected: { accountId: 'source-owner', machineId: 'broker', flowKind: 'machine_rpc',
+        routeKind: 'loopback_direct', endpointFingerprint: broker.endpoint.endpointId },
+      trustRoots, endpointExpiresAt: Date.now() + DIRECT_ROUTE_GRANT_TTL_MS.directTcpTunnel,
+      irohMachineAdmission: { localEndpointId: broker.endpoint.endpointId, role: 'acceptor', allowedFlows: [],
+        resolveApplicationTarget: async () => null,
+        resolveProviderBrokerApplicationTarget: async () => ({ port: address.port }) },
+    });
+    cleanup.push(admission.stop);
+    await broker.startAttemptAcceptor({ admissionPort: Number(new URL(admission.url).port) });
+    nativeTunnelOpen = createProviderBrokerMachineCarrierTunnelOpen({ accountId: 'requester', localMachineId: 'machine',
+      runtime: worker, resolveTrustRoots: () => trustRoots, fetchImpl: nativeFetch });
+  }
   vi.mocked(fetch).mockImplementation(async (url, options) => {
     const target = new URL(String(url));
     if (target.pathname === AGENT_RUNTIME_DAEMON_SERVICES_PATH && target.hostname === '127.0.0.1'
       && target.port === String(boundary.port)) return nativeFetch(url, options);
     if (target.pathname === PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH) {
+      if (metadata === 'slow catalog') return nativeFetch(url, options);
       // Native transport is the boundary: a failed fresh handshake closes its
       // local HTTP socket without returning an HTTP response to the real binder.
       if (metadata === 'refresh refused') await refreshStream?.();
@@ -159,7 +241,7 @@ it.each(['ready', 'missing declaration', 'non-204', 'socket closed', 'refresh re
     kind: 'provider_broker.binding.open', resourceId: 'resource', expectedResourceRevision: 2,
     agentTargetKey, modelId: model.descriptor.id } });
   try {
-  if (metadata !== 'ready') {
+  if (metadata !== 'ready' && metadata !== 'slow catalog') {
     const refused = await openThroughRunner().then(() => null, (error: unknown) => error);
     expect(brokerOpens).toBe(metadata === 'refresh refused' ? 2 : 1);
     expect(warnings.mock.calls).toContainEqual(['[ProviderBroker] Endpoint discovery refused', expect.objectContaining({
@@ -187,7 +269,8 @@ it.each(['ready', 'missing declaration', 'non-204', 'socket closed', 'refresh re
   const opened = await openThroughRunner();
   expect(opened).toMatchObject({ kind: 'provider_broker.binding', status: 'opened',
     providerBinding: { source: { kind: 'team_resource', resourceId: 'resource', resourceRevision: 2 }, model: model.descriptor,
-      upstream: { protocol: 'openai-responses', normalizedUrl: 'http://127.0.0.1:43123/v1', credential: 'apiKey' } } });
+      upstream: { protocol: 'openai-responses', normalizedUrl: metadata === 'slow catalog'
+        ? expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/v1$/u) : 'http://127.0.0.1:43123/v1', credential: 'apiKey' } } });
   const config = parseCodexProviderBindingEngineConfigV1(opened.providerBinding);
   if (!config) throw new Error('Expected Codex engine config');
   expect(config.config[`model_providers.${config.modelProvider}`]).toMatchObject({
@@ -195,10 +278,10 @@ it.each(['ready', 'missing declaration', 'non-204', 'socket closed', 'refresh re
   });
   expect(h.requester.readAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({ status: 'ready', revision: 2 });
   expect(getActiveAccountSettingsSnapshot()).toEqual(ambient);
-  expect(brokerOpens).toBe(1);
+  expect(brokerOpens).toBe(metadata === 'slow catalog' ? 2 : 1);
   h.f.retire();
   await expect(open()).rejects.toThrow('requester_session_not_current');
-  expect(brokerOpens).toBe(1);
+  expect(brokerOpens).toBe(metadata === 'slow catalog' ? 2 : 1);
   } finally {
     await removeAgentRuntimeDaemonServiceAuthorityIfOwned({ happyHomeDir: configuration.happyHomeDir,
       publicReleaseRing: configuration.publicReleaseRing, path, capabilityDigest: published.capabilityDigest });

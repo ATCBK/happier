@@ -105,6 +105,18 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
       || !pluginJsonValuesEqual(payload.consumer, input.consumer)
       || payload.executionRunOccurrenceId !== input.executionRunOccurrenceId
       || !pluginJsonValuesEqual(payload.application, input.application)) throw unavailable();
+    let closed = false;
+    const assertAdmitted = async (signal: AbortSignal = input.signal) => {
+      failedReason = 'admission_refused';
+      signal.throwIfAborted();
+      if (closed || !await input.admitConsumer(opened.authority, signal)) throw unavailable();
+      signal.throwIfAborted();
+      if (closed) throw unavailable();
+    };
+    // Home currentness reads can outlive native's pre-application custody
+    // window. Finish admission before acquiring the connection, then send its
+    // first request immediately and revalidate before publishing the binding.
+    await assertAdmitted();
     // The existing carrier verifies the signature and transport-observed peer
     // before it publishes this host-only loopback listener. It renews the same
     // exact authority for each new stream and never replays an inference call.
@@ -125,19 +137,11 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
       throw error;
     }
     const localOrigin = `http://127.0.0.1:${tunnel.localPort}`;
-    let closed = false;
     let cleanupInFlight: Promise<void> | null = null;
     const headers = Object.freeze({
       authorization: `Bearer ${tunnel.localCapability}`,
       [MACHINE_HTTP_LOCAL_CAPABILITY_HEADER]: tunnel.localCapability,
     });
-    const assertAdmitted = async (signal: AbortSignal = input.signal) => {
-      failedReason = 'admission_refused';
-      signal.throwIfAborted();
-      if (closed || !await input.admitConsumer(opened.authority, signal)) throw unavailable();
-      signal.throwIfAborted();
-      if (closed) throw unavailable();
-    };
     const cleanup = () => {
       if (cleanupInFlight) return cleanupInFlight;
       closed = true;
@@ -155,7 +159,6 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
     };
     let endpointUrl: string;
     try {
-      await assertAdmitted();
       failedReason = 'endpoint_discovery_failed';
       endpointUrl = await discovery.readEndpointUrl({ localOrigin, headers, signal: input.signal, fetchImpl: input.fetchImpl });
       await assertAdmitted();

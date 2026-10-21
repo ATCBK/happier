@@ -147,7 +147,6 @@ export async function openExactSessionTeamCredentialProviderBinding(
     revalidateSelection?(input: Readonly<{
       signal: AbortSignal;
       brokerOpen: Extract<ProviderBrokerOpenResponseV1, { ok: true }>;
-      tunnel: BrokerTunnel;
     }>): Promise<void>;
   }>,
 ): Promise<SessionTeamCredentialProviderBinding> {
@@ -198,6 +197,12 @@ export async function openExactSessionTeamCredentialProviderBinding(
     throw new Error('team_credential_provider_broker_open_changed');
   }
   input.signal.throwIfAborted();
+  // Catalog and recipient consent can require slow Home reads. Complete them
+  // before acquiring native's connection: an unused connection is retired by
+  // its pre-application custody owner before it ever asks for a fresh grant.
+  await input.revalidateSelection?.({ signal: input.signal, brokerOpen: opened });
+  await assertAdmission();
+  input.signal.throwIfAborted();
   const discovery = createProviderBrokerEndpointDiscovery();
   const tunnel = await input.openTunnel({
     brokerOpen: opened,
@@ -213,10 +218,6 @@ export async function openExactSessionTeamCredentialProviderBinding(
   let composed: Awaited<ReturnType<typeof composeProviderBindingMaterialization>> | null = null;
   try {
     input.signal.throwIfAborted();
-    await input.revalidateSelection?.({ signal: input.signal, brokerOpen: opened, tunnel });
-    input.signal.throwIfAborted();
-    await assertAdmission();
-
     const endpointUrl = await discovery.readEndpointUrl({
       localOrigin: `http://127.0.0.1:${tunnel.localPort}`,
       headers: { authorization: `Bearer ${tunnel.localCapability}`,
@@ -224,7 +225,7 @@ export async function openExactSessionTeamCredentialProviderBinding(
         [PROVIDER_BROKER_MODEL_ID_HEADER]: selection.modelId },
       signal: input.signal,
     });
-    await input.revalidateSelection?.({ signal: input.signal, brokerOpen: opened, tunnel });
+    await input.revalidateSelection?.({ signal: input.signal, brokerOpen: opened });
     input.signal.throwIfAborted();
 
     const bindingKey = `team_resource:${selection.resourceId}:revision:${selection.expectedResourceRevision}:route:brokered`;

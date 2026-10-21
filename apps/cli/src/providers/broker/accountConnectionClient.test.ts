@@ -17,6 +17,7 @@ describe('personal connection broker consumer', () => {
     ['binding_invalid', undefined, 'ordinary'],
     ['binding_invalid', undefined, 'signature'],
     ['admission_refused', undefined, 'ordinary'],
+    ['admission_refused', undefined, 'post_discovery'],
     ['tunnel_open_failed', undefined, 'ordinary'],
     ['endpoint_discovery_failed', 403, 'ordinary'],
     ['endpoint_discovery_failed', 204, 'ordinary'],
@@ -46,6 +47,7 @@ describe('personal connection broker consumer', () => {
     let publishedClosed = false;
     let retirementAcknowledged = false;
     let nativeOpens = 0;
+    let admissionReads = 0;
     // A real closed HTTP connection reproduces c72's no-status discovery shape.
     const discoveryServer = variant === 'socket' ? createServer((request) => request.socket.destroy()) : null;
     let localPort = 43123;
@@ -76,7 +78,10 @@ describe('personal connection broker consumer', () => {
         initiatorMachineId: 'worker-1', targetMachineId: reason === 'binding_invalid' && variant !== 'signature' ? 'different-hub' : 'hub-1',
         connectionId, consumer, application, ...capturedFacts, signal: new AbortController().signal,
         openBroker: async () => reason === 'broker_open_refused' ? { ok: false, reasonCode: 'broker_unavailable' } : opened,
-        admitConsumer: async () => reason !== 'admission_refused',
+        admitConsumer: async () => {
+          admissionReads++;
+          return reason !== 'admission_refused' || (variant === 'post_discovery' && admissionReads === 1);
+        },
         openTunnel,
         fetchImpl: async (request, options) => {
           if (variant === 'socket') return await fetch(request, options);
@@ -104,7 +109,12 @@ describe('personal connection broker consumer', () => {
       for (const privateValue of ['do-not-log', 'synthetic-private', 'home-1', 'account-1', 'gateway-1', 'worker-1', 'hub-1', 'a'.repeat(64), opened.authority.signature.valueBase64Url]) {
         expect(serialized).not.toContain(privateValue);
       }
-      if (reason === 'admission_refused' || reason === 'endpoint_discovery_failed') {
+      if (reason === 'admission_refused' && variant !== 'post_discovery') {
+        expect(nativeOpens).toBe(0);
+        expect(publishedClosed).toBe(false);
+        expect(retirementAcknowledged).toBe(false);
+      }
+      if (reason === 'endpoint_discovery_failed' || variant === 'post_discovery') {
         expect(publishedClosed).toBe(true);
         expect(retirementAcknowledged).toBe(true);
       }

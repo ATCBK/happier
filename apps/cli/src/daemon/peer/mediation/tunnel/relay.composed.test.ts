@@ -15,6 +15,7 @@ import tweetnacl from 'tweetnacl';
 import { EventEmitter, once } from 'node:events';
 import { createServer, type Socket } from 'node:net';
 import { connectPeerTcpTunnelTcp } from './open';
+import { startFirstBytesLocalCapabilityProxy, type FirstBytesLocalCapabilityProxy } from '../loopback/firstBytesLocalCapability';
 import { afterAll, beforeAll, describe, expect, it, onTestFailed, onTestFinished, vi } from 'vitest';
 import type { Server } from 'socket.io';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
@@ -491,6 +492,7 @@ describe('registerPeerTcpTunnelRelayTerminator', () => {
     describe('Home-backed relay disconnect fixture', () => {
         let database: Awaited<ReturnType<typeof import('../../../../../../server/sources/testkit/lightSqliteHarness').createLightSqliteHarness>> | undefined;
         let databaseSetup: Promise<void> | undefined;
+        // Real SQLite deploy uses the server composed fixtures' setup budget.
         beforeAll(() => {
             databaseSetup = (async () => {
                 const { createLightSqliteHarness } = await import('../../../../../../server/sources/testkit/lightSqliteHarness');
@@ -509,7 +511,7 @@ describe('registerPeerTcpTunnelRelayTerminator', () => {
                 } });
             })();
             return databaseSetup;
-        });
+        }, 180_000);
         afterAll(async () => {
             // Join acquisition even if the setup hook failed before releasing its owned database.
             try { await databaseSetup; }
@@ -940,35 +942,69 @@ describe('registerPeerTcpTunnelRelayTerminator', () => {
         }));
     });
 
-    it('keeps a server-consumed relay grant unavailable when daemon TCP activation fails', async () => {
+    it.each(['tcp_tunnel', 'provider_broker'] as const)('keeps a server-consumed %s relay grant unavailable and releases its target when daemon TCP activation fails', async (flowKind) => {
         const mod = await loadRelayModule();
         expect(mod?.registerPeerTcpTunnelRelayTerminator).toBeTypeOf('function');
         if (!mod?.registerPeerTcpTunnelRelayTerminator) return;
 
         const socket = createSocket();
         const connectTcp = vi.fn().mockRejectedValue(new Error('refused'));
-        mod.registerPeerTcpTunnelRelayTerminator({
+        let proxy: FirstBytesLocalCapabilityProxy | undefined;
+        let proxyClosed = false;
+        const runtime = mod.registerPeerTcpTunnelRelayTerminator({
             accountId: 'user_1',
             machineId: 'machine_1',
             socket,
             nowMs: () => 2_000,
             relayAuthorizationTrustRoots,
             connectTcp,
+            resolveProviderBrokerApplicationTarget: async ({ signal }) => {
+                proxy = await startFirstBytesLocalCapabilityProxy({ targetPort: 1, abortSignalUntilClaimed: signal });
+                void proxy.closed.then(() => { proxyClosed = true; });
+                return proxy;
+            },
         });
+        onTestFinished(async () => {
+            await runtime.dispose();
+            await proxy?.close();
+        });
+        const providerBroker = {
+            v: 1 as const, kind: 'resource_test' as const, teamId: 'team', resourceId: 'resource',
+            requestId: 'request', actorAccountId: 'actor', expectedResourceRevision: 0,
+            application: { agentTargetKey: 'codex', implementationIdentity: { pluginId: 'happier.provider.openai', localId: 'openai' },
+                endpointTemplateId: 'responses', protocol: 'openai-responses' as const },
+            source: { v: 1 as const, kind: 'provider_connection' as const,
+                connectionId: ProviderConnectionIdSchema.parse('connection-1'),
+                connectionSecurityFingerprint: ProviderConnectionSecurityFingerprintV1Schema.parse('connection-security:v1:1'),
+                credentialSlotId: 'apiKey' },
+        };
+        const authorization = createRelayAuthorization('tun_activation_failed', { flowKind, providerBroker });
+        const open = createOpenEnvelope('tun_activation_failed', { relayAuthorization: authorization });
+        if (flowKind === 'provider_broker' && open.frame.kind === 'open') delete open.frame.open.destination;
 
-        await socket.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, createOpenEnvelope('tun_activation_failed'));
-        expect(connectTcp).not.toHaveBeenCalled();
-        await socket.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, createBinarySubstreamEnvelope({
-            tunnelId: 'tun_activation_failed', substreamId: 'request', kind: 'open',
-        }));
-        expect(socket.emit.mock.calls.some(([, envelope]) => {
-            if (envelope.v !== 2) return false;
-            const decoded = decodePeerTcpTunnelBinaryFrameV2({ frame: envelope.frame, maxHeaderBytes: 1024, maxPayloadBytes: 1024 });
-            return decoded.ok && decoded.header.substreamId === 'request'
-                && decoded.header.kind === 'abort' && decoded.header.reasonCode === 'tcp_connect_failed';
-        })).toBe(true);
+        await socket.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, open);
+        if (flowKind === 'tcp_tunnel') {
+            expect(connectTcp).not.toHaveBeenCalled();
+            await socket.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, createBinarySubstreamEnvelope({
+                tunnelId: 'tun_activation_failed', substreamId: 'request', kind: 'open',
+            }));
+            expect(socket.emit.mock.calls.some(([, envelope]) => {
+                if (envelope.v !== 2) return false;
+                const decoded = decodePeerTcpTunnelBinaryFrameV2({ frame: envelope.frame, maxHeaderBytes: 1024, maxPayloadBytes: 1024 });
+                return decoded.ok && decoded.header.substreamId === 'request'
+                    && decoded.header.kind === 'abort' && decoded.header.reasonCode === 'tcp_connect_failed';
+            })).toBe(true);
+        } else {
+            expect(socket.emit).toHaveBeenCalledWith(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, expect.objectContaining({
+                frame: expect.objectContaining({ kind: 'abort', reasonCode: 'tcp_connect_failed' }),
+            }));
+            expect(proxy).toBeDefined();
+            // The real proxy resolves closed only after its loopback listener is retired.
+            await expect.poll(() => proxyClosed).toBe(true);
+            await proxy!.closed;
+        }
         await socket.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, createCloseEnvelope('tun_activation_failed'));
-        await socket.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, createOpenEnvelope('tun_activation_failed'));
+        await socket.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, open);
 
         expect(connectTcp).toHaveBeenCalledOnce();
         expect(socket.emit).toHaveBeenCalledWith(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, expect.objectContaining({
