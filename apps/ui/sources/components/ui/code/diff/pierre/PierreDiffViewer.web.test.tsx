@@ -822,12 +822,14 @@ describe('PierreDiffViewer (web)', () => {
         instance.cleanUp();
     });
 
-    it('does not render an inner Virtualizer when a shared virtualizer context is already present', async () => {
+    it('does not render an inner Virtualizer for an intrinsic diff in a shared list viewport', async () => {
         fileDiffSpy.mockClear();
         virtualizerSpy.mockClear();
 
         const { VirtualizerContext } = await import('@pierre/diffs/react');
+        const { Virtualizer: ScrollVirtualizer } = await import('@pierre/diffs');
         const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
+        const sharedVirtualizer = new ScrollVirtualizer();
 
         const patch = [
                             'diff --git a/a.ts b/a.ts',
@@ -839,7 +841,7 @@ describe('PierreDiffViewer (web)', () => {
                             '',
                         ].join('\n');
         const view = (unifiedDiff: string) => (
-            <VirtualizerContext.Provider value={{} as any}>
+            <VirtualizerContext.Provider value={sharedVirtualizer}>
                 <PierreDiffViewer
                         mode="unified"
                         filePath="src/a.ts"
@@ -847,7 +849,7 @@ describe('PierreDiffViewer (web)', () => {
                         wrapLines={true}
                         showLineNumbers={true}
                         showPrefix={true}
-                        virtualized={true}
+                        virtualized={false}
                     />
             </VirtualizerContext.Provider>
         );
@@ -861,6 +863,7 @@ describe('PierreDiffViewer (web)', () => {
         const firstRenderedKey = screen.tree.findByType('FileDiff').props.fileDiff.cacheKey;
         await screen.update(view(patch.replace('+bar', '+updated')));
         expect(screen.tree.findByType('FileDiff').props.fileDiff.cacheKey).not.toBe(firstRenderedKey);
+        sharedVirtualizer.cleanUp();
     });
 
     it('wires Pierre line clicks to onPressLine with a mapped CodeLine', async () => {

@@ -503,8 +503,10 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
     const { theme } = useUnistyles();
     const isDark = theme.dark === true;
     const inheritedVirtualizer = useVirtualizer();
-    const scopedVirtualizer = usePierreScrollRootVirtualizer(() => new PierreVirtualizer());
-    const sharedVirtualizer = scopedVirtualizer ?? inheritedVirtualizer;
+    const scopedVirtualizer = usePierreScrollRootVirtualizer(props.virtualized === true ? null : () => new PierreVirtualizer());
+    // A bounded body scrolls through its own complete diff. The enclosing file list's scroll
+    // range includes only this body's viewport, so sharing that range makes later lines unreachable.
+    const sharedVirtualizer = props.virtualized === true ? undefined : scopedVirtualizer ?? inheritedVirtualizer;
     const containerRef = React.useRef<HTMLDivElement | null>(null);
     const lastScrolledLineIdRef = React.useRef<{ key: string; filePath: string | null | undefined } | null>(null);
     const typographyStyle = React.useMemo(() => resolvePierreTypographyStyle(), []);

@@ -5,6 +5,7 @@ type LazyMountOnScreenProps = Readonly<{
     initiallyVisible?: boolean;
     placeholder?: React.ReactNode;
     rootMargin?: string;
+    style?: React.CSSProperties;
 }>;
 
 export function LazyMountOnScreen(props: LazyMountOnScreenProps) {
@@ -68,7 +69,7 @@ export function LazyMountOnScreen(props: LazyMountOnScreenProps) {
     }, [props.initiallyVisible, props.rootMargin, visible]);
 
     return (
-        <div ref={ref}>
+        <div ref={ref} style={props.style}>
             {visible ? props.children : (props.placeholder ?? null)}
         </div>
     );

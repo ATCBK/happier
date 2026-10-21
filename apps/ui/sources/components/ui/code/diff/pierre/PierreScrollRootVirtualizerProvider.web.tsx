@@ -11,12 +11,13 @@ type PierreScrollRootScope = Readonly<{
 const PierreScrollRootContext = React.createContext<PierreScrollRootScope | undefined>(undefined);
 
 /** The demanded Pierre leaf supplies the constructor; the retained list owns its lifetime. */
-export function usePierreScrollRootVirtualizer(create: () => PierreVirtualizer): PierreVirtualizer | undefined {
+export function usePierreScrollRootVirtualizer(create: (() => PierreVirtualizer) | null): PierreVirtualizer | undefined {
     const scope = React.useContext(PierreScrollRootContext);
-    const instance = scope?.getInstance(create);
+    const demanded = create !== null;
+    const instance = create ? scope?.getInstance(create) : undefined;
     React.useEffect(() => {
-        scope?.activate();
-    }, [scope]);
+        if (demanded) scope?.activate();
+    }, [demanded, scope]);
     return instance;
 }
 
@@ -66,6 +67,10 @@ function findOwnedScrollRoot(anchor: HTMLElement): HTMLElement | Document {
 
     const candidates: Candidate[] = [];
     for (const candidate of iterateWebDescendantElements(anchor, { maxNodes: 1500 })) {
+        // Bounded diff bodies own their scrolling; the shared list must not adopt a child's
+        // viewport merely because that viewport is taller than a short enclosing pane.
+        const diffOwner = candidate.closest('.happier-pierre-diff-wrapper');
+        if (diffOwner && anchor.contains(diffOwner)) continue;
         if (!isElementScrollable(candidate)) continue;
         candidates.push({
             el: candidate,

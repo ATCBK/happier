@@ -20,6 +20,8 @@ const PierreDiffViewer = retryableLazy(async () => {
     return { default: renderer.PierreDiffViewer };
 });
 
+const boundedLazyMountStyle: React.CSSProperties = { height: '100%', minHeight: 0, position: 'relative' };
+
 export const DiffViewer = React.memo<DiffViewerProps>((props) => {
     const rendererMode = useSetting('filesDiffRendererMode');
     const initialPresentationReadiness = useInitialPresentationReadiness();
@@ -55,6 +57,7 @@ export const DiffViewer = React.memo<DiffViewerProps>((props) => {
         return props.virtualized === true ? (
             <LazyMountOnScreen
                 initiallyVisible={initialPresentationReadiness?.presentationPending === true}
+                style={boundedLazyMountStyle}
             >
                 {viewer}
             </LazyMountOnScreen>

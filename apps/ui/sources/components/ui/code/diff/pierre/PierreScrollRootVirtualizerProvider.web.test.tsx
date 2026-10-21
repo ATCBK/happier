@@ -105,6 +105,46 @@ function instrumentScrollElement(
 }
 
 describe('PierreScrollRootVirtualizerProvider (web)', () => {
+    it('keeps a short shared list bound to its own root beside a taller independently scrolling diff', async () => {
+        const { Virtualizer } = await vi.importActual<typeof import('@pierre/diffs')>('@pierre/diffs');
+        const { PierreScrollRootVirtualizerProvider, usePierreScrollRootVirtualizer } = await import('./PierreScrollRootVirtualizerProvider.web');
+        // Geometry and observers are the browser boundary; root selection and Pierre's lifecycle stay real.
+        vi.stubGlobal('IntersectionObserver', class { observe() {} unobserve() {} disconnect() {} });
+        vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+        const virtualizer = new Virtualizer();
+        function Demand() { usePierreScrollRootVirtualizer(() => virtualizer); return null; }
+        const container = document.createElement('div');
+        container.className = 'happier-pierre-diff-wrapper';
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        let listRoot: HTMLDivElement | null = null;
+        try {
+            await act(async () => root.render(<PierreScrollRootVirtualizerProvider>
+                <Demand />
+                <div ref={node => {
+                    if (!node) return;
+                    listRoot = node;
+                    node.style.overflowY = 'auto';
+                    defineSizeProperty(node, 'clientHeight', 400);
+                    defineSizeProperty(node, 'scrollHeight', 1800);
+                }}>
+                    <div className="happier-pierre-diff-wrapper">
+                        <div ref={node => {
+                            if (!node) return;
+                            node.style.overflowY = 'auto';
+                            defineSizeProperty(node, 'clientHeight', 550);
+                            defineSizeProperty(node, 'scrollHeight', 221030);
+                        }} />
+                    </div>
+                </div>
+            </PierreScrollRootVirtualizerProvider>));
+            expect(virtualizer.getRoot()).toBe(listRoot);
+        } finally {
+            await act(async () => root.unmount());
+            container.remove();
+            vi.unstubAllGlobals();
+        }
+    });
     it('forgets real Pierre diffs cleaned up by direct disconnect before a root rebind', async () => {
         const { Virtualizer, VirtualizedFileDiff } = await vi.importActual<typeof import('@pierre/diffs')>('@pierre/diffs');
         const { PierreScrollRootVirtualizerProvider, usePierreScrollRootVirtualizer } = await import('./PierreScrollRootVirtualizerProvider.web');
