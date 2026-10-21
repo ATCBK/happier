@@ -63,6 +63,7 @@ const id = z.string().check(z.trim(), z.minLength(1));
 const frameStyle = z.enum(['card', 'plain']);
 export const PublicProfileLayoutWidgetV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('widget'), id, size: WidgetGridSizeV1Schema, frameStyle,
+  title: z.optional(id),
   presentation: WidgetPublicSnapshotPresentationV1Schema,
 }));
 export const PublicProfileLayoutGroupV1Schema = lazyZodSchema(() => z.strictObject({
