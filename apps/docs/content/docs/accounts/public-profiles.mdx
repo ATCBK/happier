@@ -1,0 +1,85 @@
+---
+title: Public profiles
+description: Current development status and the consent boundaries for public profiles.
+---
+
+A public profile is intended to let you review and publish selected facts on one
+Account service, then share a page, badge or card without giving visitors access
+to your Account.
+
+> **Availability:** Public profiles are under development for 0.3. Publication
+> is not available as a complete workflow in the current integration. This page
+> does not claim stable or preview availability. Username claim, check and
+> release are separate [Account identity operations](/accounts/friends).
+
+## Current status
+
+Typed publication storage, lifecycle and report configuration are present in
+development source. The eligible-fact builder, public rendering and complete
+host preparation still need integration. There are no publication setup steps
+to follow yet. Creating a username or enabling Friends does not publish a profile;
+the same username is intended to serve both features on that Account service.
+Existing [Session sharing](/accounts/session-sharing) remains a separate flow.
+
+## Consent and private drafts
+
+The planned distinction is between fields and placement: fields decide what is
+public, while blocks decide where it appears. Removing a block is not the same
+as revoking a field; selected facts can still appear in public JSON or badges.
+
+Widget layouts and Look choices are intended to remain private drafts until an
+explicit reviewed Apply. Draft edits and later plugin changes must not silently
+change the public edition or consent. Refresh is intended to update permitted
+facts only, without applying drafts or publishing/resuming a profile.
+
+The public-data design uses one period and time offset. Generated facts exclude
+money, prompts, paths, private repository identities and Team usage. History
+without enough evidence to establish personal eligibility is excluded with
+honest partial coverage. Missing data is unavailable, not a measured zero.
+The service must not claim to certify a client's synchronized totals. Exact
+field choices and source coverage will be explained in the runnable review flow.
+
+## Images and encryption
+
+The planned image flow keeps selection and preview local. Only reviewed Publish
+or Apply sends the selected normalized image and appearance as an independent
+public copy.
+
+That copy is server-readable plaintext for both plain and end-to-end encrypted
+Accounts. Publication must not change Account encryption or upload private keys.
+Review includes the visible pixels: field controls cannot redact private
+information already baked into a selected photo or screenshot. Later private
+Look, library or plugin changes must not alter the applied image.
+
+## Sharing and withdrawal
+
+Existing private recap images keep their seven styles and three formats.
+Public link, badge and card support are not available as a complete workflow.
+Development-only native daemon wiring checks for facts-only refresh after 24
+hours, but data preparation and publication integration remain incomplete.
+It requires the refresh Action to be Allowed specifically for CLI; permission
+on another surface does not authorize unattended refresh. Producing a snippet
+is separate from actually copying it.
+
+The planned lifecycle distinguishes pause, unpublish and username release.
+Unpublish keeps the username and private drafts; explicit release applies the
+30-day hold described in
+[Friends](/accounts/friends#choosing-or-releasing-a-username-03-development).
+
+The intended origin-revocation flow must check current policy and state before
+serving content. Copies already downloaded, pasted into a README, proxied or
+unfurled elsewhere cannot be recalled. The planned noindex default is a crawler
+instruction, not a secrecy guarantee.
+
+Report is intended to open this service's operator contact, without submitting
+diagnostics or claiming that a report was sent. Server moderation and explicit
+operator handle reclaim are implemented in development source; their complete
+owner and operator interface integration remains unfinished.
+
+## Related
+
+- [Friends and Account usernames](/accounts/friends)
+- [Sharing Sessions](/accounts/session-sharing)
+- [Home administration](/self-hosting/home-administration)
+- [Server identity and public ingress](/self-hosting/env#server-identity-and-public-ingress)
+- [Host Action reference](/plugins/api/host-actions)

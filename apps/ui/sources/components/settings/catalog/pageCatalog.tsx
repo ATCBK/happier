@@ -50,6 +50,15 @@ export const SETTINGS_PAGE_CATALOG: readonly SettingsPageNode[] = [
                             },
                                 ],
                             },
+                            {
+                                id: 'accountPublicProfile',
+                                titleKey: 'publicIdentity.profile.title',
+                                subtitleKey: 'publicIdentity.profile.entrySubtitle',
+                                route: SETTINGS_ROUTES.accountPublicProfile,
+                                keywordsKey: 'publicIdentity.profile.searchKeywords',
+                                gate: { featureId: 'account.publicProfiles' },
+                                icon: ({ theme }) => <Icon name="globe" size={16} color={theme.colors.text.secondary} />,
+                            },
                         ],
                     },
                     {

@@ -17,7 +17,7 @@ import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDi
 import { useHappyAction } from '@/hooks/ui/useHappyAction';
 import { HappyError } from '@/utils/errors/errors';
 import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
-import { setAccountUsername } from '@/sync/api/account/apiUsername';
+import { checkAccountUsername, releaseAccountUsername, setAccountUsername } from '@/sync/api/account/apiUsername';
 import { setAccountName } from '@/sync/api/account/apiAccountName';
 import { storage } from '@/sync/domains/state/storageStore';
 import { useFriendsEnabled } from '@/hooks/server/useFriendsEnabled';
@@ -45,9 +45,10 @@ import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHead
 import { SettingAnchor, SettingRow } from '@/components/settings/shell/SettingRow';
 import { AccountDirectConnectionsSection } from '@/components/settings/connections/DirectConnectionSettings';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { FieldItem } from '@/components/ui/forms/FieldItem';
 import { AccountNameField } from '@/components/account/AccountNameField';
-import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
+import { AccountUsernameField, type AccountUsernameCheck } from '@/components/account/AccountUsernameField';
+import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
+import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
@@ -79,22 +80,41 @@ export const WorkspaceRouteBody = React.memo(() => {
     // Profile display values
     const displayName = formatAccountDisplayName(profile);
     const security = useAccountSecurityProjection();
-    const canSetUsername =
+    const publicProfilesEnabled = useFeatureDecision('account.publicProfiles', { scopeKind: 'runtime' })?.state === 'enabled';
+    // One username serves Friends and the public page; either feature lets the Account choose it.
+    const canSetUsername = publicProfilesEnabled || (
         friendsEnabled &&
         !friendsIdentityReadiness.isLoadingFeatures &&
-        friendsIdentityReadiness.gate.gateVariant === 'username';
+        friendsIdentityReadiness.gate.gateVariant === 'username');
 
     // The profile editor: the Account's name for everyone, and its username where Friends uses one.
     const [profileDraft, setProfileDraft] = useState<ProfileDraft | null>(null);
     const [nameError, setNameError] = useState<string | null>(null);
     const [usernameError, setUsernameError] = useState<string | null>(null);
+    const [usernameCheck, setUsernameCheck] = useState<AccountUsernameCheck | null>(null);
     const openProfileEditor = () => {
         setNameError(null);
         setUsernameError(null);
+        setUsernameCheck(null);
         setProfileDraft({ name: profile.name ?? '', username: profile.username ?? '' });
     };
     const nameChanged = profileDraft !== null && profileDraft.name.trim() !== (profile.name ?? '');
     const usernameChanged = canSetUsername && profileDraft !== null && profileDraft.username.trim() !== (profile.username ?? '');
+    // The service's answer is advisory; a service that cannot answer still decides on Save.
+    const checkUsername = async (raw: string): Promise<AccountUsernameCheck | null> => {
+        if (!auth.credentials || !raw) return null;
+        try {
+            const answer = { raw, result: await checkAccountUsername(auth.credentials, raw, accountExecution) };
+            setUsernameCheck(answer);
+            return answer;
+        } catch {
+            return null;
+        }
+    };
+    const checkDraftUsername = () => {
+        const raw = profileDraft?.username.trim() ?? '';
+        if (usernameChanged && raw && usernameCheck?.raw !== raw) void checkUsername(raw);
+    };
     const [savingProfile, saveProfile] = useHappyAction(async () => {
         if (!auth.credentials || profileDraft === null) return;
         if (nameChanged) {
@@ -109,8 +129,11 @@ export const WorkspaceRouteBody = React.memo(() => {
         }
         if (usernameChanged) {
             setUsernameError(null);
+            const raw = profileDraft.username.trim();
+            const answer = usernameCheck?.raw === raw ? usernameCheck : await checkUsername(raw);
+            if (answer && answer.result.availability !== 'available') return;
             try {
-                await setAccountUsername(auth.credentials, profileDraft.username.trim(), accountExecution);
+                await setAccountUsername(auth.credentials, answer?.result.username ?? raw, accountExecution);
             } catch (e) {
                 if (!(e instanceof HappyError)) throw e;
                 setUsernameError(
@@ -125,7 +148,19 @@ export const WorkspaceRouteBody = React.memo(() => {
         }
         setProfileDraft(null);
     });
-    const cancelProfileEditor = () => { if (!savingProfile) setProfileDraft(null); };
+    const cancelProfileEditor = () => { if (!savingProfile && !releasingUsername) setProfileDraft(null); };
+    const [releasingUsername, releaseUsername] = useHappyAction(async () => {
+        if (!auth.credentials) return;
+        setUsernameError(null);
+        try {
+            await releaseAccountUsername(auth.credentials, accountExecution);
+        } catch (e) {
+            if (e instanceof HappyError && isActionApprovalDeclinedErrorCode(e.code)) return;
+            setUsernameError(t('publicIdentity.handle.releaseFailed'));
+            return;
+        }
+        setProfileDraft(null);
+    });
     const cancelOnEscape = (event: { nativeEvent: { key: string } }) => { if (event.nativeEvent.key === 'Escape') cancelProfileEditor(); };
 
     const executeLeavingAction = async (actionId: 'account.signOut' | 'account.credentials.forgetAll' | 'account.delete') => {
@@ -261,21 +296,39 @@ export const WorkspaceRouteBody = React.memo(() => {
                     </SectionContentRow>
                     {canSetUsername ? (
                         <SectionContentRow>
-                            <FieldItem label={t('profile.username')}>
-                                <FieldTextInput
-                                    testID="settings-account-username-field"
-                                    value={profileDraft.username}
-                                    onChangeText={(username) => { setUsernameError(null); setProfileDraft({ ...profileDraft, username }); }}
-                                    accessibilityLabel={t('profile.username')}
-                                    error={usernameError}
-                                    autoCapitalize="none"
-                                    autoComplete="username"
-                                    editable={!savingProfile}
-                                    onSubmitEditing={saveProfile}
-                                    onKeyPress={cancelOnEscape}
-                                />
-                            </FieldItem>
+                            <AccountUsernameField
+                                testID="settings-account-username-field"
+                                value={profileDraft.username}
+                                onChangeText={(username) => { setUsernameError(null); setProfileDraft({ ...profileDraft, username }); }}
+                                currentUsername={profile.username ?? null}
+                                check={usernameCheck}
+                                error={usernameError}
+                                editable={!savingProfile && !releasingUsername}
+                                onBlur={checkDraftUsername}
+                                onSubmitEditing={saveProfile}
+                                onKeyPress={cancelOnEscape}
+                            />
                         </SectionContentRow>
+                    ) : null}
+                    {canSetUsername && profile.username ? (
+                        <Item
+                            testID="settings-account-username-release"
+                            title={t('publicIdentity.handle.releaseTitle')}
+                            subtitle={t('publicIdentity.handle.releaseDetail', { username: profile.username })}
+                            subtitleLines={0}
+                            showChevron={false}
+                            rightElement={(
+                                <RoundButton
+                                    testID="settings-account-username-release-button"
+                                    size="small"
+                                    display="destructive"
+                                    title={t('publicIdentity.handle.releaseAction')}
+                                    disabled={savingProfile || releasingUsername || !accountExecution.ready}
+                                    loading={releasingUsername && !accountExecution.approval.approvalPending}
+                                    onPress={releaseUsername}
+                                />
+                            )}
+                        />
                     ) : null}
                     <SectionContentRow>
                         <View style={accountStyles.editorActions}>
@@ -290,6 +343,18 @@ export const WorkspaceRouteBody = React.memo(() => {
                             />
                         </View>
                     </SectionContentRow>
+                </ItemGroup>
+            ) : null}
+
+            {publicProfilesEnabled ? (
+                <ItemGroup>
+                    <Item
+                        testID="settings-account-public-profile"
+                        icon={<Icon name="globe" size={20} color={theme.colors.text.secondary} />}
+                        title={t('publicIdentity.profile.title')}
+                        subtitle={t('publicIdentity.profile.entrySubtitle')}
+                        onPress={() => router.push(SETTINGS_ROUTES.accountPublicProfile)}
+                    />
                 </ItemGroup>
             ) : null}
 

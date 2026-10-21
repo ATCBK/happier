@@ -11,14 +11,16 @@ import { HappyError } from '@/utils/errors/errors';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 /** A mounted author retains the original save through the shared approval continuation. */
+type AccountProfileActionId = 'account.name.set' | 'account.username.set' | 'account.username.check' | 'account.username.release';
+
 export type AccountProfileActionExecution = Readonly<{
-    execute: (actionId: 'account.name.set' | 'account.username.set', input: unknown) => Promise<ActionExecuteResult>;
+    execute: (actionId: AccountProfileActionId, input: unknown) => Promise<ActionExecuteResult>;
 }>;
 
 /** Capture one UI save lifetime, including retries; HTTP remains below the Action executor. */
 export function captureAccountProfileAction(
     credentials: AuthCredentials,
-    actionId: 'account.name.set' | 'account.username.set',
+    actionId: AccountProfileActionId,
     options: Readonly<{ staleScopeError: string; failureMessage: string; invalidResponseMessage: string }>,
     mounted?: AccountProfileActionExecution,
 ): Readonly<{ scope: ServerAccountScope; assertCurrent: () => void; execute: (input: unknown) => Promise<unknown> }> {

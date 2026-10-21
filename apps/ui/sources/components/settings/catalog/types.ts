@@ -19,6 +19,7 @@ export const SETTINGS_PAGE_IDS = {
     teams: 'teams',
     homeAdministration: 'homeAdministration',
     accountSecurity: 'accountSecurity',
+    accountPublicProfile: 'accountPublicProfile',
     apiTokens: 'apiTokens',
     secrets: 'secrets',
     usage: 'usage',

@@ -4,6 +4,7 @@ export const SETTINGS_ROUTES = {
     teams: '/settings/teams',
     homeAdministration: '/settings/home',
     accountSecurity: '/settings/account/security',
+    accountPublicProfile: '/settings/account/public-profile',
     apiTokens: '/settings/account/api-tokens',
     secrets: '/settings/secrets',
     usage: '/settings/usage',

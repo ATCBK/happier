@@ -41,6 +41,17 @@ function installResponse(body: unknown, status = 200, invalidJson = false) {
 }
 
 describe('setAccountUsername', () => {
+    it('checks the returned normalized candidate without changing the active identity', async () => {
+        const result = { username: 'candidate', availability: 'unavailable', suggestions: ['candidate1', 'candidate2'] };
+        homes.answer(serverId, 'POST /v1/account/username/check', { body: result });
+        const { checkAccountUsername } = await import('./apiUsername');
+        expect(await checkAccountUsername(credentials, 'Candidate')).toEqual(result);
+        expect(homes.requestsFor('/v1/account/username/check')).toEqual([
+            expect.objectContaining({ serverId, token: credentials.token, input: { username: 'Candidate' } }),
+        ]);
+        expect(storage.getState().profile.username).toBeNull();
+    });
+
     it('does not retry the captured bearer against a successor Home after a transient failure', async () => {
         let observeIssued!: () => void;
         const issued = new Promise<void>((resolve) => { observeIssued = resolve; });

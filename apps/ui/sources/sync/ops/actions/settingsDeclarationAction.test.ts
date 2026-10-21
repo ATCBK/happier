@@ -299,6 +299,41 @@ describe('Home atmosphere settings declarations', () => {
 });
 
 describe('Home atmosphere picture and Project mutations', () => {
+    it('edits the captured public-profile draft through Settings Actions without changing Home or glass', async () => {
+        const { moments: _moments, behindSessions: _behindSessions, ...initial } = settingsDefaults.homeAtmosphere;
+        let draft = initial;
+        let current = true;
+        const owner = ownerWithServices({ ...services(), publicProfileAtmosphereDraft: {
+            serverId: 'home-a', isCurrent: () => current, read: () => ({ ...draft, behindSessions: true, moments: { private: true } }),
+            update: edit => { draft = edit(draft); },
+        } });
+        const executor = throughActionExecutor(owner.action);
+        const context = { surface: 'ui', authority: 'present_user', presentUserConfirmation: { actionId: 'settings.set' } } as const;
+        const target = { kind: 'public_profile_draft', serverId: 'home-a' };
+        expect(await executor.execute('settings.get', { anchor: 'appearance.atmosphereSource', target }, context))
+            .toMatchObject({ ok: true, result: { value: initial.source } });
+        expect(await executor.execute('settings.set', { anchor: 'appearance.atmosphereSource', target, value: 'none' }, context))
+            .toMatchObject({ ok: true, result: { value: 'none' } });
+        expect(draft.source).toBe('none');
+        expect(await executor.execute('settings.get', { anchor: 'appearance.homeAtmosphere', target }, context))
+            .toEqual({ ok: true, result: { anchor: 'appearance.homeAtmosphere', value: { ...initial, source: 'none' } } });
+        expect(await executor.execute('settings.set', { anchor: 'appearance.homeAtmosphere', target,
+            value: { ...initial, behindSessions: true } }, context)).toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
+        expect(await owner.action({ actionId: 'settings.reset', input: { anchor: 'appearance.atmosphereSource', target } }))
+            .toMatchObject({ value: initial.source });
+        await executor.execute('settings.set', { anchor: 'appearance.atmosphereSource', target, value: 'none' }, context);
+        expect(owner.account()).toEqual(settingsDefaults);
+        expect(await executor.execute('settings.set', { anchor: 'appearance.atmosphereBehindSessions', target, value: true }, context))
+            .toMatchObject({ ok: false, errorCode: 'setting_target_mismatch' });
+        expect(await executor.execute('settings.set', { anchor: 'appearance.atmosphereSource', target: { ...target, serverId: 'home-b' }, value: 'planet' }, context))
+            .toMatchObject({ ok: false, errorCode: 'setting_target_mismatch' });
+        current = false;
+        expect(await executor.execute('settings.set', { anchor: 'appearance.atmosphereSource', target, value: 'planet' }, context))
+            .toMatchObject({ ok: false, errorCode: 'setting_not_bound' });
+        expect(draft.source).toBe('none');
+        expect(owner.account()).toEqual(settingsDefaults);
+    });
+
     function services(request: Parameters<typeof createAtmosphereSettingServices>[0]['request'] = async () => { throw new Error('unexpected_http'); }) {
         return createAtmosphereSettingServices({ serverId: 'home-a', accountId: 'account-a', credentials: { token: 'plain-token' },
             assertCurrent: () => {}, resolveAccountEncryption: async () => ({ accountMode: 'plain', encryption: null }), request });
@@ -306,6 +341,36 @@ describe('Home atmosphere picture and Project mutations', () => {
     function ownerWithServices(mutationServices: SettingsMutationServices) {
         return createOwner(undefined, false, true, settingsDefaults, undefined, undefined, undefined, undefined, undefined, mutationServices);
     }
+
+    it('acquires a picked picture into the captured draft and discovers the same device library without Home writes', async () => {
+        const { moments: _moments, behindSessions: _behindSessions, ...initial } = settingsDefaults.homeAtmosphere;
+        let draft = initial;
+        const picked = new Blob(['picked-picture'], { type: 'image/png' });
+        // OS image decode/canvas and picker are platform boundaries; ingress/store/Actions remain real.
+        vi.stubGlobal('createImageBitmap', async () => ({ width: 16, height: 8, close() {} }));
+        vi.stubGlobal('document', { createElement: () => ({ width: 0, height: 0, getContext: () => ({ drawImage() {} }),
+            toBlob: (done: (blob: Blob) => void) => done(new Blob(['prepared-picked'], { type: 'image/webp' })) }) });
+        onTestFinished(() => { vi.unstubAllGlobals(); });
+        const owner = ownerWithServices({ ...services(), pickAtmospherePicture: async () => picked, publicProfileAtmosphereDraft: {
+            serverId: 'home-a', isCurrent: () => true, read: () => draft, update: edit => { draft = edit(draft); },
+        } });
+        const target = { kind: 'public_profile_draft', serverId: 'home-a' };
+        const added = await owner.action({ actionId: 'settings.invoke', input: { anchor: 'appearance.atmospherePictureAdd', target,
+            input: { kind: 'atmosphere_picture_add', source: { kind: 'picked' } } } });
+        expect(added).toMatchObject({ status: 'completed', value: { localId: expect.any(String) } });
+        expect(draft.source).toBe('picture');
+        const selected = draft.picture.ref;
+        if (selected.kind !== 'user') throw new Error('Draft picture not selected');
+        const { pictureStore } = await import('@/components/atmosphere/pictureStore.web');
+        onTestFinished(() => pictureStore.remove(selected.localId));
+        expect((await pictureStore.get(selected.localId))?.kind).toBe('user');
+        const library = await owner.action({ actionId: 'settings.get', input: { anchor: 'appearance.atmospherePictureLibrary' } });
+        expect(library).toMatchObject({ value: { user: expect.arrayContaining([expect.objectContaining({ localId: selected.localId })]),
+            pictures: expect.arrayContaining([expect.objectContaining({ id: initial.picture.ref.kind === 'builtin' ? initial.picture.ref.id : '' })]) } });
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.atmospherePictureLibrary', value: {} } }))
+            .toMatchObject({ ok: false, errorCode: 'setting_read_only' });
+        expect(owner.account()).toEqual(settingsDefaults);
+    });
 
     it('does not acquire or select picture bytes after the answering Account retires during download', async () => {
         let current = true;

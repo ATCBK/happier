@@ -11,6 +11,7 @@ vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNati
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 vi.mock('@react-navigation/native', async () => (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock());
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -22,13 +23,16 @@ const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orch
 const { activateStorageAccountScope } = await import('@/dev/testkit/runtime/storageRuntime');
 const { resetScopedHomeActionExecutorsForTests, scopedHomeActionExecutor } = await import('@/sync/ops/actions/scopedHomeActionExecutor');
 const { setAccountName } = await import('./apiAccountName');
-const { setAccountUsername } = await import('./apiUsername');
+const { setAccountUsername, releaseAccountUsername } = await import('./apiUsername');
 const { useMountedActionExecution } = await import('@/components/approvals/useMountedActionExecution');
+const { Modal } = await import('@/modal');
 const credentials = { token: createAccountTokenForTests('self', { currentAccount: true }) };
 let serverId: string;
 let disposeScope: (() => void) | undefined;
 
 beforeEach(async () => {
+    vi.mocked(Modal.confirm).mockReset();
+    vi.mocked(Modal.confirm).mockResolvedValue(false);
     resetScopedHomeActionExecutorsForTests();
     await homes.reset();
     await loadSyncSingletonForTests();
@@ -43,24 +47,54 @@ beforeEach(async () => {
 afterEach(async () => { standardCleanup(); disposeScope?.(); disposeScope = undefined; await homes.reset(); });
 
 describe('self-profile UI Action admission and acknowledgements', () => {
+    it.each([true, false])('waits for default release confirmation (approved=%s) before changing identity', async (approved) => {
+        let decide!: (value: boolean) => void;
+        vi.mocked(Modal.confirm).mockImplementationOnce(() => new Promise<boolean>(resolve => { decide = resolve; }));
+        const mounted = await renderHook(() => useMountedActionExecution(serverId));
+        await waitForHomeGovernance(() => expect(mounted.getCurrent().ready).toBe(true));
+        const result = { username: null, released: true, reservedUntilMs: 2_592_000_000 };
+        homes.answer(serverId, 'POST /v1/account/username/release', { body: result });
+        const save = releaseAccountUsername(credentials, { execute: mounted.getCurrent().execute });
+        void save.catch(() => {});
+        await waitForHomeGovernance(() => expect(Modal.confirm).toHaveBeenCalledTimes(1));
+        expect(homes.requestsFor('/v1/account/username/release')).toHaveLength(0);
+        expect(storage.getState().profile.username).toBe('before');
+        decide(approved);
+        if (approved) {
+            await expect(save).resolves.toEqual(result);
+            expect(storage.getState().profile.username).toBeNull();
+        } else {
+            await expect(save).rejects.toMatchObject({ code: 'approval_canceled', canTryAgain: false });
+            expect(homes.requestsFor('/v1/account/username/release')).toHaveLength(0);
+            expect(storage.getState().profile.username).toBe('before');
+        }
+    });
+
     it.each([
         { actionId: 'account.name.set' as const, decision: 'approve' as const },
         { actionId: 'account.name.set' as const, decision: 'reject' as const },
         { actionId: 'account.username.set' as const, decision: 'approve' as const },
         { actionId: 'account.username.set' as const, decision: 'reject' as const },
+        { actionId: 'account.username.release' as const, decision: 'approve' as const },
+        { actionId: 'account.username.release' as const, decision: 'reject' as const },
     ])('keeps the original $actionId save pending until $decision returns the typed result', async ({ actionId, decision }) => {
         await homes.requireUiApproval(serverId, actionId);
         const mounted = await renderHook(() => useMountedActionExecution(serverId));
         await waitForHomeGovernance(() => expect(mounted.getCurrent().ready).toBe(true));
         const response = actionId === 'account.name.set'
-            ? { name: 'Acknowledged', firstName: 'Acknowledged', lastName: null, timestamp: 2 } : { username: 'acknowledged' };
-        const path = actionId === 'account.name.set' ? '/v1/account/profile' : '/v1/account/username';
+            ? { name: 'Acknowledged', firstName: 'Acknowledged', lastName: null, timestamp: 2 }
+            : actionId === 'account.username.release' ? { username: null, released: true, reservedUntilMs: 2_592_000_000 }
+                : { username: 'acknowledged' };
+        const path = actionId === 'account.name.set' ? '/v1/account/profile'
+            : actionId === 'account.username.release' ? '/v1/account/username/release' : '/v1/account/username';
         homes.answer(serverId, `POST ${path}`, { body: response });
         let settled = false;
         let save: Promise<unknown>;
         await act(async () => {
             const options = { execute: mounted.getCurrent().execute };
-            save = actionId === 'account.name.set' ? setAccountName(credentials, 'Requested', options) : setAccountUsername(credentials, 'requested', options);
+            save = actionId === 'account.name.set' ? setAccountName(credentials, 'Requested', options)
+                : actionId === 'account.username.release' ? releaseAccountUsername(credentials, options)
+                    : setAccountUsername(credentials, 'requested', options);
             void save.then(() => { settled = true; }, () => { settled = true; });
             await waitForHomeGovernance(() => expect(homes.requestsFor('/v1/artifacts')).toHaveLength(1));
         });
@@ -73,7 +107,8 @@ describe('self-profile UI Action admission and acknowledgements', () => {
         expect(await decideApprovalAsInbox(serverId, artifactId, decision)).toMatchObject({ ok: true });
         if (decision === 'approve') {
             await expect(save!).resolves.toEqual(response);
-            expect(storage.getState().profile).toMatchObject(actionId === 'account.name.set' ? { name: 'Acknowledged' } : { username: 'acknowledged' });
+            expect(storage.getState().profile).toMatchObject(actionId === 'account.name.set' ? { name: 'Acknowledged' }
+                : { username: actionId === 'account.username.release' ? null : 'acknowledged' });
         } else {
             await expect(save!).rejects.toMatchObject({ code: 'approval_rejected', canTryAgain: false });
             expect(homes.requestsFor(path)).toHaveLength(0);
@@ -81,13 +116,15 @@ describe('self-profile UI Action admission and acknowledgements', () => {
         }
     });
 
-    it('retires the original pending save when its Account leaves, without publishing another Account’s acknowledgement', async () => {
-        await homes.requireUiApproval(serverId, 'account.username.set');
+    it.each(['account.username.set', 'account.username.release'] as const)('retires pending %s when its Account leaves, without publishing another Account’s acknowledgement', async (actionId) => {
+        await homes.requireUiApproval(serverId, actionId);
         const mounted = await renderHook(() => useMountedActionExecution(serverId));
         await waitForHomeGovernance(() => expect(mounted.getCurrent().ready).toBe(true));
         let save: Promise<unknown>;
         await act(async () => {
-            save = setAccountUsername(credentials, 'requested', { execute: mounted.getCurrent().execute });
+            const execution = { execute: mounted.getCurrent().execute };
+            save = actionId === 'account.username.release' ? releaseAccountUsername(credentials, execution)
+                : setAccountUsername(credentials, 'requested', execution);
             void save.catch(() => {});
             await waitForHomeGovernance(() => expect(homes.requestsFor('/v1/artifacts')).toHaveLength(1));
         });
@@ -102,7 +139,7 @@ describe('self-profile UI Action admission and acknowledgements', () => {
         });
         await expect(save!).rejects.toMatchObject({ name: 'HappyError', canTryAgain: false });
         expect(storage.getState().profile).toMatchObject({ id: 'successor', username: 'successor' });
-        expect(homes.requestsFor('/v1/account/username')).toHaveLength(0);
+        expect(homes.requestsFor(actionId === 'account.username.release' ? '/v1/account/username/release' : '/v1/account/username')).toHaveLength(0);
     });
 
     it.each(['account.name.set', 'account.username.set'] as const)('honors required UI approval for %s without applying or issuing the mutation', async (actionId) => {

@@ -1,4 +1,4 @@
-import { bindHomeDomainActionHttpRequestV1, homeDomainActionOutputSchemaV1, readHomeDomainActionErrorV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
+import { bindHomeDomainActionHttpRequestV1, bindPublicProfilePreparedHttpRequestV1, homeDomainActionOutputSchemaV1, readHomeDomainActionErrorV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
@@ -200,15 +200,16 @@ export function createHomeDomainActionExecutorForScope(
         safeParse: (value: unknown) => { success: true; data: string } | { success: false };
     }>,
 ): HomeDomainActionExecutor {
-    return async ({ actionId, input, signal }) => {
+    return async ({ actionId, input, preparedRequest, signal }) => {
         const spec = getActionSpec(actionId);
-        const request = bindHomeDomainActionHttpRequestV1(actionId, input);
+        const request = preparedRequest ? bindPublicProfilePreparedHttpRequestV1(actionId, preparedRequest)
+            : bindHomeDomainActionHttpRequestV1(actionId, input);
         const result = await requestHomeDomain<unknown, string>({
             scope,
             method: request.method,
             path: request.path,
             input: request.body,
-            schema: homeDomainActionOutputSchemaV1(actionId),
+            schema: homeDomainActionOutputSchemaV1(actionId, preparedRequest),
             effect: spec.sideEffectClass === 'read' ? 'read' : 'write',
             ...(errorSchema ? { errorSchema } : {}),
             ...(signal ? { signal } : {}),

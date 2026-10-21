@@ -263,6 +263,26 @@ function describe(event: HomeAdministrationEventV1, viewer: string | null, names
                 }],
             };
         }
+        case 'public_profile.restricted':
+        case 'public_profile.restored':
+            return {
+                verb: event.action === 'public_profile.restricted'
+                    ? t('homeGovernance.activity.profileRestricted', { target: targetName(event, viewer) })
+                    : t('homeGovernance.activity.profileRestored', { target: targetName(event, viewer) }),
+                area: t('homeGovernance.activity.areaPublicProfiles'),
+                changes: [{ label: t('homeGovernance.activity.fieldReason'),
+                    from: genericValue(null), to: event.summary.reason }],
+            };
+        case 'public_profile.handle_reclaimed':
+            return {
+                verb: t('homeGovernance.activity.handleReclaimed', { target: targetName(event, viewer) }),
+                area: t('homeGovernance.activity.areaPublicProfiles'),
+                changes: [
+                    { label: t('homeGovernance.activity.fieldUsername'), from: event.summary.username, to: genericValue(null) },
+                    { label: t('homeGovernance.activity.fieldReason'), from: genericValue(null), to: event.summary.reason },
+                    { label: t('homeGovernance.activity.fieldNotice'), from: genericValue(null), to: event.summary.notice },
+                ],
+            };
         case 'account.sign_out_everywhere':
             return {
                 verb: t('homeGovernance.activity.signedOutEverywhere', { target: targetName(event, viewer) }),

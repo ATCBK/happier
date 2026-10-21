@@ -3,12 +3,30 @@ import { createUiProjectAccountRowsClient } from '@/sync/api/projects/projectAcc
 import { callGuardedMachineRpcWithPolicy } from '@/sync/runtime/orchestration/serverScopedRpc/guardedMachineRpc';
 import { throwIfAborted } from '@/utils/runtime/abortSignals';
 import { withActionAccountRequestSignal, type LazyActionAccountContext } from './actionAccountContext';
+import { SettingsDeclarationValueV1Schema } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 
 /** Settings adapters retain the invocation's exact Account; filesystem admission remains daemon-owned. */
 export function createAtmosphereSettingServices(account: Parameters<typeof createUiProjectAccountRowsClient>[0]
-    & Partial<Pick<LazyActionAccountContext, 'accountLifetime' | 'invocationSignal'>>): Pick<SettingsMutationServices, 'projectAccountRows' | 'readAtmospherePictureFile'> {
+    & Partial<Pick<LazyActionAccountContext, 'accountLifetime' | 'invocationSignal'>>): Pick<SettingsMutationServices,
+        'projectAccountRows' | 'readAtmospherePictureFile' | 'pickAtmospherePicture' | 'readAtmospherePictureLibrary'> {
     return {
         projectAccountRows: createUiProjectAccountRowsClient(account),
+        pickAtmospherePicture: async signal => {
+            throwIfAborted(signal); account.assertCurrent();
+            const { nativePickImages } = await import('@/utils/files/nativePickImages');
+            const [picked] = await nativePickImages({ multiple: false });
+            throwIfAborted(signal); account.assertCurrent();
+            return picked ? picked.kind === 'web' ? picked.file : picked.uri : null;
+        },
+        readAtmospherePictureLibrary: async signal => {
+            throwIfAborted(signal); account.assertCurrent();
+            const [{ readAtmospherePictureCatalog }, { pictureStore }] = await Promise.all([
+                import('@/components/atmosphere/pictureCatalog'), import('@/components/atmosphere/pictureStore'),
+            ]);
+            const user = (await pictureStore.list()).filter(picture => picture.kind === 'user');
+            throwIfAborted(signal); account.assertCurrent();
+            return SettingsDeclarationValueV1Schema.parse({ pictures: readAtmospherePictureCatalog().map(picture => ({ ...picture })), user });
+        },
         readAtmospherePictureFile: async (input, signal) => {
             throwIfAborted(signal); account.assertCurrent();
             const result = await withActionAccountRequestSignal(account, signal, ownedSignal => callGuardedMachineRpcWithPolicy<unknown, Readonly<{ path: string }>>({

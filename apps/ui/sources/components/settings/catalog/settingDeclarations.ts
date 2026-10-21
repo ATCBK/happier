@@ -21,6 +21,7 @@ import { BUILT_IN_SETTINGS_DECLARATIONS_V1, readBuiltInSettingDeclarationV1, rea
     parseBuiltInAccountSettingValueV1, readBuiltInAccountSettingValueV1, buildBuiltInAccountSettingMutationV1,
     type PortableSettingDeclarationV1 } from '@happier-dev/protocol/actions/settings/settingsDeclarations';
 import { BUILT_IN_SETTINGS_METADATA_V1 } from '@happier-dev/protocol/actions/settings/builtInSettingsMetadata';
+import type { AtmospherePresentation } from '@happier-dev/protocol/account/settings/accountSettings';
 
 export type SettingValue = z.infer<typeof SettingsDeclarationValueV1Schema>;
 export type SettingScalarValue = Extract<SettingValue, string | number | boolean | null>;
@@ -39,6 +40,7 @@ export type SettingOperationContext = Readonly<{
     signal?: AbortSignal;
     accountScope?: ServerAccountScope;
     input?: SettingsDeclarationOperationInputV1;
+    target?: import('@happier-dev/protocol/actions/settingsDeclarationActionFamily').SettingsDeclarationTargetV1;
     isCurrent(): boolean;
     isFeatureEnabled?: (featureId: FeatureId) => Promise<boolean>;
     readSettings(): Promise<Settings>;
@@ -54,6 +56,16 @@ export type SettingOperationResult = Readonly<{
     value?: z.infer<typeof StrictJsonValueSchema>;
 }>;
 export type SettingsMutationServices = Readonly<{
+    /** Captured controller, never looked up from caller input or current focus. */
+    publicProfileAtmosphereDraft?: Readonly<{
+        serverId: string;
+        isCurrent(): boolean;
+        read(): AtmospherePresentation;
+        update(edit: (value: AtmospherePresentation) => AtmospherePresentation): void | Promise<void>;
+    }>;
+    /** The host owns native picker custody; Action input carries no local bytes or URI. */
+    pickAtmospherePicture?: (signal?: AbortSignal) => Promise<Blob | string | null>;
+    readAtmospherePictureLibrary?: (signal?: AbortSignal) => Promise<SettingValue>;
     projectAccountRows?: Pick<ReturnType<typeof import('@/sync/api/projects/projectAccountRowsClient').createUiProjectAccountRowsClient>, 'read' | 'mutateOrganization'>;
     readAtmospherePictureFile?: (input: Readonly<{ machineId: string; path: string }>, signal?: AbortSignal) => Promise<
         Readonly<{ success: true; content: string }> | Readonly<{ success: false; error: string }>>;
@@ -82,6 +94,7 @@ export type SettingStorageBinding = Readonly<{
 }> & (
     | Readonly<{ scope: 'home'; kind: 'homeSettings'; key: string }>
     | Readonly<{ scope: 'project'; kind: 'projectAtmosphere' }>
+    | Readonly<{ scope: 'local'; kind: 'atmospherePictureLibrary' }>
     | Readonly<{ scope: 'home'; kind: 'sessionAutoFollowPreferences'; field: 'assigned' | 'direct' | 'team' | 'group' }>
     | TeamSettingBindingV1
     | Readonly<{ scope: 'account'; key: AccountSettingKey & WritableSettingsKey }>
@@ -120,7 +133,9 @@ export type SettingStorageBinding = Readonly<{
 );
 
 /** Accepted addresses derive from the declaration's actual domain owner, never a parallel catalog. */
-export function settingTargetKinds(binding: SettingStorageBinding | undefined): readonly SettingsDeclarationTargetKindV1[] {
+export function settingTargetKinds(binding: SettingStorageBinding | undefined, anchor?: string): readonly SettingsDeclarationTargetKindV1[] {
+    const declared = readBuiltInSettingDeclarationV1(anchor)?.targetKinds;
+    if (declared?.length) return declared;
     if (binding?.scope === 'project') return ['project'];
     if (binding?.scope === 'home') return ['home'];
     if (binding?.scope === 'team') return [binding.kind === 'teamIdentityConnection' ? 'team_identity_connection' : 'team'];
@@ -312,6 +327,7 @@ export function builtInSettingsPageSections(anchorPrefix: string): Record<string
 function portableStorageBinding(declaration: PortableSettingDeclarationV1): SettingStorageBinding | undefined {
     const binding = declaration.storage;
     if (!binding) return undefined;
+    if (binding.scope === 'local' && binding.kind === 'atmospherePictureLibrary') return { scope: 'local', kind: 'atmospherePictureLibrary', access: 'read_only' };
     if (binding.scope === 'project' && binding.kind === 'projectAtmosphere') return { scope: 'project', kind: 'projectAtmosphere', access: binding.access };
     const platformBinding = readPortablePlatformAccountSettingBindingV1(declaration, Platform.OS === 'web' ? 'web' : 'native');
     if (platformBinding) return platformBinding;

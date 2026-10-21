@@ -41,7 +41,8 @@ import { machineDirectConnectionStorage } from '@happier-dev/protocol/actions/se
 import { BUILT_IN_SETTINGS_DECLARATIONS_V1, readBuiltInSettingDeclarationV1, resolveBuiltInAccountSettingResetValueV1 } from '@happier-dev/protocol/actions/settings/settingsDeclarations';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { ProjectAtmosphereSchema } from '@happier-dev/protocol/account/settings/accountSettings';
-import { normalizeProjectAtmosphere } from '@/components/atmosphere/atmosphereSettings';
+import { normalizeProjectAtmosphere, readAtmospherePresentationSetting, editAtmospherePresentationSetting } from '@/components/atmosphere/atmosphereSettings';
+import { atmospherePresentation, DEFAULT_HOME_ATMOSPHERE } from '@happier-dev/protocol/account/settings/accountSettings';
 import { MachineStorageViewSettingKeySchema, MachineStorageViewSettingChangeSchema,
     readMachineStorageViewSetting, buildMachineStorageViewSettingMutation } from '@/sync/domains/settings/registry/local/machineStorageViewSetting';
 
@@ -136,6 +137,8 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
                 && !owner.setClientEncryptionRequirement ? 'not_bound'
             : sensitive ? 'sensitive'
             : !ref.storage ? 'not_bound'
+            : ref.storage.scope === 'local' && 'kind' in ref.storage && ref.storage.kind === 'atmospherePictureLibrary'
+                && !owner.mutationServices?.readAtmospherePictureLibrary ? 'unsupported_host'
             : !ownerSurfaceAllowed ? 'not_bound'
             : (ref.storage.scope === 'home' || ref.storage.scope === 'team') && !owner.mutationServices?.executeSettingsOwnerAction ? 'not_bound'
             : ref.storage.scope === 'project' && !owner.mutationServices?.projectAccountRows ? 'not_bound'
@@ -154,7 +157,7 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
             readable,
             writable: unavailableReason === undefined && surfaceAllowsMutation,
             ...(ref.storage?.scope === 'account' || ref.storage?.scope === 'local' ? { storageScope: ref.storage.scope } : {}),
-            ...(settingTargetKinds(ref.storage).length ? { targetKinds: [...settingTargetKinds(ref.storage)], targetRequired: ref.storage?.scope === 'team' || ref.storage?.scope === 'project' } : {}),
+            ...(settingTargetKinds(ref.storage, ref.anchor).length ? { targetKinds: [...settingTargetKinds(ref.storage, ref.anchor)], targetRequired: ref.storage?.scope === 'team' || ref.storage?.scope === 'project' } : {}),
             ...(readable && ref.storage?.allowedValues ? { allowedValues: [...ref.storage.allowedValues] } : {}),
             ...(unavailableReason ? { unavailableReason } : {}),
             ...(surfaceAllowsMutation && ref.operation && (!ref.contribution || owner.canUseRuntimeContributions?.() === true)
@@ -386,15 +389,36 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
             return refuse('setting_conditional_mutation_unsupported');
         }
         const target = 'target' in parsed ? parsed.target : undefined;
-        const targetKinds = settingTargetKinds(ref.storage);
+        const targetKinds = settingTargetKinds(ref.storage, ref.anchor);
         if (target && (!targetKinds.includes(target.kind) || target.serverId !== (owner.serverId ?? context?.serverId))) {
             return { ...refuse('setting_target_mismatch'), details: { targetKinds } };
         }
         if (actionId !== 'settings.invoke' && (ref.storage?.scope === 'team' || ref.storage?.scope === 'project') && !target) return { ...refuse('setting_target_required'), details: { targetKinds } };
         const access = await descriptor(pageId, ref, context, readHome);
-        const isCurrent = () => !context?.signal?.aborted && owner.isCurrent?.() !== false && (!ref.contribution || owner.canUseRuntimeContributions?.() === true);
+        const draft = target?.kind === 'public_profile_draft' ? owner.mutationServices?.publicProfileAtmosphereDraft : undefined;
+        const isCurrent = () => !context?.signal?.aborted && owner.isCurrent?.() !== false && (!ref.contribution || owner.canUseRuntimeContributions?.() === true)
+            && (target?.kind !== 'public_profile_draft' || Boolean(draft && draft.serverId === target.serverId && draft.isCurrent()));
         throwIfAborted(context?.signal);
         if (!isCurrent()) return refuse('setting_not_bound');
+        if (target?.kind === 'public_profile_draft' && actionId !== 'settings.invoke') {
+            if (!draft) return refuse('setting_not_bound');
+            if (versionedRead || conditionalWrite) return refuse('setting_conditional_mutation_unsupported');
+            if (!access.readable || !ref.storage) return refuse(`setting_${access.unavailableReason ?? 'not_bound'}`);
+            if (actionId === 'settings.get') return { anchor: ref.anchor,
+                value: SettingsDeclarationValueV1Schema.parse(readAtmospherePresentationSetting(draft.read(), ref.anchor)) };
+            if (!access.writable) return refuse('setting_read_only');
+            const value = actionId === 'settings.reset'
+                ? readAtmospherePresentationSetting(atmospherePresentation(DEFAULT_HOME_ATMOSPHERE), ref.anchor) : settingWrite?.value;
+            if (!editAtmospherePresentationSetting(draft.read(), ref.anchor, value)) return refuse('invalid_setting_value');
+            await draft.update(current => {
+                if (!isCurrent()) return current;
+                const next = editAtmospherePresentationSetting(current, ref.anchor, value);
+                if (!next) throw new RejectedSettingMutation();
+                return next;
+            });
+            if (!isCurrent()) return refuse('setting_not_bound');
+            return { anchor: ref.anchor, value: SettingsDeclarationValueV1Schema.parse(readAtmospherePresentationSetting(draft.read(), ref.anchor)) };
+        }
         if (actionId === 'settings.reset') {
             if (!access.writable || !ref.storage) return refuse(`setting_${access.unavailableReason ?? 'read_only'}`);
             if (!isCurrent()) return refuse('setting_not_bound');
@@ -447,7 +471,7 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
                     ...(!opened ? { reason: 'human_interaction_unavailable' } : {}) };
             }
             const operationInput = SettingsDeclarationActionInputSchemasV1['settings.invoke'].parse(input);
-            const result = await ref.operation.invoke({ signal: context?.signal, input: operationInput.input, isCurrent,
+            const result = await ref.operation.invoke({ signal: context?.signal, input: operationInput.input, target, isCurrent,
                 accountScope: owner.accountScope,
                 services: owner.mutationServices,
                 isFeatureEnabled: owner.isFeatureEnabled,
@@ -494,6 +518,13 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
         }
         if (!access.readable || !ref.storage) return refuse(`setting_${access.unavailableReason ?? 'not_bound'}`);
         const binding = ref.storage;
+        if (binding.scope === 'local' && 'kind' in binding && binding.kind === 'atmospherePictureLibrary') {
+            if (actionId !== 'settings.get') return refuse('setting_read_only');
+            const read = owner.mutationServices?.readAtmospherePictureLibrary;
+            if (!read) return refuse('setting_unsupported_host');
+            const value = await read(context?.signal);
+            return isCurrent() ? { anchor: ref.anchor, value } : refuse('setting_not_bound');
+        }
         if (binding.scope === 'project') {
             const rowsOwner = owner.mutationServices?.projectAccountRows;
             if (!rowsOwner || !target || target.kind !== 'project' || !isCurrent()) return refuse('setting_not_bound');
@@ -518,7 +549,7 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
         if (binding.scope === 'team') {
             const execute = owner.mutationServices?.executeSettingsOwnerAction;
             if (!execute || !isCurrent()) return refuse('setting_not_bound');
-            if (!target || target.kind === 'home' || target.kind === 'project') return refuse('setting_target_required');
+            if (!target || target.kind !== 'team' && target.kind !== 'team_identity_connection') return refuse('setting_target_required');
             if (actionId === 'settings.set' && !access.writable) return refuse('setting_read_only');
             return executeTeamSettingDeclaration({ actionId, anchor: ref.anchor, binding, target,
                 ...(actionId === 'settings.set' ? { value: SettingsDeclarationActionInputSchemasV1['settings.set'].parse(input).value } : {}),
