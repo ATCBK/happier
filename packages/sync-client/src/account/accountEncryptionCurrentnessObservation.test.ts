@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
+import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
 import { createAccountEncryptionCurrentnessObservation, projectAccountEncryptionIdentity } from './accountEncryptionCurrentnessObservation';
 
 const plain = { mode: 'plain', version: 1, settingsVersion: 1, updatedAt: 1,
@@ -11,6 +12,33 @@ const update = (fact: unknown, id = 'account') => ({ id: 'update', seq: 2, creat
 const unavailable = () => new Error('currentness unavailable');
 
 describe('portable Account encryption observation', () => {
+    it('does no whole-update validation for unrelated feed traffic while strictly checking matching facts', async () => {
+        // Pass-through performance instrumentation: the real strict parser runs
+        // unchanged; its invocation count is the multiplied feed cost under test.
+        const validation = vi.spyOn(UpdateContainerSchema, 'safeParse');
+        const observation = createAccountEncryptionCurrentnessObservation({ accountId: 'account', readFresh: async () => plain, unavailable });
+        try {
+            observation.connected();
+            await observation.read();
+            for (let index = 0; index < 100; index++) {
+                observation.update(update(encrypted, 'other-account'));
+                observation.update({ id: 'profile', seq: index, createdAt: 2, body: { t: 'update-account', id: 'account', name: 'Account' } });
+                observation.update({ id: 'session', seq: index, createdAt: 2, body: { t: 'update-session', id: 'session' } });
+            }
+            expect(observation.peek()?.mode).toBe('plain');
+            expect(validation).toHaveBeenCalledTimes(0);
+            observation.update(update(encrypted));
+            expect(validation).toHaveBeenCalledTimes(1);
+            expect(observation.peek()?.mode).toBe('e2ee');
+            observation.update({ ...update(encrypted), seq: 'malformed' });
+            expect(validation).toHaveBeenCalledTimes(2);
+            expect(observation.peek()).toBeNull();
+        } finally {
+            observation.dispose();
+            validation.mockRestore();
+        }
+    });
+
     it('uses one initialization then synchronous pushes, not per-operation identity reads or cursor witnesses', async () => {
         const readFresh = vi.fn(async () => plain);
         const observation = createAccountEncryptionCurrentnessObservation({ accountId: 'account', readFresh, unavailable });
