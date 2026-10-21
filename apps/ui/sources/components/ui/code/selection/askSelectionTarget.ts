@@ -41,7 +41,7 @@ export async function askSelectionQuote(input: Readonly<{
     }
     const target = context.withoutSessionTarget ?? settingsParse(loadAccountSettings(lifetime.scope).settings).filesAskWithoutSessionTarget;
     let detachedSupported = true;
-    if (input.sideRun || (!sessionTarget && target === 'detached_run')) {
+    if (!sessionTarget && (input.sideRun || target === 'detached_run')) {
         const support = await createUiExecutionRunActionDeps(lifetime.scope).executionRunCheckProtocolV2?.(null,
             { detachedScope: true, startAndWait: false, exactInputResults: true,
                 runScopedAgentBindings: false, secretReferenceOverlay: false },
@@ -54,7 +54,7 @@ export async function askSelectionQuote(input: Readonly<{
         target, detachedSupported, sideRun: input.sideRun });
     if (destination === 'side_run') {
         context.openDetailsTab(createInteractiveExecutionRunDraftDetailsTab({ initialText: input.quote,
-            detachedWorkspace: { machineId: workspaceScope.machineId, cwd: workspaceScope.rootPath } }), { intent: 'pinned' });
+            ...(!sessionTarget ? { detachedWorkspace: { machineId: workspaceScope.machineId, cwd: workspaceScope.rootPath } } : {}) }), { intent: 'pinned' });
         return true;
     }
     const result = seedAndOpenNewSession({ seed: { prompt: input.quote,

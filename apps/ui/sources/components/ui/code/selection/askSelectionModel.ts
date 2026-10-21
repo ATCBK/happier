@@ -28,7 +28,7 @@ export function resolveAskSelectionDestination(input: Readonly<{
     detachedSupported: boolean;
     sideRun?: boolean;
 }>): 'composer' | 'side_run' | 'new_session' {
-    if (input.sessionId && !input.sideRun) return 'composer';
+    if (input.sessionId) return input.sideRun ? 'side_run' : 'composer';
     if ((input.sideRun || input.target === 'detached_run') && input.detachedSupported) return 'side_run';
     return 'new_session';
 }

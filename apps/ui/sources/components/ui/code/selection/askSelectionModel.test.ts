@@ -80,6 +80,6 @@ describe('Ask selection context', () => {
         expect(resolveAskSelectionDestination({ sessionId: null, target: 'session', detachedSupported: true })).toBe('new_session');
         expect(resolveAskSelectionDestination({ sessionId: null, target: 'detached_run', detachedSupported: false })).toBe('new_session');
         expect(resolveAskSelectionDestination({ sessionId: 's1', target: 'session', detachedSupported: true, sideRun: true })).toBe('side_run');
-        expect(resolveAskSelectionDestination({ sessionId: 's1', target: 'session', detachedSupported: false, sideRun: true })).toBe('new_session');
+        expect(resolveAskSelectionDestination({ sessionId: 's1', target: 'session', detachedSupported: false, sideRun: true })).toBe('side_run');
     });
 });
