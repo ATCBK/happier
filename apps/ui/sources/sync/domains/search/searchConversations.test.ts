@@ -59,6 +59,23 @@ beforeEach(async () => {
 });
 afterEach(async () => { await connection?.dispose(); connection = undefined; });
 describe('conversation search fan-out', () => {
+    it('keeps healthy Machine hits when another Machine loses its RPC outcome', async () => {
+        const healthy = rpc.getMockImplementation()!;
+        rpc.mockImplementation(async call => {
+            if (call.machineId === 'two') throw Object.assign(new Error('private transport message'), {
+                rpcErrorCode: 'RPC_OUTCOME_UNKNOWN',
+            });
+            return healthy(call);
+        });
+        const result = await searchConversations(input);
+        expect(result.hits).toMatchObject([{ machineId: 'one', hit: { sessionId: 'one' } }]);
+        expect(result.machines).toMatchObject([
+            { machineId: 'one', status: 'ok' },
+            { machineId: 'two', status: 'partial' },
+            { machineId: 'offline', status: 'offline' },
+        ]);
+        expect(JSON.stringify(result)).not.toContain('private transport message');
+    });
     it('keeps native identity scoped to its Machine and Agent and preserves distinct candidates within the owning source', () => {
         const row = { machineId: 'one', mode: 'standard', agentId: 'codex', sourceKey: 'first', source: { kind: 'codexHome', home: 'user' },
             candidate: { remoteSessionId: 'native', candidateKey: 'first-candidate', updatedAtMs: 10,
