@@ -22,6 +22,8 @@ import { parseQueryParams } from 'expo-router/build/fork/getStateFromPath-forks'
 import { readPluginSettingsPageRouteParams } from '@/components/settings/catalog/runtime/pluginSettingsPageCatalog';
 import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { workspaceDestinationNavigationIdentity } from '@/components/appShell/workspace/workspaceDestinationPolicy';
+import { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { commitPreferredLanguage, getPreferredLanguage } from '@/text/preferredLanguage';
 
 import {
     resolveCompactAppDestinations,
@@ -32,6 +34,10 @@ import {
     useActivateAppDestination,
     useCompactAppDestinations,
     selectAppDestinationsInPlacement,
+    commitCompactAppDestinationSources,
+    readCommittedCompactAppDestinations,
+    subscribeCompactAppDestinations,
+    type CompactAppDestinationSources,
 } from './compactAppDestinationCatalog';
 
 // Catalog/navigation contracts never access the Session-envelope HTTP API.
@@ -222,6 +228,7 @@ const activationBoundary = vi.hoisted(() => ({
     pushed: [] as string[],
     searchOpens: 0,
 }));
+const catalogWork = vi.hoisted(() => ({ builds: 0 }));
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -233,7 +240,13 @@ vi.mock('expo-router', async () => {
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock();
+    const base = createTextModuleMock();
+    return createTextModuleMock({ translate: (key, params) => {
+        // Observe the existing localization boundary once per real DTO construction;
+        // the page/tab selectors and all catalog logic remain real.
+        if (key === 'tabs.sessions') catalogWork.builds += 1;
+        return base.t(key, params);
+    } });
 });
 
 const page = Object.freeze({
@@ -723,7 +736,153 @@ describe('useActivateAppDestination', () => {
     });
 });
 
+describe('committed compact destination catalog', () => {
+    it('does no work on unchanged reads or commits and withdraws retired Account rows before admitting a new lifetime', () => {
+        const previousRuntime = getAppliedActiveServerSnapshot();
+        const previousAvailability = isAppliedActiveServerRuntimeAvailable();
+        const scope = { serverId: 'home-a', accountId: 'catalog-account-a' };
+        const placement = createProjectedAppPage();
+        let traversals = 0;
+        const projection = { ...EMPTY_PLUGIN_UI_PROJECTION,
+            get surfacePlacementsById() { traversals += 1; return { [placement.id]: placement }; } };
+        let unsubscribe = () => {};
+        try {
+            storage.getState().activateProfileScope(scope);
+            publishAppliedActiveServerSnapshot({ serverId: scope.serverId, serverUrl: 'https://home-a.test', generation: 21 });
+            const lifetime = captureActiveServerAccountScopeLifetime();
+            if (!lifetime) throw new Error('Expected active catalog Account');
+            const source: CompactAppDestinationSources = { projection, accountLifetime: lifetime, ready: true,
+                locale: 'en', builtins: CORE_BUILTINS };
+            const observations: Array<ReturnType<typeof readCommittedCompactAppDestinations>> = [];
+            unsubscribe = subscribeCompactAppDestinations(source, () => observations.push(readCommittedCompactAppDestinations(source)));
+            commitCompactAppDestinationSources(source);
+            const initial = readCommittedCompactAppDestinations(source);
+            expect(initial.some(row => row.kind === 'plugin')).toBe(true);
+            const notifications = observations.length;
+            traversals = 0;
+            catalogWork.builds = 0;
+            for (let index = 0; index < 100; index += 1) {
+                expect(readCommittedCompactAppDestinations(source)).toBe(initial);
+                commitCompactAppDestinationSources(source);
+            }
+            expect(traversals).toBe(0);
+            expect(catalogWork.builds).toBe(0);
+            expect(observations).toHaveLength(notifications);
+            storage.getState().activateProfileScope({ ...scope, accountId: 'catalog-account-b' });
+            expect(readCommittedCompactAppDestinations(source)).toEqual([]);
+            expect(observations.at(-1)).toEqual([]);
+            commitCompactAppDestinationSources(source);
+            expect(traversals).toBe(0);
+            const secondLifetime = captureActiveServerAccountScopeLifetime();
+            if (!secondLifetime) throw new Error('Expected replacement Account');
+            const secondSource = { ...source, accountLifetime: secondLifetime };
+            commitCompactAppDestinationSources(secondSource);
+            expect(readCommittedCompactAppDestinations(secondSource)).not.toBe(initial);
+            storage.getState().activateProfileScope(scope);
+            const returnedLifetime = captureActiveServerAccountScopeLifetime();
+            expect(returnedLifetime).not.toBe(lifetime);
+            if (!returnedLifetime) throw new Error('Expected fresh returning Account lifetime');
+            const returnedSource = { ...source, accountLifetime: returnedLifetime };
+            commitCompactAppDestinationSources(returnedSource);
+            expect(readCommittedCompactAppDestinations(returnedSource)).not.toBe(initial);
+            expect(readCommittedCompactAppDestinations(source)).toEqual([]);
+        } finally {
+            unsubscribe();
+            retireActiveServerAccountScopeLifetime();
+            publishAppliedActiveServerSnapshot(previousRuntime, previousAvailability);
+        }
+    });
+
+    it('shares declaration preparation across builtin variants and publishes the ready locale without serving unready sources', () => {
+        const previousLanguage = getPreferredLanguage();
+        const placement = createProjectedAppPage();
+        const localizedPlacement = { ...placement, display: { ...placement.display, labelKey: 'notes.label' } };
+        let traversals = 0;
+        const projection = { ...EMPTY_PLUGIN_UI_PROJECTION,
+            get surfacePlacementsById() { traversals += 1; return { [placement.id]: localizedPlacement }; },
+            translationsByPluginId: { 'acme.notes': { id: 'translations:acme.notes', pluginId: 'acme.notes',
+                contributionKind: 'translations' as const, locales: ['en', 'fr'],
+                bundles: { en: { 'notes.label': 'Notes' }, fr: { 'notes.label': 'Notes françaises' } } } },
+        };
+        const source: CompactAppDestinationSources = { projection, accountLifetime: null, ready: true, locale: 'en', builtins: CORE_BUILTINS };
+        try {
+            commitPreferredLanguage('en');
+            commitCompactAppDestinationSources(source);
+            const initial = readCommittedCompactAppDestinations(source);
+            const withInbox = { ...source, builtins: { ...CORE_BUILTINS, inbox: true } };
+            traversals = 0;
+            commitCompactAppDestinationSources(withInbox);
+            const inboxRows = readCommittedCompactAppDestinations(withInbox);
+            expect(inboxRows.some(row => row.id === 'inbox')).toBe(true);
+            expect(initial.some(row => row.id === 'inbox')).toBe(false);
+            expect(inboxRows.find(row => row.id === 'sessions')).toBe(initial.find(row => row.id === 'sessions'));
+            expect(traversals).toBe(0);
+            commitPreferredLanguage('fr');
+            const frenchSource = { ...withInbox, locale: 'fr' as const };
+            commitCompactAppDestinationSources(frenchSource);
+            const french = readCommittedCompactAppDestinations(frenchSource);
+            expect(french.find(row => row.kind === 'plugin')?.title).toBe('Notes françaises');
+            expect(french).not.toBe(inboxRows);
+            traversals = 0;
+            commitCompactAppDestinationSources(source);
+            expect(traversals).toBe(0);
+            const unready = { ...frenchSource, ready: false };
+            traversals = 0;
+            commitCompactAppDestinationSources(unready);
+            expect(readCommittedCompactAppDestinations(unready)).toEqual([]);
+            expect(traversals).toBe(0);
+        } finally {
+            commitPreferredLanguage(previousLanguage);
+        }
+    });
+});
+
 describe('useCompactAppDestinations', () => {
+    it('shares catalog construction across consumers and performs no traversal while unchanged consumers render', async () => {
+        const placement = createProjectedAppPage();
+        let traversals = 0;
+        const projection = { ...EMPTY_PLUGIN_UI_PROJECTION, generation: 1,
+            get surfacePlacementsById() { traversals += 1; return { [placement.id]: placement }; } };
+        const value = {
+            interactionEnabled: true, pluginBrowserProjection: null, phase: 'current' as const,
+            machineId: 'machine-a', serverId: 'home-a', platform: 'web' as const, accountLifetime: null,
+            clientExecutableActivation: { status: 'ready' as const },
+            reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {},
+            pluginUiProjection: projection,
+        };
+        function BotsOverrideProbe() {
+            const destinations = useCompactAppDestinations({ openBotsRoster: () => {} });
+            return React.createElement('BotsOverrideCatalogProbe', { destinations });
+        }
+        const render = (consumers: number, bots = false) => React.createElement(AppShellPluginUiProjectionValueProvider,
+            { value, children: React.createElement(React.Fragment, null,
+                ...Array.from({ length: consumers }, (_, key) => React.createElement(CompactCatalogProbe, { key })),
+                bots ? React.createElement(BotsOverrideProbe) : null) });
+        const screen = await renderScreen(render(1));
+        traversals = 0;
+        catalogWork.builds = 0;
+        const first = screen.tree.findByType('CompactCatalogProbe' as never).props.destinations as ReturnType<typeof useCompactAppDestinations>;
+        await screen.update(render(2));
+        const rows = screen.tree.findAllByType('CompactCatalogProbe' as never).map(probe => probe.props.destinations);
+        expect(rows).toEqual([first, first]);
+        expect(traversals).toBe(0);
+        expect(catalogWork.builds).toBe(0);
+        expect(rows[1]).toBe(first);
+        await screen.update(render(2));
+        expect(traversals).toBe(0);
+        expect(catalogWork.builds).toBe(0);
+        await screen.update(render(2, true));
+        const withBots = screen.tree.findByType('BotsOverrideCatalogProbe' as never).props.destinations as typeof first;
+        expect(withBots.find(row => row.id === 'bots')?.availability).toBe('available');
+        expect(first.find(row => row.id === 'bots')?.availability).toBe('unavailable');
+        expect(withBots.find(row => row.id === 'sessions')).toBe(first.find(row => row.id === 'sessions'));
+        expect(traversals).toBe(0);
+        expect(catalogWork.builds).toBe(1);
+        await screen.update(render(2, true));
+        expect(catalogWork.builds).toBe(1);
+        expect(traversals).toBe(0);
+    });
+
     it('retains navigation identity through execution-only projection updates while publishing declaration changes', async () => {
         const placement = createProjectedAppPage();
         const value = {

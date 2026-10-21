@@ -72,7 +72,23 @@ export function useMcpServerDetail(
   catalogRevision: number | 'absent' | null,
   savedSecretCatalog: McpSavedSecretAvailability,
   recovery?: McpServerRecovery,
-) {
+): {
+  reach: ReturnType<typeof useReachRules>;
+  projection: ReturnType<typeof useReachProjection>;
+  placeMachines: { machineId: string; name: string; online: boolean }[];
+  projects: ReturnType<typeof useWhereItsOnNames>['projects'];
+  agentIds: string[];
+  names: ReturnType<typeof useWhereItsOnNames>['names'];
+  onMachines: readonly (McpServerMachineFact & Readonly<{ lastSeenAt: number | null }>)[];
+  tests: ReturnType<typeof useMcpServerMachineTests>;
+  tools: ReturnType<typeof useMcpServerTools>;
+  update: ReturnType<typeof useMcpServerUpdate>;
+  execution: ReturnType<typeof useMountedActionExecution>;
+  signIn: ReturnType<typeof useMcpServerSignIn>;
+  statuses: ReturnType<typeof mcpServerStatus>;
+  machineStatuses: ReturnType<typeof mcpServerMachineStatuses>;
+  testOnline: () => void;
+} {
   const router = useRouter();
   const serverId = server.id;
   const reach = useReachRules('mcp_server', serverId);

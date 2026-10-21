@@ -93,7 +93,15 @@ export function useAgentsMachineScope(targetSelection: MachineAdministrationTarg
     } as const;
 }
 
-export type AgentAdministrationCatalog = ReturnType<typeof useAgentAdministrationCatalog>;
+export type AgentAdministrationCatalog = Readonly<{
+    targetSelection: MachineAdministrationTargetSelectionV1;
+    executionTarget: ReturnType<typeof useAgentsMachineScope>['executionTarget'];
+    projectionScope: ReturnType<typeof useAgentsMachineScope>['projectionScope'];
+    machineOnline: boolean;
+    machineLabel: ReturnType<typeof useAgentsMachineScope>['machineLabel'];
+    projectionCurrent: boolean;
+    agentEntries: ReturnType<typeof getResolvedAgentCatalogEntries>;
+}>;
 
 /**
  * The Agents collection as the selected administration machine projects it: the canonical target
@@ -104,7 +112,7 @@ export type AgentAdministrationCatalog = ReturnType<typeof useAgentAdministratio
 export function useAgentAdministrationCatalog(options?: Readonly<{
     /** `false`: read the machine's cached projection only, never load it (a summary elsewhere). */
     loadProjection?: boolean;
-}>) {
+}>): AgentAdministrationCatalog {
     const backendEnabledByTargetKey = useSetting('backendEnabledByTargetKey');
     const targetSelection = useAgentsAdministrationTargetSelection();
     const scope = useAgentsMachineScope(targetSelection);

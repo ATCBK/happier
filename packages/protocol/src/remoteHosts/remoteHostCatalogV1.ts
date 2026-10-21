@@ -23,7 +23,7 @@ export type RemoteHostCatalogProjectionPortsV1 = Readonly<{
   verifySource(source: RemoteHostRetainedSourceV1, hosts: readonly RemoteHostRecordV1[]): Promise<boolean>;
   cleanupSource(source: RemoteHostRetainedSourceV1, revision: number): Promise<boolean>;
   hasPendingCleanup?(): boolean;
-  onReady?(catalog: RemoteHostCatalogSnapshotV1): void;
+  onReady?(catalog: RemoteHostCatalogSnapshotV1): void | Promise<void>;
 }>;
 export type RemoteHostCatalogProjectionLoaderV1 = (input: RemoteHostCatalogProjectionPortsV1) => Promise<RemoteHostCatalogSnapshotV1>;
 
@@ -39,22 +39,28 @@ export const loadRemoteHostCatalogProjectionV1: RemoteHostCatalogProjectionLoade
   const project = (row: RemoteHostCatalogRowReadResponseV1) => loadRemoteHostCatalogV1({
     mode: input.mode, material: input.material, signal: input.signal, readRow: async () => row,
   });
-  const publish = (catalog: RemoteHostCatalogSnapshotV1) => { assertCurrent(); input.onReady?.(catalog); return catalog; };
+  const publish = async (catalog: RemoteHostCatalogSnapshotV1) => {
+    assertCurrent();
+    await input.onReady?.(catalog);
+    assertCurrent();
+    return catalog;
+  };
   const finishCleanup = async (catalog: RemoteHostCatalogSnapshotV1, source?: RemoteHostRetainedSourceV1): Promise<RemoteHostCatalogSnapshotV1> => {
     if (catalog.status !== 'ready' || typeof catalog.revision !== 'number') return publish(catalog);
-    publish({ ...catalog, cleanup: 'pending' });
+    await publish({ ...catalog, cleanup: 'pending' });
+    let cleaned = false;
     try {
       const captured = source ?? await input.readSource();
       assertCurrent();
-      if (!await input.verifySource(captured, catalog.hosts)) return publish({ ...catalog, cleanup: 'pending' });
-      assertCurrent();
-      const cleaned = await input.cleanupSource(captured, catalog.revision);
-      assertCurrent();
-      return publish(cleaned ? catalog : { ...catalog, cleanup: 'pending' });
+      if (await input.verifySource(captured, catalog.hosts)) {
+        assertCurrent();
+        cleaned = await input.cleanupSource(captured, catalog.revision);
+        assertCurrent();
+      }
     } catch {
       assertCurrent();
-      return publish({ ...catalog, cleanup: 'pending' });
     }
+    return publish(cleaned ? catalog : { ...catalog, cleanup: 'pending' });
   };
   try {
     assertCurrent();
@@ -62,21 +68,21 @@ export const loadRemoteHostCatalogProjectionV1: RemoteHostCatalogProjectionLoade
     assertCurrent();
     const initial = await project(row);
     assertCurrent();
-    if (input.hasPendingCleanup?.()) return publish(initial.status === 'ready' ? { ...initial, cleanup: 'pending' } : initial);
+    if (input.hasPendingCleanup?.()) return await publish(initial.status === 'ready' ? { ...initial, cleanup: 'pending' } : initial);
     // A present row, including a partial row, and a tombstone never use source data.
-    if (row.status !== 'absent') return row.status === 'present' || row.status === 'deleted' ? finishCleanup(initial) : publish(initial);
-    if (initial.status !== 'ready') return publish(initial);
+    if (row.status !== 'absent') return await (row.status === 'present' || row.status === 'deleted' ? finishCleanup(initial) : publish(initial));
+    if (initial.status !== 'ready') return await publish(initial);
     const source = await input.readSource();
     assertCurrent();
-    if (!Object.prototype.hasOwnProperty.call(source.raw, 'remoteHostsV1')) return publish(initial);
+    if (!Object.prototype.hasOwnProperty.call(source.raw, 'remoteHostsV1')) return await publish(initial);
     const retained = readRetainedRemoteHostCatalogV1(source.raw.remoteHostsV1);
-    if (retained.status !== 'ready') return publish({ status: 'unavailable', reason: 'remote_host_source_incomplete' });
+    if (retained.status !== 'ready') return await publish({ status: 'unavailable', reason: 'remote_host_source_incomplete' });
     const prepared = await input.prepareSource(source, retained.hosts);
     try {
       assertCurrent();
       const record = RemoteHostCatalogRecordV1Schema.parse(prepared.record);
       if (record.hosts.length !== retained.hosts.length || record.hosts.some((host, index) => !sameHostSource(retained.hosts[index]!, host))) {
-        return publish({ status: 'unavailable', reason: 'remote_host_source_changed' });
+        return await publish({ status: 'unavailable', reason: 'remote_host_source_changed' });
       }
       const packet = { mutation: RemoteHostCatalogRowMutationV1Schema.parse({ expectedRevision: 'absent', sourceSettingsVersion: source.version,
         content: sealRemoteHostCatalogContentV1({ mode: input.mode, material: input.material, record }),
@@ -93,20 +99,20 @@ export const loadRemoteHostCatalogProjectionV1: RemoteHostCatalogProjectionLoade
         assertCurrent();
         if (observed.status !== 'ready' || typeof observed.revision !== 'number'
           || JSON.stringify(observed.hosts) !== JSON.stringify(record.hosts)) {
-          return publish({ status: 'unavailable', reason: 'outcome_unknown' });
+          return await publish({ status: 'unavailable', reason: 'outcome_unknown' });
         }
-        return finishCleanup(observed, source);
+        return await finishCleanup(observed, source);
       }
       assertCurrent();
-      if (mutation.status === 'updated') return finishCleanup({ status: 'ready', hosts: record.hosts,
+      if (mutation.status === 'updated') return await finishCleanup({ status: 'ready', hosts: record.hosts,
         diagnostics: [], revision: mutation.revision }, source);
       if (mutation.status === 'conflict') {
         const observed = await project(await input.readRow());
         assertCurrent();
-        return observed.status === 'ready' && typeof observed.revision === 'number'
-          ? finishCleanup(observed) : publish({ status: 'unavailable', reason: 'remote_host_catalog_changed' });
+        return await (observed.status === 'ready' && typeof observed.revision === 'number'
+          ? finishCleanup(observed) : publish({ status: 'unavailable', reason: 'remote_host_catalog_changed' }));
       }
-      return publish({ status: 'unavailable', reason: mutation.status });
+      return await publish({ status: 'unavailable', reason: mutation.status });
     } finally { prepared.dispose(); }
   } catch {
     return { status: 'unavailable', reason: input.signal?.aborted ? 'cancelled' : 'remote_host_catalog_unavailable' };

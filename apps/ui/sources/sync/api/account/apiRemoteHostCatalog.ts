@@ -121,6 +121,12 @@ export async function readRemoteHostCatalogProjectionInContext(context: RemoteHo
 async function readCapturedRemoteHostCatalogProjection(context: RemoteHostAccountContext, mode: 'plain' | 'e2ee',
     material: AccountScopedCryptoMaterial | null, signal?: AbortSignal,
     publication?: Readonly<{ onReady?(catalog: RemoteHostCatalogSnapshotV1, current: () => boolean): void; hasPendingCleanup?(): boolean }>): Promise<RemoteHostCatalogSnapshotV1> {
+    const assertModeCurrent = async () => {
+        const { encryption } = await context.resolveAccountEncryption();
+        const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage: 'fresh-authority' });
+        context.assertCurrent();
+        if (current.mode !== mode) throw new RemoteHostCatalogOperationError('account-mode-mismatch');
+    };
     const readSource = async (): Promise<RemoteHostRetainedSourceV1> => {
         const { encryption } = await context.resolveAccountEncryption();
         const baseline = await readAccountSettingsBaseline({ request: context.request, credentials: context.credentials, encryption, accountMode: mode });
@@ -211,12 +217,13 @@ async function readCapturedRemoteHostCatalogProjection(context: RemoteHostAccoun
                 return history.status === 'complete';
             } catch { return false; }
         },
-        ...(publication?.onReady ? { onReady: catalog => publication.onReady?.(catalog, context.accountLifetime.isCurrent) } : {}),
+        ...(publication?.onReady ? { onReady: async catalog => {
+            await assertModeCurrent();
+            publication.onReady?.(catalog, context.accountLifetime.isCurrent);
+        } } : {}),
     });
-    context.assertCurrent();
-    const { encryption } = await context.resolveAccountEncryption();
-    const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage: 'fresh-authority' });
-    return current.mode === mode ? result : { status: 'unavailable', reason: 'account-mode-mismatch' };
+    await assertModeCurrent();
+    return result;
 }
 
 async function retainedHostMatches(context: RemoteHostAccountContext, material: AccountScopedCryptoMaterial | null,

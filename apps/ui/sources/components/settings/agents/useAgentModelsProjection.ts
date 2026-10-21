@@ -61,7 +61,14 @@ export function useAgentModelsProjection(input: Readonly<{
     serverId: string | null;
     agentTargetKey: string;
     connectionIds: readonly string[];
-}>) {
+}>): {
+    data: Projection | null;
+    error: ReturnType<typeof useProviderModelProjection>['error'];
+    loading: boolean;
+    refreshFailures: ReturnType<typeof useProviderModelProjection>['refreshFailures'];
+    refresh: () => Promise<void>;
+    refreshWithResult: ReturnType<typeof useProviderModelProjection>['refreshWithResult'];
+} {
     const account = useProviderModelProjection({ ...input, machineId: null, mode: 'management' });
     const machine = useProviderModelProjection({ ...input, enabled: input.enabled && input.machineId !== null, mode: 'management' });
     const data = React.useMemo(() => account.data ? augmentAccountModels(account.data, machine.data, input.connectionIds)

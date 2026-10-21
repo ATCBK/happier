@@ -9,7 +9,7 @@ import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } 
 import { loadVitestModuleForNodeRequire } from '@/dev/vitestRnShim';
 import { getVitestNodeBuiltin } from '@/dev/vitestNodeBuiltins';
 import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
-import { readPluginUiExecutionOriginCandidates, unionPluginUiProjections } from '@/sync/domains/plugins/ui/projectionUnion';
+import { createPluginUiExecutionOriginCandidatePublication, readPluginUiExecutionOriginCandidates, unionPluginUiProjections } from '@/sync/domains/plugins/ui/projectionUnion';
 import { usePluginMachineExecutionOriginSelection } from '@/sync/domains/machines/administration/usePluginExecutionOriginSelection';
 import { useActivePluginAccountAvailabilityReleaseClassifier } from '@/sync/domains/plugins/availability/projection';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
@@ -108,7 +108,10 @@ describe('answering-client plugin origin preferences', () => {
         const projection = unionPluginUiProjections([{ machineId: machine.id, serverId: connection.home.id,
             serverIdentityId: 'srv_origin', phase: 'current', interactionEnabled: true, projection: model }]).pluginUiProjection;
         if (!projection) throw new Error('Source projection was not admitted');
-        const unpublish = publishCommittedAppShellPluginUiProjection(() => hasSource ? projection : null);
+        const candidatePublication = createPluginUiExecutionOriginCandidatePublication();
+        candidatePublication.publish(projection, [], [pluginId]);
+        const unpublish = publishCommittedAppShellPluginUiProjection(() => hasSource ? projection : null,
+            id => hasSource ? candidatePublication.getSnapshot().get(id) ?? null : null);
         const bridge = await loadVitestModuleForNodeRequire(new NodeURL('../../sync.ts', import.meta.url), () => import('@/sync/sync'));
         const account = await captureLazyActionAccountContext(connection.home.id);
         const owner = createPluginExecutionOriginActionDeps(account).pluginExecutionOriginAction;

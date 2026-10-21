@@ -10,13 +10,10 @@ import { PluginExecutionOriginActionOutputSchemas, type PluginExecutionOriginAct
 
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
-import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
+import { getServerProfileById, listServerProfiles } from '@/sync/domains/server/serverProfiles';
 import type { MachineAdministrationTargetV1 } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
 import { useAllProfileMachineInventorySnapshots } from '@/sync/domains/machines/useMachineInventorySnapshots';
-import { readMachineRequestReachabilityRevision, subscribeMachineRequestReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { sessionListRuntimeClock } from '@/hooks/session/sessionListRuntimeClock';
-import type { ServerMachineInventorySnapshotV1 } from '@/sync/domains/machines/machineInventorySnapshots';
 import { useActivePluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/projection';
 import type { PluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/reader';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -27,9 +24,7 @@ import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { useActiveServerAccountScope } from '@/sync/store/hooks';
 
 import {
-    buildPluginMachineExecutionOriginCandidates,
     resolvePluginMachineMaterializationValidation,
-    buildPluginMachineSourceExecutionOriginCandidates,
     combinePluginMachineExecutionOriginCandidates,
     resolvePluginMachineExecutionOriginState,
     getPluginExecutionOriginCandidateOrigin,
@@ -42,8 +37,11 @@ import {
     type PluginExecutionOriginCandidateV1,
     type PluginExecutionOriginContextualTarget,
 } from './pluginExecutionOrigin';
-import { readExecutionOriginMachineSnapshots, readServerProfilesForGeneration, isMachineInventoryPending,
-    type ExecutionOriginMachineSnapshotSelection } from './pluginExecutionOriginMachineSnapshots';
+import { executionOriginMachineSnapshotPublication, EMPTY_EXECUTION_ORIGIN_MACHINE_SELECTION,
+    type ExecutionOriginMachineSnapshotSelection, type ExecutionOriginMachineSnapshotConnection,
+    type PluginExecutionOriginDescriptiveInputs } from './pluginExecutionOriginMachineSnapshots';
+import { readPluginExecutionOriginAutomaticHints } from './pluginExecutionOriginAutomaticHints';
+export { readPluginExecutionOriginAutomaticHints } from './pluginExecutionOriginAutomaticHints';
 import { areAccountSettingsScopesEqual, type AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { readCurrentPluginMachineExecutionTargetPreference, readPluginMachineExecutionTargetPreference,
@@ -51,7 +49,6 @@ import { readCurrentPluginMachineExecutionTargetPreference, readPluginMachineExe
 import { getSystemTasksRunner } from '@/components/systemTasks/systemTasksRuntime';
 import { readLocalDaemonSharedState, subscribeLocalDaemonSharedState } from '@/components/settings/machines/localControl/localDaemonSharedState';
 import type { LocalDaemonStatusData } from '@/components/settings/machines/localControl/useLocalDaemonControl';
-import { isDaemonOnActiveRelay } from '@/sync/domains/server/relayDrift/relayDriftModel';
 import { buildMachineAdministrationCandidatesFromSnapshots } from './targetState';
 import type { MachineAdministrationCandidateV1 } from './targetSelection';
 import {
@@ -75,17 +72,10 @@ type PluginExecutionOriginSelectionRevisionState = Readonly<{
     revision: number;
 }>;
 
-const EMPTY_EXECUTION_ORIGIN_MACHINE_SNAPSHOTS: readonly ServerMachineInventorySnapshotV1[] = Object.freeze([]);
 const EMPTY_EXECUTION_ORIGIN_MATERIALIZATIONS: readonly PluginMachineMaterializationV1[] = Object.freeze([]);
 const EMPTY_EXECUTION_ORIGIN_SOURCES: readonly PluginMachineSourceExecutionOriginCandidateV1[] = Object.freeze([]);
-const EMPTY_MACHINE_FACT = Object.freeze({ activeAt: 0, rejection: 'unknown' as const, eligible: false });
-const DISABLED_EXECUTION_ORIGIN_MACHINE_SNAPSHOT_SELECTION = Object.freeze({
-    key: '',
-    eligibilityKey: '',
-    snapshots: EMPTY_EXECUTION_ORIGIN_MACHINE_SNAPSHOTS,
-    nextRefreshAtMs: null,
-    readMachineFact: () => EMPTY_MACHINE_FACT,
-});
+const EMPTY_PLUGIN_EXECUTION_CANDIDATES: readonly PluginExecutionOriginCandidateV1[] = Object.freeze([]);
+const EMPTY_PLUGIN_EXECUTION_STATE: PluginMachineExecutionOriginStateV1 = Object.freeze({ kind: 'selectionRequired', candidates: EMPTY_PLUGIN_EXECUTION_CANDIDATES });
 
 type StorageState = ReturnType<typeof storage.getState>;
 
@@ -95,25 +85,31 @@ function usePluginExecutionOriginMachineSnapshots(params: Readonly<{
     materializations: readonly PluginMachineMaterializationV1[];
     sources: readonly PluginMachineSourceExecutionOriginCandidateV1[];
     readinessServerIdentityId?: string;
+    selection?: PluginExecutionOriginDescriptiveInputs;
 }>): ExecutionOriginMachineSnapshotSelection {
     const activeServerId = useActiveServerSnapshot().serverId;
     const activeAccountScope = useActiveServerAccountScope(activeServerId);
     const profilesGeneration = useServerProfilesGeneration();
-    const profiles = readServerProfilesForGeneration(profilesGeneration);
+    const profiles = React.useMemo(() => listServerProfiles(), [profilesGeneration]);
     const activeHome = activeAccountScope && getServerProfileById(activeAccountScope.serverId)?.serverIdentityId;
     // Only a supplying or explicitly remembered Home can affect this plugin's
     // execution. Unrelated credential resolutions must not wake every reporter.
     // The active Home already uses Sync's admitted Account below.
-    const relevantServerIdentityIds = new Set([
+    const rememberedHome = readPluginMachineExecutionTargetPreference(storage.getState().settings.machineAdministrationTargetsLocalV1, params.pluginId)?.serverIdentityId;
+    const relevantHomes = React.useMemo(() => {
+        const relevantServerIdentityIds = new Set([
         params.readinessServerIdentityId
-            ?? readPluginMachineExecutionTargetPreference(storage.getState().settings.machineAdministrationTargetsLocalV1, params.pluginId)?.serverIdentityId
+            ?? rememberedHome
             ?? getServerProfileById(activeServerId)?.serverIdentityId,
         ...params.materializations.filter(entry => entry.pluginId === params.pluginId).map(entry => entry.serverIdentityId),
         ...params.sources.filter(entry => entry.source.origin.sourceRef.pluginId === params.pluginId).map(entry => entry.source.origin.serverIdentityId),
-    ]);
-    const bindings = useServerCredentialAccountScopeBindings(params.enabled ? profiles
+        ]);
+        return params.enabled ? profiles
         .filter(profile => profile.serverIdentityId !== activeHome && relevantServerIdentityIds.has(profile.serverIdentityId))
-        .map(profile => profile.serverIdentityId) : []);
+        .map(profile => profile.serverIdentityId) : [];
+    }, [params.enabled, params.pluginId, params.readinessServerIdentityId, params.materializations, params.sources,
+        rememberedHome, activeServerId, activeHome, profiles]);
+    const bindings = useServerCredentialAccountScopeBindings(relevantHomes);
     const accountScopesByServerId = React.useMemo(() => {
         const scopes = new Map([...bindings].flatMap(([serverId, binding]) =>
             binding.isCurrent() ? [[serverId, binding.scope] as const] : []));
@@ -125,58 +121,38 @@ function usePluginExecutionOriginMachineSnapshots(params: Readonly<{
         if (activeAccountScope && activeHome) scopes.set(activeHome, { serverId: activeHome, accountId: activeAccountScope.accountId });
         return scopes;
     }, [activeAccountScope, bindings, profiles]);
+    const accountLifetime = captureActiveServerAccountScopeLifetime();
+    const bindingLifetimes = React.useMemo(() => [...bindings.values()], [bindings]);
     const snapshots = React.useMemo(() => {
-        // React can retain the previous getSnapshot while rendering new inputs.
-        // Its settled value belongs to this selector, not a ref shared with its successor.
-        let previous: ExecutionOriginMachineSnapshotSelection | null = null;
-        let observedState: StorageState | null = null;
-        const read = () => {
-            if (!params.enabled) return DISABLED_EXECUTION_ORIGIN_MACHINE_SNAPSHOT_SELECTION;
-            return readExecutionOriginMachineSnapshots({ ...params, activeServerId, profiles,
-                reachabilityRevision: readMachineRequestReachabilityRevision(), accountScopesByServerId, state: storage.getState() });
+        let connection: ExecutionOriginMachineSnapshotConnection | null = null;
+        const listeners = new Set<() => void>();
+        // Account capture may retire an incumbent while a sibling renders.
+        // The owner withdraws synchronously; only React notification is deferred.
+        const notify = () => {
+            for (const listener of listeners) queueMicrotask(() => { if (listeners.has(listener)) listener(); });
         };
-        const get = () => {
-            const state = storage.getState();
-            // React's consistency reads must retain one snapshot until an
-            // observed source publishes, even across a wall-clock boundary.
-            if (previous && observedState === state) return previous;
-            observedState = state;
-            const selection = read();
-            // A presentation refresh can retain the consumer's prior semantic
-            // selection. Serialization itself belongs to the shared producer.
-            previous = previous?.key === selection.key ? previous : selection;
-            return previous;
+        return {
+            get: () => connection?.getSnapshot() ?? EMPTY_EXECUTION_ORIGIN_MACHINE_SELECTION,
+            read: () => connection?.readCurrent() ?? EMPTY_EXECUTION_ORIGIN_MACHINE_SELECTION,
+            subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+            publish(inputs: Parameters<typeof executionOriginMachineSnapshotPublication.connect>[0] | null) {
+                if (inputs) {
+                    if (connection) connection.updateInputs(inputs);
+                    else connection = executionOriginMachineSnapshotPublication.connect(inputs, notify);
+                } else { connection?.dispose(); connection = null; }
+                notify();
+            },
+            dispose() { connection?.dispose(); connection = null; },
         };
-        const subscribe = (listener: () => void) => {
-            if (!params.enabled) return () => {};
-            const token = {};
-            const refresh = () => {
-                // Re-arm from fresh producer facts even when a heartbeat keeps
-                // the consumer's semantic selection unchanged. The shared
-                // inventory producer computes this deadline once per input.
-                const deadline = read().nextRefreshAtMs;
-                if (deadline === null) sessionListRuntimeClock.clearWake(token);
-                else sessionListRuntimeClock.requestWake(token, deadline);
-                observedState = null;
-                listener();
-            };
-            const stopStore = storage.subscribe(refresh);
-            const stopClock = sessionListRuntimeClock.subscribe(refresh);
-            const stopReachability = subscribeMachineRequestReachability(refresh);
-            refresh();
-            return () => { stopStore(); stopClock(); stopReachability(); sessionListRuntimeClock.clearWake(token); };
-        };
-        return { get, subscribe, read };
-    }, [activeServerId, params.enabled, params.materializations, params.pluginId, params.sources, params.readinessServerIdentityId,
-        profilesGeneration, accountScopesByServerId]);
-    // Clock/store notifications re-read authority, but only an eligibility
-    // change commits this consumer. Unrelated relative-time wakes stay local.
+    }, [params.pluginId, params.readinessServerIdentityId, activeServerId]);
+    React.useLayoutEffect(() => {
+        snapshots.publish(params.enabled ? { ...params, activeServerId, profiles, profilesGeneration,
+            accountScopesByServerId, accountLifetime, bindings: bindingLifetimes } : null);
+    }, [snapshots, activeServerId, params.enabled, params.materializations, params.pluginId, params.sources,
+        params.readinessServerIdentityId, params.selection, profiles, profilesGeneration, accountScopesByServerId, accountLifetime, bindingLifetimes]);
+    React.useLayoutEffect(() => () => snapshots.dispose(), [snapshots]);
     React.useSyncExternalStore(snapshots.subscribe, snapshots.get, snapshots.get);
-    // Notifications collapse heartbeat-only changes, but another admission
-    // input (such as Availability) can still cause a render. Classify against
-    // the producer's current rows, not the retained notification snapshot's
-    // now-expired presence timestamps.
-    return snapshots.read();
+    return params.enabled ? snapshots.read() : EMPTY_EXECUTION_ORIGIN_MACHINE_SELECTION;
 }
 
 export function advancePluginExecutionOriginSelectionRevision(
@@ -211,27 +187,6 @@ type FreshPluginExecutionOriginParams = Readonly<{
     renderedVersion?: string;
     contextualTarget?: PluginExecutionOriginContextualTarget | null;
 }>;
-
-/** Read existing local/desktop facts only; the decision stays in pluginExecutionOrigin. */
-export function readPluginExecutionOriginAutomaticHints(pluginId: string, candidates: readonly PluginExecutionOriginCandidateV1[],
-    machineSnapshots?: readonly ServerMachineInventorySnapshotV1[]) {
-    const scope = getActiveServerAccountScope();
-    const profile = scope && getServerProfileById(scope.serverId);
-    const local = readLocalDaemonSharedState<LocalDaemonStatusData>(getSystemTasksRunner()).status;
-    const localMachineTarget = local?.machineId && profile?.serverIdentityId && local.daemonAccountId === scope?.accountId
-        && isDaemonOnActiveRelay({ activeRelayUrl: profile.serverUrl, daemonRelayUrl: local.daemonServerUrl }) === true
-        ? { serverIdentityId: profile.serverIdentityId, machineId: local.machineId } : null;
-    const machineActivity = machineSnapshots ? machineSnapshots.flatMap(snapshot => snapshot.kind === 'resolved'
-        ? snapshot.machines.map(machine => ({ serverIdentityId: snapshot.serverIdentityId, machineId: machine.id, activeAt: machine.activeAt })) : [])
-        : candidates.flatMap(candidate => {
-            const origin = getPluginExecutionOriginCandidateOrigin(candidate);
-            const target = { serverIdentityId: origin.serverIdentityId, machineId: getPluginMachineExecutionOriginRef(origin).machineId };
-            const fresh = resolveFreshMachineAdministrationExecutionTarget(target);
-            return fresh ? [{ ...target, activeAt: fresh.machine.activeAt }] : [];
-        });
-    return { lastUsedTarget: readPluginMachineExecutionLastUsedTarget(storage.getState().settings.machineAdministrationTargetsLocalV1, pluginId),
-        localMachineTarget, machineActivity };
-}
 
 /** Invocation-time candidates over the same Availability and raw machine owners. */
 export function readFreshPluginMachineExecutionOriginCandidates(params: FreshPluginExecutionOriginParams): readonly PluginExecutionOriginCandidateV1[] {
@@ -326,10 +281,11 @@ export function usePluginMachineExecutionOriginSelection(params: Readonly<{
     contextualTarget?: PluginExecutionOriginContextualTarget | null;
 }>): PluginMachineExecutionOriginSelectionV1 {
     const reader = useActivePluginAccountAvailabilityReader(params.pluginId);
+    const availabilityRevision = reader?.getObservationSnapshot(params.pluginId) ?? null;
     const enabled = params.enabled !== false;
     const materializationAdmission = React.useMemo(
         () => enabled ? reader?.readMaterializations() ?? null : null,
-        [enabled, reader],
+        [enabled, reader, availabilityRevision],
     );
     const availabilityNotLoaded = enabled && (reader === null || (materializationAdmission?.kind === 'unavailable'
         && materializationAdmission.code === 'account_availability_not_loaded'));
@@ -337,19 +293,7 @@ export function usePluginMachineExecutionOriginSelection(params: Readonly<{
     const materializations = materializationAdmission?.kind === 'available'
         ? materializationAdmission.materializations : EMPTY_EXECUTION_ORIGIN_MATERIALIZATIONS;
     const sources = params.sourceCandidates ?? EMPTY_EXECUTION_ORIGIN_SOURCES;
-    const semanticMachineSelection = usePluginExecutionOriginMachineSnapshots({
-        enabled,
-        pluginId: params.pluginId,
-        materializations,
-        sources,
-        readinessServerIdentityId: params.contextualTarget?.serverIdentityId,
-    });
     const presentationMachineSnapshots = useAllProfileMachineInventorySnapshots(enabled && includeMachineCandidates);
-    // Admission and its memo key must observe the same snapshot. The picker
-    // resolves its own credential-bound presentation asynchronously; borrowing
-    // that snapshot here can memoize a cold refusal after semantic readiness.
-    const machineSnapshots = semanticMachineSelection.snapshots;
-    const readMachineFact = semanticMachineSelection.readMachineFact;
     const machineCandidates = React.useMemo(() => enabled && includeMachineCandidates
         ? buildMachineAdministrationCandidatesFromSnapshots({ snapshots: presentationMachineSnapshots })
         : Object.freeze([]), [enabled, includeMachineCandidates, presentationMachineSnapshots]);
@@ -396,67 +340,21 @@ export function usePluginMachineExecutionOriginSelection(params: Readonly<{
         storedOrigin,
         storedTarget,
     );
-    // Picker presentation can refresh independently of canonical eligibility.
-    const machineFactsKey = semanticMachineSelection.key;
-    const machineEligibilityKey = semanticMachineSelection.eligibilityKey;
-    // Raw inventory can refresh presentation without changing any selection fact.
-    const candidates = React.useMemo(() => enabled ? combinePluginMachineExecutionOriginCandidates(buildPluginMachineExecutionOriginCandidates({
-        pluginId: params.pluginId,
-        materializations: materializationAdmission?.kind === 'available'
-            ? materializationAdmission.materializations
-            : [],
-        machineSnapshots,
-        readMachineFact,
-        classifyRelease: params.classifyRelease,
-        machineRejections: params.machineRejections,
-    }), buildPluginMachineSourceExecutionOriginCandidates({ pluginId: params.pluginId,
-        sources: params.sourceCandidates ?? [], machineSnapshots, readMachineFact })) : Object.freeze([]), [enabled, machineEligibilityKey, materializationAdmission, params.classifyRelease, params.pluginId, params.sourceCandidates, params.machineRejections]);
-    const rememberedTarget = storedTarget ?? (storedOrigin ? { serverIdentityId: storedOrigin.serverIdentityId,
-        machineId: getPluginMachineExecutionOriginRef(storedOrigin).machineId } : null);
-    const storedOriginMachinePresence = rememberedTarget ? readMachineFact(rememberedTarget).rejection
-        ?? params.machineRejections?.find(entry => entry.serverIdentityId === rememberedTarget.serverIdentityId
-        && entry.machineId === rememberedTarget.machineId)?.reason ?? null : null;
-    const resolvedState = React.useMemo<PluginMachineExecutionOriginStateV1>(() => enabled ? resolvePluginMachineExecutionOriginState({
-        pluginId: params.pluginId,
-        storedOrigin,
-        storedTarget,
+    const descriptiveInputs = React.useMemo<PluginExecutionOriginDescriptiveInputs>(() => ({
+        availabilityRevision, classifyRelease: params.classifyRelease, storedOrigin, contextualTarget,
         homeServerIdentityId: getServerProfileById(expectedSettingsScope?.serverId ?? '')?.serverIdentityId,
-        candidates,
-        declaredDefaultOrigins: params.declaredDefaultOrigins,
-        contextualTarget,
-        storedOriginMachinePresence,
-        autoPick: params.autoPick, renderedVersion: params.renderedVersion,
-        ...readPluginExecutionOriginAutomaticHints(params.pluginId, candidates, machineSnapshots),
-        inventoryPending: machineSnapshots.some(snapshot => 'serverIdentityId' in snapshot
-            && snapshot.serverIdentityId === (rememberedTarget?.serverIdentityId
-                ?? getServerProfileById(expectedSettingsScope?.serverId ?? '')?.serverIdentityId) && isMachineInventoryPending(snapshot)),
-    }) : Object.freeze({ kind: 'selectionRequired', candidates }), [enabled, candidates, contextualTarget, params.declaredDefaultOrigins, params.pluginId, storedOrigin, storedTarget, storedOriginMachinePresence, expectedSettingsScope,
-        params.autoPick, params.renderedVersion, lastUsedTarget, localStatus, machineFactsKey]);
-    // Recording use can change the ranking hint without changing the chosen
-    // occurrence. Preserve the selection consumed by mounted surfaces in that case.
-    const retainedState = React.useRef(resolvedState);
-    const previousState = retainedState.current;
-    const state = previousState.kind === 'selected' && resolvedState.kind === 'selected'
-        && previousState.candidate === resolvedState.candidate
-        && previousState.selectionSource === resolvedState.selectionSource
-        && arePluginMachineExecutionOriginsEqual(previousState.origin, resolvedState.origin) ? previousState : resolvedState;
-    retainedState.current = state;
-    // An admitted selected row does not wait for unrelated census hydration.
-    // Unresolved coverage still stays pending when no target can be selected.
-    const readinessServerIdentityId = state.kind === 'selected' ? state.origin.serverIdentityId
-        : rememberedTarget?.serverIdentityId
-            ?? getServerProfileById(expectedSettingsScope?.serverId ?? '')?.serverIdentityId;
-    const inventoryPending = React.useMemo(() => machineSnapshots.some((snapshot) => (
-        'serverIdentityId' in snapshot && snapshot.serverIdentityId === readinessServerIdentityId && isMachineInventoryPending(snapshot)
-    )), [machineSnapshots, readinessServerIdentityId]);
-    const establishingTarget = state.kind === 'selected' ? {
-        serverIdentityId: state.origin.serverIdentityId, machineId: getPluginMachineExecutionOriginRef(state.origin).machineId,
-    } : contextualTarget !== undefined ? contextualTarget : rememberedTarget;
-    const projectionPending = contextualTarget !== null && (state.kind === 'unavailable' || state.kind === 'selected')
-        && params.establishingTargets?.some(target => establishingTarget
-            ? target.serverIdentityId === establishingTarget.serverIdentityId && target.machineId === establishingTarget.machineId
-            : target.serverIdentityId === readinessServerIdentityId) === true;
-    const loading = availabilityNotLoaded || (enabled && ((inventoryPending && state.kind !== 'selected') || projectionPending));
+        machineRejections: params.machineRejections, declaredDefaultOrigins: params.declaredDefaultOrigins,
+        establishingTargets: params.establishingTargets, autoPick: params.autoPick, renderedVersion: params.renderedVersion,
+        availabilityNotLoaded, localStatus,
+    }), [availabilityRevision, params.classifyRelease, storedOrigin, contextualTarget, expectedSettingsScope,
+        params.machineRejections, params.declaredDefaultOrigins, params.establishingTargets, params.autoPick,
+        params.renderedVersion, availabilityNotLoaded, localStatus]);
+    const semanticMachineSelection = usePluginExecutionOriginMachineSnapshots({ enabled, pluginId: params.pluginId,
+        materializations, sources, readinessServerIdentityId: params.contextualTarget?.serverIdentityId, selection: descriptiveInputs });
+    const machineFactsKey = semanticMachineSelection.key;
+    const candidates = semanticMachineSelection.selection?.candidates ?? EMPTY_PLUGIN_EXECUTION_CANDIDATES;
+    const state = semanticMachineSelection.selection?.state ?? EMPTY_PLUGIN_EXECUTION_STATE;
+    const loading = enabled && (semanticMachineSelection.selection?.loading ?? true);
     const currentParamsRef = React.useRef(params);
     currentParamsRef.current = params;
     const contextualFacts = React.useRef({ params, enabled, reader, expectedAccountLifetime, expectedSettingsScope });
@@ -546,7 +444,8 @@ export function usePluginMachineExecutionOriginSelection(params: Readonly<{
     const clearOrigin = React.useCallback(() => executePreference(null), [executePreference]);
 
     const resolveExecutionOrigin = React.useCallback((options?: Readonly<{ recordUse?: boolean }>) => {
-        if (!enabled || !areAccountSettingsScopesEqual(expectedSettingsScope, storage.getState().settingsScope)) return null;
+        if (!enabled || expectedAccountLifetime?.isCurrent() !== true
+            || !areAccountSettingsScopesEqual(expectedSettingsScope, storage.getState().settingsScope)) return null;
         const origin = params.contextualTarget !== undefined ? storedOrigin : null;
         const target = params.contextualTarget !== undefined ? null : readCurrentPluginMachineExecutionTargetPreference(params.pluginId);
         selectionRevisionRef.current = advancePluginExecutionOriginSelectionRevision(
@@ -576,7 +475,7 @@ export function usePluginMachineExecutionOriginSelection(params: Readonly<{
                 ...resolved,
                 selectionRevision: selectionRevisionRef.current.revision,
             });
-    }, [enabled, expectedSettingsScope, contextualTarget, params.contextualTarget, params.classifyRelease, params.pluginId, reader, storedOrigin]);
+    }, [enabled, expectedAccountLifetime, expectedSettingsScope, contextualTarget, params.contextualTarget, params.classifyRelease, params.pluginId, reader, storedOrigin]);
 
     // The app shell consumes candidates/origin without asking to execute.
     // Reopen fresh release and Machine authority only when a consumer reads

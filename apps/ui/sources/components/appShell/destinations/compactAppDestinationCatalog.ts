@@ -20,9 +20,13 @@ import type {
 } from '@happier-dev/protocol/plugins/ui';
 
 import {
-    useAppShellPluginUiDeclarationProjection,
-    useProjectedPluginLocalizedTextResolver,
+    useAppShellPluginUiDeclarationSources,
+    type AppShellPluginUiDeclarationSources,
 } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { createPluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
+import { usePreferredLanguage } from '@/text/usePreferredLanguage';
+import { getPreferredLanguage } from '@/text/preferredLanguage';
+import type { SupportedLanguage } from '@/text/_all';
 import {
     resolvePluginAppPages,
     selectPluginAppPagePlacements,
@@ -505,6 +509,173 @@ export function resolveCompactAppDestinations(input: Readonly<{
     return Object.freeze(destinations.sort(compare).map((destination, order) => Object.freeze({ ...destination, order })));
 }
 
+export type CompactAppDestinationSources = AppShellPluginUiDeclarationSources & Readonly<{
+    locale: SupportedLanguage;
+    builtins: AppBuiltinDestinationAvailability;
+}>;
+
+type CompactDestinationVariant = {
+    destinations: readonly CompactAppDestination[];
+    published: boolean;
+    listeners: Set<() => void>;
+};
+
+type CompactDestinationPublication = {
+    source: CompactAppDestinationSources;
+    prepared: Readonly<{
+        pages: readonly PluginAppPage[];
+        rightSidebarTabs: readonly RightSidebarPluginTabDefinition[];
+    }> | null;
+    variants: Map<number, CompactDestinationVariant>;
+    lastDestinations: readonly CompactAppDestination[];
+    retirement: Readonly<{ dispose(): void }> | null;
+};
+
+const UNPUBLISHED_COMPACT_DESTINATIONS: readonly CompactAppDestination[] = Object.freeze([]);
+const compactDestinationPublications = new Set<CompactDestinationPublication>();
+let latestCompactDestinationPublication: CompactDestinationPublication | null = null;
+
+function isCompactDestinationSourceCurrent(source: CompactAppDestinationSources): boolean {
+    return source.ready && (!source.accountLifetime || source.accountLifetime.isCurrent());
+}
+
+function compactDestinationVariantKey(builtins: AppBuiltinDestinationAvailability): number {
+    return Number(builtins.externalSessions) | (Number(builtins.inbox) << 1)
+        | (Number(builtins.discussions === true) << 2) | (Number(builtins.workflows) << 3)
+        | (Number(builtins.friends) << 4) | (Number(builtins.botsRoster === true) << 5);
+}
+
+function findCompactDestinationPublication(source: CompactAppDestinationSources): CompactDestinationPublication | undefined {
+    for (const publication of compactDestinationPublications) {
+        if (publication.source.accountLifetime === source.accountLifetime
+            && publication.source.projection === source.projection
+            && publication.source.locale === source.locale) return publication;
+    }
+    return undefined;
+}
+
+function readLastKnownCompactDestinations(source: CompactAppDestinationSources): readonly CompactAppDestination[] {
+    const key = compactDestinationVariantKey(source.builtins);
+    let matchingVariant = UNPUBLISHED_COMPACT_DESTINATIONS;
+    let lastKnown = UNPUBLISHED_COMPACT_DESTINATIONS;
+    for (const publication of compactDestinationPublications) {
+        if (publication.source.accountLifetime !== source.accountLifetime) continue;
+        if (publication.lastDestinations !== UNPUBLISHED_COMPACT_DESTINATIONS) lastKnown = publication.lastDestinations;
+        const variant = publication.variants.get(key);
+        if (variant?.published) matchingVariant = variant.destinations;
+    }
+    return matchingVariant === UNPUBLISHED_COMPACT_DESTINATIONS ? lastKnown : matchingVariant;
+}
+
+/** Reads never prepare pages, sort destinations, compare rows, or publish a source. */
+export function readCommittedCompactAppDestinations(source: CompactAppDestinationSources): readonly CompactAppDestination[] {
+    if (!isCompactDestinationSourceCurrent(source)) return UNPUBLISHED_COMPACT_DESTINATIONS;
+    return findCompactDestinationPublication(source)?.variants.get(compactDestinationVariantKey(source.builtins))?.destinations
+        ?? readLastKnownCompactDestinations(source);
+}
+
+function isCompactDestinationSourcePublished(source: CompactAppDestinationSources): boolean {
+    return isCompactDestinationSourceCurrent(source)
+        && findCompactDestinationPublication(source)?.variants.get(compactDestinationVariantKey(source.builtins))?.published === true;
+}
+
+function releaseCompactDestinationPublication(publication: CompactDestinationPublication): void {
+    compactDestinationPublications.delete(publication);
+    publication.retirement?.dispose();
+    if (latestCompactDestinationPublication === publication) latestCompactDestinationPublication = null;
+}
+
+function pruneCompactDestinationPublications(): void {
+    // Keep the current source for remounts, and older tuples only while actually subscribed.
+    // Each source has only the six builtin booleans' demanded variants; no revision history.
+    for (const publication of compactDestinationPublications) {
+        if (publication !== latestCompactDestinationPublication
+            && [...publication.variants.values()].every(variant => variant.listeners.size === 0)) {
+            releaseCompactDestinationPublication(publication);
+        }
+    }
+}
+
+function retainCompactDestinationVariant(source: CompactAppDestinationSources): Readonly<{
+    publication: CompactDestinationPublication;
+    variant: CompactDestinationVariant;
+}> {
+    let publication = findCompactDestinationPublication(source);
+    if (!publication) {
+        publication = { source, prepared: null, variants: new Map(),
+            lastDestinations: UNPUBLISHED_COMPACT_DESTINATIONS, retirement: null };
+        compactDestinationPublications.add(publication);
+        const owned = publication;
+        publication.retirement = source.accountLifetime?.onRetire(() => {
+            releaseCompactDestinationPublication(owned);
+            owned.prepared = null;
+            owned.lastDestinations = UNPUBLISHED_COMPACT_DESTINATIONS;
+            for (const variant of owned.variants.values()) {
+                variant.destinations = UNPUBLISHED_COMPACT_DESTINATIONS;
+                variant.published = false;
+                for (const listener of variant.listeners) listener();
+            }
+        }) ?? null;
+    }
+    const key = compactDestinationVariantKey(source.builtins);
+    let variant = publication.variants.get(key);
+    if (!variant) {
+        variant = { destinations: readLastKnownCompactDestinations(source), published: false, listeners: new Set() };
+        publication.variants.set(key, variant);
+    }
+    return { publication, variant };
+}
+
+export function subscribeCompactAppDestinations(source: CompactAppDestinationSources, listener: () => void): () => void {
+    if (!isCompactDestinationSourceCurrent(source)) return () => {};
+    const { variant } = retainCompactDestinationVariant(source);
+    variant.listeners.add(listener);
+    return () => { variant.listeners.delete(listener); pruneCompactDestinationPublications(); };
+}
+
+function shareCompactDestinationRows(previous: readonly CompactAppDestination[], next: readonly CompactAppDestination[]): readonly CompactAppDestination[] {
+    const previousById = new Map(previous.map(row => [row.id, row]));
+    const shared = next.map(row => {
+        const retained = previousById.get(row.id);
+        return retained && sameStrictJsonValue(retained, row) ? retained : row;
+    });
+    return previous.length === shared.length && shared.every((row, index) => row === previous[index])
+        ? previous : Object.freeze(shared);
+}
+
+/** One committed declaration/locale prepares pages and tabs for every builtin/Bots variant. */
+export function commitCompactAppDestinationSources(source: CompactAppDestinationSources): void {
+    // Builtin titles read the ready locale's host catalog. A superseded layout callback must
+    // not publish those titles under the preceding locale's otherwise-valid declaration key.
+    if (!isCompactDestinationSourceCurrent(source) || source.locale !== getPreferredLanguage()) return;
+    const { publication, variant } = retainCompactDestinationVariant(source);
+    if (variant.published) {
+        latestCompactDestinationPublication = publication;
+        pruneCompactDestinationPublications();
+        return;
+    }
+    if (!publication.prepared) {
+        const projection = source.projection;
+        const localize = createPluginLocalizedTextResolver({ projection, locale: source.locale });
+        publication.prepared = {
+            pages: projection ? resolvePluginAppPages({ placements: selectPluginAppPagePlacements(projection), localize }) : [],
+            rightSidebarTabs: projection ? resolveRightSidebarTabs({ scope: 'app',
+                pluginPlacements: selectPluginRightSidebarTabPlacements(projection, 'app'),
+                projectionGeneration: projection.generation, localize,
+            }).filter((tab): tab is RightSidebarPluginTabDefinition => tab.owner === 'plugin') : [],
+        };
+    }
+    const previous = variant.destinations;
+    variant.destinations = shareCompactDestinationRows(previous, resolveCompactAppDestinations({
+        builtins: source.builtins, ...publication.prepared,
+    }));
+    variant.published = true;
+    publication.lastDestinations = variant.destinations;
+    latestCompactDestinationPublication = publication;
+    pruneCompactDestinationPublications();
+    if (variant.destinations !== previous) for (const listener of variant.listeners) listener();
+}
+
 /** The destinations listed in one placement group, visible ones only, in catalog order. */
 export function selectAppDestinationsInPlacement(
     catalog: readonly CompactAppDestination[],
@@ -809,42 +980,31 @@ function useAppBuiltinDestinationAvailability(owners: AppDestinationActivationOw
  * interaction: pages can be host-local or Account-artifact-backed and must remain
  * navigable/offline-tombstonable while executable bridge methods are separately unavailable.
  */
-export function useCompactAppDestinations(owners: AppDestinationActivationOwners = {}): readonly CompactAppDestination[] {
-    const pluginUiProjection = useAppShellPluginUiDeclarationProjection();
-    const localizePluginText = useProjectedPluginLocalizedTextResolver();
+export function useCompactAppDestinationCatalog(owners: AppDestinationActivationOwners = {}): Readonly<{
+    destinations: readonly CompactAppDestination[];
+    ready: boolean;
+    accountLifetime: AppShellPluginUiDeclarationSources['accountLifetime'];
+}> {
+    const declaration = useAppShellPluginUiDeclarationSources();
+    const locale = usePreferredLanguage();
     const builtins = useAppBuiltinDestinationAvailability(owners);
-    const pages = React.useMemo(() => (
-        pluginUiProjection
-            ? resolvePluginAppPages({
-                placements: selectPluginAppPagePlacements(pluginUiProjection),
-                localize: localizePluginText,
-            })
-            : []
-    ), [localizePluginText, pluginUiProjection]);
-    const rightSidebarTabs = React.useMemo(() => (
-        pluginUiProjection
-            ? resolveRightSidebarTabs({
-                scope: 'app',
-                pluginPlacements: selectPluginRightSidebarTabPlacements(
-                    pluginUiProjection,
-                    'app',
-                ),
-                projectionGeneration: pluginUiProjection.generation,
-                localize: localizePluginText,
-            }).filter((tab): tab is RightSidebarPluginTabDefinition => tab.owner === 'plugin')
-            : []
-    ), [localizePluginText, pluginUiProjection]);
-    const destinations = React.useMemo(() => resolveCompactAppDestinations({
-        builtins,
-        pages,
-        rightSidebarTabs,
-    }), [builtins, pages, rightSidebarTabs]);
-    // The compact catalog carries navigation/presentation, not executable
-    // custody. A producer/diagnostic refresh with the same visible destinations
-    // must not invalidate every workspace tab and destination row.
-    const retained = React.useRef(destinations);
-    if (!sameStrictJsonValue(retained.current, destinations)) retained.current = destinations;
-    return retained.current;
+    const source = React.useMemo<CompactAppDestinationSources>(() => ({ ...declaration, locale, builtins }), [builtins, declaration, locale]);
+    const subscribe = React.useCallback((listener: () => void) => subscribeCompactAppDestinations(source, listener), [source]);
+    const getSnapshot = React.useCallback(() => readCommittedCompactAppDestinations(source), [source]);
+    const destinations = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+    const ready = isCompactDestinationSourcePublished(source);
+    const [, refresh] = React.useReducer((value: boolean) => !value, false);
+    React.useLayoutEffect(() => {
+        commitCompactAppDestinationSources(source);
+        // useSyncExternalStore subscribes passively. Admit the first complete catalog before
+        // paint, including equal-row publications whose exact source just became ready.
+        if (destinations !== getSnapshot() || ready !== isCompactDestinationSourcePublished(source)) refresh();
+    }, [destinations, getSnapshot, ready, source]);
+    return { destinations, ready, accountLifetime: declaration.accountLifetime };
+}
+
+export function useCompactAppDestinations(owners: AppDestinationActivationOwners = {}): readonly CompactAppDestination[] {
+    return useCompactAppDestinationCatalog(owners).destinations;
 }
 
 export type ActivateAppDestination = (

@@ -14,9 +14,23 @@ import { useManagedMachineInventory } from './managed/useManagedMachineInventory
 import { useMachinePresets } from './managed/useMachinePresets';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 
-export type MachinesSettingsViewModel = ReturnType<typeof useMachinesSettingsViewModel>;
+export type MachinesSettingsViewModel = {
+    activeServerId: string;
+    allMachines: ReturnType<typeof useAllMachines>;
+    hasMachines: boolean;
+    isLoadingMachines: boolean;
+    managedFirstAnswerPending: boolean;
+    machineRows: { id: string; title: string; subtitle: string | undefined; serverId: string }[];
+    showMachinesGroupedByServer: boolean;
+    visibleMachineGroups: ReturnType<typeof useActiveSelectionMachineGroups>['visibleMachineGroups'];
+    managedByServerId: ReturnType<typeof useManagedMachineInventory>['machinesByServerId'];
+    managedInventory: ReturnType<typeof useManagedMachineInventory>;
+    presetsByServerId: ReturnType<typeof useMachinePresets>['presetsByServerId'];
+    presetInventory: ReturnType<typeof useMachinePresets>;
+    reachabilityRevision: ReturnType<typeof useMachineReachabilityRevision>;
+};
 
-export function useMachinesSettingsViewModel() {
+export function useMachinesSettingsViewModel(): MachinesSettingsViewModel {
     const reachabilityRevision = useMachineReachabilityRevision();
     const allMachines = useAllMachines();
     const machineListByServerId = useMachineListByServerId();

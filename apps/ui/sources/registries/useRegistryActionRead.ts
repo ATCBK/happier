@@ -12,7 +12,19 @@ class RegistryReadFailure extends Error {
 
 /** Reads share the mounted approval/currentness owner and retain last-known data during refresh. */
 export function useRegistryActionRead<T>(actionId: RegistryActionIdV1, input: unknown,
-    parse: (value: unknown, previous: T | null) => T, revision?: unknown, enabled = true) {
+    parse: (value: unknown, previous: T | null) => T, revision?: unknown, enabled = true): {
+    scopeKey: string;
+    inputKey: string;
+    revision: unknown;
+    value: T | null;
+    error: string | null;
+    status: RegistryFailureStatus | null;
+    loading: boolean;
+    stale: boolean;
+    refresh: () => Promise<void>;
+    execution: ReturnType<typeof useMountedActionExecution>;
+    scope: ReturnType<typeof useAccountSettingsScope>;
+} {
     const scope = useAccountSettingsScope();
     const execution = useMountedActionExecution(scope);
     const scopeKey = JSON.stringify([scope?.serverId, scope?.accountId]);

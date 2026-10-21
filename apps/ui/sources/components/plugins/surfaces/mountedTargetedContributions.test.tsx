@@ -27,6 +27,12 @@ vi.mock('@/sync/ops/machineContributionRegistryProjection', async (importOrigina
     machineContributionRegistryProjectionDescribe: describeMock,
 }));
 
+// No scoped RPC can escape this target-read transport fixture. Retain the
+// operation module's real neighbouring exports without loading a live channel.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
+    machineRpcWithServerScope: vi.fn(),
+}));
+
 vi.mock('@/sync/domains/scope/activeServerAccountScope', () => ({
     captureActiveServerAccountScopeLifetime: () => activeAccountLifetime.value,
 }));
@@ -55,6 +61,7 @@ function mount(occurrenceId: string) {
 
 // Load the shared publication graph outside an individual hook-case deadline.
 const { loadDaemonMergedProjectionCacheEntry, clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+const { useMountedTargetedContributions } = await import('./mountedTargetedContributions');
 
 describe('useMountedTargetedContributions', () => {
     beforeEach(async () => {
@@ -103,7 +110,6 @@ describe('useMountedTargetedContributions', () => {
         const first = await loadDaemonMergedProjectionCacheEntry(input);
         if (first?.kind !== 'ready') throw new Error('Expected admitted machine projection');
         targetedReadMock.mockResolvedValue({ supported: true, targetedContributions: snapshot('occurrence-a'), targetedSurfaceMounts: [mount('occurrence-a')] });
-        const { useMountedTargetedContributions } = await import('./mountedTargetedContributions');
         const rendered = await renderHook(() => useMountedTargetedContributions({
             machineId: input.machineId, serverId: input.serverId, pluginId: 'acme.triage', mountedOccurrenceId: 'occurrence-a', enabled: true,
         }));
@@ -112,11 +118,12 @@ describe('useMountedTargetedContributions', () => {
         expect(rendered.getCurrent().pluginUiProjection).toBe(first.inputs.pluginUiProjection);
         const prepared = rendered.getCurrent().preparedTargetedSurfaceMounts;
         describeMock.mockResolvedValue({ supported: true, projection: PluginProjectionV2Schema.parse({ v: 2, generation: 42 }) });
-        let next: Awaited<ReturnType<typeof loadDaemonMergedProjectionCacheEntry>> = null;
-        await act(async () => { next = await loadDaemonMergedProjectionCacheEntry(input); });
-        if (next!?.kind !== 'ready') throw new Error('Expected refreshed machine projection');
-        expect(rendered.getCurrent().projectionInputs).toBe(next!.inputs);
-        expect(rendered.getCurrent().pluginUiProjection).toBe(next!.inputs.pluginUiProjection);
+        const refresh = loadDaemonMergedProjectionCacheEntry(input);
+        await act(async () => { await refresh; });
+        const next = await refresh;
+        if (next?.kind !== 'ready') throw new Error('Expected refreshed machine projection');
+        expect(rendered.getCurrent().projectionInputs).toBe(next.inputs);
+        expect(rendered.getCurrent().pluginUiProjection).toBe(next.inputs.pluginUiProjection);
         expect(rendered.getCurrent().preparedTargetedSurfaceMounts).toBe(prepared);
         expect(targetedReadMock).toHaveBeenCalledTimes(1);
     });

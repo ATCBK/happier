@@ -8,6 +8,7 @@ import { createActionExecutor, PluginContributesV2Schema, buildComposerReference
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { formatInlineReferenceTokenV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 import { act } from 'react-test-renderer';
+import { createSessionFilesViewFixture, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
 
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import {
@@ -29,6 +30,7 @@ import { ComposerEntityDropTarget } from '@/components/sessions/composer/Compose
 import { useEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropHooks';
 import { formatWidgetInstanceRefKeyV1 } from '@happier-dev/protocol/widgets';
 import { buildMentionRefForKindV1, MENTION_KIND_V1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
+import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
 
 const persistentValues = vi.hoisted(() => new Map<string, string>());
 const activeScopeState = vi.hoisted(() => ({
@@ -61,10 +63,10 @@ vi.mock('react-native-mmkv', () => {
 
 // Only the active-scope read is stubbed; the module's real lifetime capture and
 // retirement logic stays live for every other consumer in this graph.
-vi.mock('@/sync/domains/scope/activeServerAccountScope', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/domains/scope/activeServerAccountScope')>(),
-    getActiveServerAccountScope: () => activeScopeState.value,
-}));
+vi.mock('@/sync/domains/scope/activeServerAccountScope', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/sync/domains/scope/activeServerAccountScope')>();
+    return { ...actual, getActiveServerAccountScope: () => activeScopeState.value ?? actual.getActiveServerAccountScope() };
+});
 
 vi.mock('@/sync/domains/transfers/runtime/transferRuntime', () => ({
     releaseComposerContent: releaseComposerContentSpy,
@@ -367,7 +369,7 @@ describe('composer presentation targets', () => {
             lastKnownLocator: { v: 1 as const, displayPath: 'example/repository #42' }, title: 'Attached title', subtitle: 'example/repository' };
         const item = { kind: 'plugin', scope, contribution: { pluginId, localId: 'entry-reference' }, reference } as const;
         const context: ComposerEntityDropContext = { scope, ref: document.readCurrent().ref, snapshot: document.readCurrent(), sessions: [], workspace: null,
-            referenceHost: { projection, machineId: 'machine-a', serverId: scope.serverId, isCurrent: () => true },
+            referenceHost: { projection, pluginUiProjection: normalizePluginUiProjection(projection, 'web'), machineId: 'machine-a', serverId: scope.serverId, isCurrent: () => true },
             attachmentComposition: composition, dragSourceReader: index, platform: 'web', preview: { verb: 'Attach', target: 'Composer' }, reason: code => code };
         const admission = resolveComposerEntityDrop(item, context);
         expect(admission.status).toBe('allowed');
@@ -609,9 +611,13 @@ describe('composer presentation targets', () => {
         expect(target.readCurrent()).toEqual(applied);
     });
 
-    it('uses the mounted editor release point and clears its hover caret before keyboard insertion', async () => {
-        const scope = { serverId: 'drop-home', accountId: 'drop-account' };
-        activeScopeState.value = scope;
+    it.each(['pointer', 'native'] as const)('uses the mounted editor release point for %s and clears its hover caret before keyboard insertion', async (mode) => {
+        activeScopeState.value = null;
+        await prepareSessionFilesViewTestkit();
+        const account = await createSessionFilesViewFixture({ serverIdentityId: 'srv_composer_drop',
+            sessionId: 'session-1', machineId: 'machine-a', rootPath: '/repo' });
+        cleanups.push(() => account.dispose());
+        const scope = { serverId: account.scope.serverId, accountId: 'alice' };
         const document = createDocumentTarget(createSnapshot({ text: 'Before after', selection: { start: 0, end: 0 } }));
         const ref = document.readCurrent().ref;
         if (ref.kind !== 'session') throw new Error('Session fixture required');
@@ -620,7 +626,7 @@ describe('composer presentation targets', () => {
         let nextFrame = 0;
         vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++nextFrame, callback); return nextFrame; });
         vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
-        cleanups.push(() => vi.unstubAllGlobals());
+        cleanups.push(() => { vi.unstubAllGlobals(); });
         const handle = { offsetAtPoint: vi.fn(async () => 7), setDropCaret: vi.fn() };
         const mounted = await renderHook(() => {
             const runtime = useEntityDragDropRuntime();
@@ -634,8 +640,11 @@ describe('composer presentation targets', () => {
         cleanups.push(runtime.registerSource({ id: 'dropped-file', scope, isCurrent: () => true,
             getItem: () => ({ kind: 'repository-file', scope, machineId: 'machine-a', path: '/repo/a.ts' }) }));
         const carry = runtime.begin('dropped-file')!;
+        const { createEntityDragGestureAdapter } = await import('@/components/ui/treeDragDrop/entityDragGestureAdapter');
+        const gesture = mode === 'native' ? createEntityDragGestureAdapter(carry) : null;
         await act(async () => {
-            carry.move({ x: 80, y: 20 });
+            if (gesture) gesture.update({ x: 80, y: 20 });
+            else carry.move({ x: 80, y: 20 });
         });
         expect(runtime.getSnapshot()).toMatchObject({ phase: 'carrying', targetId: 'composer-drop', admission: { status: 'allowed' } });
         await act(async () => {
@@ -644,8 +653,8 @@ describe('composer presentation targets', () => {
             await Promise.resolve();
         });
         expect(handle.setDropCaret).toHaveBeenLastCalledWith(7);
-        await act(async () => { expect(await carry.release()).toEqual({ status: 'applied' }); });
-        expect(handle.offsetAtPoint).toHaveBeenLastCalledWith({ x: 80, y: 20 });
+        await act(async () => { expect(await (gesture ? gesture.end(true, { x: 90, y: 20 }) : carry.release())).toEqual({ status: 'applied' }); });
+        expect(handle.offsetAtPoint).toHaveBeenLastCalledWith({ x: gesture ? 90 : 80, y: 20 });
         expect(document.readCurrent().text).toBe('Before [a.ts](happier-ref:file:a.ts) after');
         expect(handle.setDropCaret).toHaveBeenLastCalledWith(null);
         await act(async () => {
@@ -669,7 +678,7 @@ describe('composer presentation targets', () => {
         expect(admission.status).toBe('allowed');
         if (admission.status !== 'allowed') return;
         expect(admission.effect.input).toMatchObject({ transaction: { expectedRevision: 1, operations: [
-            { kind: 'text.insert', text: ' [file.ts](happier-ref:file:src/file.ts)' },
+            { kind: 'text.insert', text: ' [file.ts](happier-ref:file:src/file.ts) ' },
             { kind: 'reference.insert', reference: { kind: 'happier.file', ref: 'file:src/file.ts' } },
         ] } });
         expect(admission.effect.input).toMatchObject({ transaction: {
@@ -702,7 +711,8 @@ describe('composer presentation targets', () => {
             { kind: 'reference.insert', reference: { kind: 'happier.workflow', ref: 'workflow:release', label: 'Release checks' } },
         ] } } } });
         for (const item of [{ kind: 'artifact', scope, artifactId: 'a' }, { kind: 'todo', scope, todoId: 't' },
-            { kind: 'work-board-item', scope, boardId: 'b', item: { kind: 'session', qualifiedId: { serverId: scope.serverId, id: 's' } } }] as const) {
+            { kind: 'work-board-item', scope, boardId: 'b', item: { kind: 'session', qualifiedId: { serverId: scope.serverId, id: 's' } } },
+            { kind: 'companion-item', scope, address: { serverId: scope.serverId, sessionId: 's' }, item: { kind: 'widget', widgetId: 'w' } }] as const) {
             expect(resolveComposerEntityDrop(item, context)).toMatchObject({ status: 'refused', reason: { code: 'referenceUnavailable' } });
         }
     });
@@ -769,7 +779,7 @@ describe('composer presentation targets', () => {
             }] },
         };
         const context: ComposerEntityDropContext = { scope, ref: target.readCurrent().ref, snapshot: target.readCurrent(),
-            workspace: null, sessions: [], referenceHost: { projection, serverId: scope.serverId, machineId: 'm', isCurrent: () => true },
+            workspace: null, sessions: [], referenceHost: { projection, pluginUiProjection: normalizePluginUiProjection(projection, 'web'), serverId: scope.serverId, machineId: 'm', isCurrent: () => true },
             preview: { verb: 'Add context', target: 'Composer' }, reason: code => code };
         const item = { kind: 'plugin', scope, contribution: { pluginId: 'acme.issues', localId: 'pr-drag' },
             reference: buildComposerReferenceMentionPayloadV1({ reference: { pluginId: 'acme.issues', localId: 'pull-requests' },

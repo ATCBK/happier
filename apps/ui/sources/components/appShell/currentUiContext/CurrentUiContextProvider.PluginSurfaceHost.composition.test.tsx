@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { readFile } from 'node:fs/promises';
 
 import { act } from 'react-test-renderer';
@@ -566,13 +567,15 @@ async function establishActiveServer(serverId: string, accountId: string): Promi
     connection = await restoreServerAccountForTest({
         serverUrl: profile.serverUrl,
         accountId,
-        request: async (url) => {
+        request: async (url, init) => {
             const path = new URL(String(url)).pathname;
             if (path === '/health') return Response.json({ status: 'ok' });
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
             if (path === '/v1/kv/bulk') return Response.json({ values: [] });
+            const machineRead = createPlainMachineReadHttpResponseFixture(path, init, accountId);
+            if (machineRead) return machineRead;
             if (path.startsWith('/v1/machines/')) return Response.json({ machine: {
                 id: decodeURIComponent(path.slice('/v1/machines/'.length)),
                 dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,

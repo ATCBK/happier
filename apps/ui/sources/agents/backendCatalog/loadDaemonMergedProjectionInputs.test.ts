@@ -366,7 +366,13 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
         await vi.waitFor(() => expect(projectionDescribeMock).toHaveBeenCalledTimes(1));
         resolveDescribe({ supported: true, projection: daemonProjection(7) });
         await expect(shellRead).resolves.toMatchObject({ kind: 'ready' });
-        await expect(directRead).resolves.toMatchObject({ pluginProjectionV2: { generation: 7 } });
+        await expect(directRead).resolves.toMatchObject({
+            pluginProjectionV2: { generation: 7 },
+            pluginUiProjection: { generation: 7 },
+        });
+        const published = await directRead;
+        const sibling = await loadDaemonMergedProjectionInputs({ machineId: 'machine-1', serverId: 'server-1', accountLifetime: account.lifetime });
+        expect(sibling?.pluginUiProjection).toBe(published?.pluginUiProjection);
 
         // A later direct caller reuses the current revision's answer…
         await expect(loadDaemonMergedProjectionInputs({ machineId: 'machine-1', serverId: 'server-1', accountLifetime: account.lifetime }))
@@ -383,6 +389,53 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
         for (const call of projectionDescribeMock.mock.calls) {
             expect(call[1]).not.toHaveProperty('timeoutMs');
             expect(call[1]).not.toHaveProperty('requestEpoch');
+            expect(call[1]).not.toHaveProperty('selection');
+        }
+    });
+
+    it('publishes normalized model slices once and retains unchanged rows across a same-generation endpoint refresh', async () => {
+        const { loadDaemonMergedProjectionInputs, loadDaemonMergedProjectionCacheEntry } = await import('./loadDaemonMergedProjectionInputs');
+        await (await import('@/sync/domains/state/warmCacheEncryptionKey')).prepareWarmCacheEncryptionKey();
+        const normalizer = await import('@/sync/domains/plugins/ui/projection');
+        const normalize = vi.spyOn(normalizer, 'normalizePluginUiProjection');
+        const account = createAccountLifetime('account-a');
+        const projection = {
+            ...daemonProjection(7),
+            familiesById: { pluginUi: { family: 'pluginUi' as const, entriesById: {
+                'translations:acme.one': { id: 'translations:acme.one', pluginId: 'acme.one', occurrenceId: 'one', contributionKind: 'translations' as const, locales: ['en'], bundles: { en: { title: 'One' } } },
+                'translations:acme.two': { id: 'translations:acme.two', pluginId: 'acme.two', occurrenceId: 'two', contributionKind: 'translations' as const, locales: ['en'], bundles: { en: { title: 'Two' } } },
+            } } },
+        };
+        projectionDescribeMock.mockResolvedValueOnce({ supported: true, projection });
+        try {
+            const params = { ...projectionScope, accountLifetime: account.lifetime };
+            const first = await loadDaemonMergedProjectionInputs(params);
+            expect(first?.pluginUiProjection.translationsByPluginId['acme.one']).toBeDefined();
+            expect(normalize.mock.results.filter(result => result.type === 'return' && result.value === first?.pluginUiProjection)).toHaveLength(1);
+            const initialNormalizations = normalize.mock.calls.length;
+            for (let i = 0; i < 100; i++) {
+                expect((await loadDaemonMergedProjectionInputs(params))?.pluginUiProjection).toBe(first?.pluginUiProjection);
+            }
+            expect(normalize).toHaveBeenCalledTimes(initialNormalizations);
+            projectionDescribeMock.mockResolvedValueOnce({ supported: true, projection: structuredClone(projection) });
+            const repeatedAnswer = await loadDaemonMergedProjectionCacheEntry({ ...params, reuseFreshReady: false });
+            expect(repeatedAnswer?.kind === 'ready' && repeatedAnswer.inputs).toBe(first);
+            expect(normalize).toHaveBeenCalledTimes(initialNormalizations);
+            publishMachineContributionRegistryProjectionInvalidation(projectionScope);
+            projectionDescribeMock.mockResolvedValueOnce({ supported: true, projection: {
+                ...projection, familiesById: { pluginUi: { ...projection.familiesById.pluginUi, entriesById: {
+                    ...projection.familiesById.pluginUi.entriesById,
+                    'translations:acme.one': { ...projection.familiesById.pluginUi.entriesById['translations:acme.one'], bundles: { en: { title: 'Changed' } } },
+                } } },
+            } });
+            const next = await loadDaemonMergedProjectionInputs(params);
+            expect(next?.pluginUiProjection).not.toBe(first?.pluginUiProjection);
+            expect(next?.pluginUiProjection.translationsByPluginId['acme.one']).not.toBe(first?.pluginUiProjection.translationsByPluginId['acme.one']);
+            expect(next?.pluginUiProjection.translationsByPluginId['acme.two']).toBe(first?.pluginUiProjection.translationsByPluginId['acme.two']);
+            expect(next?.pluginUiProjection.composerAttachmentsById).toBe(first?.pluginUiProjection.composerAttachmentsById);
+            expect(normalize.mock.results.filter(result => result.type === 'return' && result.value === next?.pluginUiProjection)).toHaveLength(1);
+        } finally {
+            normalize.mockRestore();
         }
     });
 
@@ -465,6 +518,24 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
             expect(projectionDescribeMock).toHaveBeenCalledTimes(1);
         } finally {
             for (const unsubscribe of unsubscribes) unsubscribe();
+        }
+    });
+
+    it('prepares inert summaries before the first reader subscribes', async () => {
+        const { loadDaemonMergedProjectionCacheEntry, readDaemonMergedProjectionSummary } = await import('./loadDaemonMergedProjectionInputs');
+        const account = createAccountLifetime('account-a');
+        projectionDescribeMock.mockResolvedValue({ supported: true, projection: daemonProjection(7) });
+        await loadDaemonMergedProjectionCacheEntry({ ...projectionScope, accountLifetime: account.lifetime });
+        // Instrument construction without replacing any internal logic. A
+        // first getSnapshot must only return an already-published slice.
+        const freeze = vi.spyOn(Object, 'freeze');
+        try {
+            const first = readDaemonMergedProjectionSummary(projectionScope);
+            expect(first.current).toBe(true);
+            for (let i = 0; i < 100; i++) expect(readDaemonMergedProjectionSummary(projectionScope)).toBe(first);
+            expect(freeze).not.toHaveBeenCalled();
+        } finally {
+            freeze.mockRestore();
         }
     });
 

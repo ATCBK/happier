@@ -1,21 +1,23 @@
 import * as React from 'react';
-import { publishCommittedAppShellPluginUiProjection, readCurrentAppShellPluginUiProjection } from './committedPluginUiProjection';
+import { publishCommittedAppShellPluginUiProjection, readCurrentAppShellPluginUiExecutionOriginCandidates } from './committedPluginUiProjection';
 import type { AppShellPluginUiProjectionRead } from './committedPluginUiProjection';
+import {
+    createAppShellPluginUiProjectionPublication,
+    EMPTY_APP_SHELL_PLUGIN_UI_PROJECTION_SNAPSHOT,
+    type AppShellPluginUiProjectionPublication,
+} from './appShellPluginUiProjectionPublication';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 
-import { arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionOriginRef, type PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
-import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugins/availability/v1';
+import type { PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
-import { resolvePortableServerIdentityForRoutingId } from '@/sync/domains/server/resolvePortableServerIdentityForRoutingId';
 import {
     applyInstalledAppShellPluginUiReactNativeExecutableAuthorityInvalidation,
     createInstalledPluginUiReactNativeRuntimeProjectionSource,
     type PluginUiReactNativeRuntimeProjectionSource,
 } from '@/components/plugins/reactNative/projectionInvalidation';
 import { useIsActiveMachineListSettled } from '@/sync/domains/state/storage';
-import { loadPluginUiProjectionWarmCacheEntries } from '@/sync/domains/state/warmCachePersistence';
 import type { LocalServicePreviewPlatform } from '@/sync/domains/local/services/preview/url';
 import {
     EMPTY_PLUGIN_UI_PROJECTION,
@@ -30,14 +32,7 @@ import {
     type PluginUiProjectionPhase,
 } from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
 import {
-    arePluginUiProjectionUnionMembersEquivalent,
-    unionPluginUiProjections,
-    arePluginExecutionOriginSelectionsEquivalent,
-    mergeInstalledPluginUiProjections,
-    readPluginUiExecutionOriginCandidates,
-    type PluginUiProjectionUnion,
-    type PluginUiProjectionUnionMember,
-    type PluginUiProjectionUnionOriginSelections,
+    createPluginUiExecutionOriginCandidatePublication,
     type PluginUiExecutionOriginCandidateFacts,
 } from '@/sync/domains/plugins/ui/projectionUnion';
 import {
@@ -72,8 +67,6 @@ import { useMachinePresenceMembership } from '@/sync/domains/machines/reachabili
 import {
     advanceConnectedAccountDescriptorProjectionState,
     createConnectedAccountDescriptorProjectionLoadingState,
-    mergeConnectedAccountDescriptorProjections,
-    type ConnectedAccountDescriptorMachineProjection,
     type ConnectedAccountDescriptorProjectionResolution,
     type ConnectedAccountDescriptorProjectionState,
 } from '@/sync/domains/connectedServices/connectedAccountDescriptorProjection';
@@ -191,133 +184,35 @@ const EMPTY_APP_SHELL_PLUGIN_UI_PROJECTION_VALUE: AppShellPluginUiProjectionValu
 const AppShellPluginUiProjectionContext = React.createContext<AppShellPluginUiProjectionValue>(
     EMPTY_APP_SHELL_PLUGIN_UI_PROJECTION_VALUE,
 );
-const AppShellPluginUiDeclarationProjectionContext = React.createContext<PluginUiProjectionModel | null>(null);
-
-export type AppShellPluginProjectionTarget = Readonly<{ machineId: string; serverId: string | null }>;
-
-type InstalledMachineDeclarations = Readonly<{
-    models: readonly PluginUiProjectionModel[];
-    materializationsByPluginId: Readonly<Record<string, PluginMachineMaterializationV1>>;
-    serverIdentityId: string;
-    hasUnprovenDeclarations: boolean;
-}>;
-
-/**
- * F7 — every eligible online machine is an app-scope projection target.
- *
- * The predecessor picked ONE machine (online, prefer `active`, newest `activeAt`
- * first, take `[0]`), which made a plugin installed on machine A vanish the
- * moment machine B sent a keep-alive. `activeAt` is presence data and carries
- * neither user intent nor ownership of a contribution, so the app scope unions
- * every eligible member instead of ranking them. The result is ordered by
- * machine id so nothing about it depends on heartbeats.
- */
-export function resolveAppShellPluginProjectionTargets(params: Readonly<{
-    activeServerId: string | null;
-    onlineMachineIds: readonly string[];
-    materializationMachineIds?: readonly string[];
-    retainedMachineIds?: readonly string[];
-}>): readonly AppShellPluginProjectionTarget[] {
-    const serverId = params.activeServerId && params.activeServerId.trim().length > 0
-        ? params.activeServerId
-        : null;
-    const machineIds = new Set(params.onlineMachineIds.filter(machineId => machineId.trim().length > 0));
-    for (const materializationMachineId of [
-        ...params.materializationMachineIds ?? [],
-        ...params.retainedMachineIds ?? [],
-    ]) {
-        const machineId = materializationMachineId.trim();
-        if (machineId) machineIds.add(machineId);
-    }
-    return Object.freeze([...machineIds]
-        .map((machineId) => Object.freeze({ machineId, serverId }))
-        .sort((left, right) => left.machineId.localeCompare(right.machineId)));
-}
-
-function resolveAppShellPluginExecutionOriginPluginIds(
-    materializations: readonly PluginMachineMaterializationV1[],
-    projections: readonly (PluginUiProjectionModel | null)[],
-): readonly string[] {
-    return Object.freeze([...new Set([
-        ...materializations.map((materialization) => materialization.pluginId),
-        // Bundled and registered development sources have real daemon
-        // occurrences without an Account installation materialization.
-        ...projections.flatMap(projection => Object.keys(projection?.installedPackagesById ?? {})),
-    ])]
-        .sort((left, right) => left.localeCompare(right)));
-}
-
-function areSamePluginExecutionOrigin(
-    left: PluginMachineExecutionOriginV1 | null | undefined,
-    right: PluginMachineExecutionOriginV1 | null,
-): boolean {
-    return left === right || (
-        left !== null
-        && left !== undefined
-        && right !== null
-        && arePluginMachineExecutionOriginsEqual(left, right)
-    );
-}
-
-export type AppShellAccountScopedPluginExecutionOriginReport = Readonly<{
+export type AppShellPluginUiDeclarationSources = Readonly<{
+    projection: PluginUiProjectionModel | null;
     accountLifetime: ActiveServerAccountScopeLifetime | null;
-    origin: PluginMachineExecutionOriginV1 | null;
-    selectableOrigins?: readonly PluginMachineExecutionOriginV1[];
-    /** Administration distinguished an explicit local choice from its default. */
-    hasStoredTarget?: boolean;
+    /** This exact source scope has completed its first descriptive publication. */
+    ready: boolean;
 }>;
+const EMPTY_DECLARATION_SOURCES: AppShellPluginUiDeclarationSources = Object.freeze({ projection: null, accountLifetime: null, ready: true });
+const AppShellPluginUiDeclarationProjectionContext = React.createContext<Readonly<{
+    current: AppShellPluginUiDeclarationSources;
+    retired: AppShellPluginUiDeclarationSources;
+}>>(Object.freeze({ current: EMPTY_DECLARATION_SOURCES, retired: EMPTY_DECLARATION_SOURCES }));
 
-export type AppShellAccountScopedPluginUiCurrentnessReport = Readonly<{
-    accountLifetime: ActiveServerAccountScopeLifetime | null;
-    currentness: PluginUiProjectionCurrentness;
-}>;
+export {
+    resolveAppShellPluginProjectionTargets,
+    selectCurrentAppShellPluginExecutionOrigins,
+    selectCurrentAppShellPluginUiCurrentness,
+} from './appShellPluginUiProjectionPublication';
+export type {
+    AppShellPluginProjectionTarget,
+    AppShellAccountScopedPluginExecutionOriginReport,
+    AppShellAccountScopedPluginUiCurrentnessReport,
+} from './appShellPluginUiProjectionPublication';
 
-function isCurrentAccountLifetime(
-    lifetime: ActiveServerAccountScopeLifetime | null,
-): boolean {
+function isCurrentAccountLifetime(lifetime: ActiveServerAccountScopeLifetime | null): boolean {
     return lifetime?.isCurrent() ?? true;
 }
 
 function accountLifetimeScopeKey(lifetime: ActiveServerAccountScopeLifetime | null): string {
-    if (!lifetime) return 'no-active-account';
-    // A React key only forces the selection child to remount at an actual
-    // Account change. Exact lifetime identity remains the authoritative gate
-    // below, including same-scope retirement/recreation.
-    return JSON.stringify([lifetime.scope.serverId, lifetime.scope.accountId]);
-}
-
-/**
- * The AppShell's one cache boundary for Administration selections. It is a
- * projection cache, not a classifier: Account Availability and Administration
- * decide what the origin is; this only refuses a report from another Account
- * before the union can read it.
- */
-export function selectCurrentAppShellPluginExecutionOrigins(input: Readonly<{
-    reports: ReadonlyMap<string, AppShellAccountScopedPluginExecutionOriginReport>;
-    accountLifetime: ActiveServerAccountScopeLifetime | null;
-    admittedPluginIds: readonly string[];
-}>): PluginUiProjectionUnionOriginSelections {
-    const admittedPluginIds = new Set(input.admittedPluginIds);
-    return new Map([...input.reports]
-        .filter(([pluginId, report]) => (
-            admittedPluginIds.has(pluginId)
-            && report.accountLifetime === input.accountLifetime
-            && isCurrentAccountLifetime(report.accountLifetime)
-        ))
-        .flatMap(([pluginId, report]) => report.origin ? [[pluginId, report.origin] as const] : []));
-}
-
-/** Same Account fence for the AppShell's per-machine currentness reports. */
-export function selectCurrentAppShellPluginUiCurrentness(input: Readonly<{
-    reports: ReadonlyMap<string, AppShellAccountScopedPluginUiCurrentnessReport>;
-    accountLifetime: ActiveServerAccountScopeLifetime | null;
-}>): ReadonlyMap<string, PluginUiProjectionCurrentness> {
-    return new Map([...input.reports]
-        .filter(([, report]) => (
-            report.accountLifetime === input.accountLifetime
-            && isCurrentAccountLifetime(report.accountLifetime)
-        ))
-        .map(([machineId, report]) => [machineId, report.currentness]));
+    return lifetime ? JSON.stringify([lifetime.scope.serverId, lifetime.scope.accountId]) : 'no-active-account';
 }
 
 async function applyAppShellProjectionInvalidation(previous: PluginUiProjectionModel, next: PluginUiProjectionModel): Promise<void> {
@@ -360,18 +255,45 @@ export async function settleAppShellPluginRuntimeUpdate(input: Readonly<{
 
 export function AppShellPluginUiProjectionValueProvider(props: Readonly<{
     value: AppShellPluginUiProjectionValue;
+    declarationReady?: boolean;
+    publication?: Pick<AppShellPluginUiProjectionPublication, 'getSnapshot'>;
     children: React.ReactNode;
 }>): React.ReactElement {
     const lifetime = captureActiveServerAccountScopeLifetime();
+    // Standalone composition/specimens use the same descriptive candidate
+    // publisher. The real AppShell supplies its already-published fact map.
+    const [standaloneCandidates] = React.useState(createPluginUiExecutionOriginCandidatePublication);
+    const standaloneBasis = React.useRef<PluginUiProjectionModel | null | undefined>(undefined);
+    const declarationSources = React.useMemo(() => Object.freeze({
+        current: Object.freeze({ projection: props.value.pluginUiProjection, accountLifetime: props.value.accountLifetime,
+            ready: props.declarationReady !== false }),
+        // Preserve the retired identity: null must not relabel an in-progress
+        // Account transition as an admitted, unscoped builtin-only catalog.
+        retired: Object.freeze({ projection: null, accountLifetime: props.value.accountLifetime, ready: false }),
+    }), [props.declarationReady, props.value.accountLifetime, props.value.pluginUiProjection]);
     React.useLayoutEffect(() => {
+        if (!props.publication && standaloneBasis.current !== props.value.pluginUiProjection) {
+            standaloneBasis.current = props.value.pluginUiProjection;
+            standaloneCandidates.publish(props.value.pluginUiProjection, [],
+                Object.keys(props.value.pluginUiProjection?.installedPackagesById ?? {}));
+        }
         const read = (input?: AppShellPluginUiProjectionRead) => lifetime?.isCurrent()
             && (!input || areServerAccountScopesEqual(input.scope, lifetime.scope))
-            && (input?.declarationsOnly || props.value.phase === 'current')
-            ? props.value.pluginUiProjection : null;
-        return publishCommittedAppShellPluginUiProjection(read);
-    }, [lifetime, props.value]);
+            && (input?.declarationsOnly || (props.publication
+                ? props.publication.getSnapshot().accountUiProjection !== null || props.publication.getSnapshot().projectionUnion.phase === 'current'
+                : props.value.phase === 'current'))
+            ? props.publication?.getSnapshot().pluginUiProjection ?? (props.publication ? null : props.value.pluginUiProjection) : null;
+        const readCandidates = (pluginId: string, input?: AppShellPluginUiProjectionRead) => {
+            if (!lifetime?.isCurrent() || (input && !areServerAccountScopesEqual(input.scope, lifetime.scope))) return null;
+            if (!props.publication) return standaloneCandidates.getSnapshot().get(pluginId) ?? null;
+            const snapshot = props.publication.getSnapshot();
+            return snapshot.accountLifetime === props.value.accountLifetime
+                ? snapshot.candidateFactsByPluginId.get(pluginId) ?? null : null;
+        };
+        return publishCommittedAppShellPluginUiProjection(read, readCandidates);
+    }, [lifetime, props.publication, props.value, standaloneCandidates]);
     return (
-        <AppShellPluginUiDeclarationProjectionContext.Provider value={props.value.pluginUiProjection}>
+        <AppShellPluginUiDeclarationProjectionContext.Provider value={declarationSources}>
             <AppShellPluginUiProjectionContext.Provider value={props.value}>
                 {/*
                   * The launch input a plugin page is opened with is scoped HERE, by
@@ -407,8 +329,41 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
     const hostBundledUiEnabled = useFeatureEnabled('plugins.ui.reactNativeBundles', {
         scopeKind: 'spawn', serverId: accountLifetime?.scope.serverId ?? activeServer.serverId,
     });
-    const accountUiProjection = React.useMemo(() => hostBundledUiEnabled
-        ? availabilityReader?.readAccountUiProjection() ?? null : null, [availabilityReader, hostBundledUiEnabled]);
+    const [projectionPublication] = React.useState(createAppShellPluginUiProjectionPublication);
+    const publishedProjection = React.useSyncExternalStore(
+        projectionPublication.subscribe, projectionPublication.getSnapshot, projectionPublication.getSnapshot,
+    );
+    // Child layout effects run before their parent's. Do not mount a new
+    // Home/Account reporter until its exact source basis has been published.
+    const declarationReady = publishedProjection !== EMPTY_APP_SHELL_PLUGIN_UI_PROJECTION_SNAPSHOT
+        && publishedProjection.accountLifetime === accountLifetime
+        && publishedProjection.activeServerId === activeServer.serverId;
+    const derived = declarationReady ? publishedProjection : EMPTY_APP_SHELL_PLUGIN_UI_PROJECTION_SNAPSHOT;
+    React.useLayoutEffect(() => {
+        projectionPublication.publishSources({
+            accountLifetime, availabilityReader, hostBundledUiEnabled,
+            activeServerId: activeServer.serverId, serverProfilesGeneration,
+            activeInventoryLoaded, onlineMachineIds, selectableMachineIds,
+        });
+    }, [accountLifetime, activeInventoryLoaded, activeServer.serverId, availabilityReader, hostBundledUiEnabled,
+        onlineMachineIds, projectionPublication, selectableMachineIds, serverProfilesGeneration]);
+    React.useEffect(() => () => projectionPublication.dispose(), [projectionPublication]);
+    const {
+        accountUiProjection, executionOriginPluginIds, projectionTargets,
+        currentnessForActiveAccountByMachineId, projectionUnion, pluginUiProjection,
+        candidateFactsByPluginId, connectedAccountResolution,
+    } = derived;
+    const publishMachineProjectionCurrentness = projectionPublication.publishMachineCurrentness;
+    const publishPluginExecutionOrigin = React.useCallback((
+        pluginId: string, reportLifetime: ActiveServerAccountScopeLifetime | null,
+        origin: PluginMachineExecutionOriginV1 | null, selectableOrigins: readonly PluginMachineExecutionOriginV1[],
+        hasStoredTarget = false,
+    ) => {
+        // The unscoped bootstrap has no Account lifetime to distinguish Homes.
+        // An old child's effect must not publish into another Home's sources.
+        if (projectionPublication.getSnapshot().activeServerId !== activeServer.serverId) return;
+        projectionPublication.publishExecutionOrigin(pluginId, reportLifetime, origin, selectableOrigins, hasStoredTarget);
+    }, [activeServer.serverId, projectionPublication]);
     const accountArtifactProjectionSource = React.useRef<PluginUiReactNativeRuntimeProjectionSource | null>(null);
     React.useLayoutEffect(() => {
         const source = accountArtifactProjectionSource.current ?? createInstalledPluginUiReactNativeRuntimeProjectionSource();
@@ -420,217 +375,7 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
         accountArtifactProjectionSource.current?.dispose();
         accountArtifactProjectionSource.current = null;
     }, []);
-    // F7 has one release classifier: Account Availability. It is passed
-    // directly into Administration's canonical exact-origin selection hook;
-    // AppShell never infers release/content validity from a projection.
-    const executionOriginMaterializations = React.useMemo<readonly PluginMachineMaterializationV1[]>(() => {
-        const admission = availabilityReader?.readMaterializations();
-        return admission?.kind === 'available' ? admission.materializations : [];
-    }, [availabilityReader]);
-    const installedDeclarationsRef = React.useRef<ReadonlyMap<string, InstalledMachineDeclarations>>(new Map());
-    const installedDeclarationsByMachineId = React.useMemo(() => {
-        const admission = availabilityReader?.readInstalledPlugins();
-        const machines = new Map<string, InstalledMachineDeclarations>();
-        for (const plugin of admission?.kind === 'available' ? admission.plugins : []) for (const installation of plugin.installations) {
-            const report = installation.materialization;
-            const previous = machines.get(report.machineId);
-            machines.set(report.machineId, Object.freeze({
-                models: Object.freeze([...(previous?.models ?? []), installation.uiModel]),
-                materializationsByPluginId: Object.freeze({ ...previous?.materializationsByPluginId, [plugin.pluginId]: report }),
-                serverIdentityId: report.serverIdentityId,
-                hasUnprovenDeclarations: previous?.hasUnprovenDeclarations === true || installation.uiDeclarationState === 'preparing',
-            }));
-        }
-        // Availability advances admission cursors independently from immutable
-        // declaration content. Its producer retains unchanged model/fact identities;
-        // retain this composition input too so a refresh does not re-merge the fleet.
-        for (const [machineId, next] of machines) {
-            const previous = installedDeclarationsRef.current.get(machineId);
-            if (previous?.serverIdentityId === next.serverIdentityId
-                && previous.hasUnprovenDeclarations === next.hasUnprovenDeclarations
-                && previous.models.length === next.models.length
-                && previous.models.every((model, index) => model === next.models[index])
-                && Object.keys(previous.materializationsByPluginId).length === Object.keys(next.materializationsByPluginId).length
-                && Object.entries(previous.materializationsByPluginId).every(([pluginId, materialization]) =>
-                    materialization === next.materializationsByPluginId[pluginId])) machines.set(machineId, previous);
-        }
-        if (machines.size === installedDeclarationsRef.current.size
-            && [...machines].every(([machineId, declaration]) => installedDeclarationsRef.current.get(machineId) === declaration)) {
-            return installedDeclarationsRef.current;
-        }
-        installedDeclarationsRef.current = machines;
-        return machines;
-    }, [availabilityReader]);
-    const [currentnessByMachineId, setCurrentnessByMachineId] = React.useState<
-        ReadonlyMap<string, AppShellAccountScopedPluginUiCurrentnessReport>
-    >(() => new Map());
-    const currentnessForActiveAccountByMachineId = React.useMemo(() => (
-        selectCurrentAppShellPluginUiCurrentness({ reports: currentnessByMachineId, accountLifetime })
-    ), [accountLifetime, currentnessByMachineId]);
-    const executionOriginPluginIds = React.useMemo(
-        () => resolveAppShellPluginExecutionOriginPluginIds(executionOriginMaterializations, [
-            ...[...currentnessForActiveAccountByMachineId.values()].map(currentness => currentness.pluginUiProjection),
-            ...[...installedDeclarationsByMachineId.values()].flatMap(installed => installed.models),
-        ]),
-        [executionOriginMaterializations, currentnessForActiveAccountByMachineId, installedDeclarationsByMachineId],
-    );
-    const executionOriginPluginIdsKey = executionOriginPluginIds.join('\n');
-    const [reportedOriginsByPluginId, setReportedOriginsByPluginId] = React.useState<
-        ReadonlyMap<string, AppShellAccountScopedPluginExecutionOriginReport>
-    >(() => new Map());
-    const publishPluginExecutionOrigin = React.useCallback((
-        pluginId: string,
-        reportLifetime: ActiveServerAccountScopeLifetime | null,
-        origin: PluginMachineExecutionOriginV1 | null,
-        selectableOrigins: readonly PluginMachineExecutionOriginV1[],
-        hasStoredTarget = false,
-    ) => {
-        if (!isCurrentAccountLifetime(reportLifetime)) return;
-        setReportedOriginsByPluginId((previous) => {
-            const current = previous.get(pluginId) ?? null;
-            if (
-                current?.accountLifetime === reportLifetime
-                && areSamePluginExecutionOrigin(current.origin, origin)
-                && (current.hasStoredTarget === true) === hasStoredTarget
-                && (current.selectableOrigins?.length ?? 0) === selectableOrigins.length
-                && selectableOrigins.every((candidate, index) => (
-                    arePluginMachineExecutionOriginsEqual(candidate, current.selectableOrigins![index]!)
-                ))
-            ) return previous;
-            const next = new Map(previous);
-            next.set(pluginId, Object.freeze({ accountLifetime: reportLifetime, origin, selectableOrigins, hasStoredTarget }));
-            return next;
-        });
-    }, []);
-    // A child reports only the canonical selection state for its own plugin.
-    // Intersect by the current Availability admission synchronously, so a late
-    // effect from an old Account projection cannot retain a stale origin for
-    // even one render after Availability has withdrawn it.
-    const selectedOriginsByPluginId = React.useMemo<PluginUiProjectionUnionOriginSelections>(() => {
-        return selectCurrentAppShellPluginExecutionOrigins({
-            reports: reportedOriginsByPluginId,
-            accountLifetime,
-            admittedPluginIds: executionOriginPluginIds,
-        });
-    }, [accountLifetime, executionOriginPluginIdsKey, reportedOriginsByPluginId]);
-    const explicitOriginsByPluginId = React.useMemo<PluginUiProjectionUnionOriginSelections>(() => new Map(
-        [...selectedOriginsByPluginId].filter(([pluginId]) => reportedOriginsByPluginId.get(pluginId)?.hasStoredTarget === true),
-    ), [reportedOriginsByPluginId, selectedOriginsByPluginId]);
-    const selectableOriginsByMachineId = React.useMemo(() => {
-        const admittedPluginIds = new Set(executionOriginPluginIds);
-        const origins = new Map<string, PluginMachineExecutionOriginV1[]>();
-        for (const [pluginId, report] of reportedOriginsByPluginId) {
-            if (!admittedPluginIds.has(pluginId) || report.accountLifetime !== accountLifetime
-                || !isCurrentAccountLifetime(report.accountLifetime)) continue;
-            for (const origin of report.selectableOrigins ?? []) {
-                const machineId = getPluginMachineExecutionOriginRef(origin).machineId;
-                const supplying = origins.get(machineId) ?? [];
-                supplying.push(origin);
-                origins.set(machineId, supplying);
-            }
-        }
-        return origins;
-    }, [accountLifetime, executionOriginPluginIdsKey, reportedOriginsByPluginId]);
-    // Mount the incumbent read-only currentness readers before live inventory
-    // arrives. Retained presentation is not machine presence or executable
-    // authority; the loaded inventory replaces this bootstrap target set.
-    const retainedMachineIds = React.useMemo(() => {
-        if (activeInventoryLoaded || !accountLifetime?.isCurrent()) return [];
-        const { serverId, accountId } = accountLifetime.scope;
-        return Object.values(loadPluginUiProjectionWarmCacheEntries(serverId, accountId))
-            .map((entry) => entry.machineId);
-    }, [accountLifetime, activeInventoryLoaded]);
-    const nextProjectionTargets = React.useMemo(() => resolveAppShellPluginProjectionTargets({
-        activeServerId: activeServer.serverId,
-        onlineMachineIds,
-        materializationMachineIds: executionOriginMaterializations.map((materialization) => materialization.machineId),
-        retainedMachineIds,
-    }), [activeServer.serverId, executionOriginMaterializations, onlineMachineIds, retainedMachineIds]);
-    // Machine heartbeats change presence, not catalog membership. Preserve the
-    // target input when the resolved exact set is unchanged so installed/runtime
-    // models are not merged and republished for an equal-value presence update.
-    const projectionTargetsRef = React.useRef(nextProjectionTargets);
-    if (projectionTargetsRef.current.length !== nextProjectionTargets.length
-        || nextProjectionTargets.some((target, index) => (
-            target.machineId !== projectionTargetsRef.current[index]?.machineId
-            || target.serverId !== projectionTargetsRef.current[index]?.serverId
-        ))) {
-        projectionTargetsRef.current = nextProjectionTargets;
-    }
-    const projectionTargets = projectionTargetsRef.current;
-    const publishMachineProjectionCurrentness = React.useCallback((
-        machineId: string,
-        reportLifetime: ActiveServerAccountScopeLifetime | null,
-        currentness: PluginUiProjectionCurrentness,
-    ) => {
-        if (!isCurrentAccountLifetime(reportLifetime)) return;
-        setCurrentnessByMachineId((previous) => {
-            const current = previous.get(machineId) ?? null;
-            if (current?.accountLifetime === reportLifetime && current.currentness === currentness) return previous;
-            const next = new Map(previous);
-            next.set(machineId, Object.freeze({ accountLifetime: reportLifetime, currentness }));
-            return next;
-        });
-    }, []);
-    // A machine that leaves the eligible set leaves the union with it, so its
-    // last-known projection can never be re-admitted when it comes back before
-    // its own probe has re-described it.
-    React.useEffect(() => {
-        const eligibleMachineIds = new Set(projectionTargets.map((projectionTarget) => projectionTarget.machineId));
-        setCurrentnessByMachineId((previous) => (
-            [...previous.keys()].every((machineId) => eligibleMachineIds.has(machineId))
-                ? previous
-                : new Map([...previous].filter(([machineId]) => eligibleMachineIds.has(machineId)))
-        ));
-    }, [projectionTargets]);
-    const unionMembers = React.useMemo(() => projectionTargets.map((projectionTarget) => {
-            const currentness = currentnessForActiveAccountByMachineId.get(projectionTarget.machineId);
-            const installed = installedDeclarationsByMachineId.get(projectionTarget.machineId);
-            return {
-                machineId: projectionTarget.machineId,
-                serverId: projectionTarget.serverId,
-                serverIdentityId: installed?.serverIdentityId
-                    ?? resolvePortableServerIdentityForRoutingId(projectionTarget.serverId) ?? undefined,
-                materializationsByPluginId: installed?.materializationsByPluginId,
-                selectableExecutionOrigins: selectableOriginsByMachineId.get(projectionTarget.machineId),
-                projection: mergeInstalledPluginUiProjections(installed?.models ?? [], currentness?.pluginUiProjection ?? null,
-                    installed?.materializationsByPluginId),
-                // A registered target has an owner hook, but that child may
-                // not have published its first report yet. It is pending, not
-                // unavailable, so restored app destinations preserve intent.
-                phase: currentness?.phase === 'unavailable' || currentness?.phase === 'retainedOffline' ? currentness.phase
-                    : currentness?.pluginUiProjection?.generation == null && installed?.hasUnprovenDeclarations
-                    ? 'establishing' as const : currentness?.phase ?? 'establishing',
-                unavailableReasonCode: currentness?.unavailableReasonCode,
-                interactionEnabled: currentness?.interactionEnabled ?? false,
-            };
-        }), [currentnessForActiveAccountByMachineId, installedDeclarationsByMachineId, projectionTargets, selectableOriginsByMachineId, serverProfilesGeneration]);
-    const projectionUnion = useStableAppShellPluginUiProjectionUnion(
-        unionMembers,
-        selectedOriginsByPluginId,
-    );
     const hasEstablishingMembers = projectionUnion.hasEstablishingMembers;
-    const pluginUiProjection = React.useMemo(() => mergeInstalledPluginUiProjections(
-        accountUiProjection ? [accountUiProjection] : [], projectionUnion.pluginUiProjection, undefined, explicitOriginsByPluginId,
-    ), [accountUiProjection, explicitOriginsByPluginId, projectionUnion.pluginUiProjection]);
-    const candidateFactsState = React.useRef<Readonly<{
-        accountLifetime: typeof accountLifetime;
-        byPluginId: ReadonlyMap<string, PluginUiExecutionOriginCandidateFacts>;
-    }>>({ accountLifetime, byPluginId: new Map() });
-    const candidateFactsByPluginId = React.useMemo(() => {
-        const previous = candidateFactsState.current.accountLifetime === accountLifetime
-            ? candidateFactsState.current.byPluginId : new Map<string, PluginUiExecutionOriginCandidateFacts>();
-        const next = new Map(executionOriginPluginIds.map(pluginId => [pluginId, readPluginUiExecutionOriginCandidates({
-            projection: pluginUiProjection, pluginId, members: unionMembers, previous: previous.get(pluginId),
-        })] as const));
-        candidateFactsState.current = { accountLifetime, byPluginId: next };
-        return next;
-    }, [accountLifetime, executionOriginPluginIdsKey, pluginUiProjection, unionMembers]);
-    // Reporters consume their own stable facts. Fresh invocation reads still
-    // see the current complete supply set through this single producer ref.
-    const unionMembersRef = React.useRef(unionMembers);
-    unionMembersRef.current = unionMembers;
-    const readUnionMembers = React.useCallback(() => unionMembersRef.current, []);
     const hasCurrentAccountUi = accountUiProjection !== null && isCurrentAccountLifetime(accountLifetime);
     const interactionEnabled = hasCurrentAccountUi || projectionUnion.interactionEnabled;
     const phase = hasCurrentAccountUi ? 'current' : projectionUnion.phase;
@@ -762,47 +507,9 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
         installConnectedAccountDescriptorProjection(unmounted);
     }, []);
 
-    // Connected Accounts consume the same admitted machine snapshot as UI and
-    // browser projections. Presence heartbeats only recompute membership; the
-    // machine owner subscribes to registry changes and retries failed reads.
-    const selectableMachineIdsKey = selectableMachineIds.join('\n');
-
     React.useEffect(() => {
-        const byMachine: ConnectedAccountDescriptorMachineProjection[] = [];
-        for (const machineId of selectableMachineIdsKey ? selectableMachineIdsKey.split('\n') : []) {
-            const currentness = currentnessForActiveAccountByMachineId.get(machineId);
-            const projection = currentness?.connectedAccountProjection;
-            if (!projection || (projection.kind === 'ready' && currentness?.phase !== 'current')) {
-                byMachine.push({ kind: 'loading' });
-                continue;
-            }
-            if (projection.kind !== 'ready') {
-                byMachine.push(projection);
-                continue;
-            }
-            // Keep static service identity independent from execution. The
-            // descriptor union consumes Administration's existing admission
-            // facts to prefer admitted variants and block descriptive-only ones.
-            const executionUnavailablePluginIds = projection.descriptors.flatMap((descriptor) => {
-                if (!descriptor.pluginId || !executionOriginPluginIds.includes(descriptor.pluginId)) return [];
-                const report = reportedOriginsByPluginId.get(descriptor.pluginId);
-                if (!report || report.accountLifetime !== accountLifetime || !isCurrentAccountLifetime(report.accountLifetime)) {
-                    byMachine.push({ kind: 'loading' });
-                    return [descriptor.pluginId];
-                }
-                const selectable = (selectableOriginsByMachineId.get(machineId) ?? []).some((origin) => (
-                    getPluginMachineExecutionOriginRef(origin).pluginId === descriptor.pluginId
-                ));
-                return selectable ? [] : [descriptor.pluginId];
-            });
-            byMachine.push({ kind: 'ready', descriptors: projection.descriptors, executionUnavailablePluginIds });
-        }
-        commitConnectedAccountProjection(
-            accountLifetime,
-            mergeConnectedAccountDescriptorProjections(byMachine),
-        );
-    }, [accountLifetime, commitConnectedAccountProjection, connectedAccountProjectionReloadRevision, currentnessForActiveAccountByMachineId,
-        executionOriginPluginIdsKey, reportedOriginsByPluginId, selectableMachineIdsKey, selectableOriginsByMachineId]);
+        commitConnectedAccountProjection(accountLifetime, connectedAccountResolution);
+    }, [accountLifetime, commitConnectedAccountProjection, connectedAccountResolution]);
     const appliedProjectionRef = React.useRef<PluginUiProjectionModel>(EMPTY_PLUGIN_UI_PROJECTION);
     const pluginRuntimeUpdateTailRef = React.useRef<Promise<void>>(Promise.resolve());
     const clientExecutableActivationBasis = React.useMemo(() => Object.freeze({
@@ -934,7 +641,7 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
         reloadConnectedAccountProjection,
     }), [accountLifetime, clientExecutableActivation, connectedAccountProjectionRevision, connectedAccountProjectionState, hasEstablishingMembers, interactionEnabled, phase, platform, pluginBrowserProjection, pluginUiProjection, projectionUnion.machineId, projectionUnion.serverId, reloadClientExecutables, reloadConnectedAccountProjection, unavailableReasonCode]);
     return (
-        <AppShellPluginUiProjectionValueProvider value={value}>
+        <AppShellPluginUiProjectionValueProvider value={value} declarationReady={declarationReady} publication={projectionPublication}>
             {projectionTargets.map((projectionTarget) => (
                 <AppShellPluginUiMachineProjection
                     key={`${currentAccountLifetimeKey}:${projectionTarget.serverId ?? 'default'}:${projectionTarget.machineId}`}
@@ -951,7 +658,6 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
                     pluginId={pluginId}
                     accountLifetime={accountLifetime}
                     facts={candidateFactsByPluginId.get(pluginId)!}
-                    readMembers={readUnionMembers}
                     onOrigin={publishPluginExecutionOrigin}
                 />
             ))}
@@ -1061,7 +767,6 @@ const AppShellPluginExecutionOriginSelection = React.memo(function AppShellPlugi
     pluginId: string;
     accountLifetime: ActiveServerAccountScopeLifetime | null;
     facts: PluginUiExecutionOriginCandidateFacts;
-    readMembers: () => readonly PluginUiProjectionUnionMember[];
     onOrigin: (
         pluginId: string,
         accountLifetime: ActiveServerAccountScopeLifetime | null,
@@ -1076,9 +781,9 @@ const AppShellPluginExecutionOriginSelection = React.memo(function AppShellPlugi
         includeMachineCandidates: false,
         classifyRelease,
         ...props.facts,
-        readSourceCandidates: () => readPluginUiExecutionOriginCandidates({ projection: readCurrentAppShellPluginUiProjection(), pluginId: props.pluginId, members: props.readMembers() }).sourceCandidates,
-        readMachineRejections: () => readPluginUiExecutionOriginCandidates({ projection: readCurrentAppShellPluginUiProjection(), pluginId: props.pluginId, members: props.readMembers() }).machineRejections,
-        readDeclaredDefaultOrigins: () => readPluginUiExecutionOriginCandidates({ projection: readCurrentAppShellPluginUiProjection(), pluginId: props.pluginId, members: props.readMembers() }).declaredDefaultOrigins,
+        readSourceCandidates: React.useCallback(() => readCurrentAppShellPluginUiExecutionOriginCandidates(props.pluginId).sourceCandidates, [props.pluginId]),
+        readMachineRejections: React.useCallback(() => readCurrentAppShellPluginUiExecutionOriginCandidates(props.pluginId).machineRejections, [props.pluginId]),
+        readDeclaredDefaultOrigins: React.useCallback(() => readCurrentAppShellPluginUiExecutionOriginCandidates(props.pluginId).declaredDefaultOrigins, [props.pluginId]),
     });
     // Retain exact user intent while its machine/source is unavailable. Losing
     // that preference here would let the union bind a different sole supplier.
@@ -1094,51 +799,19 @@ const AppShellPluginExecutionOriginSelection = React.memo(function AppShellPlugi
     return null;
 });
 
-/**
- * The app-scope union, rebuilt only when a member actually changed.
- *
- * `usePluginUiProjectionCurrentness` already returns the SAME projection object
- * while a machine's generation is unchanged, so identity-comparing the members
- * gives the union the same referential stability a single-machine projection
- * had — which is what keeps runtime invalidation and activation from re-running
- * on every presence keep-alive.
- */
-function useStableAppShellPluginUiProjectionUnion(
-    members: readonly PluginUiProjectionUnionMember[],
-    selectedOriginsByPluginId: PluginUiProjectionUnionOriginSelections,
-): PluginUiProjectionUnion {
-    const settled = React.useRef<Readonly<{
-        members: readonly PluginUiProjectionUnionMember[];
-        selectedOriginsByPluginId: PluginUiProjectionUnionOriginSelections;
-        union: PluginUiProjectionUnion;
-    }> | null>(null);
-    if (
-        settled.current === null
-        || !arePluginUiProjectionUnionMembersEquivalent(settled.current.members, members)
-        || !arePluginExecutionOriginSelectionsEquivalent(
-            settled.current.selectedOriginsByPluginId,
-            selectedOriginsByPluginId,
-        )
-    ) {
-        settled.current = {
-            members,
-            selectedOriginsByPluginId,
-            union: unionPluginUiProjections(
-                members,
-                selectedOriginsByPluginId,
-            ),
-        };
-    }
-    return settled.current.union;
-}
-
 export function useAppShellPluginUiProjection(): AppShellPluginUiProjectionValue {
     return React.useContext(AppShellPluginUiProjectionContext);
 }
 
 /** Descriptive declaration consumers do not need executable diagnostics. */
 export function useAppShellPluginUiDeclarationProjection(): PluginUiProjectionModel | null {
-    return React.useContext(AppShellPluginUiDeclarationProjectionContext);
+    return useAppShellPluginUiDeclarationSources().projection;
+}
+
+/** The declaration and the lifetime that admitted it must never be recaptured separately. */
+export function useAppShellPluginUiDeclarationSources(): AppShellPluginUiDeclarationSources {
+    const sources = React.useContext(AppShellPluginUiDeclarationProjectionContext);
+    return sources.current.accountLifetime && !sources.current.accountLifetime.isCurrent() ? sources.retired : sources.current;
 }
 
 export function useProjectedConnectedServicesRegistry(): ConnectedServiceRegistrySnapshot {

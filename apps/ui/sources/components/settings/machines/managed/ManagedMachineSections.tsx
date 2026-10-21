@@ -693,7 +693,7 @@ export function ManagedMachineSections(props: SectionProps) {
  * The enrolled association, derived from the same admitted managed inventory, never a Machine-side
  * copy. A Machine page reads it once and gives it to both its header and its managed sections.
  */
-export function useManagedEnrolledMachine(props: Readonly<{ enrolledMachineId: string | undefined; serverId: string; executeAction?: Execute }>) {
+export function useManagedEnrolledMachine(props: Readonly<{ enrolledMachineId: string | undefined; serverId: string; executeAction?: Execute }>): ManagedEnrolledMachine {
     const serverId = resolveServerProfileScopeIdForIdentifier(props.serverId) || props.serverId;
     const serverIds = React.useMemo(() => serverId && props.enrolledMachineId ? [serverId] : [], [serverId, props.enrolledMachineId]);
     const executeAction = props.executeAction ?? execute;
@@ -707,7 +707,14 @@ export function useManagedEnrolledMachine(props: Readonly<{ enrolledMachineId: s
     const deny = React.useCallback(() => setDenial(entryRef.current ?? null), []);
     return { serverId, inventory, entry, machine, executeAction, deny };
 }
-export type ManagedEnrolledMachine = ReturnType<typeof useManagedEnrolledMachine>;
+export type ManagedEnrolledMachine = {
+    serverId: string;
+    inventory: ReturnType<typeof useManagedMachineInventory>;
+    entry: ManagedMachineInventoryEntry | undefined;
+    machine: ManagedMachineV1 | undefined;
+    executeAction: Execute;
+    deny: () => void;
+};
 
 export function ManagedEnrolledMachineSections(props: Readonly<{ enrolledMachineId: string; serverId: string; executeAction?: Execute }>) {
     return <ManagedEnrolledMachineSectionsView enrolled={useManagedEnrolledMachine(props)} />;
