@@ -3916,7 +3916,7 @@ export async function startDaemon(
                     if (!request.retainedOperation && !prepared) throw Object.assign(new Error('Workflow requester Session authority unavailable'), {
                       code: 'project_requester_credentials_unavailable',
                     });
-                    const handler = createMachineSessionSpawnRpcHandler({ handlers: { spawnSession },
+                    const handler = createMachineSessionSpawnRpcHandler({ handlers: { spawnSession, stopSession },
                       serverId: stamp.serverId, awaitAgentSessionOpen });
                     return await runObservedWorkflowSessionStartup(request, { serverId: stamp.serverId, machineId: input.machineId,
                       observeExecution: observed => client.observeActionExecution(observed),

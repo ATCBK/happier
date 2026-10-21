@@ -10,12 +10,51 @@ import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionOptions } from '@/session/s
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { AgentRuntimeDaemonServiceSessionOpenAttestationV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import { createMachineSessionSpawnRpcHandler } from '../sessionLifecycleActions';
 
 import { createSpawnNewSessionLifecycleActionHandler } from './createSpawnNewSessionLifecycleActionHandler';
 import { runRequesterSessionLifecycle } from './requesterSessionLifecycle';
 import { attemptNativeForkOpen } from './fork/attemptNativeForkOpen';
 
 describe('Session startup operation custody', () => {
+  it('joins refused-child retirement before failing the original startup operation', async () => {
+    const operations = createHostActionOperationRuntime({ machineId: 'machine', resolveAccountId: async () => 'account',
+      generateOperationId: () => 'refused-startup', supportsCoreCancellation: () => true });
+    const tracked: TrackedSession = { pid: 103, startedBy: 'daemon', happySessionId: 'refused-child',
+      agentRuntimeDaemonServiceAuthorityFilePath: '/private/refused-authority.json',
+      agentRuntimeDaemonServiceSessionOpenAttestation: AgentRuntimeDaemonServiceSessionOpenAttestationV1Schema.parse({
+        request: { kind: 'create', sessionId: 'refused-child', cwd: '/project' }, providerSessionId: null,
+        refusal: { code: 'native_agent_session_mode_unavailable' },
+      }) };
+    let releaseStop!: () => void;
+    const stopped = new Promise<void>(resolve => { releaseStop = resolve; });
+    let stopEntered!: () => void;
+    const stopping = new Promise<void>(resolve => { stopEntered = resolve; });
+    const handler = createMachineSessionSpawnRpcHandler({ handlers: {
+      spawnSession: async () => ({ type: 'success', sessionId: 'refused-child' }),
+      // The process adapter acknowledges only after the exact child exits.
+      stopSession: async sessionId => {
+        expect(sessionId).toBe('refused-child'); stopEntered(); await stopped;
+        return { status: 'stopped' };
+      },
+    }, awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [tracked], ...input }) });
+    const scope = { accountId: 'account', machineId: 'machine' };
+    const response = operations.observeExecution({ actionId: 'session.spawn_new', input: { creationKey: 'refused' },
+      execute: async operation => ({ ok: true, result: await handler({ directory: '/project',
+        agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+      }, { signal: operation.signal, localActionContext: operation }) }) });
+    try {
+      await response;
+      await vi.waitFor(() => expect(operations.store.get(scope, 'refused-startup')).toMatchObject({ state: 'running' }));
+      await Promise.race([stopping, operations.handlers.getV2({ operationId: 'refused-startup', waitForTerminal: true }).then(() => {
+        throw new Error('Startup settled without retiring its refused runner');
+      })]);
+      expect(operations.store.get(scope, 'refused-startup')).toMatchObject({ state: 'running' });
+      releaseStop();
+      await vi.waitFor(() => expect(operations.store.get(scope, 'refused-startup')).toMatchObject({ state: 'failed',
+        error: { errorCode: 'native_agent_session_mode_unavailable' } }));
+    } finally { releaseStop(); operations.runner.cancel(scope, 'refused-startup'); }
+  });
   it.each(['refused', 'runner_exited'] as const)('keeps native-fork %s cleanup inside its own open owner after requester startup', async outcome => {
     const operations = createHostActionOperationRuntime({ machineId: 'machine', resolveAccountId: async () => 'account',
       generateOperationId: () => 'native-fork-startup', supportsCoreCancellation: () => true });
@@ -60,6 +99,7 @@ describe('Session startup operation custody', () => {
                 return { type: 'success', sessionId: 'native-fork-child' };
               },
               awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [tracked], ...input }),
+              stopSession: async () => { throw new Error('Native fork owns its own retirement'); },
               refused: () => ({ ok: false as const, errorCode: 'requester_unavailable', errorMessage: 'unavailable' }),
               run: ({ spawnSession }) => attemptNativeForkOpen({ credentials: { token: 'test-token', encryption: null },
                 parentSessionId: 'parent', parentMetadata, directory: '/project', forkPoint: { type: 'latest' },
@@ -99,6 +139,7 @@ describe('Session startup operation custody', () => {
         context: { signal: operation.signal, localActionContext: operation },
         spawnSession: async options => { captured = options; return { type: 'success', sessionId: 'fork-child' }; },
         awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [tracked], ...input }),
+        stopSession: async () => { throw new Error('Successful startup must not retire its runner'); },
         refused: () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE, errorMessage: 'unavailable' } as const),
         run: ({ spawnSession }) => spawnSession({ directory: '/project' }),
       }) }) });
@@ -126,7 +167,8 @@ describe('Session startup operation custody', () => {
     const handler = createSpawnNewSessionLifecycleActionHandler({ spawnSession: async options => {
       captured = options;
       return { type: 'success', sessionId: 'session-child' };
-    }, awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({
+    }, stopSession: async () => { throw new Error('Open, cancellation and observed exit do not retire a refused runner'); },
+    awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({
       getTrackedSessions: () => trackedSessions, ...input,
     }) });
     try {

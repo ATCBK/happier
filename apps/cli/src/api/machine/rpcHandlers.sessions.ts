@@ -31,7 +31,7 @@ export function registerMachineSessionRpcHandlers(params: Readonly<{
   sessionSpawnDirectTargetTransport?: SessionSpawnDirectTargetTransport;
 }> {
   const spawnLifecycleHandler = createMachineSessionSpawnRpcHandler({
-    handlers: { spawnSession: params.handlers.spawnSession },
+    handlers: { spawnSession: params.handlers.spawnSession, stopSession: params.handlers.stopSession },
     ...(params.deps?.currentServerId ? { serverId: params.deps.currentServerId } : {}),
     ...(params.deps?.awaitAgentSessionOpen ? { awaitAgentSessionOpen: params.deps.awaitAgentSessionOpen } : {}),
   });

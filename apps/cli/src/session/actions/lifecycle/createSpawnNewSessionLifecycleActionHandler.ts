@@ -35,6 +35,7 @@ import type {
 
 export function createSpawnNewSessionLifecycleActionHandler(params: Readonly<{
     spawnSession: SessionLifecycleMachineHandlers['spawnSession'];
+    stopSession?: SessionLifecycleMachineHandlers['stopSession'];
     serverId?: string;
     awaitAgentSessionOpen?: SessionLifecycleMachineDeps['awaitAgentSessionOpen'];
 }>): SessionLifecycleActionHandler {
@@ -424,6 +425,7 @@ export function createSpawnNewSessionLifecycleActionHandler(params: Readonly<{
                 machineId: requesterAdmission.machineId, installationId: requesterAdmission.installationId,
             }) : undefined;
         const spawnSession = createSessionStartupProjectSpawn({ context, spawnSession: params.spawnSession,
+            ...(params.stopSession ? { stopSession: params.stopSession } : {}),
             ...(params.awaitAgentSessionOpen ? { awaitAgentSessionOpen: params.awaitAgentSessionOpen } : {}) });
         const buildBaseSpawnOptions = (resolvedDirectory: string): SpawnSessionOptions => ({
             ...admittedSpawnOptions,

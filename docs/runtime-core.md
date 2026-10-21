@@ -185,9 +185,12 @@ The native-open owner records a refused outcome through its existing runner
 attestation before entering that resident refusal path. The daemon observes it
 under the same exact runner and Agent-source custody as a committed open; it
 never projects refusal as a successful native open. A cold Session startup
-operation therefore fails without waiting for Stop or runner exit. Workflow
-consumes that original failed operation before offering its first input. Mode
-availability is checked before committing successful native-open attestation,
+operation retires the runner it spawned through the daemon's normal Stop owner
+before reporting that original failure; it does not wait for a person to Stop.
+Workflow consumes the failed operation before offering its first input. Native
+fork retains its existing child-retirement scope. A refused host without an
+observed startup operation retains the late-input consumer described above.
+Mode availability is checked before committing successful native-open attestation,
 including when the plugin returns a Session before the host refuses its mode.
 Plugins that apply configuration during native open publish their observed mode
 inventory first. During open, the host checks that publication through its

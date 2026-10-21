@@ -16,12 +16,13 @@ export { createMachineSessionStopLifecycleActionExecutor };
 
 /** The private machine spawn transport uses the existing lifecycle owner directly. */
 export function createMachineSessionSpawnRpcHandler(params: Readonly<{
-    handlers: Pick<SessionLifecycleMachineHandlers, 'spawnSession'>;
+    handlers: Pick<SessionLifecycleMachineHandlers, 'spawnSession'> & Partial<Pick<SessionLifecycleMachineHandlers, 'stopSession'>>;
     serverId?: string;
     awaitAgentSessionOpen?: SessionLifecycleMachineDeps['awaitAgentSessionOpen'];
 }>): SessionLifecycleActionHandler {
     return createSpawnNewSessionLifecycleActionHandler({
         spawnSession: params.handlers.spawnSession,
+        ...(params.handlers.stopSession ? { stopSession: params.handlers.stopSession } : {}),
         ...(params.serverId ? { serverId: params.serverId } : {}),
         ...(params.awaitAgentSessionOpen ? { awaitAgentSessionOpen: params.awaitAgentSessionOpen } : {}),
     });
@@ -39,6 +40,7 @@ export function createMachineSessionLifecycleActionExecutor(params: Readonly<{
         'session.continue_with_replay': createContinueWithReplayLifecycleActionHandler({
             sessionHostBridge,
             spawnSession: params.handlers.spawnSession,
+            stopSession: params.handlers.stopSession,
             deps: params.deps,
         }),
         'session.fork': createForkSessionLifecycleActionHandler({

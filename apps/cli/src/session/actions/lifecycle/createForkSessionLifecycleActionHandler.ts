@@ -74,6 +74,7 @@ export function createForkSessionLifecycleActionHandler(params: Readonly<{
 
         return await runRequesterSessionLifecycle<unknown>({ sessionId: parentSessionId, context,
             spawnSession: params.handlers.spawnSession,
+            stopSession: params.handlers.stopSession,
             ...(params.deps?.awaitAgentSessionOpen ? { awaitAgentSessionOpen: params.deps.awaitAgentSessionOpen } : {}),
             refused: () => ({ ok: false, errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
                 errorMessage: 'Requester Session authority is unavailable' }),

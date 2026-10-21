@@ -19,6 +19,7 @@ export async function runRequesterSessionLifecycle<T>(params: Readonly<{
     sessionId: string;
     context: Parameters<SessionLifecycleActionHandler>[1];
     spawnSession: SessionLifecycleMachineHandlers['spawnSession'];
+    stopSession?: SessionLifecycleMachineHandlers['stopSession'];
     awaitAgentSessionOpen?: SessionLifecycleMachineDeps['awaitAgentSessionOpen'];
     refused(): T;
     run(input: Readonly<{
@@ -29,6 +30,7 @@ export async function runRequesterSessionLifecycle<T>(params: Readonly<{
 }>): Promise<T> {
     const requester = params.context?.requesterSessionBootstrap;
     const startupSpawnSession = createSessionStartupProjectSpawn({ context: params.context, spawnSession: params.spawnSession,
+        ...(params.stopSession ? { stopSession: params.stopSession } : {}),
         ...(params.awaitAgentSessionOpen ? { awaitAgentSessionOpen: params.awaitAgentSessionOpen } : {}) });
     const foreign = params.context?.machineAdmission
         && params.context.machineAdmission.actorAccountId !== params.context.machineAdmission.custodianAccountId;

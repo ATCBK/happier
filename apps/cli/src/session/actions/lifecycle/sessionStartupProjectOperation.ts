@@ -1,6 +1,7 @@
 import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract';
 import { SessionStartupInputRefusalError } from '@/agent/runtime/session/input/sessionStartupInputRefusal';
 import type { ProjectSetupOperationContext } from '@/workspaces/projectSetup/projectSetupExecution';
+import { logger } from '@/ui/logger';
 
 import type { SessionLifecycleActionHandler, SessionLifecycleMachineDeps, SessionLifecycleMachineHandlers } from './sessionLifecycleTypes';
 
@@ -8,6 +9,7 @@ import type { SessionLifecycleActionHandler, SessionLifecycleMachineDeps, Sessio
 export function createSessionStartupProjectSpawn(input: Readonly<{
     context: Parameters<SessionLifecycleActionHandler>[1];
     spawnSession: SessionLifecycleMachineHandlers['spawnSession'];
+    stopSession?: SessionLifecycleMachineHandlers['stopSession'];
     awaitAgentSessionOpen?: SessionLifecycleMachineDeps['awaitAgentSessionOpen'];
 }>): SessionLifecycleMachineHandlers['spawnSession'] {
     const context = input.context;
@@ -21,9 +23,9 @@ export function createSessionStartupProjectSpawn(input: Readonly<{
             ...(local.requesterWorkAttributionV1 ? { requesterWorkAttributionV1: local.requesterWorkAttributionV1 } : {}) }
         : undefined;
     return async options => {
-        if (operation && !input.awaitAgentSessionOpen) {
+        if (operation && (!input.awaitAgentSessionOpen || !input.stopSession)) {
             return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
-                errorMessage: 'Session native startup observation unavailable' };
+                errorMessage: 'Session native startup observation or retirement unavailable' };
         }
         const result = await input.spawnSession({ ...options, ...(operation ? { projectSetupOperation: operation } : {}) });
         if (result.type !== 'success' || !result.sessionId || !operation) return result;
@@ -40,8 +42,24 @@ export function createSessionStartupProjectSpawn(input: Readonly<{
         operation.signal.throwIfAborted();
         // Startup has already been admitted. Returning a spawn response would
         // let creation reconciliation turn the committed row into success.
-        if (opened.status === 'refused') throw new SessionStartupInputRefusalError({ code: opened.code,
-            message: 'The selected native Agent mode is not available in this Session.' });
+        if (opened.status === 'refused') {
+            // This operation spawned the refused runner and has not offered its
+            // original input. Retire it through the daemon's normal Stop owner,
+            // which also suppresses respawn, before releasing startup custody.
+            // Native-fork children retain their existing fork cleanup scope above.
+            try {
+                const stopped = await input.stopSession!(result.sessionId);
+                if (stopped !== true && (typeof stopped === 'boolean' || stopped.status !== 'stopped')) {
+                    logger.infoFile('[SESSION STARTUP] Refused runner retirement incomplete', {
+                        sessionId: result.sessionId, stopResult: stopped,
+                    });
+                }
+            } catch {
+                logger.infoFile('[SESSION STARTUP] Refused runner retirement failed', { sessionId: result.sessionId });
+            }
+            throw new SessionStartupInputRefusalError({ code: opened.code,
+                message: 'The selected native Agent mode is not available in this Session.' });
+        }
         if (opened.status !== 'opened') throw Object.assign(
             new Error('Agent runner exited before native Session startup completed'),
             { code: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED });

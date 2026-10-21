@@ -500,6 +500,7 @@ it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'st
             const spawn = createSessionStartupProjectSpawn({ context: { signal: operation.signal,
               ...(surface === 'startup-settings-unbound' ? {} : { localActionContext: operation }) },
               awaitAgentSessionOpen: async () => { throw new Error('Unexpected runner'); },
+              stopSession: async () => { throw new Error('Unexpected runner retirement'); },
               spawnSession: options => executeSpawnSessionRequest({ options,
               requesterSessionRuntimeContext: runtime!, credentials: runtime!.bootstrap.credentials, api: runtime!.api,
               connectedServicesMaterializationBaseDir: directory,
