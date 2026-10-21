@@ -10,7 +10,7 @@ export function resolveWorkflowRunParentSessionId(summary: WorkflowRunSummaryV1 
     return summary?.startedBy === 'agent' ? summary.origin.originSessionId ?? null : null;
 }
 
-/** One parent-work tree: manager stays group-local; workflow steps belong only to their Run. */
+/** One parent-work tree: a report displays under its lead's group; workflow steps belong only to their Run. */
 export function nestSessionListReports(
     items: SessionListIndexItem[],
     resolveSessionRow: (serverId: string | null, sessionId: string) => SessionListRenderableSession | null,
@@ -43,7 +43,7 @@ export function nestSessionListReports(
             } else {
                 const lead = readSessionManagerSessionIdV1(row);
                 const candidate = lead ? byKey.get(sessionKey(item.serverId, lead)) : undefined;
-                if (candidate && candidate !== item && groups.get(candidate) === groups.get(item)) parent = candidate;
+                if (candidate && candidate !== item) parent = candidate;
             }
         } else {
             const origin = resolveRunOriginSession?.(item.serverId, item.runId);
