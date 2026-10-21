@@ -303,6 +303,8 @@ describe('createHappierMcpServer real host admission', () => {
       await withMcpClient(runtime, async client => {
         const cases = [
           { name: 'action_spec_get', arguments: { id: 'definitely.invalid.action' }, path: ['id'], code: 'unknown_action' },
+          { name: 'action_spec_get', arguments: { id: 'session.spawn_new', schemaPath: '/inputSchema/definitions/not-a-section' },
+            path: ['schemaPath'], code: 'invalid_schema_path' },
           { name: 'action_options_resolve', arguments: { actionId: 'definitely.invalid.action', fieldPath: 'bogus' }, path: ['actionId'], code: 'unknown_action' },
           { name: 'action_options_resolve', arguments: { actionId: 'session.spawn_new', fieldPath: 'bogus' }, path: ['fieldPath'], code: 'unknown_field' },
           { name: 'action_options_resolve', arguments: { actionId: 'session.spawn_new', fieldPath: 'configuration', draftInput: {} },
