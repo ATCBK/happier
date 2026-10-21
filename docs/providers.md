@@ -717,6 +717,15 @@ and account-unverified. Ordinary Pool member changes and access-token refresh do
 change this static compatibility confirmation. A changed target or compatibility
 fingerprint requires its own confirmation.
 
+In development source, Team runtime admission demand-loads the recipient's
+Provider catalog in the captured Account context and rereads that same authority
+after broker/tunnel work. The daemon Account cannot supply recipient consent.
+The Agent receives the local machine-carrier capability through its declared raw
+credential header, not a public-header/config literal; signed Home authority
+remains with the admitted stream. This transport correction changes the worker
+compatibility fingerprint where applicable, so an earlier confirmation may need
+to be renewed through the existing Account confirmation Action.
+
 The custodian's confirmation never filters recipients' source catalogs,
 eligibility, request-policy facts or resource Test candidates. Team policy and
 current source membership decide what is offered; the recipient's own consent
