@@ -2588,6 +2588,7 @@ const en = Shared_entityDragDropTranslations.en;
 
 const fr: EntityDragDropTranslations = {
     files: { attach: "Joindre", uploadHere: "Importer ici" },
+    runner: { filesOnly: "Les dossiers ne peuvent pas être joints à ce lancement. Joins des fichiers à la place." },
     composer: { addContext: "Ajouter du contexte", consequence: "Envoyé avec ton prochain message · rien n’est encore envoyé", target: "Éditeur", readOnly: "Cet éditeur est en lecture seule", otherWorkspace: "Ne fait pas partie de cet espace de travail", unavailable: "Cette référence est indisponible" , mentionHere: "Mentionner ici", cantMentionHere: "Impossible de le mentionner ici", attachAsImage: ({ number }: { number: number }) => `Joindre comme Image #${number}`, attachAndMention: "L’ajoute aux pièces jointes et le mentionne ici", noMentionInText: ({ name }: { name: string }) => `${name} · sans mention dans le texte`, mentionFiles: ({ count }: { count: number }) => `Mentionner ${count} ${count === 1 ? 'fichier' : 'fichiers'} ici`, mentionInComposer: "Mentionner dans l’éditeur", uploadFolderAndMention: "Téléverse le dossier et le mentionne ici" },
     surface: {
         scopeMismatch: 'Cet élément est dans un autre Home ou compte',
@@ -2932,7 +2933,6 @@ const externalSessionSettingsTranslations = { fr: {
     browseMachineOfflineBody: 'Ses sessions apparaîtront dès qu’elle se reconnectera.',
     browseChooseAnotherMachine: 'Choisir une autre machine',
     browseCantReachTitle: ({ machine }: { machine: string }) => `Impossible de joindre Happier sur ${machine}`,
-    browseCantReachBody: 'La machine est en ligne, mais son service Happier ne répond pas. Il est peut-être encore en train de démarrer.',
     browseUpdateNeededTitle: ({ machine }: { machine: string }) => `Mettre à jour Happier sur ${machine}`,
     browseUpdateNeededBody: 'Sa version ne peut pas encore partager cette liste avec cet appareil. Mets-la à jour, puis réessaie.',
     browseAccessRefusedTitle: ({ machine }: { machine: string }) => `Impossible d’ouvrir ${machine}`,
@@ -4694,6 +4694,13 @@ const fr: typeof en = {
         deleted: ({ target }: { target: string }) => `a supprimé ${target}`,
         deletionStarted: ({ target }: { target: string }) => `a commencé à supprimer ${target}`,
         signedOutEverywhere: ({ target }: { target: string }) => `a déconnecté ${target} partout`,
+        profileRestricted: ({ target }: { target: string }) => `a restreint le profil public de ${target}`,
+        profileRestored: ({ target }: { target: string }) => `a rétabli le profil public de ${target}`,
+        handleReclaimed: ({ target }: { target: string }) => `a récupéré le nom d’utilisateur de ${target}`,
+        areaPublicProfiles: 'Profils publics',
+        fieldReason: 'Motif',
+        fieldNotice: 'Avis au titulaire',
+        fieldUsername: 'Nom d’utilisateur',
         areaOwnership: 'Propriété',
         areaPolicies: 'Politiques',
         areaEmail: 'E-mail',

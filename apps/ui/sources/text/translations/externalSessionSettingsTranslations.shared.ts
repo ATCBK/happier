@@ -85,7 +85,6 @@ export const en = {
     browseMachineOfflineBody: 'Its sessions appear once it reconnects.',
     browseChooseAnotherMachine: 'Choose another machine',
     browseCantReachTitle: ({ machine }: { machine: string }) => `Can’t reach Happier on ${machine}`,
-    browseCantReachBody: 'The machine is online, but its Happier service isn’t answering. It may still be starting.',
     browseUpdateNeededTitle: ({ machine }: { machine: string }) => `Update Happier on ${machine}`,
     browseUpdateNeededBody: 'Its version can’t share this list with this device yet. Update it, then try again.',
     browseAccessRefusedTitle: ({ machine }: { machine: string }) => `Can’t open ${machine}`,

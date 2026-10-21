@@ -21,6 +21,7 @@ import { machineResourceUiTranslations } from './machineResourceUiTranslations.s
 import { machineSharing } from './features/machineSharing.pl';
 import { managedMachines } from './features/managedMachines.pl';
 import { projectWorkers } from './features/projectWorkers.pl';
+import { publicIdentity } from './features/publicIdentity.pl';
 
 import { terminalWorkspaceKeyboardTranslations } from './terminalWorkspaceTranslations.shared';
 
@@ -15118,7 +15119,10 @@ settingsSession: {
 
   usage: {
     widgets: { usage_source_coverage: "Pokrycie", usage_unpriced: "Bez ceny" },
-    board: { sources: {
+    board: { recap: {
+      deliveryUnconfirmed: "Otwarto systemowy panel udostępniania, ale nie można potwierdzić zakończenia. Przed ponowną próbą sprawdź wybraną aplikację.",
+      statMergedPrs: "scalone PR",
+    }, sources: {
       foundCaption: "Natywne użycie jest liczone po dodaniu źródła",
       coveragePurpose: "Co zgłasza wybrana historia",
       unpricedPurpose: "Tokeny bez ceny",
@@ -16389,6 +16393,7 @@ settingsSession: {
    machines: { ...machineSharing.machines, widgets: machineResourceUiTranslations.pl.widgets },
    ...managedMachines,
    ...projectWorkers,
+   ...publicIdentity,
    ...sessionPageTranslations.pl,
    settingsPlugins: {
       updateReview: pluginUpdateReviewTranslations.pl,

@@ -2581,6 +2581,7 @@ const en = Shared_entityDragDropTranslations.en;
 
 const zhHant: EntityDragDropTranslations = {
     files: { attach: "附加", uploadHere: "上傳到這裡" },
+    runner: { filesOnly: "無法為此次啟動附加資料夾。請改為附加檔案。" },
     composer: { addContext: "新增上下文", consequence: "隨你的下一則訊息送出 · 暫不送出任何內容", target: "輸入框", readOnly: "此輸入框為唯讀", otherWorkspace: "不屬於此工作區", unavailable: "此參照無法使用" , mentionHere: "在此引用", cantMentionHere: "無法在此引用", attachAsImage: ({ number }: { number: number }) => `附加為圖片 #${number}`, attachAndMention: "加入附件列並在此引用", noMentionInText: ({ name }: { name: string }) => `${name} · 內文中未引用`, mentionFiles: ({ count }: { count: number }) => `在此引用 ${count} 個檔案`, mentionInComposer: "在編輯框中引用", uploadFolderAndMention: "上傳資料夾並在此引用" },
     surface: {
         scopeMismatch: '它在另一個 Home 或帳戶中',
@@ -2927,7 +2928,6 @@ const externalSessionSettingsTranslations = { zhHant: {
     browseMachineOfflineBody: '重新連線後會顯示其工作階段。',
     browseChooseAnotherMachine: '選擇其他機器',
     browseCantReachTitle: ({ machine }: { machine: string }) => `無法連線到 ${machine} 上的 Happier`,
-    browseCantReachBody: '機器在線上，但其 Happier 服務沒有回應，可能仍在啟動。',
     browseUpdateNeededTitle: ({ machine }: { machine: string }) => `更新 ${machine} 上的 Happier`,
     browseUpdateNeededBody: '其版本暫時無法向此裝置分享該清單。請更新後重試。',
     browseAccessRefusedTitle: ({ machine }: { machine: string }) => `無法開啟 ${machine}`,
@@ -4689,6 +4689,13 @@ const zhHant: typeof en = {
         deleted: ({ target }: { target: string }) => `刪除了 ${target}`,
         deletionStarted: ({ target }: { target: string }) => `開始刪除 ${target}`,
         signedOutEverywhere: ({ target }: { target: string }) => `讓 ${target} 在所有裝置上登出`,
+        profileRestricted: ({ target }: { target: string }) => `限制了 ${target} 的公開個人資料`,
+        profileRestored: ({ target }: { target: string }) => `恢復了 ${target} 的公開個人資料`,
+        handleReclaimed: ({ target }: { target: string }) => `收回了 ${target} 的使用者名稱`,
+        areaPublicProfiles: '公開個人資料',
+        fieldReason: '原因',
+        fieldNotice: '帳戶擁有者通知',
+        fieldUsername: '使用者名稱',
         areaOwnership: '擁有權',
         areaPolicies: '政策',
         areaEmail: '郵件',

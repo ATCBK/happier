@@ -2586,6 +2586,7 @@ const en = Shared_entityDragDropTranslations.en;
 
 const ja: EntityDragDropTranslations = {
     files: { attach: "添付", uploadHere: "ここにアップロード" },
+    runner: { filesOnly: "この起動にはフォルダーを添付できません。代わりにファイルを添付してください。" },
     composer: { addContext: "コンテキストを追加", consequence: "次のメッセージと一緒に送信 · まだ何も送信されません", target: "入力欄", readOnly: "この入力欄は読み取り専用です", otherWorkspace: "このワークスペースに含まれていません", unavailable: "この参照は利用できません" , mentionHere: "ここで参照", cantMentionHere: "ここでは参照できません", attachAsImage: ({ number }: { number: number }) => `画像 #${number} として添付`, attachAndMention: "トレイに追加し、ここで参照します", noMentionInText: ({ name }: { name: string }) => `${name} · 本文での参照なし`, mentionFiles: ({ count }: { count: number }) => `ここで ${count} 個のファイルを参照`, mentionInComposer: "入力欄で参照", uploadFolderAndMention: "フォルダーをアップロードし、ここで参照します" },
     surface: {
         scopeMismatch: '別の Home またはアカウントにあります',
@@ -2932,7 +2933,6 @@ const externalSessionSettingsTranslations = { ja: {
     browseMachineOfflineBody: '再接続されるとセッションが表示されます。',
     browseChooseAnotherMachine: '別のマシンを選ぶ',
     browseCantReachTitle: ({ machine }: { machine: string }) => `${machine} の Happier に接続できません`,
-    browseCantReachBody: 'マシンはオンラインですが、Happier サービスが応答していません。まだ起動中の可能性があります。',
     browseUpdateNeededTitle: ({ machine }: { machine: string }) => `${machine} の Happier を更新`,
     browseUpdateNeededBody: 'このマシンのバージョンはまだこのデバイスにこの一覧を共有できません。更新してからもう一度お試しください。',
     browseAccessRefusedTitle: ({ machine }: { machine: string }) => `${machine} を開けません`,
@@ -4694,6 +4694,13 @@ const ja: typeof en = {
         deleted: ({ target }: { target: string }) => `が ${target} を削除しました`,
         deletionStarted: ({ target }: { target: string }) => `が ${target} の削除を開始しました`,
         signedOutEverywhere: ({ target }: { target: string }) => `が ${target} をすべてのデバイスからサインアウトしました`,
+        profileRestricted: ({ target }: { target: string }) => `が ${target} の公開プロフィールを制限しました`,
+        profileRestored: ({ target }: { target: string }) => `が ${target} の公開プロフィールを復元しました`,
+        handleReclaimed: ({ target }: { target: string }) => `が ${target} のユーザー名を回収しました`,
+        areaPublicProfiles: '公開プロフィール',
+        fieldReason: '理由',
+        fieldNotice: 'アカウント所有者への通知',
+        fieldUsername: 'ユーザー名',
         areaOwnership: '所有権',
         areaPolicies: 'ポリシー',
         areaEmail: 'メール',

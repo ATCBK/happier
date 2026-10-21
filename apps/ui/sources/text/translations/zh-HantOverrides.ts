@@ -21,6 +21,7 @@ import { machineResourceUiTranslations } from './machineResourceUiTranslations.s
 import { machineSharing } from './features/machineSharing.zh-Hant';
 import { managedMachines } from './features/managedMachines.zh-Hant';
 import { projectWorkers } from './features/projectWorkers.zh-Hant';
+import { publicIdentity } from './features/publicIdentity.zh-Hant';
 
 import { terminalWorkspaceKeyboardTranslations } from './terminalWorkspaceTranslations.shared';
 
@@ -12458,7 +12459,10 @@ settingsSession: {
     },
 
     usage: {
-        board: { sources: {
+        board: { recap: {
+            deliveryUnconfirmed: "系統分享面板已開啟，但無法確認是否完成。重試前請檢查所選應用程式。",
+            statMergedPrs: "已合併 PR",
+        }, sources: {
             foundCaption: "加入來源後才會統計原生用量",
             coveragePurpose: "所選歷史記錄報告的內容",
             unpricedPurpose: "沒有價格的 token",
@@ -13333,6 +13337,7 @@ settingsSession: {
   machines: { ...machineSharing.machines, widgets: machineResourceUiTranslations.zhHant.widgets },
   ...managedMachines,
   ...projectWorkers,
+  ...publicIdentity,
   ...sessionPageTranslations['zh-Hant'],
   settingsPlugins: {
     updateReview: pluginUpdateReviewTranslations.zhHant,

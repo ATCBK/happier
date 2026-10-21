@@ -2608,6 +2608,7 @@ const en = Shared_entityDragDropTranslations.en;
 
 const ru: EntityDragDropTranslations = {
     files: { attach: "Прикрепить", uploadHere: "Загрузить сюда" },
+    runner: { filesOnly: "К этому запуску нельзя прикреплять папки. Прикрепите файлы." },
     composer: { addContext: "Добавить контекст", consequence: "Отправится с вашим следующим сообщением · пока ничего не отправляется", target: "Редактор", readOnly: "Этот редактор доступен только для чтения", otherWorkspace: "Не относится к этому рабочему пространству", unavailable: "Эта ссылка недоступна" , mentionHere: "Упомянуть здесь", cantMentionHere: "Здесь нельзя упомянуть", attachAsImage: ({ number }: { number: number }) => `Прикрепить как Изображение #${number}`, attachAndMention: "Добавляет во вложения и упоминает здесь", noMentionInText: ({ name }: { name: string }) => `${name} · без упоминания в тексте`, mentionFiles: ({ count }: { count: number }) => `Упомянуть здесь ${count} ${count % 10 === 1 && count % 100 !== 11 ? 'файл' : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14) ? 'файла' : 'файлов'}`, mentionInComposer: "Упомянуть в редакторе", uploadFolderAndMention: "Загружает папку и упоминает её здесь" },
     surface: {
         scopeMismatch: 'Находится в другом Home или другой учётной записи',
@@ -2954,7 +2955,6 @@ const externalSessionSettingsTranslations = { ru: {
     browseMachineOfflineBody: 'Её сессии появятся, когда она снова подключится.',
     browseChooseAnotherMachine: 'Выбрать другую машину',
     browseCantReachTitle: ({ machine }: { machine: string }) => `Не удаётся связаться с Happier на ${machine}`,
-    browseCantReachBody: 'Машина в сети, но её служба Happier не отвечает. Возможно, она ещё запускается.',
     browseUpdateNeededTitle: ({ machine }: { machine: string }) => `Обновите Happier на ${machine}`,
     browseUpdateNeededBody: 'Её версия пока не может передать этот список на это устройство. Обновите её и повторите попытку.',
     browseAccessRefusedTitle: ({ machine }: { machine: string }) => `Не удаётся открыть ${machine}`,
@@ -4716,6 +4716,13 @@ const ru: typeof en = {
         deleted: ({ target }: { target: string }) => `удалил: ${target}`,
         deletionStarted: ({ target }: { target: string }) => `начал удаление: ${target}`,
         signedOutEverywhere: ({ target }: { target: string }) => `выполнил выход ${target} везде`,
+        profileRestricted: ({ target }: { target: string }) => `ограничил(а) публичный профиль ${target}`,
+        profileRestored: ({ target }: { target: string }) => `восстановил(а) публичный профиль ${target}`,
+        handleReclaimed: ({ target }: { target: string }) => `отозвал(а) имя пользователя ${target}`,
+        areaPublicProfiles: 'Публичные профили',
+        fieldReason: 'Причина',
+        fieldNotice: 'Уведомление владельцу',
+        fieldUsername: 'Имя пользователя',
         areaOwnership: 'Владение',
         areaPolicies: 'Политики',
         areaEmail: 'Почта',

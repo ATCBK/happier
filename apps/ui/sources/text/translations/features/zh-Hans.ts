@@ -2581,6 +2581,7 @@ const en = Shared_entityDragDropTranslations.en;
 
 const zhHans: EntityDragDropTranslations = {
     files: { attach: "附加", uploadHere: "上传到这里" },
+    runner: { filesOnly: "无法为此次启动附加文件夹。请改为附加文件。" },
     composer: { addContext: "添加上下文", consequence: "随你的下一条消息发送 · 暂不发送任何内容", target: "输入框", readOnly: "此输入框为只读", otherWorkspace: "不属于此工作区", unavailable: "此引用不可用" , mentionHere: "在此引用", cantMentionHere: "无法在此引用", attachAsImage: ({ number }: { number: number }) => `附加为图片 #${number}`, attachAndMention: "添加到附件栏并在此引用", noMentionInText: ({ name }: { name: string }) => `${name} · 正文中未引用`, mentionFiles: ({ count }: { count: number }) => `在此引用 ${count} 个文件`, mentionInComposer: "在编辑框中引用", uploadFolderAndMention: "上传文件夹并在此引用" },
     surface: {
         scopeMismatch: '它在另一个 Home 或账户中',
@@ -2927,7 +2928,6 @@ const externalSessionSettingsTranslations = { zhHans: {
     browseMachineOfflineBody: '重新连接后会显示其会话。',
     browseChooseAnotherMachine: '选择其他机器',
     browseCantReachTitle: ({ machine }: { machine: string }) => `无法连接 ${machine} 上的 Happier`,
-    browseCantReachBody: '机器在线，但其 Happier 服务没有响应，可能仍在启动。',
     browseUpdateNeededTitle: ({ machine }: { machine: string }) => `更新 ${machine} 上的 Happier`,
     browseUpdateNeededBody: '其版本暂时无法向此设备共享该列表。请更新后重试。',
     browseAccessRefusedTitle: ({ machine }: { machine: string }) => `无法打开 ${machine}`,
@@ -4689,6 +4689,13 @@ const zhHans: typeof en = {
         deleted: ({ target }: { target: string }) => `删除了 ${target}`,
         deletionStarted: ({ target }: { target: string }) => `开始删除 ${target}`,
         signedOutEverywhere: ({ target }: { target: string }) => `让 ${target} 在所有设备上退出登录`,
+        profileRestricted: ({ target }: { target: string }) => `限制了 ${target} 的公开个人资料`,
+        profileRestored: ({ target }: { target: string }) => `恢复了 ${target} 的公开个人资料`,
+        handleReclaimed: ({ target }: { target: string }) => `收回了 ${target} 的用户名`,
+        areaPublicProfiles: '公开个人资料',
+        fieldReason: '原因',
+        fieldNotice: '账户所有者通知',
+        fieldUsername: '用户名',
         areaOwnership: '所有权',
         areaPolicies: '策略',
         areaEmail: '邮件',

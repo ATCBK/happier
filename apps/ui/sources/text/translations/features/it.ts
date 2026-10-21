@@ -2588,6 +2588,7 @@ const en = Shared_entityDragDropTranslations.en;
 
 const it: EntityDragDropTranslations = {
     files: { attach: "Allega", uploadHere: "Carica qui" },
+    runner: { filesOnly: "Non puoi allegare cartelle a questo avvio. Allega dei file." },
     composer: { addContext: "Aggiungi contesto", consequence: "Inviato con il tuo prossimo messaggio · per ora non si invia nulla", target: "Compositore", readOnly: "Questo compositore è di sola lettura", otherWorkspace: "Non fa parte di questo spazio di lavoro", unavailable: "Questo riferimento non è disponibile" , mentionHere: "Menziona qui", cantMentionHere: "Non si può menzionare qui", attachAsImage: ({ number }: { number: number }) => `Allega come Immagine #${number}`, attachAndMention: "Lo aggiunge agli allegati e lo menziona qui", noMentionInText: ({ name }: { name: string }) => `${name} · senza menzione nel testo`, mentionFiles: ({ count }: { count: number }) => `Menziona ${count} ${count === 1 ? 'file' : 'file'} qui`, mentionInComposer: "Menziona nel compositore", uploadFolderAndMention: "Carica la cartella e la menziona qui" },
     surface: {
         scopeMismatch: 'Si trova in un’altra Home o in un altro account',
@@ -2934,7 +2935,6 @@ const externalSessionSettingsTranslations = { it: {
     browseMachineOfflineBody: 'Le sue sessioni compariranno quando si riconnetterà.',
     browseChooseAnotherMachine: 'Scegli un’altra macchina',
     browseCantReachTitle: ({ machine }: { machine: string }) => `Impossibile raggiungere Happier su ${machine}`,
-    browseCantReachBody: 'La macchina è online, ma il suo servizio Happier non risponde. Potrebbe essere ancora in avvio.',
     browseUpdateNeededTitle: ({ machine }: { machine: string }) => `Aggiorna Happier su ${machine}`,
     browseUpdateNeededBody: 'La sua versione non può ancora condividere questo elenco con questo dispositivo. Aggiornala e riprova.',
     browseAccessRefusedTitle: ({ machine }: { machine: string }) => `Impossibile aprire ${machine}`,
@@ -4696,6 +4696,13 @@ const it: typeof en = {
         deleted: ({ target }: { target: string }) => `ha eliminato ${target}`,
         deletionStarted: ({ target }: { target: string }) => `ha iniziato a eliminare ${target}`,
         signedOutEverywhere: ({ target }: { target: string }) => `ha disconnesso ${target} ovunque`,
+        profileRestricted: ({ target }: { target: string }) => `ha limitato il profilo pubblico di ${target}`,
+        profileRestored: ({ target }: { target: string }) => `ha ripristinato il profilo pubblico di ${target}`,
+        handleReclaimed: ({ target }: { target: string }) => `ha recuperato il nome utente di ${target}`,
+        areaPublicProfiles: 'Profili pubblici',
+        fieldReason: 'Motivo',
+        fieldNotice: 'Avviso al titolare',
+        fieldUsername: 'Nome utente',
         areaOwnership: 'Proprietà',
         areaPolicies: 'Criteri',
         areaEmail: 'Email',

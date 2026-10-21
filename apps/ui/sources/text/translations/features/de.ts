@@ -2582,6 +2582,7 @@ const en = Shared_entityDragDropTranslations.en;
 
 const de: EntityDragDropTranslations = {
     files: { attach: "Anhängen", uploadHere: "Hier hochladen" },
+    runner: { filesOnly: "Ordner können diesem Start nicht angehängt werden. Hänge stattdessen Dateien an." },
     composer: { addContext: "Kontext hinzufügen", consequence: "Geht mit deiner nächsten Nachricht mit · noch wird nichts gesendet", target: "Eingabe", readOnly: "Diese Eingabe ist schreibgeschützt", otherWorkspace: "Gehört nicht zu diesem Arbeitsbereich", unavailable: "Diese Referenz ist nicht verfügbar" , mentionHere: "Hier erwähnen", cantMentionHere: "Hier nicht erwähnbar", attachAsImage: ({ number }: { number: number }) => `Als Bild #${number} anhängen`, attachAndMention: "Fügt es zur Ablage hinzu und erwähnt es hier", noMentionInText: ({ name }: { name: string }) => `${name} · keine Erwähnung im Text`, mentionFiles: ({ count }: { count: number }) => `Hier ${count} ${count === 1 ? 'Datei' : 'Dateien'} erwähnen`, mentionInComposer: "Im Eingabefeld erwähnen", uploadFolderAndMention: "Lädt den Ordner hoch und erwähnt ihn hier" },
     surface: {
         scopeMismatch: 'Es ist in einem anderen Home oder Konto',
@@ -2926,7 +2927,6 @@ const externalSessionSettingsTranslations = { de: {
     browseMachineOfflineBody: 'Seine Sessions erscheinen, sobald er wieder verbunden ist.',
     browseChooseAnotherMachine: 'Anderen Rechner wählen',
     browseCantReachTitle: ({ machine }: { machine: string }) => `Happier auf ${machine} nicht erreichbar`,
-    browseCantReachBody: 'Der Rechner ist online, aber sein Happier-Dienst antwortet nicht. Vielleicht startet er noch.',
     browseUpdateNeededTitle: ({ machine }: { machine: string }) => `Happier auf ${machine} aktualisieren`,
     browseUpdateNeededBody: 'Seine Version kann diese Liste noch nicht mit diesem Gerät teilen. Aktualisier sie und versuch es dann erneut.',
     browseAccessRefusedTitle: ({ machine }: { machine: string }) => `${machine} lässt sich nicht öffnen`,
@@ -4688,6 +4688,13 @@ const de: typeof en = {
         deleted: ({ target }: { target: string }) => `hat ${target} gelöscht`,
         deletionStarted: ({ target }: { target: string }) => `hat begonnen, ${target} zu löschen`,
         signedOutEverywhere: ({ target }: { target: string }) => `hat ${target} überall abgemeldet`,
+        profileRestricted: ({ target }: { target: string }) => `hat das öffentliche Profil von ${target} eingeschränkt`,
+        profileRestored: ({ target }: { target: string }) => `hat das öffentliche Profil von ${target} wiederhergestellt`,
+        handleReclaimed: ({ target }: { target: string }) => `hat den Benutzernamen von ${target} zurückgefordert`,
+        areaPublicProfiles: 'Öffentliche Profile',
+        fieldReason: 'Grund',
+        fieldNotice: 'Mitteilung an den Kontoinhaber',
+        fieldUsername: 'Benutzername',
         areaOwnership: 'Eigentümerschaft',
         areaPolicies: 'Richtlinien',
         areaEmail: 'E-Mail',

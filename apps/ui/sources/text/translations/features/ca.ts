@@ -2588,6 +2588,7 @@ const en = Shared_entityDragDropTranslations.en;
 
 const ca: EntityDragDropTranslations = {
     files: { attach: "Adjunta", uploadHere: "Puja aquí" },
+    runner: { filesOnly: "No es poden adjuntar carpetes a aquest llançament. Adjunta fitxers." },
     composer: { addContext: "Afegeix context", consequence: "S’envia amb el teu proper missatge · encara no s’envia res", target: "Redactor", readOnly: "Aquest redactor és de només lectura", otherWorkspace: "No forma part d’aquest espai de treball", unavailable: "Aquesta referència no està disponible" , mentionHere: "Esmenta aquí", cantMentionHere: "No es pot esmentar aquí", attachAsImage: ({ number }: { number: number }) => `Adjunta com a Imatge #${number}`, attachAndMention: "L’afegeix a la safata i l’esmenta aquí", noMentionInText: ({ name }: { name: string }) => `${name} · sense esment al text`, mentionFiles: ({ count }: { count: number }) => `Esmenta ${count} ${count === 1 ? 'fitxer' : 'fitxers'} aquí`, mentionInComposer: "Esmenta al redactor", uploadFolderAndMention: "Puja la carpeta i l’esmenta aquí" },
     surface: {
         scopeMismatch: 'És en un altre Home o compte',
@@ -2934,7 +2935,6 @@ const externalSessionSettingsTranslations = { ca: {
     browseMachineOfflineBody: 'Les seves sessions apareixeran quan es torni a connectar.',
     browseChooseAnotherMachine: 'Tria una altra màquina',
     browseCantReachTitle: ({ machine }: { machine: string }) => `No es pot contactar amb Happier a ${machine}`,
-    browseCantReachBody: 'La màquina està en línia, però el servei de Happier no respon. Potser encara s’està iniciant.',
     browseUpdateNeededTitle: ({ machine }: { machine: string }) => `Actualitza Happier a ${machine}`,
     browseUpdateNeededBody: 'La seva versió encara no pot compartir aquesta llista amb aquest dispositiu. Actualitza-la i torna-ho a provar.',
     browseAccessRefusedTitle: ({ machine }: { machine: string }) => `No es pot obrir ${machine}`,
@@ -4696,6 +4696,13 @@ const ca: typeof en = {
         deleted: ({ target }: { target: string }) => `ha eliminat ${target}`,
         deletionStarted: ({ target }: { target: string }) => `ha començat a eliminar ${target}`,
         signedOutEverywhere: ({ target }: { target: string }) => `ha tancat la sessió de ${target} a tot arreu`,
+        profileRestricted: ({ target }: { target: string }) => `ha restringit el perfil públic de ${target}`,
+        profileRestored: ({ target }: { target: string }) => `ha restaurat el perfil públic de ${target}`,
+        handleReclaimed: ({ target }: { target: string }) => `ha recuperat el nom d’usuari de ${target}`,
+        areaPublicProfiles: 'Perfils públics',
+        fieldReason: 'Motiu',
+        fieldNotice: 'Avís al titular',
+        fieldUsername: 'Nom d’usuari',
         areaOwnership: 'Propietat',
         areaPolicies: 'Polítiques',
         areaEmail: 'Correu',

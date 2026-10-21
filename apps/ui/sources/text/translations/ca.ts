@@ -21,6 +21,7 @@ import { machineResourceUiTranslations } from './machineResourceUiTranslations.s
 import { machineSharing } from './features/machineSharing.ca';
 import { managedMachines } from './features/managedMachines.ca';
 import { projectWorkers } from './features/projectWorkers.ca';
+import { publicIdentity } from './features/publicIdentity.ca';
 
 import { terminalWorkspaceKeyboardTranslations } from './terminalWorkspaceTranslations.shared';
 
@@ -14120,7 +14121,10 @@ settingsSession: {
 
     usage: {
         widgets: { usage_source_coverage: "Cobertura", usage_unpriced: "Sense preu" },
-        board: { sources: {
+        board: { recap: {
+            deliveryUnconfirmed: "S’ha obert el full per compartir, però no s’ha pogut confirmar el resultat. Comprova l’aplicació triada abans de tornar-ho a provar.",
+            statMergedPrs: "PR fusionades",
+        }, sources: {
             foundCaption: "L’ús natiu es compta després d’afegir una font",
             coveragePurpose: "Què informa l’historial seleccionat",
             unpricedPurpose: "Tokens sense preu",
@@ -15312,6 +15316,7 @@ settingsSession: {
    machines: { ...machineSharing.machines, widgets: machineResourceUiTranslations.ca.widgets },
    ...managedMachines,
    ...projectWorkers,
+   ...publicIdentity,
    ...sessionPageTranslations.ca,
    settingsPlugins: {
       updateReview: pluginUpdateReviewTranslations.ca,

@@ -2588,6 +2588,7 @@ const en = Shared_entityDragDropTranslations.en;
 
 const es: EntityDragDropTranslations = {
     files: { attach: "Adjuntar", uploadHere: "Subir aquí" },
+    runner: { filesOnly: "No se pueden adjuntar carpetas a este inicio. Adjunta archivos en su lugar." },
     composer: { addContext: "Añadir contexto", consequence: "Se envía con tu próximo mensaje · aún no se envía nada", target: "Redactor", readOnly: "Este redactor es de solo lectura", otherWorkspace: "No forma parte de este espacio de trabajo", unavailable: "Esta referencia no está disponible" , mentionHere: "Mencionar aquí", cantMentionHere: "No se puede mencionar aquí", attachAsImage: ({ number }: { number: number }) => `Adjuntar como Imagen #${number}`, attachAndMention: "Lo añade a la bandeja y lo menciona aquí", noMentionInText: ({ name }: { name: string }) => `${name} · sin mención en el texto`, mentionFiles: ({ count }: { count: number }) => `Mencionar ${count} ${count === 1 ? 'archivo' : 'archivos'} aquí`, mentionInComposer: "Mencionar en el editor", uploadFolderAndMention: "Sube la carpeta y la menciona aquí" },
     surface: {
         scopeMismatch: 'Está en otro Home o cuenta',
@@ -2934,7 +2935,6 @@ const externalSessionSettingsTranslations = { es: {
     browseMachineOfflineBody: 'Sus sesiones aparecerán cuando vuelva a conectarse.',
     browseChooseAnotherMachine: 'Elegir otra máquina',
     browseCantReachTitle: ({ machine }: { machine: string }) => `No se puede contactar con Happier en ${machine}`,
-    browseCantReachBody: 'La máquina está en línea, pero su servicio de Happier no responde. Puede que aún se esté iniciando.',
     browseUpdateNeededTitle: ({ machine }: { machine: string }) => `Actualiza Happier en ${machine}`,
     browseUpdateNeededBody: 'Su versión aún no puede compartir esta lista con este dispositivo. Actualízala y vuelve a intentarlo.',
     browseAccessRefusedTitle: ({ machine }: { machine: string }) => `No se puede abrir ${machine}`,
@@ -4696,6 +4696,13 @@ const es: typeof en = {
         deleted: ({ target }: { target: string }) => `eliminó a ${target}`,
         deletionStarted: ({ target }: { target: string }) => `empezó a eliminar a ${target}`,
         signedOutEverywhere: ({ target }: { target: string }) => `cerró la sesión de ${target} en todas partes`,
+        profileRestricted: ({ target }: { target: string }) => `restringió el perfil público de ${target}`,
+        profileRestored: ({ target }: { target: string }) => `restauró el perfil público de ${target}`,
+        handleReclaimed: ({ target }: { target: string }) => `reclamó el nombre de usuario de ${target}`,
+        areaPublicProfiles: 'Perfiles públicos',
+        fieldReason: 'Motivo',
+        fieldNotice: 'Aviso al titular',
+        fieldUsername: 'Nombre de usuario',
         areaOwnership: 'Propiedad',
         areaPolicies: 'Políticas',
         areaEmail: 'Correo',
