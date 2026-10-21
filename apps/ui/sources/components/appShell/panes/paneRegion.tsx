@@ -1,28 +1,11 @@
 import * as React from 'react';
 
-import type { DetailsOpenerRegion } from '@/components/ui/panels/paneBreakpoints';
 import { useDestinationFocus } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { readPressFocusReturnTarget, restoreFocusToBestTarget, type FocusReturnTarget } from '@/keyboard/focusReturn';
 import { paneRegionFocus, type PaneKeyboardRegion } from './paneRegionFocus';
 export { focusPaneRegion } from './paneRegionFocus';
 
-/** The pane column a surface is drawn in: main content, the side column, or Details itself. */
-export type PaneRegion = DetailsOpenerRegion | 'details';
-
-const PaneRegionContext = React.createContext<PaneRegion | null>(null);
-
-/**
- * Set by the pane geometry owner around each column, so opening Details records where it was opened
- * from without every caller naming its region.
- */
-export function PaneRegionProvider(props: Readonly<{ region: PaneRegion; children: React.ReactNode }>) {
-    return <PaneRegionContext.Provider value={props.region}>{props.children}</PaneRegionContext.Provider>;
-}
-
-/** `null` outside a pane column host (a full-screen route). */
-export function usePaneRegion(): PaneRegion | null {
-    return React.useContext(PaneRegionContext);
-}
+export { PaneRegionProvider, usePaneRegion, type PaneRegion } from './paneRegionContext';
 
 let lastFocusedRegion: PaneKeyboardRegion | null = null;
 

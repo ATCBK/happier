@@ -16,7 +16,7 @@ import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { t } from '@/text';
 
-import { usePaneRegion } from '../paneRegion';
+import { usePaneRegion } from '../paneRegionContext';
 import { usePaneMainColumn } from './usePaneMainColumn';
 
 /** Whether a header in this column draws the hide control (the main column's own header only). */
