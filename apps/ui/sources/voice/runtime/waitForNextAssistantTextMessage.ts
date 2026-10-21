@@ -50,28 +50,30 @@ export function collectAssistantTextMessageEntriesSinceBaseline(
   const out: AssistantTextMessageEntry[] = [];
   for (let idx = startIndex; idx < messages.length; idx += 1) {
     const message = messages[idx];
-    if (message?.kind !== 'agent-text') continue;
-    if (message.isThinking === true) continue;
-    const segment = readStreamSegmentMetaV1(message.meta);
-    if (segment?.segmentKind === 'thinking'
-      || segment?.segmentState === 'streaming'
-      || segment?.segmentState === 'interrupted') continue;
-    if (typeof message?.text !== 'string') continue;
-    if (typeof message?.id === 'string' && baselineIds.has(message.id)) continue;
-    const text = message.text.trim();
-    const entryId = (
-      typeof message?.realID === 'string' && message.realID.trim()
-        ? message.realID
-        : typeof message?.localId === 'string' && message.localId.trim()
-          ? message.localId
-          : typeof message?.id === 'string' && message.id.trim()
-            ? message.id
-            : ''
-    ).trim();
-    if (!text || !entryId) continue;
-    out.push({ entryId, text });
+    const entry = readAssistantTextMessageEntry(message, baselineIds);
+    if (entry) out.push(entry);
   }
   return out;
+}
+
+function readAssistantTextMessageEntry(message: Message, baselineIds: Set<string>): AssistantTextMessageEntry | null {
+  if (message.kind !== 'agent-text' || message.isThinking === true) return null;
+  const segment = readStreamSegmentMetaV1(message.meta);
+  if (segment?.segmentKind === 'thinking'
+    || segment?.segmentState === 'streaming'
+    || segment?.segmentState === 'interrupted') return null;
+  if (baselineIds.has(message.id)) return null;
+  const text = message.text.trim();
+  const entryId = (
+    typeof message?.realID === 'string' && message.realID.trim()
+      ? message.realID
+      : typeof message?.localId === 'string' && message.localId.trim()
+        ? message.localId
+        : typeof message?.id === 'string' && message.id.trim()
+          ? message.id
+          : ''
+  ).trim();
+  return text && entryId ? { entryId, text } : null;
 }
 
 export async function waitForNextAssistantTextMessageEntry(
@@ -125,33 +127,48 @@ export async function waitForNextAssistantTextMessageEntry(
         // An admitted input supplies the canonical transcript boundary even
         // before its turn projection or server sequence has arrived.
         if (submittedUserLocalId && submittedUserIndex < 0) return;
-        const matches = collectAssistantTextMessageEntriesSinceBaseline(
-          sessionId,
-          baselineIds,
-          submittedUserLocalId ? submittedUserIndex + 1 : baselineCount,
-        );
-        if (matches.length > 0) {
-          done(matches[0] ?? null);
+        if (!submittedUserLocalId) {
+          const matches = collectAssistantTextMessageEntriesSinceBaseline(sessionId, baselineIds, baselineCount);
+          if (matches.length > 0) done(matches[0] ?? null);
           return;
         }
         // Admission returns the submitted row's localId. Only its committed
         // sequence can bind this wait to a turn; latest-turn status can belong
         // to an older or concurrent input from another client.
-        if (!submittedUserLocalId) return;
         const userSeq = submittedMessages?.[submittedUserIndex]?.seq;
         if (typeof userSeq !== 'number') return;
         const turn = storage.getState().sessions[sessionId]?.sessionTurns?.turns.find((candidate) =>
           candidate.transcriptAnchors?.startUserMessageSeq === userSeq
           || candidate.transcriptAnchors?.userMessageSeqs?.includes(userSeq));
+        if (!turn || turn.status === 'in_progress') return;
         const finalAssistantMessageSeq = turn?.transcriptAnchors?.finalAssistantMessageSeq;
         // Cancellation can finish without a final anchor. For other terminal
         // outcomes, only explicit null proves no reply; omission may precede
         // the final diagnostic/text projection.
-        if (turn && turn.status !== 'in_progress'
-          && (finalAssistantMessageSeq === null
-            || (turn.status === 'cancelled' && finalAssistantMessageSeq === undefined))) {
+        if (finalAssistantMessageSeq === null
+          || (turn.status === 'cancelled' && finalAssistantMessageSeq === undefined)) {
           done(null);
+          return;
         }
+        // The final anchor can arrive before its transcript row. Keep demand alive until that
+        // exact row materializes; progress narration and later clients' replies cannot replace it.
+        if (typeof finalAssistantMessageSeq === 'number') {
+          const finalMessage = submittedMessages?.find(message => message.seq === finalAssistantMessageSeq);
+          const entry = finalMessage ? readAssistantTextMessageEntry(finalMessage, baselineIds) : null;
+          if (entry) done(entry);
+          return;
+        }
+        // Retained terminal projections can predate complete anchors. Match the host's exact
+        // committed turn tag, as the canonical CLI outcome reader does, never transcript adjacency.
+        const committed = submittedMessages?.slice(submittedUserIndex + 1).filter(message => {
+          if (message.meta?.runtimeTurnId !== turn.turnId) return false;
+          const segment = readStreamSegmentMetaV1(message.meta);
+          return message.meta.runtimeEventKind === 'transcript-message-committed'
+            || (segment?.segmentKind === 'assistant' && segment.segmentState === 'complete');
+        });
+        const finalMessage = committed?.at(-1);
+        const entry = finalMessage ? readAssistantTextMessageEntry(finalMessage, baselineIds) : null;
+        if (entry) done(entry);
       } catch {
         done(null);
       }
