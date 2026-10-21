@@ -145,6 +145,9 @@ export function subscribeUsageQueryStateInvalidation(invalidate: () => void,
             state?.settings.experiments, state?.settings.featureToggles, state?.settings.usagePacingTargetsV1,
             state?.settings.usageCoachPreferencesV1, state?.settings.usageNightHoursV1, state?.settings.usageModelPriceOverridesV1] as const;
     };
+    // Credential activity does not change quota facts or their admission. The
+    // persisted Usage change signal separately wakes new provider observations.
+    const readAccountInputs = (accounts: ReturnType<typeof readInputs>[1]) => accounts?.map(({ lastUsedAt: _lastUsedAt, ...account }) => account);
     const readMachineFacts = (machines: ReturnType<typeof readInputs>[3], nowMs: number, scope: ServerAccountScope | null | undefined) => {
         let nextRefreshAtMs: number | null = null;
         for (const machine of Object.values(machines ?? {})) {
@@ -181,7 +184,9 @@ export function subscribeUsageQueryStateInvalidation(invalidate: () => void,
             // Profile/Settings hydration can replace these small admitted inputs
             // without changing Usage evidence. Compare only changed references;
             // ordinary store churn still exits before any projection work.
-            || inputs.some((input, index) => index !== 3 && !sameStrictJsonValue(input, observedInputs[index]));
+            || inputs.some((input, index) => index !== 3 && input !== observedInputs[index]
+                && (index === 1 ? !sameStrictJsonValue(readAccountInputs(inputs[1]), readAccountInputs(observedInputs[1]))
+                    : !sameStrictJsonValue(input, observedInputs[index])));
         observedInputs = inputs;
         observedUsageCapabilities = readUsageCapabilities();
         observedMachineFacts = machineFacts;

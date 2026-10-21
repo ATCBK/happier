@@ -205,13 +205,32 @@ it('ignores equivalent Profile and Settings refreshes but invalidates changed qu
                 settings: { ...state.settings, featureToggles: { ...state.settings.featureToggles } } });
         }
         expect(invalidations).toBe(0);
+        storage.setState(state => ({ profile: { ...state.profile, connectedAccountsV4: state.profile.connectedAccountsV4.map(account => ({
+            ...account, lastUsedAt: Date.now(),
+        })) } }));
+        expect(invalidations).toBe(0);
+        storage.setState(state => ({ profile: { ...state.profile, connectedAccountsV4: state.profile.connectedAccountsV4.map(account => account.revisionSemantics === 'revisioned'
+            ? { ...account, credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz_replaced' } : account) } }));
+        expect(invalidations).toBe(1);
+        storage.setState(state => ({ profile: { ...state.profile, connectedAccountsV4: state.profile.connectedAccountsV4.map(account => ({
+            ...account, status: 'needs_reauth' as const,
+        })) } }));
+        expect(invalidations).toBe(2);
+        storage.setState(state => ({ profile: { ...state.profile, connectedAccountsV4: state.profile.connectedAccountsV4.map(account => ({
+            ...account, configurationReady: true, configurationRevision: 'configuration-replaced',
+        })) } }));
+        expect(invalidations).toBe(3);
+        storage.setState(state => ({ profile: { ...state.profile, connectedAccountsV4: state.profile.connectedAccountsV4.map(account => ({
+            ...account, ref: { ...account.ref, accountId: 'replacement-account' },
+        })) } }));
+        expect(invalidations).toBe(4);
         const state = storage.getState();
         storage.setState({ settings: { ...state.settings, experiments: !state.settings.experiments } });
-        expect(invalidations).toBe(1);
+        expect(invalidations).toBe(5);
         storage.setState({ settingsScope: { ...scope, accountId: 'other-account' } });
-        expect(invalidations).toBe(2);
+        expect(invalidations).toBe(6);
         storage.setState({ profile: { ...storage.getState().profile, connectedAccountsV4: [] } });
-        expect(invalidations).toBe(3);
+        expect(invalidations).toBe(7);
     } finally {
         release?.();
         storage.setState({ profile: previous.profile, profileScope: previous.profileScope,
