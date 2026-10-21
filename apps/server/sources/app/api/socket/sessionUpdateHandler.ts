@@ -85,6 +85,8 @@ import { SessionUserActionRequiredOccurrenceV1Schema } from '@happier-dev/protoc
 import { SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1, SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1, SessionFollowObservePendingRequestV1Schema, SessionFollowObservePendingResponseV1Schema, SessionFollowAcknowledgeRequestV1Schema, SessionFollowAcknowledgeResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { ACCOUNT_VOICE_FOLLOW_OBSERVE_PENDING_EVENT_V1, ACCOUNT_VOICE_FOLLOW_ACKNOWLEDGE_EVENT_V1, AccountVoiceFollowObservePendingRequestV1Schema, AccountVoiceFollowObservePendingResponseV1Schema, AccountVoiceFollowAcknowledgeRequestV1Schema, AccountVoiceFollowAcknowledgeResponseV1Schema } from '@happier-dev/protocol/sessions/follow/accountVoiceFollowTransportV1';
 import { supportsMachineSessionFollowContextV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
+import { retainCurrentExecutionRunFollowObservations } from '@/app/session/follow/executionRunFollowSource';
+import { createServerRpcForwarder } from '@/app/api/socket/serverRpcForwarder';
 import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentPublisherPublicationV1Schema, DiscussionAgentPublisherResponseV1Schema, isDiscussionRequestWithinTransportBudgetV1 } from '@happier-dev/protocol/discussions/api';
 import { TranscriptStreamSegmentDeltaEphemeralMessageSchema, TranscriptStreamSegmentEphemeralMessageSchema } from "@happier-dev/protocol/updates";
 import type { SessionEndAckResponse } from "@happier-dev/protocol/updates";
@@ -720,13 +722,17 @@ export function sessionUpdateHandler(
             });
             if (result === null) { respond({ ok: false, v: 1, error: "forbidden" }); return; }
             if ('unsupported' in result) { respond({ ok: false, v: 1, error: "unsupported" }); return; }
+            const observations = await retainCurrentExecutionRunFollowObservations({
+                app: { forwardRpcForUser: createServerRpcForwarder({ io: socket.nsp.server }) },
+                accountId: userId, authentication: readSessionAccessAuthenticationFromSocket(socket), observations: result.observations,
+            });
             respond({ ok: true, v: 1, sessionId: request.data.sessionId,
                 publisherGeneration: result.publisherGeneration.toString(),
                 currentSourceSessionIds: result.currentSourceSessionIds,
                 // A pre-contract host cannot run the final pre-effect check;
                 // never hand it wake work when this capability is active.
                 observations: autonomousExchangeEnabled && request.data.supportsWakeAdmission !== true
-                    ? [] : result.observations,
+                    ? [] : observations,
                 ...(request.data.wakeAdmission ? { wakeAdmission:
                     autonomousExchangeEnabled && request.data.supportsWakeAdmission === true
                         ? result.wakeAdmission ?? { status: 'held', code: 'session_input_target_unavailable' }
