@@ -986,6 +986,11 @@ that typed application request to the exact Machine; the broker handler may reac
 Provider endpoint access selected by the binding. It cannot select an arbitrary loopback port,
 open SVC09 directly, or reinterpret the request as a peer-mediation operation.
 
+The server-relayed Provider application uses its request cancellation and operation
+lifecycle. Its signed authorization accepts absent idle/duration budgets; framing
+bounds and grant expiry still apply. Explicit application budgets remain readable,
+but the transport does not manufacture a deadline for the containing operation.
+
 The Home broker-open response carries the target's complete canonical endpoint
 descriptor, including its relay URLs and direct-address hints. The strict
 response requires its descriptor identity to equal the target EndpointId; the

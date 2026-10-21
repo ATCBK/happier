@@ -882,6 +882,13 @@ actually been observed. None of these presentation facts grants access or
 replaces the existing recovery action. Diagnostics carry no model, account or
 credential details.
 
+Saved-resource Test connection failures also leave content-free `stage` and
+`code` records in the server logger: `team-credential-resource-test` identifies
+placement, candidate, dispatch and response-body failures; `provider-broker-carrier`
+identifies feature, signing, authorization, initial write and trusted application
+refusals. These records omit request/response content and exception text. A trusted
+broker update refusal retains the existing `incompatible` readiness reason.
+
 The development Temporary-computer flow resolves its Team credential before a Session exists. It
 authorizes the named resource through the planned-Session admission owner before it discovers any
 broker, because Pool selection reads the custodian's Machine presence and asks their daemon whether
