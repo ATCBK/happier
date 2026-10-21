@@ -55,8 +55,9 @@ export function buildMakeCoordinatorDraft(
     const candidates = typeof input.ownerMetadata?.projectId === 'string'
         ? [{ serverId: input.serverId, projectKey: input.ownerMetadata.projectId }]
         : (input.workspaceRefs ?? []).map(projectWorkspaceRefV1);
+    const workspaceContext = workspaceRefResolutionContextV1();
     const matched = candidates.find(project => matchSessionProjectFilterV1(input.ownerMetadata,
-        input.serverId, project, input.workspaceRefs, workspaceRefResolutionContextV1) === 'match');
+        input.serverId, project, input.workspaceRefs, workspaceContext) === 'match');
     const project = matched ? { serverId: input.serverId, projectKey: matched.projectKey } : null;
     const scope = project ? 'project' : 'home';
     // Both suggestions are prepared so the person can turn either on; the Settings switches decide which appear.

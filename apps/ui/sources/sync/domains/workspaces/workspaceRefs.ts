@@ -1,5 +1,5 @@
 import { randomUUID } from '@/platform/randomUUID';
-import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { captureServerProfileScopeResolver, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { WorkspaceRefV1WriteSchema, type WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { resolveWorkspaceRefV1, enrichWorkspaceRefV1, resolveWorkspaceProjectKeyV1, projectWorkspaceRefV1, normalizeWorkspaceRootPathV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import { resolveProjectAccountWorkspaceRefRemovalV1 } from '@happier-dev/protocol/projects/projectAccountSnapshotV1';
@@ -23,12 +23,16 @@ export function findWorkspaceRefByScope(
     return result.kind === 'resolved' ? result.ref : null;
 }
 
-export const workspaceRefResolutionContextV1 = {
-    normalizeServerId: resolveServerProfileScopeIdForIdentifier,
-    normalizeRootPath: (path: string) => normalizeWorkspaceRootPathV1(path),
-};
-
-const resolutionContext = workspaceRefResolutionContextV1;
+export function workspaceRefResolutionContextV1() {
+    // Capture only when normalization is demanded, then use the same profile
+    // projection for every candidate in this operation. The next operation
+    // captures afresh; this is never a retained routing/admission decision.
+    let resolveServerId: ReturnType<typeof captureServerProfileScopeResolver> | undefined;
+    return {
+        normalizeServerId: (id: string) => (resolveServerId ??= captureServerProfileScopeResolver())(id),
+        normalizeRootPath: (path: string) => normalizeWorkspaceRootPathV1(path),
+    };
+}
 
 /** Accepted Project anchors, not optional repository/Source enrichment, associate checkouts. */
 export function sameWorkspaceProject(left: WorkspaceRefV1, right: WorkspaceRefV1): boolean {
@@ -39,7 +43,7 @@ export function sameWorkspaceProject(left: WorkspaceRefV1, right: WorkspaceRefV1
 }
 
 export function resolveWorkspaceRefByScope(workspaceRefs: readonly WorkspaceRefV1[], scope: WorkspaceScopeBase) {
-    return resolveWorkspaceRefV1(workspaceRefs, scope, resolutionContext);
+    return resolveWorkspaceRefV1(workspaceRefs, scope, workspaceRefResolutionContextV1());
 }
 
 /** Resolve accepted checkout authority; never manufacture a ref from a selected root. */
@@ -55,11 +59,11 @@ export function resolveProjectCheckoutWorkspaceRef(
 }
 
 export function resolveWorkspaceRefById(workspaceRefs: readonly WorkspaceRefV1[], id: string, serverId?: string) {
-    return resolveWorkspaceRefV1(workspaceRefs, { id, ...(serverId !== undefined ? { serverId } : {}) }, resolutionContext);
+    return resolveWorkspaceRefV1(workspaceRefs, { id, ...(serverId !== undefined ? { serverId } : {}) }, workspaceRefResolutionContextV1());
 }
 
 export function resolveWorkspaceRefByAddress(workspaceRefs: readonly WorkspaceRefV1[], address: WorkspaceAddressV1) {
-    return resolveWorkspaceRefV1(workspaceRefs, address, resolutionContext);
+    return resolveWorkspaceRefV1(workspaceRefs, address, workspaceRefResolutionContextV1());
 }
 
 export function upsertWorkspaceRefByScope(
@@ -99,7 +103,7 @@ export function upsertWorkspaceRefByScope(
     };
     const next = WorkspaceRefV1WriteSchema.parse({
         ...enrichWorkspaceRefV1(base, facts),
-        projectKey: existing ? existing.projectKey ?? existing.id : resolveWorkspaceProjectKeyV1(workspaceRefs, { ...base, ...facts }, resolutionContext),
+        projectKey: existing ? existing.projectKey ?? existing.id : resolveWorkspaceProjectKeyV1(workspaceRefs, { ...base, ...facts }, workspaceRefResolutionContextV1()),
         label: input.patch.label !== undefined ? normalizeOptionalLabel(input.patch.label) : base.label ?? null,
         lastOpenedAtMs: input.patch.lastOpenedAtMs !== undefined ? input.patch.lastOpenedAtMs : base.lastOpenedAtMs ?? null,
     });
@@ -180,7 +184,7 @@ export function resolveWorkspaceRefRemoval(
 ): WorkspaceRefRemoval {
     try {
         return { ok: true, workspaceRefs: [...resolveProjectAccountWorkspaceRefRemovalV1(
-            { workspaceRefs, relationships: input.relationships }, input, resolutionContext,
+            { workspaceRefs, relationships: input.relationships }, input, workspaceRefResolutionContextV1(),
         )] };
     } catch (error) {
         if (typeof error === 'object' && error !== null && 'code' in error) {

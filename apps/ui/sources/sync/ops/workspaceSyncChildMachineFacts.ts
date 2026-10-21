@@ -2,7 +2,7 @@ import { DevcontainerChildProjectionV1Schema } from '@happier-dev/protocol/machi
 import type { WorkspaceSyncChildMachineFacts, WorkspaceSyncChildMachineProjection } from '@happier-dev/protocol/workspaces/workspaceSyncTopology';
 import { fetchMachineRows } from '@/sync/engine/machines/syncMachines';
 import { createManagedMachineActionClient } from '@/sync/api/machines/managedMachineActions';
-import type { LazyActionAccountContext } from './actions/actionAccountContext';
+import { withActionAccountRequestSignal, type LazyActionAccountContext } from './actions/actionAccountContext';
 
 /** One admitted Machine observation, with retained-row reads only for the
  * component selected by Protocol. No UI topology or retained fact cache. */
@@ -11,8 +11,9 @@ export async function readUiWorkspaceSyncChildMachineFacts(account: LazyActionAc
     readChildMachines(machineIds: readonly string[]): Promise<readonly WorkspaceSyncChildMachineFacts[]>;
 }>> {
     account.assertCurrent();
-    const machines = await fetchMachineRows({ credentials: account.credentials,
-        request: (path, init) => account.request(path, { ...init, ...(signal ? { signal } : {}) }) });
+    const machines = await withActionAccountRequestSignal(account, signal, ownedSignal => fetchMachineRows({ credentials: account.credentials,
+        readTransport: account.readTransport, signal: ownedSignal,
+        request: (path, init) => account.request(path, { ...init, signal: ownedSignal }) }));
     account.assertCurrent();
     const childMachineProjections = machines.flatMap(machine => machine.devcontainerChild
         ? [{ serverId: account.serverId, machineId: machine.id, projection: DevcontainerChildProjectionV1Schema.parse(machine.devcontainerChild) }] : []);

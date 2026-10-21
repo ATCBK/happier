@@ -582,10 +582,25 @@ function findProfileByServerIdentifier(
     return readProfileIdentifierProjection(servers).get(id)?.profile ?? null;
 }
 
+type ProfileIdentifier = Readonly<{ profile: ServerProfile; scopeId: string }>;
+type ProfileScopeResolver = (idRaw: string | null | undefined) => string;
+
 let profileIdentifierProjectionCache: {
     servers: Record<string, ServerProfile>;
-    byIdentifier: ReadonlyMap<string, Readonly<{ profile: ServerProfile; scopeId: string }>>;
+    byIdentifier: ReadonlyMap<string, ProfileIdentifier>;
+    resolveScopeId: ProfileScopeResolver;
 } | null = null;
+
+function createProfileScopeResolver(byIdentifier: ReadonlyMap<string, ProfileIdentifier>): ProfileScopeResolver {
+    return idRaw => {
+        const id = normalizeServerId(idRaw);
+        return id ? resolveScopeIdFromIdentifiers(byIdentifier, id) : '';
+    };
+}
+
+function resolveScopeIdFromIdentifiers(byIdentifier: ReadonlyMap<string, ProfileIdentifier>, id: string): string {
+    return byIdentifier.get(id)?.scopeId ?? id;
+}
 
 function readProfileIdentifierProjection(servers: Record<string, ServerProfile>) {
     // Only the canonical parsed snapshot is immutable. Mutation working copies
@@ -594,7 +609,7 @@ function readProfileIdentifierProjection(servers: Record<string, ServerProfile>)
     if (retain && profileIdentifierProjectionCache?.servers === servers) {
         return profileIdentifierProjectionCache.byIdentifier;
     }
-    const byIdentifier = new Map<string, Readonly<{ profile: ServerProfile; scopeId: string }>>();
+    const byIdentifier = new Map<string, ProfileIdentifier>();
     for (const [id, profile] of Object.entries(servers)) {
         byIdentifier.set(id, { profile, scopeId: resolveServerProfileScopeId(profile) });
     }
@@ -604,8 +619,17 @@ function readProfileIdentifierProjection(servers: Record<string, ServerProfile>)
             if (alias && !byIdentifier.has(alias)) byIdentifier.set(alias, entry);
         }
     }
-    if (retain) profileIdentifierProjectionCache = { servers, byIdentifier };
+    if (retain) profileIdentifierProjectionCache = { servers, byIdentifier, resolveScopeId: createProfileScopeResolver(byIdentifier) };
     return byIdentifier;
+}
+
+/** One current identity snapshot for a bulk, synchronous descriptive resolution. */
+export function captureServerProfileScopeResolver(): ProfileScopeResolver {
+    const servers = readPersistedState().servers;
+    const byIdentifier = readProfileIdentifierProjection(servers);
+    return profileIdentifierProjectionCache?.servers === servers
+        ? profileIdentifierProjectionCache.resolveScopeId
+        : createProfileScopeResolver(byIdentifier);
 }
 
 function createUniqueServerId(
@@ -2334,7 +2358,7 @@ export function resolveServerProfileForPortableIdentity(
 export function resolveServerProfileScopeIdForIdentifier(idRaw: string | null | undefined): string {
     const id = normalizeServerId(idRaw);
     if (!id) return '';
-    return readProfileIdentifierProjection(readPersistedState().servers).get(id)?.scopeId ?? id;
+    return resolveScopeIdFromIdentifiers(readProfileIdentifierProjection(readPersistedState().servers), id);
 }
 
 export function areServerProfileIdentifiersEquivalent(

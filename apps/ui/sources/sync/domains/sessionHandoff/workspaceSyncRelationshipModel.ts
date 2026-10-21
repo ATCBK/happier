@@ -195,7 +195,7 @@ export function selectWorkspaceSyncLinkedHandoffChoice(
     const workspaceRefs = endpoints.flatMap((endpoint) => endpoint.workspaceRef ? [endpoint.workspaceRef] : []);
     const choices = sourceEndpoints.flatMap((sourceEndpoint) => targetEndpoints.flatMap((targetEndpoint) => {
         const route = resolveWorkspaceSyncTransferRoute({
-            context: workspaceRefResolutionContextV1,
+            context: workspaceRefResolutionContextV1(),
             serverId: source.serverId,
             workspaceRefs,
             relationships,
@@ -239,7 +239,7 @@ export function projectWorkspaceSyncSetAttentionByWorkspaceRefId(
 ): ReadonlyMap<string, WorkspaceSyncSetAttention> {
     const summariesById = new Map(summaries.map((summary) => [summary.relationshipId, summary] as const));
     const topology = deriveWorkspaceSyncTopology({
-        context: workspaceRefResolutionContextV1,
+        context: workspaceRefResolutionContextV1(),
         workspaceRefs: workspaceRefsForSummaries(summaries),
         serverId: containingHomeForSummaries(summaries),
         relationships: summaries.map((summary) => summary.relationship),
@@ -270,7 +270,7 @@ export function resolveWorkspaceSyncSetSummaries(
     workspaceRefId: string,
 ): readonly WorkspaceSyncRelationshipSummary[] {
     const topology = deriveWorkspaceSyncTopology({
-        context: workspaceRefResolutionContextV1,
+        context: workspaceRefResolutionContextV1(),
         workspaceRefs: workspaceRefsForSummaries(summaries),
         serverId: containingHomeForSummaries(summaries),
         relationships: summaries.map((summary) => summary.relationship),
@@ -291,7 +291,7 @@ export function selectWorkspaceSyncAddMachineHub(
     const refs = workspaceRefsForSummaries(summaries);
     const serverId = containingHomeForSummaries(summaries);
     const set = deriveWorkspaceSyncTopology({
-        context: workspaceRefResolutionContextV1,
+        context: workspaceRefResolutionContextV1(),
         workspaceRefs: refs,
         serverId,
         relationships: summaries.map((summary) => summary.relationship),

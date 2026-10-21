@@ -21,7 +21,7 @@ export async function listWorkspaceSyncRelationshipsOnController(request: Readon
         throw Object.assign(new Error('workspace_ref_not_ready'), { code: 'workspace_ref_not_ready' });
     }
     const controllerMachineId = resolveWorkspaceSyncReadControllerV1({
-        ...input, serverId: account.serverId, context: workspaceRefResolutionContextV1,
+        ...input, serverId: account.serverId, context: workspaceRefResolutionContextV1(),
         workspaceRefs: rows?.workspaceRefs ?? [], relationships: rows?.relationships ?? [],
     });
     account.assertCurrent();
