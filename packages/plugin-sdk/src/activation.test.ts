@@ -97,7 +97,11 @@ describe('plugin activation contract', () => {
         expectTypeOf<PluginConnectedAccountConnectedResult['accountId']>()
             .toEqualTypeOf<string | undefined>();
         expectTypeOf<NonNullable<PluginConnectedAccountConnectedResult['providerIdentity']>>()
-            .toEqualTypeOf<Readonly<{ accountId?: string; email?: string }>>();
+            .toEqualTypeOf<Readonly<{
+                accountId?: string | null;
+                email?: string | null;
+                organizationId?: string | null;
+            }>>();
     });
 
     it('registers the bounded External Sessions auxiliary on the Agent local id', () => {

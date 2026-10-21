@@ -16,6 +16,7 @@ export type { AuthPromptTextInput } from '../connectedAccounts.js';
 export type { AuthPromptTextResult } from './projections.js';
 export { CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1 } from '../connectedAccounts.js';
 export { CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH_ENV } from './requestAuth.js';
+export type { ConnectedAccountAccessTokenFingerprint } from './tokenFingerprint.js';
 export type { PluginConnectedAccountAuthCompletionResult as ConnectedAccountAuthCompletionResult } from '../services/connectedAccounts.js';
 export type { ConnectedAccountAuthDiagnostic } from './projections.js';
 export type { ConnectedAccountAuthFailure } from './projections.js';
@@ -96,7 +97,9 @@ export type { UnsupportedAccountUsage } from '../connectedAccounts.js';
 export { addSafeEpochMilliseconds } from '../connectedAccounts.js';
 export { buildConnectedAccountRequestAuthClientSource } from './requestAuth.js';
 export { buildOauthAuthEntry } from '../connectedAccounts.js';
+export { computeConnectedAccountAccessTokenFingerprint } from './tokenFingerprint.js';
 export { defineAuthMaterialization } from '../connectedAccounts.js';
+export { normalizeConnectedAccountAccessTokenFingerprint } from './tokenFingerprint.js';
 export { normalizeNonNegativeSafeMilliseconds } from '../connectedAccounts.js';
 export { parseCompactDurationMs } from '../connectedAccounts.js';
 export { parseCredentialRecord } from '../connectedAccounts.js';
@@ -107,9 +110,3 @@ export { requireOauthCredentialRecordWithExpiry } from '../connectedAccounts.js'
 export { requireTokenCredentialRecord } from '../connectedAccounts.js';
 export { resolveConnectedServiceQuotaMeterLabel } from '../connectedAccounts.js';
 export { unsupportedAccountUsage } from '../connectedAccounts.js';
-
-export {
-  computeConnectedAccountAccessTokenFingerprint,
-  normalizeConnectedAccountAccessTokenFingerprint,
-  type ConnectedAccountAccessTokenFingerprint,
-} from './tokenFingerprint.js';

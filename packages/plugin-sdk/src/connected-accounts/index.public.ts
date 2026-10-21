@@ -43,6 +43,7 @@ export type { PluginConnectedAccountMutationContext as ConnectedAccountMutationC
 export type { PluginConnectedAccountOAuthBeginRequest as ConnectedAccountOAuthBeginRequest } from '../services/connectedAccounts.js';
 export type { PluginConnectedAccountOAuthBeginResult as ConnectedAccountOAuthBeginResult } from '../services/connectedAccounts.js';
 export type { PluginConnectedAccountOAuthCompletion as ConnectedAccountOAuthCompletion } from '../services/connectedAccounts.js';
+export type { ConnectedAccountProviderIdentity } from '../services/connectedAccounts.js';
 export type { ConnectedAccountPurposeDeclaration } from '../connectedAccounts.js';
 export type { ConnectedAccountPurposeDeclarations } from './projections.js';
 export type { ConnectedAccountPurposeId } from '../connectedAccounts.js';

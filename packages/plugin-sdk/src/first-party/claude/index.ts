@@ -1,10 +1,14 @@
 export { ANTHROPIC_EFFORT_LEVELS } from './projections.js';
 export type { AnthropicEffortLevel } from './projections.js';
+export { CLAUDE_OAUTH_PROFILE_HEADERS } from './projections.js';
+export { CLAUDE_OAUTH_PROFILE_URL } from './projections.js';
 export { CLAUDE_REMOTE_DEBUG_CATEGORIES } from './projections.js';
 export { CLAUDE_SETTING_SOURCES_V2 } from './projections.js';
 export { CLAUDE_UNIFIED_TERMINAL_HOSTS } from './projections.js';
 export { CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICES } from './projections.js';
 export { CLAUDE_UNIFIED_TERMINAL_WORKSPACE_TRUST_POLICIES } from './projections.js';
+export type { ClaudeOauthCredentialMetadata } from './projections.js';
+export type { ClaudeOauthEntitlementMetadata } from './projections.js';
 export type { ClaudeRawUsage } from './projections.js';
 export type { ClaudeRemoteDebugCategory } from './projections.js';
 export type { ClaudeSettingSourceV2 } from './projections.js';
@@ -20,16 +24,11 @@ export { buildAnthropicModelOptions } from './projections.js';
 export { formatAnthropicEffortLevelLabel } from './projections.js';
 export { isValidClaudeRemoteAdvancedOptionsJson } from './projections.js';
 export { normalizeAnthropicModelDisplayName } from './projections.js';
+export { normalizeClaudeOauthProfileEntitlement } from './projections.js';
 export { normalizeClaudeRemoteAdvancedOptionsJson } from './projections.js';
 export { normalizeClaudeUnifiedTerminalHost } from './projections.js';
 export { normalizeClaudeUnifiedTerminalResumeChoice } from './projections.js';
 export { normalizeClaudeUnifiedTerminalWorkspaceTrustPolicy } from './projections.js';
+export { readClaudeOauthCredentialMetadata } from './projections.js';
+export { readClaudeOauthCredentialOrganizationId } from './projections.js';
 export { readClaudeSettingSourcesV2 } from './projections.js';
-
-export {
-  CLAUDE_OAUTH_PROFILE_URL, CLAUDE_OAUTH_PROFILE_HEADERS,
-  normalizeClaudeOauthProfileEntitlement,
-  readClaudeOauthCredentialMetadata,
-  readClaudeOauthCredentialOrganizationId,
-} from './projections.js';
-export type { ClaudeOauthCredentialMetadata, ClaudeOauthEntitlementMetadata } from './projections.js';

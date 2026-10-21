@@ -8,6 +8,7 @@
 |---|---|---|---|
 | `.` | `ActionConfirmationWhen` | type | any |
 | `.` | `ActionOperationDeclarationV1` | type | any |
+| `.` | `BuiltinUsagePublicPresentationV1` | type | any |
 | `.` | `COMPOSER_MEDIA_CONTENT_CAPABILITY_V1` | value | any |
 | `.` | `ComposerAttachmentAuthorDeclaration` | type | any |
 | `.` | `ComposerAttachmentAuthorDisplay` | type | any |
@@ -165,6 +166,10 @@
 | `.` | `ProjectNativeRefV1` | type | any |
 | `.` | `ProtocolActionSchemaInput` | type | any |
 | `.` | `ProtocolActionSchemaOutput` | type | any |
+| `.` | `PublicProfileReadResultV1` | type | any |
+| `.` | `PublicProfileSnapshotV1` | type | any |
+| `.` | `PublicProfileViewV1` | type | any |
+| `.` | `PublicUsageFactsV1` | type | any |
 | `.` | `ReadonlyAuthorDeclaration` | type | any |
 | `.` | `TargetedContributionAdmittedEntry` | type | any |
 | `.` | `TargetedContributionObservation` | type | any |
@@ -190,6 +195,9 @@
 | `.` | `UiSurfaceRendererDefinition` | type | any |
 | `.` | `UiSurfaceRendererOnlyDefinition` | type | any |
 | `.` | `UiSurfaceSettingsPageDefinition` | type | any |
+| `.` | `UsageRunLengthObservation` | type | any |
+| `.` | `UsageRunLengthObservationSummary` | type | any |
+| `.` | `UsageRunLengthSummary` | type | any |
 | `.` | `arePluginMachineExecutionOriginsEqual` | value | any |
 | `.` | `arePluginMachineMaterializationRefsEqual` | value | any |
 | `.` | `computeCanonicalDomainSeparatedDigest` | value | any |
@@ -209,7 +217,9 @@
 | `.` | `readString` | value | any |
 | `.` | `readTrimmedString` | value | any |
 | `.` | `redactBugReportSensitiveText` | value | any |
+| `.` | `resolveUsageCalendarInstant` | value | any |
 | `.` | `selectCurrentTargetedContribution` | value | any |
+| `.` | `summarizeUsageRunLengthObservations` | value | any |
 | `.` | `trimBugReportTextToMaxBytes` | value | any |
 | `./actions` | `AccountApiTokensActionInputById` | type | any |
 | `./actions` | `AccountApiTokensActionResultById` | type | any |
@@ -1212,6 +1222,7 @@
 | `./connected-accounts` | `AuthPromptTextResult` | type | any |
 | `./connected-accounts` | `CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1` | value | any |
 | `./connected-accounts` | `CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH_ENV` | value | any |
+| `./connected-accounts` | `ConnectedAccountAccessTokenFingerprint` | type | any |
 | `./connected-accounts` | `ConnectedAccountAuthCompletionResult` | type | daemon |
 | `./connected-accounts` | `ConnectedAccountAuthDiagnostic` | type | any |
 | `./connected-accounts` | `ConnectedAccountAuthFailure` | type | any |
@@ -1239,6 +1250,7 @@
 | `./connected-accounts` | `ConnectedAccountOAuthBeginRequest` | type | daemon |
 | `./connected-accounts` | `ConnectedAccountOAuthBeginResult` | type | daemon |
 | `./connected-accounts` | `ConnectedAccountOAuthCompletion` | type | daemon |
+| `./connected-accounts` | `ConnectedAccountProviderIdentity` | type | daemon |
 | `./connected-accounts` | `ConnectedAccountPurposeDeclaration` | type | any |
 | `./connected-accounts` | `ConnectedAccountPurposeDeclarations` | type | any |
 | `./connected-accounts` | `ConnectedAccountPurposeId` | type | any |
@@ -1291,7 +1303,9 @@
 | `./connected-accounts` | `addSafeEpochMilliseconds` | value | any |
 | `./connected-accounts` | `buildConnectedAccountRequestAuthClientSource` | value | any |
 | `./connected-accounts` | `buildOauthAuthEntry` | value | daemon |
+| `./connected-accounts` | `computeConnectedAccountAccessTokenFingerprint` | value | any |
 | `./connected-accounts` | `defineAuthMaterialization` | value | daemon |
+| `./connected-accounts` | `normalizeConnectedAccountAccessTokenFingerprint` | value | any |
 | `./connected-accounts` | `normalizeNonNegativeSafeMilliseconds` | value | any |
 | `./connected-accounts` | `parseCompactDurationMs` | value | any |
 | `./connected-accounts` | `parseCredentialRecord` | value | daemon |
@@ -1408,11 +1422,15 @@
 | `./exec/protocol-clients` | `ProtocolClientsService` | type | any |
 | `./first-party/claude` | `ANTHROPIC_EFFORT_LEVELS` | value | any |
 | `./first-party/claude` | `AnthropicEffortLevel` | type | any |
+| `./first-party/claude` | `CLAUDE_OAUTH_PROFILE_HEADERS` | value | any |
+| `./first-party/claude` | `CLAUDE_OAUTH_PROFILE_URL` | value | any |
 | `./first-party/claude` | `CLAUDE_REMOTE_DEBUG_CATEGORIES` | value | any |
 | `./first-party/claude` | `CLAUDE_SETTING_SOURCES_V2` | value | any |
 | `./first-party/claude` | `CLAUDE_UNIFIED_TERMINAL_HOSTS` | value | any |
 | `./first-party/claude` | `CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICES` | value | any |
 | `./first-party/claude` | `CLAUDE_UNIFIED_TERMINAL_WORKSPACE_TRUST_POLICIES` | value | any |
+| `./first-party/claude` | `ClaudeOauthCredentialMetadata` | type | any |
+| `./first-party/claude` | `ClaudeOauthEntitlementMetadata` | type | any |
 | `./first-party/claude` | `ClaudeRawUsage` | type | any |
 | `./first-party/claude` | `ClaudeRemoteDebugCategory` | type | any |
 | `./first-party/claude` | `ClaudeSettingSourceV2` | type | any |
@@ -1428,10 +1446,13 @@
 | `./first-party/claude` | `formatAnthropicEffortLevelLabel` | value | any |
 | `./first-party/claude` | `isValidClaudeRemoteAdvancedOptionsJson` | value | any |
 | `./first-party/claude` | `normalizeAnthropicModelDisplayName` | value | any |
+| `./first-party/claude` | `normalizeClaudeOauthProfileEntitlement` | value | any |
 | `./first-party/claude` | `normalizeClaudeRemoteAdvancedOptionsJson` | value | any |
 | `./first-party/claude` | `normalizeClaudeUnifiedTerminalHost` | value | any |
 | `./first-party/claude` | `normalizeClaudeUnifiedTerminalResumeChoice` | value | any |
 | `./first-party/claude` | `normalizeClaudeUnifiedTerminalWorkspaceTrustPolicy` | value | any |
+| `./first-party/claude` | `readClaudeOauthCredentialMetadata` | value | any |
+| `./first-party/claude` | `readClaudeOauthCredentialOrganizationId` | value | any |
 | `./first-party/claude` | `readClaudeSettingSourcesV2` | value | any |
 | `./first-party/connected-accounts` | `ANTIGRAVITY_OAUTH_PROFILE` | value | any |
 | `./first-party/connected-accounts` | `CLAUDE_SUBSCRIPTION_MATERIALIZATION_CONTRACT_V1` | value | any |
