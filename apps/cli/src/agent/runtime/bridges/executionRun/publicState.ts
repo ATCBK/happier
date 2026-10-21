@@ -12,7 +12,8 @@ export function projectExecutionRunPublicState(
   voiceTurnInFlight?: boolean,
 ): ExecutionRunPublicState {
   const turnInFlight = controller?.kind === 'backend'
-    ? controller.runtimeId ? controller.turnInFlight || controller.initialInputPending === true : undefined
+    ? controller.runtimeId ? controller.turnInFlight || controller.initialInputPending === true
+      || controller.hostWorkPending === true || Boolean(controller.pendingHostInput) : undefined
     : controller?.kind === 'voice_agent' ? voiceTurnInFlight : undefined;
   const requestedConfiguration = projectExecutionRunRequestedConfiguration({
     modelId: run.launch?.modelSelection?.modelId ?? run.launch?.modelId,

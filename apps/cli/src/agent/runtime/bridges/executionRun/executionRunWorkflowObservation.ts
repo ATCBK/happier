@@ -61,7 +61,7 @@ export function projectExecutionRunWorkflowInputAcceptance(
   const binding = controller.workflowObservation;
   if (controller.cancelled || !binding || !event.inputIds.includes(binding.localInputId)) return;
   controller.pendingHostBarrier = appendExecutionRunControllerHostBarrier(
-    controller.pendingHostBarrier,
+    controller,
     () => binding.sink.commit({
       kind: 'input_accepted', runId, localInputId: binding.localInputId, acceptedAtMs: event.emittedAtMs,
     }),

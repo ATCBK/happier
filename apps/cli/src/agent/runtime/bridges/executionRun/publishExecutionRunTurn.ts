@@ -130,6 +130,10 @@ export async function publishExecutionRunTurn(args: Readonly<{
   args.runs.set(args.runId, updated);
   args.onPublicStateUpdated?.(args.runId);
   if (completion.nextInput && current()) {
+    // This is already admitted analysis work. Keep the existing activity owner
+    // busy across asynchronous preparation, Pending admission and collection.
+    args.controller.pendingHostInput = completion.nextInput.localId;
+    args.onPublicStateUpdated?.(args.runId);
     let admission: Readonly<{ status: 'accepted' | 'rejected' | 'outcomeUnknown'; code?: string; message?: string }> | undefined;
     try {
       // The host-authored continuation binds its revision before Pending can
@@ -158,6 +162,7 @@ export async function publishExecutionRunTurn(args: Readonly<{
         : admission.code ?? 'execution_run_not_allowed';
       const message = admission.message ?? `Analysis part admission ${admission.status}: ${admission.code ?? code}`;
       if (admission.status === 'rejected') {
+        if (args.controller.pendingHostInput === completion.nextInput.localId) args.controller.pendingHostInput = undefined;
         await publishExecutionRunTurn({ ...args, started: false, rawText: '',
           inputIds: [completion.nextInput.localId], diagnostic: { code, message } });
       }

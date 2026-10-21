@@ -385,8 +385,9 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
         this.emitPublicStateUpdated(runId);
         const operation = this.runs.get(runId)?.projectSetup?.snapshot();
         const binding = controller.workflowObservation;
-        if (operation?.setupReview && binding) controller.pendingHostBarrier = appendExecutionRunControllerHostBarrier(controller.pendingHostBarrier,
-          () => binding.sink.commit({ kind: 'project_setup', runId, localInputId: binding.localInputId, operation }));
+        if (operation?.setupReview && binding) controller.pendingHostBarrier = appendExecutionRunControllerHostBarrier(controller,
+          () => binding.sink.commit({ kind: 'project_setup', runId, localInputId: binding.localInputId, operation }),
+          () => this.emitPublicStateUpdated(runId));
       } });
     this.runs.set(runId, { ...run, projectSetup: setup });
     return setup.context;
@@ -2976,8 +2977,10 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
         let run = this.captureRetainedState(runId);
         const controller = this.controllers.get(runId);
         if (run?.retentionPolicy === 'resumable' && controller?.kind === 'backend'
-          && !isExecutionRunActive(projectExecutionRunPublicState(run, controller))) {
+          && !controller.turnInFlight) {
           // Native completion can precede its host-owned structured publication.
+          // Publication itself is active for replacement, but retirement must
+          // still join that work before deciding whether a result survived.
           const publication = readExecutionRunControllerHostBarrier(controller);
           if (publication) await publication;
           run = this.captureRetainedState(runId);

@@ -28,13 +28,22 @@ export function failureSignal(): ExecutionRunControllerFailureSignal {
 }
 
 export function appendExecutionRunControllerHostBarrier(
-  currentBarrier: Promise<void> | undefined,
+  controller: { pendingHostBarrier?: Promise<void>; hostWorkPending?: boolean },
   nextBarrier: Promise<unknown> | (() => Promise<unknown>),
+  onSettled?: () => void,
 ): Promise<void> {
   const startNext = async (): Promise<void> => {
     await (typeof nextBarrier === 'function' ? nextBarrier() : nextBarrier);
   };
-  return currentBarrier ? currentBarrier.then(startNext) : startNext();
+  controller.hostWorkPending = true;
+  const next = (controller.pendingHostBarrier ? controller.pendingHostBarrier.then(startNext) : startNext()).finally(() => {
+    // A later append owns the whole remaining chain. An older completion must
+    // neither announce idle nor wake replacement before that work settles.
+    if (controller.pendingHostBarrier !== next) return;
+    controller.hostWorkPending = false;
+    onSettled?.();
+  });
+  return next;
 }
 
 export function readExecutionRunControllerHostBarrier(ctrl: Readonly<{

@@ -334,6 +334,10 @@ describe('ExecutionRunHostBridge pending target recovery', () => {
       localId: 'review-initial', authorAccountId: 'account-1', inputAdmissionReceipt: null, pendingProviderAction: 'send' })).toBe(true));
     if (narration) {
       await vi.waitFor(() => expect(original.enqueueSessionUserMessageWithDisposition.mock.calls).toHaveLength(2));
+      await initialController.pendingHostBarrier;
+      // Native findings have finished, but their admitted walkthrough has not
+      // reached the provider. A capability refresh must retain this host.
+      expect.soft(original.manager.getPublic(started.runId)).toMatchObject({ turnInFlight: true });
       const input = original.enqueueSessionUserMessageWithDisposition.mock.calls[1]![0];
       expect(original.consume({ role: 'user', content: { type: 'text', text: input.text }, localId: input.localId,
         authorAccountId: 'account-1', inputAdmissionReceipt: null, pendingProviderAction: 'send' })).toBe(true);
@@ -341,6 +345,9 @@ describe('ExecutionRunHostBridge pending target recovery', () => {
     let retiring: Promise<void> | undefined;
     if (holdPublication) {
       await publishing;
+      // Host publication is part of the admitted work, including the gap after
+      // native turn-complete. It must hold the same canonical restart gate.
+      expect.soft(original.manager.getPublic(started.runId)).toMatchObject({ turnInFlight: true });
       retiring = original.manager.dispose();
       releasePublication();
     }

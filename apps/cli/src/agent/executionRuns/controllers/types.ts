@@ -111,6 +111,10 @@ export type ExecutionRunBackendController = {
   releaseSessionInputAttachment?: () => Promise<void>;
   failureSignal?: ExecutionRunControllerFailureSignal;
   pendingHostBarrier?: Promise<void>;
+  /** Host publication on the current barrier has not settled yet. */
+  hostWorkPending?: boolean;
+  /** A profile-authored continuation is preparing or awaiting native acceptance. */
+  pendingHostInput?: string;
   /**
    * Readiness of this admitted long-lived occurrence. Detached sends arriving
    * before a runtime exists wait here so they cannot overtake the initial

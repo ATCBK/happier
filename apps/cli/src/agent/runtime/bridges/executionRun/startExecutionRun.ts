@@ -1051,13 +1051,14 @@ async function startAdmittedExecutionRun(
           const usage = binding.usage.current();
           if (!usage) return;
           current.pendingHostBarrier = appendExecutionRunControllerHostBarrier(
-            current.pendingHostBarrier,
+            current,
             () => binding.sink.commit({
               kind: 'usage',
               runId,
               localInputId: binding.localInputId,
               usage,
             }),
+            () => args.onPublicStateUpdated?.(runId),
           );
         },
       },

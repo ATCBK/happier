@@ -171,8 +171,9 @@ export function createExecutionRunControllerMessageHandler(args: Readonly<{
 }>): AgentMessageHandler {
   const publishTranscriptFact = (provider: ACPProvider, body: ACPMessageData, opts?: { meta?: Record<string, unknown> }): void => {
     args.ctrl.pendingHostBarrier = appendExecutionRunControllerHostBarrier(
-      args.ctrl.pendingHostBarrier,
+      args.ctrl,
       () => args.sendAcp(provider, body, opts),
+      () => args.onPublicStateUpdated?.(args.runId),
     );
   };
   const forwarder = createAcpAgentMessageForwarder({
@@ -267,7 +268,8 @@ export function createExecutionRunControllerMessageHandler(args: Readonly<{
           ));
         },
       );
-      args.ctrl.pendingHostBarrier = appendExecutionRunControllerHostBarrier(args.ctrl.pendingHostBarrier, denyTransport);
+      args.ctrl.pendingHostBarrier = appendExecutionRunControllerHostBarrier(args.ctrl, denyTransport,
+        () => args.onPublicStateUpdated?.(args.runId));
     } catch {
       const error = createFailClosedPermissionRequestError('transport_error', declaredCapability);
       terminalizeFailClosedPermissionRequest(error);
@@ -311,13 +313,14 @@ export function createExecutionRunControllerMessageHandler(args: Readonly<{
           const workflowObservation = args.ctrl.workflowObservation;
           if (workflowObservation) {
             args.ctrl.pendingHostBarrier = appendExecutionRunControllerHostBarrier(
-              args.ctrl.pendingHostBarrier,
+              args.ctrl,
               () => workflowObservation.sink.commit({
                 kind: 'provider_resume_identity',
                 runId: args.runId,
                 localInputId: workflowObservation.localInputId,
                 providerResumeIdentity,
               }),
+              () => args.onPublicStateUpdated?.(args.runId),
             );
           }
         }
@@ -420,11 +423,11 @@ export function createExecutionRunControllerMessageHandler(args: Readonly<{
       };
       // Native and message-based permission producers wake the same Run source
       // only after the request owner has accepted its fact.
-      args.ctrl.pendingHostBarrier = appendExecutionRunControllerHostBarrier(args.ctrl.pendingHostBarrier, async () => {
+      args.ctrl.pendingHostBarrier = appendExecutionRunControllerHostBarrier(args.ctrl, async () => {
         if (requestStore.publishRequestAndWait) await requestStore.publishRequestAndWait(publication);
         else requestStore.publishRequest(publication);
         args.onPublicStateUpdated?.(args.runId);
-      });
+      }, () => args.onPublicStateUpdated?.(args.runId));
       return;
     }
 
@@ -517,10 +520,11 @@ export function createExecutionRunControllerMessageHandler(args: Readonly<{
       return;
     }
     args.ctrl.pendingHostBarrier = appendExecutionRunControllerHostBarrier(
-      args.ctrl.pendingHostBarrier,
+      args.ctrl,
       async () => {
         if (await acceptance === 'accepted') publishMessage(message);
       },
+      () => args.onPublicStateUpdated?.(args.runId),
     );
   };
 }

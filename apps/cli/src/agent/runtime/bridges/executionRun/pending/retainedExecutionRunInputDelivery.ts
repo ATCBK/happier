@@ -92,6 +92,9 @@ export function createRetainedExecutionRunInputDelivery(
     const unsubscribeRuntimeEvents = controller.backend.subscribeRuntimeEvents?.((event) => {
         if (controller.cancelled || controller.delegatedTurn) return;
         if (event.kind === 'input-accepted') {
+            if (controller.pendingHostInput && event.inputIds.includes(controller.pendingHostInput)) {
+                controller.pendingHostInput = undefined;
+            }
             projectExecutionRunWorkflowInputAcceptance(controller, runId, event);
             const previous = controller.currentInputTurn;
             const inputIds = previous?.turnId === event.delivery.turnId
@@ -113,7 +116,7 @@ export function createRetainedExecutionRunInputDelivery(
                 const completed = { turnId: event.turnId, finishedAtMs: event.emittedAtMs,
                     inputIds: controller.currentInputTurn?.turnId === event.turnId ? controller.currentInputTurn.inputIds : undefined };
                 controller.pendingHostBarrier = appendExecutionRunControllerHostBarrier(
-                    controller.pendingHostBarrier, () => options.onTurnComplete!({ ...completed, rawText: controller.buffer }),
+                    controller, () => options.onTurnComplete!({ ...completed, rawText: controller.buffer }), options.onInputTurnUpdated,
                 );
             }
             if (event.kind === 'turn-failed' && activeTurnId === event.turnId && options.onTurnFailed) {
@@ -121,7 +124,7 @@ export function createRetainedExecutionRunInputDelivery(
                     inputIds: controller.currentInputTurn?.turnId === event.turnId ? controller.currentInputTurn.inputIds : undefined,
                     diagnostic: event.diagnostic };
                 controller.pendingHostBarrier = appendExecutionRunControllerHostBarrier(
-                    controller.pendingHostBarrier, () => options.onTurnFailed!({ ...failed, rawText: controller.buffer }),
+                    controller, () => options.onTurnFailed!({ ...failed, rawText: controller.buffer }), options.onInputTurnUpdated,
                 );
             }
             if (controller.currentInputTurn?.turnId === event.turnId) {
