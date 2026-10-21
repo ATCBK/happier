@@ -2,6 +2,7 @@ import { useSessionArchivePending } from '@/hooks/session/useSessionArchivePendi
 import { confirmSessionArchive } from '@/components/sessions/actions/confirmSessionArchive';
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import * as React from 'react';
+import { ChatHeaderCompactContext } from '@/components/sessions/transcript/chatHeaderCompact';
 import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { Platform, Pressable, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -464,7 +465,9 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
     get current() { return followChipAnchorRef.current ?? menuAnchorRef.current; },
   }) as React.RefObject<View | null>, []);
   const followEditor = useAccountSessionFollowEditorHost({ serverId: sessionServerId ?? null, sessionId: props.sessionId, anchorRef: followAnchorRef });
-  const followChipCompact = !useIsTablet();
+  // A tight header (a session column beside the editor) takes the chip's icon form too, so the title keeps its room.
+  const headerCompact = React.useContext(ChatHeaderCompactContext);
+  const followChipCompact = !useIsTablet() || headerCompact;
   const readStateSignature = storage((state) =>
     buildSessionHeaderReadStateSignature(state, props.sessionId, sessionServerId ?? null),
   );

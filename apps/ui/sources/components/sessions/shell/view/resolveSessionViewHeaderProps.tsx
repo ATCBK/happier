@@ -1,5 +1,7 @@
 import { Typography } from '@/constants/Typography';
 import * as React from 'react';
+import { ChatHeaderCompactContext } from '@/components/sessions/transcript/chatHeaderCompact';
+
 import type { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { Platform, Pressable, View } from 'react-native';
 
@@ -600,15 +602,17 @@ export function resolveSessionViewHeaderProps(input: ResolveSessionViewHeaderPro
                             }
                             workingMode="spinner"
                         />
-                        <Text
-                            numberOfLines={1}
-                            style={{
-                                color: input.actionIconColor,
-                                ...Typography.variant('meta', 'semiBold'),
-                            }}
-                        >
-                            {t(input.externalSessionRuntime.externalAgent.labelKey)}
-                        </Text>
+                        <HeaderChipLabel>
+                            <Text
+                                numberOfLines={1}
+                                style={{
+                                    color: input.actionIconColor,
+                                    ...Typography.variant('meta', 'semiBold'),
+                                }}
+                            >
+                                {t(input.externalSessionRuntime.externalAgent.labelKey)}
+                            </Text>
+                        </HeaderChipLabel>
                     </View>
                 ) : null}
                 <SessionHeaderActionMenu
@@ -708,4 +712,9 @@ export function resolveSessionViewHeaderProps(input: ResolveSessionViewHeaderPro
         SESSION_VIEW_HEADER_PROPS_CACHE.set(cacheKey, next);
     }
     return next;
+}
+
+/** A header chip's words, left out while the header is tight; its accessible label and mark stay. */
+function HeaderChipLabel(props: Readonly<{ children: React.ReactNode }>): React.ReactElement | null {
+    return React.useContext(ChatHeaderCompactContext) ? null : <>{props.children}</>;
 }
