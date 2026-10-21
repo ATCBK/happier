@@ -44,9 +44,7 @@ export function createAccountSessionFollowRuleCache(input: Readonly<{
     async read(options?: Parameters<typeof cache.read>[0]) {
       try {
         if (input.signal.aborted || !await input.isCurrent()) return { status: 'unavailable', reason: 'account-retired' } as const;
-        const snapshot = await cache.read(options);
-        return input.signal.aborted || !await input.isCurrent()
-          ? { status: 'unavailable', reason: 'account-retired' } as const : snapshot;
+        return await cache.read(options, input.isCurrent);
       } catch { return { status: 'unavailable', reason: 'account-retired' } as const; }
     },
     dispose: cache.dispose,

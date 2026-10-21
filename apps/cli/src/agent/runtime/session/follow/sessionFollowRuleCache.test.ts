@@ -57,6 +57,68 @@ describe('Account Follow rule cache', () => {
     expect(await cache.read()).toMatchObject({ status: 'available', defaultPreferences: preferences });
     cache.dispose();
   });
+  it('withdraws cached rules invalidated while the Account adapter awaits its final currentness check', async () => {
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'bob' })).toString('base64url')}.signature`;
+    let invalidate = () => {};
+    let checking = false;
+    let currentnessChecks = 0;
+    let reached!: () => void;
+    let release!: () => void;
+    const atFinalCheck = new Promise<void>(resolve => { reached = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const http = vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (String(url).endsWith('/v1/account/encryption/currentness')) return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
+      if (String(url).endsWith('/v2/account/session-follow-preferences')) return { status: 200,
+        data: { assigned: true, direct: false, team: false, group: false } };
+      if (String(url).endsWith('/v2/account/session-follow-rules')) return { status: 200, data: { rules: [row] } };
+      return { status: 404, data: {} };
+    });
+    const cache = createAccountSessionFollowRuleCache({ accountId: 'bob', credentials: { token, encryption: null },
+      serverHttpBaseUrl: 'https://bob-follow.test', signal: new AbortController().signal,
+      isCurrent: async () => {
+        // A cached demand checks Account authority before and after reading.
+        if (checking && ++currentnessChecks === 2) { reached(); await gate; }
+        return true;
+      }, subscribeInvalidation: listener => { invalidate = listener; return () => {}; } });
+    try {
+      expect(await cache.read()).toMatchObject({ status: 'available' });
+      checking = true;
+      const pending = cache.read();
+      await atFinalCheck;
+      invalidate();
+      release();
+      expect(await pending).toMatchObject({ status: 'unavailable', reason: 'rules-changed' });
+    } finally { release(); cache.dispose(); http.mockRestore(); }
+  });
+  it('keeps a completed range refresh usable when another range refreshes during Account validation', async () => {
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'bob' })).toString('base64url')}.signature`;
+    let currentnessChecks = 0;
+    let reached!: () => void;
+    let release!: () => void;
+    const atFinalCheck = new Promise<void>(resolve => { reached = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const http = vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (String(url).endsWith('/v1/account/encryption/currentness')) return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
+      if (String(url).endsWith('/v2/account/session-follow-preferences')) return { status: 200,
+        data: { assigned: true, direct: false, team: false, group: false } };
+      if (String(url).endsWith('/v2/account/session-follow-rules')) return { status: 200, data: { rules: [row] } };
+      return { status: 404, data: {} };
+    });
+    const cache = createAccountSessionFollowRuleCache({ accountId: 'bob', credentials: { token, encryption: null },
+      serverHttpBaseUrl: 'https://bob-follow.test', signal: new AbortController().signal,
+      isCurrent: async () => {
+        // First refresh: admission, source entry, encryption, HTTP, then final authority.
+        if (++currentnessChecks === 5) { reached(); await gate; }
+        return true;
+      }, subscribeInvalidation: () => () => {} });
+    try {
+      const wider = cache.read({ refresh: true });
+      await atFinalCheck;
+      expect(await cache.read({ refresh: true })).toMatchObject({ status: 'available' });
+      release();
+      expect(await wider).toMatchObject({ status: 'available', rules: [{ ruleId: row.ruleId }] });
+    } finally { release(); cache.dispose(); http.mockRestore(); }
+  });
   it('refreshes progress once at a catchup range boundary without publishing an older pending read', async () => {
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
@@ -145,5 +207,52 @@ describe('Account Follow rule cache', () => {
     expect(await pending).toMatchObject(unavailable);
     expect(await overlapping).toMatchObject(unavailable);
     cache.dispose();
+  });
+
+  it.each(['retirement', 'invalidation'] as const)('withdraws a shared refresh invalidated during its promise handoff by %s', async cause => {
+    let finish!: (value: { mode: 'plain'; material: null; rules: typeof row[] }) => void;
+    let invalidate = () => {};
+    let initial = true;
+    const lifetime = new AbortController();
+    const cache = createSessionFollowRuleCache({ signal: lifetime.signal, isCurrent: () => true,
+      subscribeInvalidation: listener => { invalidate = listener; return () => {}; },
+      read: async () => {
+        if (!initial) return { mode: 'plain', material: null, rules: [{ ...row, version: 2 }] };
+        initial = false;
+        return await new Promise(resolve => { finish = resolve; });
+      } });
+    try {
+      const refresh = cache.read({ refresh: true });
+      const ordinary = cache.read();
+      finish({ mode: 'plain', material: null, rules: [row] });
+      expect(await ordinary).toMatchObject({ status: 'available' });
+      if (cause === 'retirement') lifetime.abort();
+      else invalidate();
+      const overlapping = cache.read({ refresh: true });
+      const unavailable = { status: 'unavailable', reason: cause === 'retirement' ? 'account-retired' : 'rules-changed' };
+      expect(await refresh).toMatchObject(unavailable);
+      const next = await overlapping;
+      if (next.status === 'unavailable') expect(next).toMatchObject(unavailable);
+      else expect(next.rules).toMatchObject([{ version: 2 }]);
+    } finally { cache.dispose(); }
+  });
+
+  it('releases a failed shared refresh so a later demand can recover', async () => {
+    let reject!: (reason: Error) => void;
+    let failed = false;
+    const cache = createSessionFollowRuleCache({ signal: new AbortController().signal, isCurrent: () => true,
+      subscribeInvalidation: () => () => {}, read: async () => {
+        if (!failed) return await new Promise((_resolve, rejectRead) => { reject = rejectRead; });
+        return { mode: 'plain', material: null, rules: [row] };
+      } });
+    try {
+      const refresh = cache.read({ refresh: true });
+      const overlapping = cache.read({ refresh: true });
+      reject(new Error('Rules transport failed'));
+      expect(await refresh).toMatchObject({ status: 'unavailable', reason: 'private-rules-unavailable' });
+      expect(await overlapping).toMatchObject({ status: 'unavailable', reason: 'private-rules-unavailable' });
+      failed = true;
+      expect(await cache.read({ refresh: true })).toMatchObject({ status: 'available', rules: [{ ruleId: row.ruleId }] });
+    } finally { cache.dispose(); }
   });
 });
