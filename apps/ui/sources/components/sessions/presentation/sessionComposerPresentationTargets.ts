@@ -35,6 +35,10 @@ import {
     type PluginSurfaceHostApiRequestOptions,
 } from '@/components/plugins/surfaces/createPluginSurfaceHostApi';
 import { projectComposerDocumentSnapshot } from '@/components/sessions/composer/composerSnapshotProjection';
+import { planComposerAttachmentReferenceRemoval } from '@/components/sessions/composer/composerAttachmentReferences';
+import { planComposerReferenceInsertion, snapComposerReferenceOffset } from '@/components/sessions/composer/composerReferenceInsertion';
+import { buildMentionRefV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
+import { INLINE_REFERENCE_ATTACHMENT_SCHEME_V1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 import { createExistingSessionComposerDocumentOwner } from '@/components/sessions/composer/existingSessionComposerDocumentOwner';
 import type { ComposerPresentationDocumentMutation } from '@/components/sessions/composer/composerDocumentOwner';
 export type { ComposerPresentationDocumentMutation } from '@/components/sessions/composer/composerDocumentOwner';
@@ -1194,9 +1198,9 @@ function prepareComposerPresentationTransactionApply(input: Readonly<{
         return { ok: false, result: invalidOperation(reviewOperations[0]!.operationIndex, 'review_comment_workspace_unavailable') };
     }
 
-    const text = resolveTextMutation({ snapshot, operations: transaction.data.operations });
+    let text = resolveTextMutation({ snapshot, operations: transaction.data.operations });
     if (!text.ok) return { ok: false, result: text.result };
-    const references = resolveReferences({
+    let references = resolveReferences({
         snapshot,
         operations: transaction.data.operations,
         nextText: text.text,
@@ -1213,6 +1217,43 @@ function prepareComposerPresentationTransactionApply(input: Readonly<{
         executionTarget: readComposerMediaExecutionTarget(input.executionTarget),
     });
     if (!attachments.ok) return { ok: false, result: attachments.result };
+    const additions = transaction.data.operations.filter(operation => operation.kind === 'attachment.add');
+    // The attachment owner mints identity first; the insertion owner then binds it
+    // in this same revision, before either the tray or the text is published.
+    const mentions = additions.flatMap((operation, index) => operation.mentionAt
+        ? [{ range: operation.mentionAt, instanceId: attachments.attachmentInstanceIds[index]!, index }] : []);
+    mentions.sort((a, b) => b.range.start - a.range.start || b.index - a.index);
+    for (const mention of mentions) {
+        const attachment = attachments.attachments.find(item => item.instanceId === mention.instanceId);
+        if (!attachment) continue;
+        const insertionSnapshot = { ...snapshot, text: text.text, references: references.references, selection: mention.range };
+        const operations = planComposerReferenceInsertion({ snapshot: insertionSnapshot, at: { kind: 'caret' },
+            reference: { kind: INLINE_REFERENCE_ATTACHMENT_SCHEME_V1,
+                ref: buildMentionRefV1(INLINE_REFERENCE_ATTACHMENT_SCHEME_V1, attachment.instanceId),
+                label: attachment.presentation.label } });
+        const insertedText = resolveTextMutation({ snapshot: insertionSnapshot, operations });
+        if (!insertedText.ok) return { ok: false, result: insertedText.result };
+        const insertedReferences = resolveReferences({ snapshot: insertionSnapshot, operations,
+            nextText: insertedText.text, edits: insertedText.edits });
+        if (!insertedReferences.ok) return { ok: false, result: insertedReferences.result };
+        text = insertedText;
+        references = insertedReferences;
+    }
+    const remainingAttachmentIds = new Set(attachments.attachments.map((attachment) => attachment.instanceId));
+    const removedAttachmentIds = snapshot.attachments
+        .filter((attachment) => !remainingAttachmentIds.has(attachment.instanceId))
+        .map((attachment) => attachment.instanceId);
+    const cleanupOperations = planComposerAttachmentReferenceRemoval({ text: text.text, references: references.references }, removedAttachmentIds);
+    const cleanupSnapshot = { ...snapshot, text: text.text, references: references.references };
+    const cleanedText = resolveTextMutation({ snapshot: cleanupSnapshot, operations: cleanupOperations });
+    if (!cleanedText.ok) return { ok: false, result: cleanedText.result };
+    const cleanedReferences = resolveReferences({ snapshot: cleanupSnapshot, operations: cleanupOperations,
+        nextText: cleanedText.text, edits: cleanedText.edits });
+    if (!cleanedReferences.ok) return { ok: false, result: cleanedReferences.result };
+    const selection = clampSelection(snapshot.selection, text.text.length);
+    const mapSelectionOffset = (offset: number) => offset - cleanedText.edits.reduce((removed, edit) => (
+        removed + Math.max(0, Math.min(offset, edit.end) - edit.start)
+    ), 0);
     return {
         ok: true,
         prepared: Object.freeze({
@@ -1220,12 +1261,15 @@ function prepareComposerPresentationTransactionApply(input: Readonly<{
             requiresRegisteredTargetCurrent: registeredTarget === target,
             snapshot,
             expectedRevision: transaction.data.expectedRevision,
-            text: text.text,
-            references: references.references,
+            text: cleanedText.text,
+            references: cleanedReferences.references,
             attachments: attachments.attachments,
             attachmentInstanceIds: attachments.attachmentInstanceIds,
             stagedMediaClaims: attachments.stagedMediaClaims,
-            selection: clampSelection(snapshot.selection, text.text.length),
+            selection: selection ? {
+                start: snapComposerReferenceOffset(mapSelectionOffset(selection.start), cleanedReferences.references),
+                end: snapComposerReferenceOffset(mapSelectionOffset(selection.end), cleanedReferences.references),
+            } : undefined,
             reviewComments: reviewWorkspace ? { workspaceScope: reviewWorkspace, comments: reviewOperations.map(({ comment }) => comment) } : null,
         }),
     };
@@ -1615,6 +1659,20 @@ export function applyMountedComposerPresentationTransaction(request: ComposerPre
         isTargetCurrent: candidate => !request.signal?.aborted
             && readScopedMountedComposerTarget(request.ref, request.scope) === candidate,
     });
+}
+
+/** Upload drafts live outside the portable document; their chips still use its transaction owner. */
+export function removeMountedComposerAttachmentReferences(input: Readonly<{
+    ref: ComposerRefV1;
+    scope: ServerAccountScope;
+    attachmentId: string;
+}>): void {
+    const snapshot = readMountedComposerPresentationSnapshot(input);
+    if (!snapshot) return;
+    const operations = planComposerAttachmentReferenceRemoval(snapshot, [input.attachmentId]);
+    if (operations.length === 0) return;
+    applyMountedComposerPresentationTransaction({ ref: input.ref, scope: input.scope,
+        transaction: { expectedRevision: snapshot.revision, operations } });
 }
 
 export function requestRegisteredComposerAttachmentPicker(request: Readonly<{

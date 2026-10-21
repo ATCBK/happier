@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 
 import { DaemonPluginComposerReferenceSearchResponseSchema, type PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { MENTION_KIND_V1, buildMentionRefForKindV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
@@ -13,6 +14,7 @@ import { FileMentionSuggestion } from '@/components/sessions/agentInput/componen
 import { Icon } from '@/components/ui/icons/Icon';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { buildDiscussionAccountMentionPayload } from '@/components/discussions/discussionComposerDocument';
+import { formatInlineReferenceTokenV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 import { formatSessionResponsibilityAccessHint } from '@/components/sessions/responsibility/formatSessionResponsibilityAccessHint';
 import { formatSessionResponsibilityName } from '@/components/sessions/responsibility/formatSessionResponsibilityName';
 import { SessionAgentCatalogIdentityIcon } from '@/components/sessions/presentation/SessionAgentCatalogIdentityIcon';
@@ -40,7 +42,6 @@ import {
 } from './composerSuggestionCatalogs';
 import {
     COMPOSER_SUGGESTION_KIND_IDS,
-    formatComposerSuggestionToken,
     resolveComposerSuggestionKindIdsForTrigger,
     resolveComposerSuggestionTriggersForKind,
     type ComposerSuggestionKindId,
@@ -49,7 +50,8 @@ import {
 import { COMPOSER_SUGGESTION_KIND_DEADLINE_MS } from './composerSuggestionDeadlines';
 import { buildSkillComposerGroups, pickSkillComposerRow, type SkillComposerSource } from '@/sync/domains/skills/skillComposerGroups';
 import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
-import { buildComposerFileReferenceSelection, buildComposerSessionReferenceSelection, buildContributedComposerReferenceSelection } from '@/sync/domains/input/composerReferenceSelection';
+import { buildComposerFileReferenceSelection, buildComposerSessionReferenceSelection, buildContributedComposerReferenceSelection,
+    buildComposerSkillReferenceSelection, buildComposerVendorPluginReferenceSelection } from '@/sync/domains/input/composerReferenceSelection';
 
 /**
  * Composer suggestion registry — one owner for each kind's candidate resolution,
@@ -148,6 +150,7 @@ export type ComposerReferenceSearchHost = Readonly<{
     machineId: string;
     serverId?: string | null;
     projection: PluginProjectionV2;
+    pluginUiProjection: PluginUiProjectionModel;
     /** False as soon as this composer loses focus, scope, or projection currency. */
     isCurrent(): boolean;
 }>;
@@ -304,21 +307,20 @@ async function resolveVendorPluginSuggestions(
             && !matchesComposerSuggestionQuery(label, context.scopedQuery)
         ) continue;
         seen.add(plugin.vendorPluginRef);
+        const selection = buildComposerVendorPluginReferenceSelection({ kind: 'vendorPlugin',
+            vendorPluginRef: plugin.vendorPluginRef, label,
+            ...(plugin.backendId ? { backendId: plugin.backendId } : {}),
+            ...(plugin.agentId ? { agentId: plugin.agentId } : {}),
+        });
         out.push({
             kind: 'vendorPlugin',
             key: `vendor-plugin-${plugin.vendorPluginRef}`,
-            text: formatComposerSuggestionToken('@', plugin.name),
-            label,
+            text: selection.token,
+            label: selection.label,
             // Same precedence the deleted bespoke row used, so consolidation is
             // not a silent copy change.
             description: plugin.marketplace ?? plugin.source ?? plugin.name,
-            structuredInput: {
-                kind: 'vendorPlugin',
-                vendorPluginRef: plugin.vendorPluginRef,
-                label,
-                ...(plugin.backendId ? { backendId: plugin.backendId } : {}),
-                ...(plugin.agentId ? { agentId: plugin.agentId } : {}),
-            },
+            structuredInput: selection.payload,
         });
     }
     return out;
@@ -666,53 +668,58 @@ async function resolveSkillSuggestions(
         const keys = new Set<string>();
         // Each group keeps a fair share of the kind's rows, so a long session catalog never hides the library.
         const perGroup = Math.max(4, Math.floor(context.limit / Math.max(1, groups.length)));
-        return groups.flatMap((group) => group.rows.slice(0, perGroup).map((row): AutocompleteSuggestion => {
+        return groups.flatMap((group) => group.rows.slice(0, perGroup).map((row): AutocompleteSuggestion | null => {
             const title = group.kind === 'session' ? t('capabilities.session.picker.inThisSession')
                 : group.kind === 'library' ? t('capabilities.session.picker.yourLibrary')
                     : t('capabilities.session.picker.foundOn', { machine: source?.machineName ?? group.machineId ?? '' });
-            const base = { kind: 'skill' as const, text: formatComposerSuggestionToken('$', row.name), group: title };
+            const base = { kind: 'skill' as const, group: title };
             if (group.kind === 'session') {
                 const skill = catalogByIdentity.get(row.key)!;
-                return {
-                    ...base,
-                    key: `skill-${resolveComposerSuggestionSkillIdentity(skill).suggestionKey}`,
-                    label: skill.displayName ?? skill.name,
-                    description: skill.description ?? skill.origin ?? skill.source ?? skill.projectionRef ?? skill.projectionKind ?? skill.name,
-                    structuredInput: {
+                const catalogOrigin = withSkillCatalogOrigin(skill).origin;
+                const selection = buildComposerSkillReferenceSelection({
                         kind: 'skill',
                         ...(skill.id ? { id: skill.id } : {}),
                         name: skill.name,
                         ...(skill.path ? { path: skill.path } : {}),
                         ...(skill.displayName ? { displayName: skill.displayName } : {}),
                         ...(skill.description ? { description: skill.description } : {}),
-                        ...(skill.origin ?? skill.source ? { origin: skill.origin ?? skill.source } : {}),
+                        ...(catalogOrigin ? { origin: catalogOrigin } : {}),
                         ...(skill.projectionKind ? { projectionKind: skill.projectionKind } : {}),
                         ...(skill.projectionRef ?? skill.projectionKind ? { projectionRef: skill.projectionRef ?? skill.projectionKind } : {}),
                         ...(skill.backendId ? { backendId: skill.backendId } : {}),
                         ...(skill.agentId ? { agentId: skill.agentId } : {}),
-                    },
+                });
+                if (!selection) return null;
+                return {
+                    ...base,
+                    text: selection.token,
+                    key: `skill-${resolveComposerSuggestionSkillIdentity(skill).suggestionKey}`,
+                    label: selection.label,
+                    description: skill.description ?? skill.origin ?? skill.source ?? skill.projectionRef ?? skill.projectionKind ?? skill.name,
+                    structuredInput: selection.payload,
                 };
             }
             // A library skill cannot join a running Session whose Agent can neither reload skills live nor
             // resume (P8 F4): the row stays listed with the Session apply words and cannot be picked.
             const newSessionsOnly = row.source === 'library' && source?.applyTiming()?.t === 'new_sessions_only';
+            const selection = buildComposerSkillReferenceSelection({ kind: 'skill',
+                ...(row.skillId ? { id: row.skillId } : {}), name: row.name, origin: row.identity.origin,
+                ...(row.identity.backendId ? { backendId: row.identity.backendId } : {}),
+            });
+            if (!selection) return null;
             return {
                 ...base,
+                text: selection.token,
                 key: `skill-${group.kind}:${row.key}`,
                 label: row.name,
                 ...(newSessionsOnly
                     ? { description: t('capabilities.session.apply.newSessionsOnly', { item: '', machine: '' }), disabled: true as const }
                     : row.description ? { description: row.description } : {}),
-                structuredInput: {
-                    kind: 'skill',
-                    ...(row.skillId ? { id: row.skillId } : {}),
-                    name: row.name,
-                    origin: row.identity.origin,
-                    ...(row.identity.backendId ? { backendId: row.identity.backendId } : {}),
-                },
+                structuredInput: selection.payload,
                 ...(source && row.source === 'library' && !newSessionsOnly ? { selectionEffect: () => pickSkillComposerRow(row, source.owner) } : {}),
             };
-        })).filter((suggestion) => !keys.has(suggestion.key) && Boolean(keys.add(suggestion.key))).slice(0, context.limit);
+        })).filter((suggestion): suggestion is AutocompleteSuggestion => suggestion !== null)
+            .filter((suggestion) => !keys.has(suggestion.key) && Boolean(keys.add(suggestion.key))).slice(0, context.limit);
     };
     const first = rows();
     const publish = () => { if (!context.signal?.aborted) context.publish?.(rows()); };
@@ -830,6 +837,7 @@ async function resolveAccountMentionSuggestions(
         if (seen.has(candidate.accountId)) continue;
         seen.add(candidate.accountId);
         const name = formatSessionResponsibilityName(candidate.profile);
+        const mention = buildDiscussionAccountMentionPayload(candidate.accountId, name);
         const description = [
             candidate.profile.username ? `@${candidate.profile.username}` : null,
             formatSessionResponsibilityAccessHint(candidate.accessHint),
@@ -837,8 +845,7 @@ async function resolveAccountMentionSuggestions(
         out.push({
             kind: 'accountMention',
             key: candidate.accountId,
-            // A username-only Account is named "@alice"; its token is still one `@`.
-            text: `@${name.replace(/^@/u, '')}`,
+            text: formatInlineReferenceTokenV1(mention),
             label: name,
             ...(description ? { description } : {}),
             icon: React.createElement(Avatar, {
@@ -846,7 +853,7 @@ async function resolveAccountMentionSuggestions(
                 size: 20,
                 imageUrl: candidate.profile.avatarUrl,
             }),
-            structuredInput: buildDiscussionAccountMentionPayload(candidate.accountId, name),
+            structuredInput: mention,
         });
     }
     if (page.hasMore || page.candidates.length > candidateLimit) {

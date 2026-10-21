@@ -5,6 +5,7 @@ import type { ComposerOptionsInputV1 } from '@happier-dev/protocol/embed';
 import { normalizeSessionAddress, sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { reportSessionTypingEdit, stopSessionTyping } from '@/sync/domains/session/humanPresence/sessionHumanPresenceRuntime';
 import * as React from 'react';
+import { Image } from 'expo-image';
 import {
     View,
     Platform,
@@ -30,6 +31,17 @@ import {
 } from '@/components/ui/forms/MultiTextInput';
 import { MULTI_TEXT_INPUT_BASE_FONT_SIZE } from '@/components/ui/forms/multiTextInputTypography';
 import { composerReferencesFromStructuredMentions } from '@/components/sessions/composer/composerScopeAdapters';
+import type { ComposerEditorReference, ComposerEditorDecoration } from '@/components/ui/forms/composerEditor/composerEditorTypes';
+import { parseMentionRefV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
+import { INLINE_REFERENCE_ATTACHMENT_SCHEME_V1, scanInlineReferenceTokensV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
+import { formatSessionInputMentionMarkerV1 } from '@happier-dev/protocol/sessions/messages/sessionInputReferenceProjectionV1';
+import { parseComposerStructuredInputMentionsForText } from '@/sync/domains/input/draftValues/sessionDraftValueTypes';
+import { planComposerReferenceInsertion, recordComposerReferenceInsertion, readRecentComposerReferenceInsertions } from '@/components/sessions/composer/composerReferenceInsertion';
+import { applyRecentComposerSkillSelection, buildComposerRecentReferenceSuggestions } from '@/components/sessions/composer/composerRecentReferences';
+import { readQuickOpenRecentFiles } from '@/components/workspaces/files/useQuickOpenEmptyState';
+import { readComposerSessionSuggestionItems } from '@/sync/domains/input/suggestionSession';
+import { readSessionListMeaningfulActivityAt } from '@/sync/domains/session/listing/sessionListOrderingRules';
+import { readRegisteredStorageState } from '@/sync/domains/state/storageStateReaderBridge';
 import { Typography } from '@/constants/Typography';
 import type {
     PermissionMode,
@@ -213,6 +225,8 @@ import { ComposerEntityDropTarget } from '@/components/sessions/composer/Compose
 import type { ComposerReferenceSearchHost } from '@/components/autocomplete/composerSuggestionKinds';
 import type { FileSuggestionScope } from '@/sync/domains/input/suggestionFile';
 import { extractWebAttachmentFilesFromDataTransfer } from '@/utils/files/webAttachmentDataTransfer';
+import type { AddWebAttachmentsOptions } from '@/sync/domains/attachments/attachmentsUploadFileSource';
+import type { AttachmentDraft } from '@/components/sessions/attachments/attachmentDraftModel';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import type {
     AgentInputAttachmentsRowItem,
@@ -221,7 +235,7 @@ import type {
     AgentInputExtraActionChip,
     AgentInputStatusBadge as AgentInputStatusBadgeDescriptor,
 } from './agentInputContracts';
-import { projectAgentInputAttachmentRowItems } from './agentInputContracts';
+import { projectAgentInputAttachmentRowItems, readAgentInputImageNumbers } from './agentInputContracts';
 import type { AgentInputSendIntentOptions, AgentInputSendOptions } from './agentInputSendOptions';
 import type { AgentInputChipPickerOption } from './components/AgentInputChipPickerTypes';
 import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
@@ -264,6 +278,8 @@ import { AgentInputFieldAccessories, resolveAgentInputFieldAccessoryGeometry } f
 import { AgentInputPromptPicker } from './commandMenu/AgentInputPromptPicker';
 import { usePromptPickerController } from './commandMenu/usePromptPickerController';
 import { useAgentInputCommandMenu } from './commandMenu/useAgentInputCommandMenu';
+import { SelectionListFooter } from '@/components/ui/selectionList/SelectionListFooter';
+import { useHardwareKeyboard } from '@/components/ui/selectionList/useHardwareKeyboard';
 import { resolveAgentInputCommandMenuAnchor } from './commandMenu/resolveAgentInputCommandMenuAnchor';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import type { StyleProp } from 'react-native';
@@ -275,6 +291,8 @@ import {
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import type { TranscriptPermissionDisabledReason } from '@/utils/sessions/deriveTranscriptInteraction';
 
+/** Lab P1: the reference picker's one frame (list and footer), kept as results narrow. */
+const REFERENCE_PICKER_HEIGHT_PX = 320;
 const LazyResetStartPicker = retryableLazy(() => import('./components/AgentInputResetStartPicker'));
 
 /**
@@ -698,7 +716,7 @@ interface AgentInputProps {
      * toggle appears, so the two never collide.
      */
     fieldAccessory?: React.ReactNode;
-    onAttachmentsAdded?: (files: readonly File[]) => void;
+    onAttachmentsAdded?: (files: readonly File[], options?: AddWebAttachmentsOptions) => readonly AttachmentDraft[] | void;
     hasSendableAttachments?: boolean;
     permissionRequests?: ReadonlyArray<PendingPermissionRequest>;
     approvalRequests?: ReadonlyArray<OpenApprovalArtifactForSession>;
@@ -1727,7 +1745,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const inputStateRef = React.useRef<TextInputState>(initialInputState);
     const [inputSelection, setInputSelection] = React.useState<TextInputState['selection']>(initialInputState.selection);
     const [activeWordState, setActiveWordState] = React.useState<ActiveWord | undefined>(() => (
-        findActiveWord(initialInputState.text, initialInputState.selection, props.autocompleteKinds)
+        findActiveWord(initialInputState.text, initialInputState.selection, props.autocompleteKinds, props.structuredInputMentions)
     ));
     const [hasAutocompleteTextInteraction, setHasAutocompleteTextInteraction] = React.useState(false);
     const inputScopeKeyRef = React.useRef<string | null>(props.sessionId ?? null);
@@ -1760,6 +1778,16 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         props.onStructuredInputMentionsChange?.(next);
     }, [props.onStructuredInputMentionsChange, props.structuredInputMentions]);
 
+    const handleEditorReferencesChange = React.useCallback((references: readonly ComposerEditorReference[]) => {
+        const text = inputRef.current?.getText?.() ?? inputStateRef.current.text;
+        const bindings = references.flatMap((reference) => (
+            reference.binding !== null && typeof reference.binding === 'object'
+                ? [{ ...reference.binding, tokenText: reference.token, start: reference.start, end: reference.end }]
+                : []
+        ));
+        updateStructuredInputMentions(parseComposerStructuredInputMentionsForText(bindings, text).mentions);
+    }, [updateStructuredInputMentions]);
+
     const isHistoryBrowsing = React.useCallback(() => (
         messageHistory.isBrowsing()
     ), [messageHistory]);
@@ -1769,7 +1797,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     ), [messageHistory]);
 
     const updateActiveWordState = React.useCallback((state: TextInputState) => {
-        const nextActiveWord = findActiveWord(state.text, state.selection, props.autocompleteKinds);
+        const nextActiveWord = findActiveWord(state.text, state.selection, props.autocompleteKinds, structuredInputMentionsRef.current);
         setActiveWordState((currentActiveWord) => (
             areActiveWordsEqual(currentActiveWord, nextActiveWord) ? currentActiveWord : nextActiveWord
         ));
@@ -2107,6 +2135,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             inputStateRef.current.text,
             inputStateRef.current.selection,
             props.autocompleteKinds,
+            structuredInputMentionsRef.current,
         );
         if (focusedActiveWord) {
             setActiveWordState((currentActiveWord) => (
@@ -2163,7 +2192,29 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const activeWord = activeWordState?.activeWord ?? null;
     const activeSuggestionQuery = isInputFocused && hasAutocompleteTextInteraction && !props.disabled ? activeWord : null;
     // Selection follows candidate identity, not an index (INV-6) — the hook owns that.
-    const [suggestions, selected, moveUp, moveDown, selectionPending] = useActiveSuggestions(activeSuggestionQuery, props.autocompleteSuggestions, { wrapAround: true });
+    const resolveSuggestions = React.useCallback<ActiveSuggestionsHandler>(async (query, signal, publish) => {
+        if (query !== '@' || !composerDropScope) return props.autocompleteSuggestions(query, signal, publish);
+        const rows = readRegisteredStorageState()?.sessionListRowsByServerId?.[composerDropScope.serverId];
+        const sessions = props.autocompleteKinds.includes('session')
+            ? readComposerSessionSuggestionItems({ serverId: composerDropScope.serverId, currentSessionId: props.sessionId ?? null })
+                .slice().sort((left, right) => readSessionListMeaningfulActivityAt(rows?.[right.id]) - readSessionListMeaningfulActivityAt(rows?.[left.id]))
+            : [];
+        const recent = buildComposerRecentReferenceSuggestions({
+            inserted: readRecentComposerReferenceInsertions(composerDropScope, props.composerFileScope),
+            files: props.autocompleteKinds.includes('file') ? readQuickOpenRecentFiles(props.composerFileScope ?? null).map(file => file.fullPath) : [],
+            sessions, kinds: props.autocompleteKinds, group: t('newSession.machinePicker.recentTitle'),
+            skillSelectionEffect: reference => async () => {
+                const current = await props.autocompleteSuggestions(`$${reference.label}`, new AbortController().signal, () => {});
+                const candidate = current.find(item => {
+                    const mention = createStructuredInputMentionFromSuggestion({ suggestion: item, start: 0 });
+                    return mention && composerReferencesFromStructuredMentions({ text: item.text, mentions: [mention] })[0]?.ref === reference.ref;
+                });
+                return applyRecentComposerSkillSelection(candidate, t('capabilities.control.changeFailed'));
+            },
+        });
+        return recent.length > 0 ? recent : props.autocompleteSuggestions(query, signal, publish);
+    }, [composerDropScope, props.autocompleteKinds, props.autocompleteSuggestions, props.composerFileScope, props.sessionId]);
+    const [suggestions, selected, moveUp, moveDown, selectionPending] = useActiveSuggestions(activeSuggestionQuery, resolveSuggestions, { wrapAround: true });
     // A contributed Action can remain externally effectful while its selection
     // awaits canonical dispatch or form preparation. This stays local to the
     // incumbent picker selection owner and follows the same input snapshot currentness.
@@ -2186,7 +2237,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         if (isContributedActionSelection) {
             pendingContributedActionSelectionInputRef.current = currentInputState;
         }
-        const activeWordForSelection = findActiveWord(currentInputState.text, currentInputState.selection, props.autocompleteKinds);
+        const activeWordForSelection = findActiveWord(currentInputState.text, currentInputState.selection, props.autocompleteKinds, structuredInputMentionsRef.current);
         const applyResolvedSelection = (result: Readonly<{ text: string; cursorPosition: number }>) => {
             inputRef.current?.setTextAndSelection(result.text, {
                 start: result.cursorPosition,
@@ -2195,6 +2246,29 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         };
 
         const applyDefaultSelection = () => {
+            const candidateMention = createStructuredInputMentionFromSuggestion({ suggestion, start: 0 });
+            const reference = candidateMention ? composerReferencesFromStructuredMentions({ text: suggestion.text, mentions: [candidateMention] })[0] : undefined;
+            if (reference && candidateMention) {
+                const insertionReference = { kind: reference.kind, ref: reference.ref, label: reference.label ?? suggestion.label ?? suggestion.text, payload: reference };
+                const operations = planComposerReferenceInsertion({
+                    snapshot: { text: currentInputState.text, selection: currentInputState.selection,
+                        references: composerReferencesFromStructuredMentions({ text: currentInputState.text, mentions: structuredInputMentionsRef.current }) },
+                    reference: insertionReference,
+                    at: activeWordForSelection ? { kind: 'activeWord', range: { start: activeWordForSelection.offset, end: activeWordForSelection.endOffset } } : { kind: 'caret' },
+                });
+                const edit = operations[0];
+                const inserted = operations[1];
+                if (!edit || !inserted || inserted.kind !== 'reference.insert' || (edit.kind !== 'text.insert' && edit.kind !== 'text.replaceRange')) return;
+                const range = edit.kind === 'text.insert' ? { start: edit.position.offset, end: edit.position.offset } : edit.range;
+                const nextText = currentInputState.text.slice(0, range.start) + edit.text + currentInputState.text.slice(range.end);
+                applyResolvedSelection({ text: nextText, cursorPosition: range.start + edit.text.length });
+                const mention = { ...candidateMention, tokenText: inserted.reference.token, start: inserted.reference.start, end: inserted.reference.end };
+                updateStructuredInputMentions(current => [
+                    ...current.filter(existing => existing.start !== mention.start || existing.end !== mention.end), mention,
+                ]);
+                if (composerDropScope) recordComposerReferenceInsertion(composerDropScope, insertionReference, suggestion, props.composerFileScope);
+                return;
+            }
             const result = applySuggestion(
                 currentInputState.text,
                 currentInputState.selection,
@@ -2250,6 +2324,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         hapticsLight();
     }, [
         props.autocompleteKinds,
+        composerDropScope,
+        props.composerFileScope,
         props.onContributedActionSuggestionSelect,
         suggestions,
         updateStructuredInputMentions,
@@ -2288,6 +2364,18 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         handleSuggestionSelect,
         onOpenPromptPicker: promptLibraryAvailable && dictationEditable && !controlsOnly ? openPromptPickerFromSlash : undefined,
     });
+    // Lab P1: the reference picker keeps one height as results narrow and says how it is driven, on a
+    // hardware keyboard, in its footer.
+    const hardwareKeyboard = useHardwareKeyboard();
+    const referencePickerFooter = React.useMemo(() => (
+        commandMenuQuery.startsWith('@') || commandMenuQuery.startsWith('$') ? (
+            <SelectionListFooter hardwareKeyboardAvailable={hardwareKeyboard} hints={[
+                { id: 'move', label: '↑↓', description: t('commandPalette.hints.move') },
+                { id: 'mention', label: '↵', description: t('composerReferences.hintMention') },
+                { id: 'close', label: 'esc', description: t('commandPalette.hints.close') },
+            ]} />
+        ) : null
+    ), [commandMenuQuery, hardwareKeyboard]);
     const commandMenuComboboxAccessibility = React.useMemo(
         () => resolveCommandMenuComboboxAccessibility({
             testID: AGENT_INPUT_COMMAND_MENU_TEST_ID,
@@ -2887,15 +2975,66 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     }, [extraActionChips]);
     const hasExtraActionChips = extraActionChips.length > 0;
     const attachmentRowItems = React.useMemo<readonly AgentInputAttachmentsRowItem[]>(() => (
-        projectAgentInputAttachmentRowItems({ items: props.attachmentRowItems })
-    ), [props.attachmentRowItems]);
+        projectAgentInputAttachmentRowItems({ items: props.attachmentRowItems }).map((item) => {
+            const remove = item.onRemove;
+            return remove ? { ...item, onRemove: () => { flushComposerInput(); remove(); } } : item;
+        })
+    ), [flushComposerInput, props.attachmentRowItems]);
+    const editorAttachmentIds = React.useMemo(() => attachmentRowItems.flatMap((item) => (
+        item.attachmentId === undefined ? [] : [item.attachmentId]
+    )), [attachmentRowItems]);
+    const editorReferences = React.useMemo(() => {
+        const bindings = new Map(structuredInputMentions.map((mention) => [mention.start, mention]));
+        const attachments = new Map(attachmentRowItems.flatMap((item) => item.attachmentId === undefined ? [] : [[item.attachmentId, item] as const]));
+        const imageNumbers = readAgentInputImageNumbers(attachmentRowItems);
+        return composerReferencesFromStructuredMentions({ text: props.value, mentions: structuredInputMentions }).map((reference): ComposerEditorReference<ComposerStructuredInputMention> => {
+            const parsed = parseMentionRefV1(reference.ref);
+            const binding = bindings.get(reference.start);
+            const tokenLabel = scanInlineReferenceTokensV1(reference.token).find((token) => (
+                token.start === 0 && token.end === reference.token.length
+            ))?.label;
+            const label = reference.label ?? tokenLabel ?? parsed?.opaque ?? t('common.unavailable');
+            if (parsed?.scheme !== INLINE_REFERENCE_ATTACHMENT_SCHEME_V1) {
+                const readableMarker = formatSessionInputMentionMarkerV1({ ...reference, label });
+                return { ...reference, binding, label, accessibilityLabel: readableMarker,
+                    ...(parsed ? {} : { state: 'unavailable' }),
+                    readableMarker };
+            }
+            const attachment = attachments.get(parsed.opaque);
+            if (!attachment || attachment.status === 'error') {
+                return { ...reference, binding, state: 'removed', label: t('composerReferences.attachmentRemoved'),
+                    accessibilityLabel: t('composerReferences.attachmentRemoved'), readableMarker: label };
+            }
+            const number = imageNumbers.get(parsed.opaque);
+            const state = attachment.status === 'pending' || attachment.status === 'uploading'
+                ? 'pending' : attachment.availability && attachment.availability !== 'ready' ? 'unavailable' : 'ready';
+            const thumbnail = attachment.kind === 'media' && attachment.media === 'image'
+                ? attachment.renderedPreview ?? (attachment.preview?.kind === 'image'
+                    ? <Image source={{ uri: attachment.preview.uri }} style={{ width: '100%', height: '100%' }} contentFit="cover" />
+                    : undefined)
+                : undefined;
+            return { ...reference, binding, state,
+                label: number === undefined ? attachment.label : t('composerReferences.imageNumber', { number }),
+                accessibilityLabel: number === undefined ? attachment.accessibilityLabel ?? attachment.label
+                    : t('composerReferences.imageAccessibility', { number, name: attachment.label }),
+                readableMarker: number === undefined ? `[File: ${attachment.label}]` : `[Image #${number}]`,
+                ...(thumbnail === undefined ? {} : { thumbnail }),
+                ...(attachment.onPress ? { onOpen: () => attachment.onPress?.({ focusReturnRef: inputRef }) } : {}),
+            };
+        });
+    }, [attachmentRowItems, props.value, structuredInputMentions]);
     React.useEffect(() => {
         if (attachmentRowItems.length === 0) {
             setNativeAttachmentRowTopPx(null);
         }
     }, [attachmentRowItems.length]);
+    const editorDecorations = React.useMemo<readonly ComposerEditorDecoration[]>(() => (
+        (props.composerDecorations ?? []).flatMap((decoration) => decoration.decorations.ranges.map((entry) => ({
+            ...entry.range, treatment: entry.treatment, ...(entry.label ? { label: entry.label } : {}),
+        })))
+    ), [props.composerDecorations]);
     const composerPresentationFeedback = React.useMemo(() => {
-        const decorations = props.composerDecorations ?? [];
+        const decorations = Platform.OS === 'web' ? [] : props.composerDecorations ?? [];
         const inputLock = props.composerInputLock ?? null;
         if (decorations.length === 0 && inputLock === null) return null;
 
@@ -3560,8 +3699,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     onMoveDown={commandMenuMoveDown}
                     onSelect={(_item, index) => commandMenuOnSelectIndex(index)}
                     onRequestClose={commandMenuOnClose}
-                    maxHeight={240}
+                    maxHeight={referencePickerFooter ? REFERENCE_PICKER_HEIGHT_PX : 240}
                     {...(compactCommandMenu ? { matchAnchorWidth: true, maxWidth: screenWidth } : {})}
+                    {...(referencePickerFooter ? { footer: referencePickerFooter, fillHeight: true } : {})}
                     testID={AGENT_INPUT_COMMAND_MENU_TEST_ID}
                 />
                 {promptPicker.isOpen ? (
@@ -3663,6 +3803,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                         textStyle={isConversation ? styles.sessionInputText : styles.newSessionInputText}
                                         value={props.value}
                                         paddingTop={Platform.OS === 'web' ? 10 : 8}
+                                        references={editorReferences}
+                                        attachmentIds={editorAttachmentIds}
+                                        decorations={editorDecorations}
+                                        onReferencesChange={handleEditorReferencesChange}
                                         paddingBottom={Platform.OS === 'web' ? 10 : 8}
                                         paddingRight={fieldInputPaddingRight}
                                         onChangeText={handleComposerTextChange}
@@ -3871,6 +4015,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                         textStyle={isConversation ? styles.sessionInputText : styles.newSessionInputText}
                                         value={props.value}
                                         paddingTop={8}
+                                        references={editorReferences}
+                                        attachmentIds={editorAttachmentIds}
+                                        decorations={editorDecorations}
+                                        onReferencesChange={handleEditorReferencesChange}
                                         paddingBottom={8}
                                         paddingRight={fieldInputPaddingRight}
                                         onChangeText={handleComposerTextChange}
@@ -4056,6 +4204,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     id={composerDropTargetId} scope={composerDropScope} refValue={composerRef}
                     bounds={composerDropBounds} clearBounds={composerBlockBounds} presented={props.surfacePresented !== false}
                     editable={dictationEditable && !controlsOnly} kinds={props.autocompleteKinds}
+                    inputRef={inputRef} externalFilesActive={fileDragActive}
                     referenceHost={props.composerReferenceHost} fileScope={props.composerFileScope}
                     /> : null}
                 </WebDropTargetView>

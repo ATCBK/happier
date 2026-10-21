@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, basename } from 'path';
 
 import type { RpcHandlerInvoker, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
@@ -77,6 +77,8 @@ export function registerTransferUploadRpcHandlers(
             sessionId: deps.sessionAttachment.sessionId,
             messageLocalId: request.messageLocalId,
             fileName: request.fileName,
+            ...(request.relativePath === undefined ? {} : { relativePath: request.relativePath }),
+            ...(request.directoryEntries === undefined ? {} : { directoryEntries: request.directoryEntries }),
             sizeBytes: request.sizeBytes,
             uploadLocation: request.uploadLocation,
             workspaceRelativeDir: request.workspaceRelativeDir,
@@ -110,7 +112,11 @@ export function registerTransferUploadRpcHandlers(
               finalizeUpload: async (input) => {
                 const finalized = await resolved.target.finalizeUpload(input);
                 if (finalized.success) {
-                  deps.store.issueAttachment({
+                  if (uploadRequest.directoryEntries !== undefined) deps.store.issueDirectoryAttachment({
+                    uploadId: input.uploadId, sessionId: deps.sessionAttachment!.sessionId,
+                    filePath: resolved.target.destPath, name: basename(resolved.target.destPath), displayPath: finalized.path,
+                  });
+                  else deps.store.issueAttachment({
                     uploadId: input.uploadId,
                     sessionId: deps.sessionAttachment!.sessionId,
                     filePath: resolved.target.destPath,

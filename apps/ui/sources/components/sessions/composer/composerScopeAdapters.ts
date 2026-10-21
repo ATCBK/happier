@@ -3,7 +3,8 @@ import { ComposerAttachmentDraftV1Schema, type ComposerAttachmentDraftV1, type C
 import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 import { readHappierStructuredInputV1FromMeta } from '@happier-dev/protocol/sessions/userMessageRpc';
 import type { ComposerSnapshotV1 } from '@happier-dev/protocol/plugins/ui/composer';
-import type { MentionRefV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
+import { admitMentionRefsV1ForText, MentionRefV1Schema, parseMentionRefV1, type MentionRefV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
+import { formatInlineReferenceTokenV1, scanInlineReferenceTokensV1, INLINE_REFERENCE_ATTACHMENT_SCHEME_V1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 import type { PluginProjectedComposerAttachmentEntryV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 
 import { buildStructuredInputMetaOverrides } from '@/components/sessions/agentInput/structuredInputMentions';
@@ -176,6 +177,12 @@ function referenceIdentityKey(reference: Pick<MentionRefV1, 'kind' | 'ref' | 'to
 function readReferenceFromMention(
     mention: ComposerStructuredInputMention,
 ): MentionRefV1 | null {
+    if ('ref' in mention && typeof mention.ref === 'string'
+        && parseMentionRefV1(mention.ref)?.scheme === INLINE_REFERENCE_ATTACHMENT_SCHEME_V1) {
+        const parsed = MentionRefV1Schema.safeParse({ kind: mention.kind, ref: mention.ref,
+            token: mention.tokenText, ...('label' in mention && mention.label ? { label: mention.label } : {}) });
+        return parsed.success ? parsed.data : null;
+    }
     // Delegates identity encoding to the incumbent writer. The mention's own token is a
     // sufficient text basis: the writer admits a reference whose token the text contains.
     // The envelope owns only positionless Message identity. Normalize this token-sized
@@ -185,6 +192,46 @@ function readReferenceFromMention(
         text: mention.tokenText,
     }));
     return envelope?.mentions?.[0] ?? null;
+}
+
+/** The only legacy-token rewrite; callers keep text and exact ranges together. */
+export function normalizeComposerDraftReferenceTokens(input: Readonly<{
+    text: string;
+    mentions: readonly ComposerStructuredInputMention[];
+}>): Readonly<{ text: string; mentions: readonly ComposerStructuredInputMention[] }> {
+    let text = '';
+    let boundary = 0;
+    let changed = false;
+    const mentions: ComposerStructuredInputMention[] = [];
+    for (const mention of input.mentions) {
+        const reference = readReferenceFromMention(mention);
+        const inline = scanInlineReferenceTokensV1(mention.tokenText);
+        const isInline = inline.length === 1 && inline[0]?.start === 0 && inline[0]?.end === mention.tokenText.length
+            && inline[0]?.ref === reference?.ref;
+        const token = reference && !isInline
+            ? formatInlineReferenceTokenV1({ label: reference.label ?? mention.tokenText, ref: reference.ref })
+            : mention.tokenText;
+        text += input.text.slice(boundary, mention.start);
+        const start = text.length;
+        text += token;
+        const end = text.length;
+        const moved = token !== mention.tokenText || start !== mention.start || end !== mention.end;
+        mentions.push(moved ? { ...mention, tokenText: token, start, end } : mention);
+        changed ||= moved;
+        boundary = mention.end;
+    }
+    return changed ? { text: text + input.text.slice(boundary), mentions } : input;
+}
+
+/** Message envelopes are positionless; editable custody starts at this seed boundary. */
+export function hydrateComposerDraftReferencesFromMessage(input: Readonly<{
+    text: string; meta?: unknown; references?: readonly MentionRefV1[];
+}>) {
+    const candidates = input.references ?? readHappierStructuredInputV1FromMeta(input.meta)?.mentions ?? [];
+    const references = placePositionlessComposerReferences({ text: input.text,
+        references: admitMentionRefsV1ForText(input.text, candidates) });
+    return normalizeComposerDraftReferenceTokens({ text: input.text,
+        mentions: composerStructuredMentionsFromReferences({ references, existing: [] }) });
 }
 
 /**
@@ -235,11 +282,13 @@ function rebaseStoredMention(
 }
 
 function createOpaqueMention(reference: ComposerMentionRef): ComposerUnknownMention {
+    const trigger = reference.composerReferenceTrigger;
     return {
         kind: reference.kind,
         ref: reference.ref,
         ...(reference.label ? { label: reference.label } : {}),
         ...(reference.composerReference ? { composerReference: reference.composerReference } : {}),
+        ...(trigger === '@' || trigger === '$' || trigger === '/' ? { composerReferenceTrigger: trigger } : {}),
         tokenText: reference.token,
         start: reference.start,
         end: reference.end,

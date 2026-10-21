@@ -3,6 +3,7 @@ import type { PromptLibraryListItem } from '@happier-dev/protocol/prompts/librar
 import type { BuiltInPrompt } from '@/sync/domains/input/slashCommands/builtInPrompts';
 import type { UserMessageHistoryEntry } from '@/hooks/session/useUserMessageHistoryEntries';
 import { isPromptLibraryReferenceInHome } from '@/sync/ops/promptLibrary/promptLibraryReferences';
+import { readableMessageText } from '@/components/sessions/transcript/messageDisplayText';
 
 export type PromptPickerRow = Readonly<{
     id: string;
@@ -46,7 +47,8 @@ export function buildPromptPickerRows(input: Readonly<{
         if (matches([prompt.title, prompt.token])) rows.push({ id: `builtIn:${prompt.token}`, title: prompt.title, group: 'library', tokens: [prompt.token], kind: 'builtIn', prompt });
     }
     for (const entry of input.history) {
-        if (matches([entry.text])) rows.push({ id: `history:${JSON.stringify([entry.serverId, entry.sessionId, entry.messageId])}`, title: entry.text, group: 'history', tokens: [], kind: 'history', entry });
+        const title = readableMessageText(entry.text);
+        if (matches([title])) rows.push({ id: `history:${JSON.stringify([entry.serverId, entry.sessionId, entry.messageId])}`, title, group: 'history', tokens: [], kind: 'history', entry });
     }
     return rows;
 }

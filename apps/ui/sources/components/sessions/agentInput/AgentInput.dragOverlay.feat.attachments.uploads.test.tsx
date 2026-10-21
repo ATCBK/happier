@@ -2,13 +2,16 @@
 import * as React from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { flattenTestStyle } from '@/dev/testkit';
 // Collect the real owner graph before the interaction timeout starts.
 import { AgentInput } from './AgentInput';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+// jsdom has no browser hit-test API. A point outside the editor falls back to its caret.
+Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => null });
+afterAll(() => { Reflect.deleteProperty(document, 'elementFromPoint'); });
 
 type HostProps = Readonly<{
     children?: React.ReactNode;
@@ -73,6 +76,7 @@ vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.f
 // Vitest's default suffix resolution is native; retain the actual browser implementations.
 vi.mock('@/components/ui/forms/MultiTextInput', async () => await import('@/components/ui/forms/MultiTextInput.web'));
 vi.mock('@/hooks/ui/useWebFileDropZone', async () => await import('@/hooks/ui/useWebFileDropZone.web'));
+vi.mock('@/utils/files/webDroppedEntries', async () => await import('@/utils/files/webDroppedEntries.web'));
 vi.unmock('color');
 
 const mounted: Array<{ root: ReturnType<typeof createRoot>; container: HTMLElement }> = [];
@@ -93,7 +97,8 @@ function createFileDragEvent(type: string, files: readonly File[] = [], point = 
     return event;
 }
 
-async function renderAgentInput(onAttachmentsAdded: (files: readonly File[]) => void) {
+async function renderAgentInput(onAttachmentsAdded: NonNullable<React.ComponentProps<typeof AgentInput>['onAttachmentsAdded']>,
+    overrides: Partial<React.ComponentProps<typeof AgentInput>> = {}) {
     const container = document.createElement('div');
     document.body.appendChild(container);
     const root = createRoot(container);
@@ -101,7 +106,7 @@ async function renderAgentInput(onAttachmentsAdded: (files: readonly File[]) => 
     await act(async () => {
         root.render(<AgentInput value="" placeholder="placeholder" onChangeText={() => {}} onSend={() => {}}
             autocompleteKinds={[]} autocompleteSuggestions={async () => []}
-            onAttachmentsAdded={onAttachmentsAdded} hasSendableAttachments={false} />);
+            onAttachmentsAdded={onAttachmentsAdded} hasSendableAttachments={false} {...overrides} />);
     });
     const input = container.querySelector<HTMLTextAreaElement>('[data-testid="new-session-composer-input"]');
     const material = container.querySelector<HTMLElement>('[data-testid="agent-input-material-surface"]');
@@ -124,7 +129,7 @@ describe('AgentInput (attachments drag overlay)', () => {
         expect(parseFloat(getComputedStyle(overlay!).top)).toBeGreaterThan(320);
         await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); });
         expect(document.querySelector('[data-testid="agent-input-drop-overlay"]')).toBeNull();
-        expect(rendered.container.querySelector<HTMLTextAreaElement>('[data-testid="new-session-composer-input"]')?.value).toBe('');
+        expect(rendered.container.querySelector<HTMLElement>('[data-testid="new-session-composer-input"]')?.textContent).toBe('');
     });
 
     it('adds attachments dropped on the enclosing panel outside the textarea', async () => {
@@ -149,5 +154,32 @@ describe('AgentInput (attachments drag overlay)', () => {
         });
         await act(async () => { rendered.dropSurface.dispatchEvent(event); });
         expect(onAttachmentsAdded).toHaveBeenCalledWith([file]);
+    });
+
+    it('binds each dropped upload receipt at the composer caret', async () => {
+        const file = new File(['image'], 'photo.png', { type: 'image/png' });
+        const onChangeText = vi.fn();
+        const onAttachmentsAdded = vi.fn(() => [{ id: 'photo-draft', source: { kind: 'web' as const, file }, status: 'pending' as const }]);
+        const rendered = await renderAgentInput(onAttachmentsAdded, { onChangeText });
+        const input = rendered.container.querySelector<HTMLElement>('[data-testid="new-session-composer-input"]')!;
+        await act(async () => { input.dispatchEvent(createFileDragEvent('drop', [file])); });
+        expect(onAttachmentsAdded).toHaveBeenCalledOnce();
+        expect(onChangeText).toHaveBeenLastCalledWith('[photo.png](happier-ref:attachment:photo-draft)');
+    });
+
+    it('keeps an empty OS folder as one folder receipt and one mention', async () => {
+        const onChangeText = vi.fn();
+        const onAttachmentsAdded = vi.fn(() => [{ id: 'folder-draft', status: 'pending' as const,
+            source: { kind: 'folder' as const, name: 'Design', mimeType: 'inode/directory' as const, entries: [] } }]);
+        const rendered = await renderAgentInput(onAttachmentsAdded, { onChangeText });
+        const event = new MouseEvent('drop', { bubbles: true, cancelable: true });
+        Object.defineProperty(event, 'dataTransfer', { value: { files: [], types: ['Files'], items: [{ kind: 'file',
+            webkitGetAsEntry: () => ({ isFile: false, isDirectory: true, name: 'Design',
+                createReader: () => ({ readEntries: (callback: (entries: unknown[]) => void) => callback([]) }) }),
+        }] } });
+        await act(async () => { rendered.dropSurface.dispatchEvent(event); });
+        expect(onAttachmentsAdded).toHaveBeenCalledWith([], { sources: [{ kind: 'folder', name: 'Design',
+            mimeType: 'inode/directory', entries: [], directories: [] }] });
+        expect(onChangeText).toHaveBeenLastCalledWith('[Design](happier-ref:attachment:folder-draft)');
     });
 });

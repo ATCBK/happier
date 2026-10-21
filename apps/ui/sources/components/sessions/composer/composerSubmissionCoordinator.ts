@@ -6,7 +6,8 @@ import type {
     SessionExecutionTargetV1,
 } from '@happier-dev/protocol';
 import { composerRefsV1Equal } from '@happier-dev/protocol/plugins/ui/composerRef';
-import { admitMentionRefsV1ForText } from '@happier-dev/protocol/runtime/input/mentionRefV1';
+import { admitMentionRefsV1ForText, parseMentionRefV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
+import { INLINE_REFERENCE_ATTACHMENT_SCHEME_V1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 import { ComposerContentHandleV1Schema } from '@happier-dev/protocol/runtime/input/composerContentV1';
 import { hasSessionInputContentV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAuthoringV1';
 import { SessionExecutionTargetV1Schema } from '@happier-dev/protocol/sessions/creation/sessionExecutionTargetV1';
@@ -81,6 +82,36 @@ export type ComposerSubmissionFieldCurrentness = Readonly<{
     /** Current references that still name an exact token in `reconciledText`. */
     reconciledReferences: readonly ComposerMentionRef[];
 }>;
+
+/** Typed attachment ranges have custody; literal token text never acquires it. */
+export function dropOrphanComposerAttachmentReferences<Snapshot extends Readonly<{
+    text: string;
+    references: readonly ComposerMentionRef[];
+    attachments: readonly Readonly<{ instanceId: string }>[];
+}>>(
+    snapshot: Snapshot,
+    attachmentDraftIds: readonly string[] = [],
+): Snapshot {
+    const ids = new Set([...snapshot.attachments.map((attachment) => attachment.instanceId), ...attachmentDraftIds]);
+    let text = '';
+    let boundary = 0;
+    let removedChars = 0;
+    const references: ComposerMentionRef[] = [];
+    for (const reference of snapshot.references) {
+        const identity = parseMentionRefV1(reference.ref);
+        if (identity?.scheme === INLINE_REFERENCE_ATTACHMENT_SCHEME_V1 && !ids.has(identity.opaque)) {
+            text += snapshot.text.slice(boundary, reference.start);
+            boundary = reference.end;
+            removedChars += reference.end - reference.start;
+        } else {
+            references.push(removedChars === 0 ? reference : {
+                ...reference, start: reference.start - removedChars, end: reference.end - removedChars,
+            });
+        }
+    }
+    if (removedChars === 0) return snapshot;
+    return { ...snapshot, text: text + snapshot.text.slice(boundary), references };
+}
 
 function hasCanonicalComposerReferenceRanges(
     text: string,
@@ -265,6 +296,8 @@ export async function submitComposerSnapshot(input: Readonly<{
     signal?: AbortSignal;
     /** Sendable bytes owned by this mounted composer but staged outside the portable document. */
     additionalSendableContent?: boolean;
+    /** Upload drafts live beside plugin attachment views in their scope's transfer owner. */
+    attachmentDraftIds?: readonly string[];
     /** Clears through the owner token associated with the exact captured snapshot. */
     clearAcceptedSnapshot: (capturedSnapshot: ComposerSnapshotV1) => boolean;
 }>): Promise<ComposerSubmissionResult> {
@@ -273,8 +306,9 @@ export async function submitComposerSnapshot(input: Readonly<{
         return { status: 'unavailable' };
     }
 
-    const snapshot = captureComposerSubmissionSnapshot(capturedSnapshot);
-    if (!snapshot) return { status: 'unavailable' };
+    const captured = captureComposerSubmissionSnapshot(capturedSnapshot);
+    if (!captured) return { status: 'unavailable' };
+    const snapshot = dropOrphanComposerAttachmentReferences(captured, input.attachmentDraftIds);
     if (!isSubmissionRouteForSnapshot(snapshot, input.route)) {
         return { status: 'blocked', reason: 'scopeMismatch', snapshot };
     }

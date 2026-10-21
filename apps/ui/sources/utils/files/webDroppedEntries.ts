@@ -3,7 +3,9 @@ export type WebDroppedFileEntry = Readonly<{
     relativePath: string;
 }>;
 
-export async function readWebDroppedEntries(_dataTransfer: unknown): Promise<WebDroppedFileEntry[]> {
+export type WebDroppedEntriesOptions = Readonly<{ onDirectory?: (relativePath: string) => void }>;
+
+export async function readWebDroppedEntries(_dataTransfer: unknown, _options?: WebDroppedEntriesOptions): Promise<WebDroppedFileEntry[]> {
     return [];
 }
 

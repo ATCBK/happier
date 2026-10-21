@@ -5,7 +5,7 @@ import { SkillListItemV1Schema } from '@happier-dev/protocol/prompts/library/ski
 import { SkillCatalogItemV1Schema } from '@happier-dev/protocol/runtime/catalog/skills';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { PromptBundleArtifactHeaderV1Schema, PromptBundleBodyV1Schema } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
-import { buildSkillComposerGroups } from './skillComposerGroups';
+import { buildSkillComposerGroups, pickSkillComposerRow } from './skillComposerGroups';
 
 const skill = (skillId: string, name: string, userInvocable = true) => SkillListItemV1Schema.parse({ skillId, name,
     description: 'Useful capability', revision: '1:1', rules: [], trust: 'text_only', cost: { bodyTokens: 1, descriptionTokens: 1 },
@@ -19,6 +19,14 @@ const found = { machineId: 'm', observedAt: 99, result: SkillFoundListResultV1Sc
 ] }) };
 
 describe('composer skill groups', () => {
+    it('writes a Found skill selection with an inline token and the grouped canonical identity', async () => {
+        const row = buildSkillComposerGroups({ open: true, query: '', agentId: 'codex', machineId: 'm',
+            sessionItems: [], libraryItems: [], found }).flatMap(group => group.rows)[0]!;
+        expect(await pickSkillComposerRow(row, {
+            setItem: () => { throw new Error('A Found skill does not mutate the library selection'); },
+        })).toEqual({ ok: true, mention: { kind: 'happier.skill', ref: 'skill:vendor:codex:native',
+            token: '[native](happier-ref:skill:vendor:codex:native)', label: 'native' } });
+    });
     it.each([undefined, true])('does not resurrect a non-invocable Session identity from weaker Found data (%s)', userInvocable => {
         const groups = buildSkillComposerGroups({ open: true, query: '', agentId: 'codex', machineId: 'm',
             sessionItems: [SkillCatalogItemV1Schema.parse({ name: 'native', origin: 'vendor', backendId: 'codex', userInvocable: false })],

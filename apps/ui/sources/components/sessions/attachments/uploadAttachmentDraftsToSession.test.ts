@@ -32,14 +32,11 @@ describe('uploadAttachmentDraftsToSession', () => {
         });
         const metadata = buildAttachmentMessageMeta(result.uploaded);
         const payload = (metadata.happier as { payload: unknown }).payload;
-        expect(AttachmentsMessageMetaV1Schema.parse(payload).attachments[0]).toMatchObject({ attachmentHandle: handle });
+        expect(AttachmentsMessageMetaV1Schema.parse(payload).attachments[0]).toMatchObject({ id: 'd1', attachmentHandle: handle });
+        expect(result.uploaded[0]?.structuredInput).toMatchObject({ id: 'd1' });
         expect(sessionAttachmentsUploadFileSpy).not.toHaveBeenCalled();
     });
 
-    it('does not manufacture an empty attachment prompt block', async () => {
-        const { formatAttachmentsBlock } = await import('./uploadAttachmentDraftsToSession');
-        expect(formatAttachmentsBlock([])).toBe('');
-    });
     it('updates draft progress and preserves the uploaded attachment result contract', async () => {
         const { uploadAttachmentDraftsToSession } = await import('./uploadAttachmentDraftsToSession');
 
@@ -105,12 +102,14 @@ describe('uploadAttachmentDraftsToSession', () => {
             messageLocalId: 'm1',
             uploaded: [
                 {
+                    id: 'd1',
                     name: 'file.png',
                     path: '.happier/uploads/messages/m1/12345678-file.png',
                     mimeType: 'image/png',
                     sizeBytes: 5,
                     sha256: 'h1',
                     structuredInput: {
+                        id: 'd1',
                         type: 'localImage',
                         kind: 'image',
                         localPath: '.happier/uploads/messages/m1/12345678-file.png',
@@ -179,6 +178,7 @@ describe('uploadAttachmentDraftsToSession', () => {
         });
 
         expect(res.uploaded[0]).toEqual({
+            id: 'd1',
             name: 'readme.md',
             path: '.happier/uploads/messages/m1/readme.md',
             mimeType: 'text/markdown',

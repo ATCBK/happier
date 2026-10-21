@@ -22,7 +22,7 @@ describe('buildTemporaryComputerFirstPrompt', () => {
         })).toBe('  Keep my intentional spacing  ');
     });
 
-    it('adds the ordinary attachment block only after verified uploads exist', () => {
+    it('keeps uploads in metadata without adding an attachment listing to the prompt', () => {
         expect(buildTemporaryComputerFirstPrompt({
             reviewedText: 'Inspect this',
             uploaded: [{
@@ -33,7 +33,7 @@ describe('buildTemporaryComputerFirstPrompt', () => {
                 sizeBytes: 8,
                 sha256: 'a'.repeat(64),
             }],
-        })).toContain('Inspect this\n\nAttachments: open and analyze these files before answering.');
+        })).toBe('Inspect this');
     });
 
     it('retains reviewed Composer reference identity in the recovery delivery', () => {

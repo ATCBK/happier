@@ -9,6 +9,17 @@ function sourceName(file: Parameters<UploadFile>[0]['file']): string {
 }
 
 describe('uploadReviewedRunnerAttachments', () => {
+    it('keeps the reviewed tray identity on rebuilt image input after checkpoint recovery', async () => {
+        const sha256 = 'd'.repeat(64);
+        const uploaded = await uploadReviewedRunnerAttachments({ sessionId: 'session-1', messageLocalId: 'message-1',
+            reviewedFiles: [{ id: 'image-1', name: 'screen.png', mimeType: 'image/png', sizeBytes: 8, sha256 }],
+            stagedFiles: [{ id: 'image-1', source: { kind: 'memory', name: 'screen.png', mimeType: 'image/png', bytes: new Uint8Array(8) } }],
+            resumedUploads: [{ id: 'image-1', name: 'screen.png', mimeType: 'image/png', path: 'uploads/screen.png', sizeBytes: 8, sha256 }],
+            destination: { uploadLocation: 'workspace', workspaceRelativeDir: '.happier/uploads', vcsIgnoreStrategy: 'none', vcsIgnoreWritesEnabled: false },
+            maxFileBytes: 1024, admitInitialPrompt: () => {},
+        });
+        expect(uploaded[0]).toMatchObject({ id: 'image-1', structuredInput: { id: 'image-1' } });
+    });
     it('does not admit the prompt when a later ordinary upload returns a different reviewed size', async () => {
         const digest = 'a'.repeat(64);
         const admitInitialPrompt = vi.fn();

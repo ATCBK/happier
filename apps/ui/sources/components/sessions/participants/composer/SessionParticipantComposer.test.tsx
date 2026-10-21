@@ -578,8 +578,8 @@ describe('SessionParticipantComposer', () => {
         }));
         expect(syncSubmitMessageSpy).toHaveBeenCalledWith(
             's1',
-            expect.stringContaining('.happier/uploads/messages/first-input-1/notes.txt'),
             'Inspect the final edit',
+            undefined,
             expect.objectContaining({
                 happier: expect.objectContaining({ kind: 'attachments.v1' }),
             }),

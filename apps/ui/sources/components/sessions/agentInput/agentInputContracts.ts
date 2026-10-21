@@ -75,6 +75,9 @@ export type AgentInputComposerInputLock = ComposerInputLockSnapshotV1;
  */
 type AgentInputAttachmentRowItemBase = Readonly<{
     key: string;
+    /** Canonical tray identity, independent of the row's React presentation key. */
+    attachmentId?: string;
+    attachmentType?: 'file' | 'folder';
     label: string;
     testID?: string;
     accessibilityLabel?: string;
@@ -283,6 +286,7 @@ export type AgentInputAttachmentUploadProgress = Readonly<{
 export type AgentInputAttachment = Readonly<{
     key: string;
     label: string;
+    attachmentType?: 'file' | 'folder';
     status?: 'pending' | 'uploading' | 'uploaded' | 'error';
     preview?: AgentInputAttachmentPreview;
     uploadProgress?: AgentInputAttachmentUploadProgress;
@@ -301,6 +305,8 @@ function createAgentInputAttachmentRowItemBase(
 ): Omit<AgentInputAttachmentRowBadge, 'kind' | 'icon'> {
     return {
         key: attachment.key,
+        attachmentId: attachment.key,
+        ...(attachment.attachmentType ? { attachmentType: attachment.attachmentType } : {}),
         label: attachment.label,
         ...(attachment.status === undefined ? {} : { status: attachment.status }),
         ...(attachment.uploadProgress === undefined ? {} : { uploadProgress: attachment.uploadProgress }),
@@ -346,6 +352,20 @@ export function projectAgentInputAttachmentRowItems(input: Readonly<{
         ...items,
         ...transferAttachments.map(projectAgentInputAttachmentRowItem),
     ];
+}
+
+/**
+ * "Image #N" for the tray's pictures, keyed by item id and derived from tray order on every read
+ * (CIR-I02: never stored). The tray's corner badge and the composer's chip label read this one map.
+ */
+export function readAgentInputImageNumbers(items: readonly AgentInputAttachmentsRowItem[]): ReadonlyMap<string, number> {
+    const numbers = new Map<string, number>();
+    for (const item of items) {
+        if (item.kind === 'media' && item.media === 'image' && item.attachmentId !== undefined && !numbers.has(item.attachmentId)) {
+            numbers.set(item.attachmentId, numbers.size + 1);
+        }
+    }
+    return numbers;
 }
 
 export type ComposerAttachmentCatalogRowDescriptor = Readonly<{
@@ -394,6 +414,7 @@ function createComposerAttachmentFallbackBadge(input: Readonly<{
     return {
         kind: 'badge',
         key: input.attachment.instanceId,
+        attachmentId: input.attachment.instanceId,
         label: input.attachment.presentation.label,
         availability: input.attachment.availability.status,
         ...(input.onPress === undefined ? {} : { onPress: input.onPress }),
@@ -459,6 +480,7 @@ export function projectComposerAttachmentRowItem(input: Readonly<{
         return {
             kind: 'media',
             key: input.attachment.instanceId,
+            attachmentId: input.attachment.instanceId,
             label: input.attachment.presentation.label,
             media: media.media,
             renderedPreview: media.renderedPreview,
@@ -475,6 +497,7 @@ export function projectComposerAttachmentRowItem(input: Readonly<{
         return {
             kind: 'surface',
             key: input.attachment.instanceId,
+            attachmentId: input.attachment.instanceId,
             label: input.attachment.presentation.label,
             sizing: display.sizing,
             renderedContent: input.surface.renderedContent,

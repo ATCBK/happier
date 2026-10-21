@@ -30,6 +30,8 @@ import { getSessionDraftDocumentField as getField, getSessionDraftDocumentFieldV
 import { parseSerializedSessionDraftScope, serializeSessionDraftReplica } from './sessionDraftSerializedScope';
 import { clearNewSessionAttachmentDrafts } from '@/components/sessions/new/attachments/newSessionAttachmentDraftStore';
 import { resolveNewSessionDraftAttachmentFlowId } from '@/components/sessions/new/attachments/newSessionDraftAttachmentFlowId';
+import { normalizeComposerDraftReferenceTokens } from '@/components/sessions/composer/composerScopeAdapters';
+import { parseComposerStructuredInputMentionsForText } from '@/sync/domains/input/draftValues/sessionDraftValueTypes';
 
 export type SessionDraftRepositoryScope = ServerAccountScope;
 /**
@@ -475,6 +477,14 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function normalizeComposerDraftContent(composer: SessionComposerDraftSnapshot['composer']): SessionComposerDraftSnapshot['composer'] {
+    const normalized = normalizeComposerDraftReferenceTokens({ text: composer.text.value,
+        mentions: parseComposerStructuredInputMentionsForText(composer.mentions.value, composer.text.value).mentions });
+    if (normalized.text === composer.text.value) return composer;
+    return { ...composer, text: { ...composer.text, value: normalized.text },
+        mentions: { ...composer.mentions, value: normalized.mentions.map(mention => StrictJsonValueSchema.parse(mention)) } };
+}
+
 function readComposerContent(document: unknown): Pick<SessionComposerDraftSnapshot, 'composer' | 'documentVersion' | 'targetKind'> | null {
     const raw = isRecord(document) ? document : null;
     const targetKind = isRecord(raw?.target) ? raw.target.kind : null;
@@ -484,14 +494,14 @@ function readComposerContent(document: unknown): Pick<SessionComposerDraftSnapsh
             const kind = arm.shape.kind.safeParse(targetKind);
             if (!kind.success) continue;
             const composer = createStoredReadSchema(SessionDraftDocumentV1Schema.shape.composer).safeParse(raw.composer);
-            return composer.success ? { documentVersion: 1, targetKind: kind.data, composer: composer.data } : null;
+            return composer.success ? { documentVersion: 1, targetKind: kind.data, composer: normalizeComposerDraftContent(composer.data) } : null;
         }
     }
     if (NewSessionDraftDocumentV2Schema.shape.v.safeParse(raw.v).success) {
         const kind = NewSessionDraftDocumentV2Schema.shape.target.shape.kind.safeParse(targetKind);
         if (kind.success) {
             const composer = createStoredReadSchema(SessionDraftDocumentV1Schema.shape.composer).safeParse(raw.composer);
-            return composer.success ? { documentVersion: 2, targetKind: kind.data, composer: composer.data } : null;
+            return composer.success ? { documentVersion: 2, targetKind: kind.data, composer: normalizeComposerDraftContent(composer.data) } : null;
         }
     }
     if (DiscussionDraftDocumentV2Schema.shape.v.safeParse(raw.v).success) {

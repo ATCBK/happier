@@ -42,6 +42,27 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 }));
 
 describe('structured input autocomplete suggestions', () => {
+    it('writes inline vendor and skill selections through the envelope boundary', async () => {
+        const { getSuggestions } = await import('./suggestions');
+        const { createStructuredInputMentionFromSuggestion, buildStructuredInputMetaOverrides } = await import(
+            '@/components/sessions/agentInput/structuredInputMentions'
+        );
+        const cases = [
+            { query: '@plugin:mail', catalogs: { vendorPlugins: [{ name: 'mail', displayName: 'Mail',
+                vendorPluginRef: 'plugin:mail', installed: true, enabled: true }] }, token: '[Mail](happier-ref:vendorPlugin:plugin:mail)' },
+            { query: '$review', catalogs: { skills: [{ id: 'review-id', name: 'review', displayName: 'Review',
+                origin: 'happier' }] }, token: '[Review](happier-ref:skill:review-id)' },
+        ];
+        for (const item of cases) {
+            const suggestions = await getSuggestions('s1', item.query, { catalogs: item.catalogs });
+            const suggestion = suggestions[0];
+            expect(suggestion?.text).toBe(item.token);
+            if (!suggestion) throw new Error('Missing reference suggestion');
+            const mention = createStructuredInputMentionFromSuggestion({ suggestion, start: 0 });
+            const meta = buildStructuredInputMetaOverrides({ text: item.token, mentions: mention ? [mention] : [] });
+            expect(meta).toMatchObject({ happierStructuredInputV1: { mentions: [expect.objectContaining({ token: item.token })] } });
+        }
+    });
     beforeEach(() => {
         sessionRpcWithServerScopeMock.mockReset();
         machineRpcWithServerScopeMock.mockReset();
@@ -144,7 +165,7 @@ describe('structured input autocomplete suggestions', () => {
         expect(suggestions).toHaveLength(1);
         expect(suggestions[0]).toMatchObject({
             key: 'vendor-plugin-plugin://gmail@openai-curated',
-            text: '@gmail',
+            text: '[Gmail](happier-ref:vendorPlugin:plugin://gmail@openai-curated)',
             structuredInput: {
                 kind: 'vendorPlugin',
                 vendorPluginRef: 'plugin://gmail@openai-curated',
@@ -247,7 +268,7 @@ describe('structured input autocomplete suggestions', () => {
             : null;
         const meta = buildStructuredInputMetaOverrides({
             mentions: mention ? [mention] : [],
-            text: '@gmail',
+            text: '[Gmail](happier-ref:vendorPlugin:plugin://gmail@openai-curated)',
         });
 
         expect(sessionRpcWithServerScopeMock).toHaveBeenCalledWith({
@@ -274,7 +295,7 @@ describe('structured input autocomplete suggestions', () => {
         });
         expect(suggestions[0]).toMatchObject({
             key: 'vendor-plugin-plugin://gmail@openai-curated',
-            text: '@gmail',
+            text: '[Gmail](happier-ref:vendorPlugin:plugin://gmail@openai-curated)',
             structuredInput: {
                 kind: 'vendorPlugin',
                 vendorPluginRef: 'plugin://gmail@openai-curated',
@@ -289,7 +310,7 @@ describe('structured input autocomplete suggestions', () => {
                         MENTION_KIND_V1.vendorPlugin,
                         'plugin://gmail@openai-curated',
                     ),
-                    token: '@gmail',
+                    token: '[Gmail](happier-ref:vendorPlugin:plugin://gmail@openai-curated)',
                     label: 'Gmail',
                 }],
                 vendorPluginMentions: [
@@ -365,7 +386,7 @@ describe('structured input autocomplete suggestions', () => {
         expect(suggestions).toHaveLength(1);
         expect(suggestions[0]).toMatchObject({
             key: 'file-src/index.ts',
-            text: '@src/index.ts',
+            text: '[index.ts](happier-ref:file:src/index.ts)',
         });
         expect(suggestions[0]?.structuredInput).toEqual({
             kind: MENTION_KIND_V1.file,
@@ -378,7 +399,7 @@ describe('structured input autocomplete suggestions', () => {
             : null;
         expect(buildStructuredInputMetaOverrides({
             mentions: mention ? [mention] : [],
-            text: '@src/index.ts',
+            text: '[index.ts](happier-ref:file:src/index.ts)',
         })).toEqual({
             happierStructuredInputV1: {
                 v: 1,
@@ -386,7 +407,7 @@ describe('structured input autocomplete suggestions', () => {
                     kind: MENTION_KIND_V1.file,
                     ref: buildMentionRefForKindV1(MENTION_KIND_V1.file, 'src/index.ts'),
                     label: 'index.ts',
-                    token: '@src/index.ts',
+                    token: '[index.ts](happier-ref:file:src/index.ts)',
                 }],
             },
         });
@@ -443,7 +464,7 @@ describe('structured input autocomplete suggestions', () => {
         });
         const meta = buildStructuredInputMetaOverrides({
             mentions: mention ? [mention] : [],
-            text: '$review',
+            text: '[Review](happier-ref:skill:codex:review)',
         });
 
         expect(fileMention).toBeNull();
@@ -455,7 +476,7 @@ describe('structured input autocomplete suggestions', () => {
         });
         expect(suggestions[0]).toMatchObject({
             key: 'skill-codex:review',
-            text: '$review',
+            text: '[Review](happier-ref:skill:codex:review)',
             structuredInput: {
                 kind: 'skill',
                 name: 'review',
@@ -489,7 +510,7 @@ describe('structured input autocomplete suggestions', () => {
                 mentions: [{
                     kind: MENTION_KIND_V1.skill,
                     ref: buildMentionRefForKindV1(MENTION_KIND_V1.skill, 'codex:review'),
-                    token: '$review',
+                    token: '[Review](happier-ref:skill:codex:review)',
                     label: 'Review',
                 }],
                 skillMentions: [
@@ -611,7 +632,7 @@ describe('structured input autocomplete suggestions', () => {
         expect(suggestions).toHaveLength(1);
         expect(suggestions[0]).toMatchObject({
             key: 'skill-codex_native:/skills/review/skill.md:review',
-            text: '$review',
+            text: '[Review](happier-ref:skill:vendor:codex:codex_native:review)',
             structuredInput: {
                 kind: 'skill',
                 name: 'review',

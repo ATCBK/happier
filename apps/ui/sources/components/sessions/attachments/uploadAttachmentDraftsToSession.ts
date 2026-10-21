@@ -4,18 +4,20 @@ import { buildUploadedAttachment, type UploadedAttachment } from '@happier-dev/p
 
 import type { AttachmentsUploadConfig } from '@/sync/domains/transfers/ops/uploadSessionAttachment';
 import { sessionAttachmentsUploadFile } from '@/sync/domains/transfers/ops/uploadSessionAttachment';
-import type { AttachmentsUploadFileSource } from '@/sync/domains/attachments/attachmentsUploadFileSource';
+import type { AttachmentUploadSource } from '@/sync/domains/attachments/attachmentsUploadFileSource';
 import { RpcError } from '@/sync/runtime/rpcErrors';
 import { randomUUID } from '@/platform/randomUUID';
 import { runTransferFinalizeRecovery } from '@/components/transfers/recovery/runTransferFinalizeRecovery';
 import { t } from '@/text';
+import { describeUploadFailure } from '@/components/transfers/describeUploadFailure';
+import { classifyTransferFailure } from '@/sync/domains/transfers/runtime/transferRuntime';
 import { isTransferFinalizeRecoveryFailure } from '@/sync/domains/transfers/runtime/transferRuntime';
-import type { SessionAttachmentsUploadFinalizeResponse } from '@/sync/domains/transfers/runtime/transferRuntime/families/sessionAttachmentTransfers';
+import type { SessionAttachmentsUploadFinalizeResponse, SessionAttachmentTransferContext } from '@/sync/domains/transfers/runtime/transferRuntime/families/sessionAttachmentTransfers';
 
-import type { AttachmentDraft } from './attachmentDraftModel';
+import { sendableAttachmentDrafts, type AttachmentDraft } from './attachmentDraftModel';
 import type { ExactSessionMachineTargetIdentity } from '@/sync/ops/sessionMachineTarget';
 
-export { buildUploadedAttachment, buildAttachmentMessageMeta, formatAttachmentsBlock, type UploadedAttachment } from '@happier-dev/protocol/messages/structured/sessionAttachmentsInputV1';
+export { buildUploadedAttachment, buildAttachmentMessageMeta, type UploadedAttachment } from '@happier-dev/protocol/messages/structured/sessionAttachmentsInputV1';
 
 export type AttachmentUploadedDraftCheckpoint = Readonly<{
     id: string;
@@ -34,11 +36,15 @@ export type AttachmentTargetUploadedDraftCheckpoint = AttachmentUploadedDraftChe
 
 type UploadedAttachmentBase = Omit<UploadedAttachment, 'structuredInput'>;
 
-export function describeAttachmentUploadSource(source: AttachmentsUploadFileSource): Readonly<{
+export function describeAttachmentUploadSource(source: AttachmentUploadSource): Readonly<{
     name: string;
     mimeType?: string;
     sizeBytes?: number;
 }> {
+    if (source.kind === 'folder') {
+        return { name: source.name, mimeType: source.mimeType,
+            sizeBytes: source.entries.reduce((total, entry) => total + (describeAttachmentUploadSource(entry.source).sizeBytes ?? 0), 0) };
+    }
     if (source.kind === 'web') {
         return {
             name: source.file.name,
@@ -72,6 +78,7 @@ export async function uploadAttachmentDraftsToSession(args: Readonly<{
     sessionId: string;
     /** Exact qualified Session target when the created Session is outside the active Account. */
     sessionTarget?: ExactSessionMachineTargetIdentity;
+    transferContext?: SessionAttachmentTransferContext;
     drafts: readonly AttachmentDraft[];
     config: AttachmentsUploadConfig;
     applyDraftPatch: (id: string, patch: Partial<Omit<AttachmentDraft, 'id' | 'source'>>) => void;
@@ -91,7 +98,7 @@ export async function uploadAttachmentDraftsToSession(args: Readonly<{
     const messageLocalId = args.messageLocalId ?? randomUUID();
     const uploaded: UploadedAttachment[] = [];
 
-    for (const draft of args.drafts) {
+    for (const draft of sendableAttachmentDrafts(args.drafts)) {
         args.signal?.throwIfAborted();
         const stillPresent = args.drafts.find((d) => d.id === draft.id);
         if (!stillPresent) continue;
@@ -99,6 +106,7 @@ export async function uploadAttachmentDraftsToSession(args: Readonly<{
         const described = describeAttachmentUploadSource(stillPresent.source);
         if (stillPresent.uploadedPath) {
             const uploadedAttachment: UploadedAttachmentBase = {
+                id: stillPresent.id,
                 name: described.name,
                 path: stillPresent.uploadedPath,
                 sizeBytes: stillPresent.uploadedSizeBytes ?? described.sizeBytes ?? 0,
@@ -120,7 +128,9 @@ export async function uploadAttachmentDraftsToSession(args: Readonly<{
         let uploadRes = await (args.uploadFile ?? sessionAttachmentsUploadFile)({
             sessionId: args.sessionId,
             ...(args.sessionTarget ? { sessionTarget: args.sessionTarget } : {}),
+            ...(args.transferContext ? { transferContext: args.transferContext } : {}),
             file: stillPresent.source,
+            ...(stillPresent.source.kind === 'folder' ? { folderUploadId: stillPresent.id } : {}),
             messageLocalId,
             config: args.config,
             signal: args.signal ?? undefined,
@@ -150,7 +160,8 @@ export async function uploadAttachmentDraftsToSession(args: Readonly<{
         }
         args.signal?.throwIfAborted();
         if (!uploadRes.success) {
-            args.applyDraftPatch(stillPresent.id, { status: 'error', error: uploadRes.error });
+            args.applyDraftPatch(stillPresent.id, { status: 'error', error: stillPresent.source.kind === 'folder'
+                ? describeUploadFailure(classifyTransferFailure(uploadRes), t('common.machine')) : uploadRes.error });
             throw createAttachmentUploadFailureError(uploadRes);
         }
 
@@ -175,6 +186,7 @@ export async function uploadAttachmentDraftsToSession(args: Readonly<{
         });
 
         const uploadedAttachment: UploadedAttachmentBase = {
+            id: stillPresent.id,
             name: described.name,
             path: uploadRes.path,
             sizeBytes: uploadRes.sizeBytes,

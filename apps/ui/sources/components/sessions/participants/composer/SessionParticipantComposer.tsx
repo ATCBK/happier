@@ -58,7 +58,6 @@ import { useAttachmentDraftManager } from '@/components/sessions/attachments/use
 import { useAttachmentsUploadConfig } from '@/components/sessions/attachments/useAttachmentsUploadConfig';
 import {
     buildAttachmentMessageMeta,
-    formatAttachmentsBlock,
     uploadAttachmentDraftsToSession,
 } from '@/components/sessions/attachments/uploadAttachmentDraftsToSession';
 import { useSessionFileUploadAvailability } from '@/components/sessions/files/useSessionFileUploadAvailability';
@@ -68,6 +67,7 @@ import {
 } from '@/components/sessions/composer/composerSubmissionCoordinator';
 import {
     applyComposerPresentationTransaction,
+    removeMountedComposerAttachmentReferences,
     notifyComposerPresentationTargetChanged,
     readComposerPresentationSnapshot,
     registerComposerPresentationTarget,
@@ -414,6 +414,12 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
         enabled: attachmentsUploadsEnabled,
         maxFileBytes: attachmentsUploadConfig.maxFileBytes,
         initialDrafts: initialTransferDrafts,
+        ...(props.sessionId ? { eagerUpload: { sessionId: props.sessionId, config: attachmentsUploadConfig } } : {}),
+        onRemoveDraft: (attachmentId) => {
+            if (!composerAccountLifetime?.isCurrent()) return;
+            removeMountedComposerAttachmentReferences({ ref: composerRef,
+                scope: composerAccountLifetime.scope, attachmentId });
+        },
     });
     const [isUploadingAttachments, setIsUploadingAttachments] = React.useState(false);
     const activeTransferDraftScopeRef = React.useRef(transferDraftScope);
@@ -655,7 +661,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
 
         const snapshot = readParticipantComposerSnapshot();
         const submittedCurrentness = participantComposerDocumentOwner.captureCurrentness();
-        const submittedTransferDrafts = [...transferDraftManager.getDraftsSnapshot()];
+        const submittedTransferDrafts = [...transferDraftManager.getSendableDraftsSnapshot()];
         const submittedTransferDraftIds = new Set(submittedTransferDrafts.map((draft) => draft.id));
         const clearSubmittedTransferDrafts = () => {
             if (submittedTransferDraftIds.size === 0) return;
@@ -670,6 +676,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
         };
         fireAndForget(submitComposerSnapshot({
             snapshot,
+            attachmentDraftIds: submittedTransferDrafts.map(draft => draft.id),
             signal: participantComposerPresentation.scopeSignal,
             additionalSendableContent: submittedTransferDrafts.length > 0,
             route: {
@@ -725,7 +732,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
                     };
 
                     try {
-                        let outboundText = text;
+                        const outboundText = text;
                         let transferMetaOverrides: Record<string, unknown> | undefined;
                         if (submittedTransferDrafts.length > 0) {
                             if (!composerAccountLifetime || props.sessionId === null) {
@@ -745,8 +752,6 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
                                 applyDraftPatch: transferDraftManager.applyDraftPatch,
                                 messageLocalId: submissionLocalId,
                             });
-                            const attachmentBlock = formatAttachmentsBlock(uploaded);
-                            outboundText = text.length > 0 ? `${text}\n\n${attachmentBlock}` : attachmentBlock;
                             transferMetaOverrides = buildAttachmentMessageMeta(uploaded);
                         }
                         // Every Session-bound participant destination — including an Execution

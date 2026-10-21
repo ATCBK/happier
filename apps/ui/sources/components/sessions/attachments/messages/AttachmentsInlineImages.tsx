@@ -20,6 +20,9 @@ export const AttachmentsInlineImages = React.memo(function AttachmentsInlineImag
     onOpenPath: (path: string) => void;
     fileOpenEnabled: boolean;
     mediaPreviewEnabled: boolean;
+    numbers?: ReadonlyMap<string, number>;
+    ringedPath?: string | null;
+    onPreviewLoaded?: (path: string, uri: string) => void;
 }>) {
     const media = React.useMemo(() => {
         const result: SessionMediaInlineMediaSummary[] = [];
@@ -52,6 +55,9 @@ export const AttachmentsInlineImages = React.memo(function AttachmentsInlineImag
             fileOpenEnabled={props.fileOpenEnabled}
             mediaPreviewEnabled={props.mediaPreviewEnabled}
             testIdPrefix="message-attachments"
+            numbers={props.numbers}
+            ringedPath={props.ringedPath}
+            onPreviewLoaded={props.onPreviewLoaded}
         />
     );
 });

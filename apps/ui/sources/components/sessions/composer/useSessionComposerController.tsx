@@ -58,13 +58,14 @@ import { COMPOSER_SOURCE_REF_PRIVATE_META_FIELD_V1, composerRefV1Key } from "@ha
 import { PluginContextualResourceStoreProvider } from "@/components/plugins/surfaces/PluginContextualResourceStoreProvider";
 import { projectComposerAttachmentRowItems } from "@/components/sessions/composer/composerAttachmentProjection";
 import { createExistingSessionComposerDocumentOwner } from "@/components/sessions/composer/existingSessionComposerDocumentOwner";
+import { removeMountedComposerAttachmentReferences } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
 import { createPendingMessageComposerDocumentOwner, withdrawPendingMessageToComposerWithActionApproval } from "@/components/sessions/composer/pendingMessageComposerDocumentOwner";
 import { useActionApprovalContinuation } from "@/components/approvals/useActionApprovalContinuation";
 import type { ComposerDraftFieldCurrentness, MutableComposerDocumentOwner } from "@/components/sessions/composer/composerDocumentOwner";
 import { createEphemeralComposerDocumentOwner, sameComposerAttachmentViews } from "@/components/sessions/composer/composerDocumentOwner";
 import { projectComposerDocumentSnapshot } from "@/components/sessions/composer/composerSnapshotProjection";
 import { composerAttachmentDraftToView, composerAttachmentViewToDraft, composerReferencesFromStructuredMentions, composerStructuredMentionsFromReferences, resolveCurrentComposerAttachmentCatalogEntry } from "@/components/sessions/composer/composerScopeAdapters";
-import { submitComposerSnapshot, type ComposerSubmissionAdmissionHandoff, type ComposerSubmissionAdmissionOutcome, type ComposerSubmissionResult, type ComposerSubmissionSnapshot } from "@/components/sessions/composer/composerSubmissionCoordinator";
+import { dropOrphanComposerAttachmentReferences, submitComposerSnapshot, type ComposerSubmissionAdmissionHandoff, type ComposerSubmissionAdmissionOutcome, type ComposerSubmissionResult, type ComposerSubmissionSnapshot } from "@/components/sessions/composer/composerSubmissionCoordinator";
 import type { PendingMessageEditRequest } from "@/components/sessions/pending/PendingMessagesTranscriptBlock";
 import { useDraft } from "@/hooks/session/useDraft";
 import { SessionDraftConflictResolution, useSessionDraftConflictComposerBanner } from "@/components/sessions/drafts/SessionDraftConflictResolution";
@@ -207,8 +208,9 @@ import { narrowSessionModelPickerToAllowedModels, readEffectiveAllowedModelRef, 
 import { areServerProfileIdentifiersEquivalent, getServerProfileById } from "@/sync/domains/server/serverProfiles";
 import { useAttachmentsUploadConfig } from "@/components/sessions/attachments/useAttachmentsUploadConfig";
 import { useAttachmentDraftManager } from "@/components/sessions/attachments/useAttachmentDraftManager";
+import { sendableAttachmentDrafts } from "@/components/sessions/attachments/attachmentDraftModel";
 import { clearSessionAttachmentDrafts, readSessionAttachmentDrafts, type SessionAttachmentDraftScope, writeSessionAttachmentDrafts } from "@/components/sessions/attachments/sessionAttachmentDraftStore";
-import { buildAttachmentMessageMeta, formatAttachmentsBlock, uploadAttachmentDraftsToSession } from "@/components/sessions/attachments/uploadAttachmentDraftsToSession";
+import { buildAttachmentMessageMeta, uploadAttachmentDraftsToSession } from "@/components/sessions/attachments/uploadAttachmentDraftsToSession";
 import { captureSessionMessageAttachmentDrafts, isAttachmentTargetUploadCheckpointFor, recordAttachmentTargetUploadCheckpoint } from "@/components/sessions/attachments/uploadSessionMessageAttachmentDrafts";
 import { describeAttachmentUploadSource } from "@/components/sessions/attachments/uploadAttachmentDraftsToSession";
 import { formatAttachmentSelectionSummary } from "@happier-dev/protocol/messages/structured/sessionAttachmentsInputV1";
@@ -2902,6 +2904,12 @@ export function useSessionComposerController({
         enabled: attachmentsUploadsEnabled,
         maxFileBytes: attachmentsUploadConfig.maxFileBytes,
         initialDrafts: initialSessionAttachmentDrafts,
+        eagerUpload: { sessionId, config: attachmentsUploadConfig },
+        onRemoveDraft: (attachmentId) => {
+            if (!sessionAccountLifetime?.isCurrent()) return;
+            removeMountedComposerAttachmentReferences({ ref: activeComposerRefRef.current,
+                scope: sessionAccountLifetime.scope, attachmentId });
+        },
     });
     const filePickerRef = attachmentDraftManager.filePickerRef;
     const attachmentDrafts = attachmentDraftManager.drafts;
@@ -3872,7 +3880,7 @@ export function useSessionComposerController({
         // kept the typed sentence in `displayText`, and editing the expansion is
         // editing something the user never wrote. The mention admission below
         // reads the same text, so a chip can never outlive its token.
-        const editText = readMessageDisplayText(request);
+        let editText = readMessageDisplayText(request);
         const attachmentHydration = hydratePendingMessageComposerAttachmentDrafts(
             readObjectRecord(request.message.rawRecord)?.meta,
             editText,
@@ -3884,6 +3892,7 @@ export function useSessionComposerController({
             );
             return;
         }
+        editText = attachmentHydration.text ?? editText;
 
         const accountLifetime = sessionAccountLifetime;
         const hydratedComposerMentions = composerStructuredMentionsFromReferences({
@@ -6328,7 +6337,7 @@ export function useSessionComposerController({
                                                     && currentEdit.pendingId === activePendingEdit.pendingId
                                                     && currentEdit.localId === activePendingEdit.localId
                                                     && isPendingMessageEditAccountCurrent(activePendingEdit)
-                                                    && isPendingMessageComposerSubmissionSnapshotCurrent(currentEdit, snapshot);
+                                                    && isPendingMessageComposerSubmissionSnapshotCurrent(currentEdit, pendingComposerSnapshot);
                                             };
                                             if (snapshot.ref.kind !== 'pendingMessage' || !isStructuredInputCurrent()) {
                                                 return { status: 'rejected' };
@@ -6537,12 +6546,17 @@ export function useSessionComposerController({
                             ? 'server_pending' as const
                             : undefined;
 
-                        const additionalMessage = messageToSend;
-                        const trimmedText = messageToSend.trim();
                         // Capture all semantic fields before an asynchronous send-choice prompt.
                         // The canonical draft owner later clears only this exact value/revision snapshot.
                         const semanticDraftSnapshot = captureComposerSemanticDraftCurrentnessSnapshot();
-                        const composerSubmissionSnapshot = readSessionComposerSubmissionSnapshot(composerTextBeforeSend);
+                        const submittedAttachmentDrafts = sendableAttachmentDrafts(getAttachmentDraftsSnapshot());
+                        const sourceComposerSubmissionSnapshot = readSessionComposerSubmissionSnapshot(composerTextBeforeSend);
+                        const composerSubmissionSnapshot = dropOrphanComposerAttachmentReferences(
+                            sourceComposerSubmissionSnapshot, submittedAttachmentDrafts.map(draft => draft.id),
+                        );
+                        if (messageToSend === sourceComposerSubmissionSnapshot.text) messageToSend = composerSubmissionSnapshot.text;
+                        const additionalMessage = messageToSend;
+                        const trimmedText = messageToSend.trim();
                         const composerAttachmentsForSubmit = semanticDraftSnapshot.values['structuredInput.composerAttachments'] ?? [];
                         const hasComposerAttachments = composerAttachmentsForSubmit.length > 0;
                         const scmDiscussion = recipientState.scmDiffSummaryDiscussion;
@@ -6635,7 +6649,6 @@ export function useSessionComposerController({
                             );
 
                         const shouldSendReviewComments = hasIncludedReviewCommentDrafts;
-                        const submittedAttachmentDrafts = getAttachmentDraftsSnapshot();
                         const hasAttachments = attachmentsUploadsEnabled && submittedAttachmentDrafts.length > 0;
                         const participantRecipient = recipientState.recipient;
                         const sessionMessaging = readSessionComposerMessageIntent(composerSubmissionSnapshot,
@@ -6693,7 +6706,8 @@ export function useSessionComposerController({
                                 await flushSessionDraftLocally({ scope: outboundAccountLifetime.scope });
                                 if (!outboundAccountLifetime.isCurrent() || composerPluginActionScopeSignal.aborted) return;
                                 await submitComposerSnapshot({
-                                    snapshot: composerSubmissionSnapshot,
+                                    snapshot: sourceComposerSubmissionSnapshot,
+                                    attachmentDraftIds: submittedAttachmentDrafts.map(draft => draft.id),
                                     signal: composerPluginActionScopeSignal,
                                     additionalSendableContent: hasAttachments || shouldSendReviewComments,
                                     route: { kind: 'session', ref: { kind: 'session', sessionId },
@@ -7044,7 +7058,8 @@ export function useSessionComposerController({
                                 return admit(composerSubmissionSnapshot, directHandoff);
                             }
                             return submitComposerSnapshot({
-                                snapshot: composerSubmissionSnapshot,
+                                snapshot: sourceComposerSubmissionSnapshot,
+                                attachmentDraftIds: submittedAttachmentDrafts.map(draft => draft.id),
                                 signal: composerPluginActionScopeSignal,
                                 route: {
                                     kind: 'session',
@@ -7377,7 +7392,6 @@ export function useSessionComposerController({
                                         },
                                     });
                                     if (!outboundAccountLifetime.isCurrent()) return { status: 'rejected' };
-                                    const attachmentsBlock = formatAttachmentsBlock(uploaded);
                                     const attachmentsMetaOverrides = buildAttachmentMessageMeta(uploaded);
 
                                     const outbound = shouldSendReviewComments
@@ -7388,15 +7402,12 @@ export function useSessionComposerController({
                                                 reviewScope,
                                                 signal: sessionViewCaller.signal,
                                             }),
-                                            additionalMessage: trimmedText.length > 0
-                                                ? `${additionalMessage}\n\n${attachmentsBlock}`
-                                                : attachmentsBlock,
-                                            displayTextSuffix: attachmentsBlock,
+                                            additionalMessage,
                                             metaOverrides: attachmentsMetaOverrides,
                                         })
                                         : {
-                                            text: trimmedText.length > 0 ? `${trimmedText}\n\n${attachmentsBlock}` : attachmentsBlock,
-                                            displayText: trimmedText,
+                                            text: trimmedText,
+                                            displayText: undefined,
                                             metaOverrides: attachmentsMetaOverrides,
                                         };
                                     // The run destination travels as the canonical `recipient` on
@@ -7801,12 +7812,18 @@ export function useSessionComposerController({
                         presentBlockedSessionComposerSubmission(sessionAdmissionResult);
                     };
 
+                    // Resolve commands/templates from the cleaned authoring text, before
+                    // expansion moves its ranges. Custody still compares the original draft.
+                    const messageForResolution = dropOrphanComposerAttachmentReferences(
+                        readSessionComposerSubmissionSnapshot(composerMessage),
+                        getAttachmentDraftsSnapshot().map(draft => draft.id),
+                    ).text;
                     if (sendOptions?.resetStart) {
-                        await sendComposerText(composerMessage, composerMessage, sendOptions);
+                        await sendComposerText(messageForResolution, composerMessage, sendOptions);
                         return;
                     }
                     if (recipientState.scmDiffSummaryDiscussion) {
-                        await sendComposerText(composerMessage, composerMessage, sendOptions);
+                        await sendComposerText(messageForResolution, composerMessage, sendOptions);
                         return;
                     }
                     const invocationScope = selectActiveServerAccountScopeForServer(getActiveServerAccountScope(), sessionRouteServerId);
@@ -7815,7 +7832,7 @@ export function useSessionComposerController({
                     const invocationCatalog = getPromptLibraryCatalogValue(invocationScope, 'invocations');
                     const promptInvocationsV1 = invocationCatalog.status === 'ready' && !invocationCatalog.stale ? invocationCatalog.value : null;
                     const resolved = resolveSessionComposerSend({
-                        input: composerMessage,
+                        input: messageForResolution,
                         sessionId,
                         executionRunsEnabled,
                         goalControlsAvailable: providerSupportsEditableSessionGoals,

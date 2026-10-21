@@ -13,7 +13,6 @@ import { clearAllNewSessionAttachmentDrafts, readNewSessionAttachmentDrafts, wri
 
 const AgentInputMock = vi.fn((_props: any): React.ReactNode => null);
 const uploadAttachmentDraftsToSessionSpy = vi.hoisted(() => vi.fn());
-const formatAttachmentsBlockSpy = vi.hoisted(() => vi.fn(() => ''));
 const followUpSpawnedSessionWithServerScopeSpy = vi.hoisted(() => vi.fn());
 
 afterEach(clearAllNewSessionAttachmentDrafts);
@@ -69,7 +68,6 @@ vi.mock('@/components/sessions/attachments/useAttachmentsUploadConfig', () => ({
 
 vi.mock('@/components/sessions/attachments/uploadAttachmentDraftsToSession', () => ({
     uploadAttachmentDraftsToSession: uploadAttachmentDraftsToSessionSpy,
-    formatAttachmentsBlock: formatAttachmentsBlockSpy,
     buildAttachmentMessageMeta: (uploaded: unknown) => ({
         happier: {
             kind: 'attachments.v1',
@@ -588,7 +586,6 @@ describe('NewSessionWizard (attachments.uploads)', () => {
         } }];
         writeNewSessionAttachmentDrafts('wizard-follow-up', drafts);
         uploadAttachmentDraftsToSessionSpy.mockReset();
-        formatAttachmentsBlockSpy.mockReset();
         followUpSpawnedSessionWithServerScopeSpy.mockReset();
 
         uploadAttachmentDraftsToSessionSpy.mockResolvedValue({
@@ -600,7 +597,6 @@ describe('NewSessionWizard (attachments.uploads)', () => {
                 sha256: 'abc123',
             }],
         });
-        formatAttachmentsBlockSpy.mockReturnValue('[attachments block]');
 
         const handleCreateSession = vi.fn();
 
@@ -710,8 +706,8 @@ describe('NewSessionWizard (attachments.uploads)', () => {
         expect(followUpSpawnedSessionWithServerScopeSpy).toHaveBeenCalledWith({
             sessionId: 'sess_target',
             targetServerId: 'server-a',
-            initialMessageText: 'Investigate this bug\n\n[attachments block]',
-            displayText: 'Investigate this bug',
+            initialMessageText: 'Investigate this bug',
+            displayText: undefined,
             profileId: 'profile-work',
             messageLocalId: 'new-session-attachment-local-1',
             metaOverrides: {

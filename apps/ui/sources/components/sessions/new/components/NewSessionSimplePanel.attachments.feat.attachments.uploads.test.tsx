@@ -15,7 +15,6 @@ const mockEnv = vi.hoisted(() => ({
     iconsRenderAsText: false,
 }));
 const uploadAttachmentDraftsToSessionSpy = vi.hoisted(() => vi.fn());
-const formatAttachmentsBlockSpy = vi.hoisted(() => vi.fn(() => ''));
 const followUpSpawnedSessionWithServerScopeSpy = vi.hoisted(() => vi.fn());
 const workspaceReviewDraftsState = vi.hoisted(() => ({
     draftsByRootPath: new Map<string, Array<{
@@ -113,7 +112,6 @@ vi.mock('@/components/sessions/attachments/useAttachmentsUploadConfig', () => ({
 
 vi.mock('@/components/sessions/attachments/uploadAttachmentDraftsToSession', () => ({
     uploadAttachmentDraftsToSession: uploadAttachmentDraftsToSessionSpy,
-    formatAttachmentsBlock: formatAttachmentsBlockSpy,
     buildAttachmentMessageMeta: (uploaded: unknown) => ({
         happier: {
             kind: 'attachments.v1',
@@ -371,7 +369,6 @@ describe('NewSessionSimplePanel (attachments.uploads)', () => {
         } }];
         writeNewSessionAttachmentDrafts('panel-follow-up', drafts);
         uploadAttachmentDraftsToSessionSpy.mockReset();
-        formatAttachmentsBlockSpy.mockReset();
         followUpSpawnedSessionWithServerScopeSpy.mockReset();
 
         uploadAttachmentDraftsToSessionSpy.mockResolvedValue({
@@ -383,7 +380,6 @@ describe('NewSessionSimplePanel (attachments.uploads)', () => {
                 sha256: 'abc123',
             }],
         });
-        formatAttachmentsBlockSpy.mockReturnValue('[attachments block]');
 
         const handleCreateSession = vi.fn();
 
@@ -454,8 +450,8 @@ describe('NewSessionSimplePanel (attachments.uploads)', () => {
         expect(followUpSpawnedSessionWithServerScopeSpy).toHaveBeenCalledWith({
             sessionId: 'sess_target',
             targetServerId: 'server-a',
-            initialMessageText: 'Investigate this bug\n\n[attachments block]',
-            displayText: 'Investigate this bug',
+            initialMessageText: 'Investigate this bug',
+            displayText: undefined,
             profileId: 'profile-work',
             messageLocalId: 'new-session-attachment-local-1',
             metaOverrides: {

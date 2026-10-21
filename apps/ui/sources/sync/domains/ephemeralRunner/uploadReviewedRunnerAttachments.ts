@@ -174,6 +174,7 @@ export async function uploadReviewedRunnerAttachments(input: Readonly<{
         }
         return {
             ...buildUploadedAttachment({
+                id: reviewed.id,
                 name: reviewed.name,
                 path: ordinaryUploaded.path,
                 ...(reviewed.mimeType ? { mimeType: reviewed.mimeType } : {}),

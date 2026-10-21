@@ -222,7 +222,7 @@ describe('getSuggestions characterization (EU-2)', () => {
                 limit: 12,
                 signal: expect.any(AbortSignal),
             }));
-            expect(suggestions[0]).toMatchObject({ key: 'file-src/foo.ts', text: '@src/foo.ts' });
+            expect(suggestions[0]).toMatchObject({ key: 'file-src/foo.ts', text: '[foo.ts](happier-ref:file:src/foo.ts)' });
         });
 
         it('reads the vendor plugin catalog from session metadata without an override', async () => {
@@ -233,7 +233,7 @@ describe('getSuggestions characterization (EU-2)', () => {
             expect(suggestions).toHaveLength(1);
             expect(suggestions[0]).toMatchObject({
                 key: 'vendor-plugin-plugin://gmail@openai-curated',
-                text: '@gmail',
+                text: '[Gmail](happier-ref:vendorPlugin:plugin://gmail@openai-curated)',
                 structuredInput: {
                     kind: 'vendorPlugin',
                     vendorPluginRef: 'plugin://gmail@openai-curated',
@@ -306,7 +306,7 @@ describe('getSuggestions characterization (EU-2)', () => {
             expect(suggestions).toHaveLength(1);
             expect(suggestions[0]).toMatchObject({
                 key: REVIEW_SKILL_KEY,
-                text: '$review',
+                text: '[Review](happier-ref:skill:happier:review)',
                 structuredInput: {
                     kind: 'skill',
                     name: 'review',

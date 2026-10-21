@@ -1,4 +1,6 @@
-import type { AttachmentsUploadFileSource } from '@/sync/domains/attachments/attachmentsUploadFileSource';
+import type { AttachmentsUploadFileSource, AttachmentUploadSource } from '@/sync/domains/attachments/attachmentsUploadFileSource';
+import { resolveUploadRelativePath } from '@/sync/domains/transfers/uploadRelativePath';
+import { randomUUID } from '@/platform/randomUUID';
 import { openLocalUploadSourceReader, resolveLocalUploadSourceSizeBytes } from '@/sync/runtime/files/localUploadSourceReader';
 import { uploadDaemonSessionAttachmentFromReader } from '@/sync/domains/transfers/runtime/transferRuntime';
 import type { ExactSessionMachineTargetIdentity } from '@/sync/ops/sessionMachineTarget';
@@ -101,23 +103,106 @@ async function resolveSizeBytesWithTimeout(source: AttachmentsUploadFileSource):
     });
 }
 
-export async function sessionAttachmentsUploadFile(args: Readonly<{
+type SessionAttachmentUploadArgs = Readonly<{
     sessionId: string;
     sessionTarget?: ExactSessionMachineTargetIdentity;
     transferContext?: SessionAttachmentTransferContext;
-    file: AttachmentsUploadFileSource;
+    file: AttachmentUploadSource;
+    /** A draft id keeps one folder's files together without sharing another dropped root. */
+    folderUploadId?: string;
+    relativePath?: string;
+    directoryEntries?: readonly string[];
     messageLocalId: string;
     config: AttachmentsUploadConfig;
     onProgress?: (progress: AttachmentsUploadProgress) => void;
     signal?: AbortSignal;
     isCurrent?: () => boolean;
-}>): Promise<SessionAttachmentsUploadFileResult> {
+}>;
+
+// Eager upload and Send can hold the same immutable source snapshot. Reuse its
+// transfer/checkpoint rather than racing two writes into the same folder tree.
+const folderUploads = new WeakMap<AttachmentUploadSource, Map<string, Promise<SessionAttachmentsUploadFileResult>>>();
+
+export async function sessionAttachmentsUploadFile(args: SessionAttachmentUploadArgs): Promise<SessionAttachmentsUploadFileResult> {
+    if (args.file.kind !== 'folder') return await uploadSessionAttachmentSource(args);
+    if (args.signal?.aborted || args.isCurrent?.() === false) return { success: false, error: 'Upload canceled' };
+    const key = JSON.stringify([args.sessionId, args.sessionTarget, args.folderUploadId, args.config]);
+    let uploads = folderUploads.get(args.file);
+    if (!uploads) { uploads = new Map(); folderUploads.set(args.file, uploads); }
+    let pending = uploads.get(key);
+    if (!pending) {
+        pending = uploadSessionAttachmentSource(args);
+        uploads.set(key, pending);
+        const capturedUploads = uploads;
+        void pending.then(result => {
+            if (!result.success) capturedUploads.delete(key);
+        });
+    }
+    const result = await pending;
+    return args.signal?.aborted || args.isCurrent?.() === false ? { success: false, error: 'Upload canceled' } : result;
+}
+
+async function uploadSessionAttachmentSource(args: SessionAttachmentUploadArgs): Promise<SessionAttachmentsUploadFileResult> {
     const isCurrent = () => !args.signal?.aborted && (args.isCurrent?.() ?? true);
     const assertCurrent = () => {
         if (!isCurrent()) throw new Error('Upload canceled');
     };
     try {
         assertCurrent();
+        if (args.file.kind === 'folder') {
+            const folder = args.file;
+            const root = resolveUploadRelativePath(args.folderUploadId ?? randomUUID(), folder.name);
+            if (!root) return { success: false, error: 'Invalid attachment relativePath' };
+            const entries = folder.entries.map(entry => ({ ...entry, path: resolveUploadRelativePath(root, entry.relativePath) }));
+            if (entries.some(entry => !entry.path)) return { success: false, error: 'Invalid attachment relativePath' };
+            let totalBytes = 0;
+            for (const entry of entries) {
+                const size = await resolveLocalUploadSourceSizeBytes(entry.source);
+                assertCurrent();
+                if (size == null || size < 0) return { success: false, error: 'Unknown attachment size' };
+                if (size > args.config.maxFileBytes) return { success: false, error: 'File exceeds maximum allowed size' };
+                totalBytes += size;
+            }
+            const directories = folder.directories ?? [];
+            if (directories.some(directory => !resolveUploadRelativePath(root, directory))) return { success: false, error: 'Invalid attachment directory path' };
+            let completedBytes = 0;
+            const uploadNext = async (start: number, recovered?: SessionAttachmentsUploadFinalizeResponse): Promise<SessionAttachmentsUploadFileResult> => {
+                for (let index = start; index <= entries.length; index += 1) {
+                    const entry = entries[index];
+                    const result = recovered ?? await sessionAttachmentsUploadFile({ ...args,
+                        file: entry ? entry.source : { kind: 'memory', name: folder.name, bytes: new Uint8Array(0) },
+                        relativePath: entry ? entry.path! : root,
+                        ...(entry ? {} : { directoryEntries: directories }),
+                        onProgress: progress => args.onProgress?.({ uploadedBytes: completedBytes + progress.uploadedBytes, totalBytes }) });
+                    recovered = undefined;
+                    assertCurrent();
+                    if (!result.success) {
+                        if (!isTransferFinalizeRecoveryFailure<SessionAttachmentsUploadFinalizeResponse>(result)) return result;
+                        let activeRecovery = result.recovery;
+                        let resumeIndex: number | null = index;
+                        return { ...result, recovery: { ...activeRecovery,
+                            get expiresAt() { return activeRecovery.expiresAt; },
+                            invoke: async (action, signal) => {
+                                const outcome = await activeRecovery.invoke(action, signal);
+                                if (outcome.status !== 'finalized' || resumeIndex === null) return outcome;
+                                const remaining = await uploadNext(resumeIndex, outcome.response);
+                                if (remaining.success) return { status: 'finalized', response: remaining };
+                                if (isTransferFinalizeRecoveryFailure<SessionAttachmentsUploadFinalizeResponse>(remaining)) {
+                                    activeRecovery = remaining.recovery;
+                                    resumeIndex = null;
+                                    return { status: 'recovery_required', error: remaining.error };
+                                }
+                                return { status: 'unavailable', reason: 'session_unavailable', error: remaining.error };
+                            },
+                        } };
+                    }
+                    if (!entry) return { ...result, path: result.path, sizeBytes: completedBytes, sha256: '' };
+                    completedBytes += result.sizeBytes;
+                }
+                throw new Error('Directory upload did not finalize');
+            };
+            return await uploadNext(0);
+        }
         let described = describeUploadSource(args.file);
         if (described.sizeBytes < 0) {
             const resolved = await resolveSizeBytesWithTimeout(args.file);
@@ -171,6 +256,8 @@ export async function sessionAttachmentsUploadFile(args: Readonly<{
                 request: {
                     messageLocalId: args.messageLocalId,
                     fileName: described.name,
+                    ...(args.relativePath === undefined ? {} : { relativePath: args.relativePath }),
+                    ...(args.directoryEntries === undefined ? {} : { directoryEntries: [...args.directoryEntries] }),
                     sizeBytes: described.sizeBytes,
                     uploadLocation: args.config.uploadLocation,
                     workspaceRelativeDir: args.config.workspaceRelativeDir,

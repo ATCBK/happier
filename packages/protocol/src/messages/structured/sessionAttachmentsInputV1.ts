@@ -62,13 +62,12 @@ export function buildAttachmentMessageMeta(uploaded: readonly UploadedAttachment
   };
 }
 
-export function formatAttachmentsBlock(uploaded: readonly UploadedAttachment[]): string {
-  if (uploaded.length === 0) return '';
-  return [
-    'Attachments: open and analyze these files before answering.', '[attachments]',
-    ...uploaded.map(attachment => `- ${attachment.path} (${attachment.name}, ${attachment.mimeType || 'unknown'}, ${attachment.sizeBytes} bytes)`),
-    '[/attachments]',
-  ].join('\n');
+/** Reads presentation descriptors at the incumbent envelope boundary, never path authority. */
+export function readSessionAttachmentDescriptorsV1(meta: unknown): readonly SessionAttachmentDescriptorV1[] {
+  return readSessionAttachmentEnvelopeRecordsV1(meta).flatMap(value => {
+    const parsed = SessionAttachmentDescriptorV1Schema.safeParse(value);
+    return parsed.success ? [parsed.data] : [];
+  });
 }
 
 /** Authored selection preview; only a target-issued upload can supply an accessible path. */

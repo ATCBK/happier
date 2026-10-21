@@ -3,7 +3,7 @@ import type { SkillFoundListResultV1 } from '@happier-dev/protocol/prompts/libra
 import { resolveSkillCatalogItemIdentityV1, type SkillCatalogItemIdentityV1 } from '@happier-dev/protocol/runtime/catalog/skills';
 import type { CapabilityApplyTimingV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
 import { buildMentionRefForKindV1, MENTION_KIND_V1, MentionRefV1Schema, type MentionRefV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
-import { formatComposerSuggestionToken } from '../../../components/autocomplete/composerSuggestionGrammar';
+import { formatInlineReferenceTokenV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 
 export type SkillComposerRow = Readonly<{
     key: string; name: string; description: string | null; identity: SkillCatalogItemIdentityV1;
@@ -66,9 +66,9 @@ export type SkillComposerSelectionOwner = Readonly<{
 export async function pickSkillComposerRow(row: SkillComposerRow, owner: SkillComposerSelectionOwner): Promise<
     Readonly<{ ok: true; mention: MentionRefV1 }> | Readonly<{ ok: false; message: string }>
 > {
-    const mention = MentionRefV1Schema.parse({ kind: MENTION_KIND_V1.skill,
-        ref: buildMentionRefForKindV1(MENTION_KIND_V1.skill, row.identity.id),
-        token: formatComposerSuggestionToken('$', row.name), label: row.name });
+    const ref = buildMentionRefForKindV1(MENTION_KIND_V1.skill, row.identity.id);
+    const mention = MentionRefV1Schema.parse({ kind: MENTION_KIND_V1.skill, ref,
+        token: formatInlineReferenceTokenV1({ label: row.name, ref }), label: row.name });
     if (row.source === 'library' && row.skillId) {
         const result = await owner.setItem('skill', row.skillId, 'on', row.name);
         if (result && !result.ok) return result;

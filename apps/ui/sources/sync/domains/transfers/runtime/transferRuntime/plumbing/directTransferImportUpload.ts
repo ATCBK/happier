@@ -289,7 +289,9 @@ export async function uploadBulkPayloadFromFileViaDirectImport<TResponse>(params
     }
 
     if (!didFinalizeSession) {
-        const cleanupFailure = await abortOwnedDirectImportSession({
+        // The prepared session expires on its own, so a cleanup that also fails never replaces the failure the
+        // person needs: why the upload ended, not why its cleanup did.
+        await abortOwnedDirectImportSession({
             machineId: params.machineId,
             ...(typeof params.serverId === 'string' ? { serverId: params.serverId } : {}),
             ...(params.accountId ? { accountId: params.accountId } : {}),
@@ -298,9 +300,6 @@ export async function uploadBulkPayloadFromFileViaDirectImport<TResponse>(params
             filesystemRootPath: prepared.session.filesystemRootPath,
             timeoutMs: params.timeoutMs ?? null,
         });
-        if (cleanupFailure) {
-            return cleanupFailure;
-        }
     }
 
     return lastFailure ?? {

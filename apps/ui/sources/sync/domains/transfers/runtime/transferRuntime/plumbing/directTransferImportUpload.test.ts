@@ -58,6 +58,17 @@ describe('uploadBulkPayloadFromFileViaDirectImport', () => {
         expect(prepareImportSessionMock.mock.calls.map(([request]) => request.method)).toEqual(['daemon.filesystem.upload']);
     });
 
+    it('keeps the original upload failure when the best-effort cleanup of its prepared import also fails', async () => {
+        prepareImportSessionMock.mockResolvedValue({ success: true, uploadId: 'owned-import', destDisplayPath: '/repo/file',
+            expectedSizeBytes: 1, chunkSizeBytes: 1, recipientPublicKeyBase64: Buffer.alloc(32, 7).toString('base64'), expiresAt: 5000,
+            endpointCandidates: [{ kind: 'http', url: 'http://127.0.0.1:46001/machine-transfers/direct/imports/owned-import', expiresAt: 5000 }] });
+        setRuntimeFetch(async () => { throw new Error('Abort request was aborted by the caller'); });
+        await expect(uploadBulkPayloadFromFileViaDirectImport({ machineId: 'machine-1', serverId: 'server-1',
+            fileReader: { sizeBytes: 1, readBytes: async () => { throw new Error('Actual source reader failed'); }, close: async () => {} },
+            request: { t: 'session_file_upload_v1', workingDirectory: '/repo', path: 'file', sizeBytes: 1, overwrite: false },
+        })).resolves.toEqual({ success: false, error: 'Actual source reader failed' });
+    });
+
     it('reports only the shape of an unsupported prepare response', async () => {
         prepareImportSessionMock.mockResolvedValue({
             ok: true,

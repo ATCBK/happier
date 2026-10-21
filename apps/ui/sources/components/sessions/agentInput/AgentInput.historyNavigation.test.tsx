@@ -278,6 +278,9 @@ function findAllByTestID(screen: Awaited<ReturnType<typeof renderScreen>>, testI
   return screen.findAll((node) => String(node.type) === 'Pressable' && node.props?.testID === testID);
 }
 
+// Module loading is test setup, as in the structured-input suite; history assertions keep their own timeout.
+await import('./AgentInput');
+
 describe('AgentInput (history navigation)', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -1564,7 +1567,7 @@ describe('AgentInput (history navigation)', () => {
     expect(mocks.historyPause).not.toHaveBeenCalled();
   });
 
-  it('renders scoped decoration feedback and makes an edit-and-submit lock non-editable', async () => {
+  it('projects scoped decorations into the input and makes an edit-and-submit lock non-editable', async () => {
     const { AgentInput } = await import('./AgentInput');
     const screen = await renderScreen(<AgentInput
       value="Review this draft"
@@ -1595,6 +1598,9 @@ describe('AgentInput (history navigation)', () => {
 
     expect(findMultiTextInput(screen).props.editable).toBe(false);
     expect(screen.getTextContent()).toContain('Review required');
-    expect(screen.getTextContent()).toContain('Review highlighted text');
+    expect(findMultiTextInput(screen).props.decorations).toEqual([{
+      start: 0, end: 6, treatment: 'warning', label: 'Review highlighted text',
+    }]);
+    expect(screen.getTextContent()).not.toContain('Review highlighted text');
   });
 });

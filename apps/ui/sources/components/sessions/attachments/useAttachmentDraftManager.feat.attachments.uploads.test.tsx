@@ -25,7 +25,75 @@ vi.mock('@/platform/randomUUID', () => ({
     randomUUID: () => 'draft-1',
 }));
 
+// Load the real transfer graph during collection, outside an individual hook's timing budget.
+await import('./uploadAttachmentDraftsToSession');
+
 describe('useAttachmentDraftManager (attachments.uploads)', () => {
+    it.each([true, false])('starts folder uploads at intake and checkpoints success=%s', async (success) => {
+        const { createTransferRecipientKeyPair } = await import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption');
+        const recipient = createTransferRecipientKeyPair();
+        const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
+        let finish: ((value: unknown) => void) | undefined;
+        const finalizing = new Promise<unknown>(resolve => { finish = resolve; });
+        let path = '';
+        const call = vi.fn(async (method: string, request: unknown): Promise<unknown> => {
+            if (method === RPC_METHODS.DAEMON_TRANSFER_UPLOAD_INIT) {
+                path = `.uploads/messages/m1/${(request as { relativePath: string }).relativePath}`;
+                return { success: true, uploadId: 'u1', chunkSizeBytes: 5, recipientPublicKeyBase64: recipient.recipientPublicKeyBase64 };
+            }
+            if (method === RPC_METHODS.DAEMON_TRANSFER_UPLOAD_FINALIZE) {
+                const result = await finalizing as Record<string, unknown>;
+                return { ...result, path };
+            }
+            return { success: true };
+        });
+        const { useAttachmentDraftManager } = await import('./useAttachmentDraftManager');
+        const hook = await renderHook(() => useAttachmentDraftManager({ enabled: true, maxFileBytes: 3,
+            eagerUpload: { sessionId: 's1', config: { uploadLocation: 'workspace', workspaceRelativeDir: '.uploads',
+                vcsIgnoreStrategy: 'none', vcsIgnoreWritesEnabled: false, maxFileBytes: 3 },
+                transferContext: { kind: 'sessionBound', sessionId: 's1',
+                    call: async <T,>(method: string, request: unknown): Promise<T> => await call(method, request) as T } },
+        }));
+        await act(async () => { hook.getCurrent().addWebFiles([], { sources: [{ kind: 'folder', name: 'project',
+            mimeType: 'inode/directory', entries: [{ relativePath: 'a.txt',
+                source: { kind: 'memory', name: 'a.txt', bytes: new Uint8Array(3) } }] }] }); });
+        await vi.waitFor(() => expect(call.mock.calls.some(([method]) => method === RPC_METHODS.DAEMON_TRANSFER_UPLOAD_FINALIZE)).toBe(true));
+        expect(hook.getCurrent().drafts[0]?.status).toBe('uploading');
+        expect(hook.getCurrent().drafts[0]?.uploadedPath).toBeUndefined();
+        await act(async () => { finish?.(success ? { success: true, path: '.uploads/messages/m1/draft-1/project/a.txt', sizeBytes: 3,
+            sha256: 'sha', attachmentHandle: { v: 1, sessionId: 's1', id: 'handle-a' } }
+            : { success: false, error: 'transport diagnostic', errorCode: 'permission_denied' }); });
+        if (success) {
+            await vi.waitFor(() => expect(hook.getCurrent().drafts[0]).toMatchObject({ status: 'uploaded',
+                uploadedPath: '.uploads/messages/m1/draft-1/project', uploadedMimeType: 'inode/directory' }));
+        } else {
+            await vi.waitFor(() => expect(hook.getCurrent().drafts[0]).toMatchObject({ status: 'error',
+                error: 'files.transfers.uploadFailed · errors.permissionDenied' }));
+            const manager = hook.getCurrent();
+            expect(manager.getSendableDraftsSnapshot()).toEqual([]);
+            expect(manager.hasSendableAttachments).toBe(false);
+            const { dropOrphanComposerAttachmentReferences } = await import('@/components/sessions/composer/composerSubmissionCoordinator');
+            const token = '[project](happier-ref:attachment:draft-1)';
+            expect(dropOrphanComposerAttachmentReferences({ text: `Read ${token}`, attachments: [], references: [{
+                kind: 'happier.attachment', ref: 'attachment:draft-1', token, start: 5, end: 5 + token.length,
+            }] }, manager.getSendableDraftsSnapshot().map(draft => draft.id))).toMatchObject({ text: 'Read ', references: [] });
+        }
+    });
+    it('adds one folder receipt and tray item with per-file size validation', async () => {
+        const { useAttachmentDraftManager } = await import('./useAttachmentDraftManager');
+        const hook = await renderHook(() => useAttachmentDraftManager({ enabled: true, maxFileBytes: 3 }));
+        let receipts: unknown;
+        act(() => {
+            receipts = hook.getCurrent().addWebFiles([], { sources: [{
+                kind: 'folder', name: 'project', mimeType: 'inode/directory', entries: [
+                    { relativePath: 'a.txt', source: { kind: 'memory', name: 'a.txt', bytes: new Uint8Array(3) } },
+                    { relativePath: 'nested/b.txt', source: { kind: 'memory', name: 'b.txt', bytes: new Uint8Array(3) } },
+                ],
+            }] });
+        });
+        expect(receipts).toEqual([expect.objectContaining({ id: 'draft-1', status: 'pending' })]);
+        expect(hook.getCurrent().agentInputAttachments).toEqual([expect.objectContaining({ key: 'draft-1', label: 'project' })]);
+    });
     it('keeps onRemove defined while uploading so UI can disable it (not hide it)', async () => {
         (globalThis as any).URL ??= {};
         (globalThis as any).URL.createObjectURL ??= () => 'blob:test';

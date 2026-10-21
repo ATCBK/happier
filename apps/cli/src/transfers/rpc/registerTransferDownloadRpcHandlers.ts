@@ -68,14 +68,14 @@ export function registerTransferDownloadRpcHandlers(
           workingDirectory: deps.workingDirectory,
           accessPolicy: deps.accessPolicy,
           path: issued.filePath,
-          asZip: false,
+          asZip: issued.mimeType === 'inode/directory',
           additionalAllowedReadDirs: deps.getAdditionalAllowedReadDirs?.(),
           sessionRpcTransferMaxBytes: deps.sessionRpcTransferMaxBytes ?? null,
         });
         if (!source.success) return { kind: 'rejected', response: source };
         return {
           kind: 'accepted',
-          source: { ...source.source, name: issued.name },
+          source: { ...source.source, name: issued.mimeType === 'inode/directory' ? source.source.name : issued.name },
           recipientPublicKeyBase64: parsed.data.recipientPublicKeyBase64,
           diagnosticContext: { transferKind: 'session_attachment' },
         };

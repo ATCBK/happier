@@ -9,6 +9,7 @@ import {
 
 import { createRepositoryComposerDocumentOwner } from './repositoryComposerDocumentOwner';
 import { getSessionDraftDocumentField } from '@/sync/ops/sessionDrafts/sessionDraftDocumentFields';
+import { composerReferencesFromStructuredMentions } from './composerScopeAdapters';
 
 const scope = { serverId: 'server-a', accountId: 'account-a' } as const;
 
@@ -21,6 +22,25 @@ afterEach(() => {
 });
 
 describe('repositoryComposerDocumentOwner', () => {
+    it('hydrates legacy positioned tokens into inline text without losing later occurrences', () => {
+        const sessionId = 'legacy-positioned';
+        writeExistingSessionDraft({ scope, sessionId, patch: {
+            text: 'See @one and @two',
+            mentions: [
+                { kind: 'happier.session', ref: 'session:one', label: 'First', tokenText: '@one', start: 4, end: 8 },
+                { kind: 'happier.session', ref: 'session:two', label: 'Second', tokenText: '@two', start: 13, end: 17 },
+            ],
+        } });
+        const owner = createRepositoryComposerDocumentOwner({ scope, ref: { kind: 'session', sessionId } });
+        const document = owner.read().document;
+        expect(document.text).toBe('See [First](happier-ref:session:one) and [Second](happier-ref:session:two)');
+        expect(document.structuredInputMentions).toHaveLength(2);
+        for (const mention of document.structuredInputMentions) {
+            expect(document.text.slice(mention.start, mention.end)).toBe(mention.tokenText);
+        }
+        owner.replaceDocument({ ...document, text: `${document.text}!` });
+        expect(composerValue(getSessionDraftSnapshot(scope, { kind: 'session', sessionId }), 'text')).toBe(`${document.text}!`);
+    });
     it('keeps a newer attachment edit and its same source handle when an older transfer is accepted', async () => {
         const ref = { kind: 'session', sessionId: 'source-transfer' } as const;
         const attachment = {
@@ -159,21 +179,21 @@ describe('repositoryComposerDocumentOwner', () => {
         const mention = {
             kind: 'mention' as const,
             ref: 'vendor:issue-42',
-            tokenText: '@issue',
+            tokenText: '[Issue](happier-ref:vendor:issue-42)',
             start: 0,
-            end: 6,
+            end: '[Issue](happier-ref:vendor:issue-42)'.length,
             label: 'Issue',
         };
 
         owner.replaceDocument({
-            text: '@issue',
+            text: mention.tokenText,
             structuredInputMentions: [mention],
             composerAttachments: [],
         });
 
         expect(owner.read().document.structuredInputMentions).toEqual([mention]);
         expect(composerValue(getSessionDraftSnapshot(scope, { kind: 'session', sessionId }), 'mentions')).toEqual([
-            expect.objectContaining({ ref: 'vendor:issue-42', tokenText: '@issue', start: 0, end: 6 }),
+            expect.objectContaining({ ref: 'vendor:issue-42', tokenText: mention.tokenText, start: 0, end: mention.end }),
         ]);
     });
 });
@@ -282,7 +302,8 @@ describe('repositoryComposerDocumentOwner Session revision', () => {
         };
         expect(owner.apply(owner.read().revision, {
             text: owner.read().document.text,
-            references: [{ kind: 'happier.file', ref: 'file:issue-42', token: '@issue', start: 0, end: 6 }],
+            references: composerReferencesFromStructuredMentions({ text: owner.read().document.text,
+                mentions: owner.read().document.structuredInputMentions }),
             attachments: [attachment],
         }).status).toBe('applied');
 
@@ -315,33 +336,34 @@ describe('repositoryComposerDocumentOwner Session revision', () => {
             ref: { kind: 'participantMessage', sessionId, instanceId: runId },
             address,
         });
+        const tokenText = '[Issue](happier-ref:vendor:issue-42)';
         owner.replaceDocument({
-            text: '@issue accepted',
+            text: `${tokenText} accepted`,
             structuredInputMentions: [{
                 kind: 'mention',
                 ref: 'vendor:issue-42',
-                tokenText: '@issue',
+                tokenText,
                 start: 0,
-                end: 6,
+                end: tokenText.length,
             }],
             composerAttachments: [],
         });
         const accepted = owner.captureCurrentness();
 
         owner.replaceDocument({
-            text: 'prefix @issue accepted',
+            text: `prefix ${tokenText} accepted`,
             structuredInputMentions: owner.read().document.structuredInputMentions,
             composerAttachments: [],
         });
 
         expect(owner.clearAccepted(accepted).changed).toBe(false);
         expect(owner.read().document).toMatchObject({
-            text: 'prefix @issue accepted',
+            text: `prefix ${tokenText} accepted`,
             structuredInputMentions: [{
                 ref: 'vendor:issue-42',
-                tokenText: '@issue',
+                tokenText,
                 start: 7,
-                end: 13,
+                end: 7 + tokenText.length,
             }],
         });
     });

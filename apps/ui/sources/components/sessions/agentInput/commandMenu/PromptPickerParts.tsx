@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { readableMessageText } from '@/components/sessions/transcript/messageDisplayText';
 import { Animated, Platform, ScrollView, View, type StyleProp, type TextStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -138,7 +139,7 @@ export function PromptPickerPreview(props: RowLabels & Readonly<{ row: PromptPic
  */
 export function promptPreviewDisplayText(text: string): string {
     const match = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
-    return match ? text.slice(match[0].length).replace(/^\s+/, '') : text;
+    return readableMessageText(match ? text.slice(match[0].length).replace(/^\s+/, '') : text);
 }
 
 /**

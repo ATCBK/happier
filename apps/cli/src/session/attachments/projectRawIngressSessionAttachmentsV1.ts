@@ -39,7 +39,7 @@ export function projectRawIngressSessionAttachmentsV1(params: Readonly<{
   const uploaded = selection.map(handle => {
     const issued = params.resolveSessionAttachment(handle);
     if (!issued) throw new SessionAttachmentIssuedRecordMissingError();
-    const mimeType = inferSessionMediaMimeTypeFromName(issued.name);
+    const mimeType = issued.mimeType ?? inferSessionMediaMimeTypeFromName(issued.name);
     return buildUploadedAttachment({ id: issued.handle.id, name: issued.name, path: issued.displayPath,
       sizeBytes: issued.sizeBytes, sha256: issued.sha256, attachmentHandle: { ...issued.handle },
       ...(mimeType ? { mimeType } : {}),

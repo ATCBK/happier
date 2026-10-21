@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, expect, it } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { MultiTextInput } from '@/components/ui/forms/MultiTextInput';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import type { AgentInputComposerDecoration } from './agentInputContracts';
 import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
@@ -18,16 +18,6 @@ function flattenStyle(value: unknown): Record<string, unknown> {
     );
   }
   return typeof value === 'object' ? (value as Record<string, unknown>) : {};
-}
-
-function findNode(
-  screen: Awaited<ReturnType<typeof renderScreen>>,
-  hostType: string,
-  testID: string,
-) {
-  const nodes = screen.findAll((node) => String(node.type) === hostType && node.props?.testID === testID);
-  expect(nodes.length).toBe(1);
-  return nodes[0]!;
 }
 
 const DECORATION_ID = 'acme.fixture:mounted-1:references';
@@ -70,6 +60,7 @@ async function renderComposerWithDecorations() {
       disabled={false}
       showAbortButton={false}
       composerDecorations={decorations}
+      composerInputLock={{ mode: 'editAndSubmit', reasons: ['Review required'] }}
     />,
     { wrapper: runtime.Wrapper },
   );
@@ -92,29 +83,15 @@ describe('AgentInput composer decoration interactive targets', () => {
     const paint = surface.findAll((node) => typeof node.type === 'string' && node.props.dataSet?.happyGlassBackdrop === 'true')[0]!;
     expect(String(flattenStyle(paint.props.style).backgroundColor)).toContain('--happier-glass-card-opacity');
   });
-  it('gives composer link decorations the canonical minimum target without overlapping their stacked neighbour', async () => {
+  it('places scoped decorations in the input while preserving the input lock feedback', async () => {
     const screen = await renderComposerWithDecorations();
-    const expectedMinimum = resolveMinimumInteractiveTargetSize('web');
-
-    for (const index of [0, 1]) {
-      const link = findNode(screen, 'Pressable', `agent-input-composer-decoration:${DECORATION_ID}:${index}`);
-      const style = flattenStyle(
-        typeof link.props.style === 'function' ? link.props.style({ pressed: false }) : link.props.style,
-      );
-      expect(style.minWidth).toBeGreaterThanOrEqual(expectedMinimum);
-      expect(style.minHeight).toBeGreaterThanOrEqual(expectedMinimum);
-
-      // The decoration row stacks its entries with a small gap. A hit-slop
-      // floor would expand each target past that gap and into its neighbour,
-      // trading one accessibility defect for another; a layout floor cannot.
-      expect(link.props.hitSlop ?? null).toBeNull();
-    }
-
-    // The floor belongs to interactive treatments only: a presentational
-    // decoration keeps its compact composer-feedback size.
-    const nonInteractive = findNode(screen, 'View', `agent-input-composer-decoration:${DECORATION_ID}:2`);
-    const nonInteractiveStyle = flattenStyle(nonInteractive.props.style);
-    expect(nonInteractiveStyle.minWidth).toBeUndefined();
-    expect(nonInteractiveStyle.minHeight).toBeUndefined();
+    const input = screen.findAll((node) => node.type === MultiTextInput)[0]!;
+    expect(input.props.decorations).toEqual(decorations[0].decorations.ranges.map((entry) => ({
+      ...entry.range, treatment: entry.treatment, label: entry.label,
+    })));
+    expect(screen.findAll((node) => typeof node.props.testID === 'string'
+      && node.props.testID.startsWith('agent-input-composer-decoration:'))).toEqual([]);
+    expect(input.props.editable).toBe(false);
+    expect(screen.getTextContent()).toContain('Review required');
   });
 });

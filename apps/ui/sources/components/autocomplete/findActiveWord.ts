@@ -44,6 +44,7 @@ export function findActiveWord(
     content: string,
     selection: Selection,
     kinds: readonly ComposerSuggestionKindId[],
+    references: readonly Readonly<{ start: number; end: number }>[] = [],
 ): ActiveWord | undefined {
     // Only detect at a collapsed cursor, and never at the very start of the text
     // (there is no trigger character before it).
@@ -54,11 +55,13 @@ export function findActiveWord(
     if (triggers.length === 0) return undefined;
 
     const cursor = selection.start;
+    if (references.some(reference => cursor > reference.start && cursor <= reference.end)) return undefined;
     const minIndex = Math.max(0, cursor - ACTIVE_WORD_SCAN_LIMIT);
     const maxEnd = Math.min(content.length, cursor + ACTIVE_WORD_SCAN_LIMIT);
 
     let candidates = 0;
     for (let index = cursor - 1; index >= minIndex; index -= 1) {
+        if (references.some(reference => index >= reference.start && index < reference.end)) break;
         const char = content.charAt(index);
         // A token never crosses a line, so neither does the search for one.
         if (char === '\n' || char === '\r') break;

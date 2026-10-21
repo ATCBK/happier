@@ -14,6 +14,7 @@ import {
     resolveSessionMediaInlineImageLayout,
 } from '@/components/sessions/media/resolveSessionMediaInlineImageLayout';
 import { SessionMediaVideoPreview } from '@/components/sessions/media/SessionMediaVideoPreview';
+import { ImageNumberBadge } from '@/components/ui/referenceChip/ImageNumberBadge';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import type {
     SessionMediaInlineImageAvailableSummary,
@@ -83,6 +84,16 @@ const stylesheet = StyleSheet.create((theme) => ({
         marginTop: theme.space.s6,
         color: theme.colors.text.secondary,
         textAlign: 'center',
+    },
+    ring: {
+        position: 'absolute',
+        top: -4,
+        left: -4,
+        right: -4,
+        bottom: -4,
+        borderRadius: 16,
+        borderWidth: 2,
+        borderColor: theme.colors.border.focus,
     },
     videoLabel: {
         marginTop: theme.space.s6,
@@ -179,11 +190,25 @@ function SessionMediaInlineImageTile(props: Readonly<{
     fileOpenEnabled: boolean;
     originRef: React.RefObject<View | null>;
     onOpenPreview: (index: number) => void;
+    number?: number;
+    ringed?: boolean;
+    onPreviewLoaded?: (path: string, uri: string) => void;
 }>): React.ReactElement {
     const { theme } = useUnistyles();
 
     const preview = useFilePreviewSource(inlineImagePreviewInput(props.media, props.sessionId, props.workspaceScope));
     const actionable = preview.status !== 'error' || props.fileOpenEnabled;
+    const { onPreviewLoaded } = props;
+    const loadedUri = preview.status === 'loaded' ? preview.uri : null;
+    React.useEffect(() => {
+        if (loadedUri && onPreviewLoaded) onPreviewLoaded(props.media.path, loadedUri);
+    }, [loadedUri, onPreviewLoaded, props.media.path]);
+    // An "Image #N" chip asking for this picture brings it into view.
+    React.useEffect(() => {
+        if (!props.ringed) return;
+        const node = props.originRef.current as unknown as { scrollIntoView?: (options: ScrollIntoViewOptions) => void } | null;
+        node?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    }, [props.originRef, props.ringed]);
 
     return (
         <View ref={props.originRef} collapsable={false}>
@@ -218,6 +243,8 @@ function SessionMediaInlineImageTile(props: Readonly<{
                     />
             )}
         />
+        {props.number !== undefined ? <ImageNumberBadge number={props.number} /> : null}
+        {props.ringed ? <View pointerEvents="none" style={stylesheet.ring} testID={`${props.testIdPrefix}-inline-image-ring:${props.media.path}`} /> : null}
         </View>
     );
 }
@@ -298,6 +325,11 @@ export const SessionMediaInlineImages = React.memo(function SessionMediaInlineIm
     fileOpenEnabled: boolean;
     mediaPreviewEnabled: boolean;
     testIdPrefix?: string;
+    /** "Image #N" by picture path, drawn on each numbered picture's corner (D5). */
+    numbers?: ReadonlyMap<string, number>;
+    /** The picture its chip was just pressed for. */
+    ringedPath?: string | null;
+    onPreviewLoaded?: (path: string, uri: string) => void;
 }>) {
     const styles = stylesheet;
     const testIdPrefix = props.testIdPrefix ?? 'message-session-media';
@@ -385,6 +417,9 @@ export const SessionMediaInlineImages = React.memo(function SessionMediaInlineIm
                         onOpenPath={props.onOpenPath}
                         fileOpenEnabled={props.fileOpenEnabled}
                         onOpenPreview={openStage}
+                        number={props.numbers?.get(entry.media.path)}
+                        ringed={props.ringedPath === entry.media.path}
+                        onPreviewLoaded={props.onPreviewLoaded}
                     />
                 )
             ))}

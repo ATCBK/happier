@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { readableMessageText } from '@/components/sessions/transcript/messageDisplayText';
 import { isPendingMessageForRecipient } from '@/sync/domains/pending/pendingMessageRecipient';
 import { Platform, Pressable, ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -65,7 +66,7 @@ const QUEUE_GUTTER_PX = 16;
 
 function getPendingText(message: PendingMessage | DiscardedPendingMessage): string {
     const raw = (message.displayText ?? message.text) ?? '';
-    return String(raw);
+    return readableMessageText(String(raw), message.rawRecord?.meta);
 }
 
 /** The opening words of a pending message, enough to name it (one line, cut at a word). */

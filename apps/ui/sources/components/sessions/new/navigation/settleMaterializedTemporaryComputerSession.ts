@@ -2,10 +2,10 @@ import type { RunnerActivationProjectionV1 } from '@happier-dev/protocol/ephemer
 
 import {
     buildAttachmentMessageMeta,
-    formatAttachmentsBlock,
 } from '@/components/sessions/attachments/uploadAttachmentDraftsToSession';
 import { mergeMessageMetaOverrides } from '@/components/sessions/agentInput/structuredInputMentions';
 import { buildComposerSnapshotStructuredInputMetaOverrides } from '@/components/sessions/composer/composerScopeAdapters';
+import { dropOrphanComposerAttachmentReferences } from '@/components/sessions/composer/composerSubmissionCoordinator';
 import { resolveReviewCommentDraftAnchorsForPrompt } from '@/components/sessions/reviews/comments/resolveReviewCommentDraftAnchorsForPrompt';
 import { buildReviewCommentsOutboundMessage } from '@/sync/domains/input/reviewComments/buildReviewCommentsOutboundMessage';
 import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
@@ -37,11 +37,7 @@ export function buildTemporaryComputerFirstPrompt(input: Readonly<{
     reviewedText: string;
     uploaded: readonly ReviewedRunnerAttachmentUpload[];
 }>): string {
-    if (input.uploaded.length === 0) return input.reviewedText;
-    const attachmentsBlock = formatAttachmentsBlock(input.uploaded);
-    return input.reviewedText.trim().length > 0
-        ? `${input.reviewedText}\n\n${attachmentsBlock}`
-        : attachmentsBlock;
+    return input.reviewedText;
 }
 
 export function buildTemporaryComputerFirstPromptDelivery(input: Readonly<{
@@ -51,11 +47,11 @@ export function buildTemporaryComputerFirstPromptDelivery(input: Readonly<{
     reviewComments?: readonly ReviewCommentDraft[];
 }>): Readonly<{
     initialMessageText: string;
-    displayText: string;
+    displayText?: string;
     metaOverrides: Record<string, unknown> | undefined;
 }> {
-    const structuredInputMeta = buildComposerSnapshotStructuredInputMetaOverrides(input.composer);
-    const attachmentText = input.uploaded.length > 0 ? formatAttachmentsBlock(input.uploaded) : '';
+    const composer = dropOrphanComposerAttachmentReferences(input.composer, input.uploaded.map(attachment => attachment.id));
+    const structuredInputMeta = buildComposerSnapshotStructuredInputMetaOverrides(composer);
     const baseMetaOverrides = mergeMessageMetaOverrides(
         input.uploaded.length > 0 ? buildAttachmentMessageMeta(input.uploaded) : undefined,
         Object.keys(structuredInputMeta).length > 0 ? structuredInputMeta : undefined,
@@ -66,10 +62,9 @@ export function buildTemporaryComputerFirstPromptDelivery(input: Readonly<{
             sessionId: input.sessionId,
             drafts: input.reviewComments ?? [],
             additionalMessage: buildTemporaryComputerFirstPrompt({
-                reviewedText: input.composer.text,
+                reviewedText: composer.text,
                 uploaded: input.uploaded,
             }),
-            displayTextSuffix: attachmentText || null,
             metaOverrides: baseMetaOverrides,
         });
         return {
@@ -80,10 +75,9 @@ export function buildTemporaryComputerFirstPromptDelivery(input: Readonly<{
     }
     return {
         initialMessageText: buildTemporaryComputerFirstPrompt({
-            reviewedText: input.composer.text,
+            reviewedText: composer.text,
             uploaded: input.uploaded,
         }),
-        displayText: input.composer.text,
         metaOverrides: baseMetaOverrides,
     };
 }

@@ -23,7 +23,6 @@ import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScop
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const uploadAttachmentDraftsToSessionSpy = vi.hoisted(() => vi.fn());
-const formatAttachmentsBlockSpy = vi.hoisted(() => vi.fn(() => '[attachments block]'));
 const followUpSpawnedSessionWithServerScopeSpy = vi.hoisted(() => vi.fn(async (_params: unknown) => undefined));
 const featureEnabledSpy = vi.hoisted(() => vi.fn((featureId: string) => featureId === 'attachments.uploads'));
 const workspaceReviewDraftsState = vi.hoisted(() => ({
@@ -85,7 +84,6 @@ vi.mock('@/components/sessions/attachments/useAttachmentsUploadConfig', () => ({
 
 vi.mock('@/components/sessions/attachments/uploadAttachmentDraftsToSession', () => ({
     uploadAttachmentDraftsToSession: uploadAttachmentDraftsToSessionSpy,
-    formatAttachmentsBlock: formatAttachmentsBlockSpy,
     buildAttachmentMessageMeta: (uploaded: unknown) => ({
         happier: {
             kind: 'attachments.v1',
@@ -284,7 +282,6 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
     beforeEach(() => {
         clearAllNewSessionAttachmentDrafts();
         uploadAttachmentDraftsToSessionSpy.mockReset();
-        formatAttachmentsBlockSpy.mockClear();
         followUpSpawnedSessionWithServerScopeSpy.mockReset();
         featureEnabledSpy.mockClear();
         workspaceReviewDraftsState.draftsByRootPath.clear();
@@ -1147,8 +1144,8 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
         expect(followUpSpawnedSessionWithServerScopeSpy).toHaveBeenCalledWith({
             sessionId: 'session-1',
             targetServerId: 'server-a',
-            initialMessageText: 'Investigate this bug\n\n[attachments block]',
-            displayText: 'Investigate this bug',
+            initialMessageText: 'Investigate this bug',
+            displayText: undefined,
             messageLocalId: 'new-session-attachment-local-1',
             profileId: 'profile-work',
             metaOverrides: {
@@ -1232,7 +1229,6 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
         });
 
         expect(uploadAttachmentDraftsToSessionSpy).not.toHaveBeenCalled();
-        expect(formatAttachmentsBlockSpy).toHaveBeenCalledWith([verifiedAttachment]);
         expect(followUpSpawnedSessionWithServerScopeSpy).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: 'runner-session-1',
             targetServerId: 'server-a',
@@ -1561,7 +1557,7 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
         expect(followUpSpawnedSessionWithServerScopeSpy).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: 'session-1',
             targetServerId: 'server-b',
-            displayText: expect.stringContaining('[attachments block]'),
+            displayText: expect.not.stringContaining('[attachments'),
             metaOverrides: {
                 happier: {
                     kind: 'review_comments.v1',

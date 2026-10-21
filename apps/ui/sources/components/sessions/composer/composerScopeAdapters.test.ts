@@ -83,6 +83,14 @@ function composerAttachmentCatalog(
 }
 
 describe('composer scope adapters', () => {
+    it('keeps attachment chip ranges in the document without transmitting them as mentions', () => {
+        const tokenText = '[Image](happier-ref:attachment:upload-1)';
+        const mention = { kind: 'happier.attachment', ref: 'attachment:upload-1', label: 'Image', tokenText,
+            start: 0, end: tokenText.length };
+        expect(composerReferencesFromStructuredMentions({ text: tokenText, mentions: [mention] }))
+            .toEqual([expect.objectContaining({ ref: 'attachment:upload-1', token: tokenText, start: 0, end: tokenText.length })]);
+        expect(buildStructuredInputMetaOverrides({ text: tokenText, mentions: [mention] })).toEqual({});
+    });
     it('projects a detached Composer snapshot through the canonical structured-input writer', () => {
         const reference: ComposerMentionRef = {
             kind: 'acme.issue',

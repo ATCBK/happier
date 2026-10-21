@@ -154,7 +154,6 @@ vi.mock('@/components/sessions/attachments/useAttachmentDraftManager', () => ({
 
 vi.mock('@/components/sessions/attachments/uploadAttachmentDraftsToSession', () => ({
     uploadAttachmentDraftsToSession: vi.fn(),
-    formatAttachmentsBlock: vi.fn(() => ''),
 }));
 
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({

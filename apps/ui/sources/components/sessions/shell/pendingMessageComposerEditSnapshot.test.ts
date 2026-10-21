@@ -47,6 +47,13 @@ function createSnapshotWithValue(fieldId: string): PendingMessageComposerSemanti
 }
 
 describe('pending message composer semantic draft snapshot', () => {
+    it('normalizes legacy queued references together with their exact editable text', () => {
+        const token = '[Auth fix](happier-ref:session:auth)';
+        expect(hydratePendingMessageComposerAttachmentDrafts({ happierStructuredInputV1: {
+            v: 1, mentions: [{ kind: 'happier.session', ref: 'session:auth', token: '@auth', label: 'Auth fix' }],
+        } }, 'Continue @auth')).toMatchObject({ status: 'ready', text: `Continue ${token}`,
+            mentions: [{ ref: 'session:auth', token, start: 9, end: 9 + token.length }] });
+    });
     it('hydrates only contentless admitted attachment inputs without inventing draft content handles', () => {
         expect(hydratePendingMessageComposerAttachmentDrafts({
             happierStructuredInputV1: {
@@ -183,7 +190,8 @@ describe('pending message composer semantic draft snapshot', () => {
             },
         }, '@src/index.ts')).toEqual({
             status: 'ready',
-            mentions: [mention],
+            text: '[@src/index.ts](happier-ref:file:src/index.ts)',
+            mentions: [{ ...mention, token: '[@src/index.ts](happier-ref:file:src/index.ts)', end: 46 }],
             attachments: [attachment],
         });
     });
@@ -202,10 +210,12 @@ describe('pending message composer semantic draft snapshot', () => {
             },
         }, 'Edit @src/index.ts now')).toEqual({
             status: 'ready',
+            text: 'Edit [@src/index.ts](happier-ref:file:src/index.ts) now',
             mentions: [{
                 ...mention,
+                token: '[@src/index.ts](happier-ref:file:src/index.ts)',
                 start: 5,
-                end: 18,
+                end: 51,
             }],
             attachments: [],
         });

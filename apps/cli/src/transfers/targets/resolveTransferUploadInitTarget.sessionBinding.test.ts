@@ -6,6 +6,22 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { resolveTransferUploadInitTarget } from './resolveTransferUploadInitTarget';
 
 describe('attachment upload Session binding', () => {
+  it('keeps an attachment folder tree within the configured attachment destination', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-folder-attachment-'));
+    directories.push(root);
+    const base = { workingDirectory: root, tempUploadRoot: join(root, 'temp'),
+      attachmentUpload: { resolveSessionWorkingDirectory: async () => root } };
+    const request = { t: 'session_attachment_upload_v1' as const, sessionId: 'hosted',
+      messageLocalId: 'm1', fileName: 'a.txt', sizeBytes: 1,
+      uploadLocation: 'workspace' as const, workspaceRelativeDir: '.uploads',
+      vcsIgnoreStrategy: 'none' as const, vcsIgnoreWritesEnabled: false,
+      relativePath: 'draft-folder/project/nested/a.txt' };
+    const result = await resolveTransferUploadInitTarget({ ...base, request });
+    expect(result).toMatchObject({ success: true, target: { destPath: join(root, '.uploads/messages/m1/draft-folder/project/nested/a.txt') } });
+    for (const relativePath of ['../escape.txt', '/absolute.txt', 'C:\\escape.txt', 'folder/../../escape']) {
+      expect(await resolveTransferUploadInitTarget({ ...base, request: { ...request, relativePath } })).toMatchObject({ success: false });
+    }
+  });
   const directories: string[] = [];
   afterEach(async () => {
     await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));

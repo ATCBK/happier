@@ -9,7 +9,7 @@ import {
     readAdmittedHappierStructuredInputV1FromMeta,
 } from '@happier-dev/protocol/runtime';
 import { buildStructuredInputMetaOverrides } from '@/components/sessions/agentInput/structuredInputMentions';
-import { placePositionlessComposerReferences } from '@/components/sessions/composer/composerScopeAdapters';
+import { composerReferencesFromStructuredMentions, hydrateComposerDraftReferencesFromMessage } from '@/components/sessions/composer/composerScopeAdapters';
 import type { MutableComposerDocumentOwner } from '@/components/sessions/composer/composerDocumentOwner';
 import { createPendingMessageComposerDocumentOwner } from '@/components/sessions/composer/pendingMessageComposerDocumentOwner';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -60,6 +60,7 @@ type PendingMessageComposerAttachmentHydration =
         status: 'ready';
         attachments: readonly ComposerAttachmentDraftV1[];
         mentions?: ComposerSnapshotV1['references'];
+        text?: string;
     }>
     | Readonly<{ status: 'unavailable' }>;
 
@@ -113,13 +114,12 @@ export function hydratePendingMessageComposerAttachmentDrafts(
         if (typeof text !== 'string') return { status: 'unavailable' };
         const admittedMentions = admitMentionRefsV1ForText(text, mentions);
         if (admittedMentions.length !== mentions.length) return { status: 'unavailable' };
+        const hydrated = hydrateComposerDraftReferencesFromMessage({ text, references: admittedMentions });
         return {
             status: 'ready',
             attachments,
-            mentions: placePositionlessComposerReferences({
-                text,
-                references: admittedMentions,
-            }),
+            ...(hydrated.text !== text ? { text: hydrated.text } : {}),
+            mentions: composerReferencesFromStructuredMentions(hydrated),
         };
     }
     return {

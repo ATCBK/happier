@@ -3,12 +3,14 @@ export type WebDroppedFileEntry = Readonly<{
     relativePath: string;
 }>;
 
+export type WebDroppedEntriesOptions = Readonly<{ onDirectory?: (relativePath: string) => void }>;
+
 type FileSystemEntryLike = Readonly<{
     isFile: boolean;
     isDirectory: boolean;
     name: string;
     file?: (cb: (file: File) => void, err?: (e: unknown) => void) => void;
-    createReader?: () => Readonly<{ readEntries: (cb: (entries: any[]) => void, err?: (e: unknown) => void) => void }>;
+    createReader?: () => Readonly<{ readEntries: (cb: (entries: FileSystemEntryLike[]) => void, err?: (e: unknown) => void) => void }>;
 }>;
 
 function readEntryFile(entry: FileSystemEntryLike): Promise<File> {
@@ -28,7 +30,7 @@ async function readAllDirectoryEntries(entry: FileSystemEntryLike): Promise<File
     const out: FileSystemEntryLike[] = [];
     while (true) {
         const batch = await new Promise<FileSystemEntryLike[]>((resolve, reject) => {
-            reader.readEntries((entries: any[]) => resolve(entries as FileSystemEntryLike[]), reject);
+            reader.readEntries(resolve, reject);
         });
         if (!Array.isArray(batch) || batch.length === 0) break;
         out.push(...batch);
@@ -36,7 +38,7 @@ async function readAllDirectoryEntries(entry: FileSystemEntryLike): Promise<File
     return out;
 }
 
-async function walkEntry(entry: FileSystemEntryLike, prefix: string): Promise<WebDroppedFileEntry[]> {
+async function walkEntry(entry: FileSystemEntryLike, prefix: string, options: WebDroppedEntriesOptions): Promise<WebDroppedFileEntry[]> {
     if (entry.isFile) {
         const file = await readEntryFile(entry);
         const rel = prefix ? `${prefix}/${file.name}` : file.name;
@@ -45,10 +47,11 @@ async function walkEntry(entry: FileSystemEntryLike, prefix: string): Promise<We
 
     if (entry.isDirectory) {
         const nextPrefix = prefix ? `${prefix}/${entry.name}` : entry.name;
+        options.onDirectory?.(nextPrefix.replace(/\\/g, '/'));
         const children = await readAllDirectoryEntries(entry);
         const nested: WebDroppedFileEntry[] = [];
         for (const child of children) {
-            nested.push(...(await walkEntry(child, nextPrefix)));
+            nested.push(...(await walkEntry(child, nextPrefix, options)));
         }
         return nested;
     }
@@ -56,9 +59,9 @@ async function walkEntry(entry: FileSystemEntryLike, prefix: string): Promise<We
     return [];
 }
 
-export async function readWebDroppedEntries(dataTransfer: DataTransfer): Promise<WebDroppedFileEntry[]> {
+export async function readWebDroppedEntries(dataTransfer: DataTransfer, options: WebDroppedEntriesOptions = {}): Promise<WebDroppedFileEntry[]> {
     const items = Array.from(dataTransfer.items ?? []);
-    const hasWebkitEntries = items.some((item) => typeof (item as any).webkitGetAsEntry === 'function');
+    const hasWebkitEntries = items.some((item) => typeof item.webkitGetAsEntry === 'function');
 
     if (!hasWebkitEntries) {
         return Array.from(dataTransfer.files ?? []).map((file) => ({ file, relativePath: file.name }));
@@ -69,13 +72,13 @@ export async function readWebDroppedEntries(dataTransfer: DataTransfer): Promise
     const entries: FileSystemEntryLike[] = [];
     for (const item of items) {
         if (!item || item.kind !== 'file') continue;
-        const getEntry = (item as any).webkitGetAsEntry;
+        const getEntry = item.webkitGetAsEntry;
         if (typeof getEntry !== 'function') continue;
         const entry = getEntry.call(item) as FileSystemEntryLike | null;
         if (entry) entries.push(entry);
     }
 
     const out: WebDroppedFileEntry[] = [];
-    for (const entry of entries) out.push(...(await walkEntry(entry, '')));
+    for (const entry of entries) out.push(...(await walkEntry(entry, '', options)));
     return out;
 }

@@ -6,18 +6,22 @@ import {
     MENTION_KIND_V1,
     RPC_METHODS,
     buildMentionRefForKindV1,
+    readHappierStructuredInputV1FromMeta,
+    parseMentionRefV1,
     type PluginContributionLifecycleRecordV1,
     type PluginProjectionV2,
     type PluginUiIconTokenV1,
 } from '@happier-dev/protocol';
 import type { AutocompleteSuggestion } from './autocompleteTypes';
 import type { FileItem, FileSuggestionScope } from '@/sync/domains/input/suggestionFile';
+import { formatInlineReferenceTokenV1, scanInlineReferenceTokensV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
+import { buildStructuredInputMetaOverrides } from '@/components/sessions/agentInput/structuredInputMentions';
 
 /**
  * EU-3 — the sectioned picker's behaviour contract.
  *
- * Covers INV-2 (no kind suppresses another), INV-3 (an inserted token re-parses
- * to the kind that produced it), D-22 (the per-trigger row budget), D-25 (a hung
+ * Covers INV-2 (no kind suppresses another), canonical reference selection
+ * identity, D-22 (the per-trigger row budget), D-25 (a hung
  * kind must not hide healthy sections) and D-15 (a superseded query contributes
  * nothing and reports nothing).
  */
@@ -311,7 +315,8 @@ describe('sectioned composer suggestions (EU-3)', () => {
                 expect.objectContaining({
                     kind: 'composerReference',
                     key: 'composer-reference-["acme.issues","issues","issue-42"]',
-                    text: '$"Issue 42"',
+                    text: '[Issue 42](happier-ref:composerReference:issue-42)',
+                    structuredInput: expect.objectContaining({ composerReferenceTrigger: '$' }),
                     label: 'Issue 42',
                     group: 'Issue tracker',
                     description: 'Search project issues · Current sprint issue · acme.issues/issues',
@@ -384,7 +389,7 @@ describe('sectioned composer suggestions (EU-3)', () => {
                 {
                     kind: 'composerReference',
                     key: 'composer-reference-["acme.issues","issues","issue-42"]',
-                    text: '@"Issue 42"',
+                    text: '[Issue 42](happier-ref:composerReference:issue-42)',
                     label: 'Issue 42',
                     group: 'Issues',
                     icon: expect.objectContaining({
@@ -395,6 +400,7 @@ describe('sectioned composer suggestions (EU-3)', () => {
                         kind: 'happier.composerReference',
                         ref: 'composerReference:issue-42',
                         composerReference: { pluginId: 'acme.issues', localId: 'issues' },
+                        composerReferenceTrigger: '@',
                         label: 'Issue 42',
                     },
                 },
@@ -673,7 +679,7 @@ describe('sectioned composer suggestions (EU-3)', () => {
             expect(suggestions).toEqual([{
                 kind: 'session',
                 key: `session-${PEER_SESSION.id}`,
-                text: '@session:fix-detached-dev-stack-startup-v4a0a7',
+                text: '[Fix Detached Dev Stack Startup](happier-ref:session:cmslj08960ku1tmhrd0v4a0a7)',
                 label: PEER_SESSION.title,
                 description: PEER_SESSION.workspaceLabel,
                 icon: expect.anything(),
@@ -757,7 +763,7 @@ describe('sectioned composer suggestions (EU-3)', () => {
         });
     });
 
-    describe('INV-3 — an inserted token re-parses to the kind that produced it', () => {
+    describe('selected inline references retain their typed identity through the envelope', () => {
         it.each([
             ['file', '@sr', [file('src/foo.ts')], undefined, undefined],
             ['file with a space in its path', '@my', [file('my file.ts')], undefined, undefined],
@@ -777,12 +783,13 @@ describe('sectioned composer suggestions (EU-3)', () => {
             const candidate = first.find((suggestion) => suggestion.kind !== 'slashCommand');
             expect(candidate).toBeDefined();
 
-            // Feed the literal token the picker would insert straight back in.
-            const reparsed = await getSuggestions('s1', candidate!.text);
-
-            expect(reparsed.map((suggestion) => suggestion.key)).toContain(candidate!.key);
-            expect(reparsed.find((suggestion) => suggestion.key === candidate!.key)?.kind)
-                .toBe(candidate!.kind);
+            const token = candidate!.text;
+            const inline = scanInlineReferenceTokensV1(token);
+            expect(inline).toHaveLength(1);
+            const envelope = readHappierStructuredInputV1FromMeta(buildStructuredInputMetaOverrides({
+                text: token, mentions: [{ ...candidate!.structuredInput!, tokenText: token, start: 0, end: token.length }],
+            }));
+            expect(envelope?.mentions).toMatchObject([{ ref: inline[0]?.ref, token }]);
         });
 
         it('round-trips a slash command token', async () => {
@@ -797,13 +804,13 @@ describe('sectioned composer suggestions (EU-3)', () => {
         });
     });
 
-    // Plan §7.3 at the resolution layer. EU-1 covers detection (`findActiveWord`);
-    // these prove the query the dispatcher searches for survives the same inputs.
+    // Unicode labels and encoded paths survive selection without needing the
+    // autocomplete query parser to reinterpret serialized reference tokens.
     describe('input methods (plan 7.3)', () => {
         it.each([
             ['astral characters', 'docs/🙂-notes.md'],
             ['right-to-left text', 'docs/שלום.md'],
-            ['a space, which forces a quoted token', 'docs/my notes.md'],
+            ['a space', 'docs/my notes.md'],
         ])('round-trips a file token containing %s', async (_label, fullPath) => {
             searchFilesMock.mockResolvedValue([file(fullPath)]);
             const { getSuggestions } = await importSuggestions();
@@ -811,16 +818,9 @@ describe('sectioned composer suggestions (EU-3)', () => {
             const [candidate] = await getSuggestions('s1', '@docs/', { workspace: WORKSPACE });
             expect(candidate?.key).toBe(`file-${fullPath}`);
 
-            // Re-open the picker on the token the composer now holds — the state a
-            // restored draft or a pasted token arrives in.
-            searchFilesMock.mockClear();
-            const reparsed = await getSuggestions('s1', candidate!.text, { workspace: WORKSPACE });
-
-            expect(searchFilesMock).toHaveBeenCalledWith(WORKSPACE, fullPath, expect.objectContaining({
-                limit: 12,
-                signal: expect.any(AbortSignal),
-            }));
-            expect(reparsed.map((suggestion) => suggestion.key)).toContain(`file-${fullPath}`);
+            const inline = scanInlineReferenceTokensV1(candidate!.text);
+            expect(inline).toHaveLength(1);
+            expect(parseMentionRefV1(inline[0]!.ref)).toEqual({ scheme: 'file', opaque: fullPath });
         });
     });
 
@@ -847,8 +847,7 @@ describe('sectioned composer suggestions (EU-3)', () => {
             expect(suggestions[0]).toMatchObject({
                 kind: 'accountMention',
                 key: 'account-alice',
-                // The name as written (no quoting): identity is the range-bound mention, not a re-parse.
-                text: '@Alice Ng',
+                text: formatInlineReferenceTokenV1({ label: 'Alice Ng', ref: 'account:account-alice' }),
                 label: 'Alice Ng',
                 structuredInput: { kind: 'happier.account', ref: 'account:account-alice', label: 'Alice Ng' },
             });

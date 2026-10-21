@@ -92,6 +92,35 @@ function createSessionTransport() {
 }
 
 describe('uploadSessionAttachment', () => {
+    it('uploads a folder as files under one root without applying the file limit to the whole folder', async () => {
+        const transport = createSessionTransport();
+        const paths: string[] = [];
+        transport.call.mockImplementation(async (method, raw) => {
+            const request = raw as Record<string, unknown>;
+            if (method === RPC_METHODS.DAEMON_TRANSFER_UPLOAD_INIT) {
+                paths.push(String(request.relativePath));
+                return { success: true, uploadId: 'folder-upload', chunkSizeBytes: 8,
+                    recipientPublicKeyBase64: createTransferRecipientKeyPair().recipientPublicKeyBase64 };
+            }
+            if (method === RPC_METHODS.DAEMON_TRANSFER_UPLOAD_FINALIZE) {
+                return { ...finalized, path: `.happier/uploads/messages/m1/${paths.at(-1)}` };
+            }
+            return { success: true };
+        });
+        const request = {
+            sessionId: 's1', transferContext: transport.transferContext, messageLocalId: 'm1',
+            config: { ...config, maxFileBytes: 5 },
+            file: { kind: 'folder', name: 'project', mimeType: 'inode/directory', entries: [
+                { relativePath: 'a.txt', source: { kind: 'web', file: webFile() } },
+                { relativePath: 'nested/b.txt', source: { kind: 'web', file: webFile() } },
+            ] },
+            folderUploadId: 'draft-folder',
+        } satisfies Parameters<typeof sessionAttachmentsUploadFile>[0];
+        const [result, concurrent] = await Promise.all([sessionAttachmentsUploadFile(request), sessionAttachmentsUploadFile(request)]);
+        expect(paths).toEqual(['draft-folder/project/a.txt', 'draft-folder/project/nested/b.txt', 'draft-folder/project']);
+        expect(result).toMatchObject({ success: true, path: '.happier/uploads/messages/m1/draft-folder/project', sizeBytes: 10 });
+        expect(concurrent).toEqual(result);
+    });
     beforeEach(() => {
         nativeOpenSpy.mockClear();
         nativeCloseSpy.mockClear();

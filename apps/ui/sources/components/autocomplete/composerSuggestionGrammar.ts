@@ -3,8 +3,8 @@
  * (INV-1), and the per-trigger token grammar.
  *
  * A composer suggestion token is `<trigger><value>` (optionally a quoted span).
- * This module is the single place that decides where such a token ends, how its
- * query is read back, and how a selected value is written into composer text.
+ * This module decides where a token ends and how its query is read back, using
+ * Protocol's shared boundaries and formatter for composer and Agent markers.
  *
  * The detector (`findActiveWord`) and every token formatter share it, so a token
  * the picker inserts always re-parses to the same span (INV-3). Grammar is per
@@ -14,6 +14,9 @@
  * composer hosts must be able to resolve triggers without pulling the candidate
  * resolvers or row components in `composerSuggestionKinds.ts`.
  */
+
+import { isComposerTokenBoundaryChar, isComposerTokenWhitespaceChar } from '@happier-dev/protocol/runtime/input/composerSuggestionTokenV1';
+export { formatComposerSuggestionToken, isComposerTokenBoundaryChar } from '@happier-dev/protocol/runtime/input/composerSuggestionTokenV1';
 
 export const COMPOSER_SUGGESTION_TRIGGERS = ['@', '$', '/'] as const;
 
@@ -37,38 +40,13 @@ const COMPOSER_SUGGESTION_TOKEN_GRAMMAR = {
     '/': { quoting: true },
 } as const satisfies Record<ComposerSuggestionTrigger, ComposerSuggestionTokenGrammar>;
 
-/**
- * Characters that end an unquoted token, and that also open a fresh token
- * boundary in front of a trigger character.
- *
- * `.` `/` `\` `:` `-` `_` `~` `#` are deliberately ABSENT: they are ordinary
- * path, ref and command characters. `.` used to be a terminator, which is why a
- * single dot destroyed the suggestion list for `@README.md` and `/h.review`.
- */
-const TOKEN_DELIMITERS: ReadonlySet<string> = new Set([
-    ',', ';', '(', ')', '[', ']', '{', '}', '<', '>', '!', '?', '"',
-]);
-
-// Space, tab, CR/LF and NBSP. NBSP is included because mobile keyboards and pasted
-// rich text produce it where the user typed a plain space.
-const TOKEN_WHITESPACE: ReadonlySet<string> = new Set([' ', '\t', '\n', '\r', '\u00A0']);
-
 export function isComposerSuggestionTrigger(value: string): value is ComposerSuggestionTrigger {
     return (COMPOSER_SUGGESTION_TRIGGERS as readonly string[]).includes(value);
 }
 
-/**
- * True when `char` ends an unquoted token. The same predicate answers "is a
- * trigger at this index at a word boundary?", which is what keeps `@` inside
- * `email@domain.com` from opening a mention while `(@user` still does.
- */
-export function isComposerTokenBoundaryChar(char: string): boolean {
-    return char.length === 0 || TOKEN_WHITESPACE.has(char) || TOKEN_DELIMITERS.has(char);
-}
-
 /** Whitespace, or the end of the content. `charAt` returns `''` past the end. */
 function isTokenWhitespaceOrEnd(char: string): boolean {
-    return char.length === 0 || TOKEN_WHITESPACE.has(char);
+    return isComposerTokenWhitespaceChar(char);
 }
 
 /**
@@ -144,30 +122,6 @@ export function parseComposerSuggestionQuery(activeWord: string): Readonly<{
 
     const body = rest.length >= 2 && rest.endsWith('"') ? rest.slice(1, -1) : rest.slice(1);
     return { trigger, query: body.replace(/""/g, '"') };
-}
-
-/**
- * Writes `value` as a token for `trigger`, quoting when the raw value would not
- * re-parse to itself. This is the inverse of `parseComposerTokenEnd` +
- * `parseComposerSuggestionQuery`, which is what INV-3 depends on.
- *
- * One value shape is outside the grammar: a value beginning with whitespace,
- * which `opensQuotedSpan` excludes so a bare quote cannot swallow a line. No
- * candidate source produces one.
- */
-export function formatComposerSuggestionToken(trigger: ComposerSuggestionTrigger, value: string): string {
-    if (!COMPOSER_SUGGESTION_TOKEN_GRAMMAR[trigger].quoting) return `${trigger}${value}`;
-
-    let needsQuoting = value.length === 0;
-    for (const char of value) {
-        if (isComposerTokenBoundaryChar(char)) {
-            needsQuoting = true;
-            break;
-        }
-    }
-    if (!needsQuoting) return `${trigger}${value}`;
-
-    return `${trigger}"${value.replace(/"/g, '""')}"`;
 }
 
 export const COMPOSER_SUGGESTION_KIND_IDS = [

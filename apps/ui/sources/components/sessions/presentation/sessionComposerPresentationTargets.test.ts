@@ -6,6 +6,8 @@ import type {
 } from '@happier-dev/protocol';
 import { createActionExecutor, PluginContributesV2Schema, buildComposerReferenceMentionPayloadV1, readHappierStructuredInputV1FromMeta, type PluginProjectionV2, type ActionExecutorDeps } from '@happier-dev/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { formatInlineReferenceTokenV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
+import { act } from 'react-test-renderer';
 
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import {
@@ -22,6 +24,11 @@ import type { PluginUiComposerAttachmentProjection } from '@/sync/domains/plugin
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { renderHook, requireComposerDraftDocument } from '@/dev/testkit';
+import { planComposerReferenceInsertion } from '@/components/sessions/composer/composerReferenceInsertion';
+import { ComposerEntityDropTarget } from '@/components/sessions/composer/ComposerEntityDropTarget';
+import { useEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropHooks';
+import { formatWidgetInstanceRefKeyV1 } from '@happier-dev/protocol/widgets';
+import { buildMentionRefForKindV1, MENTION_KIND_V1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
 
 const persistentValues = vi.hoisted(() => new Map<string, string>());
 const activeScopeState = vi.hoisted(() => ({
@@ -67,6 +74,7 @@ vi.mock('@/sync/domains/transfers/runtime/transferRuntime', () => ({
 import {
     applyComposerPresentationTransaction,
     applyMountedComposerPresentationTransaction,
+    removeMountedComposerAttachmentReferences,
     readMountedComposerPresentationSnapshot,
     requestRegisteredComposerAttachmentPicker,
     createComposerPresentationTransactionApplier,
@@ -233,6 +241,27 @@ function createDocumentTarget(
 describe('composer presentation targets', () => {
     const cleanups: Array<() => void | Promise<void>> = [];
 
+    it('removes upload-draft chips through the exact mounted document in the same removal action', async () => {
+        const { useAttachmentDraftManager } = await import('@/components/sessions/attachments/useAttachmentDraftManager');
+        const scope = { serverId: 'upload-home', accountId: 'upload-account' };
+        activeScopeState.value = scope;
+        const ref = { kind: 'session', sessionId: 'upload-session' } as const;
+        const token = '[Photo](happier-ref:attachment:upload-1)';
+        const target = createDocumentTarget(createSnapshot({ ref, text: `See ${token}`,
+            references: [{ kind: 'happier.attachment', ref: 'attachment:upload-1', token, start: 4, end: 4 + token.length }] }));
+        cleanups.push(registerSessionComposerPresentationTarget({ serverId: scope.serverId, sessionId: ref.sessionId },
+            { ...target, readScope: () => scope }));
+        const hook = await renderHook(() => useAttachmentDraftManager({ enabled: true, maxFileBytes: 1024,
+            initialDrafts: [{ id: 'upload-1', source: { kind: 'memory', name: 'photo.png', bytes: new Uint8Array([1]) }, status: 'pending' }],
+            onRemoveDraft: (attachmentId) => removeMountedComposerAttachmentReferences({ ref, scope, attachmentId }),
+        }));
+        await act(async () => {
+            hook.getCurrent().removeDraft('upload-1');
+            expect(target.readCurrent()).toMatchObject({ text: 'See ', references: [], revision: 2 });
+            expect(hook.getCurrent().getDraftsSnapshot()).toEqual([]);
+        });
+    });
+
     it('admits anchored Ask through the real composer Action and plugin transaction without attachment authority', async () => {
         const scope = { serverId: 'review-ask-home', accountId: 'review-ask-account' };
         activeScopeState.value = scope;
@@ -328,7 +357,7 @@ describe('composer presentation targets', () => {
         const entry = createAttachmentProjectionEntry({ pluginId, localId: 'entry', typeLabel: 'Entry', occurrenceId });
         const composition = { composerAttachmentsById: { [entry.id]: entry } };
         const document = createDocumentTarget(createSnapshot({ ref: { kind: 'newSession', instanceId: 'triage-input' },
-            text: 'Investigate this', selection: { start: 1, end: 4 }, capabilities: { text: true, references: false, attachments: true, submit: true } }));
+            text: 'Investigate this', selection: { start: 12, end: 12 }, capabilities: { text: true, references: true, attachments: true, submit: true } }));
         cleanups.push(registerComposerPresentationTarget(document.readCurrent().ref, { ...document, readScope: () => scope, readAttachmentComposition: () => composition }));
         const source = { id: `${pluginId}/entry-reference`, pluginId, pluginVersion: '0.0.0', occurrenceId, definition: contributes.dragSources[0]! };
         const projection: PluginProjectionV2 = { v: 2, generation: 1, installedPackagesById: {}, agentsById: {}, actionsById: {}, toolsById: {}, commandsById: {},
@@ -343,10 +372,13 @@ describe('composer presentation targets', () => {
         const admission = resolveComposerEntityDrop(item, context);
         expect(admission.status).toBe('allowed');
         if (admission.status !== 'allowed') return;
-        expect(admission.effect.input).toMatchObject({ attachmentContributor: entry.identity, transaction: { expectedRevision: 1, operations: [{ kind: 'attachment.add', attachmentLocalId: 'entry' }] } });
+        expect(admission.effect.input).toMatchObject({ attachmentContributor: entry.identity, transaction: { expectedRevision: 1,
+            operations: [{ kind: 'attachment.add', attachmentLocalId: 'entry', mentionAt: { start: 12, end: 12 } }] } });
         expect(await executeComposerIngressAction({ actionId: 'composer.transaction.apply', input: admission.effect.input,
             context: { surface: 'ui', serverId: scope.serverId, runtimeAccountId: scope.accountId } })).toMatchObject({ status: 'applied' });
-        expect(document.readCurrent()).toMatchObject({ text: 'Investigate this', selection: { start: 1, end: 4 }, references: [],
+        expect(document.readCurrent()).toMatchObject({ text: 'Investigate [Attached title](happier-ref:attachment:host-created-issue-42) this',
+            references: [{ kind: 'attachment', ref: 'attachment:host-created-issue-42', start: 12,
+                token: '[Attached title](happier-ref:attachment:host-created-issue-42)' }],
             attachments: [{ instanceId: 'host-created-issue-42', attachment: entry.identity, value: { v: 1, entryRef: reference.entryRef, sourceInstance: reference.sourceInstance } }] });
         const corpus = createTestkitCorpusCollections();
         corpus.control.sourceInstances.seed(toCorpusStoredValue({ instanceTag: 'a'.repeat(43), sourceQualifiedId: 'happier.example.source/example-forge', lifecycle: CORPUS_SOURCE_INSTANCE_LIFECYCLE.active, configuredAtMs: 1,
@@ -502,10 +534,10 @@ describe('composer presentation targets', () => {
         expect(readMountedComposerPresentationSnapshot({ scope, ref: undeclared })).toBeNull();
     });
 
-    it('adds qualified dropped context through one transaction without replacing the draft or selection', () => {
+    it('inserts qualified dropped context at the caret through one document transaction', () => {
         const scope = { serverId: 'home-a', accountId: 'account-a' };
         const target = createDocumentTarget(createSnapshot({
-            text: 'Keep this draft @old', selection: { start: 2, end: 8 },
+            text: 'Keep this draft @old', selection: { start: 4, end: 4 },
             references: [{ kind: 'future.context', ref: 'future:old', token: '@old', start: 16, end: 20 }],
         }));
         cleanups.push(registerComposerPresentationTarget(target.readCurrent().ref, target));
@@ -522,16 +554,106 @@ describe('composer presentation targets', () => {
         expect(applyComposerPresentationTransaction(admission.effect.input as Parameters<typeof applyComposerPresentationTransaction>[0]))
             .toEqual({ status: 'applied', revision: 2 });
         const current = target.readCurrent();
-        expect(current.text).toMatch(/^Keep this draft @old /);
-        expect(current.selection).toEqual({ start: 2, end: 8 });
+        const token = '[Current title](happier-ref:session:dropped-session)';
+        expect(current.text).toBe(`Keep ${token} this draft @old`);
+        expect(current.selection).toEqual({ start: 4, end: 4 });
         expect(current.references).toHaveLength(2);
-        expect(current.references[0]).toEqual(context.snapshot?.references[0]);
-        expect(current.references[1]).toMatchObject({ kind: 'happier.session', ref: 'session:dropped-session' });
+        expect(current.references[0]).toMatchObject({ kind: 'happier.session', ref: 'session:dropped-session', token, start: 5, end: 5 + token.length });
+        expect(current.references[1]).toMatchObject({ kind: 'future.context', ref: 'future:old', token: '@old', start: 17 + token.length, end: 21 + token.length });
         expect(JSON.stringify(buildComposerSnapshotStructuredInputMetaOverrides(current))).toContain('session:dropped-session');
         expect(current.text).not.toContain('"kind"');
         expect(resolveComposerEntityDrop({ ...item, scope: { ...scope, accountId: 'other-account' } }, context).status).toBe('refused');
         expect(resolveComposerEntityDrop(item, { ...context, sessions: [] }).status).toBe('refused');
         expect(resolveComposerEntityDrop(item, { ...context, snapshot: { ...current, state: { ...current.state, editable: false } } }).status).toBe('refused');
+    });
+
+    it('snaps retained selection endpoints out of a newly inserted reference token', () => {
+        const reference = { kind: 'happier.file', ref: 'file:a.ts', label: 'a.ts' };
+        const token = '[a.ts](happier-ref:file:a.ts)';
+        for (const [selection, expectedSelection] of [
+            [{ start: 4, end: 4 }, { start: 3, end: 3 }],
+            [{ start: token.length + 2, end: token.length + 2 }, { start: token.length + 3, end: token.length + 3 }],
+            [{ start: 4, end: token.length + 2 }, { start: 3, end: token.length + 3 }],
+        ] as const) {
+            const snapshot = createSnapshot({ text: 'x'.repeat(token.length + 20), selection });
+            const target = createDocumentTarget(snapshot);
+            cleanups.push(registerComposerPresentationTarget(snapshot.ref, target));
+            const operations = planComposerReferenceInsertion({ snapshot, reference, at: { kind: 'offset', offset: 2 } });
+            expect(applyComposerPresentationTransaction({ ref: snapshot.ref,
+                transaction: { expectedRevision: snapshot.revision, operations } })).toEqual({ status: 'applied', revision: 2 });
+            expect(target.readCurrent().selection).toEqual(expectedSelection);
+        }
+    });
+
+    it('drops in the middle of the draft, snaps across chips, and refuses a stale admission without writing', () => {
+        const scope = { serverId: 'home-a', accountId: 'account-a' };
+        const token = '[old.ts](happier-ref:file:old.ts)';
+        const snapshot = createSnapshot({ text: `Before ${token} after`, selection: { start: 0, end: 0 },
+            references: [{ kind: 'happier.file', ref: 'file:old.ts', label: 'old.ts', token, start: 7, end: 7 + token.length }] });
+        const target = createDocumentTarget(snapshot);
+        cleanups.push(registerComposerPresentationTarget(snapshot.ref, target));
+        const item = { kind: 'repository-file', scope, machineId: 'machine-a', path: '/repo/new.ts' } as const;
+        const context: ComposerEntityDropContext = {
+            scope, ref: snapshot.ref, snapshot, sessions: [],
+            workspace: { serverId: scope.serverId, machineId: 'machine-a', rootPath: '/repo' },
+            at: { kind: 'offset', offset: 9 }, preview: { verb: 'Mention', target: 'Composer' }, reason: code => code,
+        };
+        const admission = resolveComposerEntityDrop(item, context);
+        expect(admission.status).toBe('allowed');
+        if (admission.status !== 'allowed') return;
+        const input = admission.effect.input as Parameters<typeof applyComposerPresentationTransaction>[0];
+        expect(applyComposerPresentationTransaction(input)).toEqual({ status: 'applied', revision: 2 });
+        expect(target.readCurrent().text).toBe(`Before [new.ts](happier-ref:file:new.ts) ${token} after`);
+        const applied = target.readCurrent();
+        expect(applyComposerPresentationTransaction(input).status).toBe('conflict');
+        expect(target.readCurrent()).toEqual(applied);
+    });
+
+    it('uses the mounted editor release point and clears its hover caret before keyboard insertion', async () => {
+        const scope = { serverId: 'drop-home', accountId: 'drop-account' };
+        activeScopeState.value = scope;
+        const document = createDocumentTarget(createSnapshot({ text: 'Before after', selection: { start: 0, end: 0 } }));
+        const ref = document.readCurrent().ref;
+        if (ref.kind !== 'session') throw new Error('Session fixture required');
+        cleanups.push(registerSessionComposerPresentationTarget({ serverId: scope.serverId, sessionId: ref.sessionId }, { ...document, readScope: () => scope }));
+        const frames = new Map<number, FrameRequestCallback>();
+        let nextFrame = 0;
+        vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++nextFrame, callback); return nextFrame; });
+        vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
+        cleanups.push(() => vi.unstubAllGlobals());
+        const handle = { offsetAtPoint: vi.fn(async () => 7), setDropCaret: vi.fn() };
+        const mounted = await renderHook(() => {
+            const runtime = useEntityDragDropRuntime();
+            ComposerEntityDropTarget({ id: 'composer-drop', scope, refValue: document.readCurrent().ref,
+                bounds: () => ({ x: 0, y: 0, width: 200, height: 100 }), presented: true, editable: true,
+                kinds: ['file'], fileScope: { serverId: scope.serverId, machineId: 'machine-a', rootPath: '/repo' },
+                inputRef: { current: handle } });
+            return runtime;
+        });
+        const runtime = mounted.getCurrent();
+        cleanups.push(runtime.registerSource({ id: 'dropped-file', scope, isCurrent: () => true,
+            getItem: () => ({ kind: 'repository-file', scope, machineId: 'machine-a', path: '/repo/a.ts' }) }));
+        const carry = runtime.begin('dropped-file')!;
+        await act(async () => {
+            carry.move({ x: 80, y: 20 });
+        });
+        expect(runtime.getSnapshot()).toMatchObject({ phase: 'carrying', targetId: 'composer-drop', admission: { status: 'allowed' } });
+        await act(async () => {
+            for (const callback of frames.values()) callback(0);
+            frames.clear();
+            await Promise.resolve();
+        });
+        expect(handle.setDropCaret).toHaveBeenLastCalledWith(7);
+        await act(async () => { expect(await carry.release()).toEqual({ status: 'applied' }); });
+        expect(handle.offsetAtPoint).toHaveBeenLastCalledWith({ x: 80, y: 20 });
+        expect(document.readCurrent().text).toBe('Before [a.ts](happier-ref:file:a.ts) after');
+        expect(handle.setDropCaret).toHaveBeenLastCalledWith(null);
+        await act(async () => {
+            const keyboard = runtime.begin('dropped-file', 'keyboard')!;
+            keyboard.choose('composer-drop');
+            expect(await keyboard.release()).toEqual({ status: 'applied' });
+        });
+        expect(document.readCurrent().text).toBe('[a.ts](happier-ref:file:a.ts) Before [a.ts](happier-ref:file:a.ts) after');
     });
 
     it('admits repository references only on the exact current machine and workspace', () => {
@@ -547,7 +669,7 @@ describe('composer presentation targets', () => {
         expect(admission.status).toBe('allowed');
         if (admission.status !== 'allowed') return;
         expect(admission.effect.input).toMatchObject({ transaction: { expectedRevision: 1, operations: [
-            { kind: 'text.insert', text: ' @src/file.ts' },
+            { kind: 'text.insert', text: ' [file.ts](happier-ref:file:src/file.ts)' },
             { kind: 'reference.insert', reference: { kind: 'happier.file', ref: 'file:src/file.ts' } },
         ] } });
         expect(admission.effect.input).toMatchObject({ transaction: {
@@ -560,6 +682,47 @@ describe('composer presentation targets', () => {
         expect(resolveComposerEntityDrop({ ...item, path: 'c:/users/ALICE/repo\\src/file.ts' }, windowsContext).status).toBe('allowed');
         expect(resolveComposerEntityDrop({ ...item, path: 'C:\\Users\\Alice\\repo2\\src\\file.ts' }, windowsContext).status).toBe('refused');
         expect(resolveComposerEntityDrop({ ...item, path: '/repo/src/../escape.ts' }, context).status).toBe('refused');
+    });
+
+    it('mentions repository folders and workflow identities while refusing the excluded families', () => {
+        const scope = { serverId: 'home-a', accountId: 'account-a' };
+        const snapshot = createSnapshot({ text: 'Read this', selection: { start: 5, end: 5 } });
+        const context: ComposerEntityDropContext = { scope, ref: snapshot.ref, snapshot, sessions: [], itemLabel: 'Release checks',
+            workspace: { serverId: scope.serverId, machineId: 'machine-a', rootPath: '/repo' },
+            preview: { verb: 'Mention', target: 'Composer' }, reason: code => code };
+        const folder = resolveComposerEntityDrop({ kind: 'repository-file', scope, machineId: 'machine-a',
+            path: '/repo/src', entryKind: 'directory' }, context);
+        expect(folder).toMatchObject({ status: 'allowed', effect: { input: { transaction: { operations: [
+            { kind: 'text.insert', position: { offset: 5 }, text: '[src/](happier-ref:file:src/) ' },
+            { kind: 'reference.insert', reference: { kind: 'happier.file', ref: 'file:src/', label: 'src/' } },
+        ] } } } });
+        const workflow = resolveComposerEntityDrop({ kind: 'workflow', scope, workflowId: 'release' }, context);
+        expect(workflow).toMatchObject({ status: 'allowed', effect: { input: { transaction: { operations: [
+            { kind: 'text.insert', text: '[Release checks](happier-ref:workflow:release) ' },
+            { kind: 'reference.insert', reference: { kind: 'happier.workflow', ref: 'workflow:release', label: 'Release checks' } },
+        ] } } } });
+        for (const item of [{ kind: 'artifact', scope, artifactId: 'a' }, { kind: 'todo', scope, todoId: 't' },
+            { kind: 'work-board-item', scope, boardId: 'b', item: { kind: 'session', qualifiedId: { serverId: scope.serverId, id: 's' } } }] as const) {
+            expect(resolveComposerEntityDrop(item, context)).toMatchObject({ status: 'refused', reason: { code: 'referenceUnavailable' } });
+        }
+    });
+
+    it('mentions qualified widgets through the canonical instance identity', () => {
+        const scope = { serverId: 'home-a', accountId: 'account-a' };
+        const snapshot = createSnapshot({ text: '', selection: { start: 0, end: 0 } });
+        const context: ComposerEntityDropContext = { scope, ref: snapshot.ref, snapshot, sessions: [], workspace: null,
+            itemLabel: 'Build status', preview: { verb: 'Mention', target: 'Composer' }, reason: code => code };
+        const ref = { surface: { ...scope, owner: { kind: 'workBoard' as const, boardId: 'board-a' } }, instanceId: 'widget-a' };
+        for (const item of [{ kind: 'work-board-widget', scope, boardId: 'board-a', instanceId: 'widget-a' },
+            { kind: 'widget-area-instance', scope, ref: { ...ref, surface: { ...scope, owner: { kind: 'project', projectId: 'project-a' } } } }] as const) {
+            const identity = item.kind === 'work-board-widget' ? ref : item.ref;
+            expect(resolveComposerEntityDrop(item, context)).toMatchObject({ status: 'allowed', effect: { input: { transaction: {
+                operations: [expect.objectContaining({ kind: 'text.insert' }), { kind: 'reference.insert', reference: {
+                    kind: 'happier.widget', ref: buildMentionRefForKindV1(MENTION_KIND_V1.widget, formatWidgetInstanceRefKeyV1(identity)),
+                    label: 'Build status', start: 0,
+                } }],
+            } } } });
+        }
     });
 
     it('preserves predecessor Message identities and unknown references when adding new context', () => {
@@ -615,10 +778,10 @@ describe('composer presentation targets', () => {
         expect(admission.status).toBe('allowed');
         if (admission.status !== 'allowed') return;
         expect(applyComposerPresentationTransaction(admission.effect.input as Parameters<typeof applyComposerPresentationTransaction>[0]).status).toBe('applied');
-        expect(target.readCurrent()).toMatchObject({ selection: { start: 1, end: 3 }, references: [{
+        expect(target.readCurrent()).toMatchObject({ selection: { start: 1, end: 2 }, references: [{
             kind: 'happier.composerReference', ref: 'composerReference:pr:42', composerReference: { pluginId: 'acme.issues', localId: 'pull-requests' },
         }] });
-        expect(target.readCurrent().text).not.toContain('composerReference');
+        expect(target.readCurrent().text).toBe('R [PR 42](happier-ref:composerReference:pr:42) iew');
         expect(resolveComposerEntityDrop(item, { ...context, referenceHost: { ...context.referenceHost!, isCurrent: () => false } }).status).toBe('refused');
         expect(resolveComposerEntityDrop(item, { ...context, referenceHost: { ...context.referenceHost!, projection: { ...projection, contributionIntrospection: undefined } } }).status).toBe('refused');
         expect(resolveComposerEntityDrop({ ...item, reference: { actionId: 'session.send', input: { text: 'transport' } } }, context).status).toBe('refused');
@@ -1093,7 +1256,20 @@ describe('composer presentation targets', () => {
     });
 
     it('adds and removes an exact plugin attachment through one explicitly addressed composer without a control or picker', () => {
-        const target = createDocumentTarget(createSnapshot());
+        const token = '[Issue](happier-ref:attachment:host-created-issue-42)';
+        const keptToken = '[Session](happier-ref:session:session-2)';
+        const text = `${token} and ${keptToken} then ${token}; plain ${token}`;
+        const keptStart = token.length + 5;
+        const secondStart = keptStart + keptToken.length + 6;
+        const target = createDocumentTarget(createSnapshot({
+            text,
+            selection: { start: text.length, end: text.length },
+            references: [
+                { kind: 'happier.attachment', ref: 'attachment:host-created-issue-42', token, start: 0, end: token.length },
+                { kind: 'happier.session', ref: 'session:session-2', token: keptToken, start: keptStart, end: keptStart + keptToken.length },
+                { kind: 'happier.attachment', ref: 'attachment:host-created-issue-42', token, start: secondStart, end: secondStart + token.length },
+            ],
+        }));
         cleanups.push(registerComposerPresentationTarget(
             { kind: 'session', sessionId: 'session-1' },
             target,
@@ -1149,6 +1325,13 @@ describe('composer presentation targets', () => {
             },
         })).toEqual({ status: 'applied', revision: 3 });
         expect(target.readCurrent().attachments).toEqual([]);
+        const nextText = ` and ${keptToken} then ; plain ${token}`;
+        expect(target.readCurrent()).toMatchObject({
+            text: nextText,
+            references: [{ ref: 'session:session-2', start: 5, end: 5 + keptToken.length }],
+            selection: { start: nextText.length, end: nextText.length },
+        });
+        expect(target.readCurrent().references).toHaveLength(1);
     });
 
     it('freezes the CURRENT locale into an admitted attachment type label, not the declaration fallback', () => {
@@ -2257,7 +2440,8 @@ describe('persistent Session composer fallback', () => {
     it('persists a replacement label when a transaction removes and reinserts the same reference identity', () => {
         const sessionId = 'session-persistent-reference-label';
         const ref = { kind: 'session', sessionId } as const;
-        activatePersistentSessionDraft(sessionId, '@issue-42');
+        const token = formatInlineReferenceTokenV1({ label: 'Issue #42', ref: 'issue:42' });
+        activatePersistentSessionDraft(sessionId, token);
 
         const initial = readPersistentSessionSnapshot(sessionId);
         expect(applyComposerPresentationTransaction({
@@ -2269,10 +2453,10 @@ describe('persistent Session composer fallback', () => {
                     reference: {
                         kind: 'acme.issue',
                         ref: 'issue:42',
-                        token: '@issue-42',
+                        token,
                         label: 'Issue #42',
                         start: 0,
-                        end: 9,
+                        end: token.length,
                     },
                 }],
             },
@@ -2286,17 +2470,17 @@ describe('persistent Session composer fallback', () => {
                 operations: [
                     {
                         kind: 'reference.remove',
-                        reference: { ref: 'issue:42', start: 0, end: 9 },
+                        reference: { ref: 'issue:42', start: 0, end: token.length },
                     },
                     {
                         kind: 'reference.insert',
                         reference: {
                             kind: 'acme.issue',
                             ref: 'issue:42',
-                            token: '@issue-42',
+                            token,
                             label: 'Renamed issue',
                             start: 0,
-                            end: 9,
+                            end: token.length,
                         },
                     },
                 ],
@@ -2310,9 +2494,9 @@ describe('persistent Session composer fallback', () => {
         )).toEqual([{
             kind: 'acme.issue',
             ref: 'issue:42',
-            tokenText: '@issue-42',
+            tokenText: token,
             start: 0,
-            end: 9,
+            end: token.length,
             label: 'Renamed issue',
         }]);
         expect(readPersistentSessionSnapshot(sessionId).references).toEqual([

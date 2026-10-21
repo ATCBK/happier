@@ -23,6 +23,9 @@ import type { SessionAttachmentUploadInitRequestV1 } from '@happier-dev/protocol
 import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { filesystemPathComparisonKey } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import type { TransferLifecycleDiagnosticContext } from '../rpc/transferLifecycleDiagnostics';
+import { mkdir, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
+import { normalizeAttachmentWorkspaceRelativeDir } from './resolveAttachmentTransferTarget';
 
 type WorkspaceLikeTransferUploadTarget = Extract<
   ReturnType<typeof resolveWorkspaceFileUploadTarget>,
@@ -136,11 +139,17 @@ export async function resolveTransferUploadInitTarget(params: Readonly<{
       return { success: false, error: 'Missing fileName' };
     }
 
-    const path = buildAttachmentUploadPath({
-      uploadBasePath: resolvedTarget.uploadBasePath,
-      messageLocalId,
-      fileName: request.fileName,
-    });
+    let path: string;
+    try {
+      path = buildAttachmentUploadPath({
+        uploadBasePath: resolvedTarget.uploadBasePath,
+        messageLocalId,
+        fileName: request.fileName,
+        ...(request.relativePath === undefined ? {} : { relativePath: request.relativePath }),
+      });
+    } catch {
+      return { success: false, error: 'Invalid attachment relativePath' };
+    }
 
     const target = resolveWorkspaceFileUploadTarget({
       workingDirectory: attachmentWorkingDirectory,
@@ -156,6 +165,23 @@ export async function resolveTransferUploadInitTarget(params: Readonly<{
       return { success: false, error: target.error };
     }
 
+    let directoryPaths: string[] | null = null;
+    if (request.directoryEntries !== undefined) {
+      if (request.sizeBytes !== 0 || !request.relativePath) return { success: false, error: 'Invalid directory upload' };
+      directoryPaths = [target.target.destPath];
+      for (const entry of request.directoryEntries) {
+        const normalized = normalizeAttachmentWorkspaceRelativeDir(entry);
+        if (!normalized) {
+          return { success: false, error: 'Invalid attachment directory path' };
+        }
+        const child = resolveWorkspaceFileUploadTarget({ workingDirectory: attachmentWorkingDirectory,
+          accessPolicy: params.accessPolicy, path: join(path, normalized), sizeBytes: 0, overwrite: false,
+          additionalAllowedWriteDirs: resolvedTarget.target.additionalAllowedWriteDirs });
+        if (!child.success) return child;
+        directoryPaths.push(child.target.destPath);
+      }
+    }
+
     params.attachmentUpload?.pathAllowanceRegistry?.setAdditionalAllowedReadDirs(resolvedTarget.target.additionalAllowedReadDirs);
     params.attachmentUpload?.pathAllowanceRegistry?.setAdditionalAllowedWriteDirs(resolvedTarget.target.additionalAllowedWriteDirs);
 
@@ -168,9 +194,16 @@ export async function resolveTransferUploadInitTarget(params: Readonly<{
       // Best effort.
     }
 
+    const directoryTargets = directoryPaths;
     return {
       success: true,
-      target: target.target,
+      target: directoryTargets === null ? target.target : { ...target.target,
+        finalizeUpload: async ({ tempPath }) => {
+          for (const directoryPath of directoryTargets) await mkdir(directoryPath, { recursive: true });
+          await unlink(tempPath);
+          return { success: true as const, path, sizeBytes: 0 };
+        },
+      },
       diagnosticContext: {
         transferKind: 'session_attachment',
         destinationClass: config.uploadLocation,

@@ -117,6 +117,23 @@ function createSnapshot(input: Readonly<{
 }
 
 describe('composerSubmissionCoordinator', () => {
+    it('drops only bound orphan attachment chips before admission and keeps captured custody for clearing', async () => {
+        const removed = '[missing](happier-ref:attachment:gone)';
+        const retained = '[screen](happier-ref:attachment:upload-1)';
+        const text = `See ${removed} then ${retained}; literal ${removed}`;
+        const snapshot = createSnapshot({ text, attachments: [], references: [
+            { kind: 'happier.attachment', ref: 'attachment:gone', token: removed, label: 'missing', start: 4, end: 4 + removed.length },
+            { kind: 'happier.attachment', ref: 'attachment:upload-1', token: retained, label: 'screen', start: 10 + removed.length, end: 10 + removed.length + retained.length },
+        ] });
+        const admit = vi.fn(async (_snapshot: ComposerSubmissionSnapshot) => ({ status: 'accepted' as const }));
+        const clearAcceptedSnapshot = vi.fn(() => true);
+        await submitComposerSnapshot({ snapshot, attachmentDraftIds: ['upload-1'],
+            route: { kind: 'session', ref: { kind: 'session', sessionId: 'session-1' }, admit }, clearAcceptedSnapshot });
+        expect(admit.mock.calls[0]?.[0]).toMatchObject({ text: `See  then ${retained}; literal ${removed}`, references: [
+            expect.objectContaining({ ref: 'attachment:upload-1', start: 10, end: 10 + retained.length }),
+        ] });
+        expect(clearAcceptedSnapshot).toHaveBeenCalledWith(snapshot);
+    });
     afterEach(() => {
         getComposerMediaContentAvailabilitySpy.mockReset();
     });

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { readableMessageText } from '@/components/sessions/transcript/messageDisplayText';
 import type { ScrollView } from 'react-native';
 import type { PendingReorderInputV1 } from '@happier-dev/protocol';
 import { entityDragScopesEqualV1, type EntityDragScopeV1 } from '@happier-dev/protocol/plugins/ui';
@@ -36,7 +37,7 @@ export const PendingMessagesDragReorderList = React.memo<PendingMessagesDragReor
     const executeReorder = useEntityReorderAction(props.scope);
     const binding: EntityFlatReorderBinding = React.useMemo(() => {
         const { scope, sessionId, recipient, messages } = props;
-        const items = messages.map(message => ({ id: durableId(message), title: String(message.displayText ?? message.text ?? '') }));
+        const items = messages.map(message => ({ id: durableId(message), title: readableMessageText(String(message.displayText ?? message.text ?? ''), message.rawRecord?.meta) }));
         return {
             scope, kind: 'pending-input', items,
             getItem: id => scope && messages.some(message => durableId(message) === id)

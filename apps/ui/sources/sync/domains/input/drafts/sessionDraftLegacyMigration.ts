@@ -6,6 +6,7 @@ import {
     composerReferencesFromStructuredMentions,
     composerStructuredMentionsFromReferences,
     placePositionlessComposerReferences,
+    normalizeComposerDraftReferenceTokens,
 } from '@/components/sessions/composer/composerScopeAdapters';
 
 import { randomUUID } from '@/platform/randomUUID';
@@ -119,7 +120,9 @@ function buildExistingPatch(
                 continue;
             }
             const mentions = parseLegacySessionDraftMentions(envelope.value, text);
-            patch.mentions = mentions.mentions.map(asStrictJsonValue);
+            const normalized = normalizeComposerDraftReferenceTokens({ text, mentions: mentions.mentions });
+            patch.text = normalized.text;
+            patch.mentions = normalized.mentions.map(asStrictJsonValue);
             if (!mentions.fullyDecoded) fullyProjected = false;
             continue;
         }

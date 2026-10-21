@@ -429,6 +429,16 @@ describe('findActiveWord host eligibility (R-9, INV-1)', () => {
 });
 
 describe('findActiveWord input methods (plan 7.3)', () => {
+    it('treats bound references as opaque, including their label and destination triggers', () => {
+        const content = '[run /help @name $skill](happier-ref:file:src/a.ts) @next';
+        const end = content.indexOf(' @next');
+        const references = [{ start: 0, end }];
+        for (const cursor of [10, 16, 23, end]) {
+            expect(findActiveWord(content, { start: cursor, end: cursor }, ALL_KINDS, references)).toBeUndefined();
+        }
+        expect(findActiveWord(content, { start: content.length, end: content.length }, ALL_KINDS, references)?.word).toBe('@next');
+    });
+
     it('resolves offsets in UTF-16 code units when the token contains astral characters', () => {
         // "🙂" is a surrogate pair: two UTF-16 code units.
         const content = 'see @🙂-notes.md';

@@ -1,26 +1,31 @@
 import * as React from 'react';
 
-import type { AttachmentsUploadFileSource } from '@/sync/domains/attachments/attachmentsUploadFileSource';
+import type { AttachmentUploadSource, AddWebAttachmentsOptions } from '@/sync/domains/attachments/attachmentsUploadFileSource';
 import type { PickedAttachment, AttachmentFilePickerHandle } from '@/components/sessions/attachments/AttachmentFilePicker.types';
 import type { AgentInputAttachment } from '@/components/sessions/agentInput/agentInputContracts';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { randomUUID } from '@/platform/randomUUID';
 import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
-import type { AttachmentDraft } from './attachmentDraftModel';
+import { sendableAttachmentDrafts, type AttachmentDraft } from './attachmentDraftModel';
+import type { AttachmentsUploadConfig } from '@/sync/domains/transfers/ops/uploadSessionAttachment';
+import type { SessionAttachmentTransferContext } from '@/sync/domains/transfers/runtime/transferRuntime/families/sessionAttachmentTransfers';
+import type { ExactSessionMachineTargetIdentity } from '@/sync/ops/sessionMachineTarget';
 
-function resolveSourceSizeBytes(source: AttachmentsUploadFileSource): number | null {
+function resolveSourceSizeBytes(source: AttachmentUploadSource): number | null {
+    if (source.kind === 'folder') return source.entries.reduce((total, entry) => total + (resolveSourceSizeBytes(entry.source) ?? 0), 0);
     if (source.kind === 'web') return source.file.size;
     if (source.kind === 'memory') return source.bytes.byteLength;
     return typeof source.sizeBytes === 'number' && Number.isFinite(source.sizeBytes) ? source.sizeBytes : null;
 }
 
-function resolveSourceName(source: AttachmentsUploadFileSource): string {
+function resolveSourceName(source: AttachmentUploadSource): string {
     if (source.kind === 'web') return source.file.name;
     return source.name;
 }
 
-function isImageSource(source: AttachmentsUploadFileSource): boolean {
+function isImageSource(source: AttachmentUploadSource): boolean {
+    if (source.kind === 'folder') return false;
     const viewer = resolveFileViewerKind(source.kind === 'web'
         ? { path: source.file.name, mimeType: source.file.type }
         : { path: source.name, mimeType: source.mimeType, ...(source.kind === 'memory' ? { head: source.bytes } : {}) });
@@ -31,31 +36,42 @@ export function useAttachmentDraftManager(params: Readonly<{
     enabled: boolean;
     maxFileBytes: number;
     initialDrafts?: readonly AttachmentDraft[];
+    eagerUpload?: Readonly<{ sessionId: string; sessionTarget?: ExactSessionMachineTargetIdentity;
+        config: AttachmentsUploadConfig; transferContext?: SessionAttachmentTransferContext }>;
+    /** The mounted document owner removes exact chip occurrences in the same user action. */
+    onRemoveDraft?: (id: string) => void;
 }>): Readonly<{
     filePickerRef: React.RefObject<AttachmentFilePickerHandle | null>;
     drafts: readonly AttachmentDraft[];
     getDraftsSnapshot: () => readonly AttachmentDraft[];
+    getSendableDraftsSnapshot: () => readonly AttachmentDraft[];
     /** Process-local mutation revision for compare-and-restore consumers. */
     getDraftRevisionSnapshot: () => number;
     hasSendableAttachments: boolean;
     agentInputAttachments: readonly AgentInputAttachment[];
-    addWebFiles: (files: readonly File[]) => void;
+    addWebFiles: (files: readonly File[], options?: AddWebAttachmentsOptions) => readonly AttachmentDraft[];
     addPickedAttachments: (picked: readonly PickedAttachment[]) => void;
     removeDraft: (id: string) => void;
     removeSubmittedDrafts: (submitted: readonly AttachmentDraft[]) => readonly AttachmentDraft[];
     clearDrafts: () => void;
     replaceDrafts: (drafts: readonly AttachmentDraft[]) => void;
-    applyDraftPatch: (id: string, patch: Partial<Omit<AttachmentDraft, 'id' | 'source'>>, expectedSource?: AttachmentsUploadFileSource) => void;
+    applyDraftPatch: (id: string, patch: Partial<Omit<AttachmentDraft, 'id' | 'source'>>, expectedSource?: AttachmentUploadSource) => void;
 }> {
     const filePickerRef = React.useRef<AttachmentFilePickerHandle | null>(null);
     const [drafts, setDrafts] = React.useState<AttachmentDraft[]>(() => [...(params.initialDrafts ?? [])]);
     const draftsRef = React.useRef<AttachmentDraft[]>(params.initialDrafts ? [...params.initialDrafts] : []);
     const draftRevisionRef = React.useRef(0);
+    const onRemoveDraftRef = React.useRef(params.onRemoveDraft);
+    onRemoveDraftRef.current = params.onRemoveDraft;
+    const eagerUploadRef = React.useRef(params.eagerUpload);
+    eagerUploadRef.current = params.eagerUpload;
+    const eagerUploadsRef = React.useRef(new Map<string, AbortController>());
 
     const webPreviewUrlsRef = React.useRef<Map<string, string>>(new Map());
     const [webPreviewUrlsVersion, setWebPreviewUrlsVersion] = React.useState(0);
 
     const getDraftsSnapshot = React.useCallback(() => draftsRef.current, []);
+    const getSendableDraftsSnapshot = React.useCallback(() => sendableAttachmentDrafts(draftsRef.current), []);
     const getDraftRevisionSnapshot = React.useCallback(() => draftRevisionRef.current, []);
 
     const commitDrafts = React.useCallback((updater: (previous: AttachmentDraft[]) => AttachmentDraft[]) => {
@@ -84,19 +100,42 @@ export function useAttachmentDraftManager(params: Readonly<{
         };
     }, []);
 
-    const applyDraftPatch = React.useCallback((id: string, patch: Partial<Omit<AttachmentDraft, 'id' | 'source'>>, expectedSource?: AttachmentsUploadFileSource) => {
+    const applyDraftPatch = React.useCallback((id: string, patch: Partial<Omit<AttachmentDraft, 'id' | 'source'>>, expectedSource?: AttachmentUploadSource) => {
         if (expectedSource && !draftsRef.current.some((draft) => draft.id === id && draft.source === expectedSource)) return;
         commitDrafts((prev) => prev.map((d) => d.id === id ? ({ ...d, ...patch } as AttachmentDraft) : d));
     }, [commitDrafts]);
 
-    const addSources = React.useCallback((sources: readonly AttachmentsUploadFileSource[]) => {
-        if (!params.enabled) return;
+    const startEagerUploads = React.useCallback((added: readonly AttachmentDraft[]) => {
+        const target = eagerUploadRef.current;
+        if (!target) return;
+        for (const draft of added) {
+            if (draft.source.kind !== 'folder' || draft.status !== 'pending' || draft.uploadedPath || eagerUploadsRef.current.has(draft.id)) continue;
+            const controller = new AbortController();
+            eagerUploadsRef.current.set(draft.id, controller);
+            void import('./uploadAttachmentDraftsToSession').then(({ uploadAttachmentDraftsToSession }) => uploadAttachmentDraftsToSession({
+                ...target, drafts: [draft], signal: controller.signal,
+                applyDraftPatch: (id, patch) => applyDraftPatch(id, patch, draft.source),
+            })).catch(() => {
+                // The upload owner has already projected the failure onto this draft.
+            }).finally(() => {
+                if (eagerUploadsRef.current.get(draft.id) === controller) eagerUploadsRef.current.delete(draft.id);
+            });
+        }
+    }, [applyDraftPatch]);
+
+    React.useEffect(() => () => {
+        for (const controller of eagerUploadsRef.current.values()) controller.abort();
+        eagerUploadsRef.current.clear();
+    }, [params.eagerUpload?.sessionId, params.eagerUpload?.sessionTarget?.serverId, params.eagerUpload?.sessionTarget?.accountId]);
+
+    const addSources = React.useCallback((sources: readonly AttachmentUploadSource[]): readonly AttachmentDraft[] => {
+        if (!params.enabled) return [];
 
         const next: AttachmentDraft[] = [];
         let skippedOversizeCount = 0;
         for (const source of sources) {
-            const sizeBytes = resolveSourceSizeBytes(source);
-            if (sizeBytes != null && sizeBytes > params.maxFileBytes) {
+            const files = source.kind === 'folder' ? source.entries.map(entry => entry.source) : [source];
+            if (files.some(file => (resolveSourceSizeBytes(file) ?? 0) > params.maxFileBytes)) {
                 skippedOversizeCount += 1;
                 continue;
             }
@@ -113,12 +152,14 @@ export function useAttachmentDraftManager(params: Readonly<{
                 t('attachments.alerts.fileTooLargeBody', { count: skippedOversizeCount }),
             );
         }
-        if (next.length === 0) return;
+        if (next.length === 0) return [];
         commitDrafts((prev) => [...prev, ...next]);
-    }, [commitDrafts, params.enabled, params.maxFileBytes]);
+        startEagerUploads(next);
+        return next;
+    }, [commitDrafts, params.enabled, params.maxFileBytes, startEagerUploads]);
 
-    const addWebFiles = React.useCallback((files: readonly File[]) => {
-        addSources(files.map((file) => ({ kind: 'web' as const, file })));
+    const addWebFiles = React.useCallback((files: readonly File[], options?: AddWebAttachmentsOptions) => {
+        return addSources(options?.sources ?? files.map((file) => ({ kind: 'web' as const, file })));
     }, [addSources]);
 
     const addPickedAttachments = React.useCallback((picked: readonly PickedAttachment[]) => {
@@ -126,6 +167,8 @@ export function useAttachmentDraftManager(params: Readonly<{
     }, [addSources]);
 
     const removeDraft = React.useCallback((id: string) => {
+        eagerUploadsRef.current.get(id)?.abort();
+        onRemoveDraftRef.current?.(id);
         commitDrafts((prev) => prev.filter((d) => d.id !== id));
     }, [commitDrafts]);
 
@@ -198,6 +241,7 @@ export function useAttachmentDraftManager(params: Readonly<{
             return {
                 key: d.id,
                 label: name,
+                attachmentType: d.source.kind === 'folder' ? 'folder' as const : 'file' as const,
                 status: d.status,
                 preview: imagePreviewUri ? { kind: 'image', uri: imagePreviewUri } : undefined,
                 uploadProgress: d.uploadProgress,
@@ -214,8 +258,9 @@ export function useAttachmentDraftManager(params: Readonly<{
         filePickerRef,
         drafts,
         getDraftsSnapshot,
+        getSendableDraftsSnapshot,
         getDraftRevisionSnapshot,
-        hasSendableAttachments: drafts.length > 0,
+        hasSendableAttachments: sendableAttachmentDrafts(drafts).length > 0,
         agentInputAttachments,
         addWebFiles,
         addPickedAttachments,
@@ -233,6 +278,7 @@ export function useAttachmentDraftManager(params: Readonly<{
         drafts,
         getDraftRevisionSnapshot,
         getDraftsSnapshot,
+        getSendableDraftsSnapshot,
         removeDraft,
         removeSubmittedDrafts,
         replaceDrafts,

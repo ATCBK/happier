@@ -27,6 +27,8 @@ import type {
     AgentInputAttachmentsRowItem,
     AgentInputAttachmentUploadProgress,
 } from '../agentInputContracts';
+import { readAgentInputImageNumbers } from '../agentInputContracts';
+import { ImageNumberBadge } from '@/components/ui/referenceChip/ImageNumberBadge';
 
 /** A draft image the composer already holds as a direct URI (the draft owns and revokes it). */
 type ComposerAttachmentImagePreviewItem = Readonly<{ key: string; uri: string; title: string }>;
@@ -443,6 +445,12 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
         () => resolveAttachmentImagePreviewItems(compactItems),
         [compactItems],
     );
+    // Lab TA: each picture carries its "Image #N" number on its corner, the same number its chip reads.
+    const imageNumbers = React.useMemo(() => readAgentInputImageNumbers(props.items), [props.items]);
+    const renderImageNumber = (item: Extract<AgentInputAttachmentsRowItem, Readonly<{ kind: 'media' }>>) => {
+        const number = item.attachmentId === undefined ? undefined : imageNumbers.get(item.attachmentId);
+        return number === undefined ? null : <ImageNumberBadge number={number} testID={`agent-input-attachment-number:${item.key}`} />;
+    };
     const surfaceLayoutKeys = React.useMemo(
         () => new Set(props.items.flatMap((item) => (
             item.kind === 'surface' ? [`${item.key}:${item.sizing}`] : []
@@ -745,6 +753,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                                     <Text style={styles.attachmentImageOverlayText}>{percent}%</Text>
                                 </View>
                             ) : null}
+                            {renderImageNumber(att)}
                             {attachmentError ? (
                                 <View
                                     accessibilityLabel={attachmentError}
@@ -812,6 +821,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                                         <Text style={styles.attachmentImageOverlayText}>{percent}%</Text>
                                     </View>
                                 ) : null}
+                                {renderImageNumber(att)}
                                 {attachmentError ? (
                                     <View
                                         accessibilityLabel={attachmentError}

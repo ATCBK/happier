@@ -109,6 +109,7 @@ export type ComposerUnknownMention = Readonly<{
      * remain persistence-compatible but are not inferred as transport data.
      */
     composerReference?: ComposerReferenceMentionPayloadV1['composerReference'];
+    composerReferenceTrigger?: '@' | '$' | '/';
     tokenText: string;
     start: number;
     end: number;

@@ -1,4 +1,4 @@
-import type { AttachmentsUploadFileSource } from '@/sync/domains/attachments/attachmentsUploadFileSource';
+import type { AttachmentUploadSource } from '@/sync/domains/attachments/attachmentsUploadFileSource';
 import type { SessionAttachmentHandleV1 } from '@happier-dev/protocol';
 import type { AttachmentTargetUploadedDraftCheckpoint } from './uploadAttachmentDraftsToSession';
 
@@ -6,7 +6,7 @@ export type AttachmentDraftStatus = 'pending' | 'uploading' | 'uploaded' | 'erro
 
 export type AttachmentDraft = Readonly<{
     id: string;
-    source: AttachmentsUploadFileSource;
+    source: AttachmentUploadSource;
     status: AttachmentDraftStatus;
     error?: string;
     uploadProgress?: Readonly<{ uploadedBytes: number; totalBytes: number }>;
@@ -18,3 +18,7 @@ export type AttachmentDraft = Readonly<{
     /** Exact cross-Session upload checkpoints; ordinary uploadedPath remains source-scoped. */
     targetUploadedCheckpoints?: readonly AttachmentTargetUploadedDraftCheckpoint[];
 }>;
+
+export function sendableAttachmentDrafts(drafts: readonly AttachmentDraft[]): readonly AttachmentDraft[] {
+    return drafts.filter(draft => draft.source.kind !== 'folder' || draft.status !== 'error');
+}

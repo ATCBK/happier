@@ -73,6 +73,25 @@ describe('migrateLegacySessionDrafts', () => {
         vi.clearAllMocks();
     });
 
+    it('normalizes the predecessor positionless Session draft through the migration writer', async () => {
+        // Captured by executing ../0.2 savePersistedSessionDraftValues at
+        // 8a088dd70f57ccf43fade3543fb6a3e874bee12a (relevant files clean).
+        // /tmp/happier-u1-predecessor-draft-fixture.cjs loads the actual predecessor
+        // persistence, key and scope modules; only device storage is an in-memory boundary.
+        // The source mention is its structuredInputMentions.test.ts:158-164 fixture.
+        state.sessionDrafts = { 'legacy-inline': 'Compare @session:fix-startup-v4a0a7 then @session:fix-startup-v4a0a7' };
+        state.draftValues = JSON.parse('{"legacy-inline":{"structuredInput.mentions":{"v":1,"lastEditedAt":1,"value":[{"kind":"session","tokenText":"@session:fix-startup-v4a0a7","sessionId":"cmslj08960ku1tmhrd0v4a0a7","label":"Fix Detached Dev Stack Startup"},{"kind":"session","tokenText":"@session:fix-startup-v4a0a7","sessionId":"cmslj08960ku1tmhrd0v4a0a7","label":"Fix Detached Dev Stack Startup"}]}}}');
+        await migrateLegacySessionDrafts(scope);
+        expect(mocks.writeExisting).toHaveBeenCalledWith(expect.objectContaining({ patch: expect.objectContaining({
+            text: 'Compare [Fix Detached Dev Stack Startup](happier-ref:session:cmslj08960ku1tmhrd0v4a0a7) then [Fix Detached Dev Stack Startup](happier-ref:session:cmslj08960ku1tmhrd0v4a0a7)',
+            mentions: expect.arrayContaining([
+                expect.objectContaining({ ref: 'session:cmslj08960ku1tmhrd0v4a0a7', start: 8,
+                    tokenText: '[Fix Detached Dev Stack Startup](happier-ref:session:cmslj08960ku1tmhrd0v4a0a7)' }),
+            ]),
+        }) }));
+        expect(mocks.writeExisting.mock.calls[0]?.[0].patch.mentions).toHaveLength(2);
+    });
+
     it('projects retained legacy draft attachments with unknown nested fields', async () => {
         const actual = await vi.importActual<typeof import('@/sync/ops/sessionDrafts/sessionDraftRepository')>(
             '@/sync/ops/sessionDrafts/sessionDraftRepository',
@@ -144,8 +163,8 @@ describe('migrateLegacySessionDrafts', () => {
             scope,
             sessionId: 'session-a',
             patch: {
-                text: '@a legacy text',
-                mentions: [expect.objectContaining({ kind: 'happier.session', ref: 'session:a', tokenText: '@a', start: 0, end: 2 })],
+                text: '[@a](happier-ref:session:a) legacy text',
+                mentions: [expect.objectContaining({ kind: 'happier.session', ref: 'session:a', tokenText: '[@a](happier-ref:session:a)', start: 0, end: 27 })],
                 attachments: [expect.objectContaining({ instanceId: 'issue-42', key: '42' })],
                 routing: { recipient: { mode: 'manual', recipient: null } },
             },
@@ -247,7 +266,7 @@ describe('migrateLegacySessionDrafts', () => {
         expect(state.sessionDrafts).toEqual({ 'session-a': '@a' });
         expect(state.draftValues).toHaveProperty('session-a');
         expect(mocks.writeExisting).toHaveBeenCalledWith(expect.objectContaining({ patch: {
-            text: '@a', mentions: [expect.objectContaining({ ref: 'session:a', start: 0, end: 2 })],
+            text: '[@a](happier-ref:session:a)', mentions: [expect.objectContaining({ ref: 'session:a', start: 0, end: 27 })],
         } }));
         expect(mocks.writeSupplement).toHaveBeenCalledWith(expect.objectContaining({ patch: { legacyExistingSessionDraftV1: true } }));
     });

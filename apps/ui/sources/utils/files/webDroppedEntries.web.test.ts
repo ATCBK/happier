@@ -16,6 +16,14 @@ function folderEntry(name: string, children: FakeEntry[]): FakeEntry {
 }
 
 describe('dropped folder entries', () => {
+    it('reports directory metadata, including an entirely empty root, without changing file consumers', async () => {
+        const entries = [folderEntry('empty', []), folderEntry('project', [folderEntry('nested-empty', []), fileEntry('a.txt')])];
+        const directories: string[] = [];
+        const dataTransfer = { files: [], items: entries.map(entry => ({ kind: 'file', webkitGetAsEntry: () => entry })) } as unknown as DataTransfer;
+        const files = await readWebDroppedEntries(dataTransfer, { onDirectory: path => directories.push(path) });
+        expect(files.map(entry => entry.relativePath)).toEqual(['project/a.txt']);
+        expect(directories).toEqual(['empty', 'project', 'project/nested-empty']);
+    });
     it('claims every dropped item before walking the first folder, because the browser empties the list after the drop event', async () => {
         const entries = [folderEntry('upload-dir', [fileEntry('a.txt'), folderEntry('sub', [fileEntry('b.txt')])]), fileEntry('loose.txt')];
         let dispatching = true;

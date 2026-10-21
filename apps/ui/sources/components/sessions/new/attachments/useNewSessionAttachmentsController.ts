@@ -29,8 +29,10 @@ import { openAttachmentFilePickerFiles, openAttachmentFilePickerImages } from '@
 import { attachRecoverableAttachmentDrafts } from '@/components/sessions/attachments/recoverableAttachmentDrafts';
 import { useWorkspaceReviewCommentDraftHandlers } from '@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceReviewCommentDraftHandlers';
 import { useAttachmentDraftManager } from '@/components/sessions/attachments/useAttachmentDraftManager';
+import { removeMountedComposerAttachmentReferences } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { useAttachmentsUploadConfig } from '@/components/sessions/attachments/useAttachmentsUploadConfig';
-import { buildAttachmentMessageMeta, formatAttachmentsBlock, uploadAttachmentDraftsToSession } from '@/components/sessions/attachments/uploadAttachmentDraftsToSession';
+import { buildAttachmentMessageMeta, uploadAttachmentDraftsToSession } from '@/components/sessions/attachments/uploadAttachmentDraftsToSession';
 import { blurActiveElementOnWeb, deferOnWeb } from '@/utils/platform/deferOnWeb';
 import { nativeReadClipboardImageAttachment } from '@/utils/files/nativeClipboardImageAttachment';
 import { Modal } from '@/modal';
@@ -133,6 +135,12 @@ export function useNewSessionAttachmentsController(params: Readonly<{
         enabled: attachmentsUploadsEnabled,
         maxFileBytes: attachmentsUploadConfig.maxFileBytes,
         initialDrafts: initialDraftsRef.current,
+        onRemoveDraft: (attachmentId) => {
+            const document = params.composerDocument;
+            const scope = getActiveServerAccountScope();
+            if (!document?.isCurrent() || !scope) return;
+            removeMountedComposerAttachmentReferences({ ref: document.ref, scope, attachmentId });
+        },
     });
     const {
         filePickerRef,
@@ -144,6 +152,7 @@ export function useNewSessionAttachmentsController(params: Readonly<{
         applyDraftPatch,
         replaceDrafts,
         getDraftsSnapshot,
+        getSendableDraftsSnapshot,
     } = attachmentDraftManager;
     const bindAttachmentPicker = params.composerDocument?.bindAttachmentPicker;
     React.useEffect(() => bindAttachmentPicker?.(() => {
@@ -303,7 +312,7 @@ export function useNewSessionAttachmentsController(params: Readonly<{
             });
         };
 
-        const draftSnapshot = getDraftsSnapshot();
+        const draftSnapshot = getSendableDraftsSnapshot();
         const hasAttachments = attachmentsUploadsEnabled && draftSnapshot.length > 0;
         // One freeze at Send for both launch targets. The ordinary Machine path
         // still settles while this owner is mounted and rebuilds from the live
@@ -395,7 +404,6 @@ export function useNewSessionAttachmentsController(params: Readonly<{
                             ? launchAttempt.firstTurnLocalId
                             : (hasAttachments || hasReviewCommentDrafts ? attachmentMessageLocalId : undefined);
                     const trimmed = input.initialPrompt.trim();
-                    let attachmentsBlock = '';
                     let attachmentsMetaOverrides: Record<string, unknown> | undefined;
 
                     if (hasAttachments) {
@@ -407,7 +415,6 @@ export function useNewSessionAttachmentsController(params: Readonly<{
                             applyDraftPatch,
                             messageLocalId: attachmentMessageLocalId,
                         })).uploaded;
-                        attachmentsBlock = formatAttachmentsBlock(uploaded);
                         attachmentsMetaOverrides = buildAttachmentMessageMeta(uploaded);
                     }
 
@@ -423,20 +430,15 @@ export function useNewSessionAttachmentsController(params: Readonly<{
                         ? buildReviewCommentsOutboundMessage({
                             sessionId,
                             drafts: resolvedReviewCommentDrafts,
-                            additionalMessage: attachmentsBlock
-                                ? (trimmed.length > 0 ? `${trimmed}\n\n${attachmentsBlock}` : attachmentsBlock)
-                                : trimmed,
-                            displayTextSuffix: attachmentsBlock || null,
+                            additionalMessage: trimmed,
                             metaOverrides: mergeMessageMetaOverrides(
                                 attachmentsMetaOverrides,
                                 input.structuredInputMetaOverrides,
                             ),
                         })
                         : {
-                            text: attachmentsBlock
-                                ? (trimmed.length > 0 ? `${trimmed}\n\n${attachmentsBlock}` : attachmentsBlock)
-                                : trimmed,
-                            displayText: trimmed || undefined,
+                            text: trimmed,
+                            displayText: undefined,
                             metaOverrides: mergeMessageMetaOverrides(
                                 attachmentsMetaOverrides,
                                 input.structuredInputMetaOverrides,
@@ -488,6 +490,7 @@ export function useNewSessionAttachmentsController(params: Readonly<{
             }
             fireAndForget(submitComposerSnapshot({
                 snapshot: composerSnapshot,
+                attachmentDraftIds: draftSnapshot.map(draft => draft.id),
                 signal: composerDocument.scopeSignal,
                 route: {
                     kind: 'newSession',
@@ -545,6 +548,7 @@ export function useNewSessionAttachmentsController(params: Readonly<{
         clearDraftsForFlow,
         discoverableReviewCommentsScope,
         getDraftsSnapshot,
+        getSendableDraftsSnapshot,
         hasReviewCommentDrafts,
         includedReviewCommentDrafts,
         params.composerDocument,

@@ -57,6 +57,7 @@ export function normalizeAttachmentWorkspaceRelativeDir(value: unknown): string 
   const trimmed = value.trim();
   if (!trimmed) return null;
   if (trimmed.startsWith('/') || trimmed.startsWith('\\')) return null;
+  if (trimmed.includes('\0') || /^[A-Za-z]:/.test(trimmed)) return null;
   const parts = trimmed.split(/[\\/]+/g).filter(Boolean);
   if (parts.some((part) => part === '.' || part === '..')) return null;
   return parts.join('/');
@@ -107,7 +108,13 @@ export function buildAttachmentUploadPath(input: Readonly<{
   uploadBasePath: string;
   messageLocalId: string;
   fileName: string;
+  relativePath?: string;
 }>): string {
+  if (input.relativePath !== undefined) {
+    const path = normalizeAttachmentWorkspaceRelativeDir(input.relativePath);
+    if (!path) throw new Error('Invalid attachment relativePath');
+    return join(input.uploadBasePath, input.messageLocalId, path).replace(/[\\]+/g, '/');
+  }
   const prefix = randomUUID().slice(0, 8);
   return join(
     input.uploadBasePath,

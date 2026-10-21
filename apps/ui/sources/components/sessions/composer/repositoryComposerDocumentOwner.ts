@@ -17,6 +17,7 @@ import {
     composerAttachmentViewToDraft,
     composerReferencesFromStructuredMentions,
     composerStructuredMentionsFromReferences,
+    normalizeComposerDraftReferenceTokens,
 } from '@/components/sessions/composer/composerScopeAdapters';
 import {
     parseComposerStructuredInputMentionsForText,
@@ -72,10 +73,11 @@ function readRepositoryComposerDocument(
     const text = typeof value('text') === 'string'
         ? String(value('text'))
         : '';
-    const mentions = parseComposerStructuredInputMentionsForText(
+    const parsedMentions = parseComposerStructuredInputMentionsForText(
         value('mentions'),
         text,
     );
+    const normalized = normalizeComposerDraftReferenceTokens({ text, mentions: parsedMentions.mentions });
     const attachmentValue = value('attachments');
     const attachments = Array.isArray(attachmentValue)
         ? attachmentValue.flatMap((value) => {
@@ -85,8 +87,8 @@ function readRepositoryComposerDocument(
         : [];
     return {
         document: Object.freeze({
-            text,
-            structuredInputMentions: Object.freeze(mentions.mentions),
+            text: normalized.text,
+            structuredInputMentions: Object.freeze(normalized.mentions),
             composerAttachments: Object.freeze(attachments),
         }),
         repositoryRevision: snapshot.revision,
@@ -183,9 +185,17 @@ export function createRepositoryComposerDocumentOwner(input: Readonly<{
                 existing: current.document.structuredInputMentions,
             });
             const nextAttachments = mutation.attachments.map(composerAttachmentViewToDraft);
+            const changes = readComposerDraftDocumentChanges(current.document, {
+                text: mutation.text, structuredInputMentions: nextMentions, composerAttachments: nextAttachments,
+            });
             const patch = {
-                text: mutation.text,
-                mentions: nextMentions.map(strictJson),
+                // A legacy read projection is already semantically canonical. An
+                // attachment-only edit must not turn that projection into a newer
+                // text mutation while an accepted send still owns its custody.
+                ...(changes.text || changes.structuredInputMentions ? {
+                    text: mutation.text,
+                    mentions: nextMentions.map(strictJson),
+                } : {}),
                 attachments: nextAttachments.map(strictJson),
             };
             if (address.kind === 'session' || address.kind === 'run') {

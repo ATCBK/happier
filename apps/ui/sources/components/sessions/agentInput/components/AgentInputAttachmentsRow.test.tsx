@@ -147,6 +147,28 @@ describe('AgentInputAttachmentsRow', () => {
         }
     });
 
+    it('numbers the tray pictures in tray order on their corner and leaves other items unnumbered', async () => {
+        const screen = await renderScreen(
+            <AgentInputAttachmentsRow
+                items={[
+                    { kind: 'media', key: 'before', attachmentId: 'draft-a', label: 'before.png', media: 'image',
+                        preview: { kind: 'image', uri: 'https://example.test/before.png' }, onRemove: () => {} },
+                    { kind: 'badge', key: 'trace', attachmentId: 'draft-t', label: 'trace.json', onRemove: () => {} },
+                    { kind: 'media', key: 'after', attachmentId: 'draft-b', label: 'after.png', media: 'image',
+                        renderedPreview: <View />, onRemove: () => {} },
+                ] satisfies readonly AgentInputAttachmentsRowItem[]}
+            />,
+        );
+
+        const number = (key: string) => screen.findAllByTestId(`agent-input-attachment-number:${key}`)
+            .find((node) => typeof node.type === 'string');
+        const textOf = (node: ReactTestInstance | undefined): string => !node ? '' : node.children
+            .map((child) => (typeof child === 'string' ? child : textOf(child))).join('');
+        expect(textOf(number('before'))).toBe('1');
+        expect(textOf(number('after'))).toBe('2');
+        expect(number('trace')).toBeUndefined();
+    });
+
     it('renders a host-projected staged-media thumbnail without requiring a direct image URI', async () => {
         const onPreview = vi.fn();
 
