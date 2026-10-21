@@ -29,9 +29,10 @@ function readExecutionRunGetErrorLike(input: unknown): ExecutionRunGetErrorLike 
     };
 }
 
-function isRpcMethodNotAvailableError(input: unknown): boolean {
+function isRunHostUnavailableError(input: unknown): boolean {
     const errorLike = readExecutionRunGetErrorLike(input);
     if (String(errorLike.errorCode ?? '') === 'RPC_METHOD_NOT_AVAILABLE') return true;
+    if (errorLike.errorCode === 'target_unavailable') return true;
     return /rpc method not available/i.test(String(errorLike.error ?? ''));
 }
 
@@ -40,7 +41,7 @@ export function resolveExecutionRunGetFailureLoadedState(params: Readonly<{
     transcriptFallback?: ExecutionRunTranscriptFallback | null;
     daemonFallback?: ExecutionRunDaemonFallback | null;
 }>): ExecutionRunDetailsLoadedFallbackState | null {
-    if (isRpcMethodNotAvailableError(params.result)) {
+    if (isRunHostUnavailableError(params.result)) {
         if (params.daemonFallback) {
             return {
                 status: 'loaded',

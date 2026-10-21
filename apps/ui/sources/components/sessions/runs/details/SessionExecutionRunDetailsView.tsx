@@ -264,6 +264,14 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
             setState({ status: 'loading' });
             setDaemonProcessLine(null);
         }
+        // Work and Details read the same retained transcript index. A terminal Run
+        // remains readable after its parent stops, without contacting that runner.
+        if (props.sessionId !== null && session?.active === false && transcriptFallback
+            && transcriptFallback.run.status !== 'running') {
+            loadedRunAddressRef.current = runAddressKey;
+            setState({ status: 'loaded', ...transcriptFallback, source: 'transcript_fallback' });
+            return;
+        }
         const first = await getRun({ runId: props.runId, includeStructured: true });
         if (!isCurrentRequest()) return;
         const result =
@@ -359,7 +367,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         if (daemonFallback?.daemonProcessLine) {
             setDaemonProcessLine(daemonFallback.daemonProcessLine);
         }
-    }, [executeAction, runOperation, explicitServerId, hasQualifiedSession, props.runId, props.sessionId, props.workspace?.machineId, props.workspace?.cwd, runAddressKey, sessionMessagesLoaded, source, transcriptFallback]);
+    }, [executeAction, runOperation, explicitServerId, hasQualifiedSession, props.runId, props.sessionId, props.workspace?.machineId, props.workspace?.cwd, runAddressKey, session?.active, sessionMessagesLoaded, source, transcriptFallback]);
 
     React.useEffect(() => {
         void load();
@@ -489,16 +497,17 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         const meta = state.structuredMeta;
         const result = state.latestToolResult === undefined && props.sessionId === null
             && meta !== null && typeof meta === 'object' && 'payload' in meta ? meta.payload : state.latestToolResult;
-        if (result === undefined) return null;
+        const failure = state.run.status === 'failed' ? state.run.error : undefined;
+        if (result === undefined && !failure) return null;
         return {
-            name: 'execution_run_result',
+            name: 'SubAgentRun',
             state: 'completed',
-            input: null,
+            input: { runId: state.run.runId },
             createdAt: 0,
             startedAt: null,
             completedAt: null,
             description: null,
-            result,
+            result: failure ? { status: 'failed', runId: state.run.runId, error: failure } : result,
         };
     }, [state, props.sessionId]);
 
@@ -947,7 +956,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                 The result is presented through the transcript's own structured
                 projection; the exact payload a plugin returned stays reachable
                 under its own disclosure rather than being the primary content. */}
-            {latestToolResultProjection !== null && !hasStructuredResult ? (
+            {latestToolResultProjection !== null && !hasStructuredResult && transcriptMessage?.kind !== 'tool-call' ? (
                 <View
                     testID="session-run-details-latest-tool-result"
                     style={{
@@ -981,7 +990,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                             testID="session-run-details-latest-tool-result-raw"
                             style={{ color: theme.colors.text.secondary, fontFamily: 'Menlo' }}
                         >
-                            {JSON.stringify(latestToolResultProjection.result, null, 2)}
+                            {JSON.stringify(state.latestToolResult !== undefined ? state.latestToolResult : state.run.error, null, 2)}
                         </Text>
                     ) : null}
                 </View>

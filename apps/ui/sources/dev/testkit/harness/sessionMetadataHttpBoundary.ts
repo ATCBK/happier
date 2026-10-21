@@ -14,7 +14,10 @@ export function createSessionMetadataHttpBoundary(readSessions: () => Readonly<R
     return {
         writes,
         /** Replace a persisted seed after a test installs a new server-side fixture. */
-        replaceSession(sessionId: string) { records.delete(sessionId); },
+        replaceSession(sessionId: string, record?: ReturnType<typeof SessionCurrentProjectionRecordV1Schema.parse>) {
+            if (record) records.set(sessionId, SessionCurrentProjectionRecordV1Schema.parse(record));
+            else records.delete(sessionId);
+        },
         /** Mirror the current /v1/sessions hosted plain create/load transport contract. */
         createSessionFromPost(sessionId: string, init: RequestInit): Response {
             const body = z.strictObject({ tag: z.string().check(z.minLength(1)), metadataLayoutVersion: z.literal(1),

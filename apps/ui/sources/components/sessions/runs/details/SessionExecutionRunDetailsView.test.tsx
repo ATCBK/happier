@@ -8,7 +8,7 @@ import {
     ExecutionRunSendRequestSchema,
     ExecutionRunStopRequestSchema, FeaturesResponseSchema,
     normalizeActionsSettingsV1,
-    SessionAgentActivityHeadlineV1Schema, SessionMessagesPageV1Schema, SessionStoredMessageContentSchema, V2SessionByIdResponseSchema,
+    SessionAgentActivityHeadlineV1Schema, SessionMessagesPageV1Schema, SessionStoredMessageContentSchema,
     type ExecutionRunPublicState,
 } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -21,6 +21,7 @@ import { createMachineFixture, createPendingMessageFixture, createSessionFixture
 import { createSessionMessagesFixture, createToolCallMessageFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
 import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { serveActionHomes, type ServedHomeRequest } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
 import { createArtifactStoreBoundary, type ArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -132,6 +133,7 @@ let structuredMeta: unknown;
 let browserRuntime: SessionBrowserContextRuntime | null = null;
 const httpReads: ServedHomeRequest[] = [];
 let httpSessionAvailable = true;
+let sessionMetadata: ReturnType<typeof createSessionMetadataHttpBoundary>;
 let initialHistoryResponse: Promise<Response> | undefined;
 const pendingRows: Array<Readonly<{
     localId: string; recipient: { kind: 'execution_run'; runId: string }; messageRole: 'user';
@@ -274,6 +276,7 @@ beforeEach(async ({ task }) => {
         return { errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND, error: 'Method not found' };
     });
     httpReads.length = 0;
+    sessionMetadata = createSessionMetadataHttpBoundary(() => getStorage().getState().sessions);
     approvalArtifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-1', encryptionMode: 'plain' });
     home = await serveActionHomes({
         homes: [{ key: 'home', serverUrl: 'https://run-details-' + (++sequence) + '.test',
@@ -297,15 +300,20 @@ beforeEach(async ({ task }) => {
             if (request.path === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'm1', accountId: 'account-1' })]);
             if (request.path === '/v1/machines/m1') return Response.json({ machine: createPlainMachineRowFixture({ id: 'm1', accountId: 'account-1' }) });
             if (request.path === '/v2/sessions/s1' && !httpSessionAvailable) return new Response(null, { status: 404 });
-            if (request.path === '/v2/sessions/s1') return Response.json(V2SessionByIdResponseSchema.parse({
-                session: { ...createPlainSessionCurrentProjectionRecordFixture({ id: 's1', active: true,
-                    metadata: getStorage().getState().sessions.s1?.metadata ?? { path: '/worktree', host: 'localhost' },
-                }),
+            if (request.path === '/v2/sessions/s1') {
+                // The real Session Stop first commits its explicit-stop metadata.
+                // Serve that tuple's CAS through the shared persistence boundary.
+                if (request.method === 'GET' && sessionMetadata.writes.length === 0) sessionMetadata.replaceSession('s1', {
+                    ...createPlainSessionCurrentProjectionRecordFixture({ id: 's1', active: getStorage().getState().sessions.s1?.active ?? true,
+                        metadata: getStorage().getState().sessions.s1?.metadata ?? { path: '/worktree', host: 'localhost' },
+                    }),
                     effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
                         capabilities: getStorage().getState().sessions.s1!.access!.capabilities },
                     ...(commandSuite ? { pendingVersion: 1, pendingCount: 0 } : {}),
-                },
-            }));
+                });
+                return sessionMetadata.handle(request.url, { method: request.method,
+                    ...(request.body !== undefined ? { body: JSON.stringify(request.body) } : {}) }) ?? undefined;
+            }
             if (request.method === 'POST' && request.path === '/v2/sessions/s1/pending') {
                 const body = request.body as Readonly<{ localId: string; requestedAction: unknown }>;
                 return Response.json({ requestedAction: body.requestedAction, pending: { localId: body.localId }, didWrite: true });
@@ -527,6 +535,23 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
         expect(screen.findByTestId('session-run-details-latest-tool-result-raw')).toBeNull();
         await screen.pressByTestIdAsync('session-run-details-latest-tool-result-raw-toggle');
         expect(screen.getTextContent()).toContain('Four checks passed');
+    });
+    it.each([false, true])('lets the transcript tool own a failed Run result with sidechain=%s instead of rendering it twice', async (withSidechain) => {
+        runState = createRun({ status: 'failed', finishedAtMs: 2,
+            error: { code: 'codex_tool_restriction_unsupported_auth', message: 'private diagnostic' } });
+        latestToolResult = { ...runState, summary: 'private diagnostic' };
+        publishMarker('failed');
+        if (withSidechain) getStorage().getState().applyMessages('s1', [{
+            id: 'sc-agent', localId: null, createdAt: 2, seq: 3, role: 'agent',
+            isSidechain: true, sidechainId: 'toolu_1',
+            content: [{ type: 'text', text: 'Checking the changes', uuid: 'sc-text', parentUUID: null }],
+        }]);
+        await mount(); await loaded();
+        expect(screen.findAllByType(SessionMessageDetailsView)).toHaveLength(1);
+        expect(screen.findAllHostsByTestId('session-run-details-latest-tool-result')).toHaveLength(0);
+        expect(screen.getTextContent()).not.toContain('private diagnostic');
+        // SessionMessageDetailsView intentionally defers its body; inspect the mounted result.
+        await vi.waitFor(() => expect(screen.getTextContent().split('toolView.actionOutcome.cause.toolPolicyUnsupportedAuth')).toHaveLength(2));
     });
     it('mounts the exact retained Run composer before any tool marker, with canonical queue/steer controls', async () => {
         runState = liveRun();
@@ -782,6 +807,20 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
         expect(composer()).toHaveLength(0);
         expect(mutationMethods.flatMap(method => calls(method))).toEqual([]);
         expect(calls(RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST)).toEqual([]);
+    });
+    it.each(['panel', 'screen'] as const)('opens a stopped Run from Work transcript evidence in the %s after its parent stops', async presentation => {
+        runState = createRun({ status: 'cancelled', finishedAtMs: 2 });
+        publishMarker('cancelled');
+        getStorage().getState().applySessions([{ ...getStorage().getState().sessions.s1!, active: false }]);
+        getReply = async () => ({ ok: false, error: 'RPC target unavailable', errorCode: 'target_unavailable' });
+        await mount({ presentation }); await loaded();
+        expect(info().run).toMatchObject({ runId: 'run_1', status: 'cancelled' });
+        expect(screen.findAllByType(SessionMessageDetailsView)).toHaveLength(1);
+        expect(composer()).toHaveLength(0);
+        expect(info().stopAction).toBeNull();
+        expect(calls(SESSION_RPC_METHODS.EXECUTION_RUN_GET)).toEqual([]);
+        expect(calls(RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST)).toEqual([]);
+        expect(mutationMethods.flatMap(method => calls(method))).toEqual([]);
     });
     it('loads main transcript history before failing closed on an absent Run, then offers a way out', async () => {
         getStorage().setState({ sessionMessages: { s1: createSessionMessagesFixture({ isLoaded: false }) } });

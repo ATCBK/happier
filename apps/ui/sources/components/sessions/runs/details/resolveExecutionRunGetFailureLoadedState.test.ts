@@ -75,4 +75,15 @@ describe('resolveExecutionRunGetFailureLoadedState', () => {
             source: 'transcript_fallback',
         });
     });
+
+    it('opens retained transcript evidence when the Run host is unavailable', () => {
+        expect(resolveExecutionRunGetFailureLoadedState({
+            result: { error: 'RPC target unavailable', errorCode: 'target_unavailable' },
+            transcriptFallback,
+        })).toMatchObject({ status: 'loaded', run: transcriptFallback.run, source: 'transcript_fallback' });
+        expect(resolveExecutionRunGetFailureLoadedState({
+            result: { error: 'Forbidden', errorCode: 'forbidden' },
+            transcriptFallback,
+        })).toBeNull();
+    });
 });
