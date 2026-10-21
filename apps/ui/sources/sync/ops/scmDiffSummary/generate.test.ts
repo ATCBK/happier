@@ -9,6 +9,7 @@ import { createUiScmAction } from '@/sync/ops/actions/scmActionDeps';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { encodeScmDiffSummaryModelOverride } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 
 // Execution-run RPCs are network boundaries; keep all domain and envelope logic real.
 vi.mock('@/sync/ops/sessionExecutionRuns', () => ({
@@ -56,6 +57,16 @@ const finalCheckpointParams = { ...params,
 } satisfies Parameters<ReturnType<typeof createScmDiffSummaryOperations>['prefetch']>[0];
 
 describe('SCM diff summary operations', () => {
+    it('preserves a named-Turn capture transport refusal instead of reporting invalid Action output', async () => {
+        machineRpc.mockRejectedValueOnce(new Error('Machine connection closed'));
+        const actionExecutor = createActionExecutor(createActionExecutorBoundaryFixture({
+            scmActionExecute: createUiScmAction(),
+        }));
+        const ops = createScmDiffSummaryOperations({ actionExecutor });
+        expect(await ops.captureComparison({ machineId: 'machine', input: { cwd: '/repo',
+            source: { kind: 'turnCheckpoint', sessionId: 'session', turnId: 'turn-2', evidenceMode: 'reconciled' },
+        } })).toMatchObject({ success: false, errorCode: 'BACKEND_UNAVAILABLE' });
+    });
     it.each([
         ['invalid_parameters', 'invalidRequest', 'walkthrough.generationFailure.invalidRequest', 'reviewRequest'],
         ['MODEL_UNAVAILABLE', 'modelUnavailable', 'walkthrough.generationFailure.modelUnavailable', 'chooseModel'],

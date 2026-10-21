@@ -204,7 +204,12 @@ async function callMachineScmTransport<
         if (options?.signal?.aborted && getScmRpcSideEffectClass(method) === 'read') {
             throw error;
         }
-        return scmFallbackError(error, { method, request });
+        const failure = scmFallbackError(error, { method, request });
+        // Analysis/result Actions have their own closed domain responses. A failed
+        // transport is an Action refusal, not a Git response for those schemas.
+        return method.startsWith('scm.diffSummary.')
+            ? { ok: false, errorCode: failure.errorCode, error: failure.error }
+            : failure;
     }
 }
 
