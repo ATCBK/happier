@@ -105,6 +105,7 @@ import { getProfileDisplayName } from '@/components/profiles/profileDisplay';
 import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
 import { AgentInputScrollableChipRow } from './layout/AgentInputScrollableChipRow';
 import { PathAndResumeRow } from './layout/PathAndResumeRow';
+import { resolveAgentInputColumn } from './layout/agentInputColumn';
 import { resolveAgentInputFolderChipState, type AgentInputFolderChipState } from './definitions/AgentInputFolderChip';
 import {
     getHasAnyAgentInputActions,
@@ -1239,6 +1240,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const localSampleSource = transcriptSource?.kind === 'readOnly' && transcriptSource.actions !== null ? transcriptSource : null;
     const isConversation = Boolean(props.sessionId || localSampleSource);
     const compactControls = props.controlPreset === 'compact';
+    const column = resolveAgentInputColumn({
+        screenWidth,
+        ...(props.contentPaddingHorizontal === undefined ? {} : { contentPaddingHorizontal: props.contentPaddingHorizontal }),
+        ...(props.maxWidthCap === undefined ? {} : { maxWidthCap: props.maxWidthCap }),
+        compact: compactControls,
+    });
     const attentionRequestSessionId = props.sessionId ?? localSampleSource?.sessionId;
     const submitAccessibilityLabel = props.submitAccessibilityLabel ?? (isConversation ? t('common.send') : undefined);
     const readOnly = props.onChangeText === undefined;
@@ -3466,18 +3473,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     styles.container,
                     documentPanel ? styles.containerDocument : null,
                     stageSpotlightProps.style,
-                    { paddingHorizontal: props.contentPaddingHorizontal ?? (screenWidth > 700 ? 16 : 8) },
+                    { paddingHorizontal: column.paddingHorizontal },
                 ]}
             >
             <View style={[
                 styles.innerContainer,
-                // A compact composer is contained by its host's section: it takes the section's width, never the
-                // centred conversation column.
-                ...(typeof props.maxWidthCap === 'number'
-                    ? [{ maxWidth: props.maxWidthCap }]
-                    : props.maxWidthCap === null || compactControls
-                        ? []
-                        : [{ maxWidth: layout.maxWidth }])
+                ...(column.maxWidth === undefined ? [] : [{ maxWidth: column.maxWidth }]),
             ]} ref={overlayAnchorRef}>
                 <AgentInputOverlayLayer
                     overlayAnchorRef={overlayAnchorRef}

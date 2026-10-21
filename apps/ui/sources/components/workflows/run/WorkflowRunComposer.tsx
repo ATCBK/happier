@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { useWindowDimensions, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierInputField } from '@happier-dev/plugin-ui/presentation';
 import type { JsonValue, RoleOverrideV1, WorkflowDefinitionV1, WorkflowMaterializedLeafV1 } from '@happier-dev/protocol';
@@ -43,15 +43,19 @@ import { workflowBlockReferenceLabel } from '@/sync/domains/workflows/workflowBl
 import { countWorkflowStepsV1, walkWorkflowBlocks } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
 import { useWorkflowAccountLifetime } from '../workflowAccountScope';
 import type { WorkflowRunNowRetainedRequest } from './useWorkflowRunNowController';
+import { resolveAgentInputColumn } from '@/components/sessions/agentInput/layout/agentInputColumn';
 
 const styles = StyleSheet.create((theme) => ({
     root: { minWidth: 0 },
-    // The composer's text edge is the card's: the title, the summary, the chips and Start share it.
-    footer: { flexDirection: 'row', alignItems: 'flex-end', gap: theme.space.s8, paddingHorizontal: theme.space.s16, paddingBottom: theme.space.s12, paddingTop: theme.space.s8 },
+    // The request's label and the status/Start footer sit in the composer's own column, so they share
+    // the card's edges on every host and width (New centres that column on a wide page).
+    column: { width: '100%', alignItems: 'center' },
+    columnInner: { width: '100%' },
+    footer: { flexDirection: 'row', alignItems: 'flex-end', gap: theme.space.s8, paddingBottom: theme.space.s12, paddingTop: theme.space.s8 },
     status: { flex: 1, minWidth: 0, minHeight: theme.space.s16, justifyContent: 'center', gap: theme.space.s4 },
     hostedPanel: { borderWidth: 0, borderTopWidth: 0, borderBottomWidth: 0, borderRadius: 0 },
-    summary: { ...Typography.variant('meta'), color: theme.colors.text.secondary, paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12, paddingBottom: theme.space.s8 },
-    mainLabel: { ...Typography.variant('meta'), color: theme.colors.text.primary, paddingHorizontal: theme.space.s16, paddingTop: theme.space.s12 },
+    summary: { ...Typography.variant('meta'), color: theme.colors.text.secondary, paddingVertical: theme.space.s12, paddingBottom: theme.space.s8 },
+    mainLabel: { ...Typography.variant('meta'), color: theme.colors.text.primary, paddingTop: theme.space.s12 },
     start: { alignItems: 'flex-end', gap: theme.space.s4 },
     shortcut: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 },
     keyHint: { ...({ ...Typography.variant('micro', 'regular'), ...Typography.mono(), ...Typography.tabular() }), color: theme.colors.text.secondary },
@@ -155,6 +159,10 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
     const roleIds = React.useMemo(() => props.definition ? workflowUsedRoleIds(props.definition) : [], [props.definition]);
     // While an earlier request is unsettled, the review is that request: its inputs, Roles and Team.
     const retained = props.retainedRequest ?? null;
+    const { width: screenWidth } = useWindowDimensions();
+    const column = resolveAgentInputColumn({ screenWidth });
+    const columnStyle = [styles.column, { paddingHorizontal: column.paddingHorizontal }];
+    const columnInnerStyle = [styles.columnInner, column.maxWidth === undefined ? null : { maxWidth: column.maxWidth }];
     const retainedSource = retained?.input.source;
     const visibility = useWorkflowRunVisibility(acceptedRepeat ? null : props.sourceArtifactId);
     const visibleTeamId = retainedSource !== undefined
@@ -341,8 +349,10 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
     return (
         <View testID={prefix} style={styles.root}>
             <View testID={`${prefix}-${main === null ? 'preview' : 'main'}`}>
-                {main === null ? <Text testID={`${prefix}-summary`} selectable numberOfLines={1} style={styles.summary}>{summary}</Text>
-                    : <Text style={styles.mainLabel}>{inputTitle(main.definition)}</Text>}
+                <View style={columnStyle}><View style={columnInnerStyle}>
+                    {main === null ? <Text testID={`${prefix}-summary`} selectable numberOfLines={1} style={styles.summary}>{summary}</Text>
+                        : <Text style={styles.mainLabel}>{inputTitle(main.definition)}</Text>}
+                </View></View>
                 <PluginContextualResourceStoreProvider>
                     <AgentInput
                         panelPresentation="document"
@@ -369,7 +379,7 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
                     />
                 </PluginContextualResourceStoreProvider>
             </View>
-            <View testID={`${prefix}-footer`} style={styles.footer}>
+            <View style={columnStyle}><View testID={`${prefix}-footer`} style={[columnInnerStyle, styles.footer]}>
                 <View testID={`${prefix}-status`} style={styles.status}>
                     {props.notice ? <Text style={styles.secondary}>{props.notice}</Text> : null}
                     {props.reconciling ? <Text testID={`${prefix}-reconciling`} accessibilityLiveRegion="polite" style={styles.secondary}>{t('workflows.start.stillStarting')}</Text> : null}
@@ -410,7 +420,7 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
                         <Text style={styles.secondary}>{t('workflows.start.shortcutStarts')}</Text>
                     </View> : null}
                 </View>
-            </View>
+            </View></View>
         </View>
     );
 }
