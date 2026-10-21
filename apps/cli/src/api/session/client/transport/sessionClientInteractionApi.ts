@@ -60,7 +60,7 @@ import { deriveSessionInputActionRequestAttributionV1 } from '@happier-dev/proto
 import { isFollowDeliveryMutedV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 import { readSessionDeliveryMutedScopes } from '@/api/sessionDeliveryMuteTransport';
 import { findTranscriptEncryptedMessageByLocalIdV2 } from '../../transcriptMessageLookup';
-import type { DiscussionAddressingV1 } from '@happier-dev/protocol/discussions/references';
+import type { DiscussionAddressingV1, DiscussionAddressV1 } from '@happier-dev/protocol/discussions/references';
 
 export type SessionInputProviderDispatchReconciliation = Readonly<{
     localId: string;
@@ -255,6 +255,7 @@ function buildInputSettlementValidation(
 
 async function reconcileProtectedPendingInput(params: Readonly<{
     socket: Socket<ServerToClientEvents, ClientToServerEvents>;
+    serverId: string;
     sessionId: string;
     token: string;
     message: PendingQueueMaterializedMessage;
@@ -262,7 +263,7 @@ async function reconcileProtectedPendingInput(params: Readonly<{
     crypto: SessionStoredContentCryptoContext;
     executionRun?: boolean;
     signal?: AbortSignal;
-    readCurrentAutonomousCheckIn?: () => Promise<Readonly<{ afterTurns: number | null }> | null>;
+    readCurrentAutonomousCheckIn?: (origin?: DiscussionAddressV1) => Promise<Readonly<{ afterTurns: number | null }> | null>;
 }>): Promise<ReconciledPendingInput> {
     const localId = params.message.localId;
     const payload = readPendingStoredPayload(params.message, params.crypto);
@@ -397,7 +398,13 @@ async function reconcileProtectedPendingInput(params: Readonly<{
             ? { status: 'outcomeUnknown' }
             : { status: 'rejected' };
     }
-    const autonomousCheckIn = await params.readCurrentAutonomousCheckIn?.();
+    // Protected attribution retains the originating Discussion across later
+    // addressed inputs; the current addressed Discussion is otherwise the root.
+    const causeOrigin = request.actionRequestAttributionV1?.origin;
+    const originatingDiscussion = causeOrigin?.kind === 'discussion' ? causeOrigin.discussion
+        : request.discussionAddressing ? { serverId: params.serverId, discussionId: request.discussionAddressing.discussionId }
+        : undefined;
+    const autonomousCheckIn = await params.readCurrentAutonomousCheckIn?.(originatingDiscussion);
     // A missing current preference must not block a person's input or an
     // informational returned answer. Their later autonomous child can initialize
     // the original root when current Account authority becomes available.
@@ -495,7 +502,7 @@ export function createSessionClientInteractionApi(
         serverId: string;
         sessionId: string;
         token: string;
-        readCurrentAutonomousCheckIn?: () => Promise<Readonly<{ afterTurns: number | null }> | null>;
+        readCurrentAutonomousCheckIn?: (origin?: DiscussionAddressV1) => Promise<Readonly<{ afterTurns: number | null }> | null>;
         serverUrl?: string;
         signal?: AbortSignal;
         getClosed: () => boolean;
@@ -749,6 +756,7 @@ export function createSessionClientInteractionApi(
             const reconciled = await runWithServerHttpBaseUrl(serverUrl, () => reconcileProtectedPendingInput({
                 signal: deps.signal ?? metadataWaitAbortController.signal,
                 socket,
+                serverId: deps.serverId,
                 sessionId: deps.sessionId,
                 token: deps.token,
                 message: messageToReconcile,
@@ -1342,7 +1350,7 @@ export function createSessionClientInteractionApi(
                 || originalAddress.participantSessionId !== address.participantSessionId
                 || address.participantSessionId !== deps.sessionId)) return 'rejected';
             const result = await runWithServerHttpBaseUrl(serverUrl, () => reconcileProtectedPendingInput({
-                socket, sessionId: deps.sessionId, token: deps.token, message, metadata: deps.getMetadata(), crypto,
+                socket, serverId: deps.serverId, sessionId: deps.sessionId, token: deps.token, message, metadata: deps.getMetadata(), crypto,
                 signal: input.signal, ...(deps.readCurrentAutonomousCheckIn
                     ? { readCurrentAutonomousCheckIn: deps.readCurrentAutonomousCheckIn } : {}),
             }));

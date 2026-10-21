@@ -196,6 +196,8 @@ import {
 } from '@/session/composer/notifyComposerAttachmentsAfterMessageAccepted';
 import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
+import { resolveAutonomousExchangeAfterTurnsV1 } from '@happier-dev/protocol/sessions/messages/autonomousExchangeV1';
+import type { DiscussionAddressV1 } from '@happier-dev/protocol/discussions/references';
 import { SESSION_PUBLISHER_AUTHORITY_CHECK_EVENT, SESSION_RUNTIME_ACTIVITY_CLOSE_EVENT, SessionPublisherAuthorityCheckAckSchema, SessionPublisherAuthorityCheckRequestSchema, SessionRuntimeActivityCloseAckSchema, SessionRuntimeActivityCloseRequestSchema } from '@happier-dev/protocol/sessions/runtime/activity/transport';
 import { SESSION_METADATA_LAYOUT_VERSION_V1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { SessionActionConfirmationsV1Schema, SessionActionConfirmationResponseTargetV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionActionConfirmationsV1';
@@ -512,6 +514,8 @@ export type ApiSessionClientOptions = Readonly<{
     getSimulatorPreviewRoutes?: (() => SimulatorPreviewRoutes | null) | null;
     getPeerMediationObservabilityRuntimeActionContext?: (() => DaemonPeerMediationObservabilityRuntimeActionContext | null) | null;
     getServerFeaturesSnapshot?: (() => CliServerFeaturesSnapshot | undefined) | null;
+    /** C3's captured-Account settings reader: undefined inherits; null is unavailable. */
+    readDiscussionAutonomousCheckIn?: (origin: DiscussionAddressV1) => Promise<Readonly<{ afterTurns: number | null }> | undefined | null>;
     createCapabilitiesApiClient?: NonNullable<
         Parameters<typeof registerSessionClientRuntimeHandlers>[0]
     >['createCapabilitiesApiClient'];
@@ -549,6 +553,7 @@ export class ApiSessionClient extends EventEmitter {
     private readonly metadataAuthorityKind: SessionMetadataAuthority['kind'];
     private readonly runtimePrincipalAccountId: string | null;
     private readonly ownerCredentials: StoredCredentials | null;
+    private readonly readDiscussionAutonomousCheckIn: ApiSessionClientOptions['readDiscussionAutonomousCheckIn'];
     private readonly transport: SessionClientTransport;
     private readonly serverBinding: SessionClientServerBinding;
     private readonly machineAdmissionTransport: ApiSessionClientOptions['machineAdmissionTransport'];
@@ -1130,6 +1135,7 @@ export class ApiSessionClient extends EventEmitter {
             this.readInjectedOwnerCredentials = metadataAuthority.kind === 'owner'
                 ? metadataAuthority.readCurrentCredentials ?? null
                 : null;
+            this.readDiscussionAutonomousCheckIn = options.readDiscussionAutonomousCheckIn;
             this.getAccountEncryptionCurrentness = options.getAccountEncryptionCurrentness
                 ?? (async () => await this.runSessionRequest(async () => fetchAccountEncryptionCurrentness({ token: this.token })));
             this.storedContentCrypto = session.encryptionMode === 'plain'
@@ -1808,7 +1814,7 @@ export class ApiSessionClient extends EventEmitter {
             serverUrl: this.transport.serverUrl,
             sessionId: this.sessionId,
             token: this.token,
-            readCurrentAutonomousCheckIn: () => this.readCurrentAutonomousCheckIn(),
+            readCurrentAutonomousCheckIn: origin => this.readCurrentAutonomousCheckIn(origin),
             getClosed: () => this.closed,
             setClosed: (value) => {
                 this.closed = value;
@@ -2405,7 +2411,7 @@ export class ApiSessionClient extends EventEmitter {
             && readServerEnabledBit(serverFeatures.features, 'sessions.autonomousExchange') === true;
     }
 
-    private async readCurrentAutonomousCheckIn() {
+    private async readCurrentAutonomousCheckIn(originatingDiscussion?: DiscussionAddressV1) {
         const credentials = await this.readCurrentOwnerCredentials();
         const snapshot = getActiveAccountSettingsSnapshot();
         if (!credentials || !snapshot || snapshot.source !== 'network'
@@ -2413,7 +2419,17 @@ export class ApiSessionClient extends EventEmitter {
             || this.accountSettingsSyncBarrier !== null
             || !this.hasOwnerMetadataAuthority()
             || snapshot.scopeKey !== resolveAccountSettingsScopeKey(credentials)) return null;
-        return snapshot.settings.coordinationAutonomousCheckIn;
+        try {
+            const override = originatingDiscussion && this.readDiscussionAutonomousCheckIn
+                ? await this.readDiscussionAutonomousCheckIn(originatingDiscussion) : undefined;
+            if (override === null || this.closed || this.accountSettingsSyncBarrier !== null
+                || getActiveAccountSettingsSnapshot() !== snapshot
+                || !(await this.readCurrentOwnerCredentials())) return null;
+            return { afterTurns: resolveAutonomousExchangeAfterTurnsV1(
+                snapshot.settings.coordinationAutonomousCheckIn.afterTurns, override) };
+        } catch {
+            return null;
+        }
     }
 
     /** Authenticated owner facts only; the question owner decides manager eligibility. */

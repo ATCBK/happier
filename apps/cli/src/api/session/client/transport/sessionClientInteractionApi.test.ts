@@ -16,6 +16,7 @@ import type { UserMessage } from '@/api/types';
 import { assertSessionInputAdmissionReceiptForAuthorityV1, readSessionInputRequest, settleSessionInputRequestV1, withSessionInputAuthority } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { encryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
 import { SessionPendingAdmissionSettlementRequestV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingAdmissionSettlementV1';
+import { resolveAutonomousExchangeAfterTurnsV1 } from '@happier-dev/protocol/sessions/messages/autonomousExchangeV1';
 import type { SessionMessageContent } from '@/api/types';
 
 const axiosGetMock = vi.hoisted(() => vi.fn());
@@ -1002,6 +1003,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
     'rechecks the original queued Discussion input after checkpoint preparation ($state, $delivery, $mode)', async ({ state, delivery, mode }) => {
       const discussionAddressing = { discussionId: 'discussion', messageId: 'question', throughSeq: 3, participantSessionId: 's1' };
       const localId = 'original-discussion-input';
+      const originatingDiscussion = { serverId: 'home', discussionId: 'originating-discussion' };
       const socket = createSocketStub();
       let checkpointFinished = false;
       let readBeforePreparationFinished = false;
@@ -1009,6 +1011,9 @@ describe('createSessionClientInteractionApi diagnostics', () => {
         content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Answer the original question' }, meta: {
           happierProvenanceV1: { v: 1, kind: 'host', producer: 'sessionAction' },
           happierInputRequestV1: { v: 1, producer: 'sessionAction', caller: { kind: 'host' }, discussionAddressing,
+            ...(delivery === 'steer' ? { actionRequestAttributionV1: { requestRef: 'origin-input', requester: null,
+              persona: { serverId: 'home', sessionId: 's1' }, origin: { kind: 'discussion',
+                discussion: originatingDiscussion, messageId: 'origin-message' } } } : {}),
             replyIntent: { mode: 'return' }, permission: state === 'permission-broadened' ? {}
               : { requestedPermissionCeiling: state === 'permission-narrowed' ? 'default' : 'read-only' } },
         } } }, inputAdmissionReceipt: { v: 1 as const, issuer: 'authenticatedMachine' as const, discussionAddressing,
@@ -1048,7 +1053,13 @@ describe('createSessionClientInteractionApi diagnostics', () => {
         getMetadata: () => createTestMetadata({ permissionMode: state === 'permission-narrowed' ? 'read-only' : 'default' }),
         // Human-origin watch inputs have no sourceSession. The current Account
         // preference must still reach the server's persisted watch admission.
-        readCurrentAutonomousCheckIn: async () => ({ afterTurns: 10 }),
+        readCurrentAutonomousCheckIn: async origin => {
+          const configuredDiscussion = delivery === 'steer' ? originatingDiscussion
+            : { serverId: 'home', discussionId: discussionAddressing.discussionId };
+          return { afterTurns: resolveAutonomousExchangeAfterTurnsV1(5,
+            origin?.serverId === configuredDiscussion.serverId && origin.discussionId === configuredDiscussion.discussionId
+              ? { afterTurns: 10 } : undefined) };
+        },
       });
       let receiveUserMessage: ((message: UserMessage) => boolean | void) | undefined;
       const observeProviderInputSettlement = vi.fn(async () => false);
@@ -1133,7 +1144,8 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       if (admitted || state === 'revoked' || state === 'muted' || state === 'held' || state === 'settlement-unknown') {
         expect(socketAckMock).toHaveBeenCalledWith('session-pending-admission-settlement-v1',
           expect.objectContaining({ sessionId: 's1', localId,
-            decision: expect.objectContaining({ validation: { reply: { mode: 'return', discussion: discussionAddressing },
+            decision: expect.objectContaining({ validation: { reply: { mode: 'return', discussion: discussionAddressing,
+              ...(request.actionRequestAttributionV1 ? { actionRequestAttributionV1: request.actionRequestAttributionV1 } : {}) },
               ...(state === 'muted' ? {} : { autonomousCheckIn: { afterTurns: 10 } }) } }) }));
         if (state !== 'muted') expect(socketAckMock).toHaveBeenCalledWith('session-pending-admission-settlement-v1',
           expect.objectContaining({ decision: expect.objectContaining({ kind: 'admit', finalContent: original.content }) }));

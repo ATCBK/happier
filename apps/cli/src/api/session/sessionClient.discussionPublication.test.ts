@@ -20,7 +20,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it('publishes an Account Action and binds its protected active reply through the exact current Session publisher', async () => {
+it.each(['failed', 'cancelled'] as const)('publishes an Account Action and its exact %s return through the current Session publisher', async terminalKind => {
   const sessionId = 'cmv3discussionparticipant';
   const credentials = { token: 'discussion-owner', encryption: null };
   const features = { status: 'ready' as const, features: FeaturesResponseSchema.parse({
@@ -48,10 +48,23 @@ it('publishes an Account Action and binds its protected active reply through the
       v: 1, status: 'available', progress: { v: 1, mode: 'return', disposition: terminalReturned ? 'returned' : 'return_pending', acceptedTurnId: 'turn-1',
         discussion: { discussionId: 'discussion-1', messageId: 'question-1', throughSeq: 1, participantSessionId: sessionId },
         outcome: explicitlyReturned ? { kind: 'answer', publicationRef: { kind: 'discussion',
-          discussion: { serverId: 'discussion-home', discussionId: 'discussion-1' }, messageId: 'committed-explicit' } } : { kind: 'failed' } },
+          discussion: { serverId: 'discussion-home', discussionId: 'discussion-1' }, messageId: 'committed-explicit' } }
+          : terminalKind === 'cancelled' ? { kind: 'cancelled', result: { sessionId, messageId: 'stopped-partial' } } : { kind: 'failed' } },
+    } };
+    if (String(url).endsWith('/messages/by-local-id/original')) return { status: 200, data: { message: {
+      id: 'original-row', localId: 'original', seq: 1, createdAt: 1, updatedAt: 1,
+      content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Question' } } },
+    } } };
+    if (String(url).includes('/messages?')) return { status: 200, data: { messages: [{ id: 'stopped-partial', localId: 'partial',
+      seq: 2, createdAt: 2, updatedAt: 2, content: { t: 'plain', v: { role: 'agent', content: { type: 'acp',
+        agentId: 'codex', data: { type: 'text', text: 'Stopped partial answer' } } } } },
+      { id: 'unrelated-later', localId: 'later', seq: 3, createdAt: 3, updatedAt: 3,
+        content: { t: 'plain', v: { role: 'agent', content: { type: 'acp', agentId: 'codex', data: { type: 'text', text: 'Later answer' } } } } }] } };
+    if (String(url).endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+      mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
     } };
     if (String(url).endsWith('/v1/discussions/discussion-1')) return { status: 200, data: { discussion: summary } };
-    return { status: 200, data: { session: createSessionRecordFixture({ id: sessionId, share: null }) } };
+    return { status: 200, data: { session: createSessionRecordFixture({ id: sessionId, share: null, encryptionMode: 'plain' }) } };
   });
   const requests: string[] = [];
   vi.spyOn(axios, 'request').mockImplementation(async config => {
@@ -204,7 +217,8 @@ it('publishes an Account Action and binds its protected active reply through the
   // The Account owner can reach this RPC, but cannot author a terminal outcome.
   expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: terminalRequest }))
     .toEqual({ v: 1, ok: false, error: 'discussion_post_denied' });
-  terminalRequest.request.content = { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'The requested session failed.' }] } };
+  terminalRequest.request.content = { t: 'plain', v: { v: 1, parts: [{ t: 'text',
+    text: terminalKind === 'cancelled' ? 'Stopped partial answer' : 'The requested session failed.' }] } };
   expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: terminalRequest }))
     .toMatchObject({ ok: true, value: { message: { id: 'committed-answer' } } });
   expect(publications).toHaveLength(3);

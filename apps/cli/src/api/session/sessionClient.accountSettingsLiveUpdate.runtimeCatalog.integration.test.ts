@@ -6,6 +6,8 @@ import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSna
     getActiveAccountSettingsSnapshot, readAccountRoleOverridesFromSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+import { FeaturesResponseSchema } from '@happier-dev/protocol';
+import type { ApiSessionClientOptions } from './sessionClient';
 import { buildPromptLibraryPhysicalKeyV1, PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { createMockSession } from '@/testkit/backends/sessionFixtures';
@@ -155,7 +157,7 @@ describe('ApiSessionClient live account settings convergence', () => {
         else process.env.HAPPY_ENABLE_V2_CHANGES = previousEnableV2Changes;
     });
 
-    function createClient() {
+    function createClient(options: Partial<ApiSessionClientOptions> = {}) {
         const sessionSocket = createApiSessionSocketStub({ connected: true });
         const userSocket = createApiSessionSocketStub({ connected: true });
         bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket,
@@ -164,10 +166,35 @@ describe('ApiSessionClient live account settings convergence', () => {
             pendingCount: 1,
             pendingVersion: 3,
             latestTurnStatus: 'in_progress',
-        }));
+        }), options);
         clients.add(client);
         return { client, sessionSocket, userSocket };
     }
+
+    it('reads the originating Discussion check-in choice under current Account authority', async () => {
+        const credentials = { token: 'fake-token', encryption: null } as const;
+        readStoredCredentialsMock.mockResolvedValue(credentials);
+        let override: Readonly<{ afterTurns: number | null }> | undefined | null;
+        const readDiscussionAutonomousCheckIn = vi.fn(async () => override);
+        const { client } = createClient({ readDiscussionAutonomousCheckIn,
+            getServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({
+                features: { sessions: { enabled: true, autonomousExchange: { enabled: true } } }, capabilities: {},
+            }) }) });
+        setActiveAccountSettingsSnapshot({ source: 'network', rawSettings: {}, settings: accountSettingsParse({}),
+            settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
+        const reader = client as unknown as { readCurrentAutonomousCheckIn(origin?: { serverId: string; discussionId: string }): Promise<unknown> };
+        const origin = { serverId: client.getServerBinding().serverId, discussionId: 'discussion' };
+        for (const afterTurns of [null, 12, undefined]) {
+            override = afterTurns === undefined ? undefined : { afterTurns };
+            expect(await reader.readCurrentAutonomousCheckIn(origin)).toEqual({ afterTurns: afterTurns === undefined ? 5 : afterTurns });
+            expect(readDiscussionAutonomousCheckIn).toHaveBeenCalledWith(origin);
+            readDiscussionAutonomousCheckIn.mockClear();
+        }
+        expect(await reader.readCurrentAutonomousCheckIn()).toEqual({ afterTurns: 5 });
+        expect(readDiscussionAutonomousCheckIn).not.toHaveBeenCalled();
+        override = null;
+        expect(await reader.readCurrentAutonomousCheckIn(origin)).toBeNull();
+    });
 
     it('fails malformed direct settings hints closed while unrelated runtime updates still apply', async () => {
         const { client, userSocket } = createClient();
