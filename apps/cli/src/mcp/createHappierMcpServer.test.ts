@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fastify from 'fastify';
 import Ajv from 'ajv';
 import { z } from 'zod/mini';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { accountSettingsParse, deriveSessionCreationTagV1, FeaturesResponseSchema, normalizeActionsSettingsV1, projectSessionAccessCapabilitiesV1, SessionCreationCorrespondenceV1Schema, SessionInputRequestSchema, V2SessionByIdResponseSchema, type AccountSettings } from '@happier-dev/protocol';
 import { SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
@@ -15,10 +16,14 @@ import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { createSessionRecordFixture, createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createHappierMcpServer } from '@/mcp/createHappierMcpServer';
+import { createHappierMcpBridge } from '@/agent/runtime/createHappierMcpBridge';
+import { createDaemonControlApp } from '@/daemon/controlServer';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveRunnerMcpServers } from '@/mcp/runtime/resolveRunnerMcpServers';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
-import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
 import { buildSessionMetadataEnvelopeFields } from '@/session/metadata/buildSessionMetadataEnvelopeCreateFields';
@@ -74,19 +79,38 @@ async function installAccountCatalogDaemonTransport(params: Readonly<{
     resolveServerFeaturesSnapshot: async () => ({ status: 'ready', provenance: 'authenticated',
       features: FeaturesResponseSchema.parse({ features: {}, capabilities: {} }) }),
   });
-  // Only daemon IPC and Home HTTP are substituted. The credentialed daemon
-  // catalog, current Session metadata opening and availability stay real.
-  vi.spyOn(daemonControlClient, 'requestDaemonPluginActionExecution').mockImplementation(async (request) => {
-    const result = await executor.execute(ActionIdSchema.parse(request.actionId), request.input, {
-      surface: request.surface, authority: 'account_automation', actionCaller: { kind: 'host' },
-      ...(request.defaultSessionId ? { defaultSessionId: request.defaultSessionId } : {}),
-    });
-    return { matched: true, result: result.ok
-      ? { ok: true, result: StrictJsonValueSchema.parse(result.result) }
-      : { ok: false, errorCode: result.errorCode, error: result.error,
-        ...(result.details === undefined ? {} : { details: result.details }) } };
+  const registryLease = await pluginReloadController.acquireRuntimeRegistry({ resolveRuntimeRegistry: () =>
+    resolveExecutablePluginRuntimeRegistry({ contributes: createResolvedContributionRegistry({}), pluginIds: [] }) });
+  await registryLease.release();
+  const control = createDaemonControlApp({
+    getChildren: () => [], machineId: 'machine-1', controlToken: 'catalog-control-token',
+    stopSession: async () => ({ status: 'not_found' as const }),
+    spawnSession: async () => { throw new Error('Unexpected Session spawn'); },
+    requestShutdown: () => {}, onHappySessionWebhook: () => {},
+    externalActionApi: {
+      currentServerId: getTestServerBinding().serverId, executor,
+      verifyPat: async () => { throw new Error('Catalog transport does not verify PATs'); },
+      resolveTarget: async () => ({ kind: 'machine' as const, machineId: 'machine-1' }),
+    },
+    pluginChangeService: {
+      requestPluginChange: vi.fn(), decidePluginChange: vi.fn(),
+      statusPluginChange: async () => ({ kind: 'expired' as const }),
+      listPendingPluginChanges: async () => ({ changes: [] }), shutdown: async () => {},
+    },
   });
-  return { executor, getSessionReads: () => sessionReads, close: async () => { restore(); await app.close(); } };
+  // Only daemon IPC and Home HTTP are substituted. Keep the actual control
+  // route's result projection as well as the credentialed Action executor.
+  vi.spyOn(daemonControlClient, 'requestDaemonPluginActionExecution').mockImplementation(async (request) => {
+    const response = await control.inject({
+      method: 'POST', url: '/plugins/actions/execute',
+      headers: { 'x-happier-daemon-token': 'catalog-control-token' }, payload: request,
+    });
+    expect(response.statusCode).toBe(200);
+    return response.json();
+  });
+  return { executor, getSessionReads: () => sessionReads, close: async () => {
+    restore(); await control.close(); await app.close();
+  } };
 }
 
 const catalogHostTurn = {
@@ -95,6 +119,8 @@ const catalogHostTurn = {
   getActiveTurnPermissionWitness: () => ({ turnId: 'catalog-turn',
     causalPermissionAuthority: { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'yolo' as const } }),
 };
+
+afterAll(async () => { await pluginReloadController.shutdown(); });
 
 function hostClient(sessionId: string, overrides: Partial<HappyMcpSessionClient> = {}): HappyMcpSessionClient {
   return {
@@ -298,37 +324,43 @@ describe('createHappierMcpServer real host admission', () => {
   it('retains content-free discovery and execution repair details over native MCP', async () => {
     const sessionId = 'c666666666666666666666667';
     const daemon = await installAccountCatalogDaemonTransport({ sessionId, readMetadata: () => createTestMetadata() });
-    const runtime = createHappierMcpServer(hostClient(sessionId));
+    process.env.HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT = '1';
+    vi.spyOn(daemonControlClient, 'readDaemonPluginCatalog').mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
+    const bridge = await createHappierMcpBridge(hostClient(sessionId));
+    const client = new Client({ name: 'native-discovery-contract-test', version: '1' });
     try {
-      await withMcpClient(runtime, async client => {
-        const cases = [
-          { name: 'action_spec_get', arguments: { id: 'definitely.invalid.action' }, path: ['id'], code: 'unknown_action' },
-          { name: 'action_spec_get', arguments: { id: 'session.spawn_new', schemaPath: '/inputSchema/definitions/not-a-section' },
-            path: ['schemaPath'], code: 'invalid_schema_path' },
-          { name: 'action_options_resolve', arguments: { actionId: 'definitely.invalid.action', fieldPath: 'bogus' }, path: ['actionId'], code: 'unknown_action' },
-          { name: 'action_options_resolve', arguments: { actionId: 'session.spawn_new', fieldPath: 'bogus' }, path: ['fieldPath'], code: 'unknown_field' },
-          { name: 'action_options_resolve', arguments: { actionId: 'session.spawn_new', fieldPath: 'configuration', draftInput: {} },
-            path: ['draftInput', 'agentTarget'], code: 'invalid_selection' },
-          { name: 'action_execute', arguments: { actionId: 'agents.config_options.list', input: {
-            backendTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-6-luna', machineId: 'machine', serverId: 'private-home-value', limit: 50,
-          } }, path: ['serverId'], code: 'invalid_type' },
-          { name: 'action_execute', arguments: { actionId: 'agents.config_options.list', input: {
-            backendTargetKey: 'agent:happier.agent.codex/codex', modelId: 123,
-          } }, path: ['modelId'], code: 'invalid_type' },
-        ];
-        for (const testCase of cases) {
-          const reply = CallToolResultSchema.parse(await client.callTool({ name: testCase.name, arguments: testCase.arguments }));
-          expect(reply.isError).toBe(true);
-          const content = reply.content.find(item => item.type === 'text');
-          if (content?.type !== 'text') throw new Error('Missing refusal payload');
-          const payload = JSON.parse(content.text);
-          expect(payload, testCase.name).toMatchObject({ errorCode: 'invalid_parameters',
-            details: { issues: expect.arrayContaining([expect.objectContaining({ code: testCase.code, path: testCase.path })]) } });
-          expect(content.text).not.toContain('private-home-value');
-        }
-      });
-    } finally { await daemon.close(); }
-  });
+      const config = bridge.mcpServers.happier;
+      await client.connect(new StdioClientTransport({ command: config.command,
+        args: [...(config.args ?? [])], env: config.env ? { ...config.env } : undefined }));
+      const cases = [
+        { name: 'action_spec_get', arguments: { id: 'definitely.invalid.action' }, path: ['id'], code: 'unknown_action' },
+        { name: 'action_spec_get', arguments: { id: 'acme.external/actions/private-unknown-action' }, path: ['id'], code: 'unknown_action' },
+        { name: 'action_spec_get', arguments: { id: 'session.spawn_new', schemaPath: '/inputSchema/definitions/not-a-section' },
+          path: ['schemaPath'], code: 'invalid_schema_path' },
+        { name: 'action_options_resolve', arguments: { actionId: 'definitely.invalid.action', fieldPath: 'bogus' }, path: ['actionId'], code: 'unknown_action' },
+        { name: 'action_options_resolve', arguments: { actionId: 'session.spawn_new', fieldPath: 'bogus' }, path: ['fieldPath'], code: 'unknown_field' },
+        { name: 'action_options_resolve', arguments: { actionId: 'session.spawn_new', fieldPath: 'configuration', draftInput: {} },
+          path: ['draftInput', 'agentTarget'], code: 'invalid_selection' },
+        { name: 'action_execute', arguments: { actionId: 'agents.config_options.list', input: {
+          backendTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-6-luna', machineId: 'machine', serverId: 'private-home-value', limit: 50,
+        } }, path: ['serverId'], code: 'invalid_type' },
+        { name: 'action_execute', arguments: { actionId: 'agents.config_options.list', input: {
+          backendTargetKey: 'agent:happier.agent.codex/codex', modelId: 123,
+        } }, path: ['modelId'], code: 'invalid_type' },
+      ];
+      for (const testCase of cases) {
+        const reply = CallToolResultSchema.parse(await client.callTool({ name: testCase.name, arguments: testCase.arguments }));
+        expect(reply.isError).toBe(true);
+        const content = reply.content.find(item => item.type === 'text');
+        if (content?.type !== 'text') throw new Error('Missing refusal payload');
+        const payload = JSON.parse(content.text);
+        expect(payload, testCase.name).toMatchObject({ errorCode: 'invalid_parameters',
+          details: { issues: expect.arrayContaining([expect.objectContaining({ code: testCase.code, path: testCase.path })]) } });
+        expect(content.text).not.toContain('private-home-value');
+        expect(content.text).not.toContain('private-unknown-action');
+      }
+    } finally { await client.close(); bridge.happierMcpServer.stop(); await daemon.close(); }
+  }, 30_000);
 
   it('discovers the callable Workflow validator named by start guidance over native MCP', async () => {
     const sessionId = 'c666666666666666666666668';

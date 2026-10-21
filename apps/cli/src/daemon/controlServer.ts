@@ -17,6 +17,7 @@ import { AUTHORITY_CEILING_HEADER_V1, resolveInvocationAuthority } from '@happie
 import { waitForTerminalPresentUserPolicyRefresh, type TerminalPresentUserPolicyScope } from '@/settings/accountSettings/resolveEffectiveTerminalPresentUserPolicy';
 import { logger } from '@/ui/logger';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { projectActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { resolveRuntimeActionExecutionFamily } from '@happier-dev/protocol/actions/executor/dispatch';
 import { classifyActionTransportFailure } from '@/api/client/classifyServerEndpointError';
 import { createDaemonControlAuthGuard } from './controlAuth';
@@ -1416,11 +1417,7 @@ export function createDaemonControlApp({
           if (!execution.ok) {
             return {
               matched: true,
-              result: {
-                ok: false,
-                errorCode: execution.errorCode,
-                error: execution.error,
-              },
+              result: projectActionExecuteFailure(execution),
             };
           }
           const result = StrictJsonValueSchema.safeParse(execution.result);
