@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { writeFile } from 'node:fs/promises';
 import test from 'node:test';
+import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { parseDevTargetsConfig } from './config.mjs';
 
 import {
@@ -165,11 +168,8 @@ test('renderMutagenProject creates one-way source replicas while retaining targe
     '!/.project',
     '/.project/*',
     '!/.project/plans',
-    '!/.project/plans/**',
     '!/.project/tasks',
-    '!/.project/tasks/**',
     '!/.project/scripts',
-    '!/.project/scripts/**',
     '!/.project/*.md',
     '/.project/plans/runtime-unification-v2/_validation/source-reality-review/qa/lane-A/repo-importers-map.json',
     '/.project/plans/plugin-sdk-author-surface-convergence/CLAUDE-AUDIT-JOURNAL.md',
@@ -212,7 +212,7 @@ test('renderMutagenProject creates one-way source replicas while retaining targe
     'the project root must be traversable before searchable children are selected',
   );
   assert.ok(
-    rendered.indexOf('- "!/.project/plans/**"')
+    rendered.indexOf('- "!/.project/plans"')
       < rendered.indexOf('- "/.project/plans/**/*.har"'),
     'binary and sensitive plan exclusions must be applied after the searchable plan exception',
   );
@@ -242,6 +242,40 @@ test('renderMutagenProject re-includes tracked source coverage without unignorin
     ],
     'the generic generated-coverage ignore must precede the tracked source exception',
   );
+});
+
+test('renderMutagenProject preserves default exclusions inside re-included project source trees', async (t) => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-project-ignores-' });
+  const rendered = renderMutagenProject({ sourceDir: fixture.root, targets });
+  const ignores = rendered.split('\n').filter(line => line.startsWith('        - ')).map(line => JSON.parse(line.slice(10)));
+  // Mutagen's documented Git-style precedence, basename and anchored patterns
+  // share these semantics. Use Git's real matcher instead of a test-only parser:
+  // https://mutagen.io/documentation/synchronization/ignores/
+  execFileSync('git', ['init', '--quiet', fixture.root]);
+  await writeFile(fixture.path('.gitignore'), `${ignores.join('\n')}\n`);
+  await writeFile(fixture.path('empty-excludes'), '');
+
+  const excluded = [];
+  const included = ['.project/README.md', 'packages/triage-qa/src/coverage/source.ts',
+    'packages/protocol/src/browser/target/source.ts',
+    'apps/cli/src/plugins/testkit/fixtures/packed-external-voice-provider/dist/index.js'];
+  for (const tree of ['plans', 'tasks', 'scripts']) {
+    const root = `.project/${tree}/qa/plugin`;
+    included.push(`${root}/src/index.ts`, `${root}/README.md`);
+    for (const directory of ['node_modules', 'dist', 'dist.staging.123', 'coverage', '.turbo', '.next', 'target', '.project']) {
+      excluded.push(`${root}/${directory}`, `${root}/${directory}/nested/output.js`);
+    }
+    for (const file of ['env.local', '.env.local', 'tsconfig.tsbuildinfo', 'output.log', 'output.trace', '.DS_Store']) {
+      excluded.push(`${root}/${file}`);
+    }
+  }
+  excluded.push('.project/reviews/report.md', '.project/plans/qa/browser-diagnostics.json',
+    '.project/plans/qa/capture.har', 'packages/fixture/.project/plans/source.ts');
+  const ignored = execFileSync('git', ['-C', fixture.root, '-c', `core.excludesFile=${fixture.path('empty-excludes')}`,
+    'check-ignore', '--no-index', '--stdin', '-z'], {
+    input: `${[...excluded, ...included].join('\0')}\0`, encoding: 'utf8',
+  }).split('\0').filter(Boolean);
+  assert.deepEqual(ignored, excluded, 'build output stays target-local while authored project sources remain synchronized');
 });
 
 test('renderMutagenProject re-includes tracked fixture target directories without unignoring build output', () => {

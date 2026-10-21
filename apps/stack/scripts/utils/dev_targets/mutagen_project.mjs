@@ -162,12 +162,11 @@ export const DEV_TARGET_MUTAGEN_IGNORE_PATHS = [
   '!apps/cli/src/plugins/testkit/fixtures/packed-external-voice-provider/dist/**',
   '!/.project',
   '/.project/*',
+  // Re-open only the selected directories. Recursive negations would override
+  // basename exclusions (node_modules, dist, env.local, etc.) in their children.
   '!/.project/plans',
-  '!/.project/plans/**',
   '!/.project/tasks',
-  '!/.project/tasks/**',
   '!/.project/scripts',
-  '!/.project/scripts/**',
   '!/.project/*.md',
   '/.project/plans/runtime-unification-v2/_validation/source-reality-review/qa/lane-A/repo-importers-map.json',
   '/.project/plans/plugin-sdk-author-surface-convergence/CLAUDE-AUDIT-JOURNAL.md',
