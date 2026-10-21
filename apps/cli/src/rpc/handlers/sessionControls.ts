@@ -23,7 +23,7 @@ import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import type { Metadata } from '@/api/types';
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import type { ComposerAttachmentDispatchResolver } from '@/agent/runtime/runPermissionModePromptLoop';
-import type { StructuredInputComposerReferenceResolver } from '@/agent/runtime/turns/resolveStructuredInputProviderContext';
+import type { StructuredInputCatalogReaders, StructuredInputComposerReferenceResolver } from '@/agent/runtime/turns/resolveStructuredInputProviderContext';
 import type { AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agents/runtime';
 import { configuration } from '@/configuration';
 import { SkillCatalogItemV1Schema } from '@happier-dev/protocol/runtime/catalog/skills';
@@ -57,6 +57,7 @@ export type SessionRuntimeControls = {
     'withdrawn' | 'dispatched' | Promise<'withdrawn' | 'dispatched'>;
   /** Current-generation Composer reference resolver, scoped by the owning Session runtime. */
   resolveComposerReference?: StructuredInputComposerReferenceResolver['resolve'];
+  readReferenceAction?: StructuredInputCatalogReaders['readReferenceAction'];
   /** Current-generation Composer attachment resolver, scoped by the owning Session runtime. */
   resolveComposerAttachmentForDispatch?: ComposerAttachmentDispatchResolver;
   managedProviderRunServices?: import('@/agent/runtime/session/process/agentRuntimeDaemonServiceAuthorityClient').RunnerManagedProviderRunServices;

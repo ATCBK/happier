@@ -413,6 +413,8 @@ export function registerSessionClientRuntimeHandlers(
             readOwnerAccountCredentials,
             readCodingPromptBehavior,
             readAppliedChildSelection,
+            ...(params.sessionRuntimeControls?.readReferenceAction
+                ? { readReferenceAction: params.sessionRuntimeControls.readReferenceAction } : {}),
             get permissionHandler() {
                 const handler = disposed ? null : params.sessionRuntimeControls?.readPermissionHandler?.();
                 if (!handler) throw permissionOwnerUnavailable();
