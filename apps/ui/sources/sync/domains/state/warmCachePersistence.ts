@@ -733,7 +733,14 @@ function persistScopedRecord<T extends Record<string, unknown>>(key: string | nu
     const written = attemptWarmCacheStorage('write', () => {
         if (storage.getString(key) !== encoded.value) storage.set(key, encoded.value);
     });
-    if (written.ok) warmCacheSavedValueByKey.set(key, { raw: encoded.value, value });
+    if (written.ok) {
+        warmCacheSavedValueByKey.set(key, { raw: encoded.value, value });
+    } else if (written.failure.reason === 'quota_exceeded') {
+        // An atomic rejected replacement leaves the older (potentially origin-filling) cache on
+        // disk. Release only this derived record so it cannot crowd out settings, drafts or cursors.
+        // The complete latest projection remains in memory above; no size/count cap or retry is needed.
+        attemptWarmCacheStorage('delete', () => storage.delete(key));
+    }
 }
 
 function peekScopedRecord<T extends Record<string, unknown>>(key: string | null): T | null {

@@ -396,6 +396,33 @@ describe('persistence', () => {
             expect(loadSessionMaterializedMaxSeqById()).toEqual({ abc: 12 });
         });
 
+        it.each(['QuotaExceededError', 'SecurityError'])('keeps progress usable when storage rejects a write with %s', (name) => {
+            const progress = { abc: 12 };
+            const write = vi.spyOn(getPersistenceStorage(), 'set').mockImplementationOnce(() => {
+                throw Object.assign(new Error('storage unavailable'), { name });
+            });
+            try {
+                expect(() => saveSessionMaterializedMaxSeqById(progress, sessionLocalScopeA)).not.toThrow();
+                expect(progress).toEqual({ abc: 12 });
+                expect(loadSessionMaterializedMaxSeqById(sessionLocalScopeB)).toEqual({});
+                saveSessionMaterializedMaxSeqById({ abc: 13 }, sessionLocalScopeA);
+                expect(loadSessionMaterializedMaxSeqById(sessionLocalScopeA)).toEqual({ abc: 13 });
+            } finally {
+                write.mockRestore();
+            }
+        });
+
+        it('uses a cold cursor when storage cannot be read', () => {
+            const read = vi.spyOn(getPersistenceStorage(), 'getString').mockImplementationOnce(() => {
+                throw Object.assign(new Error('storage unavailable'), { name: 'SecurityError' });
+            });
+            try {
+                expect(loadSessionMaterializedMaxSeqById(sessionLocalScopeA)).toEqual({});
+            } finally {
+                read.mockRestore();
+            }
+        });
+
         it('filters out invalid persisted values', () => {
             store.set(
                 'session-materialized-max-seq-v1',

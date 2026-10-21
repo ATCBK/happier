@@ -925,11 +925,19 @@ export function clearNewSessionDraft(scope?: ServerAccountScope | null) {
     mmkv.delete(newSessionDraftKey(scope));
 }
 
+let sessionMaterializedMaxSeqPersistenceFailureReported = false;
+
+function reportSessionMaterializedMaxSeqPersistenceFailure(operation: 'read' | 'write'): void {
+    if (sessionMaterializedMaxSeqPersistenceFailureReported) return;
+    sessionMaterializedMaxSeqPersistenceFailureReported = true;
+    // Storage errors can include Account-scoped keys. Report no key, value or error prose.
+    console.warn('[session-materialization] Local progress persistence failed; continuing transcript sync.', { operation });
+}
+
 export function loadSessionMaterializedMaxSeqById(scope?: ServerAccountScope | null): Record<string, number> {
-    const mmkv = getPersistenceStorage();
-    const raw = mmkv.getString(sessionMaterializedMaxSeqKey(scope));
-    if (raw) {
-        try {
+    try {
+        const raw = getPersistenceStorage().getString(sessionMaterializedMaxSeqKey(scope));
+        if (raw) {
             const parsed: unknown = JSON.parse(raw);
             if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
                 return {};
@@ -942,17 +950,21 @@ export function loadSessionMaterializedMaxSeqById(scope?: ServerAccountScope | n
                 }
             }
             return result;
-        } catch (e) {
-            console.error('Failed to parse session materialized max seq', e);
-            return {};
         }
+    } catch {
+        reportSessionMaterializedMaxSeqPersistenceFailure('read');
     }
     return {};
 }
 
 export function saveSessionMaterializedMaxSeqById(data: Record<string, number>, scope?: ServerAccountScope | null) {
-    const mmkv = getPersistenceStorage();
-    mmkv.set(sessionMaterializedMaxSeqKey(scope), JSON.stringify(data));
+    try {
+        getPersistenceStorage().set(sessionMaterializedMaxSeqKey(scope), JSON.stringify(data));
+    } catch {
+        // Sync owns the live cursor. A cold restart can refetch messages from an older/missing
+        // cursor; persistence of this projection must never interrupt message delivery or scope retirement.
+        reportSessionMaterializedMaxSeqPersistenceFailure('write');
+    }
 }
 
 export function prepareSessionLocalStateScopeForActivation(scope: ServerAccountScope): void {

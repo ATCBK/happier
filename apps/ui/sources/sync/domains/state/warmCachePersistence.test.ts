@@ -74,6 +74,8 @@ describe('warmCachePersistence', () => {
         expect(() => saveMachineDisplayWarmCacheEntries('server-a', accountId, latest)).not.toThrow();
         expect(loadMachineDisplayWarmCacheEntries('server-a', accountId)).toEqual(latest);
         expect(warmCache.peekMachineDisplayWarmCacheEntries('server-a', accountId)).toBe(latest);
+        // Security denial does not establish storage pressure and must not evict a recoverable record.
+        expect(store.has(`machine-display-warm-cache-v1:server-a:${accountId}`)).toBe(name === 'SecurityError');
         // A later update can persist normally; the failed write never restores the older disk value.
         const recovered = { m1: { ...latest.m1, updatedAt: 3 } };
         saveMachineDisplayWarmCacheEntries('server-a', accountId, recovered);
@@ -89,6 +91,61 @@ describe('warmCachePersistence', () => {
         expect(loadMachineDisplayWarmCacheEntries('server-a', accountId)).toEqual({});
         getString.mockImplementationOnce(() => { throw new Error('storage failed'); });
         expect(loadMachineDisplayWarmCacheEntries('server-a', 'unreadable')).toEqual({});
+    });
+
+    it('keeps the latest projection if storage also refuses quota recovery removal', () => {
+        const accountId = 'quota-removal-failed';
+        const previous = { m1: { machineId: 'm1', metadataVersion: 1, updatedAt: 1,
+            active: true, activeAt: 1, revokedAt: null } };
+        saveMachineDisplayWarmCacheEntries('server-a', accountId, previous);
+        const latest = { m1: { ...previous.m1, updatedAt: 2 } };
+        set.mockImplementationOnce(() => { throw Object.assign(new Error('storage full'), { name: 'QuotaExceededError' }); });
+        deleteKey.mockImplementationOnce(() => { throw Object.assign(new Error('storage unavailable'), { name: 'SecurityError' }); });
+        expect(() => saveMachineDisplayWarmCacheEntries('server-a', accountId, latest)).not.toThrow();
+        expect(loadMachineDisplayWarmCacheEntries('server-a', accountId)).toEqual(latest);
+        expect(JSON.parse(store.get(`machine-display-warm-cache-v1:server-a:${accountId}`)!)).toEqual(previous);
+    });
+
+    it('releases a quota-rejected warm record so settings and transcript progress can still persist', async () => {
+        // Browser warm caches and durable local state share MMKV's default localStorage namespace.
+        vi.stubGlobal('window', globalThis);
+        vi.stubGlobal('document', {});
+        const persistence = await import('./persistence');
+        const local = persistence.loadLocalSettings();
+        persistence.saveLocalSettings(local);
+        const draftKey = 'new-session-draft-v1';
+        const draft = JSON.stringify({ input: 'Keep this unsent draft' });
+        store.set(draftKey, draft);
+        const previous = { m1: { machineId: 'm1', metadataVersion: 1, updatedAt: 1,
+            active: true, activeAt: 1, revokedAt: null, host: 'x'.repeat(4096) } };
+        const latest = { m1: { ...previous.m1, updatedAt: 2, host: previous.m1.host.repeat(2) } };
+        const key = 'machine-display-warm-cache-v1:quota-home:quota-account';
+        saveMachineDisplayWarmCacheEntries('quota-home', 'quota-account', previous);
+        const storedSettings = store.get('local-settings');
+        // The fixture quota is exactly the occupied storage: even a cursor cannot be added until
+        // the rejected cache releases its old disk copy. No production size/count cutoff is used.
+        const quota = [...store].reduce((total, [key, value]) => total + key.length + value.length, 0);
+        set.mockImplementation((key, value) => {
+            const candidate = new Map(store).set(key, value);
+            const size = [...candidate].reduce((total, [key, value]) => total + key.length + value.length, 0);
+            if (size > quota) throw Object.assign(new Error('storage full'), { name: 'QuotaExceededError' });
+            store.set(key, value);
+        });
+        try {
+            saveMachineDisplayWarmCacheEntries('quota-home', 'quota-account', latest);
+            expect(loadMachineDisplayWarmCacheEntries('quota-home', 'quota-account')).toEqual(latest);
+            expect(store.has(key)).toBe(false);
+            expect(store.get('local-settings')).toBe(storedSettings);
+            expect(store.get(draftKey)).toBe(draft);
+            const nextLocal = { ...local, debugMode: !local.debugMode };
+            expect(() => persistence.saveLocalSettings(nextLocal)).not.toThrow();
+            expect(persistence.loadLocalSettings().debugMode).toBe(nextLocal.debugMode);
+            persistence.saveSessionMaterializedMaxSeqById({ session: 12 });
+            expect(persistence.loadSessionMaterializedMaxSeqById()).toEqual({ session: 12 });
+        } finally {
+            set.mockImplementation((key, value) => { store.set(key, value); });
+            vi.unstubAllGlobals();
+        }
     });
 
     it('retains Found results by kind, machine, Home and Account without lending online authority', () => {
