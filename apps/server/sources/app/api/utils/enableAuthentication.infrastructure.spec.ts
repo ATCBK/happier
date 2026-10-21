@@ -16,9 +16,9 @@ const boundary = vi.hoisted(() => ({
     homeGovernancePolicy: { findUnique: vi.fn() },
 }));
 vi.mock("@/storage/db", async () => {
-    const { createDbTransactionMock } = await import("@/app/api/testkit/dbMocks");
+    const { createDbTransactionMock, inTxPostgresControlStatementMock } = await import("@/app/api/testkit/dbMocks");
     // Replace database IO only; token crypto, transactions and HTTP error handling remain real.
-    return { db: createDbTransactionMock(() => boundary).wrapDb(boundary) };
+    return { db: createDbTransactionMock(() => ({ ...inTxPostgresControlStatementMock, ...boundary })).wrapDb(boundary) };
 });
 
 describe("authentication infrastructure failures", () => {
@@ -66,20 +66,24 @@ describe("authentication infrastructure failures", () => {
     }
 
     it.each(["credential", "configuration", "optional"] as const)(
-        "returns an opaque 500 on a %s database failure and accepts the same credential after recovery",
+        "returns typed unavailability on a %s database failure and accepts the same credential after recovery",
         async (phase) => {
             const { app, token } = await createApp();
             const failure = Object.assign(new Error("private database connection detail"), { code: "P1017" });
             const reader = phase === "configuration" ? boundary.homeSettings.findUnique : boundary.account.findUnique;
-            reader.mockRejectedValueOnce(failure);
+            let injectedFailureReached = false;
+            reader.mockImplementationOnce(async () => {
+                injectedFailureReached = true;
+                throw failure;
+            });
             const url = phase === "optional" ? "/public" : "/private";
             try {
                 const failed = await app.inject({ method: "GET", url, headers: { authorization: `Bearer ${token}` } });
-                expect(failed.statusCode).toBe(500);
+                expect(injectedFailureReached).toBe(true);
+                expect(failed.statusCode).toBe(503);
                 expect(failed.json()).toEqual({
-                    error: "Internal Server Error",
-                    message: "An unexpected error occurred",
-                    statusCode: 500,
+                    error: "database_connection_unavailable",
+                    statusCode: 503,
                 });
                 const recovered = await app.inject({ method: "GET", url, headers: { authorization: `Bearer ${token}` } });
                 expect(recovered.statusCode).toBe(200);
@@ -129,16 +133,23 @@ describe("authentication infrastructure failures", () => {
             const connected = new Promise<void>((resolve) => client.once("connect", () => resolve()));
             client.connect();
             await connected;
-            boundary.account.findUnique.mockRejectedValueOnce(Object.assign(new Error("private connection detail"), { code: "P1017" }));
+            let socketFailureReached = false;
+            boundary.account.findUnique.mockImplementationOnce(async () => {
+                socketFailureReached = true;
+                throw Object.assign(new Error("private connection detail"), { code: "P1017" });
+            });
             const reconnected = new Promise<void>((resolve) => client.once("connect", () => resolve()));
             const request = { sessionId: "session", localId: "accepted-input" };
             // No ACK timeout: disconnect must retire the original wait so its
             // incumbent custody can reoffer this exact operation on reconnect.
             await expect(client.emitWithAck(event, request)).rejects.toThrow("disconnected");
+            expect(socketFailureReached).toBe(true);
+            const accountReadsAfterFailure = boundary.account.findUnique.mock.calls.length;
             expect(effects).toEqual([]);
             expect(client.active).toBe(true);
             await reconnected;
             await expect(client.emitWithAck(event, request)).resolves.toEqual({ ok: true });
+            expect(boundary.account.findUnique.mock.calls.length).toBeGreaterThan(accountReadsAfterFailure);
             expect(effects).toEqual([request]);
             // A real invalid credential keeps the existing terminal refusal.
             const serverSocket = [...server.sockets.sockets.values()][0]!;
