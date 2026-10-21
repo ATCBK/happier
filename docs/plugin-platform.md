@@ -3944,6 +3944,20 @@ message remain dispatchable. Text and PDF text-layer context uses the attachment
 context contract, not the separate reference-preview ceiling. These are source
 contracts, not a claim of a verified composed loaded-runtime journey.
 
+Channels' unreleased 0.3 ingress compares attachment identity through the
+shared attachment codec. Email's retained slash-joined MIME part paths and
+their portable encoding name the same native parts. This leaves the existing
+comparisons of descriptor order, names, media types, lengths and occurrence
+content unchanged.
+Compacted censuses check the corresponding keyed replay digest representations
+without replacing their retained evidence. An occurrence conflict keeps normal
+polling paused. The existing `connection/poll-retry-v1` Action re-fetches the
+retained occurrence under its exact connection revision and authority epoch,
+and clears its census attention only when the immutable evidence matches.
+Missing or different evidence keeps the conflict blocked. Conflict diagnostics
+name schema field paths without logging their values; a compacted digest
+mismatch cannot identify a field whose evidence was already compacted away.
+
 In current 0.3 development source, UI and CLI plugin Action, Resource, Settings and
 Secret requests use the canonical transport setup budget without an implicit
 operation deadline. Explicit caller deadlines and cancellation still apply;
