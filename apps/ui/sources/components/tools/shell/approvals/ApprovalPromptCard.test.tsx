@@ -346,6 +346,16 @@ describe('ApprovalPromptCard', () => {
         expect(screen.getTextContent()).not.toContain('approvals.failureGeneric');
     });
 
+    it('says the failed action once: a summary that only repeats its title is not a second line', async () => {
+        const { resolveApprovalActionTitle } = await import('./approvalFailureOutcome');
+        const base = ApprovalRequestSchema.parse({ ...failedWriteFile(), status: 'failed', actionId: 'session.list', actionArgs: {},
+            execution: { executedAtMs: 3, ok: false, errorCode: 'boom_happened', error: 'boom_happened' } });
+        const title = resolveApprovalActionTitle(base);
+        const screen = await renderCard({ ...base, summary: `${title}.`, preview: { summary: `${title}.` } } as ApprovalRequest, { chrome: 'inline' });
+        // The headline already names the action; no subtitle repeats it, with or without its full stop.
+        expect(screen.getTextContent()).not.toContain(title);
+    });
+
     it('heads a stale failure as not run, not as the action it never attempted', async () => {
         const approval = ApprovalRequestSchema.parse({ ...failedWriteFile(), status: 'failed',
             execution: { executedAtMs: 3, ok: false, errorCode: 'approval_stale', error: 'approval_stale' } });
@@ -417,6 +427,9 @@ describe('ApprovalPromptCard', () => {
     it('reads a summary that only repeats the Action title once', async () => {
         const repeated = await renderCard({ ...approvalRequest(), actionId: 'browser.view.open', actionArgs: {}, summary: 'Open browser view', preview: undefined });
         expect(repeated.getTextContent().match(/browser\.view\.open|Open browser view/g)).toHaveLength(1);
+        // A summary that adds only a full stop or another case is the same words.
+        const stopped = await renderCard({ ...approvalRequest(), actionId: 'browser.view.open', actionArgs: {}, summary: 'Open browser view.', preview: undefined });
+        expect(stopped.getTextContent().match(/browser\.view\.open|Open browser view/g)).toHaveLength(1);
     });
 
     it('names a declared Session reference on the same Home used by the approval decision', async () => {

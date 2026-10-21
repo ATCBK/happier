@@ -1266,7 +1266,7 @@ describe('ApprovalDetailScreen', () => {
     }))).toBe('approvals.failureNotRun');
     expect(await titleOf(failedWith({
       errorCode: 'executor_failed', error: 'Executor failed', effectAttempted: true,
-    }))).toBe('approvals.failureGeneric');
+    }))).toBe('approvals.failureNamed');
   });
 
   it('says what failed when a recorded failure carries only a machine code, never that the decision could not be saved', async () => {

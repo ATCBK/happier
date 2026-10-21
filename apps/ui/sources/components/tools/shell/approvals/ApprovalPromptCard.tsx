@@ -201,29 +201,33 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
     // A failed approval leads with its outcome; what was approved follows once, as its summary.
     const cardTitle = failureOutcome?.headline ?? requestTitle;
     // A summary that only repeats the title says nothing more: the card reads it once.
-    const cardSubtitle = failureOutcome ? (!projectCommand && props.approval.summary?.trim()) || requestTitle
+    // The failure headline names the action, so a summary that only repeats that name is not a second line.
+    const failureSummary = failureOutcome && !projectCommand ? props.approval.summary?.trim() || null : null;
+    const sameWords = (left: string, right: string) => left.replace(/[.\s]+$/, '').toLowerCase() === right.replace(/[.\s]+$/, '').toLowerCase();
+    const repeatsActionName = (text: string) => sameWords(text, requestTitle);
+    const cardSubtitle = failureOutcome ? (failureSummary && !repeatsActionName(failureSummary) ? failureSummary : null)
         : projectCommand ? null
             : !props.approval.summary ? t('approvals.untitled')
-                : props.approval.summary.trim() === cardTitle ? null : props.approval.summary;
+                : sameWords(props.approval.summary.trim(), cardTitle) ? null : props.approval.summary;
     return (
         <ApprovalPromptChrome
             testID="approval-prompt-card"
             chrome={chrome}
             title={cardTitle}
-            titleNumberOfLines={1}
+            titleNumberOfLines={failureOutcome ? 2 : 1}
             tone={failureOutcome ? 'danger' : undefined}
             icon={failureOutcome ? 'warning-circle' : undefined}
             subtitle={cardSubtitle}
             subtitleNumberOfLines={2}
-            headerAccessory={canOpenToolRoute || (proposal && proposalMode && props.approval.status === 'open') ? (
+            // A failed card closes from its head, so several of them in the tray stay a line or two each.
+            headerAccessory={canOpenToolRoute || failureOutcome || (proposal && proposalMode && props.approval.status === 'open') ? (
                 <View style={styles.headerAccessories}>
                     {proposal && proposalMode && props.approval.status === 'open' ? <ResourceProposalModeChip mode={proposalMode} /> : null}
                     {viewToolButton}
+                    {failureOutcome && props.approval.status !== 'open' ? <ApprovalDecisionFooter isDeciding={false} onDismiss={onDismissFailure} /> : null}
                 </View>
             ) : null}
-            footer={props.approval.status !== 'open' ? (failureOutcome ? (
-                <ApprovalDecisionFooter isDeciding={false} onDismiss={onDismissFailure} />
-            ) : undefined) : (
+            footer={props.approval.status !== 'open' ? undefined : (
                 <ApprovalDecisionFooter
                     approveLabel={confidentialAction ? t('approvals.confidential.review') : projectCommandDecisions?.approve ?? proposalLabels?.approve}
                     rejectLabel={projectCommandDecisions?.reject ?? proposalLabels?.reject}
@@ -243,7 +247,7 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
                     <Text style={styles.previewText}>{failureOutcome.reason}</Text>
                 </View>
             ) : null}
-            {previewSummary && previewSummary !== cardSubtitle?.trim() ? (
+            {previewSummary && previewSummary !== cardSubtitle?.trim() && !(failureOutcome && repeatsActionName(previewSummary)) ? (
                 <Text style={styles.previewText}>{previewSummary}</Text>
             ) : null}
             {computerAction ? (

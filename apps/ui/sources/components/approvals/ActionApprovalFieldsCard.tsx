@@ -352,8 +352,10 @@ const styles = StyleSheet.create((theme) => ({
     tableBlock: {
         gap: theme.space.s4,
     },
+    // The key reads in the value's own size and line, regular and quieter (lab `b-ask C`), so a row is one line.
     tableLabel: {
-        ...Typography.variant('meta', 'semiBold'),
+        ...Typography.variant('label', 'regular'),
+        lineHeight: 20,
         color: theme.colors.text.secondary,
         width: TABLE_LABEL_WIDTH_PX,
         flexShrink: 0,
