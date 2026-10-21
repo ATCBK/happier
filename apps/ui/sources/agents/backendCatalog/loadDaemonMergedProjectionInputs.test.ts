@@ -621,6 +621,23 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
             .toMatchObject({ projectionRevision: initialRevision + 1 });
     });
 
+    it('shares automatic failure recovery without delaying an explicit fresh read', async () => {
+        const { loadDaemonMergedProjectionCacheEntry } = await import('./loadDaemonMergedProjectionInputs');
+        const account = createAccountLifetime('account-a');
+        const params = { ...projectionScope, accountLifetime: account.lifetime };
+        projectionDescribeMock
+            .mockResolvedValueOnce({ supported: false, reason: 'timeout' })
+            .mockResolvedValueOnce({ supported: true, projection: daemonProjection(7) });
+        const failed = await loadDaemonMergedProjectionCacheEntry({ ...params, shareRetryCadence: true });
+        expect(failed).toMatchObject({ kind: 'error', reason: 'timeout' });
+        expect(await loadDaemonMergedProjectionCacheEntry({ ...params, shareRetryCadence: true })).toBe(failed);
+        expect(projectionDescribeMock).toHaveBeenCalledTimes(1);
+        await expect(loadDaemonMergedProjectionCacheEntry(params)).resolves.toMatchObject({
+            kind: 'ready', inputs: { pluginProjectionV2: { generation: 7 } },
+        });
+        expect(projectionDescribeMock).toHaveBeenCalledTimes(2);
+    });
+
     it('keeps the classified reason of a failed read with the last good inputs', async () => {
         projectionDescribeMock
             .mockResolvedValueOnce({ supported: true, projection: daemonProjection(3) })

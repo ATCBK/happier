@@ -60,6 +60,8 @@ type ProjectionCacheResult = (
         fetchedAtMs: number;
         /** Why the latest read failed; the last good inputs stay available. */
         reason: MachineContributionRegistryProjectionFailureReason;
+        retryAttempt: number;
+        retryAtMs: number;
         inputs?: DaemonMergedProjectionInputs;
     }>
 );
@@ -167,6 +169,15 @@ export function subscribeDaemonMergedProjectionSummary(params: Readonly<{
     };
 }
 const DEFAULT_PROJECTION_STALE_MS = 60_000;
+// Preserve the incumbent transient burst and 30 s recovery cadence. Attempts
+// belong to the shared Machine question, not each mounted reader's timer.
+const PROJECTION_RETRY_BACKOFF_MS = [250, 1_000, 2_500, 5_000, 30_000] as const;
+
+export function readDaemonMergedProjectionRetryDelayMs(entry?: ProjectionCacheEntry | null): number {
+    return entry?.kind === 'error'
+        ? Math.max(0, entry.retryAtMs - Date.now())
+        : PROJECTION_RETRY_BACKOFF_MS[0];
+}
 type ProjectionRequest = Readonly<{
     revision: number;
     locale: string;
@@ -288,10 +299,14 @@ export async function loadDaemonMergedProjectionCacheEntry(params: Readonly<{
     accountLifetime?: ActiveServerAccountScopeLifetime | null;
     /** App-shell readers may reuse the same fresh, Account-qualified projection. */
     reuseFreshReady?: boolean;
+    /** Automatic recovery: share its cadence, or false to refresh its authority.
+     * Omit for an explicit one-shot read with ordinary fresh/rejection semantics. */
+    shareRetryCadence?: boolean;
     signal?: AbortSignal;
 }>): Promise<ProjectionCacheEntry | null> {
     if (params.signal?.aborted) return null;
     const accountLifetime = params.accountLifetime ?? captureActiveServerAccountScopeLifetime();
+    if (accountLifetime && !accountLifetime.isCurrent()) return null;
     const locale = getPreferredLanguage();
     const cacheKey = buildCacheKey(params.machineId, params.serverId);
     // The canonical per-machine projection scope. Its revision advances on
@@ -305,6 +320,9 @@ export async function loadDaemonMergedProjectionCacheEntry(params: Readonly<{
     };
     const requestRevision = getMachineContributionRegistryProjectionRevision(projectionScope);
     const accountScope = accountLifetime?.scope ?? null;
+    const matchesRequest = (entry: ProjectionCacheEntry) => entry.projectionRevision === requestRevision
+        && entry.locale === locale && (entry.accountScope === accountScope
+            || areServerAccountScopesEqual(entry.accountScope ?? null, accountScope));
     const incumbentRequest = LATEST_PROJECTION_REQUEST.get(cacheKey);
     if (
         incumbentRequest?.revision === requestRevision
@@ -313,6 +331,12 @@ export async function loadDaemonMergedProjectionCacheEntry(params: Readonly<{
             || areServerAccountScopesEqual(incumbentRequest.accountScope, accountScope))
     ) {
         return await incumbentRequest.wait(accountLifetime, params.signal);
+    }
+    const previousAttempt = params.shareRetryCadence ? currentProjectionCacheEntry(cacheKey) : null;
+    if (params.shareRetryCadence && previousAttempt?.kind === 'error' && matchesRequest(previousAttempt)
+        && Date.now() < previousAttempt.retryAtMs) {
+        if (accountLifetime) previousAttempt.accountCurrentness?.retainReader(accountLifetime);
+        return previousAttempt;
     }
     if (params.reuseFreshReady === true) {
         const cached = readReusableDaemonMergedProjectionCacheEntry({
@@ -387,8 +411,20 @@ export async function loadDaemonMergedProjectionCacheEntry(params: Readonly<{
         return published;
     };
     const requestAbort = new AbortController();
+    const publishFailure = (reason: MachineContributionRegistryProjectionFailureReason, fetchedAtMs: number) => {
+        const previous = currentProjectionCacheEntry(cacheKey);
+        const retryAttempt = params.shareRetryCadence && previous?.kind === 'error' && matchesRequest(previous)
+            ? previous.retryAttempt + 1 : 0;
+        return publish({ kind: 'error', fetchedAtMs, projectionRevision: requestRevision, reason, retryAttempt,
+            retryAtMs: Date.now() + PROJECTION_RETRY_BACKOFF_MS[
+                Math.min(retryAttempt, PROJECTION_RETRY_BACKOFF_MS.length - 1)
+            ]!,
+            ...((previous?.kind === 'ready' || previous?.kind === 'error') && previous.inputs
+                ? { inputs: previous.inputs } : {}),
+        });
+    };
+    const fetchedAtMs = Date.now();
     const request = (async (): Promise<ProjectionCacheEntry | null> => {
-        const fetchedAtMs = Date.now();
         const res = await machineContributionRegistryProjectionDescribe(params.machineId, {
             ...(params.serverId ? { serverId: params.serverId } : {}),
             ...(accountLifetime ? { accountLifetime } : {}),
@@ -397,7 +433,6 @@ export async function loadDaemonMergedProjectionCacheEntry(params: Readonly<{
         if (requestAbort.signal.aborted) return null;
         if (routedAccount && !routedAccount.currentness.isCurrent()) return null;
         if (res.supported !== true) {
-            const previous = currentProjectionCacheEntry(cacheKey);
             // Retiring retained custody is destructive, so only the endpoint
             // that is still current may do it.
             if (
@@ -413,19 +448,9 @@ export async function loadDaemonMergedProjectionCacheEntry(params: Readonly<{
                     targetKey: pluginUiProjectionAdmissionTargetKey(projectionScope),
                 });
             }
-            return publish(res.reason === 'not-supported'
-                ? { kind: 'unsupported', fetchedAtMs, projectionRevision: requestRevision }
-                : {
-                    kind: 'error',
-                    fetchedAtMs,
-                    projectionRevision: requestRevision,
-                    reason: res.reason,
-                    ...(
-                        previous?.kind === 'ready' || previous?.kind === 'error'
-                            ? (previous.inputs ? { inputs: previous.inputs } : {})
-                            : {}
-                    ),
-                });
+            return res.reason === 'not-supported'
+                ? publish({ kind: 'unsupported', fetchedAtMs, projectionRevision: requestRevision })
+                : publishFailure(res.reason, fetchedAtMs);
         }
 
         const adapted = adaptDaemonContributionRegistryProjectionToMergedProjectionInputs(res.projection);
@@ -458,7 +483,13 @@ export async function loadDaemonMergedProjectionCacheEntry(params: Readonly<{
                     : { automationEligibleEvents: res.automationEligibleEvents }),
             }),
         });
-    })();
+    })().catch((error: unknown) => {
+        // Automatic recovery owns failures after transport normalization too.
+        // Explicit one-shot callers retain their ordinary rejection contract.
+        if (params.shareRetryCadence === undefined) throw error;
+        if (requestAbort.signal.aborted || (routedAccount && !routedAccount.currentness.isCurrent())) return null;
+        return publishFailure('error', fetchedAtMs);
+    });
     let waitingReaders = 0;
     let settled = false;
     void request.then(() => { settled = true; }, () => { settled = true; });
