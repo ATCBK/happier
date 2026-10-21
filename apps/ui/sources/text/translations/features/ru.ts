@@ -3060,6 +3060,13 @@ const filesPaneTranslations = { ru: {
             plainText: "Обычный текст",
             fromMachine: ({ machine }) => "с " + machine,
         },
+            infoKind: "Тип",
+            infoLanguage: "Язык",
+            infoLines: "Строки",
+            infoSize: "Размер",
+            infoEncoding: "Кодировка",
+            artifactAudienceUnavailable: "Не удалось прочитать команды этого файла, поэтому его увидите только вы.",
+            artifactShareFailed: ({ team }) => "Сохранено для вас, но поделиться с " + team + " не удалось.",
         intelligence: {
             cardLabel: "Об этом имени",
             languageServer: "языковой сервер",

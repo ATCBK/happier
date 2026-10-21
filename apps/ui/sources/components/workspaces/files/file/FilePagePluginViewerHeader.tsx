@@ -6,9 +6,8 @@ import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScop
 import { useActiveServerAccountScope } from '@/sync/store/hooks';
 import { t } from '@/text';
 import { desktopHostKind } from '@/utils/platform/desktopHost';
-import { FilePageHeader } from './FilePageHeader';
+import { buildFilePageMenuActions, FilePageHeader } from './FilePageHeader';
 import { formatFilePageBytes } from './FilePageStates';
-import { resolveFileMenuItems, type FileMenuIntent } from './fileMenus';
 import { useFilePageSharing } from './useFilePageSharing';
 import { useFilePageDetailsActions } from './useFilePageDetailsActions';
 import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
@@ -55,10 +54,11 @@ export function FilePagePluginViewerHeader(
     sourceFacts: typeof props.sizeBytes === 'number' ? formatFilePageBytes(props.sizeBytes) : '',
   });
   const size = useSurfaceStateSize();
+  const viewerKind = resolveFileViewerKind({ path: props.filePath });
   const fileDetails = useFilePageDetailsActions({ path: props.filePath,
-    kind: resolveFileViewerKind({ path: props.filePath }).kind,
+    kind: viewerKind.kind, kindLabel: t(viewerKind.labelKey as never) as string,
     language: getFileLanguageFromPath(props.filePath), sizeBytes: props.sizeBytes });
-  const menuActions = resolveFileMenuItems(
+  const menuActions = buildFilePageMenuActions(
     {
       machineReachable,
       unavailableReason,
@@ -84,17 +84,8 @@ export function FilePagePluginViewerHeader(
       openInDefaultApp: share.openInDefaultApp,
     },
     size === 'phone' ? 'phone' : 'page',
-  ).map((item) => ({
-    id: item.id,
-    title: item.title ?? t(item.titleKey),
-    testID: `file-menu-${item.id}`,
-    category: item.group,
-    ...(typeof item.state === 'object'
-      ? { disabled: true, subtitle: item.state.disabledReason }
-      : {}),
-    ...(item.id === 'download' && share.busy ? { loading: true } : {}),
-    onSelect: (intent?: FileMenuIntent) => item.run(intent),
-  }));
+    { details: fileDetails, downloadBusy: share.busy },
+  );
   const fileName = props.filePath.split('/').pop() ?? props.filePath;
   return (
     <FilePageHeader
@@ -112,7 +103,6 @@ export function FilePagePluginViewerHeader(
       find={null}
       edit={props.onEdit ? { kind: 'edit', onPress: props.onEdit } : null}
       menuActions={menuActions}
-      fileDetails={fileDetails}
       diffMode="pending"
       onDiffMode={noop}
       hasPendingDelta={false}

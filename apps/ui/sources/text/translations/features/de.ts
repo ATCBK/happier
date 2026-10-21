@@ -3032,6 +3032,13 @@ const filesPaneTranslations = { de: {
             plainText: "Klartext",
             fromMachine: ({ machine }) => "von " + machine,
         },
+            infoKind: "Art",
+            infoLanguage: "Sprache",
+            infoLines: "Zeilen",
+            infoSize: "Größe",
+            infoEncoding: "Kodierung",
+            artifactAudienceUnavailable: "Die Teams dieser Datei konnten nicht gelesen werden, daher siehst nur du es.",
+            artifactShareFailed: ({ team }) => "Für dich gespeichert, aber das Teilen mit " + team + " ist fehlgeschlagen.",
         intelligence: {
             cardLabel: "Über diesen Namen",
             languageServer: "der Sprachserver",

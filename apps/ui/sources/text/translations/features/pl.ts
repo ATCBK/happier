@@ -3051,6 +3051,13 @@ const filesPaneTranslations = { pl: {
             plainText: "Zwykły tekst",
             fromMachine: ({ machine }) => "z " + machine,
         },
+            infoKind: "Rodzaj",
+            infoLanguage: "Język",
+            infoLines: "Wiersze",
+            infoSize: "Rozmiar",
+            infoEncoding: "Kodowanie",
+            artifactAudienceUnavailable: "Nie udało się odczytać zespołów tego pliku, więc zobaczysz go tylko ty.",
+            artifactShareFailed: ({ team }) => "Zapisano dla ciebie, ale nie udało się udostępnić zespołowi " + team + ".",
         intelligence: {
             cardLabel: "O tej nazwie",
             languageServer: "serwer języka",

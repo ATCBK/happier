@@ -3040,6 +3040,13 @@ const filesPaneTranslations = { pt: {
             plainText: "Texto simples",
             fromMachine: ({ machine }) => "de " + machine,
         },
+            infoKind: "Tipo",
+            infoLanguage: "Linguagem",
+            infoLines: "Linhas",
+            infoSize: "Tamanho",
+            infoEncoding: "Codificação",
+            artifactAudienceUnavailable: "Não foi possível ler as equipes deste arquivo, então só você verá.",
+            artifactShareFailed: ({ team }) => "Salvo para você, mas não foi possível compartilhar com " + team + ".",
         intelligence: {
             cardLabel: "Sobre este nome",
             languageServer: "o servidor de linguagem",

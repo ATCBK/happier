@@ -39,7 +39,8 @@ export function SaveFileAsArtifactDialog(props: SaveFileAsArtifactDialogProps) {
     });
     const fileName = props.source.filePath.split(/[\\/]/).filter(Boolean).at(-1) ?? props.source.filePath;
     const status = model.status;
-    const savedId = status.kind === 'saved' ? status.receipt.artifactId : null;
+    // Once the copy exists it can be opened, even when sharing it with the Team then failed or waits for approval.
+    const savedId = model.receipt?.artifactId ?? null;
     const close = () => { model.dismiss(); props.onClose(); };
     const submit = async () => {
         const artifactId = await model.submit();
@@ -48,11 +49,17 @@ export function SaveFileAsArtifactDialog(props: SaveFileAsArtifactDialogProps) {
             props.onOpenArtifact(artifactId);
         }
     };
+    // Who can see it: the source's Team when it has one. While that is read the choice keeps its place with
+    // Only you; when it can't be read the copy stays private and the line says why (never a guessed Team).
     const audience = model.team ? [
         { id: 'private' as const, label: t('files.pane.page.artifactOnlyYou') },
         { id: 'team' as const, label: model.team.name },
+    ] : model.audienceLoading || model.audienceUnavailable ? [
+        { id: 'private' as const, label: t('files.pane.page.artifactOnlyYou') },
     ] : null;
-    const statusLine = status.kind === 'failed' ? t('files.pane.page.artifactFailed')
+    const shareFailed = status.kind === 'failed' && status.receipt !== undefined && model.team !== null;
+    const statusLine = shareFailed && model.team ? t('files.pane.page.artifactShareFailed', { team: model.team.name })
+        : status.kind === 'failed' ? t('files.pane.page.artifactFailed')
         : status.kind === 'approval' ? t('files.pane.page.artifactApproval') : null;
     return (
         <ModalCardFrame
@@ -66,9 +73,15 @@ export function SaveFileAsArtifactDialog(props: SaveFileAsArtifactDialogProps) {
                     {statusLine ? <Text testID="save-as-artifact-status" style={[styles.status, status.kind === 'failed' ? { color: theme.colors.state.danger.foreground } : null]}>{statusLine}</Text> : null}
                     <RoundButton testID="save-as-artifact-cancel" display="inverted" title={t('common.cancel')} onPress={close} />
                     {savedId && props.onOpenArtifact ? (
+                        // The copy exists: Open it; when only sharing failed, sharing again is the one primary.
                         <RoundButton testID="save-as-artifact-open" title={t('files.pane.page.artifactOpen')}
+                            display={shareFailed ? 'inverted' : undefined}
                             onPress={() => { props.onClose(); props.onOpenArtifact?.(savedId); }} />
-                    ) : (
+                    ) : null}
+                    {shareFailed ? (
+                        <RoundButton testID="save-as-artifact-retry-share" title={t('common.retry')}
+                            disabled={!model.canSubmit} loading={model.busy} onPress={() => { void submit(); }} />
+                    ) : savedId && props.onOpenArtifact ? null : (
                         <RoundButton testID="save-as-artifact-save" title={t('files.pane.page.artifactSave')}
                             disabled={!model.canSubmit} loading={model.busy} onPress={() => { void submit(); }} />
                     )}
@@ -102,6 +115,9 @@ export function SaveFileAsArtifactDialog(props: SaveFileAsArtifactDialogProps) {
                             onSelectTab={model.setVisibility}
                             segmentSizing="content"
                         />
+                        {model.audienceUnavailable && !model.team ? (
+                            <Text testID="save-as-artifact-audience-unavailable" style={styles.hint}>{t('files.pane.page.artifactAudienceUnavailable')}</Text>
+                        ) : null}
                     </View>
                 ) : null}
             </View>
@@ -148,6 +164,10 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         justifyContent: 'flex-end',
         gap: theme.space.s8,
+    },
+    hint: {
+        ...Typography.variant('meta'),
+        color: theme.colors.text.secondary,
     },
     status: {
         ...Typography.variant('meta'),

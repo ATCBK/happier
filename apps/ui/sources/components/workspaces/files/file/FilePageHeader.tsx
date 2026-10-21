@@ -23,6 +23,7 @@ import { t } from '@/text';
 
 import { FilePageAttributionFact, FilePageDeletionFact } from './FilePageAttributionFact';
 import { FilePageBreadcrumb } from './FilePageBreadcrumb';
+import { resolveFileMenuItems, type FileMenuContext } from './fileMenus';
 import { resolveFilePageEditControl, type FileDiffMode, type FileDisplayMode, type FilePageEditControl, type FilePageMode, type FilePageModeOption } from './filePageModel';
 
 export { resolveFilePageEditControl, type FilePageEditControl } from './filePageModel';
@@ -37,6 +38,50 @@ export function resolveFilePageModeLabel(mode: FilePageMode): string {
         case 'source': return t('files.pane.page.source');
         case 'changes': return t('files.pane.page.changes');
     }
+}
+
+const BACKGROUND_CHOICES = [
+    { id: 'checkerboard', titleKey: 'files.viewer.backgroundCheckerboard' },
+    { id: 'light', titleKey: 'files.viewer.backgroundLight' },
+    { id: 'dark', titleKey: 'files.viewer.backgroundDark' },
+] as const;
+
+/**
+ * The File page's `⋯` rows from the one item list (`fileMenus.ts`), for the built-in and plugin-viewer headers alike:
+ * Background is a chooser (Checkerboard · Light · Dark, remembered per kind on the device, FV4s), Copy path
+ * becomes Copy absolute path while Alt is held on desktop, and the phone lists the absolute path as its own row.
+ */
+export function buildFilePageMenuActions(context: FileMenuContext, surface: 'page' | 'phone', extras: Readonly<{
+    details?: FilePageDetailsModel | null;
+    wrapChecked?: boolean;
+    downloadBusy?: boolean;
+}> = {}): PageHeaderMenuAction[] {
+    const background = extras.details?.background ?? null;
+    return resolveFileMenuItems(context, surface).flatMap((item): PageHeaderMenuAction[] => {
+        if (item.id === 'background' && !background) return [];
+        return [{
+            id: item.id,
+            title: item.title ?? t(item.titleKey),
+            testID: `file-menu-${item.id}`,
+            category: item.group,
+            ...(item.destructive ? { destructive: true } : {}),
+            ...(item.id === 'wrap' && extras.wrapChecked !== undefined ? { checked: extras.wrapChecked } : {}),
+            ...(typeof item.state === 'object' ? { disabled: true, subtitle: item.state.disabledReason } : {}),
+            ...(item.id === 'download' && extras.downloadBusy ? { loading: true } : {}),
+            ...(item.id === 'copyPath' && surface === 'page' && context.platform !== 'ios' && context.platform !== 'android'
+                ? { alternateTitle: t('files.pane.menu.copyAbsolutePath') } : {}),
+            ...(item.id === 'background' && background ? {
+                children: BACKGROUND_CHOICES.map((choice) => ({
+                    id: `background-${choice.id}`,
+                    title: t(choice.titleKey),
+                    testID: `file-menu-background-${choice.id}`,
+                    checked: background.value === choice.id,
+                    onSelect: () => background.onSelect(choice.id),
+                })),
+            } : {}),
+            onSelect: (intent) => item.run(intent),
+        }];
+    });
 }
 
 export type FilePageHeaderProps = Readonly<{
@@ -67,10 +112,10 @@ export type FilePageHeaderProps = Readonly<{
     onDisplayMode: (mode: FileDisplayMode) => void;
     /** Find in this file (the bar is open while `active`). */
     find?: Readonly<{ onOpen: () => void; active?: boolean }> | null;
+    /** Media kinds: "View full screen" opens the Media stage, for people who don't click the picture (lab FV4). */
+    expand?: Readonly<{ onOpen: () => void }> | null;
     /** The `⋯` menu, already resolved from the page's one item list (`fileMenus.ts`). */
     menuActions?: readonly PageHeaderMenuAction[];
-    /** Page composition consumes the Info/Background state reached from the shared menu. */
-    fileDetails?: FilePageDetailsModel;
     /** The phone page carries its view controls in a bottom toolbar instead (`FilePageToolbar`). */
     toolbarBelow?: boolean;
     diffMode: FileDiffMode;
@@ -148,14 +193,16 @@ export function FilePageHeader(props: FilePageHeaderProps) {
     const modeSegments = React.useMemo(() => (props.modes ?? []).map((option) => ({
         id: option.displayMode, label: resolveFilePageModeLabel(option.id),
     })), [props.modes]);
-    const showModeSegment = !editing && modeSegments.length > 1;
+    // Edit is not a reading view (P4 U2): while editing, the reading views stay reachable with none of them
+    // current, so View (even alone) or Changes leaves the editor and keeps the draft (B1-PE-04).
+    const showModeSegment = editing ? modeSegments.length > 0 : modeSegments.length > 1;
     const modeSegment = showModeSegment ? (
-        <SegmentedTabBar
+        <SegmentedTabBar<FileDisplayMode | 'edit'>
             testIDPrefix="file-details-view-mode"
             accessibilityLabel={t('detailsSurface.file.viewLabel')}
             tabs={modeSegments}
-            activeTabId={displayMode}
-            onSelectTab={(mode) => onDisplayMode(mode)}
+            activeTabId={editing ? 'edit' : displayMode}
+            onSelectTab={(mode) => { if (mode !== 'edit') onDisplayMode(mode); }}
             segmentSizing="content"
             compact
         />
@@ -184,10 +231,24 @@ export function FilePageHeader(props: FilePageHeaderProps) {
         />
     ) : null;
 
+    const expandButton = props.expand && !toolbarBelow ? (
+        <IconButton
+            testID="file-header-expand"
+            variant="plain"
+            size={30}
+            iconSize={iconSize}
+            iconName="arrows-out"
+            accessibilityRole="button"
+            accessibilityLabel={t('files.viewer.viewFullScreen')}
+            tooltip={t('files.viewer.viewFullScreen')}
+            onPress={props.expand.onOpen}
+        />
+    ) : null;
+
     // Quiet controls in the identity band: the view choice, then Find (lab FV1); review tools in Changes.
     const diffPresentationToggle = Platform.OS === 'web' && isDiffDisplay;
     const commentToggle = reviewCommentsEnabled === true && Boolean(onToggleCommentMode);
-    const hasBandControls = Boolean((!toolbarBelow && (modeSegment || findButton)) || statusNode || diffPresentationToggle || commentToggle);
+    const hasBandControls = Boolean((!toolbarBelow && (modeSegment || findButton)) || expandButton || statusNode || diffPresentationToggle || commentToggle);
     const bandControls = hasBandControls ? (
         <View testID="file-details-view-actions" style={styles.bandControls}>
             {!toolbarBelow ? modeSegment : null}
@@ -209,6 +270,7 @@ export function FilePageHeader(props: FilePageHeaderProps) {
                 />
             ) : null}
             {!toolbarBelow ? findButton : null}
+            {expandButton}
         </View>
     ) : undefined;
 

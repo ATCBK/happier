@@ -3040,6 +3040,13 @@ const filesPaneTranslations = { ca: {
             plainText: "Text pla",
             fromMachine: ({ machine }) => "des de " + machine,
         },
+            infoKind: "Tipus",
+            infoLanguage: "Llenguatge",
+            infoLines: "Línies",
+            infoSize: "Mida",
+            infoEncoding: "Codificació",
+            artifactAudienceUnavailable: "No s’han pogut llegir els equips d’aquest fitxer, així que només tu el veuràs.",
+            artifactShareFailed: ({ team }) => "Desat per a tu, però no s’ha pogut compartir amb " + team + ".",
         intelligence: {
             cardLabel: "Sobre aquest nom",
             languageServer: "el servidor de llenguatge",

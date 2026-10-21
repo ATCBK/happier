@@ -2,12 +2,12 @@ import * as React from 'react';
 import { Platform, ScrollView, View } from 'react-native';
 import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 
-import { FilePageHeader, FilePageToolbar } from '@/components/workspaces/files/file/FilePageHeader';
+import { buildFilePageMenuActions, FilePageHeader, FilePageToolbar } from '@/components/workspaces/files/file/FilePageHeader';
 import { FilePagePluginViewerHeader } from '@/components/workspaces/files/file/FilePagePluginViewerHeader';
 import { resolveFilePageEditControl } from '@/components/workspaces/files/file/filePageModel';
 import { FileCodeSkeleton, FilePartialFooter, FileReadingLine, FileTooLargeState, formatFilePageBytes } from '@/components/workspaces/files/file/FilePageStates';
 import type { FileDisplayMode } from '@/components/workspaces/files/file/filePageModel';
-import { resolveFileMenuItems, type FileMenuContext } from '@/components/workspaces/files/file/fileMenus';
+import type { FileMenuContext } from '@/components/workspaces/files/file/fileMenus';
 import { useFilePageCodeIntelligence } from '@/components/workspaces/files/intelligence/useFilePageCodeIntelligence';
 import { useFilePageSharing } from '@/components/workspaces/files/file/useFilePageSharing';
 import { useFilePageDetailsActions } from '@/components/workspaces/files/file/useFilePageDetailsActions';
@@ -18,7 +18,7 @@ import { desktopHostKind } from '@/utils/platform/desktopHost';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { useWorkspaceFileLiveMoment } from './workspaceFileDetails/useWorkspaceFileLiveMoment';
 import { FileErrorState, FileLoadingState } from '@/components/workspaces/files/file/FileScreenState';
-import { FileViewerBody } from '@/components/workspaces/files/file/FileViewerBody';
+import { FileViewerBody, type FileViewerStageHandle } from '@/components/workspaces/files/file/FileViewerBody';
 import type { ImageWellInfo } from '@/components/ui/media/ImageWell';
 import { CheckoutUnreachableState, useCheckoutReachability } from '@/components/workspaces/reachability/checkoutReachability';
 import { FileContentPanel, resolveFileCodeGeometry } from '@/components/workspaces/files/file/FileContentPanel';
@@ -1215,7 +1215,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
             checkoutReachability.machineName ? t('files.pane.page.fromMachine', { machine: checkoutReachability.machineName }) : null,
         ].filter(Boolean).join(' · '),
     });
-    const fileDetails = useFilePageDetailsActions({ path: filePath, kind: fileViewer.kind, language, content: fileContent });
+    const fileDetails = useFilePageDetailsActions({ path: filePath, kind: fileViewer.kind, kindLabel: t(fileViewer.labelKey as never) as string, language, content: fileContent });
     const effectiveWrapLines = fileView.wrap ?? wrapLinesInDiffs;
     const isBinaryContent = fileContent?.isBinary === true;
     const onChangesScopeChange = React.useCallback((changesScope: FileChangesScope) => patchFileView({ changesScope }), [patchFileView]);
@@ -1301,17 +1301,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         openInDefaultApp: share.openInDefaultApp,
         commands: codeIntelligence.menuCommands,
     };
-    const menuActions = resolveFileMenuItems(menuContext, phonePage ? 'phone' : 'page').map((item) => ({
-        id: item.id,
-        title: item.title ?? t(item.titleKey),
-        testID: `file-menu-${item.id}`,
-        category: item.group,
-        ...(item.destructive ? { destructive: true } : {}),
-        ...(item.id === 'wrap' ? { checked: effectiveWrapLines } : {}),
-        ...(typeof item.state === 'object' ? { disabled: true, subtitle: item.state.disabledReason } : {}),
-        ...(item.id === 'download' && share.busy ? { loading: true } : {}),
-        onSelect: (intent?: import('../file/fileMenus').FileMenuIntent) => item.run(intent),
-    }));
+    const menuActions = buildFilePageMenuActions(menuContext, phonePage ? 'phone' : 'page',
+        { details: fileDetails, wrapChecked: effectiveWrapLines, downloadBusy: share.busy });
     const pageEditControl = resolveFilePageEditControl({
         fileEditorEnabled: editorSurfaceEnabled && !isBinaryContent && fileEntry?.kind !== 'deleted' && headerModel.editUnavailableReason === null,
         isEditingFile: isEditorSelected,
@@ -1384,6 +1375,11 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     const isBinaryFile = fileContent?.isBinary === true;
     const [imageInfo, setImageInfo] = React.useState<Readonly<{ path: string; info: ImageWellInfo }> | null>(null);
     const onImageInfo = React.useCallback((info: ImageWellInfo) => setImageInfo({ path: filePath, info }), [filePath]);
+    // The non-code body (image, SVG preview, PDF, media, binary identity) and its "View full screen" control.
+    const showsViewerBody = (displayMode === 'file' && isBinaryFile) || (displayMode === 'markdown' && fileViewer.kind === 'svg' && heldText !== null);
+    const viewerStageRef = React.useRef<FileViewerStageHandle | null>(null);
+    const stageViewable = showsViewerBody && (fileViewer.kind === 'image' || fileViewer.kind === 'svg' || fileViewer.kind === 'pdf' || fileViewer.kind === 'video');
+    const pageExpand = React.useMemo(() => stageViewable ? { onOpen: () => viewerStageRef.current?.open() } : null, [stageViewable]);
     const deleted = fileEntry?.kind === 'deleted';
     // The header's facts (details lab 2): how the file changed and by how much, or, for an unchanged
     // file, that nothing changed and how long it is; a partial view says which part it holds.
@@ -1519,7 +1515,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                     find={pageFind}
                     edit={pageEditControl}
                     menuActions={menuActions}
-                    fileDetails={fileDetails}
+                    expand={pageExpand}
                     toolbarBelow={phoneToolbar}
                     displayMode={displayMode}
                     onDisplayMode={onDisplayMode}
@@ -1660,7 +1656,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                             savedText={fileContent?.isBinary ? undefined : fileContent?.content} sessionId={sessionId || null} active={isActive} />
                     ) : null}
                     </>
-                ) : (displayMode === 'file' && isBinaryFile) || (displayMode === 'markdown' && fileViewer.kind === 'svg' && heldText !== null) ? (
+                ) : showsViewerBody ? (
                     <FileViewerBody
                         viewer={fileViewer}
                         title={filePath.split(/[\\/]/).at(-1) || filePath}
@@ -1678,6 +1674,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                 ) : displayMode === 'diff' && scope ? (
                     <FileChangesSection review={changesReview} scope={scope} filePath={filePath}
                         keyboardActive={isActive} liveChangeKind={fileEntry?.kind ?? null}
+                        stageRef={viewerStageRef}
                         ask={{ scopeId: props.scopeId, sessionId: sessionId || null, active: isActive }}>
                         {(surface) => renderFindPanel(surface)}
                     </FileChangesSection>

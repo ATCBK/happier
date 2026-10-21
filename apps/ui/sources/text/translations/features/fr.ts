@@ -3038,6 +3038,13 @@ const filesPaneTranslations = { fr: {
             plainText: "Texte brut",
             fromMachine: ({ machine }) => "depuis " + machine,
         },
+            infoKind: "Type",
+            infoLanguage: "Langage",
+            infoLines: "Lignes",
+            infoSize: "Taille",
+            infoEncoding: "Encodage",
+            artifactAudienceUnavailable: "Impossible de lire les équipes de ce fichier, vous seul le verrez.",
+            artifactShareFailed: ({ team }) => "Enregistré pour vous, mais le partage avec " + team + " a échoué.",
         intelligence: {
             cardLabel: "À propos de ce nom",
             languageServer: "le serveur de langage",

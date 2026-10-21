@@ -3033,6 +3033,13 @@ const filesPaneTranslations = { 'zh-Hant': {
             plainText: "純文字",
             fromMachine: ({ machine }) => "來自 " + machine,
         },
+            infoKind: "類型",
+            infoLanguage: "語言",
+            infoLines: "行數",
+            infoSize: "大小",
+            infoEncoding: "編碼",
+            artifactAudienceUnavailable: "無法讀取此檔案的團隊，因此只有你能看到。",
+            artifactShareFailed: ({ team }) => "已為你儲存，但無法與 " + team + " 共用。",
         intelligence: {
             cardLabel: "關於此名稱",
             languageServer: "語言伺服器",

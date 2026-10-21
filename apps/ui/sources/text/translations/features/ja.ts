@@ -3038,6 +3038,13 @@ const filesPaneTranslations = { ja: {
             plainText: "プレーンテキスト",
             fromMachine: ({ machine }) => machine + " から",
         },
+            infoKind: "種類",
+            infoLanguage: "言語",
+            infoLines: "行数",
+            infoSize: "サイズ",
+            infoEncoding: "エンコーディング",
+            artifactAudienceUnavailable: "このファイルのチームを読み込めなかったため、あなただけに表示されます。",
+            artifactShareFailed: ({ team }) => "あなた用に保存しましたが、" + team + " と共有できませんでした。",
         intelligence: {
             cardLabel: "この名前について",
             languageServer: "言語サーバー",

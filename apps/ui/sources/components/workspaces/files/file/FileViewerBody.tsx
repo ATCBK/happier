@@ -18,6 +18,9 @@ import { t } from '@/text';
 import type { MediaPlayerBodyProps } from './MediaPlayerBody';
 import type { PdfViewerProps } from '@/components/ui/media/pdf/PdfViewerStates';
 
+/** The page's "View full screen" control opens the same stage a press on the picture does. */
+export type FileViewerStageHandle = Readonly<{ open: () => void }>;
+
 export type FileViewerBodyProps = Readonly<{
   /** From `resolveFileViewerKind` for this file version. */
   viewer: FileViewerClass;
@@ -39,6 +42,8 @@ export type FileViewerBodyProps = Readonly<{
   /** Hands the file to the viewer chooser's built-in text viewer (binary kinds). */
   onOpenAsText?: () => void;
   onImageInfo?: (info: ImageWellInfo) => void;
+  /** Set while this kind can open in the Media stage (image, SVG, PDF, video). */
+  stageRef?: React.Ref<FileViewerStageHandle | null>;
   pdf?: Readonly<{
     zoom: PdfZoom;
     onZoomChange: (zoom: PdfZoom) => void;
@@ -117,7 +122,9 @@ export function FileViewerBody(props: FileViewerBodyProps) {
   const { viewer } = props;
   const stage = useMediaStage();
   const stageKind =
-    viewer.kind === 'image' || viewer.kind === 'svg' ? viewer.kind : null;
+    viewer.kind === 'image' || viewer.kind === 'svg' || viewer.kind === 'pdf' || viewer.kind === 'video'
+      ? viewer.kind
+      : null;
   const openInStage = React.useMemo(() => {
     if (props.expandable === false || !stageKind) return undefined;
     return () =>
@@ -128,7 +135,8 @@ export function FileViewerBody(props: FileViewerBodyProps) {
             title: props.title,
             source: props.source,
             sizeBytes: props.sizeBytes ?? null,
-            originRef,
+            // Documents have no picture rect to fly from; the stage fades them in.
+            ...(stageKind === 'image' || stageKind === 'svg' ? { originRef } : {}),
             ...(props.openFile ? { openFile: props.openFile } : {}),
           },
         ],
@@ -143,6 +151,7 @@ export function FileViewerBody(props: FileViewerBodyProps) {
     props.title,
     stageKind,
   ]);
+  React.useImperativeHandle<FileViewerStageHandle | null>(props.stageRef, () => (openInStage ? { open: openInStage } : null), [openInStage]);
 
   switch (viewer.kind) {
     case 'image':

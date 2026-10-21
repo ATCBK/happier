@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -10,6 +10,8 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { t } from '@/text';
+
+export type PageHeaderMenuIntent = Readonly<{ altKey?: boolean }>;
 
 /** One rare operation in an entity page's `⋯` menu. */
 export type PageHeaderMenuAction = Readonly<{
@@ -23,7 +25,10 @@ export type PageHeaderMenuAction = Readonly<{
     loading?: boolean;
     /** A policy the menu toggles ("Link new sessions automatically"): shows its current state as a check. */
     checked?: boolean;
-    onSelect: () => void | Promise<void>;
+    /** `altKey`: the row was chosen with Alt / Option held (desktop), for rows whose alternate does more. */
+    onSelect: (intent?: PageHeaderMenuIntent) => void | Promise<void>;
+    /** The row's title while Alt / Option is held on desktop ("Copy absolute path"): the alternate is visible, not hidden. */
+    alternateTitle?: string;
     /** A chooser one level in ("Move to folder" → its folders): the row opens these instead of selecting itself. */
     children?: readonly PageHeaderMenuAction[];
     /** Why a disabled row can't run now ("MacBook Pro isn't answering"), under its title. */
@@ -54,12 +59,14 @@ export const PageHeaderMenu = React.memo(function PageHeaderMenu(props: Readonly
     const { theme } = useUnistyles();
     const [open, setOpen] = React.useState(props.openRequested === true);
     const content = props.content;
+    const hasAlternates = props.actions.some((action) => action.alternateTitle !== undefined);
+    const altHeld = useAltHeldWhileOpen(open && hasAlternates);
     React.useEffect(() => {
         if (props.openRequested) setOpen(true);
     }, [props.openRequested]);
     const toItem = React.useCallback((action: PageHeaderMenuAction): DropdownMenuItem => ({
         id: action.id,
-        title: action.title,
+        title: altHeld && action.alternateTitle !== undefined ? action.alternateTitle : action.title,
         ...(action.testID ? { testID: action.testID } : {}),
         ...(action.disabled || action.loading ? { disabled: true } : {}),
         ...(action.destructive ? { destructive: true } : {}),
@@ -74,7 +81,7 @@ export const PageHeaderMenu = React.memo(function PageHeaderMenu(props: Readonly
         ...(action.children && action.children.length > 0
             ? { submenu: { items: action.children.map((child) => toItem(child)), showCategoryTitles: false } }
             : {}),
-    }), [theme.colors.text.secondary]);
+    }), [altHeld, theme.colors.text.secondary]);
     const items = React.useMemo(() => props.actions.map(toItem), [props.actions, toItem]);
     return (
         <DropdownMenu
@@ -90,7 +97,7 @@ export const PageHeaderMenu = React.memo(function PageHeaderMenu(props: Readonly
             onSelect={(id) => {
                 setOpen(false);
                 return props.actions.flatMap((action) => [action, ...(action.children ?? [])])
-                    .find((action) => action.id === id)?.onSelect();
+                    .find((action) => action.id === id)?.onSelect(altHeld ? { altKey: true } : undefined);
             }}
             placement="bottom"
             popoverAnchorAlign="end"
@@ -115,6 +122,28 @@ export const PageHeaderMenu = React.memo(function PageHeaderMenu(props: Readonly
         />
     );
 });
+
+/**
+ * Whether Alt / Option is held while a menu with alternates is open (web and desktop only), so the menu shows
+ * and runs the alternate for keyboard and pointer choices alike, as desktop menus do.
+ */
+function useAltHeldWhileOpen(active: boolean): boolean {
+    const [held, setHeld] = React.useState(false);
+    React.useEffect(() => {
+        if (!active || Platform.OS !== 'web' || typeof window === 'undefined') { setHeld(false); return; }
+        // Pointer events carry the modifier too, so Alt held from before the menu opened counts on the next move.
+        const update = (event: KeyboardEvent | PointerEvent) => setHeld(event.altKey);
+        const release = () => setHeld(false);
+        const events = ['keydown', 'keyup', 'pointermove', 'pointerdown'] as const;
+        for (const name of events) window.addEventListener(name, update, true);
+        window.addEventListener('blur', release);
+        return () => {
+            for (const name of events) window.removeEventListener(name, update, true);
+            window.removeEventListener('blur', release);
+        };
+    }, [active]);
+    return held;
+}
 
 /**
  * An entity page's one state control ("Enabled"), placed in `PageHeader` `actions` beside the `⋯` menu:
