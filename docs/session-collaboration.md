@@ -431,6 +431,14 @@ the flag lets the presenting surface group or hide unreadable choices without
 comparing translated strings or retaining a second title store. It is display
 availability, never permission to invite or disclose content.
 
+Discussion speakers, committed Session mentions, roster rows and invite candidates
+reuse that Home-qualified Session title owner. In current development source,
+an admitted Account-owner name remains available while shared Session-key
+hydration is deferred; an opened but unnamed owner view uses the canonical
+untitled fallback. A different Home, recipient-only projection or unopenable
+owner envelope cannot supply the private name. This does not open shared Session
+content, fetch a second title inventory or grant Discussion viewers Session access.
+
 Operational `discussion.invite` accepts a SessionTarget in `participant.sessionId`;
 `discussion.create` accepts independently-one SessionTarget operands in Session entries
 of `participants`. The shared Action SessionTarget front door resolves these before

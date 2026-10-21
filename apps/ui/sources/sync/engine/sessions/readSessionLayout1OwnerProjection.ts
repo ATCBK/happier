@@ -93,20 +93,23 @@ export type SessionLayout1OwnerMetadataRead =
     | Extract<SessionLayout1OwnerProjection, { kind: 'unavailable' }>;
 
 /**
- * The owner-private visibility fact that remains usable when the Session DEK is unavailable.
+ * Owner-private identity/visibility that remains usable when the Session DEK is unavailable.
  *
  * `systemSessionV1` lives in the Account-encrypted owner envelope, not in Session-encrypted shared
  * metadata. An authenticated owner can therefore still classify a locked Session without making
  * the fact Home-readable or publishing it to recipients. Absence in a successfully opened strict
- * owner envelope proves this is not a hidden system Session.
+ * owner envelope proves this is not a hidden system Session. Its explicit name has the same
+ * Account custody: displaying it does not require opening Session-encrypted shared content.
+ * Other private workspace/runtime fields stay out of this locked projection.
  */
 export function projectSessionLayout1LockedOwnerVisibility(
     ownerMetadataRead: SessionLayout1OwnerMetadataRead | null,
 ): Metadata | null {
     if (ownerMetadataRead?.kind !== 'owner') return null;
     const systemSessionV1 = ownerMetadataRead.ownerMetadata.system?.systemSessionV1;
+    const name = ownerMetadataRead.ownerMetadata.workspace?.name;
     const parsed = MetadataSchema.safeParse(
-        systemSessionV1 ? { systemSessionV1 } : {},
+        { ...(systemSessionV1 ? { systemSessionV1 } : {}), ...(name === undefined ? {} : { name }) },
     );
     return parsed.success ? parsed.data : null;
 }

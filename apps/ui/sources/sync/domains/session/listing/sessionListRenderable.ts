@@ -532,10 +532,10 @@ export function buildSessionListRenderableFromSession(
         : null;
     const currentMetadata = readSessionListRenderableMetadataComparison(renderableSourceMetadata, previousMetadata);
     // An undecided Session can still carry proved owner visibility. Preserve readable
-    // row details until shared content is demanded, while applying the current hidden bit.
+    // row details until shared content is demanded, while applying current owner identity/visibility.
     const nextMetadata: ReturnType<typeof readSessionListRenderableMetadataComparisonFromRenderable> = preserveMetadata
         ? ownerProjection && metadataUndecided && currentMetadata && previousMetadata
-            ? { ...previousMetadata, hiddenSystemSession: currentMetadata.hiddenSystemSession }
+            ? { ...previousMetadata, name: currentMetadata.name, hiddenSystemSession: currentMetadata.hiddenSystemSession }
             : previousMetadata
         : currentMetadata;
     const titleFallbackMessages = aggregate

@@ -1707,6 +1707,14 @@ server persistence layer.
   recursively while validating known fields; creation and mutation remain strict.
   The reversible Bot marker alone is recipient-safe. Its birth fact, memory choice
   and tool-call view override remain inside the Account-scoped owner envelope.
+- The UI may name a layout-1 Session from its successfully opened Account-owner
+  envelope before opening the separate Session DEK. Its existing deferred-row
+  projection retains only the explicit owner name and system visibility fact,
+  not workspace paths, runtime settings or shared content. A successfully opened
+  empty owner view uses the ordinary untitled name. Wrong Account material or
+  recipient access does not produce that owner projection and retains the
+  existing unavailable/locked naming; title readability never marks shared
+  content readable or admits an operation.
 - Fresh layout-1 creation and owner-driven layout-0 migration activate only after the
   complete compatibility-declared Session/CPX writer, reader, tuple-CAS, and recipient
   projection vertical is green. Schema presence alone does not activate it.
