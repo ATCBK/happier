@@ -4,7 +4,7 @@ Happier ships binary installers. First-party runtime paths must work on machines
 
 ## Native language-server acquisition (0.3 development source)
 
-The bundled `lang-typescript` plugin declares native TypeScript 7.0.2 as a
+The bundled `lang-typescript` plugin declares native TypeScript 7.1.0-beta as a
 managed-first internal prerequisite through the existing `managedDependencies`
 family. Each Linux, macOS and Windows x64/arm64 npm platform archive has a pinned
 SHA-256 digest. The pinned-archive installer verifies that digest and retains the

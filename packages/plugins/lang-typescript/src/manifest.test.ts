@@ -21,7 +21,7 @@ describe('managed TypeScript language contribution', () => {
     const archive = dependency?.sources.find(source => source.kind === 'pinnedArchive');
     expect(archive?.kind).toBe('pinnedArchive');
     if (archive?.kind !== 'pinnedArchive') return;
-    expect(archive.version).toBe('7.0.2');
+    expect(archive.version).toBe('7.1.0-beta');
     expect(Object.keys(archive.assetsByPlatform).sort()).toEqual([
       'darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64', 'win32-arm64', 'win32-x64',
     ]);

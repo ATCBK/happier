@@ -1,7 +1,7 @@
 import { definePlugin } from '@happier-dev/plugin-sdk';
 
 // The platform archives retain the adjacent standard-library declarations.
-// Digests and layout were measured against the 7.0.2 npm platform archives.
+// Digests and layout were measured against the 7.1.0-beta npm platform archives.
 export const LANG_TYPESCRIPT_PLUGIN = definePlugin({
   id: 'happier.language.typescript', version: '0.0.0', displayName: 'TypeScript',
   description: 'TypeScript and JavaScript language intelligence on the workspace Machine.',
@@ -21,36 +21,36 @@ export const LANG_TYPESCRIPT_PLUGIN = definePlugin({
     'typescript-native': {
       title: 'TypeScript language server', executable: 'tsc',
       platforms: ['linux', 'macos', 'windows'], architectures: ['x64', 'arm64'],
-      sources: [{ kind: 'pinnedArchive', installId: 'dep.typescript-native', version: '7.0.2', assetsByPlatform: {
+      sources: [{ kind: 'pinnedArchive', installId: 'dep.typescript-native', version: '7.1.0-beta', assetsByPlatform: {
         'linux-x64': {
-          archiveUrl: 'https://registry.npmjs.org/@typescript/typescript-linux-x64/-/typescript-linux-x64-7.0.2.tgz',
-          sha256: '7ecad6f67377e831856367ab062ef394f21506a611405bf8ac0ff039348637d3',
-          sizeBytes: 9669334, executableSubpath: 'package/lib/tsc',
+          archiveUrl: 'https://registry.npmjs.org/@typescript/typescript-linux-x64/-/typescript-linux-x64-7.1.0-beta.tgz',
+          sha256: '59128685cb55f44c9e6644ef5edb3cb321618d9547b4ee94c3038598ffd51855',
+          sizeBytes: 10175135, executableSubpath: 'package/lib/tsc',
         },
         'linux-arm64': {
-          archiveUrl: 'https://registry.npmjs.org/@typescript/typescript-linux-arm64/-/typescript-linux-arm64-7.0.2.tgz',
-          sha256: 'c83d931ac9dd7549cde6e71246aa9d6a9812843023df3e277fe3b5dcf41dd0ea',
-          sizeBytes: 8900516, executableSubpath: 'package/lib/tsc',
+          archiveUrl: 'https://registry.npmjs.org/@typescript/typescript-linux-arm64/-/typescript-linux-arm64-7.1.0-beta.tgz',
+          sha256: 'd4a8b647be7417178be3ba5f1366cd83976af9b2ab5beb8755e2f9cfc00ee540',
+          sizeBytes: 9375190, executableSubpath: 'package/lib/tsc',
         },
         'darwin-x64': {
-          archiveUrl: 'https://registry.npmjs.org/@typescript/typescript-darwin-x64/-/typescript-darwin-x64-7.0.2.tgz',
-          sha256: 'eba158cb54050f723d5ff781438f33de5640054440bb4f2bd170cfe9bc2eb551',
-          sizeBytes: 10057523, executableSubpath: 'package/lib/tsc',
+          archiveUrl: 'https://registry.npmjs.org/@typescript/typescript-darwin-x64/-/typescript-darwin-x64-7.1.0-beta.tgz',
+          sha256: '7123fd034c5a1d019f294b34d155f9ba0fd1d39aa671af61c34e978a955ec989',
+          sizeBytes: 10586661, executableSubpath: 'package/lib/tsc',
         },
         'darwin-arm64': {
-          archiveUrl: 'https://registry.npmjs.org/@typescript/typescript-darwin-arm64/-/typescript-darwin-arm64-7.0.2.tgz',
-          sha256: '902e2fe1cf0799198ef902c6b8c310a450fef629a6baba41d45641ef75c04ebd',
-          sizeBytes: 9270373, executableSubpath: 'package/lib/tsc',
+          archiveUrl: 'https://registry.npmjs.org/@typescript/typescript-darwin-arm64/-/typescript-darwin-arm64-7.1.0-beta.tgz',
+          sha256: 'ec13640298a303ee474e83d9160e62e931da5cda8b6e188b2c4d342867fbd650',
+          sizeBytes: 9776273, executableSubpath: 'package/lib/tsc',
         },
         'win32-x64': {
-          archiveUrl: 'https://registry.npmjs.org/@typescript/typescript-win32-x64/-/typescript-win32-x64-7.0.2.tgz',
-          sha256: '61fc4e141d2bc687db580e71bbfa63b9c209f0310645d82ca1b457eb3a24fd19',
-          sizeBytes: 9776626, executableSubpath: 'package/lib/tsc.exe',
+          archiveUrl: 'https://registry.npmjs.org/@typescript/typescript-win32-x64/-/typescript-win32-x64-7.1.0-beta.tgz',
+          sha256: 'f918f45b0ed148768015b437aeecf1b6b9c3a3d390256d2bb37299f8b5e05884',
+          sizeBytes: 10283326, executableSubpath: 'package/lib/tsc.exe',
         },
         'win32-arm64': {
-          archiveUrl: 'https://registry.npmjs.org/@typescript/typescript-win32-arm64/-/typescript-win32-arm64-7.0.2.tgz',
-          sha256: '0a73534e6ee50cdbb2a29ac48657ca0ad13cf0f424cf63808e4df7baeb87b8be',
-          sizeBytes: 8900840, executableSubpath: 'package/lib/tsc.exe',
+          archiveUrl: 'https://registry.npmjs.org/@typescript/typescript-win32-arm64/-/typescript-win32-arm64-7.1.0-beta.tgz',
+          sha256: '9fd1a4e28f9d98a5c7aa6349c17c215345a784e86f91f59c6b1d129599a25e5e',
+          sizeBytes: 9385247, executableSubpath: 'package/lib/tsc.exe',
         },
       } }],
     },
