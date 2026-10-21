@@ -31,14 +31,28 @@ const shared = { safety: 'safe', requiredAuthority: 'account_automation', execut
 export const INTERNAL_TASK_ACTION_SPECS = [
   { ...shared, id: 'tasks.internal.list', title: 'List personal Happier tasks', description: 'Read the authenticated Account task records and current ordering.',
     sideEffectClass: 'read', approval: { result: 'none' }, inputSchema: InternalTaskListInputSchema, outputSchema: InternalTaskListOutputSchema,
+    inputHints: { fields: [] },
     bindings: { mcpToolName: 'tasks_internal_list' }, cli: { acceptsServerId: true, commands: [{ path: ['tasks', 'internal', 'list'], visibility: 'canonical' }] } },
   { ...shared, id: 'tasks.internal.create', title: 'Create personal Happier task', description: 'Create one task in the authenticated Account. An uncertain result must not be replayed blindly.',
     sideEffectClass: 'write', approval: { result: 'required' }, inputSchema: InternalTaskCreateInputSchema, outputSchema: InternalTaskMutationOutputSchema,
+    inputHints: { fields: [
+      { path: 'fields', title: 'Task fields', widget: 'json', required: true },
+    ] },
     bindings: { mcpToolName: 'tasks_internal_create' }, cli: { acceptsServerId: true, commands: [{ path: ['tasks', 'internal', 'create'], visibility: 'canonical' }] } },
   { ...shared, id: 'tasks.internal.edit', title: 'Edit personal Happier task', description: 'Apply supported fields to the current task, preserving concurrent fields and Session links.',
     sideEffectClass: 'write', approval: { result: 'required' }, inputSchema: InternalTaskEditInputSchema, outputSchema: InternalTaskMutationOutputSchema,
+    inputHints: { fields: [
+      { path: 'scope', title: 'Task Home and Account', widget: 'json', required: true },
+      { path: 'taskId', title: 'Task', widget: 'text', required: true },
+      { path: 'fields', title: 'Fields to change', widget: 'json', required: true },
+    ] },
     bindings: { mcpToolName: 'tasks_internal_edit' }, cli: { acceptsServerId: true, commands: [{ path: ['tasks', 'internal', 'edit'], visibility: 'canonical' }] } },
   { ...shared, id: 'tasks.internal.transition', title: 'Change personal Happier task state', description: 'Apply the task state through its canonical completion and ordering owner.',
     sideEffectClass: 'write', approval: { result: 'required' }, inputSchema: InternalTaskTransitionInputSchema, outputSchema: InternalTaskMutationOutputSchema,
+    inputHints: { fields: [
+      { path: 'scope', title: 'Task Home and Account', widget: 'json', required: true },
+      { path: 'taskId', title: 'Task', widget: 'text', required: true },
+      { path: 'state', title: 'State', widget: 'select', required: true, options: [{ value: 'backlog', label: 'Backlog' }, { value: 'unstarted', label: 'Unstarted' }, { value: 'started', label: 'Started' }, { value: 'completed', label: 'Completed' }, { value: 'canceled', label: 'Canceled' }] },
+    ] },
     bindings: { mcpToolName: 'tasks_internal_transition' }, cli: { acceptsServerId: true, commands: [{ path: ['tasks', 'internal', 'transition'], visibility: 'canonical' }] } },
 ] as const satisfies readonly PreNormalizedActionSpec[];

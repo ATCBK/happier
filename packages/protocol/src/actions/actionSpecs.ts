@@ -8910,6 +8910,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     title: 'Stop session',
     description: 'Request that the local daemon stops the specified session.',
     safety: 'safe',
+    sideEffectClass: 'write',
     placements: [],
     bindings: { voiceClientToolName: 'session_stop', mcpToolName: 'session_stop', rpcMethod: 'stop-session' },
     examples: {

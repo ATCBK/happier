@@ -211,7 +211,7 @@ export const PROJECT_WORKER_ACTION_SPECS = [...PROJECT_SERVICE_PLACEMENT_ACTION_
       rpc: machine },
     bindings: { mcpToolName: id.replaceAll('.', '_'), voiceClientToolName: id.replaceAll('.', '_'),
       ...(machine ? { rpcMethod: id === 'projects.worker.copy.inspect' ? RPC_METHODS.DAEMON_WORKSPACE_SYNC_COMMITTED_COPY_INSPECT : id } : {}) },
-    cli: { commands: [{ path: id.split('.'), visibility: 'canonical' }] },
+    cli: { acceptsServerId: true, commands: [{ path: id.split('.'), visibility: 'canonical' }] },
     inputHints: { title: titles[id], fields: inputFields[id] },
     examples: { voice: { argsExample: JSON.stringify(voiceInputs[id]) } },
     inputSchema: ProjectWorkerActionInputSchemasV1[id], outputSchema: ProjectWorkerActionOutputSchemasV1[id],
