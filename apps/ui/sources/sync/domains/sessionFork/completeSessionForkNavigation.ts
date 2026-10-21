@@ -56,7 +56,8 @@ function writeRestoredDraft(input: Readonly<{ childSessionId: string; parentSess
                 accountId: activeScope.accountId,
             },
             sessionId: input.childSessionId,
-            patch: { text: draft.text, mentions: draft.mentions.map(mention => StrictJsonValueSchema.parse(mention)) },
+            patch: { text: draft.text, mentions: draft.mentions.map(mention => StrictJsonValueSchema.parse(mention)),
+                attachments: draft.attachments },
             materializationIntent: 'seeded',
         });
     } catch {

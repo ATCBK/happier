@@ -3,6 +3,7 @@ import 'fake-indexeddb/auto';
 import { SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { createPlainSessionCurrentProjectionRecordFixture, requireComposerDraftDocument } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { configureConnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createReducer } from '@happier-dev/session-core/reducer';
@@ -64,7 +65,7 @@ describe('completeSessionForkNavigation', () => {
                 sharedMetadata: { version: row.metadataVersion }, agentState: { version: row.agentStateVersion } }) };
         } });
         connection = await restoreServerAccountForTest({ serverUrl: 'https://fork-navigation.test', accountId,
-            request: homes.request, configureSocket: configureConnectedServerSocketBoundary });
+            request: createSessionReadBatchFetchBoundary(homes.request), configureSocket: configureConnectedServerSocketBoundary });
         resetSessionDraftRepositoryForTests();
         await prepareSessionDraftPersistenceStorage();
         events.length = 0;
@@ -100,10 +101,13 @@ describe('completeSessionForkNavigation', () => {
 
     it('restores exact inline reference ranges from the source message envelope', async () => {
         const token = '[Auth fix](happier-ref:session:auth)';
+        const attachmentToken = '[Issue #42](happier-ref:attachment:issue-42)';
+        const attachment = { v: 1, instanceId: 'issue-42', attachment: { pluginId: 'acme.issues', localId: 'issue' },
+            key: '42', value: { issueId: 42 }, presentation: { label: 'Issue #42', typeLabel: 'Issue' } };
         const message: UserTextMessage = { id: 'reference-source', kind: 'user-text', localId: null, createdAt: 1, seq: 7,
-            text: `Continue ${token}`, meta: MessageMetaSchema.parse({ happierStructuredInputV1: { v: 1, mentions: [
+            text: `Continue ${token} / ${token} / ${attachmentToken} / [Literal](happier-ref:session:auth)`, meta: MessageMetaSchema.parse({ happierStructuredInputV1: { v: 1, mentions: [
                 { kind: 'happier.session', ref: 'session:auth', label: 'Auth fix', token },
-            ] } }) };
+            ], composerAttachments: [attachment] } }) };
         const messagesById = { [message.id]: message };
         storage.setState(state => ({ sessionMessages: { ...state.sessionMessages, parent: {
             messagesById, messagesMap: messagesById, messageIdsOldestFirst: [message.id], messagesVersion: 1,
@@ -113,9 +117,14 @@ describe('completeSessionForkNavigation', () => {
             navigate: () => {}, restoredDraftText: message.text, sourceMessageId: message.id });
         const snapshot = getSessionDraftSnapshot(scope(), address);
         if (!snapshot) throw new Error('Expected the restored fork draft');
-        expect(requireComposerDraftDocument(snapshot.document).composer.mentions?.value).toEqual([
-            expect.objectContaining({ ref: 'session:auth', tokenText: token, start: 9, end: message.text.length }),
+        const composer = requireComposerDraftDocument(snapshot.document).composer;
+        expect(composer.mentions?.value).toEqual([
+            expect.objectContaining({ ref: 'session:auth', tokenText: token, start: 9, end: 9 + token.length }),
+            expect.objectContaining({ ref: 'session:auth', tokenText: token, start: 12 + token.length, end: 12 + token.length * 2 }),
+            expect.objectContaining({ ref: 'attachment:issue-42', tokenText: attachmentToken, start: 15 + token.length * 2,
+                end: 15 + token.length * 2 + attachmentToken.length }),
         ]);
+        expect(composer.attachments?.value).toEqual([attachment]);
     });
 
     it('does not write a restored draft, navigate, or persist prompt metadata for a wrong child', async () => {
