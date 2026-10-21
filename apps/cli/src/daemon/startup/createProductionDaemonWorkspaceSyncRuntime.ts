@@ -1,4 +1,7 @@
 import * as z from 'zod/mini';
+import { isProjectWorkspaceSyncPreparationActionV1 } from '@happier-dev/protocol/actions/projectActionFamily';
+import { DaemonLocalServiceLauncherStartRequestV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
+import { createProjectServiceDeclarationTargetIdV1 } from '@happier-dev/protocol/local/services/actions/v1';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
@@ -927,7 +930,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
   });
   function isProjectPreparation(context?: RpcHandlerContext): boolean {
     const actionId = context?.callerInputAuthorization?.binding.actionId;
-    return actionId === 'projects.script.run' || actionId === 'projects.compute.exec' || actionId === 'projects.service.relocate';
+    return isProjectWorkspaceSyncPreparationActionV1(actionId);
   }
   const assertProjectPreparationInput = async (request: WorkspaceSyncPrepareBetweenRequestV1,
     snapshot: ActiveProjectAccountRowsSnapshot, context: RpcHandlerContext) => {
@@ -936,7 +939,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
     const envelope = context.workspaceSyncSourceRouting?.originalActionEnvelope ?? context.originalActionEnvelope;
     const requester = readRequesterAccountActionContext(authorization);
     if (!authorization || !binding || !requester || !envelope
-      || (binding.actionId !== 'projects.script.run' && binding.actionId !== 'projects.compute.exec' && binding.actionId !== 'projects.service.relocate')
+      || !isProjectWorkspaceSyncPreparationActionV1(binding.actionId)
       || binding.serverIdentityId !== semanticServerId || !await requester.isCurrent()
       || !isExternalActionAuthorizationBoundToEnvelope(binding, { actionId: binding.actionId, machineId: binding.machineId, envelope })) {
       throw compositionError('project_requester_authority_unavailable', 'The original Project requester is unavailable');
@@ -957,13 +960,21 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
     const target = resolveWorkspaceRefById(snapshot.workspaceRefs, request.targetWorkspaceRefId, semanticServerId);
     const original = binding.actionId === 'projects.service.relocate'
       ? ProjectServiceRelocateInputV1Schema.safeParse(originalInput)
+      : binding.actionId === 'localServices.launcher.start'
+        ? DaemonLocalServiceLauncherStartRequestV1Schema.safeParse(originalInput)
       : PROJECT_ACTION_INPUT_SCHEMAS_V1[binding.actionId].safeParse(originalInput);
-    const matchesWorkspace = original.success && source && target && original.data.workspace.serverId === semanticServerId
+    const matchesWorkspace = original.success && source && target && original.data.workspace && original.data.workspace.serverId === semanticServerId
       && ('selectedTarget' in original.data
         ? original.data.workspace.refId === source.id && original.data.selectedTarget.machineId === target.machineId
         : original.data.workspace.workspaceId === source.id && original.data.workspace.machineId === source.machineId
           && original.data.workspace.rootPath === source.rootPath && target.machineId === binding.machineId);
-    if (!matchesWorkspace || !source
+    const matchesService = binding.actionId !== 'localServices.launcher.start' || original.success && source && target
+      && 'targetId' in original.data && original.data.machineId === binding.machineId
+      && original.data.declaration?.workspaceRefId === source.id
+      && original.data.targetId === createProjectServiceDeclarationTargetIdV1(source, original.data.declaration.selection)
+      && (original.data.choice === undefined || original.data.choice.kind === 'workers'
+        && (original.data.choice.destination.kind !== 'machine' || original.data.choice.destination.machineId === target.machineId));
+    if (!matchesWorkspace || !matchesService || !source
       || context.workspaceSyncSourceRouting && (context.workspaceSyncSourceRouting.sourceMachineId !== source.machineId
         || context.workspaceSyncSourceRouting.sourceRootPath !== source.rootPath)) {
       throw compositionError('project_workspace_changed', 'The original Project workspace no longer matches preparation');

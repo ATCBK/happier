@@ -43,13 +43,13 @@ describe('requester bootstrap installation confidentiality', () => {
       purpose: { ...purpose, method: RPC_METHODS.SPAWN_HAPPY_SESSION },
       installationPublicKey: recipient.publicKey, randomBytes: tweetnacl.randomBytes })).toThrow();
   });
-  it('seals finite Sync preparation only to its named controller and exact request while retaining the worker root', () => {
+  it.each(['projects.script.run', 'localServices.launcher.start'] as const)('seals %s Sync preparation only to its named controller and exact request while retaining the worker root', actionId => {
     const worker = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(4));
     const controller = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(5));
     const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'finite-root', binding: {
       accountId: 'bob', custodianAccountId: 'owner', authentication: { kind: 'terminal', tokenEpoch: 1 },
       serverIdentityId: 'home', machineId: 'worker', installationId: 'worker-installation', accountEncryptionMode: 'plain',
-      actionId: 'projects.script.run', requestId: 'run', requestEnvelopeDigest: 'a'.repeat(43),
+      actionId, requestId: 'run', requestEnvelopeDigest: 'a'.repeat(43),
       target: { kind: 'machine', machineId: 'worker' },
     } });
     const purpose = { kind: 'workspace_sync_prepare', controller: { machineId: 'controller', installationId: 'controller-installation' },
@@ -64,6 +64,10 @@ describe('requester bootstrap installation confidentiality', () => {
     expect(bootstrap.openExternalActionRequesterAccountContextV1(input)).toEqual(credentials);
     expect(bootstrap.openExternalActionRequesterAccountContextV1({ ...input, purpose: { ...purpose,
       request: { ...purpose.request, targetWorkspaceRefId: 'substituted' } } })).toBeNull();
+    expect(bootstrap.openExternalActionRequesterAccountContextV1({ ...input, purpose: { ...purpose,
+      request: { ...purpose.request, sourceWorkspaceRefId: 'substituted' } } })).toBeNull();
+    expect(bootstrap.openExternalActionRequesterAccountContextV1({ ...input,
+      installationId: 'another-installation' })).toBeNull();
     expect(bootstrap.openExternalActionRequesterAccountContextV1({ ...input, purpose: { kind: 'external_action' },
       machineId: 'worker', installationId: 'worker-installation', installationPrivateKey: worker.secretKey })).toBeNull();
     expect(() => bootstrap.sealExternalActionRequesterAccountContextV1({ authorization: { ...authorization,

@@ -21,6 +21,7 @@ import { AgentPermissionIntentV1Schema } from '../../runtime/permissionIntentV1.
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 import { WorkspaceSyncPrepareBetweenRequestV1Schema, type WorkspaceSyncPrepareBetweenRequestV1 } from '../control/handoff/workspaceSyncSchemas.js';
 import { isDiscussionSecondOpinionModelRpcMethodV1 } from '../../discussions/secondOpinionActions.js';
+import { isProjectWorkspaceSyncPreparationActionV1 } from '../../actions/projectActionIdsV1.js';
 export { SessionRequesterInstallationSealedBootstrapV1Schema } from './sessionRequesterBootstrapSchemasV1.js';
 
 /** Same serialized fields as the credential custodian's access.key owner, on a private carrier only. */
@@ -218,7 +219,7 @@ function isReviewedChildRecipientPurpose(authorization: ExternalActionExecutionA
 
 function isWorkspaceSyncPreparationRoot(authorization: ExternalActionExecutionAuthorizationV1): boolean {
   const binding = authorization.binding;
-  return (binding.actionId === 'projects.script.run' || binding.actionId === 'projects.compute.exec' || binding.actionId === 'projects.service.relocate')
+  return isProjectWorkspaceSyncPreparationActionV1(binding.actionId)
     && binding.target.kind === 'machine' && binding.target.machineId === binding.machineId;
 }
 export const SessionRequesterBootstrapRpcRequestV1Schema = lazyZodSchema(() => z.strictObject({

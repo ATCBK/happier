@@ -4,6 +4,7 @@
  */
 
 import axios from 'axios';
+import { isProjectWorkspaceSyncPreparationActionV1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { createDiscussionReplyReturnPublisher } from '@/discussions/discussionReplyReturnPublisher';
 import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentApprovedReplayPublicationV1Schema,
     DiscussionAgentApprovedReplayResponseV1Schema, type DiscussionAgentPostPublicationV1,
@@ -2902,8 +2903,7 @@ export class ApiMachineClient {
         const actionId = authorization?.binding.actionId;
         const serverId = input.sourceWorkspace.serverId;
         if (!authorization || !envelope.success || !input.context.machineAdmission
-            || (preparation ? actionId !== 'projects.script.run' && actionId !== 'projects.compute.exec'
-                && actionId !== 'projects.service.relocate' : actionId !== 'projects.open')
+            || (preparation ? !isProjectWorkspaceSyncPreparationActionV1(actionId) : actionId !== 'projects.open')
             || input.context.machineAdmission.machineId !== this.machine.id
             || !isExternalActionAuthorizationBoundToEnvelope(authorization.binding,
                 { actionId: authorization.binding.actionId, machineId: this.machine.id, envelope: envelope.data })) {
