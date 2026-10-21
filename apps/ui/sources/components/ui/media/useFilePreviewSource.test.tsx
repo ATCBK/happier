@@ -2,10 +2,13 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { act } from 'react-test-renderer';
 import type { ComposerContentHandleV1 } from '@happier-dev/protocol';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 
 import { renderHook } from '@/dev/testkit';
 import { createSessionFileNativeTransferBoundary } from '@/components/sessions/files/sessionFileNativeTransferTestkit';
 import { createSessionFilesViewFixture, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
+import { transferMachine } from '@/components/sessions/files/sessionFileTransferTestkit';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 import { useFilePreviewSource } from './useFilePreviewSource';
 
 const files = vi.hoisted(() => new Map<string, { exists: boolean; chunks: Uint8Array[]; closed: number; deletes: number }>());
@@ -49,7 +52,33 @@ describe('useFilePreviewSource', () => {
     beforeEach(async () => {
         files.clear();
         transfer = createSessionFileNativeTransferBoundary();
-        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', machineCarrierOrigin: transfer.origin, rpc: transfer.rpc, request: transfer.request });
+        const serverIdentityId = 'srv_file_preview_source';
+        const boundary = await createExternalActionAccountHttpBoundary({
+            serverUrl: 'https://session-file-views.test', serverIdentityId,
+            accountId: 'alice', machineId: 'm1', actionId: 'daemon.filesystem.download', tokenEpoch: 0,
+            execute: (input, { target }) => {
+                if (target.kind !== 'machine') throw new Error('Expected a preview Machine');
+                return transfer.rpc({ targetId: target.machineId,
+                    method: getActionSpec('daemon.filesystem.download').bindings!.rpcMethod!, payload: { input } });
+            },
+        });
+        const machine = transferMachine({ id: 'm1', storageMode: 'plain', installationId: boundary.machine.installationId,
+            installationPublicKey: boundary.machine.installationPublicKey, replacedByMachineId: null, access: boundary.machine.access });
+        const row = { ...boundary.machine, operationProtocolCapabilities: machine.operationProtocolCapabilities,
+            operationProtocolCapabilitiesRevision: machine.operationProtocolCapabilitiesRevision,
+            daemonState: encodePlainMachineStoredContent(machine.daemonState) };
+        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', machine, serverIdentityId,
+            credentials: { token: `e30.${Buffer.from(JSON.stringify({ sub: 'alice', provenance: { v: 1, kind: 'account', authority: 'present_user' }, tokenEpoch: 0 })).toString('base64url')}.signature` },
+            machineCarrierOrigin: transfer.origin, rpc: transfer.rpc, request: async (url, init) => {
+                const parsed = new URL(String(url));
+                if (parsed.pathname === '/v1/machines') return Response.json([row]);
+                if (parsed.pathname === '/v1/machines/m1') return Response.json({ machine: row });
+                if (parsed.pathname.startsWith('/v1/actions/')) {
+                    const response = await boundary.handle(parsed, init);
+                    if (response) return response;
+                }
+                return transfer.request(url, init);
+            } });
         fixture.storage.getState().applySettingsLocal({
             filesImagePreviewCacheMaxEntries: 10, filesImagePreviewCacheMaxTotalBytes: 1_000_000, filesImagePreviewMaxBytes: 1_000_000,
         });
