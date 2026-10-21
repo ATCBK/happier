@@ -1,4 +1,5 @@
 import { EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1 } from '../../../../actions/externalActionApi.js';
+import { isProjectWorkspaceSyncPreparationActionV1 } from '../../../../actions/projectActionIdsV1.js';
 import { ACTION_OPERATION_RPC_METHODS_V1, ACTION_OPERATION_RPC_METHODS_V2 } from '../../../../actions/operations/v1.js';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '../../../../rpc/methods.js';
 import { resolveSocketRpcSessionAuthorization } from '../../../../rpc/socket.js';
@@ -1069,8 +1070,7 @@ export function resolveMachineRpcExternalActionEffectV1(method: string,
   binding?: ExternalActionExecutionAuthorizationV1['binding'],
   selectedTarget?: Readonly<{ machineId: string; installationId: string }>): string | null {
   if (method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN) {
-    return binding && (binding.actionId === 'projects.script.run' || binding.actionId === 'projects.compute.exec'
-      || binding.actionId === 'projects.service.relocate')
+    return binding && isProjectWorkspaceSyncPreparationActionV1(binding.actionId)
       && binding.target.kind === 'machine' && binding.target.machineId === binding.machineId ? binding.actionId : null;
   }
   if (binding?.actionId === 'session.agent.transition') {

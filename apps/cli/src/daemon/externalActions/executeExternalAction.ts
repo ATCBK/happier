@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { isProjectWorkspaceSyncPreparationActionV1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { isPluginError } from '@happier-dev/plugin-sdk';
 
 import { prepareExternalActionResponseEnvelopeV1, ExternalActionActionIdV1Schema, ExternalActionExecutionAuthorizationV1Schema, ExternalActionRequestEnvelopeSchema, externalActionTargetsEqualV1, isExternalActionRequestWithinLimit, isExternalActionRequestVersionAllowedForAccountModeV1, projectExternalActionExecutionResultV1, readExternalActionProtectedRequestId } from '@happier-dev/protocol/actions/externalActionApi';
@@ -645,7 +646,7 @@ export async function executeExternalAction(input: Readonly<{
     ...(executionAuthorization?.success
       ? {
           externalActionExecutionAuthorization: admittedAuthorization!,
-          ...(actionId.data === 'projects.open' || actionId.data === 'projects.script.run' || actionId.data === 'projects.compute.exec' || actionId.data === 'projects.service.relocate'
+          ...(actionId.data === 'projects.open' || isProjectWorkspaceSyncPreparationActionV1(actionId.data)
             ? { originalActionEnvelope: envelope.data } : {}),
           signExternalActionApprovalInput: ({ actionId: approvalActionId, input: approvalInput, target: approvalTarget, requesterConfirmation, sessionTargetsV1 }) =>
             signExternalActionApprovalInputV1({

@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { isProjectWorkspaceSyncPreparationActionV1 } from './projectActionIdsV1.js';
 import type { RuntimeActionExecuteArgs } from './executor/types.js';
 import { DaemonLocalServiceLauncherStartRequestV1Schema, LocalServiceStartApprovalReviewV1Schema } from '../local/services/launcher/v1.js';
 import { actionInputValidationFailure } from './executor/actionInputValidation.js';
@@ -1758,7 +1759,7 @@ export function buildApprovalExecutionOriginV1(params: Readonly<{
         }
       : {}),
     ...(externalAuthorization ? { externalActionExecutionAuthorization: externalAuthorization } : {}),
-    ...((params.actionId === 'projects.open' || params.actionId === 'projects.script.run' || params.actionId === 'projects.compute.exec' || params.actionId === 'projects.service.relocate')
+    ...((params.actionId === 'projects.open' || isProjectWorkspaceSyncPreparationActionV1(params.actionId))
       && externalAuthorization?.binding.actionId === params.actionId && params.context.originalActionEnvelope
       ? { originalActionEnvelope: params.context.originalActionEnvelope } : {}),
     ...(externalActionInputSignature ? { externalActionInputSignature } : {}),

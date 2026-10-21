@@ -1,4 +1,5 @@
 import type { RequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionContext';
+import { isProjectWorkspaceSyncPreparationActionV1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { requesterActionContext } from '@/daemon/sessionEncryption/requesterAccountActionContext';
 
 import { randomBytes } from 'node:crypto';
@@ -529,7 +530,7 @@ export async function prepareRequesterAccountActionContext(input: Readonly<{
       || root.data.binding.actionId === 'discussion.second_opinion.start'
         && input.purpose.kind === 'machine_rpc' && (input.purpose.method === RPC_METHODS.SESSION_SPAWN_NEW
           || input.purpose.method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT))) return refused('requester_move_root');
-    if (preparation && ((root.data.binding.actionId !== 'projects.script.run' && root.data.binding.actionId !== 'projects.compute.exec' && root.data.binding.actionId !== 'projects.service.relocate')
+    if (preparation && (!isProjectWorkspaceSyncPreparationActionV1(root.data.binding.actionId)
       || root.data.binding.target.kind !== 'machine' || root.data.binding.target.machineId !== root.data.binding.machineId)) return refused('requester_workspace_preparation_root');
     if (input.purpose.kind === 'managed_finite_wake' && (!finiteWake
       || !sameStrictJsonValue(finiteWake.target, input.purpose.target))) return refused('requester_finite_wake_target');

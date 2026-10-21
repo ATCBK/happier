@@ -1,4 +1,6 @@
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
+import { isProjectWorkspaceSyncPreparationActionV1 } from '@happier-dev/protocol/actions/projectActionFamily';
+import { DaemonLocalServiceLauncherStartRequestV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import axios from 'axios';
 import { signMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import { RequesterSessionCurrentnessPurposeV1Schema, type RequesterSessionCurrentnessPurposeV1 } from '@happier-dev/protocol/machines/identity/installationIdentity';
@@ -40,8 +42,7 @@ export function doesWorkspaceSyncSourceRootMatchRouting(authorization: ExternalA
   const binding = authorization.binding;
   const context = source.sourceContext;
   const handoff = binding.handoffAdmission;
-  if (binding.actionId === 'projects.open' || binding.actionId === 'projects.script.run' || binding.actionId === 'projects.compute.exec'
-    || binding.actionId === 'projects.service.relocate') {
+  if (binding.actionId === 'projects.open' || isProjectWorkspaceSyncPreparationActionV1(binding.actionId)) {
     const envelope = source.originalActionEnvelope;
     const constraints = 'grant' in binding ? { models: binding.grant.models, permissionModes: binding.grant.permissionModes } : undefined;
     return !!context && !!envelope && source.phase === 'prepare' && source.sourceSessionId === undefined
@@ -70,12 +71,12 @@ export function doesWorkspaceSyncSourceRootMatchRouting(authorization: ExternalA
     && sameStrictJsonValue(constraints ?? null, context.callerInputConstraints ?? null);
 }
 
-/** Signed finite and Move roots retain their logical source; current Account refs prove the target at the controller. */
+/** Signed Project roots retain their logical source; current Account refs prove the target at the controller. */
 export function doesWorkspaceSyncFinitePrepareRequestMatchRouting(params: unknown, authorization: ExternalActionExecutionAuthorizationV1,
   source: WorkspaceSyncSourceRoutingV1): boolean {
   const actionId = authorization.binding.actionId;
   const body = WorkspaceSyncPrepareBetweenRequestV1Schema.safeParse(params);
-  if ((actionId !== 'projects.script.run' && actionId !== 'projects.compute.exec' && actionId !== 'projects.service.relocate') || !body.success
+  if (!isProjectWorkspaceSyncPreparationActionV1(actionId) || !body.success
     || !doesWorkspaceSyncSourceRootMatchRouting(authorization, source)) return false;
   const envelope = source.originalActionEnvelope!;
   // Protected input is opened only by the controller's admitted requester custody,
@@ -86,8 +87,10 @@ export function doesWorkspaceSyncFinitePrepareRequestMatchRouting(params: unknow
     return input.success && input.data.workspace.refId === body.data.sourceWorkspaceRefId
       && input.data.workspace.serverId === source.accountServerId;
   }
-  const input = PROJECT_ACTION_INPUT_SCHEMAS_V1[actionId].safeParse(envelope.input);
-  return input.success && input.data.workspace.workspaceId === body.data.sourceWorkspaceRefId
+  const input = actionId === 'localServices.launcher.start'
+    ? DaemonLocalServiceLauncherStartRequestV1Schema.safeParse(envelope.input)
+    : PROJECT_ACTION_INPUT_SCHEMAS_V1[actionId].safeParse(envelope.input);
+  return input.success && !!input.data.workspace && input.data.workspace.workspaceId === body.data.sourceWorkspaceRefId
     && input.data.workspace.serverId === source.accountServerId
     && input.data.workspace.machineId === source.sourceMachineId && input.data.workspace.rootPath === source.sourceRootPath;
 }
@@ -285,9 +288,7 @@ export async function readMachineRpcAdmissionCurrentOrThrow(input: MachineRpcAdm
       || !doesWorkspaceSyncSeedRootMatchRouting(originalRoot, seed, sourceExecution))
       || seedReceiver && !seed) return null;
     const projectSource = originalRoot?.binding.actionId === 'projects.open' && sourceRouting !== undefined;
-    const finiteSource = sourceRouting !== undefined
-      && (originalRoot?.binding.actionId === 'projects.script.run' || originalRoot?.binding.actionId === 'projects.compute.exec'
-        || originalRoot?.binding.actionId === 'projects.service.relocate');
+    const finiteSource = sourceRouting !== undefined && isProjectWorkspaceSyncPreparationActionV1(originalRoot?.binding.actionId);
     const projectSourceMethod = finiteSource ? RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN
       : RPC_METHODS.DAEMON_WORKSPACE_SYNC_MATERIALIZE_FOR_OPEN;
     const sourceReceiver = input.workspaceSyncSourceReceiver;
@@ -326,7 +327,8 @@ export async function readMachineRpcAdmissionCurrentOrThrow(input: MachineRpcAdm
       || !sameStrictJsonValue(context, writerTarget.source.sourceContext.machineAdmission))) return null;
     if (originalRoot && !moveChild && !writerTarget && !seed && (!sourceRouting || !sourceReceiver
       || sourceRouting.phase !== 'prepare' && sourceRouting.phase !== 'finalize'
-      || !['session.handoff', 'projects.open', 'projects.script.run', 'projects.compute.exec', 'projects.service.relocate'].includes(originalRoot.binding.actionId))) return null;
+      || !(originalRoot.binding.actionId === 'session.handoff' || originalRoot.binding.actionId === 'projects.open'
+        || isProjectWorkspaceSyncPreparationActionV1(originalRoot.binding.actionId)))) return null;
     const retainedRoot = originalRoot ? { callerInputAuthorization: originalRoot } : {};
     if (sourceRouting && targetRouting || sourceReceiver && targetReceiver
       || targetRouting && (!targetReceiver || targetRouting.targetMachineId !== context.machineId

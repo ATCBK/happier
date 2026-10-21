@@ -33,7 +33,7 @@ describe('MachineRpcRoutePolicyV1', () => {
     expect(protocol.resolveEphemeralRunnerMachineRpcAuthority(RPC_METHODS.SCM_FILE_READ)).toBeNull();
   });
 
-  it('projects prepare-between only from finite Project worker and reviewed Service Move roots', async () => {
+  it('projects prepare-between only from Project worker Script, Compute, Service Start and Move roots', async () => {
     const { resolveMachineRpcExternalActionEffectV1: resolve } = await import('./routePolicyV1');
     const binding = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'finite-root', binding: {
       accountId: 'requester', custodianAccountId: 'owner', authentication: { kind: 'terminal', tokenEpoch: 1 },
@@ -41,7 +41,7 @@ describe('MachineRpcRoutePolicyV1', () => {
       actionId: 'projects.script.run', requestId: 'run', requestEnvelopeDigest: 'a'.repeat(43),
       target: { kind: 'machine', machineId: 'worker' },
     } }).binding;
-    for (const actionId of ['projects.script.run', 'projects.compute.exec', 'projects.service.relocate'] as const) {
+    for (const actionId of ['projects.script.run', 'projects.compute.exec', 'projects.service.relocate', 'localServices.launcher.start'] as const) {
       expect(resolve(RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN, { ...binding, actionId })).toBe(actionId);
     }
     expect(resolve(RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN)).toBeNull();

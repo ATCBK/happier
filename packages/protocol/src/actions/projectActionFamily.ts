@@ -14,7 +14,7 @@ import { canRetainProjectSetupReviewV1 } from './operations/v1.js';
 export { ProjectSetupConsentFailureDetailsV1Schema, ProjectSetupConsentScopeV1Schema,
   type ProjectSetupConsentFailureDetailsV1, type ProjectSetupConsentScopeV1 } from './projectSetupConsentFailure.js';
 import { PROJECT_ACTION_IDS_V1, type ProjectActionIdV1 } from './projectActionIdsV1.js';
-export { PROJECT_ACTION_IDS_V1, isProjectActionIdV1, type ProjectActionIdV1 } from './projectActionIdsV1.js';
+export { PROJECT_ACTION_IDS_V1, isProjectActionIdV1, isProjectWorkspaceSyncPreparationActionV1, type ProjectActionIdV1 } from './projectActionIdsV1.js';
 export { ProjectWorkerNoAcceptanceFailureDetailsV1Schema, readProjectWorkerNoAcceptanceFailureV1,
   type ProjectWorkerNoAcceptanceFailureDetailsV1 } from './projectWorkerRefusal.js';
 

@@ -1,4 +1,6 @@
 import * as z from 'zod/mini';
+import { isProjectWorkspaceSyncPreparationActionV1 } from '@happier-dev/protocol/actions/projectActionFamily';
+import { DaemonLocalServiceLauncherStartRequestV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import { ExternalActionActionIdV1Schema, bindExternalActionExecutionAuthorizationVerifyHttpPathV1, bindExternalActionExecutionAuthorizationHttpPathV1, EXTERNAL_ACTION_HTTP_PATH_PREFIX_V1, ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationVerifyRequestV1Schema, isExternalActionResolvedTargetAllowedV1, isExternalActionWorkflowActionIdV1, type ExternalActionExecutionAuthorizationBindingV1, type ExternalActionExecutionAuthorizationV1, type ExternalActionMachineRpcExecutionV1, type ExternalActionTargetV1, type ExternalActionServerPrincipalV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { decodeExternalActionResolvedTargetV1, encodeExternalActionResolvedTargetV1, verifyExternalActionMachineRpcRequestV1, verifyExternalActionMachineRequestV1, isExternalActionAuthorizationBoundToEnvelope, type ExternalActionMachineRpcEventV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { getActionSpec, isPluginProvenanceOnlyActionId, PublicActionIdSchema, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
@@ -1877,25 +1879,28 @@ export async function readCurrentWorkspaceSyncProjectSourceAuthorization(
 
 function readWorkspaceSyncProjectSourceMethod(actionId: string): string | null {
     return actionId === 'projects.open' ? RPC_METHODS.DAEMON_WORKSPACE_SYNC_MATERIALIZE_FOR_OPEN
-        : actionId === 'projects.script.run' || actionId === 'projects.compute.exec' || actionId === 'projects.service.relocate'
+        : isProjectWorkspaceSyncPreparationActionV1(actionId)
             ? RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN : null;
 }
 
 function matchesWorkspaceSyncProjectSourceInput(value: unknown,
     binding: ExternalActionExecutionAuthorizationBindingV1, routing: WorkspaceSyncSourceRoutingV1): boolean {
-    if (binding.actionId === 'projects.open') {
+    const actionId = binding.actionId;
+    if (actionId === 'projects.open') {
         const input = OpenProjectInputV1Schema.safeParse(value);
         return input.success && input.data.serverId === binding.serverIdentityId && input.data.machineId === binding.machineId
             && input.data.materialization.kind === 'sync' && (input.data.source.kind === 'workspace' || input.data.source.kind === 'source')
             && input.data.source.checkout?.machineId === routing.sourceMachineId && input.data.source.checkout.rootPath === routing.sourceRootPath;
     }
-    if (binding.actionId === 'projects.service.relocate') {
+    if (!isProjectWorkspaceSyncPreparationActionV1(actionId)) return false;
+    if (actionId === 'projects.service.relocate') {
         const input = ProjectServiceRelocateInputV1Schema.safeParse(value);
         return input.success && input.data.workspace.serverId === binding.serverIdentityId;
     }
-    if (binding.actionId !== 'projects.script.run' && binding.actionId !== 'projects.compute.exec') return false;
-    const input = PROJECT_ACTION_INPUT_SCHEMAS_V1[binding.actionId].safeParse(value);
-    return input.success && input.data.workspace.serverId === binding.serverIdentityId
+    const input = actionId === 'localServices.launcher.start'
+        ? DaemonLocalServiceLauncherStartRequestV1Schema.safeParse(value)
+        : PROJECT_ACTION_INPUT_SCHEMAS_V1[actionId].safeParse(value);
+    return input.success && !!input.data.workspace && input.data.workspace.serverId === binding.serverIdentityId
         && input.data.workspace.machineId === routing.sourceMachineId && input.data.workspace.rootPath === routing.sourceRootPath;
 }
 
@@ -1913,6 +1918,7 @@ export async function verifyWorkspaceSyncProjectSourceAuthorization(
         execution.method.slice(0, -suffix.length), resolveCurrentSessionMachine);
     if (!admitted) return null;
     const { binding } = admitted.verified;
+    const actionId = binding.actionId;
     const envelope = routing.originalActionEnvelope;
     const packet = execution.externalActionExecution;
     if (!envelope || packet.authorization.token !== authorization.token
@@ -1933,9 +1939,12 @@ export async function verifyWorkspaceSyncProjectSourceAuthorization(
                 const input = ProjectServiceRelocateInputV1Schema.safeParse(envelope.input);
                 if (!input.success || request.data.sourceWorkspaceRefId !== input.data.workspace.refId) return null;
             }
-            if (envelope.v === 1 && (binding.actionId === 'projects.script.run' || binding.actionId === 'projects.compute.exec')) {
-                const input = PROJECT_ACTION_INPUT_SCHEMAS_V1[binding.actionId].safeParse(envelope.input);
-                if (!input.success || request.data.sourceWorkspaceRefId !== input.data.workspace.workspaceId) return null;
+            if (envelope.v === 1 && isProjectWorkspaceSyncPreparationActionV1(actionId)
+                && actionId !== 'projects.service.relocate') {
+                const input = actionId === 'localServices.launcher.start'
+                    ? DaemonLocalServiceLauncherStartRequestV1Schema.safeParse(envelope.input)
+                    : PROJECT_ACTION_INPUT_SCHEMAS_V1[actionId].safeParse(envelope.input);
+                if (!input.success || !input.data.workspace || request.data.sourceWorkspaceRefId !== input.data.workspace.workspaceId) return null;
             }
         }
     }
