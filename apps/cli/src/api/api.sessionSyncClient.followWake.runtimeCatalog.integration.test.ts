@@ -13,6 +13,8 @@ import {
 import { ApiClient } from './api';
 import { CURRENT_MACHINE_OPERATION_PROTOCOL_CAPABILITIES_V1 } from './apiMachine';
 import type { ApiSessionClient } from './session/sessionClient';
+import { configuration } from '@/configuration';
+import { FeaturesResponseSchema } from '@happier-dev/protocol';
 
 const { mockIo, readStoredCredentialsMock } = vi.hoisted(() => ({
   mockIo: vi.fn(),
@@ -48,6 +50,30 @@ describe('ApiClient ordinary Session Follow wake wiring', () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+  });
+
+  it('binds the production captured-Home Discussion check-in reader into an ordinary Session client', async () => {
+    const userSocket = createApiSessionSocketStub({ id: 'check-in-user' });
+    const sessionSocket = createApiSessionSocketStub({ id: 'check-in-session' });
+    bindApiSessionSocketSequenceMock(mockIo, [userSocket, sessionSocket]);
+    const api = await ApiClient.create({ token: 'ordinary-account-token', encryption: null });
+    api.setServerFeaturesSnapshotProvider(() => ({ status: 'ready', features: FeaturesResponseSchema.parse({
+      features: { sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } }, capabilities: {},
+    }) }));
+    client = api.sessionSyncClient(createMockSession({ id: 'check-in-destination', encryptionMode: 'plain',
+      metadataLayoutVersion: 1, metadata: { v: 1 }, agentState: null }));
+    const reader: unknown = Reflect.get(client, 'readDiscussionAutonomousCheckIn');
+    expect(reader).toBeTypeOf('function');
+    if (typeof reader !== 'function') throw new Error('Production Discussion reader missing');
+    const request = vi.spyOn(axios, 'request').mockResolvedValue({ status: 200, data: {
+      discussionId: 'discussion', settings: { coordination: { autonomousCheckIn: { afterTurns: null } } },
+    } });
+    expect(await reader({ serverId: configuration.activeServerId, discussionId: 'discussion' })).toEqual({ afterTurns: null });
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({
+      url: expect.stringContaining('/v1/discussions/discussion/settings'),
+      headers: expect.objectContaining({ Authorization: 'Bearer ordinary-account-token' }),
+    }));
+    expect(await reader({ serverId: 'another-home', discussionId: 'discussion' })).toBeNull();
   });
 
   it('backs advertised wake support with exact Session invalidation and reconnect consumers when V2 changes are disabled', async () => {

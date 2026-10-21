@@ -107,7 +107,8 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
           openCommentCount, threadRef: root.messageRef };
       }
       const localId = deriveDiscussionFollowInputLocalIdV1(addressing);
-      const displayName = question.accountActor?.profile ? resolveAccountDisplayLabelV1(question.accountActor.profile) : null;
+      const displayName = !question.producerV1 && question.accountActor?.profile
+        ? resolveAccountDisplayLabelV1(question.accountActor.profile) : null;
       const sender: DiscussionPromptAuthorV1 = {
         kind: question.producerV1 ? 'agent_session' : 'person',
         ...(question.authorAccountId ? { accountId: question.authorAccountId } : {}),
@@ -153,7 +154,14 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
         if (source?.ok && source.sessionId === sourceSession.sourceSessionId) {
           const sourceMetadata = readSessionPresentationContent({ credentials: input.credentials, rawSession: source.rawSession,
             accountEncryptionMode: source.accountEncryptionCurrentness.mode }).metadata;
-          if (sender.kind !== 'model' && readSessionBotV1(sourceMetadata?.bot)) sender.kind = 'bot';
+          if (source.sessionId === question.producerV1.sessionId) {
+            if (sender.kind !== 'model' && readSessionBotV1(sourceMetadata?.bot)) sender.kind = 'bot';
+            const summary = sourceMetadata?.summary;
+            const summaryText = summary && typeof summary === 'object' && 'text' in summary ? summary.text : null;
+            const sessionName = (typeof summaryText === 'string' ? summaryText.trim() : '')
+              || (typeof sourceMetadata?.name === 'string' ? sourceMetadata.name.trim() : '');
+            if (sessionName) sender.displayName = sessionName;
+          }
         }
         if (foreignSource) {
           // This only requests custody. Pending proves the committed producer

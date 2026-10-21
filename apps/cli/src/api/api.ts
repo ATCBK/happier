@@ -94,6 +94,8 @@ import { serializeAxiosErrorForLog } from './client/serializeAxiosErrorForLog';
 import { logServerEndpointFailure } from './client/serverEndpointFailureLog';
 import { classifyServerEndpointError } from './client/classifyServerEndpointError';
 import { resolveServerHttpBaseUrl } from './client/serverHttpBaseUrl';
+import { createDiscussionAutonomousCheckInReader } from '@/discussions/discussionActionDeps';
+import { resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
 import { readAccountEncryptionModeOnce } from './client/accountEncryptionMode';
 import { resolveConnectedServicesServerApiTimeoutMs } from './client/connectedServicesServerApiTimeout';
 import { SessionCreationPlacementError } from './session/sessionCreationPlacementError';
@@ -1545,6 +1547,14 @@ export class ApiClient {
       | 'actionsSettingsProvider'
     > & Partial<Pick<ApiSessionClientOptions, 'metadataAuthority'>> = {},
   ): ApiSessionClient {
+    const serverId = configuration.activeServerId;
+    const readDiscussionAutonomousCheckIn = createDiscussionAutonomousCheckInReader({
+      credentials: this.credential,
+      serverId,
+      serverHttpBaseUrl: resolveServerHttpBaseUrl(),
+      capturedHomeIdentity: resolveServerProfileHomeIdentityId(serverId),
+      resolveServerFeaturesSnapshot: () => this.getCachedServerFeaturesSnapshot?.(),
+    });
     return new ApiSessionClient(this.credential.token, session, {
       transport: createAccountSessionClientTransport(this.credential.token),
       metadataAuthority: sessionOptions.metadataAuthority
@@ -1572,6 +1582,7 @@ export class ApiClient {
         sessionOptions.machineAdmissionTransport,
       localMachineId: this.localMachineId,
       onSessionFollowInvalidated: publishSessionFollowWakeInvalidation,
+      readDiscussionAutonomousCheckIn,
       initialRegisteredSessionStateFieldMutations: sessionOptions.initialRegisteredSessionStateFieldMutations,
       durableMutationDeliveryInitiallyActive: sessionOptions.durableMutationDeliveryInitiallyActive,
     });

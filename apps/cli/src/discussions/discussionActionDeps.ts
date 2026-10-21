@@ -32,6 +32,9 @@ import { DISCUSSION_SECOND_OPINION_PREVIEW_HTTP_PATH_V1, DiscussionSecondOpinion
 import { DiscussionCandidatesListInputV1Schema } from '@happier-dev/protocol/discussions/actions';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { getActionSpec, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
+import { DiscussionSettingsResponseV1Schema } from '@happier-dev/protocol/discussions/settings';
+import type { DiscussionAddressV1 } from '@happier-dev/protocol/discussions/references';
+import { areServerProfileIdentifiersEquivalent } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 
 function failure(code: string) {
   return { ok: false as const, errorCode: code, error: code };
@@ -55,6 +58,28 @@ function openPayload(crypto: SessionStoredContentCryptoContext | null, content: 
 type DiscussionActionFixedHome =
   | Readonly<{ serverId?: undefined; serverHttpBaseUrl?: undefined }>
   | Readonly<{ serverId: string; serverHttpBaseUrl: string }>;
+
+/** C2 consumes one captured Home/Account settings observation, never a second check-in policy. */
+export function createDiscussionAutonomousCheckInReader(options: Parameters<typeof createDiscussionActionDeps>[0] & Readonly<{
+  capturedHomeIdentity?: Promise<string | null>;
+}>) {
+  const serverId = options.serverId ?? configuration.activeServerId;
+  const homeIdentity = options.capturedHomeIdentity ?? Promise.resolve(options.serverIdentityId ?? null);
+  const deps = createDiscussionActionDeps(options);
+  return async (origin: DiscussionAddressV1): Promise<Readonly<{ afterTurns: number | null }> | undefined | null> => {
+    try {
+      const homeId = await homeIdentity;
+      if (!areServerProfileIdentifiersEquivalent(origin.serverId, serverId,
+        id => id === serverId || id === homeId ? homeId : null)) return null;
+      const value = DiscussionSettingsResponseV1Schema.safeParse(await deps.discussionAction!({
+        actionId: 'discussion.settings.get', input: { discussionId: origin.discussionId },
+        context: { serverId, surface: 'cli', authority: 'account_automation' },
+      }));
+      return value.success && value.data.discussionId === origin.discussionId
+        ? value.data.settings.coordination?.autonomousCheckIn : null;
+    } catch { return null; }
+  };
+}
 
 /**
  * Account/Home transport for independent Discussion resources. The server owns

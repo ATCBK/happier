@@ -21,7 +21,7 @@ import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/action
 const { axiosRequest, axiosGet } = vi.hoisted(() => ({ axiosRequest: vi.fn(), axiosGet: vi.fn() }));
 vi.mock('axios', () => ({ default: { request: axiosRequest, get: axiosGet } }));
 
-import { createDiscussionActionDeps } from './discussionActionDeps';
+import { createDiscussionActionDeps, createDiscussionAutonomousCheckInReader } from './discussionActionDeps';
 import { createResourceDataKey, openResourceDataKey } from '@/api/encryption/resourceDataKey';
 import { libsodiumPublicKeyFromSecretKey } from '@/api/encryption';
 import { deriveKey } from '@/utils/deriveKey';
@@ -88,6 +88,36 @@ function discussionExecutor(deps: Pick<ActionExecutorDeps, 'discussionAction'> &
 }
 
 describe('Home Discussion resource transport', () => {
+  it('reads the captured Home check-in override without keys and holds unavailable or mismatched results', async () => {
+    const read = createDiscussionAutonomousCheckInReader({ credentials: keyless, serverId: 'server-1',
+      serverHttpBaseUrl: 'https://home.example.test', resolveServerFeaturesSnapshot: () => features });
+    const origin = { serverId: 'server-1', discussionId: 'discussion-1' };
+    for (const [settings, expected] of [
+      [{}, undefined], [{ coordination: { autonomousCheckIn: { afterTurns: null } } }, { afterTurns: null }],
+      [{ coordination: { autonomousCheckIn: { afterTurns: 8 } } }, { afterTurns: 8 }],
+      [{ coordination: { autonomousCheckIn: { afterTurns: 0 } } }, null],
+    ] as const) {
+      axiosRequest.mockResolvedValueOnce({ status: 200, data: { discussionId: origin.discussionId, settings } });
+      expect(await read(origin)).toEqual(expected);
+    }
+    const requestsBefore = axiosRequest.mock.calls.length;
+    expect(await read({ ...origin, serverId: 'other-home' })).toBeNull();
+    expect(axiosRequest.mock.calls).toHaveLength(requestsBefore);
+    axiosRequest.mockResolvedValueOnce({ status: 200, data: { discussionId: 'other-discussion', settings: {} } });
+    expect(await read(origin)).toBeNull();
+    const aliasRead = createDiscussionAutonomousCheckInReader({ credentials: keyless, serverId: 'profile-1',
+      capturedHomeIdentity: Promise.resolve('srv_home'), serverHttpBaseUrl: 'https://home.example.test',
+      resolveServerFeaturesSnapshot: () => features });
+    axiosRequest.mockResolvedValueOnce({ status: 200, data: { discussionId: origin.discussionId,
+      settings: { coordination: { autonomousCheckIn: { afterTurns: null } } } } });
+    expect(await aliasRead({ ...origin, serverId: 'srv_home' })).toEqual({ afterTurns: null });
+    for (const status of [403, 404, 503]) {
+      axiosRequest.mockResolvedValueOnce({ status, data: { error: 'discussion_not_found' } });
+      expect(await read(origin)).toBeNull();
+    }
+    axiosRequest.mockRejectedValueOnce(new Error('Network unavailable'));
+    expect(await read(origin)).toBeNull();
+  });
   beforeEach(async () => {
     vi.clearAllMocks();
     ownerFingerprint = computeContentPublicKeyFingerprint(libsodiumPublicKeyFromSecretKey(
