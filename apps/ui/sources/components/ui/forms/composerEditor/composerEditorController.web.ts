@@ -57,7 +57,17 @@ export function createComposerEditorController(element: HTMLElement, initial: Co
     const removedAttachmentIds = new Set<string>();
     const bindings = new WeakMap<ProseMirrorNode, ComposerEditorReference>();
     const chipRefreshers = new Set<() => void>();
-    const mapping = (doc = editor.state.doc) => mapComposerDoc(doc, node => bindings.get(node));
+    // ProseMirror documents are immutable. Selection, geometry and controlled echoes
+    // all read the same projection until the document or its opaque bindings change.
+    let mappedDocument: ProseMirrorNode | null = null;
+    let mapped: ReturnType<typeof mapComposerDoc>;
+    const mapping = (doc = editor.state.doc) => {
+        if (mappedDocument !== doc) {
+            mapped = mapComposerDoc(doc, node => bindings.get(node));
+            mappedDocument = doc;
+        }
+        return mapped;
+    };
     const read = (): ComposerEditorDocument => {
         const current = mapping();
         const selection = editor.state.selection;
@@ -260,12 +270,22 @@ export function createComposerEditorController(element: HTMLElement, initial: Co
             },
         },
         onUpdate: () => { if (!applyingExternal) options.onChange?.(read()); options.onCaretChange?.(); },
-        onSelectionUpdate: () => { if (!applyingExternal) options.onSelection?.(read()); options.onCaretChange?.(); },
+        onSelectionUpdate: ({ transaction }) => {
+            // TipTap emits selectionUpdate before update for the same edit. The
+            // combined change already carries its selection; cursor-only changes
+            // (including replacing a selection with equal text) still need reporting.
+            const reportsChange = !transaction.getMeta('preventUpdate') && !transaction.before.eq(editor.state.doc);
+            if (!reportsChange) {
+                if (!applyingExternal) options.onSelection?.(read());
+                options.onCaretChange?.();
+            }
+        },
         onFocus: () => options.onFocus?.(),
         onBlur: () => options.onBlur?.(),
     });
 
     function bind(doc: ProseMirrorNode, text: string, references: readonly ComposerEditorReference[]) {
+        mappedDocument = null;
         const bound = boundComposerEditorReferences(text, references);
         let index = 0;
         doc.descendants(node => {
@@ -303,9 +323,24 @@ export function createComposerEditorController(element: HTMLElement, initial: Co
             for (const id of ids) removedAttachmentIds.delete(id);
             previousAttachmentIds = ids;
         }
+        const previous = options;
         options = next;
-        editor.setEditable(next.editable !== false, false);
-        replaceDocument(next.text, next.references ?? []);
+        if (editor.isEditable !== (next.editable !== false)) editor.setEditable(next.editable !== false, false);
+        const current = mapping();
+        const references = boundComposerEditorReferences(next.text, next.references ?? []);
+        const sameDocument = current.text === next.text && current.references.length === references.length
+            && current.references.every((reference, index) => {
+                const incoming = references[index]!;
+                return reference.start === incoming.start && reference.end === incoming.end
+                    && reference.ref === incoming.ref && reference.token === incoming.token;
+            });
+        if (sameDocument) {
+            // A controlled acknowledgement can refresh presentation/bindings without
+            // constructing a second document or issuing an empty editor transaction.
+            bind(editor.state.doc, next.text, references);
+            for (const refresh of chipRefreshers) refresh();
+            if (previous.decorations !== next.decorations) editor.view.dispatch(editor.state.tr.setMeta('addToHistory', false));
+        } else replaceDocument(next.text, references);
     }
     replaceDocument(initial.text, initial.references ?? [], { start: initial.text.length, end: initial.text.length });
     mounted = true;

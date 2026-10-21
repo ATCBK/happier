@@ -273,9 +273,10 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
             selectionRef.current = nextSelection;
             liveReferencesRef.current = references;
             inputRef.current?.setTextAndSelection(text, nextSelection, serializeReferences(references));
+            // Match native edits: the host must process new text before receiving its rebased bindings.
+            publishSelection(nextSelection);
             props.onReferencesChange?.(references);
             props.onChangeText(text);
-            publishSelection(nextSelection);
         },
         setSelection(selection) {
             if (textRef.current !== props.value) return;

@@ -262,7 +262,7 @@ function renderScreen(element: React.ReactElement) {
 }
 
 function findNativeTextInput(screen: Awaited<ReturnType<typeof renderScreen>>) {
-    const nodes = screen.findAll((node) => node.type === 'HappierComposerInput');
+    const nodes = screen.tree.findAllByType('HappierComposerInput');
     expect(nodes.length).toBe(1);
     return nodes[0]!;
 }
@@ -863,6 +863,26 @@ describe('AgentInput (enter to send on native)', () => {
         expect(modEnterHandled).not.toBe(true);
         expect(mocks.inputBlur).not.toHaveBeenCalled();
         expect(screen.findAll((node) => node.props?.testID === 'new-session-composer-send')).toHaveLength(0);
+    });
+
+    it('keeps typed identity after a programmatic prefix edit through the real host reconciliation', async () => {
+        settingState.nativeEnterToSend = true;
+        const token = formatInlineReferenceTokenV1({ label: 'GitHub', ref: buildMentionRefForKindV1(MENTION_KIND_V1.vendorPlugin, 'github') });
+        const mention = { kind: 'vendorPlugin', vendorPluginRef: 'github', label: 'GitHub',
+            backendId: 'codex-app-server', agentId: 'codex', tokenText: token, start: 0, end: token.length } as const;
+        const changedMentions = vi.fn();
+        const screen = await renderScreen(<AgentInput value={token} onChangeText={mocks.onChangeText}
+            onSend={mocks.onSend} placeholder="p" autocompleteKinds={[]} autocompleteSuggestions={async () => []}
+            structuredInputMentions={[mention]} onStructuredInputMentionsChange={changedMentions} />);
+        const input = findNativeTextInput(screen);
+        await act(async () => {
+            input.props.onSelection({ nativeEvent: { selection: { start: 0, end: 0 } } });
+            input.props.onFocus({ nativeEvent: {} });
+        });
+        expect(hardwareShiftEnterState.listener).toBeTypeOf('function');
+        await act(async () => hardwareShiftEnterState.listener?.());
+        expect(mocks.onChangeText).toHaveBeenCalledWith(`\n${token}`);
+        expect(changedMentions).toHaveBeenLastCalledWith([{ ...mention, start: 1, end: token.length + 1 }]);
     });
 
     it('uses platform-correct immediate-send bypass for native hardware Mod+Enter', async () => {
