@@ -13,10 +13,29 @@ describe('buildCodeLinesFromUnifiedDiff', () => {
         const diff = '--- a/a\n+++ b/a\n@@ -1 +1 @@\n-\ufeffold\r\n+\ufeffnew\r\n\\ No newline at end of file\n@@ -9 +9 @@\n-last\n+next\n';
         const lines = buildCodeLinesFromUnifiedDiff({ unifiedDiff: diff });
         expect(lines.map(line => [line.id, line.hunkIndex])).toEqual([
-            ['h:2', 0], ['r:3', 0], ['a:4', 0], ['x:5', 0],
+            ['h:2', 0], ['r:3', 0], ['a:4', 0],
             ['h:6', 1], ['r:7', 1], ['a:8', 1],
         ]);
         expect(lines.find(line => line.id === 'a:4')?.renderCodeText).toBe('\ufeffnew');
+        expect(lines.find(line => line.id === 'a:4')).toMatchObject({ noEol: true, newLine: 1 });
+    });
+    it('keeps newline markers as previous-line metadata without consuming source coordinates or splitting a replacement', () => {
+        const lines = buildCodeLinesFromUnifiedDiff({
+            unifiedDiff: '@@ -1 +1 @@\n-old value\n\\ No newline at end of file\n+new value\n\\ No newline at end of file\n',
+            intraLineDiff: { enabled: true, maxLines: 20, maxLineLength: 100 },
+        });
+        expect(lines.map(line => [line.id, line.kind, line.oldLine, line.newLine])).toEqual([
+            ['h:0', 'header', null, null], ['r:1', 'remove', 1, null], ['a:3', 'add', null, 1],
+        ]);
+        expect(lines.slice(1)).toEqual([
+            expect.objectContaining({ noEol: true, renderCodeText: 'old value', renderIntraLineDiffSegments: expect.any(Array) }),
+            expect.objectContaining({ noEol: true, renderCodeText: 'new value', renderIntraLineDiffSegments: expect.any(Array) }),
+        ]);
+    });
+    it('retains literal marker text when it is an actual changed source line', () => {
+        const lines = buildCodeLinesFromUnifiedDiff({ unifiedDiff: '@@ -0,0 +1 @@\n+\\ No newline at end of file\n' });
+        expect(lines[1]).toMatchObject({ kind: 'add', newLine: 1, renderCodeText: '\\ No newline at end of file' });
+        expect(lines[1]).not.toHaveProperty('noEol');
     });
     it('hides the file prelude by default when hunks exist', () => {
         const diff = [

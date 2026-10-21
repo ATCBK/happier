@@ -79,6 +79,11 @@ pre, code, [data-diffs-header], [data-diff], [data-file], [data-error-wrapper], 
   --mix-light: 0%;
   --mix-dark: 0%;
 }
+[data-no-newline][data-line-type] {
+  /* EOF metadata describes the preceding source line; it is not another addition/deletion. */
+  background: transparent;
+}
+[data-no-newline][data-line-type]::before { content: none; }
 `;
 
 // The patched library retains its original number/dataset for interactions. Desktop exposes both

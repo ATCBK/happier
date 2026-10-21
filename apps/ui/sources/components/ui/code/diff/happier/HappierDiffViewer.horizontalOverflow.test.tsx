@@ -11,7 +11,7 @@ vi.mock('react-native', async () => {
 
 describe('Happier diff viewers horizontal overflow', () => {
     it.each(['text', 'unified'] as const)(
-        'scrolls no-wrap %s diff rows horizontally on Android while retaining selection of wrapped changed words',
+        'scrolls no-wrap %s diff rows horizontally on Android while keeping changed words as their own segments',
         async (mode) => {
             const { HappierTextDiffViewer } = await import('./HappierTextDiffViewer');
             const { HappierUnifiedDiffViewer } = await import('./HappierUnifiedDiffViewer');
@@ -45,7 +45,8 @@ describe('Happier diff viewers horizontal overflow', () => {
                 for (const text of ['before', 'after']) {
                     const textNodes = screen.tree.root.findAll((node) => typeof node.type === 'string' && String(node.type) === 'Text' && node.props.children === text);
                     expect(textNodes.length).toBeGreaterThan(0);
-                    expect(textNodes.map((node) => node.props.selectable)).toEqual(textNodes.map(() => wrapLines));
+                    // Native code text is not natively selectable: selection is captured by the shared web reading owner (CodeLineRow textSelectable).
+                    expect(textNodes.map((node) => node.props.selectable)).toEqual(textNodes.map(() => false));
                 }
             }
         },

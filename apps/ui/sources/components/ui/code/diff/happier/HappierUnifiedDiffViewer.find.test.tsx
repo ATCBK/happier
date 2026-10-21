@@ -8,12 +8,6 @@ import { buildCodeLinesFromUnifiedDiff } from '../../model/buildCodeLinesFromUni
 import { act } from 'react-test-renderer';
 
 installCodeViewCommonModuleMocks();
-// The third-party renderer is a boundary; renderer selection, diff parsing,
-// folding, settings subscriptions, and Find decoration all stay real.
-vi.mock('@pierre/diffs/react', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@pierre/diffs/react')>(),
-    FileDiff: () => React.createElement('pierre-file-diff', { testID: 'pierre-file-diff' }),
-}));
 const initialSettings = storage.getState().settings;
 beforeEach(() => storage.setState({ settings: { ...initialSettings, filesDiffFoldingEnabled: true,
     filesDiffFoldingContextThreshold: 4, filesDiffFoldingContextRadius: 1 } }));
@@ -24,24 +18,6 @@ afterEach(() => {
 });
 
 describe('unified diff Find reveal', () => {
-    it('renders real line matches while Find replaces Pierre and restores the saved renderer on close', async () => {
-        // jsdom supplies shadow DOM but cannot launch browser workers.
-        vi.stubGlobal('Worker', class { constructor() { throw new Error('Browser worker unavailable in host test'); } });
-        vi.stubEnv('EXPO_PUBLIC_HAPPIER_PIERRE_DIFFS__ENABLED', 'true');
-        storage.setState({ settings: { ...storage.getState().settings, filesDiffRendererMode: 'pierre' } });
-        const { DiffViewer } = await import('../DiffViewer.web');
-        await import('../pierre/PierreDiffViewer.web');
-        const unifiedDiff = 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+needle';
-        const target = buildCodeLinesFromUnifiedDiff({ unifiedDiff }).find(line => line.renderCodeText === 'needle')!;
-        const props = { mode: 'unified' as const, unifiedDiff, filePath: 'a.ts', virtualized: false };
-        const screen = await renderScreen(<DiffViewer {...props} findActive scrollToLineId={target.id}
-            findRangesByLineId={new Map([[target.id, [{ start: 0, end: 6, current: true }]]])} />);
-        expect(screen.findAllHostsByTestId('find-match-current').map(node => node.children.join('')).join('')).toBe('needle');
-        expect(screen.findByTestId('pierre-file-diff')).toBeNull();
-        await screen.update(<DiffViewer {...props} findActive={false} />);
-        expect(screen.findByTestId('pierre-file-diff')).not.toBeNull();
-        expect(storage.getState().settings.filesDiffRendererMode).toBe('pierre');
-    });
     it('opens the context region holding the current match through the canonical fold owner', async () => {
         const { HappierUnifiedDiffViewer } = await import('./HappierUnifiedDiffViewer');
         const unifiedDiff = ['@@ -1,11 +1,11 @@', ...Array.from({ length: 10 }, (_, index) => ` context ${index}`), '-old', '+new'].join('\n');

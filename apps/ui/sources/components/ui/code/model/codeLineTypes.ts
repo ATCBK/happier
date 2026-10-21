@@ -17,6 +17,8 @@ export type CodeLine = Readonly<{
     newLine: number | null;
     renderPrefixText: string;
     renderCodeText: string;
+    /** Source-line metadata from the canonical hunk parser, never a separate code row. */
+    noEol?: true;
     renderIntraLineDiffSegments?: readonly IntraLineDiffSegment[] | null;
     renderIsHeaderLine: boolean;
     selectable: boolean;

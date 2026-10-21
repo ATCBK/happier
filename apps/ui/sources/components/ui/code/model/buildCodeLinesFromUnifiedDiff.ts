@@ -134,6 +134,9 @@ export function buildCodeLinesFromUnifiedDiff(params: Readonly<{
         }
 
         const hunkLine = content.get(i);
+        // The engine already attached the following marker to this source line.
+        // Do not project it again as numbered/selectable code or break a remove/add pair.
+        if (!hunkLine && content.get(i - 1)?.noEol) continue;
         const codeText = hunkLine?.text.replace(/\r$/, '') ?? normalized.slice(1);
 
         if (hunkLine?.kind === 'add') {
@@ -185,6 +188,7 @@ export function buildCodeLinesFromUnifiedDiff(params: Readonly<{
                 newLine,
                 renderPrefixText: '+',
                 renderCodeText: codeText,
+                ...(hunkLine.noEol ? { noEol: true as const } : {}),
                 renderIntraLineDiffSegments,
                 renderIsHeaderLine: false,
                 selectable: true,
@@ -204,6 +208,7 @@ export function buildCodeLinesFromUnifiedDiff(params: Readonly<{
                 newLine: null,
                 renderPrefixText: '-',
                 renderCodeText: codeText,
+                ...(hunkLine.noEol ? { noEol: true as const } : {}),
                 renderIntraLineDiffSegments: null,
                 renderIsHeaderLine: false,
                 selectable: true,
@@ -228,6 +233,7 @@ export function buildCodeLinesFromUnifiedDiff(params: Readonly<{
                 newLine,
                 renderPrefixText: ' ',
                 renderCodeText: codeText,
+                ...(hunkLine.noEol ? { noEol: true as const } : {}),
                 renderIntraLineDiffSegments: null,
                 renderIsHeaderLine: false,
                 selectable: false,
@@ -237,7 +243,8 @@ export function buildCodeLinesFromUnifiedDiff(params: Readonly<{
             continue;
         }
 
-        pendingRemovals.length = 0;
+        // A `\ No newline at end of file` marker annotates the line before it; it does not break a remove/add pair.
+        if (!normalized.startsWith('\\')) pendingRemovals.length = 0;
         out.push({
             id: `x:${i}`,
             sourceIndex: i,

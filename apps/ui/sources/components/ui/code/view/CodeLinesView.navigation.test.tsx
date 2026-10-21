@@ -84,7 +84,8 @@ describe('code line navigation', () => {
             await settleScroll();
             const nativeIDs = screen.tree.findAll((node) => typeof node.type === 'string' && typeof node.props.nativeID === 'string').map((node) => node.props.nativeID);
             expect(new Set(nativeIDs).size).toBe(nativeIDs.length);
-            const targetIds = new Set(getElementById.mock.calls.map(([id]) => id));
+            // The selection-paint style element is looked up by id too; only the scroll targets are under test.
+            const targetIds = new Set(getElementById.mock.calls.map(([id]) => id).filter((id) => id.endsWith('-a:2')));
             expect(targetIds.size).toBe(2);
             for (const nativeID of targetIds) {
                 expect(screen.findByProps({ nativeID })).toBeTruthy();
