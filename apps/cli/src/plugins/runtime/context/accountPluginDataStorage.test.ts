@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import tweetnacl from 'tweetnacl';
+import * as collectionCodec from '@happier-dev/protocol/plugins/data/collectionLogicalCodecV1';
 import {
     FeaturesResponseSchema,
     PLUGIN_COLLECTION_DEFAULT_DEPLOYMENT_LIMITS_V1,
@@ -610,6 +611,77 @@ describe('Account plugin Data storage host', () => {
             .rejects.toMatchObject({ code: 'plugin_collection_undeclared' });
         await expect(next.put({ id: 'task-1', status: 'invalid', privateNote: 'note' }, { expectedRevision: 'absent' }))
             .rejects.toMatchObject({ code: 'plugin_collection_invalid_value' });
+    });
+
+    it.each([plainCredentials, encryptedCredentials])('validates stored Collection rows once per revision across invocation reads on $token', async (credentials) => {
+        // Observation only: the real codec, stored-schema adapter and crypto run.
+        const decode = vi.spyOn(collectionCodec, 'decodePluginCollectionLogicalRowV1');
+        let revision = 3;
+        let status = 'open';
+        let scope = ACCOUNT_SCOPE_KEY;
+        let wrongEnvelope = false;
+        let current: StoredCredentials = credentials;
+        const content = credentials.encryption === null
+            ? { t: 'plain' as const, v: { privateNote: 'retained', retired: true } }
+            : { t: 'encrypted' as const, c: sealPluginCollectionPrivatePayloadV1({
+                payload: { privateNote: 'retained', retired: true },
+                material: { type: 'dataKey', machineKey: encryptedMachineKey },
+                randomBytes: length => new Uint8Array(length).fill(3),
+            }) };
+        const post = vi.fn(async (url: string) => {
+            const row = { rowId: 'task-retained', revision, content: wrongEnvelope
+                ? (credentials.encryption === null ? { t: 'encrypted', c: 'invalid' } : { t: 'plain', v: {} })
+                : content, projection: { status, retired: true } };
+            return { status: 200, data: url.endsWith('/query')
+                ? { rows: [row], changeCursor: 1 }
+                : { row, absenceEpoch: 0 } };
+        });
+        const host = createAccountPluginDataStorageHost({
+            contracts: [admitted], readCredentials: async () => current,
+            isCurrentAccount: () => true, resolveAccountScopeKey: () => scope,
+            resolveBaseUrl: () => 'https://data.example.test',
+            resolveAccountEncryptionCurrentness: async (value) => currentnessFor(value),
+            http: { get: async () => ({ status: 200, data: {} }), post },
+        });
+        const bind = () => {
+            const account = host.bind({ pluginId: PLUGIN_ID, occurrenceId: '1',
+                signal: new AbortController().signal, isOccurrenceCurrent: () => true });
+            if (!account) throw new Error('Expected Account Data binding');
+            return account.collection(collectionDefinition);
+        };
+        try {
+            const first = await bind().get('task-retained');
+            expect(first?.value).toEqual({ id: 'task-retained', status: 'open', privateNote: 'retained' });
+            expect(decode).toHaveBeenCalledTimes(1);
+            if (first) Reflect.set(first.value, 'privateNote', 'caller mutation');
+            const queried = await bind().query({ index: 'by-status', prefix: ['open'], order: 'asc' });
+            expect(queried.rows[0]?.value).toEqual({ id: 'task-retained', status: 'open', privateNote: 'retained' });
+            expect(decode).toHaveBeenCalledTimes(1);
+            expect(post).toHaveBeenCalledTimes(2); // Fresh authority and transport are not cached.
+            scope = 'other-account-scope';
+            await bind().get('task-retained');
+            expect(decode).toHaveBeenCalledTimes(2);
+            revision += 1;
+            status = 'closed';
+            expect((await bind().get('task-retained'))?.value.status).toBe('closed');
+            expect(decode).toHaveBeenCalledTimes(3);
+            wrongEnvelope = true;
+            await expect(bind().get('task-retained')).rejects.toMatchObject({ code: 'plugin_collection_protocol_invalid' });
+            wrongEnvelope = false;
+            if (credentials.encryption) {
+                const machineKey = new Uint8Array(32).fill(9);
+                current = { token: credentials.token, encryption: { type: 'dataKey', machineKey,
+                    publicKey: tweetnacl.box.keyPair.fromSecretKey(machineKey).publicKey } };
+                // Revision equality never lets a retired key's plaintext escape.
+                await expect(bind().get('task-retained')).rejects.toBeInstanceOf(PluginError);
+                expect(decode).toHaveBeenCalledTimes(4);
+                current = credentials;
+            }
+            revision += 1;
+            status = 'invalid';
+            await expect(bind().get('task-retained')).rejects.toBeInstanceOf(PluginError);
+            expect(decode).toHaveBeenCalledTimes(credentials.encryption ? 5 : 4);
+        } finally { decode.mockRestore(); }
     });
 
     it('retains a static Collection binding without losing declaration or occurrence admission', async () => {

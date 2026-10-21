@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { randomBytes as nodeRandomBytes, randomUUID } from 'node:crypto';
+import { randomBytes as nodeRandomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import { computePluginUiArtifactSha256DigestV1 } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 import { readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
@@ -12,6 +12,7 @@ import { PluginAccountKvRowError, assertPluginAccountKvExpectedVersionV1, cloneP
 import type { PluginAccountStorageEntryV1, AccountEncryptionCurrentnessResponse, AccountScopedCryptoMaterial, NormalizedPluginAccountCollectionContractV1, PluginCollectionLogicalDecodeFailureReasonV1, PluginCollectionLogicalEncodeFailureReasonV1, PluginAccountCollectionContributionV1, PluginCollectionCandidatePreparationBindingV1, PluginCollectionContractRefV1, PluginDataCollectionsCapabilities, PluginCollectionMutationOperationV1, PluginCollectionMutationRequestMeasurementV1, PluginCollectionMutationRequestV1, PluginCollectionMutationResultV1, PluginCollectionRowV1, PluginCollectionLogicalValueV1, PluginAccountStorageRowV1 } from '@happier-dev/protocol';
 import { PLUGIN_COLLECTION_CANDIDATE_PREPARATION_RETIRE_HTTP_PATH_V1, PLUGIN_COLLECTION_CANDIDATE_PREPARATION_SOURCE_PAGE_HTTP_PATH_V1, PLUGIN_COLLECTION_CANDIDATE_PREPARATION_STAGE_HTTP_PATH_V1, PLUGIN_COLLECTION_GET_HTTP_PATH_V1, PLUGIN_COLLECTION_MUTATION_HTTP_PATH_V1, PLUGIN_COLLECTION_QUERY_HTTP_PATH_V1, PluginCollectionCandidatePreparationBindingV1Schema, PluginCollectionCandidatePreparationErrorV1Schema, PluginCollectionCandidatePreparationRetireRequestV1Schema, PluginCollectionCandidatePreparationRetireResultV1Schema, PluginCollectionCandidatePreparationSourcePageRequestV1Schema, PluginCollectionCandidatePreparationSourcePageResultV1Schema, PluginCollectionCandidatePreparationStageRequestV1Schema, PluginCollectionCandidatePreparationStageResultV1Schema, PluginCollectionGetRequestV1Schema, PluginCollectionGetResultV1Schema, PLUGIN_COLLECTION_FORGET_HTTP_PATH_V1, PluginCollectionForgetRequestV1Schema, PluginCollectionForgetResultV1Schema, PluginCollectionMutationErrorV1Schema, PluginCollectionMutationResultV1Schema, PluginCollectionQueryRequestV1Schema, PluginCollectionQueryResultV1Schema, PluginCollectionReadErrorV1Schema, normalizePluginAccountCollectionContractV1, resolveEffectivePluginCollectionLimitsV1, resolvePluginCollectionIdentityTagV1, splitPluginCollectionCandidatePreparationStageRequestsForKnownLimitsV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
 import { PLUGIN_COLLECTION_LIMITS_V1 } from '@happier-dev/protocol/plugins/data/collectionLimitsV1';
+import { assertPluginCollectionContentEnvelopeForModeV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
 import { PluginAccountCollectionContributionV1Schema, resolvePluginCollectionMigrationChainV1 } from '@happier-dev/protocol/plugins/data/collectionContributionV1';
 import { PluginCollectionRowIdV1Schema } from '@happier-dev/protocol/plugins/data/collectionUiQueryWireV1';
 import { compilePluginJsonSchema, createPluginJsonSchemaZodValueAdapter, preparePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
@@ -139,6 +140,19 @@ type BoundCollection = Readonly<{
     validate: ReturnType<typeof compilePluginJsonSchema>;
     storedValueSchema: ReturnType<typeof createPluginJsonSchemaZodValueAdapter>;
 }>;
+
+type AdmittedCollection = {
+    contract: NormalizedPluginAccountCollectionContractV1;
+    prepared?: BoundCollection;
+    definitions: WeakMap<PluginAccountCollectionDefinition, BoundCollection>;
+    reads?: Readonly<{
+        scopeKey: string;
+        accountLifetimeToken: number;
+        mode: 'plain' | 'e2ee';
+        material: AccountScopedCryptoMaterial | null;
+        rows: Map<string, PluginCollectionRow<PluginAccountCollectionValue<PluginAccountCollectionDefinition>>>;
+    }>;
+};
 
 /**
  * Host-private capability for one exact target artifact. The Protocol binding
@@ -581,11 +595,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
         listener: (hint: PluginAccountCollectionWatchInvalidation) => void,
     ) => () => void;
 } & AccountPluginDataStorageHostDependencies>): AccountPluginDataStorageHost {
-    const contractsByPluginAndCollection = new Map<string, {
-        contract: NormalizedPluginAccountCollectionContractV1;
-        prepared?: BoundCollection;
-        definitions: WeakMap<PluginAccountCollectionDefinition, BoundCollection>;
-    }>();
+    const contractsByPluginAndCollection = new Map<string, AdmittedCollection>();
     for (const contract of params.contracts) {
         contractsByPluginAndCollection.set(`${contract.pluginId}\u0000${contract.collectionId}`, {
             contract,
@@ -1771,8 +1781,9 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                 const existing = boundCollections.get(definition);
                 if (existing) return existing as PluginAccountCollectionForDefinition<TDefinition>;
                 let collection: BoundCollection;
+                let admitted: AdmittedCollection | undefined;
                 try {
-                    const admitted = contractsByPluginAndCollection.get(
+                    admitted = contractsByPluginAndCollection.get(
                         `${lifecycle.pluginId}\u0000${definition.id}`,
                     );
                     if (!admitted) return createUnavailableAccountCollection<TDefinition>(COLLECTION_UNDECLARED_CODE);
@@ -1978,12 +1989,49 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                     row: PluginCollectionRowV1,
                     mode: 'plain' | 'e2ee',
                     material: AccountScopedCryptoMaterial | null,
-                ): PluginCollectionRow<PluginAccountCollectionValue<TDefinition>> => mergeLogicalRow<PluginAccountCollectionValue<TDefinition>>({
-                    collection,
-                    row,
-                    encryptionMode: mode,
-                    material,
-                });
+                ): PluginCollectionRow<PluginAccountCollectionValue<TDefinition>> => {
+                    // Transport and current Account admission still run for every
+                    // read. Only the stored logical value is retained by this
+                    // admitted contract, at its latest server-issued row revision.
+                    const scopeKey = currentAccountScopeKey();
+                    const prior = admitted?.reads;
+                    const sameMaterial = prior?.material === null ? material === null
+                        : prior?.material !== undefined && material !== null
+                            && prior.material.type === material.type
+                            && timingSafeEqual(
+                                prior.material.type === 'legacy' ? prior.material.secret : prior.material.machineKey,
+                                material.type === 'legacy' ? material.secret : material.machineKey,
+                            );
+                    if (admitted && (!prior || prior.scopeKey !== scopeKey
+                        || prior.accountLifetimeToken !== lifecycle.accountLifetimeToken
+                        || prior.mode !== mode || !sameMaterial)) {
+                        admitted.reads = scopeKey ? {
+                            scopeKey, accountLifetimeToken: lifecycle.accountLifetimeToken,
+                            mode, material, rows: new Map(),
+                        } : undefined;
+                    }
+                    const rows = admitted?.reads?.rows;
+                    const retained = rows?.get(row.rowId);
+                    // The wire schema already admits the envelope. Its mode is
+                    // not implied by revision equality, including on a warm hit.
+                    if ((mode === 'plain') !== (row.content.t === 'plain')) {
+                        throw collectionDecodeFailureError('content-mode-mismatch');
+                    }
+                    if (mode === 'e2ee') {
+                        try { assertPluginCollectionContentEnvelopeForModeV1(row.content, mode); }
+                        catch { throw collectionDecodeFailureError('content-mode-mismatch'); }
+                    }
+                    if (retained?.revision === row.revision) {
+                        return Object.freeze({ ...retained, value: structuredClone(retained.value) }) as PluginCollectionRow<PluginAccountCollectionValue<TDefinition>>;
+                    }
+                    const decoded = mergeLogicalRow<PluginAccountCollectionValue<TDefinition>>({
+                        collection, row, encryptionMode: mode, material,
+                    });
+                    // A plugin cannot mutate the retained validated value through
+                    // a previously returned object. No second JSON/schema walk.
+                    rows?.set(row.rowId, { ...decoded, value: structuredClone(decoded.value) });
+                    return decoded;
+                };
 
                 const bound: PluginAccountCollectionForDefinition<TDefinition> = Object.freeze({
                     async forget(
@@ -1993,6 +2041,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                         if (!await forgetRowForRetention(rowId, options.expectedRevision, options.signal)) {
                             throw dataError(COLLECTION_CONFLICT_CODE, 'Collection forget conflicted with a newer row revision');
                         }
+                        admitted?.reads?.rows.delete(rowId);
                         return Object.freeze({ rowId, forgotten: true as const });
                     },
                     async identityTag(
@@ -2057,9 +2106,11 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                             throw dataError(COLLECTION_PROTOCOL_INVALID_CODE, 'Collection read response is invalid');
                         }
                         await assertCurrentAccount(credentials, options?.signal);
-                        return parsed.data.row
-                            ? materialize(parsed.data.row, encryption.mode, encryption.material)
-                            : null;
+                        if (!parsed.data.row) {
+                            admitted?.reads?.rows.delete(rowId);
+                            return null;
+                        }
+                        return materialize(parsed.data.row, encryption.mode, encryption.material);
                     },
                     async put(
                         value: PluginAccountCollectionValue<TDefinition>,
@@ -2114,6 +2165,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                         if (!entry || !entry.deleted || entry.rowId !== rowId) {
                             throw dataError(COLLECTION_PROTOCOL_INVALID_CODE, 'Collection delete response omitted its deleted row');
                         }
+                        admitted?.reads?.rows.delete(rowId);
                         return Object.freeze({ rowId: entry.rowId, revision: entry.revision, deleted: true as const });
                     },
                     async query(requestInput: PluginCollectionQuery, options?: Readonly<{ signal?: AbortSignal }>) {
