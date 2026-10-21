@@ -107,6 +107,9 @@ function readDaemonOwnershipEnvironmentVariablesFromPosixPs(
     const raw = execFileSync('ps', ['eww', '-p', String(pid), '-o', 'command='], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
+      // @happier-platform:begin feat=daemon-ps-locale-fix eww 投影同样强制 UTF-8
+      env: posixPsEnvironment(),
+      // @happier-platform:end feat=daemon-ps-locale-fix
     });
     const pairs = parseEnvironmentEntries(raw.split(/\s+/u).filter(Boolean));
     return pickEnvironmentVariables(pairs, DAEMON_OWNERSHIP_ENVIRONMENT_VARIABLE_KEYS);
@@ -166,6 +169,17 @@ function parsePositiveInt(value: unknown): number | null {
     : Number.parseInt(typeof value === 'string' ? value : '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
+
+// @happier-platform:begin feat=daemon-ps-locale-fix ps 子进程强制 UTF-8 locale
+// macOS launchd starts the daemon without LANG/LC_*, so BSD ps falls back to the C locale and
+// rewrites non-ASCII bytes in captured command lines as M-x control notation (e.g. 「项目」→
+// M-iM-!M-9M-gM^[M-.). The ps-captured runner entry then never matches the daemon's correct
+// (Node-native) path and every runner is misjudged stale. Forcing a UTF-8 locale on the ps
+// child makes its output byte-faithful regardless of the ambient daemon environment.
+function posixPsEnvironment(): NodeJS.ProcessEnv {
+  return { ...process.env, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' };
+}
+// @happier-platform:end feat=daemon-ps-locale-fix
 
 function parseWindowsProcessInfoOutput(output: string): Map<number, { pid: number; name?: string; cmd?: string }> {
   const trimmed = output.trim();
@@ -244,6 +258,9 @@ function getProcessInfoByPidPosix(pid: number): RawProcessInfo | null {
     const output = execFileSync('ps', ['-o', 'stat=,ucomm=,command=', '-p', String(pid)], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
+      // @happier-platform:begin feat=daemon-ps-locale-fix stat/ucomm/command 投影强制 UTF-8
+      env: posixPsEnvironment(),
+      // @happier-platform:end feat=daemon-ps-locale-fix
     }).trim();
     const line = output
       .split('\n')
