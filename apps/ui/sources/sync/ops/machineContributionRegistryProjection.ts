@@ -7,6 +7,7 @@ import {
     DaemonPluginSettingsWatchRequestSchema,
     DaemonPluginSettingsWatchResponseSchema,
     isRpcMethodNotFoundResult,
+    RPC_ERROR_CODES,
     RPC_METHODS,
     type DaemonPluginSettingsWatchRequest,
     type DaemonPluginSettingsWatchResponse,
@@ -53,11 +54,23 @@ export {
  * - `timeout` / `aborted`: the machine RPC budget elapsed or the caller left;
  * - `invalid-response`: the daemon answered with a body this client cannot
  *   parse, or one that answers a different question than was asked;
- * - `error`: any other transport failure.
+ * - transport, access, authentication, update and encryption failures retain
+ *   their stable RPC category, without exposing the error's message or data;
+ * - `request-failed` / `transport-error`: local request preparation failed,
+ *   or the RPC failed without a more specific stable category;
+ * - `error`: a less-specific failure from a targeted read or projection cache.
  */
 export type MachineContributionRegistryProjectionFailureReason =
     | MachinePluginTransportReason
-    | 'invalid-response';
+    | 'invalid-response'
+    | 'request-failed'
+    | 'transport-error'
+    | 'transport-unavailable'
+    | 'access-denied'
+    | 'authentication-required'
+    | 'authentication-unavailable'
+    | 'update-required'
+    | 'encryption-unavailable';
 
 export type MachineContributionRegistryProjectionDescribeResult =
     | Readonly<{
@@ -205,6 +218,31 @@ function classifyMachinePluginTransportError(error: unknown): MachinePluginTrans
     return 'error';
 }
 
+/** Projection reads expose recovery categories, never arbitrary peer codes or prose. */
+function classifyMachineProjectionReadError(error: unknown): MachineContributionRegistryProjectionFailureReason {
+    switch (readRpcErrorCode(error)) {
+        case RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE:
+        case RPC_ERROR_CODES.OUTCOME_UNKNOWN:
+            // This is a read: losing its reply means no current projection is
+            // available, not that the Machine is offline or lacks integrations.
+            return 'transport-unavailable';
+        case RPC_ERROR_CODES.FORBIDDEN:
+            return 'access-denied';
+        case RPC_ERROR_CODES.TEAM_AUTHENTICATION_REQUIRED:
+            return 'authentication-required';
+        case RPC_ERROR_CODES.TEAM_AUTHENTICATION_UNAVAILABLE:
+            return 'authentication-unavailable';
+        case RPC_ERROR_CODES.UPDATE_REQUIRED:
+            return 'update-required';
+        case 'MACHINE_ENCRYPTION_UNAVAILABLE':
+            return 'encryption-unavailable';
+        default: {
+            const reason = classifyMachinePluginTransportError(error);
+            return reason === 'error' ? 'transport-error' : reason;
+        }
+    }
+}
+
 /** Plugin work follows its caller's lifetime; setup retains the RPC admission budget. */
 function pluginRpcOperationOptions(opts: Readonly<{ timeoutMs?: number | null; signal?: AbortSignal }>) {
     return {
@@ -337,7 +375,7 @@ export async function machineContributionRegistryProjectionDescribe(
                 : await readProjectionClientContext(machineId),
         );
     } catch {
-        return { supported: false, reason: 'error' };
+        return { supported: false, reason: 'request-failed' };
     }
     const scope = {
         machineId: payload.machineId,
@@ -375,7 +413,7 @@ export async function machineContributionRegistryProjectionDescribe(
             if (isRpcMethodNotFoundError(error) || isRpcMethodNotAvailableError(error)) {
                 return { supported: false, reason: 'not-supported' };
             }
-            return { supported: false, reason: classifyMachinePluginTransportError(error) };
+            return { supported: false, reason: classifyMachineProjectionReadError(error) };
         }
     });
     return await waitForSharedRead(request, opts?.signal, () => ({ supported: false, reason: 'aborted' }));
