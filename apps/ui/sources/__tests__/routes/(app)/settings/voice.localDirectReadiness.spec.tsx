@@ -4,7 +4,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMachineFixture, createRootLayoutFeaturesResponse, renderSettingsView, standardCleanup } from '@/dev/testkit';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainMachineReadHttpResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { createVoiceSettingsAccountTestHarness } from '@/voice/settings/panels/voiceSettingsAccountTestHarness';
@@ -117,9 +117,8 @@ async function configure(voice = createVoice(), options: { capped?: boolean; mac
     account.request.mockImplementation(async (url, init) => {
         const path = new URL(String(url)).pathname;
         if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
-        if (path.startsWith('/v1/machines/')) return Response.json({ machine: createPlainMachineRowFixture({
-            id: decodeURIComponent(path.slice('/v1/machines/'.length)), accountId: account.scope.accountId,
-        }) });
+        const machineResponse = createPlainMachineReadHttpResponseFixture(path, init, account.scope.accountId);
+        if (machineResponse) return machineResponse;
         return baseRequest(url, init);
     });
     const snapshot = await getServerFeaturesSnapshot({ serverId: account.scope.serverId, force: true });

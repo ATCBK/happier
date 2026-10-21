@@ -35,10 +35,14 @@ import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fi
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
+import { MachinePublishedRowV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 let accountConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 
 async function restorePagingAccount() {
+    const machine = MachinePublishedRowV1Schema.parse({ ...createOnlineMachine('machine-1'),
+        metadata: null, daemonState: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
     installDisconnectedServerSocketBoundary((socket) => {
         // Keep real SDK/host RPC codecs and replace only the remote ACK boundary.
         socket.connected = true;
@@ -61,7 +65,9 @@ async function restorePagingAccount() {
             const url = new URL(String(input));
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
-            if (url.pathname.startsWith('/v1/machines/')) return Response.json({ machine: { id: 'machine-1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
+            if (url.pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                id => id === machine.id ? machine : null);
+            if (url.pathname === '/v1/machines/machine-1') return Response.json({ machine });
             if (url.pathname.endsWith('/messages')) return requestMock(url.pathname + url.search, init);
             return Response.json({}, { status: 404 });
         },

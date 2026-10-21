@@ -9,7 +9,7 @@ import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionAc
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { PluginPermissionSubjectV1Schema } from '@happier-dev/protocol/plugins/permissions/grants';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 let account: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
 vi.mock('socket.io-client', async original => (
@@ -189,11 +189,13 @@ const grant = Object.freeze({
 describe('VoiceRawCredentialAccessReview', () => {
   beforeEach(async () => {
     account = await restoreServerAccountForTest({ serverUrl: `https://raw-${crypto.randomUUID()}.example.test`,
-      accountId: 'account-1', credentialScope: 'restored-home', request: async url => {
+      accountId: 'account-1', credentialScope: 'restored-home', request: async (url, init) => {
         const path = new URL(String(url)).pathname;
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
         if (path === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain', v: {} } });
         if (path === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'machine-a', accountId: 'account-1' })]);
+        if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+          id => id === 'machine-a' ? createPlainMachineRowFixture({ id, accountId: 'account-1' }) : null);
         if (path === '/v1/machines/machine-a') return Response.json({ machine: createPlainMachineRowFixture({ id: 'machine-a', accountId: 'account-1' }) });
         return new Response('{}', { status: 404 });
       } });

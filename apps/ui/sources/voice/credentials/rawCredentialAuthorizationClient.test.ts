@@ -6,6 +6,7 @@ import { DaemonVoiceClientRawCredentialAuthorizationInspectResponseV1Schema,
   DaemonVoiceClientRawCredentialAuthorizationRequestResponseV1Schema } from '@happier-dev/protocol/daemon/voiceCredentials';
 import { PluginPermissionGrantV1Schema, PluginPermissionGrantRequestV1Schema } from '@happier-dev/protocol/plugins/permissions/grants';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
@@ -109,11 +110,13 @@ const permissionHttp = vi.fn<NonNullable<NonNullable<Parameters<typeof createPlu
 beforeEach(async () => {
   webLocks = installWebLockManagerMock();
   account = await restoreServerAccountForTest({ serverUrl: 'https://raw-authorization.test',
-    accountId: 'account-a', credentialScope: 'restored-home', request: async url => {
+    accountId: 'account-a', credentialScope: 'restored-home', request: async (url, init) => {
       const path = new URL(String(url)).pathname;
       if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
       if (path === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain', v: {} } });
       if (path === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' })]);
+      if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+        id => id === 'machine-1' ? createPlainMachineRowFixture({ id, accountId: 'account-a' }) : null);
       if (path === '/v1/machines/machine-1') return Response.json({ machine: createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' }) });
       return null;
     } });

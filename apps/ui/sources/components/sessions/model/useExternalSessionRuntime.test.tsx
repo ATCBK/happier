@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSessionFixture, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ExternalSessionStatusGetResponseSchema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
@@ -293,7 +293,9 @@ describe('useExternalSessionRuntime', () => {
       ...['srv_server-1', 'srv_server-2', 'srv_server-owned-a', 'srv_server-owned-b', 'srv_server-owned'].map(key => ({
         key, serverUrl: 'https://external-' + key + '.test', serverIdentityId: key, accountId: 'account-a',
       })),
-    ], route: ({ path, url }) => {
+    ], route: ({ path, url, body, method }) => {
+      if (path === '/v1/machines/read-batch' && method === 'POST') return createMachineReadBatchResponseFixture(body,
+        id => id === machine.id ? machine : null);
       if (path === '/v1/machines/machine-1') return Response.json({ machine });
       if (path === '/v1/machines') return Response.json([machine]);
       return sessions.handle(url) ?? http.request(url);

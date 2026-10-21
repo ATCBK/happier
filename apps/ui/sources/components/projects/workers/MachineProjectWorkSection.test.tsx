@@ -13,7 +13,7 @@ import {
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { storage } from '@/sync/domains/state/storage';
 import { apiSocket } from '@/sync/api/session/apiSocket';
@@ -71,18 +71,6 @@ vi.mock(
     return createServerScopedMachineRpcBoundaryMock(rpc.machine);
   },
 );
-// The Machine record read is an HTTP boundary; every other Home request keeps the real client.
-vi.mock('@/sync/http/client', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/sync/http/client')>();
-  return {
-    ...actual,
-    serverFetch: async (...args: Parameters<typeof actual.serverFetch>) =>
-      args[0] === '/v1/machines/m1' && machineHttp.read
-        ? (await machineHttp.gate, machineHttp.read())
-        : await actual.serverFetch(...args),
-  };
-});
-
 let fixture:
   | Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>
   | undefined;
@@ -130,12 +118,23 @@ async function setup(
   const { loadSyncSingletonForTests } =
     await import('@/dev/testkit/harness/syncSingletonLoader');
   await loadSyncSingletonForTests();
-  fixture = await createPlainArtifactHomeFixture('https://machine-work.test', { currentAccount: true });
+  fixture = await createPlainArtifactHomeFixture('https://machine-work.test', { currentAccount: true,
+    handleRequest: async (path, init) => {
+      const batch = path === '/v1/machines/read-batch' && init?.method === 'POST';
+      if (!machineHttp.read || (path !== '/v1/machines/m1' && !batch)) return null;
+      await machineHttp.gate;
+      const response = machineHttp.read();
+      if (!batch || !response.ok) return response;
+      const body: unknown = await response.json();
+      const row = body && typeof body === 'object' && 'machine' in body ? body.machine : null;
+      return createMachineReadBatchResponseFixture(init?.body, id => id === 'm1' ? row : null);
+    },
+  });
   machineHttp.read = () =>
     new Response(
       JSON.stringify({
         machine: {
-          id: 'm1',
+          ...createPlainMachineRowFixture({ id: 'm1', accountId: 'artifact-account' }),
           metadata: encodePlainMachineStoredContent(metadata),
           metadataVersion: version,
           dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,

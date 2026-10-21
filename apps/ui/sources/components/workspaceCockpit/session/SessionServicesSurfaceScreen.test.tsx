@@ -7,6 +7,7 @@ import { DaemonLocalServicePublicPreviewCreateResponseV1Schema, LocalServicePubl
 
 import { buildLocalServiceInventoryState, createMachineFixture, createPlainMachineRowFixture, createSessionFixture, renderScreen } from '@/dev/testkit';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import { primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -44,9 +45,11 @@ const responses = new Map<string, unknown>();
 // Only Home HTTP/Socket transport and native consequence presentation are replaced.
 const runtime = installSessionPaneRuntimeTestHarness({
     sessionId: 'session-a', features,
-    request: async url => {
+    request: async (url, init) => {
         const path = new URL(String(url)).pathname;
         const machine = createPlainMachineRowFixture({ id: 'machine-a', accountId: 'account-a' });
+        if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+            id => id === machine.id ? machine : null);
         return path === '/v1/machines' ? Response.json([machine])
             : path === '/v1/machines/machine-a' ? Response.json({ machine }) : null;
     },

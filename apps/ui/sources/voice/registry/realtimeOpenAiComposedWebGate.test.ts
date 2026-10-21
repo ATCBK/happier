@@ -11,7 +11,7 @@ import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plu
 import { log } from '@/log';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { sync } from '@/sync/sync';
@@ -602,6 +602,8 @@ describe('realtime_openai source-composed WebRTC gate', () => {
           if (url.origin === new URL(accountConnection.home.serverUrl).origin) return homeRequest(input, init);
           if (url.pathname === '/v1/account/profile') return Response.json(AccountProfileSchema.parse({ id: 'openai-composed-account-b' }));
           if (url.pathname === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: OPENAI_CREDENTIAL_MACHINE_ID, accountId: 'openai-composed-account-b' })]);
+          if (url.pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+            id => id === OPENAI_CREDENTIAL_MACHINE_ID ? createPlainMachineRowFixture({ id, accountId: 'openai-composed-account-b' }) : null);
           if (url.pathname === `/v1/machines/${OPENAI_CREDENTIAL_MACHINE_ID}`) return Response.json({ machine: createPlainMachineRowFixture({ id: OPENAI_CREDENTIAL_MACHINE_ID, accountId: 'openai-composed-account-b' }) });
           return homeRequest(input, init);
         },

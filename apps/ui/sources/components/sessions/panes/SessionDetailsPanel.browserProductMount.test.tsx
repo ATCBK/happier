@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DaemonContributionRegistryProjectionDescribeResponseSchema, MACHINE_PLAIN_DATA_KEY_MARKER, PluginProjectionV2Schema, DiscussionOpenedSummaryV1Schema } from '@happier-dev/protocol';
+import { DaemonContributionRegistryProjectionDescribeResponseSchema, PluginProjectionV2Schema, DiscussionOpenedSummaryV1Schema } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { z } from 'zod/mini';
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
@@ -18,17 +18,24 @@ import { installSessionDetailsPanelCommonModuleMocks } from './sessionDetailsPan
 import { installSessionPaneRuntimeTestHarness } from './sessionPaneRuntimeTestHarness';
 import { createSessionBoardDetailsTab, createSessionCommitDetailsTab, createSessionDiscussionDetailsTab } from './details/sessionDetailsTabBuilders';
 import { createWorkspaceFileDetailsTab } from '@/components/appShell/panes/details/fileDetailsTab';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installSessionDetailsPanelCommonModuleMocks();
+// Browser launchpad discovery is served by this Account's explicitly admitted daemon.
+const browserMachine = createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' });
 const runtime = installSessionPaneRuntimeTestHarness({
     features: () => createRootLayoutFeaturesResponse({ features: {
         browser: { enabled: true, viewTargets: { enabled: true } },
     } }),
     request: async (url, init) => {
-        if ((init?.method ?? 'GET') === 'GET' && new URL(String(url)).pathname === '/v1/machines/machine-1') {
-            return Response.json({ machine: { id: 'machine-1', kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/machines/read-batch' && init?.method === 'POST') {
+            return createMachineReadBatchResponseFixture(init.body, id => id === browserMachine.id ? browserMachine : null);
+        }
+        if ((init?.method ?? 'GET') === 'GET' && path === '/v1/machines/machine-1') {
+            return Response.json({ machine: browserMachine });
         }
         return null;
     },

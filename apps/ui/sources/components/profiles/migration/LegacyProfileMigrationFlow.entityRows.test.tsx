@@ -20,7 +20,8 @@ import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@h
 import { SavedSecretResourceMaterialsResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { MachinePublishedRowV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit/render/renderScreen';
@@ -152,7 +153,7 @@ describe('Legacy Profile guided source preparation', () => {
         const machineRows = ['machine-nearest', selectedMachineId].map(id => {
             const fixture = createMachineFixture({ id, kind: 'persistent', activeAt: Date.now(),
                 storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
-            return { ...fixture, metadata: encodePlainMachineStoredContent(fixture.metadata), daemonState: null };
+            return MachinePublishedRowV1Schema.parse({ ...fixture, metadata: encodePlainMachineStoredContent(fixture.metadata), daemonState: null });
         });
         catalogReads.mockImplementation(async () => Response.json(ProfileRowsListResponseV1Schema.parse({ status: 'listed',
             rows: [], nextCursor: null, complete: true, diagnostics: [], referenceGuardRevision: 'absent',
@@ -187,6 +188,8 @@ describe('Legacy Profile guided source preparation', () => {
             if (path === AUTHORING_MEMORY_ROUTE_V1) return Response.json({ rows: [] });
             if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return Response.json({ status: 'listed', rows: [], coverage: 'complete' });
             if (path === '/v1/machines') return Response.json(machineRows);
+            if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                id => machineRows.find(row => row.id === id) ?? null);
             const machine = machineRows.find(row => path === `/v1/machines/${row.id}`);
             if (machine) return Response.json({ machine });
             if (path === PROFILE_ROWS_ROUTE_V1) return catalogReads(url, init);

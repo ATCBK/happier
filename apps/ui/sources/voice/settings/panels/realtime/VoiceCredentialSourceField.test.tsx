@@ -17,7 +17,7 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { getConnectedAccountAuthentication } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { AppShellPluginUiProjectionProvider, useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { commitExternalVoiceProviderRegistration, resetExternalVoiceProviderRegistrationsForTests } from '@/voice/registry/externalVoiceProviderRegistrations';
 import { createVoiceProviderRegistry } from '@/voice/registry/providerRegistry';
@@ -443,6 +443,8 @@ beforeEach(async () => {
       id: descriptorMachineId, accountId: account!.scope.accountId,
     });
     if (path === '/v1/machines') return Response.json([machine]);
+    if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+      id => id === machine.id ? machine : null);
     // The real scoped RPC owner must confirm this exact Home machine envelope
     // before it can emit a daemon request; a list row alone is not that authority.
     if (path === `/v1/machines/${descriptorMachineId}`) return Response.json({ machine });

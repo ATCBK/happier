@@ -3,7 +3,7 @@ import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SessionResumeRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionResumeRequestV1';
 import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import {
   createRetainedVoiceAgentRpcBoundary,
   createStandaloneVoicePolicyHarness,
@@ -70,9 +70,11 @@ describe('teleportVoiceAgentToSessionRoot', () => {
       throw new Error(`Unexpected Voice teleport RPC: ${method}`);
     } });
     harness = await createStandaloneVoicePolicyHarness({ mode: 'off', dispatch: daemon.dispatch,
-      handleRequest: async path => {
+      handleRequest: async (path, init) => {
         const pathname = new URL(path, 'https://voice.test').pathname;
         if (pathname === '/v1/machines') return Response.json([machineRow]);
+        if (pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+          id => id === machineRow.id ? machineRow : null);
         if (pathname === '/v1/machines/machine-1') return Response.json({ machine: machineRow });
         return null;
       },

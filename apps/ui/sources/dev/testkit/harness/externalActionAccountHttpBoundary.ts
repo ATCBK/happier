@@ -11,7 +11,7 @@ import {
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { openExternalActionRequesterAccountContextV1, type ExternalActionRequesterInvocationV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
-import { createPlainMachineRowFixture } from '../fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '../fixtures/machineFixtures';
 
 /** One current plain Account's external issuer and Machine HTTP responses.
  * Account capture, custody admission, authorization binding and requester-box crypto stay real.
@@ -57,6 +57,8 @@ export async function createExternalActionAccountHttpBoundary(params: Readonly<{
         async handle(url: URL, init?: RequestInit): Promise<Response | null> {
             if (url.origin !== new URL(params.serverUrl).origin) return null;
             if (url.pathname === '/v1/machines') return Response.json([machine]);
+            if (url.pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                id => id === machine.id ? machine : null);
             const mintPath = bindExternalActionExecutionAuthorizationHttpPathV1(params.actionId);
             if (url.pathname !== mintPath && url.pathname !== `/v1/actions/${params.actionId}`) return null;
             const body: unknown = JSON.parse(String(init?.body));

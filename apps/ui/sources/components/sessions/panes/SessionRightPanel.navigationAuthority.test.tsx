@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod/mini';
 import {
     DaemonContributionRegistryProjectionDescribeResponseSchema,
-    MACHINE_PLAIN_DATA_KEY_MARKER,
     PluginProjectionV2Schema,
 } from '@happier-dev/protocol';
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
@@ -14,6 +13,7 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { installSessionPaneRuntimeTestHarness } from './sessionPaneRuntimeTestHarness';
 import { createSessionPaneScopeId } from './sessionPaneScopeId';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 // Only the native SDK/router and actual Home HTTP/Socket transport are
 // substituted. Session lookup, projection, pane reducer and launch owners run real.
@@ -41,12 +41,20 @@ const destinationBinding = normalizePluginUiDestinationBindingV1({
     container: 'rightSidebarTab', target: { kind: 'session' },
 });
 if (!destinationBinding) throw new Error('Canonical destination schema refused the Session sidebar fixture');
+// This journey admits the Account's named daemon to serve its sidebar projection.
+// Declare the external custody explicitly, independently of the hydrated UI row.
+const sidebarMachine = createPlainMachineRowFixture({ id: 'm1', accountId: 'account-a' });
 const runtime = installSessionPaneRuntimeTestHarness({
     sessionId,
     scopeId: ({ serverId }) => createSessionPaneScopeId(sessionId, serverId),
-    request: async (url, init) => (init?.method ?? 'GET') === 'GET' && new URL(String(url)).pathname === '/v1/machines/m1'
-        ? Response.json({ machine: { id: 'm1', kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } })
-        : null,
+    request: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/machines/read-batch' && init?.method === 'POST') {
+            return createMachineReadBatchResponseFixture(init.body, id => id === sidebarMachine.id ? sidebarMachine : null);
+        }
+        return (init?.method ?? 'GET') === 'GET' && path === '/v1/machines/m1'
+            ? Response.json({ machine: sidebarMachine }) : null;
+    },
     configureSocket: socket => {
         vi.mocked(socket.connect).mockImplementation(() => {
             socket.connected = true;

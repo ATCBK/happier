@@ -8,7 +8,7 @@ import { ScmWorkingSnapshotSchema, createScmCapabilities } from '@happier-dev/pr
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { DaemonFilesystemListDirectoryRequestSchema, DaemonFilesystemListDirectoryResponseSchema, DaemonFilesystemListRootsResponseSchema } from '@happier-dev/protocol/machines/fileBrowser';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 import { MachinePathBrowserView } from '@/components/ui/pathBrowser/MachinePathBrowserModal';
 import { MachineSelector } from '@/components/sessions/new/components/MachineSelector';
@@ -135,6 +135,8 @@ beforeEach(async () => {
     account = await restoreServerAccountForTest({ serverUrl: 'https://workflow-where.test', accountId: 'account-a', request: async (url, init) => {
         const path = new URL(String(url)).pathname;
         if (path === '/v1/machines') return Response.json(machineRows);
+        if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+            id => machineRows.find(row => row.id === id) ?? null);
         const machine = machineRows.find(row => path === `/v1/machines/${row.id}`);
         if (machine) return Response.json({ machine });
         if (path === '/health' || path.startsWith('/v1/features') || path.startsWith('/v1/account/encryption')
