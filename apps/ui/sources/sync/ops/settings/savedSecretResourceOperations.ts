@@ -493,11 +493,9 @@ function catalogCreationOutcomeVerifier<TSuccess extends Extract<SavedSecretCata
                 && entry.materialStatus === 'ready' && entry.capabilities.use))) return unknown();
             const success = params.verifyIntent ? await params.verifyIntent(context) : params.success;
             if (!success) return unknown();
-            const currentMode = (await fetchAccountEncryptionMode(context.credentials, { request: context.request })).mode;
-            if (encryption) {
-                const currentStorage = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
-                if (currentStorage.mode !== mode) return unknown();
-            }
+            const currentMode = encryption
+                ? (await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage: 'fresh-authority' })).mode
+                : (await fetchAccountEncryptionMode(context.credentials, { request: context.request, usage: 'fresh-authority' })).mode;
             context.assertCurrent();
             if (!params.originalContext.accountLifetime.isCurrent() || currentMode !== mode) return unknown();
             return success;

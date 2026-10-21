@@ -146,11 +146,9 @@ async function readSavedSecretReferencesInContext(
         });
         // Opening private material cannot authorize its later disclosure: the
         // server may have committed revocation before the socket delivers it.
-        const currentMode = (await fetchAccountEncryptionMode(context.credentials, { request: context.request, usage: 'fresh-authority' })).mode;
-        if (needsAccountEncryption) {
-            const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage: 'fresh-authority' });
-            if (current.mode !== accountMode) return { ok: false, reason: 'unavailable' };
-        }
+        const currentMode = needsAccountEncryption
+            ? (await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage: 'fresh-authority' })).mode
+            : (await fetchAccountEncryptionMode(context.credentials, { request: context.request, usage: 'fresh-authority' })).mode;
         signal?.throwIfAborted();
         context.assertCurrent();
         if (currentMode !== accountMode) return { ok: false, reason: 'unavailable' };

@@ -89,7 +89,8 @@ export async function readRemoteHostCatalogInContext(context: RemoteHostAccountC
     catch (error) { return failure(error, signal); }
 }
 export async function readRemoteHostCatalog(scope: ServerAccountScope, signal?: AbortSignal): Promise<RemoteHostCatalogSnapshotV1> {
-    try { return await withProfileAccount(scope, signal, context => readRemoteHostCatalogInContext(context, signal), 'identity'); }
+    try { return await withProfileAccount(scope, signal,
+        (context, mode, material) => readAdmittedRemoteHostCatalog(context, mode, material, signal), 'identity'); }
     catch (error) { return failure(error, signal); }
 }
 
