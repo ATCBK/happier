@@ -61,6 +61,10 @@ export function applyLocalServiceLauncherSnapshot(
     state: LocalServiceLauncherState,
     snapshot: LocalServiceLauncherSnapshot,
 ): LocalServiceLauncherState {
+    // Reads and Action responses share this owner. A delayed earlier read cannot
+    // replace the native facts already published by a newer response.
+    if (state.machineId === snapshot.machineId && state.sessionId === (snapshot.sessionId ?? null)
+        && state.updatedAt !== null && snapshot.updatedAt < state.updatedAt) return state;
     const targetsById = new Map<string, LocalServiceLaunchTarget>();
     const targetIds: string[] = [];
 

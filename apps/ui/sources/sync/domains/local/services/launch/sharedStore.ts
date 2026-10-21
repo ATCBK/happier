@@ -131,9 +131,12 @@ const store = createSharedSubscriptionStore<
             ...(normalized.accountId ? { accountId: normalized.accountId } : {}),
             signal,
         });
+        // An Action can publish while this network read is pending. Reconcile
+        // against the current owner state so its native timestamp orders both paths.
+        const current = getLocalServiceLauncherState(input);
         return result.ok
-            ? applyLocalServiceLauncherSnapshot(state, result.snapshot)
-            : failRefresh(state, normalized, result.reason);
+            ? applyLocalServiceLauncherSnapshot(current, result.snapshot)
+            : current.updatedAt !== state.updatedAt ? current : failRefresh(current, normalized, result.reason);
     },
     failRefresh: (state, input) => (
         failRefresh(state, normalizeInput(input), 'request_failed')

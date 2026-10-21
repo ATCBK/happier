@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalServiceLauncherSnapshotV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { flushHookEffects } from '@/dev/testkit';
+import { createDeferred, flushHookEffects } from '@/dev/testkit';
 
 const rpc = vi.hoisted(() => ({ machine: vi.fn(), launcher: vi.fn() }));
 // Daemon transport is the boundary; subscription, request and response owners remain real.
@@ -14,6 +14,8 @@ import { expectNoWallClockPolling } from '../noPollingTestHelpers';
 import {
     getLocalServiceLauncherState,
     publishLocalServiceLauncherSnapshot,
+    invalidateLocalServiceLauncherStore,
+    readLocalServiceLauncherStore,
     resetLocalServiceLauncherStoreForTests,
     subscribeLocalServiceLauncherStore,
 } from './sharedStore';
@@ -61,6 +63,38 @@ describe('shared local-service launcher store', () => {
     afterEach(() => {
         resetLocalServiceLauncherStoreForTests();
         resetLocalServiceInventoryStoreForTests();
+    });
+
+    it.each(['snapshot', 'failure'] as const)('does not let a late pre-Start read overwrite a newer succeeded-Start snapshot (%s)', async reply => {
+        const stale = createDeferred<void>();
+        const entered = createDeferred<void>();
+        let held = false;
+        rpc.launcher.mockImplementation(async () => {
+            if (held) {
+                entered.resolve(); await stale.promise;
+                if (reply === 'failure') throw new Error('earlier_read_failed');
+            }
+            return { protocolVersion: 1, snapshot: { ...snapshot, targets: [] } };
+        });
+        const key = { machineId: 'machine-a', serverId: 'server-a', sessionId: 'session-a' };
+        const unsubscribe = subscribeLocalServiceLauncherStore(key, () => {});
+        try {
+            await flushMicrotasks();
+            held = true;
+            invalidateLocalServiceLauncherStore(key);
+            await entered.promise;
+            const pending = readLocalServiceLauncherStore(key);
+            publishLocalServiceLauncherSnapshot(key, { ...snapshot, updatedAt: 2_000 });
+            stale.resolve();
+            await pending;
+            expect(getLocalServiceLauncherState(key).updatedAt).toBe(2_000);
+            expect(getLocalServiceLauncherState(key).refreshStatus).toBe('idle');
+            expect(buildLocalServiceRows({ inventoryRows: [], launchTargets: selectLocalServiceLaunchTargets(getLocalServiceLauncherState(key)),
+                sessionId: 'session-a', scope: 'machine' })[0]?.status).toBe('running');
+            const current = getLocalServiceLauncherState(key);
+            publishLocalServiceLauncherSnapshot(key, { ...snapshot, targets: [] });
+            expect(getLocalServiceLauncherState(key)).toBe(current);
+        } finally { stale.resolve(); unsubscribe(); }
     });
 
     it('keeps last-known rows stale after watch retirement and recovers even at the same inventory generation', async () => {
