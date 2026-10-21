@@ -115,7 +115,7 @@ async function connect(socket: Socket) {
   });
 }
 
-export async function exerciseMcpOAuthSocketRequestAuth(options?: Readonly<{ testPipeline?: boolean }>): Promise<void> {
+export async function exerciseMcpOAuthSocketRequestAuth(options?: Readonly<{ testPipeline?: boolean; ownClient?: boolean }>): Promise<void> {
   if (!preparedHome) await prepareMcpOAuthSocketRequestAuthFixture();
   const harness = preparedHome!;
   preparedHome = null;
@@ -202,7 +202,7 @@ export async function exerciseMcpOAuthSocketRequestAuth(options?: Readonly<{ tes
     } else if (request.url === '/.well-known/oauth-authorization-server/issuer') {
       response.end(JSON.stringify({ issuer, authorization_endpoint: 'https://authorization.fixture.test/authorize',
         token_endpoint: 'https://authorization.fixture.test/token', response_types_supported: ['code'], token_endpoint_auth_methods_supported: ['none'],
-        code_challenge_methods_supported: ['S256'], client_id_metadata_document_supported: true,
+        code_challenge_methods_supported: ['S256'], client_id_metadata_document_supported: options?.ownClient !== true,
         authorization_response_iss_parameter_supported: true }));
     } else if (request.url === '/token') {
       authorizationBodies.push(new URLSearchParams(Buffer.concat(body).toString('utf8')));
@@ -403,7 +403,8 @@ export async function exerciseMcpOAuthSocketRequestAuth(options?: Readonly<{ tes
   }
   expect(authorizationBodies).toEqual([]);
   rpcRuntime = runtime;
-  const begun = await execute({ actionId: 'mcp.servers.signIn.start', input: { serverId: 'server-one' },
+  const begun = await execute({ actionId: 'mcp.servers.signIn.start', input: { serverId: 'server-one',
+    ...(options?.ownClient ? { client: { clientId: 'fixture-own-app' } } : {}) },
     context: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
       externalActionTarget: { kind: 'machine', machineId: machine.id } } });
   expect(begun).toMatchObject({ ok: true });
@@ -415,7 +416,8 @@ export async function exerciseMcpOAuthSocketRequestAuth(options?: Readonly<{ tes
     completion: { code: 'private-code', state, callbackUrl: MCP_OAUTH_CALLBACK_URL_V1, iss: 'https://wrong-issuer.example' } }));
   expect(rejected.status).toBe('rejected');
   expect(authorizationBodies).toEqual([]);
-  const restarted = await execute({ actionId: 'mcp.servers.signIn.start', input: { serverId: 'server-one' },
+  const restarted = await execute({ actionId: 'mcp.servers.signIn.start', input: { serverId: 'server-one',
+    ...(options?.ownClient ? { client: { clientId: 'fixture-own-app' } } : {}) },
     context: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
       externalActionTarget: { kind: 'machine', machineId: machine.id } } });
   expect(restarted).toMatchObject({ ok: true });

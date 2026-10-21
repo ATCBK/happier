@@ -1,14 +1,19 @@
-import { afterEach, beforeAll, it } from 'vitest';
+import { afterEach, beforeEach, it } from 'vitest';
 import '../../../../../cli/src/vitestSetup';
 
 import {
     exerciseMcpOAuthMachineTest,
+    exerciseMcpOAuthSocketRequestAuth,
     prepareMcpOAuthSocketRequestAuthFixture,
     closeMcpOAuthSocketRequestAuthFixture,
 } from '../../../../../cli/src/mcp/oauth/mcpOAuthSocketRequestAuth.testkit.mjs';
 
-beforeAll(() => prepareMcpOAuthSocketRequestAuthFixture({ encryptionMode: 'e2ee' }));
+beforeEach(() => prepareMcpOAuthSocketRequestAuthFixture({ encryptionMode: 'e2ee' }));
 afterEach(closeMcpOAuthSocketRequestAuthFixture);
 
 it('composes E2EE CLI sign-in and reconnect, registered OAuth Test persistence and consecutive Session tool calls',
     exerciseMcpOAuthMachineTest);
+
+it('settles a supplied OAuth app through the registered daemon and durable Account owners', async () => {
+    await exerciseMcpOAuthSocketRequestAuth({ ownClient: true });
+});
