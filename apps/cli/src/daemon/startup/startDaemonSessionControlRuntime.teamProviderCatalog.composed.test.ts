@@ -22,6 +22,7 @@ import { createAgentRuntimeDaemonServiceAuthorityPath, publishAgentRuntimeDaemon
 import { openCurrentRunnerTeamCredentialProviderBinding } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceAuthorityClient';
 import { readSessionPreparationFailureDiagnostic } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { AGENT_RUNTIME_DAEMON_SERVICES_PATH } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
+import { logger } from '@/ui/logger';
 
 const nativeFetch = fetch;
 const boundary = vi.hoisted(() => ({ control: null as Parameters<typeof startDaemonControlServer>[0] | null, port: 0,
@@ -48,11 +49,13 @@ vi.mock('@/daemon/controlServer', async importOriginal => {
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); boundary.control = null; });
 
-it.each(['ready', 'missing declaration', 'non-204'] as const)(
+it.each(['ready', 'missing declaration', 'non-204', 'socket closed', 'refresh refused'] as const)(
   'opens the real Codex Team binder with the tracked recipient catalog, never custodian consent (%s)', async metadata => {
   let h: Awaited<ReturnType<typeof createInstalledProjectAgentDaemonFixture>>;
   let model: TeamCredentialProviderModelCatalogEntryV1;
   let brokerOpens = 0;
+  let refreshStream: (() => Promise<unknown>) | undefined;
+  const warnings = vi.spyOn(logger, 'warnLocalFile');
   h = await createInstalledProjectAgentDaemonFixture(() => boundary.control, 'codex', false, undefined, undefined, {
     openTeamCredentialProviderBinding: async input => {
       const opened = await openSessionTeamCredentialProviderBinding({ ...input, machineId: 'machine',
@@ -61,6 +64,7 @@ it.each(['ready', 'missing declaration', 'non-204'] as const)(
         materializationBaseDir: join(h.f.directory, 'materialized'), readCatalog: async () => [model],
         openBroker: async request => {
           brokerOpens++;
+          if (request.refreshAuthority && metadata === 'refresh refused') return { ok: false, reasonCode: 'broker_unavailable' };
           return { ok: true, target: { custodianAccountId: 'source-owner', brokerMachineId: 'broker', endpointId: 'b'.repeat(64),
             endpointRevision: 1, endpoint: { endpointId: 'b'.repeat(64) } }, authority: { payload: { v: 1,
               aud: 'happier-provider-broker-route-v1', grantId: 'grant', issuedAt: 1, expiresAt: 2,
@@ -71,8 +75,11 @@ it.each(['ready', 'missing declaration', 'non-204'] as const)(
               consumer: request.consumer, application: request.application },
               signature: { alg: 'Ed25519', keyId: 'home', valueBase64Url: 'A'.repeat(86) } } };
         },
-        openTunnel: async () => ({ localPort: 43123, localCapability: 'synthetic-consumer-token', observedPath: 'direct',
-          retire: async () => undefined, close: async () => undefined }),
+        openTunnel: async ({ refreshBrokerOpen }) => {
+          refreshStream = refreshBrokerOpen;
+          return { localPort: 43123, localCapability: 'synthetic-consumer-token', observedPath: 'direct',
+            retire: async () => undefined, close: async () => undefined };
+        },
       });
       if (!opened) throw new Error('Expected Team binding');
       return opened;
@@ -125,6 +132,12 @@ it.each(['ready', 'missing declaration', 'non-204'] as const)(
     if (target.pathname === AGENT_RUNTIME_DAEMON_SERVICES_PATH && target.hostname === '127.0.0.1'
       && target.port === String(boundary.port)) return nativeFetch(url, options);
     if (target.pathname === PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH) {
+      // Native transport is the boundary: a failed fresh handshake closes its
+      // local HTTP socket without returning an HTTP response to the real binder.
+      if (metadata === 'refresh refused') await refreshStream?.();
+      if (metadata === 'socket closed' || metadata === 'refresh refused') {
+        throw new TypeError('fetch failed', { cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }) });
+      }
       return new Response(null, { status: metadata === 'non-204' ? 403 : 204,
         headers: metadata === 'missing declaration' ? {} : { [PROVIDER_BROKER_ENDPOINT_PATH_HEADER]: '/v1' } });
     }
@@ -148,7 +161,21 @@ it.each(['ready', 'missing declaration', 'non-204'] as const)(
   try {
   if (metadata !== 'ready') {
     const refused = await openThroughRunner().then(() => null, (error: unknown) => error);
-    expect(brokerOpens).toBe(1);
+    expect(brokerOpens).toBe(metadata === 'refresh refused' ? 2 : 1);
+    expect(warnings.mock.calls).toContainEqual(['[ProviderBroker] Endpoint discovery refused', expect.objectContaining({
+      reason: 'endpoint_discovery_failed',
+      discoveryCause: metadata === 'refresh refused' ? 'broker_refresh_refused' : metadata === 'socket closed'
+        ? 'socket_closed' : metadata === 'missing declaration' ? 'invalid_metadata' : 'http_response',
+      discoveryElapsedMs: expect.any(Number),
+      refreshOutcome: metadata === 'refresh refused' ? 'refused' : 'not_requested',
+      ...(metadata === 'refresh refused' ? { refreshElapsedMs: expect.any(Number) } : {}),
+      ...(metadata === 'socket closed' || metadata === 'refresh refused' ? {} : { httpStatus: metadata === 'non-204' ? 403 : 204 }),
+    })]);
+    const discoveryRecord = warnings.mock.calls.find(([label]) => label === '[ProviderBroker] Endpoint discovery refused')?.[1];
+    if (metadata === 'socket closed' || metadata === 'refresh refused') expect(discoveryRecord).not.toHaveProperty('httpStatus');
+    for (const privateValue of ['synthetic-consumer-token', 'source-owner', 'requester', 'other side closed']) {
+      expect(JSON.stringify(discoveryRecord)).not.toContain(privateValue);
+    }
     expect(boundary.responseStatus).toBe(200);
     expect(boundary.responseBody).toEqual({ ok: false,
       error: { code: 'provider_endpoint_unavailable', message: 'provider_endpoint_unavailable' } });

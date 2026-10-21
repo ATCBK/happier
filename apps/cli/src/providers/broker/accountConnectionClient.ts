@@ -6,43 +6,15 @@ import { normalizeProviderOriginRelativePathSyntax } from '@happier-dev/protocol
 import { MACHINE_HTTP_LOCAL_CAPABILITY_HEADER } from '@happier-dev/iroh-native/node';
 import type { ManagedProviderEndpointAccessProjection } from '@/plugins/runtime/invocation/services/managedServicesAdapter';
 import type { ManagedServiceRequest } from '@happier-dev/plugin-sdk/managed-services';
-import { readProviderBrokerEndpointUrl } from './providerBrokerPrivateProtocol';
+import { createProviderBrokerEndpointDiscovery, type ProviderBrokerEndpointDiscoveryFailure } from './providerBrokerEndpointDiscovery';
 import { logger } from '@/ui/logger';
 import { MachineCarrierError } from '@/daemon/peer/iroh/machineCarrier';
 
 type BrokerOpenFailureReason = 'broker_open_refused' | 'binding_invalid' | 'tunnel_open_failed'
   | 'admission_refused' | 'endpoint_discovery_failed' | 'consumer_binding_invalid';
 
-type EndpointDiscoveryFailureCause = 'aborted' | 'timeout' | 'connection_reset' | 'connection_refused'
-  | 'socket_closed' | 'http_response' | 'invalid_metadata' | 'transport_error' | 'broker_refresh_refused';
-
-function endpointDiscoveryFailureCause(error: unknown, signal: AbortSignal, httpStatus?: number): EndpointDiscoveryFailureCause {
-  if (signal.aborted) return 'aborted';
-  if (error instanceof Error) {
-    if (error.name === 'AbortError') return 'aborted';
-    if (error.name === 'TimeoutError') return 'timeout';
-  }
-  if (httpStatus !== undefined) return httpStatus === 204 ? 'invalid_metadata' : 'http_response';
-  // Fetch wraps socket failures in TypeError.cause. Only these fixed codes
-  // become diagnostics; error names/messages/objects may contain private data.
-  const cause = error instanceof Error && error.cause ? error.cause : error;
-  const code = cause !== null && typeof cause === 'object' && 'code' in cause ? cause.code : undefined;
-  switch (code) {
-    case 'ECONNRESET': return 'connection_reset';
-    case 'ECONNREFUSED': return 'connection_refused';
-    case 'UND_ERR_SOCKET': return 'socket_closed';
-    case 'ETIMEDOUT':
-    case 'UND_ERR_CONNECT_TIMEOUT':
-    case 'UND_ERR_HEADERS_TIMEOUT':
-    case 'UND_ERR_BODY_TIMEOUT': return 'timeout';
-    default: return 'transport_error';
-  }
-}
-
-type AccountConnectionProviderBrokerFailureDiagnostic = Readonly<{
+type AccountConnectionProviderBrokerFailureDiagnostic = ProviderBrokerEndpointDiscoveryFailure & Readonly<{
   reason: BrokerOpenFailureReason | 'native_runtime_absent';
-  httpStatus?: number;
-  discoveryCause?: EndpointDiscoveryFailureCause;
 }>;
 // Same-process diagnostic custody only. Nothing is added to the public error,
 // serialized response, SDK, or native exception, and the original error is retained.
@@ -105,11 +77,10 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
 }>): Promise<AccountConnectionProviderBrokerAccess> {
   const unavailable = () => createProviderErrorV1('provider_endpoint_unavailable', { connectionId: input.connectionId, machineId: input.targetMachineId });
   let failedReason: BrokerOpenFailureReason = 'consumer_binding_invalid';
-  let discoveryHttpStatus: number | undefined;
-  let discoveryCause: EndpointDiscoveryFailureCause | undefined;
-  const reportFailure = (reason: BrokerOpenFailureReason, httpStatus?: number) => {
-    reportAccountConnectionProviderBrokerOpenFailure({ reason, ...(httpStatus === undefined ? {} : { httpStatus }),
-      ...(reason === 'endpoint_discovery_failed' && discoveryCause ? { discoveryCause } : {}) });
+  const discovery = createProviderBrokerEndpointDiscovery();
+  const reportFailure = (reason: BrokerOpenFailureReason) => {
+    reportAccountConnectionProviderBrokerOpenFailure({ reason,
+      ...(reason === 'endpoint_discovery_failed' ? discovery.failureDiagnostic() : {}) });
   };
   try {
     input.signal.throwIfAborted();
@@ -141,16 +112,9 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
     let tunnel: BrokerTunnel;
     try {
       tunnel = await input.openTunnel({ brokerOpen: opened, signal: input.signal,
-        refreshBrokerOpen: async (signal = input.signal) => {
-          try {
-            const refreshed = await input.openBroker({ ...request, refreshAuthority: opened.authority }, signal);
-            if (!refreshed.ok) discoveryCause = 'broker_refresh_refused';
-            return refreshed;
-          } catch (error) {
-            discoveryCause = endpointDiscoveryFailureCause(error, signal);
-            throw error;
-          }
-        } });
+        refreshBrokerOpen: (signal = input.signal) => discovery.refreshBrokerOpen(
+          () => input.openBroker({ ...request, refreshAuthority: opened.authority }, signal), signal),
+      });
     } catch (error) {
       // Classify the carrier's closed signature/binding failures, without
       // inspecting native messages or changing its verification decision.
@@ -193,17 +157,9 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
     try {
       await assertAdmitted();
       failedReason = 'endpoint_discovery_failed';
-      endpointUrl = await readProviderBrokerEndpointUrl({ localOrigin, headers, signal: input.signal,
-        fetchImpl: async (request, options) => {
-          const response = await (input.fetchImpl ?? fetch)(request, options);
-          discoveryHttpStatus = response.status;
-          return response;
-        } });
+      endpointUrl = await discovery.readEndpointUrl({ localOrigin, headers, signal: input.signal, fetchImpl: input.fetchImpl });
       await assertAdmitted();
     } catch (error) {
-      if (failedReason === 'endpoint_discovery_failed') {
-        discoveryCause ??= endpointDiscoveryFailureCause(error, input.signal, discoveryHttpStatus);
-      }
       // Never publish an unverified base path or leave its listener exposed.
       // Preserve the opening failure even if remote retirement also fails.
       try { await cleanup(); } finally {
@@ -246,12 +202,11 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
     });
   } catch (error) {
     if (!input.signal.aborted || failedReason === 'endpoint_discovery_failed') {
-      const httpStatus = failedReason === 'endpoint_discovery_failed' ? discoveryHttpStatus : undefined;
+      const diagnostic = failedReason === 'endpoint_discovery_failed' ? discovery.failureDiagnostic() : {};
       withAccountConnectionProviderBrokerFailureDiagnostic(error, {
-        reason: failedReason, ...(httpStatus === undefined ? {} : { httpStatus }),
-        ...(failedReason === 'endpoint_discovery_failed' && discoveryCause ? { discoveryCause } : {}),
+        reason: failedReason, ...diagnostic,
       });
-      reportFailure(failedReason, httpStatus);
+      reportFailure(failedReason);
     }
     throw error;
   }

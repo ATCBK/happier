@@ -20,7 +20,8 @@ import { isSameTeamCredentialBrokerApplication } from '@/providers/broker/teamCr
 import { composeProviderBindingMaterialization } from '@/providers/spawn/compose';
 import { resolveProviderCredentialPlaintextAsync } from '@/providers/spawn/credentials';
 import { MACHINE_HTTP_LOCAL_CAPABILITY_HEADER } from '@happier-dev/iroh-native/node';
-import { readProviderBrokerEndpointUrl, PROVIDER_BROKER_MODEL_ID_HEADER, teamCredentialBrokerLocalCredentialTransport } from './providerBrokerPrivateProtocol';
+import { PROVIDER_BROKER_MODEL_ID_HEADER, teamCredentialBrokerLocalCredentialTransport } from './providerBrokerPrivateProtocol';
+import { createProviderBrokerEndpointDiscovery } from './providerBrokerEndpointDiscovery';
 import { assertTeamCredentialModelAdmission, type TeamCredentialModelCompatibilityInput } from './teamCredentialModelCompatibility';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/savedSecretOperationContext';
 import { SessionTeamCredentialLaunchUnavailableError } from '@/session/services/sessionTeamCredentialLaunch';
@@ -197,15 +198,16 @@ export async function openExactSessionTeamCredentialProviderBinding(
     throw new Error('team_credential_provider_broker_open_changed');
   }
   input.signal.throwIfAborted();
+  const discovery = createProviderBrokerEndpointDiscovery();
   const tunnel = await input.openTunnel({
     brokerOpen: opened,
     // An established tunnel renews by presenting the prior signed authority it
     // already holds. How the Home first selected this exact target is not a
     // runtime renewal policy, so every established open refreshes the same way.
-    refreshBrokerOpen: async (signal = input.signal) => await input.openBroker({
+    refreshBrokerOpen: (signal = input.signal) => discovery.refreshBrokerOpen(() => input.openBroker({
       ...brokerOpenRequest,
       refreshAuthority: opened.authority,
-    }, signal),
+    }, signal), signal),
     signal: input.signal,
   });
   let composed: Awaited<ReturnType<typeof composeProviderBindingMaterialization>> | null = null;
@@ -215,7 +217,7 @@ export async function openExactSessionTeamCredentialProviderBinding(
     input.signal.throwIfAborted();
     await assertAdmission();
 
-    const endpointUrl = await readProviderBrokerEndpointUrl({
+    const endpointUrl = await discovery.readEndpointUrl({
       localOrigin: `http://127.0.0.1:${tunnel.localPort}`,
       headers: { authorization: `Bearer ${tunnel.localCapability}`,
         [MACHINE_HTTP_LOCAL_CAPABILITY_HEADER]: tunnel.localCapability,

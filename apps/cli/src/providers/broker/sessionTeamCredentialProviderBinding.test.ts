@@ -720,7 +720,7 @@ describe('Session Team credential Provider binding', () => {
       if (failure === 'missing declaration' || failure === 'non-204') {
         expect(refused).toBeInstanceOf(SessionTeamCredentialLaunchUnavailableError);
         expect(refused).toMatchObject({ code: 'provider_endpoint_unavailable' });
-        expect(diagnostic.mock.calls.at(-1)?.[1]).toEqual({
+        expect(diagnostic).toHaveBeenCalledWith(expect.any(String), {
           httpStatus: failure === 'non-204' ? 403 : 204,
           hasEndpointPath: failure !== 'missing declaration',
           brokerReasonCode: failure === 'non-204' ? 'resource_unavailable' : null,
