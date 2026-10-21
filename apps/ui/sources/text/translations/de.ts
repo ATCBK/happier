@@ -8439,7 +8439,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
             discarded: {
                 title: 'Verworfene Nachrichten',
                 subtitle:
-                    'Diese Nachrichten wurden nicht an den Agent gesendet (zum Beispiel beim Wechsel von remote zu lokal).',
+                    'Diese Nachrichten sind nicht mehr in der Warteschlange. Die Zustellung kann ungewiss sein; prüfe den Verlauf, bevor du sie erneut sendest.',
                 label: 'Verworfen',
                 removeConfirm: {
                     title: 'Verworfene Nachricht entfernen?',

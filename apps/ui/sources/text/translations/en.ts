@@ -10063,7 +10063,7 @@ const enSession = {
     discarded: {
       title: 'Discarded messages',
       subtitle:
-        'These messages were not sent to the agent (for example, when switching from remote to local).',
+        'These messages are no longer queued. Delivery may be uncertain; check the transcript before sending again.',
       label: 'Discarded',
       removeConfirm: {
         title: 'Remove discarded message?',

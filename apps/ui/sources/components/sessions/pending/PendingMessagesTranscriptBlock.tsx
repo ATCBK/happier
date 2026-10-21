@@ -1324,7 +1324,10 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                 messageId={message.id} sessionId={props.sessionId} serverId={props.serverId} createdAt={message.createdAt} /> : <Text numberOfLines={collapsedLines} style={{ color: theme.colors.text.primary, ...Typography.default() }}>
                                 {text}
                             </Text>}
-                            <Text style={{ marginTop: theme.space.s6, color: theme.colors.text.secondary, ...Typography.variant('meta', 'semiBold'),  }}>
+                            <Text style={[
+                                { marginTop: theme.space.s6, color: theme.colors.text.secondary, ...Typography.variant('meta', 'semiBold') },
+                                isHostFollowInput ? styles.hostDiscardedLabel : null,
+                            ]}>
                                 {t('session.pendingMessages.discarded.label')}
                             </Text>
                         </Pressable>
@@ -1750,6 +1753,11 @@ const styles = StyleSheet.create(() => ({
     hostInputContainer: {
         alignSelf: 'stretch',
         marginLeft: -QUEUE_GUTTER_PX,
+    },
+    // The notice row reaches back over the queue's gutter (it carries the column's own margin), so its
+    // plain label would start at the clip edge of the scrolling queue; it takes the gutter back.
+    hostDiscardedLabel: {
+        marginLeft: QUEUE_GUTTER_PX,
     },
     userMessageBubble: {
         borderRadius: 12,

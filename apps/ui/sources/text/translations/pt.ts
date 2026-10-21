@@ -8555,7 +8555,7 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
         discarded: {
           title: "Mensagens descartadas",
           subtitle:
-            "Essas mensagens não foram enviadas ao agente (por exemplo, ao mudar de remoto para local).",
+            "Estas mensagens já não estão na fila. A entrega pode ser incerta; verifique a transcrição antes de enviar novamente.",
           label: "Descartada",
           removeConfirm: {
             title: "Remover mensagem descartada?",

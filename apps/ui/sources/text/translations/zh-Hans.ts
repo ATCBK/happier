@@ -8130,7 +8130,7 @@ const zhHansValues = {
         },
         discarded: {
           title: "已丢弃消息",
-          subtitle: "这些消息未发送给代理（例如从远程切换到本地时）。",
+          subtitle: "这些消息已不在队列中。投递结果可能不确定；重新发送前请检查对话记录。",
           label: "已丢弃",
           removeConfirm: {
             title: "移除已丢弃消息？",

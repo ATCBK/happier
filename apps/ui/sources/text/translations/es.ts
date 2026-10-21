@@ -8445,7 +8445,7 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
         discarded: {
           title: "Mensajes descartados",
           subtitle:
-            "Estos mensajes no se enviaron al agente (por ejemplo, al cambiar de remoto a local).",
+            "Estos mensajes ya no están en la cola. La entrega puede ser incierta; revisa la transcripción antes de volver a enviarlos.",
           label: "Descartado",
           removeConfirm: {
             title: "¿Eliminar mensaje descartado?",
