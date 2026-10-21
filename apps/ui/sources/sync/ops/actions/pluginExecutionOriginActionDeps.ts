@@ -2,7 +2,7 @@ import type { ActionExecutorDeps } from '@happier-dev/protocol';
 import { PluginExecutionOriginActionInputSchemas as inputs } from '@happier-dev/protocol/actions/pluginExecutionOriginActionFamily';
 import { readCurrentAppShellPluginUiExecutionOriginCandidates } from '@/components/appShell/plugins/committedPluginUiProjection';
 import { readPluginAccountAvailability } from '@/sync/domains/plugins/availability/projection';
-import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent, getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -13,6 +13,7 @@ import { getPluginExecutionOriginCandidateOrigin, getPluginExecutionOriginCandid
 import { persistPluginMachineExecutionOriginSelection, readCurrentPluginMachineExecutionTargetPreference } from '@/sync/domains/machines/administration/selectionPreferences';
 import type { LazyActionAccountContext } from './actionAccountContext';
 import { readCurrentUiContextActionReader } from '@/components/appShell/currentUiContext/currentUiContextActionRuntime';
+import { executionOriginMachineSnapshotPublication } from '@/sync/domains/machines/administration/pluginExecutionOriginMachineSnapshots';
 
 /** The answering client's Account-bound projection supplies candidates. Neither
  * the caller nor a daemon inventory can elect another plugin execution origin. */
@@ -62,6 +63,7 @@ export function createPluginExecutionOriginActionDeps(account: Pick<LazyActionAc
             const candidates = readFreshPluginMachineExecutionOriginCandidates(facts);
             const storedTarget = readCurrentPluginMachineExecutionTargetPreference(parsed.pluginId);
             const selection = resolvePluginMachineExecutionOriginState({ ...facts, storedOrigin: null, storedTarget, candidates,
+                automaticOrigin: executionOriginMachineSnapshotPublication.readAutomaticOrigin(parsed.pluginId, captureActiveServerAccountScopeLifetime()),
                 ...readPluginExecutionOriginAutomaticHints(parsed.pluginId, candidates),
                 homeServerIdentityId: getServerProfileById(scope.serverId)?.serverIdentityId });
             return { status: 'available', storedTarget, storedOrigin: null,

@@ -105,7 +105,7 @@ describe('answering-client plugin origin preferences', () => {
                 renderer: { kind: 'hostedHtml', contributionId: 'home', source: artifactHtmlBundleFromBodyV1('<p>Source</p>'), requiredHostMethods: ['context'] },
                 display: {}, headerActions: [], availability: { state: 'available', reason: 'available', diagnostics: [] },
             } } } } });
-        const projection = unionPluginUiProjections([{ machineId: machine.id, serverId: connection.home.id,
+        let projection = unionPluginUiProjections([{ machineId: machine.id, serverId: connection.home.id,
             serverIdentityId: 'srv_origin', phase: 'current', interactionEnabled: true, projection: model }]).pluginUiProjection;
         if (!projection) throw new Error('Source projection was not admitted');
         const candidatePublication = createPluginUiExecutionOriginCandidatePublication();
@@ -169,6 +169,29 @@ describe('answering-client plugin origin preferences', () => {
                 ...readPluginUiExecutionOriginCandidates({ pluginId, projection }),
                 readSourceCandidates: () => readPluginUiExecutionOriginCandidates({ pluginId, projection: hasSource ? projection : null }).sourceCandidates,
             }));
+            const secondMachine = createMachineFixture({ id: 'second-machine', active: true, activeAt: admittedAtMs + 1 });
+            const secondOrigin = { ...origin, sourceRef: { ...origin.sourceRef, machineId: secondMachine.id } };
+            const members = [
+                { machineId: machine.id, serverId: connection.home.id, serverIdentityId: 'srv_origin',
+                    phase: 'current' as const, interactionEnabled: true, projection: model },
+                { machineId: secondMachine.id, serverId: connection.home.id, serverIdentityId: 'srv_origin',
+                    phase: 'current' as const, interactionEnabled: true, projection: { ...model,
+                        installedPackagesById: { ...model.installedPackagesById,
+                            [pluginId]: { ...model.installedPackagesById[pluginId]!, executionOrigin: secondOrigin } } } },
+            ];
+            projection = unionPluginUiProjections(members).pluginUiProjection;
+            if (!projection) throw new Error('Paired source projection was not admitted');
+            candidatePublication.publish(projection, members, [pluginId]);
+            await act(async () => { storage.setState({ machines: { machine, [secondMachine.id]: secondMachine },
+                machineListByServerId: { [connection.home.id]: [machine, secondMachine] } }); });
+            await hook.rerender();
+            expect(hook.getCurrent().candidates).toHaveLength(2);
+            expect(hook.getCurrent().selectedOrigin).toEqual(origin);
+            // The Action captures its own invocation fence. That wrapper must
+            // still observe the mounted Account's Auto selection, not re-elect.
+            expect(await invokeRegistered('plugins.execution_origin.list', { pluginId })).toMatchObject({
+                status: 'available', selectionSource: 'auto', selectedOrigin: origin,
+            });
             expect(await invokeUiPreference(() => hook.getCurrent().selectOrigin(origin))).toMatchObject({ status: 'applied' });
             expect(raw).toEqual(retainedAccountSettings);
             await hook.rerender();
