@@ -15,6 +15,7 @@ import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.
 import { SessionFollowSourceKeyPreparationResultV1Schema } from '../follow/sessionFollowSourceKeyPreparationV1.js';
 import { SessionAttestedContextV1Schema } from './sessionAttestedContextV1.js';
 import { SessionSpawnLaunchErrorV1Schema } from '../spawnSession.js';
+import { ActionOperationAddressV1Schema } from '../../actions/specs/actionOperations.js';
 import {
   SessionCreationOpaqueIdV1Schema,
   SessionExecutionTargetV1Schema,
@@ -135,6 +136,8 @@ export const SessionSpawnNewResultV1Schema = lazyZodSchema(() => z.union([
     type: z.literal('pending'),
     retryWithSameCreationKey: z.literal(true),
     outcome: z.enum(['accepted', 'unknown']),
+    /** Existing receiving-host operation; observation never starts another create. */
+    operation: z.optional(ActionOperationAddressV1Schema),
   }),
   z.strictObject({
     type: z.literal('error'),

@@ -865,6 +865,21 @@ describe('happier session create (action executor)', () => {
     }
   });
 
+  it('returns the existing operation address when creation is accepted', async () => {
+    const operation = { serverId: 'home', machineId: 'peer', operationId: 'original-startup' };
+    execute.mockResolvedValueOnce({ ok: true,
+      result: { type: 'pending', outcome: 'accepted', retryWithSameCreationKey: true, operation } });
+    const output = captureConsoleJsonOutput();
+    try {
+      await handleSessionCommand(['create', '--path', '/tmp', '--spawn-attempt-id', 'attempt-8', '--json'], {
+        readCredentialsFn: async () => ({ token: 'token_test', encryption: null }),
+      });
+      expect(output.json()).toMatchObject({ ok: false, kind: 'session_create', error: {
+        code: 'session_create_pending', outcome: 'accepted', spawnAttemptId: 'attempt-8', operation,
+      } });
+    } finally { output.restore(); }
+  });
+
   it('shows a human run the same stable attempt id when creation stays pending', async () => {
     execute.mockResolvedValueOnce({
       ok: true,

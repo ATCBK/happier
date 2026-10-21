@@ -229,6 +229,7 @@ export async function cmdSessionCreate(
           code: 'session_create_pending',
           ...(created.retryWithSameCreationKey ? { retryWithSameCreationKey: true } : {}),
           outcome: created.outcome,
+          ...(created.operation ? { operation: created.operation } : {}),
           spawnAttemptId: effectiveSpawnAttemptId,
         },
       });
@@ -238,9 +239,11 @@ export async function cmdSessionCreate(
     // run must see it too, or the only safe retry is unavailable to them.
     throw Object.assign(
       new Error(
-        `session_create_pending Retry with --spawn-attempt-id ${effectiveSpawnAttemptId} --resume-spawn-attempt.`,
+        `session_create_pending Retry with --spawn-attempt-id ${effectiveSpawnAttemptId} --resume-spawn-attempt.${created.operation
+          ? ` Operation: ${JSON.stringify(created.operation)}.` : ''}`,
       ),
-      { code: 'session_create_pending', spawnAttemptId: effectiveSpawnAttemptId },
+      { code: 'session_create_pending', spawnAttemptId: effectiveSpawnAttemptId,
+        ...(created.operation ? { operation: created.operation } : {}) },
     );
   }
 

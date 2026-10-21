@@ -13,6 +13,7 @@ import { RequesterWorkAttributionV1Schema, type RequesterWorkAttributionV1 } fro
 import { RpcError, RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
 import type { LiveWorkProducerV1 } from '@/daemon/lifecycle/managedActivity';
 import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
+import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 
 export type RequesterMachineOperationCleanupInput = Readonly<{
   serverId: string;
@@ -198,15 +199,17 @@ export function createHostActionOperationRuntime(deps: Readonly<{
     const requestId = request.actionRequestId?.trim()
       || readRequestId(request.actionId, request.input);
     const domainRef = readInitialDomainRef(request.actionId, request.input, requestId);
-    return await runner.observe({
+    let observedOperationId: string | undefined;
+    const result = await runner.observe({
       actionId: request.actionId,
       scope,
       ...(attribution ? { requesterWorkAttributionV1: attribution } : {}),
       ...(requestId ? { requestId } : {}),
       input: request.input,
-      ...(request.onOperation ? { onOperation: request.onOperation } : {}),
+      onOperation: operation => { observedOperationId = operation.operationId; request.onOperation?.(operation); },
       ...(domainRef ? { domainRef } : {}),
-      cancellation: request.actionId === 'projects.script.run' || request.actionId === 'projects.compute.exec' || request.actionId === 'projects.prepare'
+      cancellation: request.actionId === 'workspace.files.replace'
+        || request.actionId === 'projects.script.run' || request.actionId === 'projects.compute.exec' || request.actionId === 'projects.prepare'
         || request.actionId === 'machines.managed.power.set' || request.actionId === 'machines.managed.delete'
         || request.actionId === 'machines.managed.acquire' || request.actionId === 'machines.managed.bootstrap.retry'
         || request.actionId === 'machines.environment.apply'
@@ -225,6 +228,15 @@ export function createHostActionOperationRuntime(deps: Readonly<{
         ...(operationAcceptance ? { operationAcceptance } : {}),
       }),
     });
+    const serverId = deps.custodyBinding?.serverId ?? deps.serverId;
+    if (request.actionId === 'session.spawn_new' && result.ok && serverId && observedOperationId) {
+      const pending = SessionSpawnNewResultV1Schema.safeParse(result.result);
+      if (pending.success && pending.data.type === 'pending') {
+        return { ...result, result: { ...pending.data,
+          operation: { serverId, machineId: scope.machineId, operationId: observedOperationId } } };
+      }
+    }
+    return result;
   };
 
   const runActionOperation: NonNullable<ActionExecutorDeps['runActionOperation']> = async request => {

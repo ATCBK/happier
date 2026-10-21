@@ -9,6 +9,7 @@ import type { TrackedSession } from '@/daemon/types';
 import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { AgentRuntimeDaemonServiceSessionOpenAttestationV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
+import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 
 import { createSpawnNewSessionLifecycleActionHandler } from './createSpawnNewSessionLifecycleActionHandler';
 import { runRequesterSessionLifecycle } from './requesterSessionLifecycle';
@@ -113,7 +114,7 @@ describe('Session startup operation custody', () => {
   it.each(['open', 'cancel', 'exit'] as const)('retains the original operation after webhook acknowledgement until native startup can %s', async outcome => {
     vi.useFakeTimers();
     const scope = { accountId: 'account', machineId: 'machine' };
-    const operations = createHostActionOperationRuntime({ machineId: scope.machineId,
+    const operations = createHostActionOperationRuntime({ serverId: 'home', machineId: scope.machineId,
       resolveAccountId: async () => scope.accountId, generateOperationId: () => 'original-startup',
       supportsCoreCancellation: () => true });
     const tracked: TrackedSession = { pid: 100, startedBy: 'daemon', happySessionId: 'session-child',
@@ -140,7 +141,12 @@ describe('Session startup operation custody', () => {
             throw error;
           }
         } });
-      expect(response).toMatchObject({ ok: true, result: { type: 'pending', outcome: 'accepted', retryWithSameCreationKey: true } });
+      expect(response).toMatchObject({ ok: true, result: { type: 'pending', outcome: 'accepted', retryWithSameCreationKey: true,
+        operation: { serverId: 'home', machineId: scope.machineId, operationId: 'original-startup' } } });
+      if (!response.ok) throw new Error('Expected accepted startup');
+      expect(SessionSpawnNewResultV1Schema.parse(response.result)).toEqual(response.result);
+      expect(await operations.observeExecution({ actionId: 'session.spawn_new', input: { creationKey: 'same-creation' },
+        execute: async () => { throw new Error('An existing startup must not spawn again'); } })).toEqual(response);
       expect(captured?.projectSetupOperation?.operationAcceptance?.operationId).toBe('original-startup');
       expect(operations.store.get(scope, 'original-startup')).toMatchObject({ state: 'running' });
       await vi.advanceTimersByTimeAsync(15_100);
