@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -253,6 +254,8 @@ describe('global Voice post-End permission custody', () => {
         expect(pillRing()).toBeNull();
 
         await act(async () => {
+            // The ring answers only to keyboard use: the document records Tab before the focus lands.
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
             resume().props.onBlur?.({});
             resume().props.onFocus?.({ target: focusedElement(true) });
         });

@@ -12,6 +12,7 @@ vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ pathname: '/friends/manage' }).module);
 
 installDisconnectedServerSocketBoundary();
+const { t } = await import('@/text');
 const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
 const { FriendsManageScreen } = await import('@/app/(app)/friends/manage');
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
@@ -55,7 +56,7 @@ describe('Friends management destination', () => {
             </DestinationInstanceHost>
         </InjectedAuthProvider>);
         await vi.waitFor(() => {
-            const controls = screen.findAllByTestId('friends-add-friend').filter(node => node.props.accessibilityRole === 'button');
+            const controls = screen.findAllHostsByTestId('friends-add-friend').filter(node => (node.props.role ?? node.props.accessibilityRole) === 'button');
             expect(controls, screen.getTextContent()).toHaveLength(1);
         });
         await screen.pressByTestIdAsync('friends-add-friend');
@@ -63,6 +64,6 @@ describe('Friends management destination', () => {
 
         await act(async () => { storage.getState().applyProfile({ ...storage.getState().profile, username: null, linkedProviders: [] }); });
         expect(screen.findByTestId('friends-add-friend')).toBeNull();
-        expect(screen.findAllByProps({ accessibilityRole: 'textbox' }).length).toBeGreaterThan(0);
+        expect(screen.findAllByProps({ accessibilityLabel: t('profile.username') }).length).toBeGreaterThan(0);
     });
 });

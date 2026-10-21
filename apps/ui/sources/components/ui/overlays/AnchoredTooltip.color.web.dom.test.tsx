@@ -62,7 +62,10 @@ it.each(['light', 'dark'] as const)('opens the real %s tooltip with CSS surface 
             const bubble = document.body.querySelector<HTMLElement>('[data-testid="variable-tooltip"]');
             expect(bubble?.textContent).toContain('Open browser');
             const paint = bubble?.querySelector<HTMLElement>('[data-happy-glass-backdrop="true"]');
-            expect(paint?.style.backgroundColor).toContain('--happier-glass-floating-background-color');
+            // The named floating coat is solved from the live surface tokens into a concrete color;
+            // only the solid material keeps the CSS token spelling (asserted below).
+            expect(paint?.style.backgroundColor).toMatch(/^rgba?\(/);
+            expect(paint?.style.backgroundColor).not.toContain('var(');
             // JSDOM rejects even literal backdrop-filter. The glass renderer suite verifies that
             // filter before the DOM boundary; here the real tooltip must retain its material coat.
         });

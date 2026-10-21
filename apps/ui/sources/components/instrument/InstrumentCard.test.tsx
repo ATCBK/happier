@@ -21,6 +21,8 @@ vi.mock('./motion/useMotionPreferences', async (importOriginal) => {
     };
 });
 
+import { lightTheme } from '@/theme';
+
 import { InstrumentCard } from './InstrumentCard';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -50,13 +52,14 @@ describe('instrument InstrumentCard', () => {
     });
 
     it('tile variant (default) adopts the canonical flat grouped-surface chrome — no competing drop shadow or bespoke radius (D-R4-1)', () => {
-        // Light theme: border.surface is transparent, so the canonical grouped surface (ItemGroup)
-        // has no hairline — only its raised bottom lip and the level-1 lift. InstrumentCard's tile
-        // must match exactly so it does not read as a different tile than every other in the app.
+        // The canonical grouped surface (ItemGroup) draws the ink `border.surface` hairline, its raised
+        // bottom lip and the level-1 lift. InstrumentCard's tile must match exactly so it does not
+        // read as a different tile than every other in the app.
         const tree = render(<InstrumentCard testID="card"><React.Fragment>content</React.Fragment></InstrumentCard>);
         const surface = surfaceStyleOf(tree);
         expect(surface.backgroundColor).toBe('#ffffff');
-        expect(surface.borderWidth).toBe(0);
+        expect(surface.borderColor).toBe(lightTheme.colors.border.surface);
+        expect(Number(surface.borderWidth)).toBeGreaterThan(0);
         expect(Number(surface.borderBottomWidth)).toBeGreaterThan(0);
         expect(hasCastShadow(surface)).toBe(true);
         // Canonical grouped-surface radius (ItemGroup: 10 on iOS, 16 elsewhere) —
@@ -72,7 +75,9 @@ describe('instrument InstrumentCard', () => {
     it('popover variant is an elevated floating surface — soft cast shadow + hairline border, its own radius', () => {
         const tree = render(<InstrumentCard testID="card" variant="popover"><React.Fragment /></InstrumentCard>);
         const surface = surfaceStyleOf(tree);
-        expect(surface.borderColor).toMatch(/^rgba\(.*0\.4\)$/);
+        // The ink `border.default` is already a translucent rgba token, which the card passes through
+        // unchanged (only an opaque hex hairline is scaled to 40%).
+        expect(surface.borderColor).toBe(lightTheme.colors.border.default);
         expect(surface.borderWidth).toBe(1); // hairlineWidth = 1 in the RN test stub
         expect(hasCastShadow(surface)).toBe(true);
         expect(surface.borderRadius).toBe(12);

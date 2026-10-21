@@ -280,8 +280,14 @@ describe('SegmentedTabBar', () => {
                         const measured = measureSegment(screen, 'seg:alpha');
                         const context = `${platform}/${compact ? 'compact' : 'regular'}/${tabs === ICON_TABS ? 'icon' : 'label'}`;
 
-                        expect(`${context}: ${measured.framePaddingY}`)
-                            .toBe(`${context}: ${measured.trackPadding}`);
+                        // Under a finger the frame takes the whole track padding; under a precise pointer
+                        // (web here) it grows only as far as the WCAG floor needs, never past the track.
+                        if (platform === 'web') {
+                            expect(measured.framePaddingY).toBeLessThanOrEqual(measured.trackPadding);
+                        } else {
+                            expect(`${context}: ${measured.framePaddingY}`)
+                                .toBe(`${context}: ${measured.trackPadding}`);
+                        }
                         // Cancelled by an equal negative margin, so the row still measures the
                         // drawn segment and the frame stays invisible.
                         expect(measured.frameMarginY).toBe(-measured.framePaddingY);
@@ -329,8 +335,9 @@ describe('SegmentedTabBar', () => {
                     const context = `${platform}/${compact ? 'compact' : 'regular'}`;
 
                     expect(`${context}: ${targetHeight >= WCAG_MINIMUM_TARGET_PX}`).toBe(`${context}: true`);
-                    // An icon bar is as tall as a label bar: 32 regular / 24 compact, still on the WCAG floor.
-                    expect(`${context}: ${targetHeight}`).toBe(`${context}: ${compact ? 24 : 32}`);
+                    // An icon bar is as tall as a label bar, still on the WCAG floor. Under a finger the frame
+                    // adds the track padding (32 regular); under a precise pointer (web) the drawn bar already clears it.
+                    expect(`${context}: ${targetHeight}`).toBe(`${context}: ${platform === 'web' ? (compact ? 24 : 28) : (compact ? 24 : 32)}`);
                     expect(targetHeight).toBeLessThan(44);
                 }
             } finally {

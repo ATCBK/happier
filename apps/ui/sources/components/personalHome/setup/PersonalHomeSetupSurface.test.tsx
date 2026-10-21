@@ -289,11 +289,15 @@ describe('PersonalHomeSetupSurface', () => {
         try {
             const screen = await renderScreen(<PersonalHomeSetupSurface snapshot={snapshot} />);
             const root = screen.findAllHostsByTestId('personal-home-setup-surface')[0];
-            const material = flattenStyle(root?.props.style);
+            // The glass paints its material on its own layer beneath the content (the shell is transparent).
+            const layer = root?.findAll((node) => node.props.dataSet?.happyGlassBackdrop === 'true')[0];
+            const material = flattenStyle(layer?.props.style);
             if (reduced) {
                 expect(material.backdropFilter).toBeUndefined();
                 expect(material.backgroundColor).toEqual(expect.any(String));
-                expect(material.backgroundColor).not.toMatch(/transparent|rgba\([^)]*,\s*0?\.\d+\)/);
+                // The material resolves through the glass opacity variable, which stays fully opaque (100%) here.
+                expect(material.backgroundColor).toContain('var(--happier-glass-floating-opacity, 100%)');
+                expect(material.backgroundColor).not.toMatch(/rgba\([^)]*,\s*0?\.\d+\)/);
             } else {
                 expect(material.backdropFilter).toMatch(/^blur\(/);
             }

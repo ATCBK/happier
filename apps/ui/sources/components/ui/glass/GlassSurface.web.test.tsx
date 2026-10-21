@@ -779,7 +779,7 @@ describe('web glass material', () => {
         </GlassRuntimeEnvironmentProvider>);
         const paints = screen.findAll(node => typeof node.type === 'string' && typeof flattenTestStyle(node.props.style)?.backgroundImage === 'string');
         expect(paints).toHaveLength(3);
-        for (const paint of paints) expect(flattenTestStyle(paint.props.style)?.backgroundColor).toContain('var(--happier-glass-floating-background-color');
+        for (const paint of paints) expect(String(flattenTestStyle(paint.props.style)?.backgroundColor)).toMatch(/--happier-glass-floating-background-color|^color-mix\(/);
         expect(screen.findHostByTestId('dock')?.findAll(node => node.props.children === 'Cancel')).not.toHaveLength(0);
     });
     it('keeps the independent selection rail on its authored inverse fill with one floating finish', async () => {

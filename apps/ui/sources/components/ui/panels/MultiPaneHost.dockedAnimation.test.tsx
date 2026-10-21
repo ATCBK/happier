@@ -48,6 +48,9 @@ vi.mock('@/hooks/ui/useReducedMotionPreference', () => ({
     useReducedMotionPreference: () => false,
 }));
 
+// The host's first presence belongs to the main column's drawer (closed here); details and right follow it.
+const DETAILS_AND_RIGHT_PROGRESS = [1, 3] as const;
+
 describe('MultiPaneHost docked pane animation', () => {
     beforeEach(() => {
         capturedAnimatedInitialValues = [];
@@ -103,11 +106,11 @@ describe('MultiPaneHost docked pane animation', () => {
             />,
         );
 
-        expect(capturedAnimatedValues.slice(0, 2).map((value) => value.__value)).toEqual([0, 0]);
+        expect(capturedAnimatedValues.slice(...DETAILS_AND_RIGHT_PROGRESS).map((value) => value.__value)).toEqual([0, 0]);
 
         await vi.advanceTimersByTimeAsync(250);
 
-        expect(capturedAnimatedValues.slice(0, 2).map((value) => value.__value)).toEqual([1, 1]);
+        expect(capturedAnimatedValues.slice(...DETAILS_AND_RIGHT_PROGRESS).map((value) => value.__value)).toEqual([1, 1]);
     });
 
     it('shows current open-pane content and callbacks while retaining the last content only for closing', async () => {
