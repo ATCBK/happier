@@ -8,6 +8,7 @@ const send = value => { const json = JSON.stringify({jsonrpc:'2.0', ...value}); 
 const reply = (id, result) => send({id, result});
 const range = {start:{line:0,character:0},end:{line:0,character:1}};
 const answer = message => {
+  if (message.method === 'shutdown') {reply(message.id,null);return;}
   const uri = message.params?.textDocument?.uri;
   const document = documents.get(uri);
   if (options.requiredLanguageId && document?.languageId !== options.requiredLanguageId) {
@@ -56,7 +57,9 @@ const receive = (message, fromQueue = false) => {
   if (message.method === 'initialized') { send({id:'registration',method:'client/registerCapability',params:{registrations:options.watching === false ? [] : [{id:'files',method:'workspace/didChangeWatchedFiles',registerOptions:{watchers:[{globPattern:'**/*'}]}}]}}); return; }
   if (message.method === 'shutdown') {
     if (options.pushOnShutdown) for (const [uri,document] of documents) send({method:'textDocument/publishDiagnostics',params:{uri,version:document.version,diagnostics:[{range,severity:1,message:options.pushOnShutdown}]}});
-    reply(message.id,null); return;
+    if (options.delayShutdown) pending.set(message.id,message);
+    else reply(message.id,null);
+    return;
   }
   if (message.method === 'exit') { process.exit(0); }
   if (!registered) { queued.push(message); return; }

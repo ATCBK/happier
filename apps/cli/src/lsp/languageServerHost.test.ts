@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import * as fsPromises from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
@@ -22,20 +23,28 @@ import { DaemonLspApplyResponseSchema } from '@happier-dev/protocol/machines/lan
 import { pathToFileURL } from 'node:url';
 import { buildWorkspaceFileRestoreOperation } from '@happier-dev/protocol/machines/workspaceFilesReplace';
 import { applyWorkspaceFileReplace } from '@/rpc/handlers/workspaceFileReplace';
-async function fixture(rootPath: string, count = 1, behavior: Record<string, unknown> = {}, rootMarkers?: readonly string[], readPolicy?: MachineResourcesPolicyReader) {
+import type { ResolvedLanguageServerContribution } from '@/plugins/projection/registry/types';
+import { readLspObject } from './languageServerResults';
+// Filesystem scheduling is the external boundary in the acquire/close regressions.
+vi.mock('node:fs/promises', async () => {
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    return { ...actual, readFile: vi.fn(actual.readFile) };
+});
+async function fixture(rootPath: string, count = 1, behavior: Record<string, unknown> = {}, rootMarkers?: readonly string[], readPolicy?: MachineResourcesPolicyReader,
+    definitionOverrides?: readonly Partial<ResolvedLanguageServerContribution['definition']>[]) {
     const protocolHandles: PluginProtocolClientHandle<'jsonRpc'>[] = [];
     const log = join(rootPath, 'messages.jsonl');
     await writeFile(log, '');
     const registryFor = (definitionCount: number) => createResolvedContributionRegistry({ languageServers: Array.from({ length: definitionCount }, (_, index) => ({
             provenance: 'external' as const, source: { kind: 'path' as const }, pluginId: 'fixture', identity: { pluginId: 'fixture', localId: `server${index}` }, manifestPath: join(rootPath, 'plugin.json'),
-            definition: { id: `server${index}`, title: `Fixture ${index}`, languageIds: { typescript: 'typescript', tsx: 'typescriptreact' }, filePatterns: ['**/*.ts', '**/*.tsx'], ...(rootMarkers ? { rootMarkers: [...rootMarkers] } : {}), executable: { kind: 'systemTool' as const, id: 'server' }, args: [], initializationOptions: { userPreferences: { tsserver: { automaticTypeAcquisition: { enabled: false } } }, disablePushDiagnostics: true } },
+            definition: { id: `server${index}`, title: `Fixture ${index}`, languageIds: { typescript: 'typescript', tsx: 'typescriptreact' }, filePatterns: ['**/*.ts', '**/*.tsx'], ...(rootMarkers ? { rootMarkers: [...rootMarkers] } : {}), executable: { kind: 'systemTool' as const, id: 'server' }, args: [], initializationOptions: { userPreferences: { tsserver: { automaticTypeAcquisition: { enabled: false } } }, disablePushDiagnostics: true }, ...definitionOverrides?.[index] },
         })) });
     let registry = registryFor(count);
     const host = createLanguageServerHost({ readCurrentContributionRegistry: () => registry, readPolicy, async openProtocol(input) {
             // The OS executable/protocol child is the system boundary; host, catalog, codec and supervisor stay real.
             const service = createStablePluginExecService({ allowedExecutables: [input.definition.executable], signal: input.signal, processOwner: input.processOwner, isOccurrenceCurrent: () => !input.signal.aborted,
                 resolveExecutable: async () => behavior.nativeTypeScript ? { command: resolve('../../node_modules/@typescript/typescript-linux-x64/lib/tsc'), args: ['--lsp', '--stdio'] }
-                    : { command: process.execPath, args: [resolve('src/lsp/__fixtures__/languageServer.cjs'), log, JSON.stringify(behavior)] }, resolvePath: async () => rootPath });
+                    : { command: process.execPath, args: [resolve('src/lsp/__fixtures__/languageServer.cjs'), log, JSON.stringify({ ...readLspObject(input.definition.initializationOptions), ...behavior })] }, resolvePath: async () => rootPath });
             const protocol = await service.clients.spawn({ kind: 'jsonRpc', framing: 'contentLength', cancellationMethod: '$/cancelRequest', maxFrameBytes: DEFAULT_JSON_RPC_MAX_FRAME_BYTES, launch: { executable: input.definition.executable, cwd: rootPath } });
             protocolHandles.push(protocol);
             return protocol;
@@ -252,6 +261,60 @@ describe('language intelligence composed host', () => {
             } finally { await f.host.dispose(); }
         });
     });
+    it.each(['closed', 'closing'] as const)('acquires an Action document after its selected sibling session is %s during the disk read', async phase => {
+        await withTempDir('happier-lsp-acquire-close-', async rootPath => {
+            const path = join(rootPath, 'a.ts');
+            await writeFile(path, 'shared');
+            const behavior = { delayHover: true, delayShutdown: phase === 'closing' };
+            const f = await fixture(rootPath, 1, behavior);
+            let releaseRead!: () => void;
+            const readGate = new Promise<void>(resolve => { releaseRead = resolve; });
+            let enteredRead!: () => void;
+            const reading = new Promise<void>(resolve => { enteredRead = resolve; });
+            const nativeRead = (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).readFile;
+            const readSpy = vi.mocked(fsPromises.readFile);
+            try {
+                const target = { machineId: 'machine', rootPath, path: 'a.ts' };
+                const hover = f.executor.execute('code.hover.get', { ...target, line: 1, character: 0 }, { surface: 'agent' });
+                await vi.waitFor(async () => expect((await f.messages()).some(message => message.method === 'textDocument/hover')).toBe(true));
+                // Gate only the OS disk read. Session selection, document custody,
+                // Action admission, managed JSON-RPC and the child remain real.
+                let blocked = false;
+                readSpy.mockImplementation((async (...args: Parameters<typeof nativeRead>) => {
+                    if (args[0] === path && !blocked) {
+                        blocked = true;
+                        enteredRead();
+                        await readGate;
+                    }
+                    return await nativeRead(...args);
+                }) as typeof nativeRead);
+                const symbols = f.executor.execute('code.symbols.list', target, { surface: 'agent' });
+                await reading;
+                await f.protocolHandles[0].client.notify('fixture/release', { method: 'textDocument/hover' });
+                if (phase === 'closed') await hover;
+                else {
+                    await vi.waitFor(async () => expect((await f.messages()).some(message => message.method === 'shutdown')).toBe(true));
+                    expect(f.host.readProcessRoots()).toMatchObject([{ state: 'stopping', pid: expect.any(Number) }]);
+                    behavior.delayShutdown = false;
+                }
+                releaseRead();
+                if (phase === 'closing') {
+                    await new Promise<void>(resolve => setImmediate(resolve));
+                    await f.protocolHandles[0].client.notify('fixture/release', { method: 'shutdown' });
+                }
+                expect(await hover).toMatchObject({ ok: true, result: { status: 'ok', sections: [{ markdown: 'shared' }] } });
+                expect.soft(await symbols).toMatchObject({ ok: true, result: { status: 'ok', kind: 'documentSymbols', symbols: [{ name: 'fixture' }] } });
+                // The next ordinary Action must not inherit a stopped session.
+                expect(await f.executor.execute('code.symbols.list', target, { surface: 'agent' }))
+                    .toMatchObject({ ok: true, result: { status: 'ok', symbols: [{ name: 'fixture' }] } });
+                expect(await f.host.watch({ rootPath })).toMatchObject({ status: 'ok', servers: [] });
+            } finally {
+                releaseRead();
+                readSpy.mockImplementation(nativeRead);
+                await f.host.dispose();
+            }
+        });
+    });
     it.each(['cancelled', 'completed'] as const)('retains an overlapping transient query after its sibling is %s', async settlement => {
         await withTempDir('happier-lsp-transient-overlap-', async rootPath => {
             await writeFile(join(rootPath, 'a.ts'), 'shared');
@@ -273,6 +336,71 @@ describe('language intelligence composed host', () => {
                 await expect(f.protocolHandles[0].wait()).resolves.toBeDefined();
                 expect(f.protocolHandles).toHaveLength(1);
             } finally { await f.host.dispose(); }
+        });
+    });
+    it('preserves a new editor holder acquired while its previous holder closes natively', async () => {
+        await withTempDir('happier-lsp-editor-reacquire-', async rootPath => {
+            await writeFile(join(rootPath, 'a.ts'), 'disk');
+            const behavior = { delayShutdown: true };
+            const f = await fixture(rootPath, 1, behavior);
+            try {
+                await f.open('a.ts', 'first', 1);
+                const closing = f.call(RPC_METHODS.DAEMON_LSP_SYNC, { rootPath, op: { op: 'close', path: 'a.ts' } });
+                await vi.waitFor(async () => expect((await f.messages()).some(message => message.method === 'shutdown')).toBe(true));
+                expect(f.host.readProcessRoots()).toMatchObject([{ state: 'stopping' }]);
+                behavior.delayShutdown = false;
+                const opening = f.open('a.ts', 'editor', 9, true);
+                await new Promise<void>(resolve => setImmediate(resolve));
+                await f.protocolHandles[0].client.notify('fixture/release', { method: 'shutdown' });
+                expect(await closing).toMatchObject({ status: 'ok' });
+                expect(await opening).toMatchObject({ status: 'ok' });
+                expect(await f.query('hover', 'a.ts', { position: { line: 0, character: 0 } }))
+                    .toMatchObject({ status: 'ok', version: 9, sections: [{ markdown: 'editor' }] });
+                expect(await f.query('hover', 'a.ts', { text: 'disk', position: { line: 0, character: 0 } }))
+                    .toMatchObject({ status: 'error', errorCode: 'unsaved_editor_changes' });
+                expect(await f.host.watch({ rootPath })).toMatchObject({ status: 'ok', servers: [{ state: 'ready' }] });
+                await f.call(RPC_METHODS.DAEMON_LSP_SYNC, { rootPath, op: { op: 'close', path: 'a.ts' } });
+                expect(await f.host.watch({ rootPath })).toMatchObject({ status: 'ok', servers: [] });
+            } finally { await f.host.dispose(); }
+        });
+    });
+    it('preserves a current unsaved editor buffer opened during a default query disk read', async () => {
+        await withTempDir('happier-lsp-editor-during-read-', async rootPath => {
+            const path = join(rootPath, 'a.ts');
+            await writeFile(path, 'disk');
+            const f = await fixture(rootPath);
+            let releaseRead!: () => void;
+            const readGate = new Promise<void>(resolve => { releaseRead = resolve; });
+            let enteredRead!: () => void;
+            const reading = new Promise<void>(resolve => { enteredRead = resolve; });
+            const nativeRead = (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).readFile;
+            const readSpy = vi.mocked(fsPromises.readFile);
+            try {
+                let blocked = false;
+                readSpy.mockImplementation((async (...args: Parameters<typeof nativeRead>) => {
+                    if (args[0] === path && !blocked) {
+                        blocked = true;
+                        enteredRead();
+                        await readGate;
+                    }
+                    return await nativeRead(...args);
+                }) as typeof nativeRead);
+                const hover = f.query('hover', 'a.ts', { position: { line: 0, character: 0 } });
+                await reading;
+                expect(await f.open('a.ts', 'editor', 9, true)).toMatchObject({ status: 'ok' });
+                releaseRead();
+                const result = await hover;
+                expect.soft(result).toMatchObject({ status: 'ok', version: 9, sections: [{ markdown: 'editor' }] });
+                expect.soft(result).not.toHaveProperty('fileHash');
+                expect.soft(await f.query('hover', 'a.ts', { position: { line: 0, character: 0 } }))
+                    .toMatchObject({ status: 'ok', version: 9, sections: [{ markdown: 'editor' }] });
+                expect(await f.query('hover', 'a.ts', { text: 'disk', position: { line: 0, character: 0 } }))
+                    .toMatchObject({ status: 'error', errorCode: 'unsaved_editor_changes' });
+            } finally {
+                releaseRead();
+                readSpy.mockImplementation(nativeRead);
+                await f.host.dispose();
+            }
         });
     });
     it.each([1, 2])('forgets idle-reaped holder memberships before reopening %i definitions', async definitionCount => {
@@ -361,6 +489,10 @@ describe('language intelligence composed host', () => {
                 const previous = (await f.messages()).filter(m => m.method === 'textDocument/hover').length;
                 expect(await f.query('hover', 'a.ts', extra)).toMatchObject({ status: 'error', errorCode: 'unsaved_editor_changes', diskHash: createHash('sha256').update(bytes).digest('hex') });
                 expect((await f.messages()).filter(m => m.method === 'textDocument/hover')).toHaveLength(previous);
+                expect(await f.query('hover', 'a.ts', { position: { line: 0, character: 0 } }))
+                    .toMatchObject({ status: 'ok', version: 3, sections: [{ markdown: 'unsaved' }] });
+                expect(await f.host.watch({ rootPath })).toMatchObject({ status: 'ok', servers: [{ state: 'ready' }] });
+                expect(f.protocolHandles).toHaveLength(3);
                 await f.call(RPC_METHODS.DAEMON_LSP_SYNC, { rootPath, op: { op: 'snapshot', path: 'a.ts', languageId: 'typescript', version: 4, text: 'clean old', unsaved: false } });
                 const changedBytes = Buffer.from('changed on disk\r\n');
                 await writeFile(join(rootPath, 'a.ts'), changedBytes);
@@ -403,6 +535,31 @@ describe('language intelligence composed host', () => {
             finally {
                 await f.host.dispose();
             }
+        });
+    });
+    it('reports only document servers and capabilities in sync while watches aggregate the root', async () => {
+        await withTempDir('happier-lsp-document-servers-', async rootPath => {
+            await writeFile(join(rootPath, 'a.ts'), 'typescript');
+            await writeFile(join(rootPath, 'file.example'), 'example');
+            const f = await fixture(rootPath, 2, {}, undefined, undefined, [
+                { languageIds: { typescript: 'typescript' }, filePatterns: ['**/*.ts'], initializationOptions: { semanticEdits: true } },
+                { languageIds: { example: 'example-lsp' }, filePatterns: ['**/*.example'] },
+            ]);
+            try {
+                expect(await f.open('a.ts', 'typescript')).toMatchObject({ status: 'ok', servers: [{ serverId: 'fixture/server0' }], capabilities: { rename: true } });
+                const sync = (op: Record<string, unknown>) => f.call(RPC_METHODS.DAEMON_LSP_SYNC, { rootPath, op: { path: 'file.example', ...op } });
+                const explicit = DaemonLspSyncResponseSchema.parse(await sync({ op: 'open', languageId: 'example', text: 'example', version: 1, unsaved: false }));
+                expect.soft(explicit).toMatchObject({ status: 'ok', servers: [{ serverId: 'fixture/server1' }], capabilities: { hover: true, rename: false } });
+                const fallback = DaemonLspSyncResponseSchema.parse(await sync({ op: 'snapshot', languageId: 'text', text: 'example two', version: 2, unsaved: false }));
+                expect.soft(fallback).toMatchObject({ status: 'ok', servers: [{ serverId: 'fixture/server1' }], capabilities: { rename: false } });
+                expect.soft(await sync({ op: 'change', baseVersion: 2, version: 3, edit: { startLine: 0, startCharacter: 0, endLine: 0, endCharacter: 7, text: 'changed' }, unsaved: true }))
+                    .toMatchObject({ status: 'ok', servers: [{ serverId: 'fixture/server1' }], capabilities: { rename: false } });
+                expect(await f.host.watch({ rootPath })).toMatchObject({ status: 'ok', servers: [{ serverId: 'fixture/server0' }, { serverId: 'fixture/server1' }] });
+                const opened = (await f.messages()).filter(message => message.method === 'textDocument/didOpen');
+                expect(opened).toContainEqual(expect.objectContaining({ params: { textDocument: expect.objectContaining({ languageId: 'example-lsp' }) } }));
+                expect.soft(await sync({ op: 'close' })).toMatchObject({ status: 'ok', servers: [], capabilities: { hover: false } });
+                expect(await f.host.watch({ rootPath })).toMatchObject({ status: 'ok', servers: [{ serverId: 'fixture/server0' }] });
+            } finally { await f.host.dispose(); }
         });
     });
     it('retains a shared document until its last holder closes', async () => {

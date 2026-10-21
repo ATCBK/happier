@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import axios from 'axios';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -56,6 +56,8 @@ import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/art
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
 import { resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { createLanguageServerHost } from '@/lsp/languageServerHost';
+import { createLanguageServerProtocolOpener } from '@/lsp/managedProtocol';
 
 vi.mock('node:fs', async (importOriginal) => {
   const fs = await importOriginal<typeof import('node:fs')>();
@@ -519,6 +521,78 @@ async function invokeIdentity(
 
 describe('daemon plugin registry runtime lifecycle owner', () => {
   afterEach(() => vi.restoreAllMocks());
+  it('keeps descriptor-only language use available without claiming cold daemon activation', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-plugin-static-language-cold-'));
+    const pluginId = 'acme.static.language';
+    const fixture = await createExecutableInstallFixture(happyHomeDir, pluginId, { lazy: true });
+    const manifestPath = join(fixture.pluginRoot, '.happier-plugin/plugin.json');
+    const logPath = join(happyHomeDir, 'native-messages.jsonl');
+    const rootPath = join(happyHomeDir, 'workspace');
+    await mkdir(rootPath);
+    await writeFile(logPath, '');
+    await writeFile(join(rootPath, 'file.static-language'), 'nativeSymbol');
+    const manifest = PluginManifestV2Schema.parse(createPluginManifestV2Fixture({
+      id: pluginId, entrypoints: { daemon: './daemon.mjs' },
+      contributes: {
+        languageServers: [{ id: 'native', title: 'Static language', languageIds: { 'static-language': 'native-language' },
+          filePatterns: ['*.static-language'], executable: { kind: 'systemTool', id: 'native' },
+          args: [resolve('src/lsp/__fixtures__/languageServer.cjs'), logPath, JSON.stringify({ requiredLanguageId: 'native-language' })] }],
+        systemTools: [{ id: 'native', title: 'Native process fixture', executableNames: [process.execPath] }],
+      },
+    }));
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    await writeFile(join(fixture.pluginRoot, 'daemon.mjs'), `
+      import { appendFileSync } from 'node:fs';
+      appendFileSync(${JSON.stringify(fixture.counterPath)}, 'module\\n');
+      export function activate() { appendFileSync(${JSON.stringify(fixture.counterPath)}, 'activate\\n'); }
+    `);
+    const hotController = createPluginReloadController({ happyHomeDir });
+    const store = createPluginRegistryStateStore({ happyHomeDir,
+      runtimeLifecycle: createDaemonPluginRegistryRuntimeLifecycle({ happyHomeDir, reloadController: hotController }) });
+    const coldController = createPluginReloadController({ happyHomeDir });
+    const { createDaemonPluginRuntimeOwner } = await import('@/plugins/daemon/runtimeOwner');
+    const coldOwner = createDaemonPluginRuntimeOwner({ happyHomeDir, staleCandidateCleanup: 'disabled',
+      reloadController: coldController, connectedAccounts: createUnusedConnectedAccountsOwner() });
+    const host = createLanguageServerHost({
+      readCurrentContributionRegistry: () => coldController.getState().activeRegistry?.contributes,
+      openProtocol: createLanguageServerProtocolOpener({ acquireRuntimeRegistry: () => coldController.acquireRuntimeRegistry() }),
+    });
+    try {
+      await store.initialize();
+      expect(await installFixtureCandidate(store, fixture.input)).toMatchObject({ status: 'committed' });
+      const hot = (await readCurrentDaemonPluginCatalog({ happyHomeDir, reloadController: hotController }))
+        .find(entry => entry.pluginId === pluginId)!;
+      expect(hot.desiredGeneration).toEqual(expect.any(String));
+      expect(hot.appliedGeneration).toBe(hot.desiredGeneration);
+      await expect(readFile(fixture.counterPath, 'utf8')).resolves.toBe('module\nactivate\n');
+      await hotController.shutdown();
+
+      await coldOwner.initialize();
+      const readCold = async () => (await coldOwner.readCatalog()).find(entry => entry.pluginId === pluginId)!;
+      const cold = await readCold();
+      expect(cold).toMatchObject({ enabled: true, desiredGeneration: hot.desiredGeneration, appliedGeneration: null,
+        compatibility: { status: 'compatible' } });
+      expect(cold.contributionIntrospection.contributions.filter(entry => entry.contribution.family === 'languageServers'))
+        .toMatchObject([{ registration: { requirement: 'notRequired', state: 'notRequired' },
+          activation: { state: 'notRequired' }, projection: { state: 'projected' } }]);
+      expect(coldController.getState().activeRegistry?.activatedPluginIds.has(pluginId)).toBe(false);
+      // This is the real declared executable/Exec/codec/supervisor path. Only
+      // the child protocol is scripted; no activation or catalog owner is mocked.
+      expect(await host.query({ rootPath, path: 'file.static-language', kind: 'hover', text: 'disk',
+        position: { line: 0, character: 0 } })).toMatchObject({ status: 'ok',
+        sections: [{ serverId: `${pluginId}/native`, markdown: 'nativeSymbol' }] });
+      expect(await readCold()).toMatchObject({ desiredGeneration: hot.desiredGeneration, appliedGeneration: null });
+      expect(coldController.getState().activeRegistry?.activatedPluginIds.has(pluginId)).toBe(false);
+      await expect(readFile(fixture.counterPath, 'utf8')).resolves.toBe('module\nactivate\n');
+      expect(await readFile(logPath, 'utf8')).toContain('"languageId":"native-language"');
+    } finally {
+      await host.dispose();
+      await coldOwner.changeService.shutdown();
+      await coldController.shutdown();
+      await hotController.shutdown();
+      await rm(happyHomeDir, { recursive: true, force: true });
+    }
+  });
   it('identifies first install from durable state without reseeding updates or re-enable', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-plugin-skill-first-install-'));
     const pluginId = 'acme.library.defaults';
