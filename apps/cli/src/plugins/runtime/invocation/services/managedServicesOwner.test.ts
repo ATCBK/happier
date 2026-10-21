@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
+import { logger } from '@/ui/logger';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import type { Socket } from 'socket.io-client';
 
@@ -656,6 +657,7 @@ function createProjectLifecycleInput(options: Readonly<{
 
 describe('managed-services SVC09 owner', () => {
     it('G1 retries projection cleanup after consumer settlement is unavailable', async () => {
+        const diagnostic = vi.spyOn(logger, 'infoFile').mockImplementation(() => undefined);
         const directory = await mkdtemp(join(tmpdir(), 'happier-shared-settlement-retry-'));
         const process = createLifecycleProcess(4_503);
         let settlementAvailable = false;
@@ -681,6 +683,11 @@ describe('managed-services SVC09 owner', () => {
             });
             expect(projection).not.toBeNull();
             await expect(projection!.cleanup()).rejects.toMatchObject({ code: 'plugin_managed_service_unavailable' });
+            // Access is revoked even while the wrapper cannot settle ingress.
+            expect(diagnostic.mock.calls).toContainEqual(['[managed-provider-consumer-claim]', {
+                action: 'release', connectionId: 'connection', machineId: 'machine',
+                instanceId: expect.any(String), consumerId: 'shared-retry',
+            }]);
             expect(process.dispose).not.toHaveBeenCalled();
             settlementAvailable = true;
             await projection!.cleanup();
@@ -689,6 +696,7 @@ describe('managed-services SVC09 owner', () => {
             settlementAvailable = true;
             await service.dispose();
             await harness.owner.dispose();
+            diagnostic.mockRestore();
             await rm(directory, { recursive: true, force: true });
         }
     });
@@ -989,6 +997,9 @@ describe('managed-services SVC09 owner', () => {
         }
     });
     it('G1 coalesces gateway custody while isolating consumer tokens and last-consumer stop/restart', async () => {
+        // File logging is the system boundary; claim/token custody stays real.
+        const diagnostic = vi.spyOn(logger, 'infoFile').mockImplementation(() => undefined);
+        const claimRecords = () => diagnostic.mock.calls.filter(([message]) => message === '[managed-provider-consumer-claim]');
         const directory = await mkdtemp(join(tmpdir(), 'happier-gateway-consumers-'));
         const process = createLifecycleProcess(4_501);
         const restarted = createLifecycleProcess(4_502);
@@ -1006,16 +1017,16 @@ describe('managed-services SVC09 owner', () => {
             clientAccess: { kind: 'hostBearer', injectEnvironmentKey: 'MANAGEMENT_TOKEN', headerName: 'authorization', scheme: 'Bearer' },
         };
         const gateway = { homeId: 'home', accountId: 'account', connectionId: 'connection', machineId: 'machine' };
-        const bind = (consumerId: string, purpose: string) => harness.owner.bindScope(
-            lifecycleScope({ occurrenceId: 'gateway-occurrence', operationId: consumerId }),
+        const bind = (sessionId: string, purpose: string) => harness.owner.bindScope(
+            lifecycleScope({ occurrenceId: 'gateway-occurrence', operationId: sessionId }),
             harness.exec,
             {
                 managedProvider: {
                     realm: 'managedProviderStart', providerLocalId: 'gateway', isCurrent: () => true, isPhysicalOccurrenceCurrent: () => true,
-                    sharedGateway: { ...gateway, consumerId },
+                    sharedGateway: { ...gateway, consumerId: JSON.stringify({ kind: 'session', sessionId }) },
                 },
                 requestAuth: {
-                    realm: 'managedProviderStart', capabilityPath: join(directory, `${consumerId}.capability`), isCurrent: () => true,
+                    realm: 'managedProviderStart', capabilityPath: join(directory, `${sessionId}.capability`), isCurrent: () => true,
                     ...gatewayRequestAuthUses(purpose, ['https://example.com', 'https://other.example.com']),
                 },
             },
@@ -1038,6 +1049,12 @@ describe('managed-services SVC09 owner', () => {
             const registry = JSON.parse(await readFile(registryPath!, 'utf8'));
             expect(registry.consumers).toHaveLength(2);
             expect(new Set(registry.consumers.map((consumer: { token: string }) => consumer.token)).size).toBe(2);
+            expect(claimRecords()).toEqual(expect.arrayContaining(['session-one', 'session-two'].map(sessionId => [
+                '[managed-provider-consumer-claim]',
+                { action: 'claim', connectionId: gateway.connectionId, machineId: gateway.machineId,
+                    instanceId: expect.any(String), consumerId: JSON.stringify({ kind: 'session', sessionId }) },
+            ])));
+            expect(claimRecords()).toHaveLength(2);
             expect(registry.consumers).toEqual(expect.arrayContaining([
                 expect.objectContaining({
                     capabilityPath: join(directory, 'session-one.capability'),
@@ -1052,6 +1069,12 @@ describe('managed-services SVC09 owner', () => {
             await second.request({ pathAndQuery: '/v1/models' });
             expect(headers[0]?.get('authorization')).not.toBe(headers[1]?.get('authorization'));
             await first.dispose();
+            await first.dispose();
+            expect(claimRecords().filter(([, record]) => typeof record === 'object' && record !== null && 'action' in record && record.action === 'release'))
+                .toEqual([['[managed-provider-consumer-claim]', {
+                    action: 'release', connectionId: gateway.connectionId, machineId: gateway.machineId,
+                    instanceId: expect.any(String), consumerId: JSON.stringify({ kind: 'session', sessionId: 'session-one' }),
+                }]]);
             expect(process.dispose).not.toHaveBeenCalled();
             expect(second.snapshot().state).toBe('healthy');
             await expect(first.request({ pathAndQuery: '/v1/models' })).rejects.toMatchObject({ code: 'plugin_managed_service_unavailable' });
@@ -1064,12 +1087,19 @@ describe('managed-services SVC09 owner', () => {
             expect(harness.exec.spawn).toHaveBeenCalledTimes(2);
             expect(third.snapshot().state).toBe('healthy');
             await third.dispose();
+            expect(claimRecords()).toHaveLength(6);
+            for (const { token } of registry.consumers as { token: string }[]) {
+                expect(JSON.stringify(claimRecords())).not.toContain(token);
+            }
+            expect(JSON.stringify(claimRecords())).not.toContain(registryPath);
+            expect(JSON.stringify(claimRecords())).not.toContain('.capability');
             expect(restarted.dispose).toHaveBeenCalledOnce();
             expect(harness.owner.readSharedProviderGatewayRuntime(gateway).status).toBe('idle');
             await harness.owner.dispose();
             expect(harness.owner.readSharedProviderGatewayRuntime(gateway)).toEqual({ status: 'not_checked', reachability: 'not_checked' });
         } finally {
             await harness.owner.dispose();
+            diagnostic.mockRestore();
             await rm(directory, { recursive: true, force: true });
         }
     });

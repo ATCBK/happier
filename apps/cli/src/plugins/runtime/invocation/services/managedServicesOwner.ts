@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { logger } from '@/ui/logger';
 import { assertManagedServiceRequestBodySize, failManagedServiceRequestSize } from './managedServiceRequestSize';
 import { invalidateProcessLaunchDiscovery } from '@/processes/launchNotification';
 import { LocalServiceEstablishmentFailureV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
@@ -3265,6 +3266,20 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
             path: census.path,
             contents: JSON.stringify({ v: 1, consumers: [...census.claims.values()] }),
         });
+        const instanceId = entry.readProcessSnapshot!().instanceId;
+        const recordClaim = (action: 'claim' | 'release') => {
+            const gateway = context.managedProvider!.sharedGateway;
+            if (!gateway) return;
+            logger.infoFile('[managed-provider-consumer-claim]', {
+                action,
+                connectionId: gateway.connectionId,
+                machineId: gateway.machineId,
+                instanceId,
+                // Session broker claims already encode { kind, sessionId } in
+                // consumerId. Preserve that identity, never derive one from a token.
+                consumerId: gateway.consumerId,
+            });
+        };
         const token = createPrivateBearerCredential();
         let active = true;
         const lifetime = new AbortController();
@@ -3286,6 +3301,7 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                     ))).values()],
                 });
                 try { await publish(); } catch (error) { census.claims.delete(token); throw error; }
+                recordClaim('claim');
             });
         } catch (error) {
             if (census.claims.size === 0 && census.pending === 0 && census.unsettled.size === 0) await retireEntry(entry);
@@ -3299,6 +3315,7 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                 census.claims.delete(token);
                 census.unsettled.add(token);
                 await publish();
+                recordClaim('release');
                 // Revocation precedes settlement. The wrapper owns complete
                 // HTTP/stream/WebSocket lifetime, including requests made by
                 // an Agent rather than through this host request adapter.

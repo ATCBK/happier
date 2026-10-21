@@ -182,6 +182,7 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
               signal, isCurrent: () => true }),
           });
           const consumerScope = createProviderLaunchResourceScope();
+          const consumerLogs = vi.spyOn(logger, 'infoFile');
           try {
             const plan = await createNativeAgentRuntimeSessionPlanFixture({
               identity: registration, createRuntime: input => registration.createRuntime(input),
@@ -327,6 +328,12 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
                 consumerScope.register(peer.cleanup);
                 expect(await readFile(processFile, 'utf8')).toBe(localPid);
                 expect(peer.credential).not.toBe(consumer.credential);
+                for (const id of [sessionId, peerSessionId]) {
+                  expect(consumerLogs.mock.calls).toContainEqual(['[managed-provider-consumer-claim]', {
+                    action: 'claim', connectionId: basis.connectionId, machineId: hubMachineId,
+                    instanceId: expect.any(String), consumerId: JSON.stringify({ kind: 'session', sessionId: id }),
+                  }]);
+                }
                 const readModels = async (endpoint: typeof consumer, credential = endpoint.credential) => {
                   const response = await fetch(`${endpoint.endpointUrl}/models`, {
                     headers: { authorization: `Bearer ${credential}` },
@@ -343,6 +350,12 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
                 // physical gateway while that Session still holds its claim.
                 await peer.cleanup();
                 await peer.retire();
+                // Peer retirement crosses the real carrier; its hub cleanup
+                // is observed asynchronously after the local tunnel closes.
+                await vi.waitFor(() => expect(consumerLogs.mock.calls).toContainEqual(['[managed-provider-consumer-claim]', {
+                  action: 'release', connectionId: basis.connectionId, machineId: hubMachineId,
+                  instanceId: expect.any(String), consumerId: JSON.stringify({ kind: 'session', sessionId: peerSessionId }),
+                }]));
                 expect(await readModels(consumer)).toEqual(localModels);
                 expect(await readFile(processFile, 'utf8')).toBe(localPid);
                 const materialized = await attempt.materializeManagedEndpoint({ normalizedUrl: consumer.endpointUrl,
@@ -370,7 +383,7 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
             expect(created.admittedProviderBindingHandoff?.sessionBindingMetadata).toEqual(metadata);
             expect(created.admittedProviderBindingHandoff?.materialization.kind).toBe('spawnEnv');
             await created.operations.resetOrDisposeRuntime();
-          } finally { await consumerScope.release(); }
+          } finally { try { await consumerScope.release(); } finally { consumerLogs.mockRestore(); } }
         }
       }
       const logs = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
