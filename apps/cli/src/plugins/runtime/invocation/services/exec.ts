@@ -1411,9 +1411,12 @@ export function createStablePluginExecService(params: Readonly<{
         const requestMethods = new Set<string>();
         const client: PluginJsonRpcClient = Object.freeze({
             async request(method: string, requestParams?: JsonValue, requestOptions?: { signal?: AbortSignal; timeoutMs?: number | null }) {
-                return await protocol.client.request<JsonValue | undefined, JsonValue>(method, requestParams, requestOptions);
+                guard(requestOptions?.signal);
+                const result = await protocol.client.request<JsonValue | undefined, JsonValue>(method, requestParams, requestOptions);
+                guard(requestOptions?.signal);
+                return result;
             },
-            notify: (method: string, notificationParams?: JsonValue) => protocol.client.notify(method, notificationParams),
+            notify: async (method: string, notificationParams?: JsonValue) => { guard(); await protocol.client.notify(method, notificationParams); },
             onNotification(listener: Parameters<PluginJsonRpcClient['onNotification']>[0]) {
                 const unsubscribe = protocol.subscribeNotification((message) => listener({
                     method: message.method,
