@@ -8949,7 +8949,7 @@ settingsSession: {
                     silenceTitle: 'Stille-Timeout (ms)',
                     minSpeechTitle: 'Mindestlänge der Sprache (ms)',
                     pushToTalkTitle: 'Push-to-Talk',
-                    pushToTalkSubtitle: 'Dieser Anbieter transkribiert eine fertige Aufnahme – tippe erneut auf das Mikrofon, um zu senden. Für Freisprechen wähle Geräte- oder lokale neuronale Spracherkennung.',
+                    pushToTalkSubtitle: 'Dieser Anbieter transkribiert eine fertige Aufnahme – tippe erneut auf das Mikrofon, um zu senden. Für die freihändige Nutzung wähle Geräte- oder lokale neuronale Spracherkennung.',
                 },
                 customBackendIdSubtitle: 'Gib eine eigene Backend-ID ein.',
                 searchBackendsPlaceholder: 'Backends suchen',

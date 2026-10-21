@@ -7728,6 +7728,14 @@ settingsSession: {
             },
             conversationMode: '對話模式',
             conversationModeSubtitle: '直接寫入工作階段，或使用中介並顯式提交',
+            conversation: {
+                handsFree: {
+                    pushToTalkSubtitle: '此提供商會轉寫完成的錄音，再次點按麥克風即可傳送。如需免持操作，請選擇裝置或本機神經語音辨識。',
+                },
+            },
+            neuralStt: {
+                webFallbackSubtitle: '僅在行動應用程式中可用。在瀏覽器中，語音將改用瀏覽器的語音辨識。',
+            },
             mediatorBackend: '中介後端',
             mediatorBackendSubtitle: 'Daemon（使用 Happier 後端）或 OpenAI 相容 HTTP',
             mediatorBackendDaemon: '守護程序',

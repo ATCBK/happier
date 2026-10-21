@@ -688,7 +688,7 @@ describe('VoiceSurface', () => {
     const { VoiceSurface } = await import('./VoiceSurface');
     const screen = await renderScreen(React.createElement(VoiceSurface, { variant: 'session', sessionId: 's1' }));
 
-    const texts = screen.root.findAllByType('Text' as any).map((n: any) => String(n.props.children ?? ''));
+    const texts = screen.getTextContent();
     expect(texts).toContain('voiceSurface.errors.sendFailed');
     expect(texts).toContain('session is offline');
   });
@@ -716,7 +716,7 @@ describe('VoiceSurface', () => {
     const { VoiceSurface } = await import('./VoiceSurface');
     const screen = await renderScreen(React.createElement(VoiceSurface, { variant: 'sidebar' }));
 
-    const texts = screen.root.findAllByType('Text' as any).map((n: any) => String(n.props.children ?? ''));
+    const texts = screen.getTextContent();
     expect(texts).toContain('voiceSurface.errors.localNeuralPackNotInstalled');
   });
 

@@ -1355,7 +1355,7 @@ describe('VoiceAgentManager', () => {
         idleTtlSeconds: 60,
         initialContext: 'CTX',
         bootstrapMode: 'ready_handshake',
-      } as any);
+      });
       expect(started.voiceAgentId).toEqual(expect.any(String));
     } finally {
       await manager.dispose();
@@ -1385,7 +1385,7 @@ describe('VoiceAgentManager', () => {
           initialContext: 'CTX',
           bootstrapMode: 'ready_handshake',
           bootstrapTimeoutMs: 25,
-        } as any),
+        }),
       ).rejects.toMatchObject({ code: 'VOICE_AGENT_START_FAILED' });
       expect(dispose).toHaveBeenCalled();
     } finally {
@@ -1415,7 +1415,7 @@ describe('VoiceAgentManager', () => {
           initialContext: 'CTX',
           bootstrapMode: 'ready_handshake',
           bootstrapTimeoutMs: 15_000,
-        } as any),
+        }),
       ).rejects.toMatchObject({ code: 'VOICE_AGENT_START_FAILED' });
       expect(backend.seenTimeouts).toEqual([5_000]);
     } finally {
@@ -1449,7 +1449,7 @@ describe('VoiceAgentManager', () => {
           initialContext: 'CTX',
           bootstrapMode: 'ready_handshake',
           bootstrapTimeoutMs: 25,
-        } as any),
+        }),
       ).rejects.toMatchObject({ code: 'VOICE_AGENT_START_FAILED' });
       expect(dispose).toHaveBeenCalled();
     } finally {
@@ -1484,7 +1484,7 @@ describe('VoiceAgentManager', () => {
           initialContext: 'CTX',
           bootstrapMode: 'ready_handshake',
           bootstrapTimeoutMs: 25,
-        } as any),
+        }),
       ).rejects.toMatchObject({ code: 'VOICE_AGENT_START_FAILED' });
       expect(dispose).toHaveBeenCalled();
     } finally {
