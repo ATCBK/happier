@@ -1,4 +1,5 @@
 import { RuntimeDescriptorV1Schema } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
+import { sanitizeNewSessionConfigOverridesForModelSelection } from '@/components/sessions/new/modules/newSessionConfigOptionOverrideSanitization';
 import { agentReceivesUserMcpServersV1 } from '@happier-dev/protocol/plugins/contributions/v2';
 import { createPreflightComposerSuggestionCatalogSource, type ComposerSuggestionCatalogs } from '@/components/autocomplete/composerSuggestionCatalogs';
 import type { AutocompleteSuggestionUpdate } from '@/components/autocomplete/autocompleteTypes';
@@ -843,17 +844,16 @@ export function useNewSessionScreenModel(input?: Readonly<{
     const credentialResourcesEnabled = useFeatureEnabled('teams.credentialResources', {
         scopeKind: 'spawn', serverId: targetServerId,
     });
-    const teamCredentialCatalog = useHomeTeamCredentialModelCatalog({
-        serverId: targetServerId,
-        enabled: credentialResourcesEnabled,
-    });
-    const teamCredentialConnectedServiceResources = React.useMemo(() => (
-        teamCredentialCatalog.resources.filter((resource) => resource.connectedServiceSelections.length > 0)
-    ), [teamCredentialCatalog.resources]);
-    const [selectedTeamCredentialModel, setSelectedTeamCredentialModel] = React.useState<TeamCredentialProviderModelSelectionV1 | null>(null);
+    const [storedTeamCredentialModel, setStoredTeamCredentialModel] = React.useState<TeamCredentialProviderModelSelectionV1 | null>(null);
+    const teamCredentialModelRef = useLatestRef(storedTeamCredentialModel);
+    const setSelectedTeamCredentialModel = React.useCallback((selection: TeamCredentialProviderModelSelectionV1 | null) => {
+        // Native selection and its remember callback can run in the same event.
+        teamCredentialModelRef.current = selection;
+        setStoredTeamCredentialModel(selection);
+    }, [teamCredentialModelRef]);
     React.useEffect(() => {
         setSelectedTeamCredentialModel(null);
-    }, [targetServerId]);
+    }, [setSelectedTeamCredentialModel, targetServerId]);
     const externalSessionsFeatureEnabled = useFeatureEnabled('sessions.direct', { scopeKind: 'spawn', serverId: targetServerId });
     const useMachinePickerSearch = useSetting('useMachinePickerSearch');
     const usePathPickerSearch = useSetting('usePathPickerSearch');
@@ -1236,36 +1236,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
     // choice below uses retained declarations independently of execution admission.
     const projectionCurrent = daemonMergedProjection.phase === 'ready';
     const currentProjectionInputs = projectionCurrent ? daemonMergedProjection.inputs : null;
-    // The mounted authoring owner is the canonical composition point for the
-    // Temporary-computer creator producers: it already holds the Agent catalog,
-    // the entitled Team credential catalog and the current model selection, so
-    // composing here keeps one store instead of a second parallel loader. An
-    // explicit override stays available for harnesses that must substitute a
-    // producer, but production no longer runs with these absent.
-    const composedTemporaryComputerCreator = React.useMemo(() => (
-        createTemporaryComputerCreatorDependencies({
-            teamCredentialResources: teamCredentialCatalog.resources,
-            currentTeamCredentialResourceKeys: teamCredentialCatalog.currentResourceKeys,
-            teamCredentialServerId: targetServerId,
-            selectedTeamCredentialModel,
-            registryActionExecution: temporaryComputerRegistryActionExecution,
-            // This machine owns the installed generation. Its exact acquisition
-            // listing is read through the qualified Account registry Actions.
-            agentCatalogMachineId,
-            projectedAgentsById: currentProjectionInputs?.pluginProjectionV2?.agentsById ?? EMPTY_PLUGIN_PROJECTION_RECORD,
-            installedPluginPackagesById: currentProjectionInputs?.pluginProjectionV2?.installedPackagesById ?? EMPTY_PLUGIN_PROJECTION_RECORD,
-        })
-    ), [
-        agentCatalogMachineId,
-        currentProjectionInputs?.pluginProjectionV2,
-        selectedTeamCredentialModel,
-        targetServerId,
-        teamCredentialCatalog.currentResourceKeys,
-        teamCredentialCatalog.resources,
-        temporaryComputerRegistryActionExecution,
-    ]);
-    const temporaryComputerCreator: TemporaryComputerCreatorDependencies =
-        input?.temporaryComputerCreatorDependencies ?? composedTemporaryComputerCreator.dependencies;
     // New Session draft records have no generation field. Revalidate them
     // only against the exact current machine/account projection; retained
     // inputs during a target/account transition are intentionally inert.
@@ -1331,6 +1301,40 @@ export function useNewSessionScreenModel(input?: Readonly<{
         machineTarget: { machineId: selectedMachineId, serverId: capabilityServerId, load: hostDemanded,
             inventoryDemanded: agentInventoryDemanded },
     });
+    const selectedBackendTargetKey = React.useMemo(() => resolveBackendTargetKeyV2(backendTarget), [backendTarget]);
+    const selectedTeamCredentialModel = storedTeamCredentialModel?.agentTargetKey === selectedBackendTargetKey
+        ? storedTeamCredentialModel : null;
+    React.useEffect(() => {
+        if (storedTeamCredentialModel && storedTeamCredentialModel.agentTargetKey !== selectedBackendTargetKey) {
+            setSelectedTeamCredentialModel(null);
+        }
+    }, [selectedBackendTargetKey, setSelectedTeamCredentialModel, storedTeamCredentialModel]);
+    const teamCredentialCatalog = useHomeTeamCredentialModelCatalog({
+        serverId: targetServerId,
+        enabled: credentialResourcesEnabled,
+        agentTargetKey: selectedBackendTargetKey,
+    });
+    const teamCredentialConnectedServiceResources = React.useMemo(() => (
+        teamCredentialCatalog.resources.filter((resource) => resource.connectedServiceSelections.length > 0)
+    ), [teamCredentialCatalog.resources]);
+    // The authoring owner composes the selected Agent's qualified Team catalog
+    // with creator eligibility; picker and launch consume the same source rows.
+    const composedTemporaryComputerCreator = React.useMemo(() => (
+        createTemporaryComputerCreatorDependencies({
+            teamCredentialResources: teamCredentialCatalog.resources,
+            currentTeamCredentialResourceKeys: teamCredentialCatalog.currentResourceKeys,
+            teamCredentialServerId: targetServerId,
+            selectedTeamCredentialModel,
+            registryActionExecution: temporaryComputerRegistryActionExecution,
+            agentCatalogMachineId,
+            projectedAgentsById: currentProjectionInputs?.pluginProjectionV2?.agentsById ?? EMPTY_PLUGIN_PROJECTION_RECORD,
+            installedPluginPackagesById: currentProjectionInputs?.pluginProjectionV2?.installedPackagesById ?? EMPTY_PLUGIN_PROJECTION_RECORD,
+        })
+    ), [agentCatalogMachineId, currentProjectionInputs?.pluginProjectionV2, selectedTeamCredentialModel,
+        targetServerId, teamCredentialCatalog.currentResourceKeys, teamCredentialCatalog.resources,
+        temporaryComputerRegistryActionExecution]);
+    const temporaryComputerCreator: TemporaryComputerCreatorDependencies =
+        input?.temporaryComputerCreatorDependencies ?? composedTemporaryComputerCreator.dependencies;
     /**
      * The selected installed Agent's declarations are the only owners of the
      * settings consumed by its behavior. Account and daemon groups are both
@@ -1528,7 +1532,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
                 ?? prevTarget;
         });
     }, [resolvedBackendEntries, setBackendTarget]);
-    const selectedBackendTargetKey = React.useMemo(() => resolveBackendTargetKeyV2(backendTarget), [backendTarget]);
     const agentOptionState = backendNewSessionOptionStateByTargetKey[selectedBackendTargetKey] ?? null;
     const selectedBackendEntry = React.useMemo(() => {
         return resolvedBackendEntries.find((entry) => entry.backendTargetKey === selectedBackendTargetKey) ?? null;
@@ -1639,8 +1642,13 @@ export function useNewSessionScreenModel(input?: Readonly<{
         if (!selection) return;
         hydratedTeamCredentialBindingKeyRef.current = hydrationKey;
         setSelectedTeamCredentialModel(selection);
-    }, [persistedDraft, selectedTeamCredentialModel, targetServerId, teamCredentialCatalog.resources]);
-    const rememberEngineSelection = useDeferredRememberedEngineSelection({
+    }, [persistedDraft, selectedTeamCredentialModel, setSelectedTeamCredentialModel, targetServerId, teamCredentialCatalog.resources]);
+    const canRetainModelSelection = React.useCallback((selection: SessionModelSelectionV1 | null) => {
+        const team = teamCredentialModelRef.current;
+        return !team || !selection || selection.ref.providerConnectionId !== null
+            || selection.ref.agentTargetKey !== team.agentTargetKey || selection.ref.modelId !== team.modelId;
+    }, [teamCredentialModelRef]);
+    const rememberRetainableEngineSelection = useDeferredRememberedEngineSelection({
         enabled: rememberLastEngineSelections,
         selectionsByScope: lastEngineSelectionsByScope,
         serverId: capabilityServerId,
@@ -1648,6 +1656,9 @@ export function useNewSessionScreenModel(input?: Readonly<{
         accountLifetime,
         commit: setLastEngineSelectionsByScope,
     });
+    const rememberEngineSelection = React.useCallback<ReturnType<typeof useDeferredRememberedEngineSelection>>((target, selection) => {
+        if (canRetainModelSelection(selection.modelSelection)) rememberRetainableEngineSelection(target, selection);
+    }, [canRetainModelSelection, rememberRetainableEngineSelection]);
     const currentEngineSelectionRef = useLatestRef({
         backendTarget: selectedBackendEntry?.backendTarget ?? backendTarget,
         modelMode,
@@ -1695,7 +1706,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         setSelectedTeamCredentialModel(null);
         setModelSelection(selection);
         rememberCurrentEngineSelection({ modelSelection: selection });
-    }, [rememberCurrentEngineSelection, setModelSelection]);
+    }, [rememberCurrentEngineSelection, setModelSelection, setSelectedTeamCredentialModel]);
     const providerModelProjection = useProviderModelProjection({
         // A machine RPC: an embedded composer asks only once the person reaches for it.
         enabled: providersFeatureEnabled && selectedMachineId !== null && hostDemanded,
@@ -1718,66 +1729,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
         currentResourceKeys: teamCredentialCatalog.currentResourceKeys,
     });
     const coordinateTeamCredentialSelection = useTeamCredentialSelectionCoordinator(targetServerId);
-    const selectTeamCredentialModel = React.useCallback(async (selection: TeamCredentialProviderModelSelectionV1) => {
-        const selectedResource = teamCredentialSelectionContextRef.current.resources.find((resource) => (
-            resource.id === selection.resourceId
-            && resource.teamId === selection.teamId
-            && resource.resourceRevision === selection.expectedResourceRevision
-        ));
-        const resourceKey = `${selection.teamId}:${selection.resourceId}`;
-        if (!selectedResource
-            || !teamCredentialSelectionContextRef.current.currentResourceKeys.has(resourceKey)
-            || !resourceHasAvailableTeamCredentialProviderModel(selectedResource, selection)) return;
-        const expectedServerId = teamCredentialSelectionContextRef.current.serverId;
-        const stillCurrent = () => {
-            const current = teamCredentialSelectionContextRef.current;
-            return current.serverId === expectedServerId
-                && current.currentResourceKeys.has(resourceKey)
-                && current.resources.some((resource) => (
-                resource.id === selection.resourceId
-                && resource.teamId === selection.teamId
-                && resourceHasAvailableTeamCredentialProviderModel(resource, selection)
-            ));
-        };
-        const selectionOutcome = await coordinateTeamCredentialSelection({
-            resource: selectedResource,
-            deliveryMode: selection.deliveryMode,
-            selection,
-            isCurrent: stillCurrent,
-        });
-        if (selectionOutcome.kind !== 'continue') return;
-        if (selectedResource.sessionUsePolicy === 'team_visibility_required') {
-            const confirmed = await Modal.confirm(
-                t('teams.credentials.usePolicy.title'),
-                t('teams.credentials.usePolicy.visibilityNote'),
-                { confirmText: t('common.continue'), cancelText: t('common.cancel') },
-            );
-            if (!confirmed || !stillCurrent()) return;
-        }
-        const model = selectedResource.providerModels.find(candidate => (
-            sessionModelSelectionKey(candidate.selection) === sessionModelSelectionKey(selectionOutcome.selection)
-        ));
-        if (!model) return;
-        await confirmExperimentalProviderModel.confirm({ kind: 'team-model', model }, () => {
-            if (!stillCurrent()) return;
-            if (selectedResource.sessionUsePolicy !== 'personal_allowed') {
-                accessDraftState.applyTeamCredentialPolicy(
-                    selectedResource.teamId,
-                    selectedResource.sessionUsePolicy === 'team_visibility_required',
-                );
-            }
-            setSelectedTeamCredentialModel(selectionOutcome.selection);
-            setModelSelection({
-                v: 1,
-                updatedAt: Date.now(),
-                ref: {
-                    agentTargetKey: selectionOutcome.selection.agentTargetKey,
-                    providerConnectionId: null,
-                    modelId: selectionOutcome.selection.modelId,
-                },
-            });
-        });
-    }, [accessDraftState, confirmExperimentalProviderModel, coordinateTeamCredentialSelection, setModelSelection, teamCredentialSelectionContextRef]);
     const teamCredentialProviderBinding = React.useMemo(() => selectedTeamCredentialModel
         ? sessionModelSelectionV2TeamBindingIntent({
             v: 2,
@@ -2063,11 +2014,87 @@ export function useNewSessionScreenModel(input?: Readonly<{
         connectedAccountDefaultsReady: connectedAccountDefaultsStatus === 'ready',
     });
 
+    const selectTeamCredentialModel = React.useCallback(async (selection: TeamCredentialProviderModelSelectionV1) => {
+        const selectedResource = teamCredentialSelectionContextRef.current.resources.find((resource) => (
+            resource.id === selection.resourceId
+            && resource.teamId === selection.teamId
+            && resource.resourceRevision === selection.expectedResourceRevision
+        ));
+        const resourceKey = `${selection.teamId}:${selection.resourceId}`;
+        if (!selectedResource
+            || !teamCredentialSelectionContextRef.current.currentResourceKeys.has(resourceKey)
+            || !resourceHasAvailableTeamCredentialProviderModel(selectedResource, selection)) return;
+        const expectedServerId = teamCredentialSelectionContextRef.current.serverId;
+        const stillCurrent = () => {
+            const current = teamCredentialSelectionContextRef.current;
+            return current.serverId === expectedServerId
+                && current.currentResourceKeys.has(resourceKey)
+                && current.resources.some((resource) => (
+                resource.id === selection.resourceId
+                && resource.teamId === selection.teamId
+                && resourceHasAvailableTeamCredentialProviderModel(resource, selection)
+            ));
+        };
+        const selectionOutcome = await coordinateTeamCredentialSelection({
+            resource: selectedResource,
+            deliveryMode: selection.deliveryMode,
+            selection,
+            isCurrent: stillCurrent,
+        });
+        if (selectionOutcome.kind !== 'continue') return;
+        if (selectedResource.sessionUsePolicy === 'team_visibility_required') {
+            const confirmed = await Modal.confirm(
+                t('teams.credentials.usePolicy.title'),
+                t('teams.credentials.usePolicy.visibilityNote'),
+                { confirmText: t('common.continue'), cancelText: t('common.cancel') },
+            );
+            if (!confirmed || !stillCurrent()) return;
+        }
+        const model = selectedResource.providerModels.find(candidate => (
+            sessionModelSelectionKey(candidate.selection) === sessionModelSelectionKey(selectionOutcome.selection)
+        ));
+        if (!model) return;
+        await confirmExperimentalProviderModel.confirm({ kind: 'team-model', model }, () => {
+            if (!stillCurrent()) return;
+            if (selectedResource.sessionUsePolicy !== 'personal_allowed') {
+                accessDraftState.applyTeamCredentialPolicy(
+                    selectedResource.teamId,
+                    selectedResource.sessionUsePolicy === 'team_visibility_required',
+                );
+            }
+            setSelectedTeamCredentialModel(selectionOutcome.selection);
+            const previousOverrides = currentEngineSelectionRef.current.sessionConfigOptionOverrides;
+            const sourceOverrides = sanitizeNewSessionConfigOverridesForModelSelection({
+                providerId: selectionOutcome.selection.agentTargetKey,
+                configOptions: acpConfigOptions, modelOptions,
+                selectedModelId: selectionOutcome.selection.modelId,
+                selectedModelConfigOptions: model.descriptor.modelOptions ?? [],
+                selectedConfigOverrides: Object.fromEntries(Object.entries(previousOverrides?.overrides ?? {})
+                    .flatMap(([id, override]) => typeof override.value === 'string' ? [[id, override.value]] : [])),
+            });
+            const updatedAt = Date.now();
+            setSessionConfigOptionOverrides(Object.keys(sourceOverrides).length > 0 ? buildAcpConfigOptionOverridesV1({
+                updatedAt,
+                overrides: Object.fromEntries(Object.entries(sourceOverrides).map(([id, value]) => [id, { updatedAt, value }])),
+            }) : null);
+            setModelSelection({
+                v: 1,
+                updatedAt: Date.now(),
+                ref: {
+                    agentTargetKey: selectionOutcome.selection.agentTargetKey,
+                    providerConnectionId: null,
+                    modelId: selectionOutcome.selection.modelId,
+                },
+            });
+        });
+    }, [accessDraftState, acpConfigOptions, modelOptions, confirmExperimentalProviderModel, coordinateTeamCredentialSelection, currentEngineSelectionRef,
+        setModelSelection, setSelectedTeamCredentialModel, setSessionConfigOptionOverrides, teamCredentialSelectionContextRef]);
+
     const selectCreationModel = React.useCallback<React.ComponentProps<typeof SessionModelPicker>['onSelect']>((ref) => {
         // Host-restricted choices update this draft, not the Account's remembered engine selection.
         setSelectedTeamCredentialModel(null);
         setModelSelection(ref ? { v: 1, updatedAt: Date.now(), ref } : null);
-    }, [setModelSelection]);
+    }, [setModelSelection, setSelectedTeamCredentialModel]);
     const creationModelPickerProps = React.useMemo<React.ComponentProps<typeof SessionModelPicker> | undefined>(() => {
         if (!creationProfile) return undefined;
         const hostCatalog = creationProfile.modelCatalog;
@@ -2728,6 +2755,18 @@ export function useNewSessionScreenModel(input?: Readonly<{
         clearProfileRouteParam,
     });
 
+    const clearTeamCredentialModel = React.useCallback(() => setSelectedTeamCredentialModel(null), [setSelectedTeamCredentialModel]);
+    const teamModels = React.useMemo<NonNullable<React.ComponentProps<typeof NewSessionEngineOptionDetail>['teamModels']>>(() => ({
+        teamCredentialResources: teamCredentialCatalog.resources,
+        teamNameById: teamCredentialCatalog.teamNameById,
+        homeNameByTeamId: teamCredentialCatalog.homeNameByTeamId,
+        currentTeamCredentialResourceKeys: teamCredentialCatalog.currentResourceKeys,
+        selectedTeamCredentialModel,
+        onSelectTeamCredentialModel: (selection) => { void selectTeamCredentialModel(selection); },
+        onSelectOtherModel: clearTeamCredentialModel,
+    }), [clearTeamCredentialModel, selectTeamCredentialModel, selectedTeamCredentialModel,
+        teamCredentialCatalog.currentResourceKeys, teamCredentialCatalog.homeNameByTeamId,
+        teamCredentialCatalog.resources, teamCredentialCatalog.teamNameById]);
     const {
         agentPickerOptions,
         agentPickerSelectedOptionId,
@@ -2751,6 +2790,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         setBackendTarget,
         modelMode,
         modelSelection,
+        canRetainModelSelection,
         setModelMode,
         acpSessionModeId,
         setAcpSessionModeId,
@@ -2775,6 +2815,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         refreshProbe: cliAvailabilityProbe ?? null,
         providerProjection: providerModelProjection,
         selectedNativeSourceLabel: connectedServicesNativeSourceLabel,
+        teamModels,
         selectedConnectedServices: connectedServicesBindingsPayload,
         experimentalConfirmation: confirmExperimentalProviderModel,
     });

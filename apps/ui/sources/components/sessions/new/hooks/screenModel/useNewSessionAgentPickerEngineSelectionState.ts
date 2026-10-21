@@ -20,6 +20,8 @@ type UseNewSessionAgentPickerEngineSelectionStateParams = Readonly<{
     selectedBackendTargetKey: string;
     modelMode: ModelMode;
     modelSelection?: SessionModelSelectionV1 | null;
+    /** Source identities absent from V1 must not be retained as native tuples. */
+    canRetainModelSelection?: (selection: SessionModelSelectionV1 | null) => boolean;
     acpSessionModeId: string | null;
     sessionConfigOptionOverrides: ReturnType<typeof buildAcpConfigOptionOverridesV1> | null;
     setBackendTarget: React.Dispatch<React.SetStateAction<PersistedBackendTargetRefV2>>;
@@ -152,6 +154,10 @@ export function useNewSessionAgentPickerEngineSelectionState(
             ...initialSelection,
             sessionModeId: normalizeSessionModeIdForEntry(params.selectedBackendEntry, initialSelection.sessionModeId),
         };
+        if (params.canRetainModelSelection?.(nextSelection.modelSelection ?? null) === false) {
+            pendingAppliedSelectionRef.current = null;
+            return;
+        }
         const pendingAppliedSelection = pendingAppliedSelectionRef.current;
         if (pendingAppliedSelection?.targetKey === selectedTargetKey) {
             if (!areEngineSelectionsEqual(nextSelection, pendingAppliedSelection.selection)) {
@@ -162,15 +168,18 @@ export function useNewSessionAgentPickerEngineSelectionState(
         }
 
         engineSelectionByTargetKeyRef.current.set(selectedTargetKey, nextSelection);
-    }, [buildInitialEngineSelection, params.selectedBackendEntry, selectedTargetKey]);
+    }, [buildInitialEngineSelection, params.canRetainModelSelection, params.selectedBackendEntry, selectedTargetKey]);
 
     const getEngineSelectionForTargetKey = React.useCallback((targetKey: string) => {
+        if (targetKey === selectedTargetKey && params.canRetainModelSelection?.(params.modelSelection ?? null) === false) {
+            return buildInitialEngineSelection(targetKey);
+        }
         const existing = engineSelectionByTargetKeyRef.current.get(targetKey);
         if (existing) return existing;
         const initialSelection = buildInitialEngineSelection(targetKey);
         engineSelectionByTargetKeyRef.current.set(targetKey, initialSelection);
         return initialSelection;
-    }, [buildInitialEngineSelection]);
+    }, [buildInitialEngineSelection, params.canRetainModelSelection, params.modelSelection, selectedTargetKey]);
 
     const applyEngineSelection = React.useCallback((entry: ResolvedBackendCatalogEntry, selection: SessionAgentPickerSelection) => {
         const normalizedSessionModeId = normalizeSessionModeIdForEntry(entry, selection.sessionModeId);
@@ -208,13 +217,16 @@ export function useNewSessionAgentPickerEngineSelectionState(
                         modelId: selection.modelId,
                     },
                 };
-        pendingAppliedSelectionRef.current = {
-            targetKey: entry.backendTargetKey,
-            selection: {
-                ...selection,
-                sessionModeId: normalizedSessionModeId,
-            },
+        const retainSelection = params.canRetainModelSelection?.(modelSelection) !== false;
+        const appliedSelection = {
+            ...selection,
+            sessionModeId: normalizedSessionModeId,
         };
+        if (retainSelection) engineSelectionByTargetKeyRef.current.set(entry.backendTargetKey, appliedSelection);
+        pendingAppliedSelectionRef.current = retainSelection ? {
+            targetKey: entry.backendTargetKey,
+            selection: appliedSelection,
+        } : null;
         params.onExplicitBackendTargetSelection?.(entry.backendTarget);
         params.setBackendTarget(entry.backendTarget);
         if (params.setEngineSelectionForBackendTarget) {
@@ -229,7 +241,7 @@ export function useNewSessionAgentPickerEngineSelectionState(
             params.setAcpSessionModeId(normalizedSessionModeId);
             params.setSessionConfigOptionOverrides(sessionConfigOptionOverrides);
         }
-        params.onRememberEngineSelection?.(entry.backendTarget, {
+        if (retainSelection) params.onRememberEngineSelection?.(entry.backendTarget, {
             modelSelection,
             acpSessionModeId: normalizedSessionModeId,
             sessionConfigOptionOverrides,
@@ -241,7 +253,6 @@ export function useNewSessionAgentPickerEngineSelectionState(
             ...selection,
             sessionModeId: normalizeSessionModeIdForEntry(entry, selection.sessionModeId),
         };
-        engineSelectionByTargetKeyRef.current.set(entry.backendTargetKey, normalizedSelection);
         applyEngineSelection(entry, normalizedSelection);
     }, [applyEngineSelection]);
 

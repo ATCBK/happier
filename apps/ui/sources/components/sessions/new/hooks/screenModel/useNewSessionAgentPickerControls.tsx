@@ -48,6 +48,7 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
     setBackendTarget: React.Dispatch<React.SetStateAction<PersistedBackendTargetRefV2>>;
     modelMode: ModelMode;
     modelSelection?: SessionModelSelectionV1 | null;
+    canRetainModelSelection?: Parameters<typeof useNewSessionAgentPickerEngineSelectionState>[0]['canRetainModelSelection'];
     setModelMode: React.Dispatch<React.SetStateAction<ModelMode>>;
     acpSessionModeId: string | null;
     setAcpSessionModeId: React.Dispatch<React.SetStateAction<string | null>>;
@@ -79,6 +80,7 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
      */
     refreshProbe?: OptionPickerProbeState | null;
     providerProjection?: NewSessionEngineOptionDetailProps['providerProjection'];
+    teamModels?: NewSessionEngineOptionDetailProps['teamModels'];
     selectedNativeSourceLabel?: string | null;
     selectedConnectedServices?: ConnectedServiceBindingsV2 | null;
     experimentalConfirmation?: SessionModelPickerExperimentalConfirmationController;
@@ -109,6 +111,7 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
         selectedBackendTargetKey: params.selectedBackendTargetKey,
         modelMode: params.modelMode,
         modelSelection: params.modelSelection ?? null,
+        canRetainModelSelection: params.canRetainModelSelection,
         acpSessionModeId: params.acpSessionModeId,
         sessionConfigOptionOverrides: params.sessionConfigOptionOverrides,
         setBackendTarget: params.setBackendTarget,
@@ -237,6 +240,7 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
         onRemoveFavoriteModelSelection: handleRemoveFavoriteModelSelection,
         onRememberAgentPickerView: rememberAgentPickerView,
         ...(params.providerProjection ? { providerProjection: params.providerProjection } : {}),
+        teamModels: params.teamModels,
         selectedNativeSourceLabel: params.selectedNativeSourceLabel,
         ...('selectedConnectedServices' in params ? { selectedConnectedServices: params.selectedConnectedServices } : {}),
         experimentalConfirmation: params.experimentalConfirmation,
@@ -268,6 +272,7 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
         params.profileMap,
         params.projectionCurrent,
         params.providerProjection,
+        params.teamModels,
         params.selectedNativeSourceLabel,
         params.selectedConnectedServices,
         params.refreshProbe,
