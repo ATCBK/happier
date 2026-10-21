@@ -591,7 +591,7 @@ describe("local service API route composition", () => {
         });
     });
 
-    it("exchanges the composed public capability URL token once and rejects the consumed original", async () => {
+    it("exchanges the composed public capability URL token into its cookie and keeps the shared link reusable", async () => {
         const mod = await loadLocalServiceRoutesModule();
         expect(mod?.registerLocalServiceRoutes).toBeTypeOf("function");
         if (!mod?.registerLocalServiceRoutes) return;
@@ -657,17 +657,15 @@ describe("local service API route composition", () => {
         const exchangeResponse = exchangeReply.send.mock.calls.at(-1)?.[0] as { protocolVersion?: number; publicToken?: string; exposureId?: string } | undefined;
         expect(exchangeResponse?.protocolVersion).toBe(1);
         expect(exchangeResponse?.exposureId).toBe(exposureId);
-        const rotatedToken = exchangeResponse?.publicToken;
-        expect(rotatedToken).toBeTypeOf("string");
-        expect(rotatedToken).not.toBe(publicToken);
+        // A secret link is sharing authority until expiry or revocation: the exchange never consumes or rotates it.
+        expect(exchangeResponse?.publicToken).toBe(publicToken);
         expect(exchangeReply.headers["Set-Cookie"]).toEqual(expect.stringContaining(`Path=/v1/local-services/public/${exposureId}`));
         expect(exchangeReply.headers["Set-Cookie"]).toEqual(expect.stringContaining("HttpOnly"));
 
-        // Replaying the consumed original URL token is denied.
+        // Replaying the original URL token is not denied as a mismatch.
         const replayReply = createReplyStub();
         await getRouteHandler(app, 'GET', '/*')(mintedPublicRequest(exposureReply), replayReply);
-        expect(replayReply.statusCode).toBe(403);
-        expect(replayReply.send).toHaveBeenCalledWith(expect.objectContaining({
+        expect(replayReply.send).not.toHaveBeenCalledWith(expect.objectContaining({
             reasonCode: "public_token_mismatch",
         }));
     });

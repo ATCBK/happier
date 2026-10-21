@@ -3,6 +3,7 @@ import { V2SessionByIdResponseSchema } from "@happier-dev/protocol";
 
 import {
     accountFindUnique,
+    FOLLOW_RULE_VIEWER_ACCOUNT_READS,
     createSessionAccessProjectionRelations,
     createSessionDataKeyEnvelopeFixture,
     configureMaterializedRunnerCurrentnessFixture,
@@ -224,6 +225,8 @@ describe("sessionRoutes v2 session by id", () => {
             metadataVersion: 1,
             metadataLayoutVersion: 1,
             ownerMetadata: JSON.stringify({ t: "plain", v: { v: 1 } }),
+            // The fresh readmission row carries the owning Account's current (plain) mode.
+            account: { status: "active", encryptionMode: "plain", publicKey: null, contentPublicKey: null, contentPublicKeySig: null },
             agentState: null,
             agentStateVersion: 0,
             pendingPermissionRequestCount: 1,
@@ -413,7 +416,7 @@ describe("sessionRoutes v2 session by id", () => {
                 agentState: "legacy-owner-agent-state",
             }),
         });
-        expect(accountFindUnique).not.toHaveBeenCalled();
+        expect(accountFindUnique).toHaveBeenCalledTimes(FOLLOW_RULE_VIEWER_ACCOUNT_READS);
     });
 
     it("returns owned session with raw session DEK and share=null", async () => {
@@ -750,7 +753,8 @@ describe("sessionRoutes v2 session by id", () => {
         const route = await createSessionRouteTestBuilder("GET", "/v2/sessions/:sessionId");
         const { response: res } = await route.invoke({ params: { sessionId: "s1" } });
 
-        expect(txSessionFindUnique).toHaveBeenCalledTimes(2);
+        // Strict read, released fallback read, then the owner's Pending-activation publication read.
+        expect(txSessionFindUnique).toHaveBeenCalledTimes(3);
         expect(txSessionFindUnique.mock.calls[1]?.[0]?.select).not.toHaveProperty("turns");
         expect(txSessionFindUnique.mock.calls[1]?.[0]?.select).toEqual(expect.objectContaining({
             currentStorageState: true,

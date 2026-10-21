@@ -132,7 +132,9 @@ const markSessionProjectionRecipientsChanged = vi.fn(async () => [{ accountId: "
 vi.mock("@/app/session/changeTracking/markSessionProjectionRecipientsChanged", () => ({
     markSessionProjectionRecipientsChanged,
 }));
-vi.mock("@/app/changes/markAccountChanged", () => ({
+// Only the terminal Account-change write is recorded; the real transaction owner flushes its queue.
+vi.mock("@/app/changes/markAccountChanged", async (importOriginal) => ({
+    ...await importOriginal<typeof import("@/app/changes/markAccountChanged")>(),
     markAccountChanged,
 }));
 const refreshTrackedSessionAccountBadgePushes = vi.fn(async () => {});

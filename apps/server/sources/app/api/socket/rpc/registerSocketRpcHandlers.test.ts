@@ -148,7 +148,11 @@ vi.mock("@/storage/db", async () => {
                 return rows.filter(row => row !== null);
             } },
         account: { findUnique: accountFindUniqueMock },
-        managedMachine: { findUnique: managedMachineFindUniqueMock },
+        managedMachine: { findUnique: managedMachineFindUniqueMock,
+            // Fleet reads select by enrolled Machine ids; the same persisted rows answer each id.
+            findMany: async (args: Readonly<{ where: { enrolledMachineId: { in: readonly string[] } } }>) =>
+                (await Promise.all(args.where.enrolledMachineId.in.map(enrolledMachineId =>
+                    managedMachineFindUniqueMock({ where: { enrolledMachineId } })))).filter(row => row !== null && row !== undefined) },
         accessKey: { findUnique: accessKeyFindUniqueMock },
         ephemeralRunnerActivation: { findFirst: ephemeralRunnerActivationFindFirstMock },
         session: { findUnique: sessionFindUniqueMock, findFirst: sessionFindFirstMock },

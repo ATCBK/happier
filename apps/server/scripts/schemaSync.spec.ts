@@ -765,7 +765,7 @@ model AutomationWorkerClaimReceipt {
         const model = (name: string) => new RegExp(`^model\\s+${name}\\s+\\{[\\s\\S]*?^\\}\\s*$`, "m")
             .exec(mysql)?.[0] ?? "";
 
-        expect(postgres).not.toMatch(/enum TeamDirectorySourceState \{[\s\S]*?\bsetup\b/);
+        expect(postgres).not.toMatch(/enum TeamDirectorySourceState \{[^}]*\bsetup\b/);
         expect(model("TeamDirectorySource")).toMatch(/externalSourceKey\s+String\s+@unique\s+@db\.VarChar\(64\)/);
         expect(model("TeamProvisionedIdentity")).toMatch(/externalUserId\s+String\s+@db\.VarChar\(256\)/);
         expect(model("TeamProvisionedIdentity")).toMatch(/externalSubjectId\s+String\?\s+@db\.VarChar\(512\)/);

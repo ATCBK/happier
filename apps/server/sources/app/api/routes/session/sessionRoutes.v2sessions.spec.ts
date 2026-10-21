@@ -16,6 +16,7 @@ import {
     createSessionRouteTestBuilder,
     createSessionDataKeyEnvelopeFixture,
     accountFindUnique,
+    FOLLOW_RULE_VIEWER_ACCOUNT_READS,
     createSessionAccessProjectionRelations,
     flattenSessionWhereConjuncts,
     resetSessionRouteMocks,
@@ -330,7 +331,7 @@ describe("sessionRoutes v2 sessions snapshot", () => {
         })).toBe(false);
     });
 
-    it("projects a live waiting activation authorization and suppresses a stale fence", async () => {
+    it("projects a waiting activation authorization and keeps it through later publisher activity", async () => {
         sessionFindMany
             .mockResolvedValueOnce([
                 {
@@ -340,6 +341,7 @@ describe("sessionRoutes v2 sessions snapshot", () => {
                     pendingActivationStatus: "waiting",
                 },
                 {
+                    // Publisher activity after the request no longer fences the authorization.
                     ...pagedSessionRow("stale", { lastActiveAt: new Date(3_000) }),
                     pendingActivationRequestId: "pending-2",
                     pendingActivationRequestedAt: new Date(2_000),
@@ -360,8 +362,10 @@ describe("sessionRoutes v2 sessions snapshot", () => {
                 status: "waiting",
             },
         });
-        expect(response.sessions.find((session: { id: string }) => session.id === "stale"))
-            .not.toHaveProperty("pendingActivationAuthorization");
+        expect(response.sessions.find((session: { id: string }) => session.id === "stale")).toMatchObject({
+            id: "stale",
+            pendingActivationAuthorization: { requestId: "pending-2", requestedAt: 2_000, status: "waiting" },
+        });
     });
 
     it("coalesces owned layout-one projection to one Account-currentness read per page", async () => {
@@ -479,7 +483,7 @@ describe("sessionRoutes v2 sessions snapshot", () => {
             expect(flattenSessionWhereConjuncts(query.where))
                 .toContainEqual({ metadataLayoutVersion: { not: 1 } });
         }
-        expect(accountFindUnique).not.toHaveBeenCalled();
+        expect(accountFindUnique).toHaveBeenCalledTimes(FOLLOW_RULE_VIEWER_ACCOUNT_READS);
     });
 
     it("omits an incompatible pinned row without rejecting the compatible page", async () => {
@@ -537,7 +541,7 @@ describe("sessionRoutes v2 sessions snapshot", () => {
         });
         expect((response as { sessions: Array<{ id: string }> }).sessions)
             .not.toContainEqual(expect.objectContaining({ id: "pinned-layout-one" }));
-        expect(accountFindUnique).not.toHaveBeenCalled();
+        expect(accountFindUnique).toHaveBeenCalledTimes(FOLLOW_RULE_VIEWER_ACCOUNT_READS);
     });
 
     it("keeps full Agent state owner-only when projecting a shared session row", () => {
@@ -1409,10 +1413,13 @@ describe("sessionRoutes v2 sessions snapshot", () => {
 
     it("treats an empty server pin set as authoritative instead of falling back to client-provided pinned ids", async () => {
         txSessionPinFindMany.mockResolvedValue([]);
-        sessionFindMany
-            .mockResolvedValueOnce([pagedSessionRow("s_normal_first_page", { meaningfulActivityAt: new Date(1_000) })])
-            .mockResolvedValueOnce([pagedSessionRow("s_legacy_pinned", { meaningfulActivityAt: new Date(100) })])
-            .mockResolvedValueOnce([]);
+        const normalFirstPageRow = pagedSessionRow("s_normal_first_page", { meaningfulActivityAt: new Date(1_000) });
+        const legacyPinnedRow = pagedSessionRow("s_legacy_pinned", { meaningfulActivityAt: new Date(100) });
+        // The database holds both rows; the page selection must still never ask for the client-provided id.
+        sessionFindMany.mockImplementation(async (query) => {
+            const ids = readWhereSessionIds(query.where);
+            return ids?.has("s_legacy_pinned") ? [legacyPinnedRow] : [normalFirstPageRow];
+        });
 
         const route = await createSessionRouteTestBuilder("GET", "/v2/sessions");
         const { response } = await route.invoke({
@@ -1523,19 +1530,17 @@ describe("sessionRoutes v2 sessions snapshot", () => {
     });
 
     it("caps rollback-eligible turn relation fanout on paged list rows", async () => {
-        sessionFindMany.mockResolvedValue([]);
+        // The activity branches select ids only; the page's private relations (including the
+        // capped rollback-eligible turns) load once, by id, for the merged page.
+        sessionFindMany.mockResolvedValue([pagedSessionRow("s_page_row", { meaningfulActivityAt: new Date(1_000) })]);
 
         const route = await createSessionRouteTestBuilder("GET", "/v2/sessions");
         await route.invoke({
             query: { limit: 1 },
         });
 
-        expect(sessionFindMany).toHaveBeenNthCalledWith(1, expect.objectContaining({
-            select: expect.objectContaining({
-                turns: expect.objectContaining({ take: DEFAULT_SESSION_ROLLBACK_ELIGIBLE_TURN_RELATION_LIMIT }),
-            }),
-        }));
-        expect(sessionFindMany).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        expect(sessionFindMany).toHaveBeenCalledWith(expect.objectContaining({
+            where: { id: { in: expect.arrayContaining(["s_page_row"]) } },
             select: expect.objectContaining({
                 turns: expect.objectContaining({ take: DEFAULT_SESSION_ROLLBACK_ELIGIBLE_TURN_RELATION_LIMIT }),
             }),

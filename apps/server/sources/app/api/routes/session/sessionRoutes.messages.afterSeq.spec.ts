@@ -798,7 +798,7 @@ describe("sessionRoutes v1 messages pagination", () => {
                         transcriptAnchorMaxSeq: { gte: 7 },
                     }),
                     expect.objectContaining({
-                        status: "in_progress",
+                        status: { in: ["in_progress", "waiting"] },
                     }),
                 ]),
             }),

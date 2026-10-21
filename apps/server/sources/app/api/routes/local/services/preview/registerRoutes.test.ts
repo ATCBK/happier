@@ -182,7 +182,8 @@ describe('local service preview routes', () => {
             } }) };
         const room = { timeout: () => room, fetchSockets: async () => [socket] };
         // Socket.IO and its returned acknowledgement are the network boundary; forwarding and admission remain real.
-        const io = { in: () => room } as unknown as Server;
+        // The custodian is only reachable through the cluster census: this process holds no local room members.
+        const io = { in: () => room, sockets: { adapter: { rooms: new Map() }, sockets: new Map() } } as unknown as Server;
         eventRouter.setIo(io, { forwardRpc: request => forwardRpcCall({ ...request, io }) });
         const env = { ...peerMediationGrantSigningEnv(), HANDY_MASTER_SECRET: 'secret', HAPPIER_PUBLIC_SERVER_URL: 'https://app.happier.test',
             HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__ENABLED: 'true', HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN: 'preview.happier.test',

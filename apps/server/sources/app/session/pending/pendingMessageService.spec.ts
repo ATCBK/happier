@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { createEnvPatcher } from "@/testkit/env";
+import { inTxPostgresControlStatementMock } from "@/app/api/testkit/dbMocks";
 import {
     buildSessionAgentTransitionDividerLocalId,
     serializeSessionInputRequestEqualityIntentV1,
@@ -17,12 +18,7 @@ const pendingHomeId = `srv_${'p'.repeat(32)}`;
 let currentTx: any;
 
 const transactionHarness = vi.hoisted(() => ({
-    inTx: vi.fn(async (fn: any) => await fn(currentTx)),
-}));
-
-vi.mock("@/storage/inTx", async (importOriginal) => ({
-    ...await importOriginal<typeof import("@/storage/inTx")>(),
-    inTx: transactionHarness.inTx,
+    inTx: vi.fn(async (fn: any) => await fn({ ...inTxPostgresControlStatementMock, ...currentTx })),
 }));
 
 const loggingHarness = vi.hoisted(() => ({ warn: vi.fn() }));
@@ -37,6 +33,10 @@ vi.mock("@/storage/db", async (importOriginal) => {
     return {
         getActivePrismaRuntime: () => original.prismaRuntime,
         db: {
+            // The canonical inTx owner stays real (including nested Pending queue-position
+            // transactions); only the Prisma transaction boundary is substituted.
+            $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
+                await transactionHarness.inTx(async (tx: unknown) => await fn(tx)),
             session: {
                 findUnique: (...args: unknown[]) => currentTx.session.findUnique(...args),
             },
@@ -90,6 +90,17 @@ type PendingSessionFixture = Readonly<{
     pendingQueueSeq: number;
 }>;
 
+function pendingMachineFixture(id: string) {
+    return {
+        id, kind: 'persistent', accountId: 'u1', installationId: `installation-${id}`,
+        active: true, revokedAt: null, replacedByMachineId: null,
+        metadata: encodePlainMachineStoredContent({ name: 'Pending admission fixture' }), metadataVersion: 1,
+        daemonState: null, daemonStateVersion: 0, dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER),
+        account: { status: 'active', encryptionMode: 'plain' },
+        accountGrants: [], teamGrants: [], groupGrants: [],
+    };
+}
+
 function createPendingSessionFixture(
     overrides: Partial<PendingSessionFixture> = {},
 ): PendingSessionFixture {
@@ -121,7 +132,7 @@ describe("pendingMessageService", () => {
     beforeEach(() => {
         loggingHarness.warn.mockClear();
         transactionHarness.inTx.mockReset();
-        transactionHarness.inTx.mockImplementation(async (fn: any) => await fn(currentTx));
+        transactionHarness.inTx.mockImplementation(async (fn: any) => await fn({ ...inTxPostgresControlStatementMock, ...currentTx }));
         applyPendingSessionStateChange.mockReset();
         applyPendingSessionStateChange.mockImplementation(async (params: { meaningfulActivityAt?: Date } = {}) => ({
             pendingCount: 1,
@@ -162,14 +173,9 @@ describe("pendingMessageService", () => {
                 findMany: vi.fn(async () => []),
             },
             machine: {
-                findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({
-                    id: where.id, kind: 'persistent', accountId: 'u1', installationId: `installation-${where.id}`,
-                    active: true, revokedAt: null, replacedByMachineId: null,
-                    metadata: encodePlainMachineStoredContent({ name: 'Pending admission fixture' }), metadataVersion: 1,
-                    daemonState: null, daemonStateVersion: 0, dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER),
-                    account: { status: 'active', encryptionMode: 'plain' },
-                    accountGrants: [], teamGrants: [], groupGrants: [],
-                })),
+                // Owner Machine facts are read by id, singly or as one batch.
+                findUnique: vi.fn(async ({ where }: { where: { id: string } }) => pendingMachineFixture(where.id)),
+                findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) => where.id.in.map(pendingMachineFixture)),
                 findFirst: vi.fn(async () => ({
                     revokedAt: null,
                     replacedByMachineId: null,
@@ -915,7 +921,7 @@ describe("pendingMessageService", () => {
             pendingCount: 1,
             pendingVersion: 1,
         }));
-        currentTx.sessionPendingMessage.findUnique.mockResolvedValue({ id: "p1", status: "queued" });
+        currentTx.sessionPendingMessage.findUnique.mockResolvedValue({ id: "p1", status: "queued", deliveryState: null, deliveryBlockedReason: null, providerAction: null, replyProgress: null });
         currentTx.sessionPendingMessage.update = vi.fn();
 
         const res = await updatePendingMessageCompat({
@@ -938,7 +944,7 @@ describe("pendingMessageService", () => {
             pendingCount: 1,
             pendingVersion: 1,
         }));
-        currentTx.sessionPendingMessage.findUnique.mockResolvedValue({ id: "p1", status: "queued" });
+        currentTx.sessionPendingMessage.findUnique.mockResolvedValue({ id: "p1", status: "queued", deliveryState: null, deliveryBlockedReason: null, providerAction: null, replyProgress: null });
         currentTx.sessionPendingMessage.update = vi.fn();
 
         const res = await updatePendingMessageCompat({
@@ -975,7 +981,7 @@ describe("pendingMessageService", () => {
             pendingCount: 3,
             pendingVersion: 7,
         }));
-        currentTx.sessionPendingMessage.findUnique.mockResolvedValue({ id: "p2", status: "queued" });
+        currentTx.sessionPendingMessage.findUnique.mockResolvedValue({ id: "p2", status: "queued", deliveryState: null, deliveryBlockedReason: null, providerAction: null, replyProgress: null });
         currentTx.sessionPendingMessage.update = vi.fn();
 
         const res = await updatePendingMessageCompat({
@@ -1007,6 +1013,8 @@ describe("pendingMessageService", () => {
                 status: "queued",
                 deliveryState: "blocked",
                 deliveryBlockedReason: "delivery_outcome_uncertain",
+                providerAction: null,
+                replyProgress: null,
                 discardedReason: null,
                 messageRole: "user",
                 content,
@@ -1042,7 +1050,7 @@ describe("pendingMessageService", () => {
             }),
         }));
         currentTx.sessionPendingMessage.findUnique
-            .mockResolvedValueOnce({ status: "discarded", deliveryState: null, deliveryBlockedReason: null,
+            .mockResolvedValueOnce({ status: "discarded", deliveryState: null, deliveryBlockedReason: null, replyProgress: null,
                 discardedReason: "resent_as_new", messageRole: "user", content })
             .mockResolvedValueOnce({ targetExecutionRunId: null, status: "queued", deliveryState: null,
                 messageRole: "user", content, requestedAction: { v: 1, kind: "enqueue", retired: true } });

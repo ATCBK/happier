@@ -8,6 +8,7 @@ import {
 } from "@happier-dev/protocol";
 import type { SessionAccessProjectionRow } from "@/app/session/access/sessionAccess";
 import { createEnvPatcher } from "@/testkit/env";
+import { inTxPostgresControlStatementMock } from "@/app/api/testkit/dbMocks";
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
 import {
     deleteSessionSystemRecordV1,
@@ -79,6 +80,7 @@ vi.mock("@/storage/db", async () => {
             $transaction: async <T>(fn: (tx: TxMock) => Promise<T>) => {
                 const tx = testState.currentTx as TxMock;
                 const reader = {
+                    ...inTxPostgresControlStatementMock,
                     ...tx,
                     session: {
                         ...tx.session,

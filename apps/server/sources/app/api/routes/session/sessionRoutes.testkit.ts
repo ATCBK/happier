@@ -144,6 +144,8 @@ const txDbMocks = createDbMocks({
     teamMembership: ["findMany"],
     sessionTeamGrant: ["findMany"],
     sessionGroupGrant: ["findMany"],
+    sessionTeamCredentialBinding: ["findMany"],
+    userKVStore: ["findMany"],
     accountSessionFollow: ["updateMany"],
     sessionFollowEdge: ["findMany", "findUnique"],
     account: ["findMany", "findUnique"],
@@ -169,7 +171,13 @@ const txDbMocks = createDbMocks({
 } as const);
 export const txExecuteRawUnsafe = vi.fn(async () => 1);
 export const dbQueryRaw = vi.fn(async () => [] as Array<{ sessionId: string }>);
+// Account owner-metadata admission locks bound Account rows; the fixture database holds every requested row.
+export const txQueryRawUnsafe = vi.fn(async (_query: string, ...parameters: unknown[]) =>
+    (Array.isArray(parameters[0]) ? parameters[0] : parameters)
+        .filter((id): id is string => typeof id === "string")
+        .map(id => ({ id })));
 const txDb = Object.assign(txDbMocks.db, {
+    $queryRawUnsafe: txQueryRawUnsafe,
     $executeRawUnsafe: txExecuteRawUnsafe,
     $queryRaw: dbQueryRaw,
 });
@@ -208,7 +216,30 @@ txDb.session.findFirst = vi.fn(async (...args: Parameters<typeof txSessionFindFi
     const transactionRow = await txSessionFindFirstDelegate(...args);
     return transactionRow ?? await sessionDbMocks.db.session.findFirst(...args);
 });
-txDb.session.findMany = vi.fn(async (...args: Parameters<typeof txDbMocks.db.session.findMany>) => {
+// Rows served by earlier reads in a test form the fixture "snapshot": the Session
+// list selects its page from activity-only branches, then loads that page's
+// private relations by exact id from the same snapshot.
+const servedSessionRows = new Map<string, unknown>();
+function recordServedSessionRow(row: unknown): void {
+    if (row && typeof row === "object" && typeof (row as { id?: unknown }).id === "string") {
+        servedSessionRows.set((row as { id: string }).id, row);
+    }
+}
+const txSessionFindUniqueDelegate = txDbMocks.db.session.findUnique;
+txDb.session.findUnique = vi.fn(async (...args: Parameters<typeof txSessionFindUniqueDelegate>) => {
+    const row = await txSessionFindUniqueDelegate(...args);
+    recordServedSessionRow(row);
+    return row;
+});
+function readExactSessionIdIn(where: unknown): readonly string[] | undefined {
+    if (!where || typeof where !== "object") return undefined;
+    const keys = Object.keys(where);
+    const id = (where as { id?: unknown }).id;
+    if (keys.length !== 1 || keys[0] !== "id" || !id || typeof id !== "object") return undefined;
+    const values = (id as { in?: unknown }).in;
+    return Array.isArray(values) && values.every((value): value is string => typeof value === "string") ? values : undefined;
+}
+async function resolveFixtureSessionRows(...args: Parameters<typeof txDbMocks.db.session.findMany>) {
     const transactionRows = await txSessionFindManyDelegate(...args);
     const fallbackRows = await sessionDbMocks.db.session.findMany(...args);
     if (typeof args[0]?.take === "number" && args[0].take <= 2) {
@@ -242,6 +273,17 @@ txDb.session.findMany = vi.fn(async (...args: Parameters<typeof txDbMocks.db.ses
         return fallbackRows;
     }
     return transactionRows ?? fallbackRows;
+}
+txDb.session.findMany = vi.fn(async (...args: Parameters<typeof txDbMocks.db.session.findMany>) => {
+    const exactIds = typeof args[0]?.take === "number" ? undefined : readExactSessionIdIn(args[0]?.where);
+    const rows = await resolveFixtureSessionRows(...args);
+    if (exactIds && exactIds.every(id => servedSessionRows.has(id))) {
+        return exactIds.map(id => servedSessionRows.get(id)) as Awaited<ReturnType<typeof resolveFixtureSessionRows>>;
+    }
+    if (Array.isArray(rows)) {
+        for (const row of rows) recordServedSessionRow(row);
+    }
+    return rows;
 });
 Object.assign(txDb, { account: Object.assign({}, txDbMocks.db.account) });
 txDb.account.findMany = vi.fn(async (...args: Parameters<typeof txAccountFindManyDelegate>) => {
@@ -257,6 +299,12 @@ export const sessionFindMany = sessionDbMocks.db.session.findMany;
 export const sessionFindFirst = sessionDbMocks.db.session.findFirst;
 export const sessionFindUnique = sessionDbMocks.db.session.findUnique;
 export const accountFindUnique = sessionDbMocks.db.account.findUnique;
+/**
+ * A page or detail with rows projects the viewer's Follow-rule membership, which reads the
+ * viewer Account twice (active-status admission, then the Account-scoped KV scope). Any
+ * further Account read is a Session-owner metadata currentness read.
+ */
+export const FOLLOW_RULE_VIEWER_ACCOUNT_READS = 2;
 export const machineFindFirst = sessionDbMocks.db.machine.findFirst;
 export const accountFindMany = sessionDbMocks.db.account.findMany;
 export const sessionUpdate = sessionDbMocks.db.session.update;
@@ -287,7 +335,7 @@ export const txEphemeralRunnerActivationFindFirst = txDbMocks.db.ephemeralRunner
 export const txMachineFindFirst = txDbMocks.db.machine.findFirst;
 export const txSessionFindFirst = txSessionFindFirstDelegate;
 export const txSessionFindMany = txSessionFindManyDelegate;
-export const txSessionFindUnique = txDbMocks.db.session.findUnique;
+export const txSessionFindUnique = txSessionFindUniqueDelegate;
 export const txSessionCreate = txDbMocks.db.session.create;
 export const txSessionUpdate = txDbMocks.db.session.update;
 export const txSessionUpdateMany = txDbMocks.db.session.updateMany;
@@ -393,7 +441,8 @@ export function createSessionAccessProjectionRelations(): Pick<
     SessionAccessProjectionRow,
     "account" | "shares" | "teamGrants" | "groupGrants"
 > {
-    return { account: { status: "active" }, shares: [], teamGrants: [], groupGrants: [] };
+    // Owner-Account currentness is read from the same fresh row as access (readmission).
+    return { account: { ...TEST_E2EE_ACCOUNT_CURRENTNESS_ROW }, shares: [], teamGrants: [], groupGrants: [] };
 }
 
 /**
@@ -539,7 +588,18 @@ vi.mock("@/app/session/agentTransition/applySessionAgentTransitionCutover", () =
     applySessionAgentTransitionCutover,
 }));
 export const markAccountChanged = vi.fn(async () => 1);
-vi.mock("@/app/changes/markAccountChanged", () => ({ markAccountChanged }));
+// Route specs record the terminal Account-change write. Publication scheduling and
+// cursor locks are database-side effects of the same boundary, so they are no-ops here
+// (a partial importOriginal would load the real transaction owner ahead of its mock).
+vi.mock("@/app/changes/markAccountChanged", () => ({
+    markAccountChanged,
+    beforeAccountChangePublication: vi.fn(),
+    assertAccountChangePublicationAudienceInTx: vi.fn(),
+    afterAccountChangePublication: vi.fn(),
+    enqueueAccountChangePublication: vi.fn(),
+    flushAccountChangesInTx: vi.fn(async () => {}),
+    acquireAccountChangePublicationLocksInTx: vi.fn(async () => []),
+}));
 vi.mock("@/app/account/profile/accountDisplayProfile", async (importOriginal) => ({
     ...(await importOriginal<typeof import("@/app/account/profile/accountDisplayProfile")>()),
     ACCOUNT_DISPLAY_PROFILE_SELECT: {},
@@ -557,6 +617,7 @@ export function resetSessionRouteMocks(): void {
     vi.clearAllMocks();
     sessionDbMocks.reset();
     txDbMocks.reset();
+    servedSessionRows.clear();
     txExecuteRawUnsafe.mockReset();
     txExecuteRawUnsafe.mockResolvedValue(1);
     listQueuedExecutionRunPendingTargetsForSessions.mockReset();
@@ -655,6 +716,8 @@ export function resetSessionRouteMocks(): void {
     });
     txDbMocks.db.sessionTeamGrant.findMany.mockResolvedValue([]);
     txDbMocks.db.sessionGroupGrant.findMany.mockResolvedValue([]);
+    txDbMocks.db.sessionTeamCredentialBinding.findMany.mockResolvedValue([]);
+    txDbMocks.db.userKVStore.findMany.mockResolvedValue([]);
     txDbMocks.db.accountSessionFollow.updateMany.mockResolvedValue({ count: 0 });
     txDbMocks.db.sessionFollowEdge.findMany.mockResolvedValue([]);
     txSessionMessageFindMany.mockResolvedValue([]);
