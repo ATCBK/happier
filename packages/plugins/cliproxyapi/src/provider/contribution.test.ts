@@ -36,6 +36,31 @@ describe('CLIPROXYAPI_PROVIDER_CONTRIBUTION', () => {
     expect(parsed.catalog.source).toBe('probe');
   });
 
+  it('publishes exact pinned-SDK effort choices without borrowing levels for budget-only or image models', () => {
+    // Parsing the real contribution exercises the strict descriptor consumer,
+    // not a reconstructed copy of its model-option shape.
+    const families = ProviderContributionV1Schema.parse(CLIPROXYAPI_PROVIDER_CONTRIBUTION)
+      .managedRuntime?.connectedAccounts ?? [];
+    const codexModels = families.find((family) => family.purpose === 'openai-upstream')?.staticModels ?? [];
+    const claudeModels = families.find((family) => family.purpose === 'anthropic-upstream')?.staticModels ?? [];
+    const values = (models: typeof codexModels, id: string) => models.find((model) => model.id === id)
+      ?.modelOptions?.find((option) => option.id === 'reasoning_effort')?.options?.map((option) => option.value);
+
+    expect(values(codexModels, 'gpt-5.5')).toEqual(['low', 'medium', 'high', 'xhigh']);
+    expect(values(codexModels, 'gpt-5.6-sol')).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(values(claudeModels, 'claude-sonnet-4-6')).toEqual(['low', 'medium', 'high', 'max']);
+    expect(values(claudeModels, 'claude-opus-4-7')).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(values(claudeModels, 'claude-opus-4-5-20251101')).toBeUndefined();
+    expect(values(claudeModels, 'claude-3-5-haiku-20241022')).toBeUndefined();
+    expect(values(codexModels, 'gpt-image-2')).toBeUndefined();
+    for (const model of [...codexModels, ...claudeModels]) {
+      for (const option of model.modelOptions ?? []) {
+        expect(option.type).toBe('select');
+        expect(option.options?.some((choice) => choice.value === option.currentValue)).toBe(true);
+      }
+    }
+  });
+
   it('owns source-qualified upstream purposes independently of the exact downstream endpoint/protocol', () => {
     expect(resolveCLIProxyAPIManagedPurposeFamily({
       endpointTemplateId: 'cliproxyapi-openai-responses',
@@ -172,7 +197,7 @@ describe('CLIPROXYAPI_PROVIDER_CONTRIBUTION', () => {
       catalog: {
         source: 'probe',
         manualModelPolicy: 'allowed',
-        sourceRegistryVersion: 'v7.2.95',
+        sourceRegistryVersion: 'v7.2.95:reasoning-v1',
         probes: [{
           endpointTemplateId: 'cliproxyapi-openai-responses',
           path: '/v1/models',
