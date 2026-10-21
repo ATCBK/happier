@@ -185,6 +185,98 @@ describe('apiAccountEncryptionMode', () => {
     ]);
   });
 
+  it('shares only live mode reads within the same captured request, then reads fresh', async () => {
+    const { createServerFetchAtEndpoint } = await import('@/sync/http/client');
+    const request = createServerFetchAtEndpoint({ endpointUrl: 'https://captured-mode.test', credentials });
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    let mode = 'plain';
+    const fetchMock = installNetworkBoundary(async () => {
+      await pending;
+      return Response.json({ mode, updatedAt: 42 });
+    });
+    const first = accountEncryptionMode.fetchAccountEncryptionMode(credentials, { request });
+    const second = accountEncryptionMode.fetchAccountEncryptionMode(credentials, { request });
+    await vi.waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(0));
+    release();
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { mode: 'plain', updatedAt: 42 }, { mode: 'plain', updatedAt: 42 },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    mode = 'e2ee';
+    await expect(accountEncryptionMode.fetchAccountEncryptionMode(credentials, { request }))
+      .resolves.toEqual({ mode: 'e2ee', updatedAt: 42 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not share captured mode reads across request lifetimes or credential material', async () => {
+    const { createServerFetchAtEndpoint } = await import('@/sync/http/client');
+    const firstRequest = createServerFetchAtEndpoint({ endpointUrl: 'https://captured-mode.test', credentials });
+    const otherRequest = createServerFetchAtEndpoint({ endpointUrl: 'https://captured-mode.test', credentials });
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const fetchMock = installNetworkBoundary(async () => {
+      await pending;
+      return Response.json({ mode: 'plain', updatedAt: 42 });
+    });
+    const reads = [
+      accountEncryptionMode.fetchAccountEncryptionMode(credentials, { request: firstRequest }),
+      accountEncryptionMode.fetchAccountEncryptionMode(credentials, { request: otherRequest }),
+      accountEncryptionMode.fetchAccountEncryptionMode({ ...credentials, secret: 'another-account-secret' }, { request: firstRequest }),
+    ];
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    release();
+    await expect(Promise.all(reads)).resolves.toHaveLength(3);
+  });
+
+  it('does not join a captured mode read begun before Account invalidation', async () => {
+    const { createServerFetchAtEndpoint } = await import('@/sync/http/client');
+    const request = createServerFetchAtEndpoint({ endpointUrl: 'https://captured-mode.test', credentials });
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    let calls = 0;
+    const fetchMock = installNetworkBoundary(async () => {
+      const previousMode = ++calls === 1;
+      await pending;
+      return Response.json({ mode: previousMode ? 'plain' : 'e2ee', updatedAt: calls });
+    });
+    const first = accountEncryptionMode.fetchAccountEncryptionMode(credentials, { request });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    accountEncryptionMode.invalidateAccountEncryptionModeCache();
+    const second = accountEncryptionMode.fetchAccountEncryptionMode(credentials, { request });
+    // Both reads settle even if a regression incorrectly joins the older read.
+    release();
+    const results = await Promise.all([first, second]);
+    expect(results.map(result => result.mode)).toEqual(['plain', 'e2ee']);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares a captured mode denial without caching it or retrying it', async () => {
+    const { createServerFetchAtEndpoint } = await import('@/sync/http/client');
+    const request = createServerFetchAtEndpoint({ endpointUrl: 'https://captured-mode.test', credentials });
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    let denied = true;
+    const fetchMock = installNetworkBoundary(async () => {
+      await pending;
+      return denied ? Response.json({ error: 'denied' }, { status: 403 })
+        : Response.json({ mode: 'plain', updatedAt: 43 });
+    });
+    const outcomes = Promise.allSettled([
+      accountEncryptionMode.fetchAccountEncryptionMode(credentials, { request }),
+      accountEncryptionMode.fetchAccountEncryptionMode(credentials, { request }),
+    ]);
+    await vi.waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(0));
+    release();
+    expect(await outcomes).toEqual([0, 1].map(() => ({ status: 'rejected',
+      reason: expect.objectContaining({ status: 403, code: 'forbidden', canTryAgain: false }) })));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    denied = false;
+    await expect(accountEncryptionMode.fetchAccountEncryptionMode(credentials, { request }))
+      .resolves.toEqual({ mode: 'plain', updatedAt: 43 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('does not coalesce account-mode GETs across distinct credential scopes that share a bearer token', async () => {
     const responses: Array<(response: Response) => void> = [];
     const fetchMock = installNetworkBoundary(() => new Promise<Response>((resolve) => {

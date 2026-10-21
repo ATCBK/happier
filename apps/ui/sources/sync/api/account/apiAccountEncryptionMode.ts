@@ -194,12 +194,13 @@ type AccountEncryptionCurrentnessReadOptions = Readonly<{
 
 // Only live reads share authority. Captured request identity includes its Home
 // and hidden cancellation lifetime; an ambient read uses the selected scope.
-const pendingAccountEncryptionCurrentnessReads = new Set<Readonly<{
+type PendingAccountEncryptionRead = Readonly<{
     scopeKey: string;
     request: AccountEncryptionCurrentnessReadOptions['request'];
     signal: AbortSignal | undefined;
-    result: Promise<AccountEncryptionCurrentnessResponse>;
-}>>();
+}> & (Readonly<{ kind: 'currentness'; result: Promise<AccountEncryptionCurrentnessResponse> }>
+    | Readonly<{ kind: 'mode'; result: Promise<AccountEncryptionModeResult> }>);
+const pendingAccountEncryptionReads = new Set<PendingAccountEncryptionRead>();
 
 export async function fetchAccountEncryptionCurrentness(
     credentials: AuthCredentials,
@@ -208,16 +209,16 @@ export async function fetchAccountEncryptionCurrentness(
     throwIfAborted(options.signal);
     const scopeKey = options.request ? resolveAuthCredentialsScopeKey(credentials)
         : `${getAccountEncryptionModeScopeKey(credentials)}\u0000${accountEncryptionModeCacheRevision}`;
-    const incumbent = [...pendingAccountEncryptionCurrentnessReads].find(entry => entry.scopeKey === scopeKey
+    const incumbent = [...pendingAccountEncryptionReads].find(entry => entry.kind === 'currentness' && entry.scopeKey === scopeKey
         && entry.request === options.request && entry.signal === options.signal);
-    if (incumbent) return await incumbent.result;
+    if (incumbent?.kind === 'currentness') return await incumbent.result;
     const result = readAccountEncryptionCurrentness(credentials, options);
-    const entry = { scopeKey, request: options.request, signal: options.signal, result };
-    pendingAccountEncryptionCurrentnessReads.add(entry);
+    const entry = { kind: 'currentness' as const, scopeKey, request: options.request, signal: options.signal, result };
+    pendingAccountEncryptionReads.add(entry);
     try {
         return await result;
     } finally {
-        pendingAccountEncryptionCurrentnessReads.delete(entry);
+        pendingAccountEncryptionReads.delete(entry);
     }
 }
 
@@ -400,7 +401,23 @@ export async function fetchAccountEncryptionMode(
         };
     };
 
-    if (opts.retry === 'none' || opts.request) {
+    if (opts.request) {
+        const scopeKey = `${resolveAuthCredentialsScopeKey(credentials)}\u0000${accountEncryptionModeCacheRevision}`;
+        const incumbent = [...pendingAccountEncryptionReads].find(entry => entry.kind === 'mode'
+            && entry.scopeKey === scopeKey && entry.request === opts.request);
+        if (incumbent?.kind === 'mode') return await incumbent.result;
+        // Share only this captured operation's live transport. A later read,
+        // including a post-open validation, must still consult its Home afresh.
+        const result = run();
+        const entry = { kind: 'mode' as const, scopeKey, request: opts.request, signal: undefined, result };
+        pendingAccountEncryptionReads.add(entry);
+        try {
+            return await result;
+        } finally {
+            pendingAccountEncryptionReads.delete(entry);
+        }
+    }
+    if (opts.retry === 'none') {
         return await run();
     }
 
