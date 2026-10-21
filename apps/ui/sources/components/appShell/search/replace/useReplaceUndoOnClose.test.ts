@@ -12,6 +12,7 @@ import type { WorkspaceReplacePreviewFile } from '@/sync/domains/workspaces/file
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
 import { t } from '@/text';
 
@@ -91,6 +92,7 @@ describe('useReplaceUndoOnClose', () => {
     await homes.reset(); rpc.call.mockReset();
     scope = { ...scope, serverId: await homes.addHome({ name: 'Replace Home', serverUrl: 'https://replace-notice.test',
       serverIdentityId: 'srv_replace_notice', accountId: 'acct', currentAccount: true, active: false }) };
+    scope = { ...scope, serverId: resolveServerProfileScopeIdForIdentifier(scope.serverId) };
     account = { ...account, scope: { serverId: scope.serverId, accountId: 'acct' } };
     const boundary = await createExternalActionAccountHttpBoundary({ serverUrl: 'https://replace-notice.test',
       serverIdentityId: 'srv_replace_notice', accountId: 'acct', machineId: 'mac', actionId: 'workspace.files.replace', tokenEpoch: 0,
@@ -131,7 +133,7 @@ describe('useReplaceUndoOnClose', () => {
       return { operation: { operationId: 'replace-closing' } };
     });
     const hook = await renderHook(() => useSurface());
-    expect(hook.getCurrent().canApply).toBe(true);
+    await waitForHomeGovernance(() => expect(hook.getCurrent().canApply).toBe(true));
     let applying: Promise<void> = Promise.resolve();
     await act(async () => { applying = hook.getCurrent().apply(); });
     await waitForHomeGovernance(() => expect(observingTerminal).toBe(true));
@@ -168,6 +170,7 @@ describe('useReplaceUndoOnClose', () => {
       useReplaceUndoOnClose(model, 'NLDW3');
       return model;
     }, { initialProps: scope });
+    await waitForHomeGovernance(() => expect(hook.getCurrent().canApply).toBe(true));
     let applying: Promise<void> = Promise.resolve();
     await act(async () => { applying = hook.getCurrent().apply(); });
     await hook.rerender({ ...scope, rootPath: '/other' });
@@ -213,6 +216,7 @@ describe('useReplaceUndoOnClose', () => {
         results: [{ path: file.path, status: 'restored', hash: hash('a') }],
       });
     const hook = await renderHook(() => useSurface());
+    await waitForHomeGovernance(() => expect(hook.getCurrent().canApply).toBe(true));
     await act(async () => {
       await hook.getCurrent().apply();
     });
@@ -267,6 +271,7 @@ describe('useReplaceUndoOnClose', () => {
         results: [{ path: file.path, status: 'restored', hash: hash('a') }],
       });
     const hook = await renderHook(() => useSurface());
+    await waitForHomeGovernance(() => expect(hook.getCurrent().canApply).toBe(true));
     await act(async () => {
       await hook.getCurrent().apply();
     });
