@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ActionsSettingsV1Schema, type ActionExecuteResult } from '@happier-dev/protocol';
+import { ActionDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
 import * as control from '@/daemon/controlClient';
 import * as publication from '@/daemon/multiDaemon';
 import type { StoredCredentials } from '@/persistence';
@@ -8,6 +9,44 @@ import { createCliActionExecutorFromCredentials } from './createCliActionExecuto
 afterEach(() => vi.restoreAllMocks());
 
 describe('original terminal Settings transport', () => {
+  it('preserves explicit daemon ingress for prepared contributed input-type choices', async () => {
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'account-1', provenance: {
+      v: 1, kind: 'account', authority: 'present_user',
+    } })).toString('base64url')}.signature`;
+    // OS publication and daemon HTTP are the system boundaries; preparation,
+    // consuming-field admission and the options callback stay real.
+    vi.spyOn(publication, 'resolveLiveDaemonControlTargetForServer').mockResolvedValue({
+      pid: 123, httpPort: 4321, accountId: 'account-1', machineId: 'machine-1',
+    });
+    const definition = ActionDefinitionV1Schema.parse({
+      kindVersion: 1, id: 'com.acme.inputs/actions/read', title: 'Read repository', description: 'Read repository',
+      safety: 'safe', placements: [], slash: null, bindings: null, examples: null,
+      surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false, api: true, plugin: true },
+      inputHints: { fields: [{ path: 'repository', title: 'Repository', widget: 'select',
+        inputType: { pluginId: 'com.acme.inputs', localId: 'repository' } }] },
+      inputSchema: { type: 'object', properties: { repository: { type: 'string' } }, additionalProperties: false },
+    });
+    const input = { actionId: definition.id, fieldPath: 'repository' };
+    const requests: unknown[] = [];
+    const result = { actionId: definition.id, fieldPath: 'repository', optionsSourceId: null,
+      options: [{ value: 'repo-one', label: 'One' }] };
+    vi.spyOn(control, 'requestDaemonSignedRootActionExecution').mockImplementation(async (request, options) => {
+      expect(options?.target).toMatchObject({ accountId: 'account-1', machineId: 'machine-1' });
+      requests.push(request);
+      return { ok: true, result };
+    });
+    const owner = createCliActionExecutorFromCredentials({
+      credentials: { token, encryption: null, credentialProvenance: 'stored_session' },
+      serverId: 'home-1', serverApiUrl: 'https://home.example.test', serverIdentityId: 'srv_home',
+      listContributedActionDefinitions: () => [definition],
+      actionsSettingsProvider: { getActionsSettings: () => ActionsSettingsV1Schema.parse({ v: 1 }) },
+    });
+    const prepared = await owner.prepare('action.options.resolve', input, { surface: 'cli' });
+    if (prepared.kind !== 'ready') throw new Error(JSON.stringify(prepared));
+    const actual = await prepared.invocation.run();
+    expect(actual, JSON.stringify(actual)).toMatchObject({ ok: true, result });
+    expect(requests).toEqual([{ actionId: 'action.options.resolve', input }]);
+  });
   it.each(['terminal', 'account'] as const)('captures the own daemon route when a stored %s caller prepares a device setting read', async kind => {
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'account-1', provenance: {
       v: 1, kind, authority: kind === 'terminal' ? 'account_automation' : 'present_user',

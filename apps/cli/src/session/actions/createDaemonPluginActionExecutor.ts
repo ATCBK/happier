@@ -1,4 +1,3 @@
-import { ACTION_IDS } from '@happier-dev/protocol/actions/actionIds';
 import type { ActionExecuteResult, ActionExecutorContext, ActionId, ActionCaller, ActionExecutorDeps, WorkflowRunStartedByV1 } from '@happier-dev/protocol';
 import { resolveWorkflowRunStartedByForActionCallerV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
 import { parseQualifiedPluginActionId, formatQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
@@ -29,13 +28,17 @@ export type CurrentProcessPluginActionExecutionAttempt =
   | Readonly<{ matched: false; accountSelectionUnavailable?: true }>
   | Readonly<{ matched: true; result: ActionExecuteResult }>;
 
-const DAEMON_OWNED_PLUGIN_META_ACTION_IDS = new Set<string>([
+const PLUGIN_META_ACTION_IDS = new Set<string>([
   'action.spec.search',
   'action.spec.get',
   'action.options.resolve',
   'action.invoke',
 ]);
-const BUILT_IN_ACTION_IDS = new Set<string>(ACTION_IDS);
+
+/** These IDs must reach the placement-aware plugin owner before root transport. */
+export function isPluginActionExecutionDispatchId(actionId: string): boolean {
+  return PLUGIN_META_ACTION_IDS.has(actionId) || parseQualifiedPluginActionId(actionId) !== null;
+}
 
 /**
  * Extends an existing first-party executor with the daemon's final external
@@ -175,14 +178,9 @@ export function createPluginActionExecutor(params: Readonly<{
     },
     execute: async (actionId, input, context) => {
       const normalizedActionId = String(actionId);
-      const contributedIdentity = parseQualifiedPluginActionId(normalizedActionId);
-      if (!BUILT_IN_ACTION_IDS.has(normalizedActionId)
-        || DAEMON_OWNED_PLUGIN_META_ACTION_IDS.has(normalizedActionId)) {
+      if (isPluginActionExecutionDispatchId(normalizedActionId)) {
         // Public discovery/Tool metadata use Action-qualified IDs. Only this
         // adapter crosses to the daemon's internal contribution registry key.
-        if (!BUILT_IN_ACTION_IDS.has(normalizedActionId) && !contributedIdentity) {
-          return await params.base.execute(actionId, input, context);
-        }
         const attempt = await requestContributed(normalizedActionId, input, context);
         if (attempt.matched) {
           return attempt.result;

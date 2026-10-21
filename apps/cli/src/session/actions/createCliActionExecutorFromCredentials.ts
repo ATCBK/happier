@@ -51,7 +51,7 @@ import { buildTrustedHostSessionInputAdmissionV1 } from '@happier-dev/protocol/s
 import { createSessionFollowSourceKeyPreparationAfterSet } from '@/agent/runtime/session/follow/createSessionFollowSourceKeyPreparationAfterSet';
 import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { getActionSpec, resolveActionExecutionPlacementForInput, PublicActionIdSchema, SignedRootActionIdSchema, projectSessionSpawnNewApiRequest } from '@happier-dev/protocol/actions/actionSpecs';
-import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
+import { isPluginActionExecutionDispatchId } from './createDaemonPluginActionExecutor';
 import { ActionIdSchema, isPluginDevLoopActionIdV1 } from '@happier-dev/protocol/actions/actionIds';
 import { isSettingsDeclarationActionIdV1, SettingsDeclarationActionInputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { enrichCliActionApprovalContext } from './enrichCliActionApprovalContext';
@@ -1346,11 +1346,13 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       // This receiver already owns admission and execution. A Machine selector
       // must not send its host/CLI context back through its own root endpoint.
       if (params.pluginActionExecutionOwner === 'current_process') return { context };
-      // Qualified plugin Actions belong to the current contributed-Action
-      // discovery/daemon owner, not the host's finite ActionSpec placement map.
+      // Plugin Actions and their discovery/invocation meta-Actions belong to
+      // the placement-aware plugin owner, not the finite root transport map.
       // Credential admission and approval context are already established;
       // carry them unchanged to that owner rather than fabricating API custody.
-      if (parseQualifiedPluginActionId(actionId)) return { context };
+      // An admitted input-type callback explicitly requests the existing root
+      // ingress; ordinary CLI plugin discovery still selects placement first.
+      if (!requireDaemonIngress && isPluginActionExecutionDispatchId(actionId)) return { context };
       // Consent belongs to the Account approval owner, regardless of the outer
       // Machine selector. Its approved-Artifact continuation owns placement.
       if (actionId === 'approval.request.decide' && hasStoredSessionCredentialProvenance(credentials)) return { context };

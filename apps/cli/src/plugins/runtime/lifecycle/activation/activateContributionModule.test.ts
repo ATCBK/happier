@@ -17,6 +17,8 @@ import { createBundledActivationSourceResolver } from '../../bundledActivationSo
 import { resolvePluginStorePaths } from '@/plugins/store/paths';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
+import { registerAccountHomeHttp } from '@/session/actions/widgetApproval.testkit';
 
 type PluginMcpServerRuntime = Parameters<PluginApi['mcp']['registerServer']>[1];
 
@@ -70,7 +72,16 @@ describe('contribution module activation', () => {
             const execution = bundled.manifest.contributes.actions.find(action => action.id === 'internal/tasks/configure-v1')?.execution;
             expect(execution?.target).toBe('account');
             if (execution?.target !== 'account') throw new Error('Triage Account declaration is not current');
+            if (!bundled.generatedUiArtifactsManifest?.entries.some(entry => entry.artifactId === execution.account.artifactId
+                && entry.tier === 'reactNative')) {
+                throw new Error('Triage Account artifact prerequisite: run the public @happier-dev/plugins-triage build on this execution host before this cold activation test.');
+            }
             const app = fastify();
+            const accountId = 'triage-cold-account';
+            const serverId = 'triage-cold-home';
+            const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`,
+                encryption: null, credentialProvenance: 'stored_session' as const };
+            const features = registerAccountHomeHttp(app, { accountId, serverId });
             const response = { availabilityCursor: 1, hostingCapability: { enabled: false },
                 intent: null, release: null, uiArtifacts: [], packageAssets: [] };
             app.post(PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list'], async () => ({
@@ -80,11 +91,12 @@ describe('contribution module activation', () => {
             app.post(PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intent.read'], async () => response);
             await app.ready();
             const restore = installAxiosFastifyAdapter({ app, origin: 'http://triage-account-activation.test' });
+            const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json(features));
             try {
                 const sources = await resolveAccountPluginActivationSources({
                     contributes: createResolvedContributionRegistry(projectLoadedPluginContributes({ provenance: 'first_party',
                         loadResult: { loadedPlugins: [bundled], diagnosticsByPluginId: {} } })),
-                    paths: resolvePluginStorePaths({ happyHomeDir }), credentials: { token: 'fixture', encryption: null },
+                    paths: resolvePluginStorePaths({ happyHomeDir }), credentials,
                     serverUrl: 'http://triage-account-activation.test', isCurrent: () => true,
                     resolveBundledActivationSource: createBundledActivationSourceResolver({
                         bundledPackageNames: [bundled.sourceSpec.locator], bundledDeclarations: [bundled],
@@ -105,7 +117,11 @@ describe('contribution module activation', () => {
                     expect(expected).toContain('internal/tasks/configure-v1');
                     expect(expected).toContain('tasks/list-v1');
                 } finally { await result.dispose(); }
-            } finally { restore(); await app.close(); }
+                const executor = createCliActionExecutorFromCredentials({ credentials, serverId, serverIdentityId: serverId,
+                    serverApiUrl: 'http://triage-account-activation.test', externalActionClient: true });
+                expect(await executor.execute('action.spec.get', { id: 'happier.triage/actions/tasks/list-v1' }, { surface: 'cli' }))
+                    .toMatchObject({ ok: true, result: { actionSpec: { id: 'happier.triage/actions/tasks/list-v1', executionPlacement: 'account' } } });
+            } finally { fetch.mockRestore(); restore(); await app.close(); }
         });
     });
 
