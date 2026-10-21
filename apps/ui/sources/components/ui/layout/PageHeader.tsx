@@ -178,10 +178,9 @@ export const PageHeader = React.memo(function PageHeader(props: PageHeaderProps)
     // A page that is a pane host's main column offers "Hide <page>" as its header's last control.
     const hideMain = usePaneMainHideAvailable() ? <PaneMainHideButton /> : null;
     const ownActions = chromeShowsTitle && props.actionsPlacement !== 'page' ? null : props.actions;
-    const pageActions = hideMain ? <>{ownActions}{hideMain}</> : ownActions;
     const actions = pageButtons || routeActions
-        ? <View style={stylesheet.actions}>{pageActions}{routeActions}{pageButtons}</View>
-        : pageActions;
+        ? <View style={stylesheet.actions}>{ownActions}{routeActions}{pageButtons}{hideMain}</View>
+        : hideMain ? <>{ownActions}{hideMain}</> : ownActions;
     const meta = React.useMemo(() => props.meta?.map((fact) => ({
         key: fact.key,
         text: fact.text,
