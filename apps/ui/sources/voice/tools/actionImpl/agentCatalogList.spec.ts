@@ -20,7 +20,7 @@ import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ROWS_ROUT
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 let catalogHomeId = '';
@@ -120,12 +120,7 @@ vi.mock('socket.io-client', async (importOriginal) => (
   await import('@/dev/testkit/harness/serverAccountConnectionHarness')
 ).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary((socket, serverUrl) => {
-  socket.connected = true;
-  vi.mocked(socket.connect).mockImplementation(() => {
-    socket.connected = true;
-    for (const listener of socket.listeners('connect')) listener();
-    return socket;
-  });
+  configureConnectedServerSocketBoundary(socket);
   vi.spyOn(socket.io, '_packet').mockImplementation(() => {});
   vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload) => {
     if (event !== 'rpc-call') throw new Error(`Unexpected catalog socket acknowledgement: ${event}`);

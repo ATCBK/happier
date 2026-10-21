@@ -2,19 +2,12 @@ import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 vi.mock('socket.io-client', async original =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
-installDisconnectedServerSocketBoundary(socket => {
-    socket.connected = true;
-    vi.mocked(socket.connect).mockImplementation(() => {
-        socket.connected = true;
-        for (const listener of socket.listeners('connect')) listener();
-        return socket;
-    });
-});
+installDisconnectedServerSocketBoundary(configureConnectedServerSocketBoundary);
 await loadSyncSingletonForTests();
 const { storage } = await import('@/sync/domains/state/storage');
 const { resolveToolSessionAddress } = await import('./resolveToolSessionId');

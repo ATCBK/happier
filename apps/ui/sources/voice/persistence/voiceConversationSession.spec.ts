@@ -332,6 +332,10 @@ async function restoreAccount() {
   });
   homeId = connection.home.id;
   state.settingsScope = { serverId: homeId, accountId: 'account-1' };
+  // Finish the real bootstrap census before a case replaces its external
+  // Machine rows. A refresh may otherwise join the older bootstrap census.
+  const { sync } = await import('@/sync/sync');
+  await sync.refreshMachines();
 }
 async function loadConversationSession() {
   const normalize = (id: string, session: Parameters<typeof createSessionFixture>[0]) =>
@@ -1328,7 +1332,7 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
       };
       return { type: 'success', sessionId: 'voice-home-session' };
     });
-    listResponse.mockImplementation(async () => {
+    const publishVisibleSession = async () => {
       state.sessionListRowsByServerId = {
         ...(state.sessionListRowsByServerId ?? {}),
         [homeId]: {
@@ -1360,7 +1364,12 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
           { type: 'session', sessionId: 'voice-home-session', serverId: homeId, serverName: 'Server 1' },
         ],
       };
-    });
+      // The server now has this hydrated row. Both census and exact batch
+      // reads expose it, replacing the earlier metadata-null spawn record.
+      sessionRecords.delete('voice-home-session');
+    };
+    listResponse.mockImplementation(publishVisibleSession);
+    sessionDetailResponse.mockImplementation(publishVisibleSession);
 
     const { ensureVoiceConversationSessionForVoiceHome } = await loadConversationSession();
     const pending = ensureVoiceConversationSessionForVoiceHome();

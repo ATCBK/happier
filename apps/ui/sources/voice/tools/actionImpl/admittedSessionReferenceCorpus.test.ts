@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Socket } from 'socket.io-client';
 import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const home = createHomeGovernanceHarness();
@@ -13,12 +13,7 @@ vi.mock('socket.io-client', async original =>
 const sockets = new Map<string, Socket>();
 installDisconnectedServerSocketBoundary((socket, serverUrl) => {
     if (serverUrl) sockets.set(new URL(serverUrl).origin, socket);
-    socket.connected = true;
-    vi.mocked(socket.connect).mockImplementation(() => {
-        socket.connected = true;
-        for (const listener of socket.listeners('connect')) listener();
-        return socket;
-    });
+    configureConnectedServerSocketBoundary(socket);
 });
 await loadSyncSingletonForTests();
 const { storage } = await import('@/sync/domains/state/storage');

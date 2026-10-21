@@ -46,6 +46,7 @@ import { currentPendingEnqueueAck } from '@/sync/engine/pending/pendingQueueV2.t
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createStandaloneVoicePolicyHarness, prepareStandaloneVoicePolicyHarness } from '@/dev/testkit/harness/standaloneVoicePolicyHarness';
 import { createRetainedVoiceAgentRpcBoundary } from '@/dev/testkit/harness/voiceAgentRpcBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { SessionResumeRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionResumeRequestV1';
 import { createExistingSessionDirectoryPreflightResult, createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
@@ -783,7 +784,7 @@ describe('voice tool handlers', () => {
       execute: () => ({ items: [{ engineId: 'claude', value: 'claude', label: 'Claude', backendId: 'claude',
         enabled: true, capabilities: { structuredNarration: true } }] }),
     })));
-    account.request.mockImplementation(async (input, init) => {
+    account.request.mockImplementation(createSessionReadBatchFetchBoundary(async (input, init) => {
       const url = new URL(String(input));
       const pathname = url.pathname;
       if (pathname === '/health' || pathname === '/v1/auth/ping') return Response.json({});
@@ -872,7 +873,7 @@ describe('voice tool handlers', () => {
         return Response.json({ changed: true, sessionIds: request.sessionIds });
       }
       return accountHttp(input, init);
-    });
+    }));
     setRuntimeFetch(account.request);
     // Complete the Account bootstrap before publishing test-owned current rows.
     // Otherwise its legitimate HTTP census can replace them during an assertion.
@@ -996,7 +997,7 @@ describe('voice tool handlers', () => {
       })));
     const previousHttp = account.request.getMockImplementation();
     if (!previousHttp) throw new Error('Voice Account HTTP boundary missing');
-    account.request.mockImplementation(async (url, init) => {
+    account.request.mockImplementation(createSessionReadBatchFetchBoundary(async (url, init) => {
       for (const boundary of boundaries) {
         const response = await boundary.handle(new URL(String(url)), init);
         if (!response) continue;
@@ -1007,7 +1008,7 @@ describe('voice tool handlers', () => {
         })));
       }
       return previousHttp(url, init);
-    });
+    }));
     const tools = createVoiceToolHandlers({ resolveSessionId: () => 'another-visible-session',
       currentSessionAddress: { serverId: homeA, sessionId: 's1' } });
     const callerContext = { effectId: 'voice-return-approval', authority: 'present_user', bypassApprovals: true };
