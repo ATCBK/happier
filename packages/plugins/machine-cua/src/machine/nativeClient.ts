@@ -1,6 +1,7 @@
 import type { ExecService, PluginExecSpawnRequest } from '@happier-dev/plugin-sdk/exec';
 import { createSecureTempDirectorySync, writeAtomicFile } from '@happier-dev/plugin-sdk/fs';
 import { createHash } from 'node:crypto';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as z from 'zod/mini';
 import { CuaLocalNameSchema } from './schemas.js';
@@ -35,7 +36,11 @@ export function createCuaNativeClient(options: {
     /** Captured operation credentials; never copied into native arguments. */
     environment?: PluginExecSpawnRequest['env'];
 }) {
-    const environment = options.environment === undefined ? undefined : { ...options.environment };
+    // Plugin Exec is an explicit environment boundary and intentionally does
+    // not inherit the daemon process environment. Cua resolves its embedded
+    // state below HOME; provide the daemon user's real home so Happier and the
+    // user's own `cua` CLI share one sandbox registry and image cache.
+    const environment = { ...options.environment, HOME: homedir() };
     // Pinned trycua/cua@2bce4442: sandbox.rs Cp/cp/env_of uses the exact
     // qualified sandbox and native SHA256-verified upload. Shell's noninteractive
     // branch calls shell::exec with raw buffered bytes and stdin:false. Private

@@ -1,5 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { homedir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import type { PluginExecSpawnRequest, PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
 import { createCuaNativeClient } from './nativeClient.js';
@@ -11,6 +12,16 @@ function result(stdout = new Uint8Array(), exitCode = 0): PluginProcessResult {
 const text = (value: string) => new TextEncoder().encode(value);
 
 describe('Cua private native bootstrap carrier', () => {
+    it('runs every native command with the daemon user home so embedded state matches the user CLI', async () => {
+        const requests: PluginExecSpawnRequest[] = [];
+        const native = createCuaNativeClient({ executable: { kind: 'systemTool', id: 'cua' }, exec: {
+            async run(request) { requests.push(request); return result(text('{}')); },
+        } });
+        expect((await native.json(['--embedded', 'runtime', 'doctor'])).kind).toBe('success');
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.env).toEqual({ HOME: homedir() });
+    });
+
     it('puts private stdin through native files, preserves buffered bytes and cleans the guest and controller files', async () => {
         const requests: PluginExecSpawnRequest[] = [];
         const privateInput = text('private enrollment bearer\0binary');
