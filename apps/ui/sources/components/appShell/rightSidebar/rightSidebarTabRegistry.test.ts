@@ -8,8 +8,22 @@ import {
   resolveRightSidebarTabSelection,
   resolveRightSidebarMobileSurface,
   resolveRightSidebarTabs,
+  resolveRightSidebarTabPlacement,
 } from './rightSidebarTabRegistry';
 import { resolveRightSidebarMobileProjection } from './rightSidebarMobileProjection';
+
+describe('right-sidebar tab placement', () => {
+  it('presents the session catalog group beside the composer only in Editor first', () => {
+    const tabs = resolveRightSidebarTabs({ scope: 'session', boardFeatureEnabled: true, sessionSharingAvailable: true });
+    const placements = tabs.map(tab => [tab.id, resolveRightSidebarTabPlacement(tab, { scope: 'session', arrangement: 'editor' })]);
+    expect(placements.filter(([, placement]) => placement === 'main').map(([id]) => id).sort()).toEqual(['agents', 'board', 'collaboration', 'navigation']);
+    for (const tab of tabs) {
+      expect(resolveRightSidebarTabPlacement(tab, { scope: 'session', arrangement: 'session' })).toBe('side');
+      expect(resolveRightSidebarTabPlacement(tab, { scope: 'session', arrangement: 'editor', presentation: 'mobile' })).toBe('side');
+      expect(resolveRightSidebarTabPlacement(tab, { scope: 'project', arrangement: 'editor' })).toBe('side');
+    }
+  });
+});
 
 const REVIEW_PLUGIN_ID = 'acme.review';
 const APP_PLUGIN_ID = 'acme.panels';

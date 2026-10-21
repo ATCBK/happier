@@ -71,6 +71,23 @@ export type ProjectRightSidebarTabId =
 
 export type { RightSidebarTabDefinitionFor };
 
+export type RightSidebarTabPlacementContext = Readonly<{
+    scope: RightSidebarScope;
+    arrangement: 'session' | 'editor';
+    presentation?: RightSidebarPresentation;
+}>;
+
+/** The existing session group follows its composer in Editor first; selection remains pane-owned. */
+export function resolveRightSidebarTabPlacement(
+    tab: RightSidebarTabDefinition,
+    context: RightSidebarTabPlacementContext,
+): 'main' | 'side' {
+    return context.scope === 'session' && context.arrangement === 'editor'
+        && context.presentation !== 'mobile' && tab.owner === 'builtin' && tab.railGroup === 'session'
+        ? 'main'
+        : 'side';
+}
+
 export function getRightSidebarBuiltinTab(id: RightSidebarBuiltInTabId): RightSidebarBuiltinTabDefinition {
     const tab = RIGHT_SIDEBAR_BUILTIN_TABS.find((entry) => entry.id === id);
     if (!tab) {

@@ -14,11 +14,13 @@ import type { PluginUiDestinationReferenceV1 } from '@happier-dev/protocol/plugi
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
 import { resolvePluginUiRuntimeFormFactor } from '@/components/appShell/panes/layout/resolveMultiPaneDeviceType';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
+import { useOptionalAppPaneScopeLayout } from '@/components/appShell/panes/hooks/useAppPaneScopeLayout';
+import { usePaneMainColumn } from '@/components/appShell/panes/mainColumn/usePaneMainColumn';
 import { usePaneActionRail, usePaneActionRailRightPaneHiddenByDetails } from '@/components/appShell/panes/PaneActionRailContext';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { RightSidebarActionRail, type RightSidebarRailAction } from '@/components/appShell/rightSidebar/RightSidebarActionRail';
-import { toggleRightSidebarTab, usePublishRightSidebarActions } from '@/components/appShell/rightSidebar/rightSidebarActions';
+import { openRightSidebarBuiltinTab, toggleRightSidebarTab, usePublishRightSidebarActions } from '@/components/appShell/rightSidebar/rightSidebarActions';
 import { getRightSidebarTabLabel } from '@/components/appShell/rightSidebar/rightSidebarTabRegistry';
 import { useSessionTerminalAction } from '@/components/sessions/terminal/useSessionTerminalAction';
 import { toggleSessionReview } from './sessionPaneActions';
@@ -32,6 +34,7 @@ import { AppRightSidebarTabSurface, useAppRightSidebarTabInputs } from '@/compon
 import {
     resolveSessionRightSidebarTabs,
     resolveRightSidebarTabSelection,
+    resolveRightSidebarTabPlacement,
 } from '@/components/appShell/rightSidebar/rightSidebarTabRegistry';
 import type { RightSidebarPluginTabDefinition } from '@/components/appShell/rightSidebar/rightSidebarBuiltinTabs';
 import { PluginSurfacePlacementHost } from '@/components/plugins/surfaces';
@@ -204,6 +207,13 @@ function useSessionRightSidebar() {
 function useSessionRightSidebarModel(props: SessionRightPanelProps & SessionRightSidebarRuntimeProps) {
     const deviceType = useDeviceType();
     const pane = useAppPaneScope(props.scopeId);
+    const layout = useOptionalAppPaneScopeLayout();
+    const mainColumn = usePaneMainColumn();
+    const placementContext = React.useMemo(() => ({
+        scope: 'session' as const,
+        arrangement: layout?.arrangement ?? 'session',
+        presentation: props.presentation === 'screen' || deviceType === 'phone' ? 'mobile' as const : 'desktop' as const,
+    }), [deviceType, layout?.arrangement, props.presentation]);
     const scopeState = pane.scopeState;
     const { sidebarTabAvailable: terminalTabAvailable } = useSessionTerminalAvailability(props.paneSurfaceScope?.serverId ?? parseSessionPaneScopeId(props.scopeId)?.address?.serverId);
     // The Board tab is decided by the EXACT Session's Home, carried by the route
@@ -285,6 +295,11 @@ function useSessionRightSidebarModel(props: SessionRightPanelProps & SessionRigh
     const activeTab = rightTabSelection.kind === 'available'
         ? rightTabSelection.tab.id
         : null;
+    const activeTabPlacement = rightTabSelection.kind === 'available'
+        ? resolveRightSidebarTabPlacement(rightTabSelection.tab, placementContext)
+        : 'side';
+    const setMainHidden = mainColumn?.setHidden;
+    const showMain = React.useCallback(() => setMainHidden?.(false), [setMainHidden]);
     const resolveBoardPrimaryHost = props.resolveBoardPrimaryHost ?? NO_BOARD_PRIMARY_MOUNT;
     const callerHostedHtmlRuntime = mountedBoard?.callerHostedHtmlRuntime ?? null;
     const activePluginPlacement = rightTabSelection.kind === 'available'
@@ -338,9 +353,9 @@ function useSessionRightSidebarModel(props: SessionRightPanelProps & SessionRigh
             paneLaunchStore.retire();
             return;
         }
-        pane.openRight({ tabId });
+        openRightSidebarBuiltinTab(pane, tab, placementContext, showMain);
         paneLaunchStore.retire();
-    }, [pane, paneLaunchStore, rightPanelTabs]);
+    }, [pane, paneLaunchStore, placementContext, rightPanelTabs, showMain]);
 
     const openRightSidebarTab = React.useCallback((resolution: Parameters<typeof stagePluginSurfacePaneLaunch>[0]['resolution']) => {
         if (!stagePluginSurfacePaneLaunch({ store: paneLaunchStore, resolution })) {
@@ -418,6 +433,8 @@ function useSessionRightSidebarModel(props: SessionRightPanelProps & SessionRigh
         rightPanelTabs,
         rightTabSelection,
         activeTab,
+        activeTabPlacement,
+        placementContext,
         collaborationAddress,
         pluginRuntime,
         activePaneLaunch,
@@ -434,6 +451,19 @@ function useSessionRightSidebarModel(props: SessionRightPanelProps & SessionRigh
         openFileInDetails,
         openFileInDetailsPinned,
         setActiveTab,
+    };
+}
+
+/** UI consumes the canonical selected tab; Back closes its presentation without replacing selection. */
+export function useSessionRightSidebarPresentation() {
+    const model = useSessionRightSidebar();
+    return {
+        placement: model.activeTabPlacement,
+        sessionColumnTab: model.scopeState?.right.isOpen && model.activeTabPlacement === 'main'
+            ? model.rightTabSelection.kind === 'available' ? model.rightTabSelection.tab : null
+            : null,
+        backToTranscript: model.pane.closeRight,
+        selectTab: model.setActiveTab,
     };
 }
 
@@ -755,6 +785,7 @@ export const SessionActionRail = React.memo(() => {
     for (const tab of model.rightPanelTabs) {
         // One terminal action owns all dock locations; the catalog retains its sidebar admission.
         if (tab.id === 'terminal') continue;
+        const placement = resolveRightSidebarTabPlacement(tab, model.placementContext);
         const badgeCount = tab.id === 'agents' ? outstandingCount : tab.id === 'scripts' ? runningScripts : undefined;
         actions.push({
             id: tab.id,
@@ -766,14 +797,14 @@ export const SessionActionRail = React.memo(() => {
             icon: tab.icon,
             // Plugin tabs sit after the built-in groups, behind their own hairline.
             group: tab.owner === 'builtin' ? tab.railGroup : 'plugins',
-            active: Boolean(model.scopeState?.right.isOpen && !rightPaneHiddenByDetails && model.activeTab === tab.id),
+            active: Boolean(model.scopeState?.right.isOpen && (placement === 'main' || !rightPaneHiddenByDetails) && model.activeTab === tab.id),
             disabled: Boolean(tab.disabledReason),
             badgeCount,
             badge: tab.id === 'git' ? <SessionGitActionRailBadge sessionId={model.sessionId} serverId={model.pluginRuntime.serverId} />
                 : tab.id === 'collaboration' && model.collaborationAddress ? <SessionCollaborationRailBadge target={model.collaborationAddress} />
                     : undefined,
             tooltipContent: tab.id === 'git' ? <SessionGitActionRailTooltip sessionId={model.sessionId} serverId={model.pluginRuntime.serverId} /> : undefined,
-            onPress: () => toggleRightSidebarTab(model.pane, tab.id, model.activeTab, model.setActiveTab, rightPaneHiddenByDetails),
+            onPress: () => toggleRightSidebarTab(model.pane, tab.id, model.activeTab, model.setActiveTab, rightPaneHiddenByDetails, placement),
         });
         if (tab.id === 'git') actions.push({
             id: 'review', label: t('files.toolbar.review'), icon: 'file-diff', group: 'code',
