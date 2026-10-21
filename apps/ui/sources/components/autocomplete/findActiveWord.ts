@@ -55,13 +55,18 @@ export function findActiveWord(
     if (triggers.length === 0) return undefined;
 
     const cursor = selection.start;
-    if (references.some(reference => cursor > reference.start && cursor <= reference.end)) return undefined;
-    const minIndex = Math.max(0, cursor - ACTIVE_WORD_SCAN_LIMIT);
+    let minIndex = Math.max(0, cursor - ACTIVE_WORD_SCAN_LIMIT);
+    // A reference is an opaque boundary. Find the nearest one once, rather than
+    // visiting every chip for each character in the backwards scan.
+    for (const reference of references) {
+        const { start, end } = reference;
+        if (cursor > start && cursor <= end) return undefined;
+        if (end <= cursor) minIndex = Math.max(minIndex, end);
+    }
     const maxEnd = Math.min(content.length, cursor + ACTIVE_WORD_SCAN_LIMIT);
 
     let candidates = 0;
     for (let index = cursor - 1; index >= minIndex; index -= 1) {
-        if (references.some(reference => index >= reference.start && index < reference.end)) break;
         const char = content.charAt(index);
         // A token never crosses a line, so neither does the search for one.
         if (char === '\n' || char === '\r') break;
