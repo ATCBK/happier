@@ -1,4 +1,3 @@
-import type { ToolCallsGroupChromeVariant } from '../toolCalls/units/toolCallsGroupChrome';
 import type { ChatListItem } from '@/components/sessions/chatListItems';
 import type { Message } from "@happier-dev/session-core/messages";
 
@@ -13,7 +12,7 @@ type ForkMessageMetadata = Readonly<{
 /**
  * Stable per-unit virtualization rows for one semantic tool-call group (plan N2c).
  *
- * One semantic group decomposes into a header and body, plus a footer for card backgrounds: cap rows own the
+ * One semantic group decomposes into one `header..footer` span: dedicated cap rows own the
  * position-dependent chrome so every tool row stays uniform — streaming appends and prepend
  * merges become BETWEEN-row insertions that list-level position maintenance can handle.
  * All unit ids derive purely from `groupId` + `toolMessageId`, so upstream sticky group-id
@@ -122,7 +121,6 @@ function appendToolGroupUnits(params: Readonly<{
     /** Linear group items carry their own fork metadata; turn-derived groups pass null. */
     groupItemMetadata: ForkMessageMetadata | null;
     isGroupExpanded: (toolMessageIds: readonly string[]) => boolean;
-    toolCallsGroupChromeVariant: ToolCallsGroupChromeVariant;
     collapsedPreviewCount: number;
 }>): void {
     if (params.toolMessageIds.length === 0) return;
@@ -181,9 +179,7 @@ function appendToolGroupUnits(params: Readonly<{
         });
     }
 
-    // Only groups with a card background need a bottom cap; plain groups end at their content.
-    if (params.toolCallsGroupChromeVariant === 'feed') return;
-
+    // The footer separates the group from the next message and closes card backgrounds.
     params.output.push({
         kind: 'tool-group-footer',
         id: `${params.groupId}#footer`,
@@ -286,7 +282,6 @@ type TranscriptTurnUnitBuildParams = Readonly<{
     getMessageById: (messageId: string) => Message | null;
     metadataByMessageId?: Readonly<Record<string, { originSessionId: string; isReadOnlyContext: boolean }>>;
     isGroupExpanded: (toolMessageIds: readonly string[]) => boolean;
-    toolCallsGroupChromeVariant: ToolCallsGroupChromeVariant;
     collapsedPreviewCount: number; // already-resolved K; <= 0 means no preview tail
     /** Producer-observed suppressed notifications only; absent/unknown facts keep ordinary rows. */
     quietWorkflowTurnIds?: ReadonlySet<string>;
@@ -337,7 +332,6 @@ export function buildTranscriptTurnUnits(params: TranscriptTurnUnitBuildParams):
                     groupItemMetadata: null,
                     isGroupExpanded: params.isGroupExpanded,
                     collapsedPreviewCount,
-                    toolCallsGroupChromeVariant: params.toolCallsGroupChromeVariant,
                 });
             }
             continue;
@@ -357,7 +351,6 @@ export function buildTranscriptTurnUnits(params: TranscriptTurnUnitBuildParams):
                 groupItemMetadata,
                 isGroupExpanded: params.isGroupExpanded,
                 collapsedPreviewCount,
-                toolCallsGroupChromeVariant: params.toolCallsGroupChromeVariant,
             });
             continue;
         }

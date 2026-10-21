@@ -31,7 +31,7 @@ describe('workflow turn membership in linear transcripts', () => {
             groupConsecutiveToolCalls: groupToolCalls });
         const grouped = groupWorkflowTranscriptTurns(linear, turns, getMessageById);
         const decompose = (items: Parameters<typeof buildTranscriptTurnUnits>[0]['items'], quietWorkflowTurnIds?: ReadonlySet<string>) =>
-            buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background', items, getMessageById, collapsedPreviewCount: 0, isGroupExpanded: () => true, quietWorkflowTurnIds });
+            buildTranscriptTurnUnits({ items, getMessageById, collapsedPreviewCount: 0, isGroupExpanded: () => true, quietWorkflowTurnIds });
         // No evidence, or matched evidence projected as an empty quiet set, must retain exactly the old rows.
         expect(decompose(grouped)).toEqual(decompose(linear));
         expect(decompose(grouped, new Set())).toEqual(decompose(linear));
@@ -55,7 +55,7 @@ describe('workflow turn membership in linear transcripts', () => {
             groupToolCalls: true, toolCallsGroupStrategy: 'consecutive_tools', forkBoundaryBeforeMessageIds: new Set(['fork-child']) });
         const linear = buildChatListItems({ messageIdsOldestFirst, messagesById, pendingMessages: [] });
         const grouped = groupWorkflowTranscriptTurns(linear, turns, getMessageById);
-        const decompose = (items: Parameters<typeof buildTranscriptTurnUnits>[0]['items'], quiet: boolean) => buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const decompose = (items: Parameters<typeof buildTranscriptTurnUnits>[0]['items'], quiet: boolean) => buildTranscriptTurnUnits({
             items, getMessageById, collapsedPreviewCount: 0, isGroupExpanded: () => false,
             quietWorkflowTurnIds: new Set(quiet ? [turns[0]!.id] : []),
         });

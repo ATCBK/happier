@@ -1,4 +1,3 @@
-import type { ToolCallsGroupChromeVariant } from '../toolCalls/units/toolCallsGroupChrome';
 import * as React from 'react';
 
 import type { Message, ToolCallMessage } from "@happier-dev/session-core/messages";
@@ -108,7 +107,6 @@ export type TranscriptItemsPipelineDeps = Readonly<{
     targetWindowActiveRef: Ref<boolean>;
     targetWindowState?: TranscriptTargetWindowState;
     transcriptToolCallsCollapsedPreviewCountSetting: unknown;
-    toolCallsGroupChromeVariant: ToolCallsGroupChromeVariant;
     showToolCalls?: boolean;
 }>;
 
@@ -144,7 +142,6 @@ export function useTranscriptItemsPipeline(deps: TranscriptItemsPipelineDeps) {
         targetWindowActiveRef,
         targetWindowState,
         transcriptToolCallsCollapsedPreviewCountSetting,
-        toolCallsGroupChromeVariant,
         showToolCalls,
     } = deps;
 
@@ -185,7 +182,6 @@ export function useTranscriptItemsPipeline(deps: TranscriptItemsPipelineDeps) {
             isGroupExpanded: (toolMessageIds) => toolMessageIds.some((id) => expandedToolCallsAnchorMessageIds.has(id)),
             collapsedPreviewCount: showToolCalls === false ? 0 : resolveTranscriptToolCallsCollapsedPreviewCount(transcriptToolCallsCollapsedPreviewCountSetting),
             quietWorkflowTurnIds,
-            toolCallsGroupChromeVariant,
         });
     }, [
         expandedToolCallsAnchorMessageIds,
@@ -194,7 +190,6 @@ export function useTranscriptItemsPipeline(deps: TranscriptItemsPipelineDeps) {
         items,
         quietWorkflowTurnIds,
         transcriptToolCallsCollapsedPreviewCountSetting,
-        toolCallsGroupChromeVariant,
         showToolCalls,
     ]);
 

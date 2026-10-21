@@ -87,7 +87,6 @@ function buildDeps(members: ReturnType<typeof createStableMembers>): ItemsPipeli
         sessionThinking: false,
         targetWindowState: inactiveWindowState,
         transcriptToolCallsCollapsedPreviewCountSetting: 3,
-        toolCallsGroupChromeVariant: 'feed_background',
     } satisfies ItemsPipelineDeps;
 }
 

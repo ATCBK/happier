@@ -296,7 +296,7 @@ const styles = StyleSheet.create((theme) => ({
         overflow: 'hidden',
     },
     containerFeed: {
-        marginBottom: 0,
+        marginBottom: theme.space.s8,
         borderRadius: 0,
         backgroundColor: 'transparent',
         overflow: 'visible',

@@ -247,7 +247,7 @@ function estimateWrappedLineCount(text: string): number {
  *
  * | variant           | header | expand | tool | footer |
  * |-------------------|--------|--------|------|--------|
- * | `feed`            |   27   |   28   |  28  |    —   |
+ * | `feed`            |   27   |   28   |  28  |    8   |
  * | `feed_background` |   33   |   28   |  28  |   34   |
  *
  * Evidence basis: measured live in Chrome in the sibling repo (2026-07-29) by rendering the real
@@ -260,7 +260,7 @@ function estimateWrappedLineCount(text: string): number {
  * (paddings, gaps, font sizes, gutter widths) is byte-identical. That is derived, not re-measured
  * here; any future divergence in those shells has to re-derive these caps.
  *
- * Plain feed groups emit no footer unit because they have no card cap.
+ * Plain feed footers reserve only the compact 8px message gap.
  * Background footers retain their rounded card cap.
  *
  * `cards` is deliberately NOT a key here: a tool GROUP cannot exist in that mode. Grouping is
@@ -445,13 +445,13 @@ type ToolGroupUnitRowHeights = Readonly<{
     header: number;
     expand: number;
     tool: number;
-    footer?: number;
+    footer: number;
 }>;
 
 type ToolCallsGroupFeedChromeVariant = Exclude<ToolCallsGroupChromeVariant, 'cards'>;
 
 const TOOL_GROUP_UNIT_ROW_PX_BY_CHROME_VARIANT: Readonly<Record<ToolCallsGroupFeedChromeVariant, ToolGroupUnitRowHeights>> = {
-    feed: { header: 27, expand: 28, tool: ESTIMATE_TOOL_ROW_PX },
+    feed: { header: 27, expand: 28, tool: ESTIMATE_TOOL_ROW_PX, footer: 8 },
     feed_background: { header: 33, expand: 28, tool: ESTIMATE_TOOL_ROW_PX, footer: 34 },
 };
 

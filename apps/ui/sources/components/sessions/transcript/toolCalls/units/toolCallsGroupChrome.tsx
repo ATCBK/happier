@@ -56,7 +56,9 @@ export function resolveToolCallsGroupUnitContainerStyle(
     position: ToolCallsGroupUnitPosition,
 ): StyleProp<ViewStyle> {
     const pieces: StyleProp<ViewStyle>[] = [unitStyles.container];
-    if (position === 'footer') pieces.push(unitStyles.containerFooterMargin);
+    if (position === 'footer') {
+        pieces.push(variant === 'feed' ? unitStyles.containerPlainFeedFooterMargin : unitStyles.containerFooterMargin);
+    }
     if (variant === 'cards') {
         pieces.push(unitStyles.unitCards);
         if (position === 'header') pieces.push(unitStyles.unitCardsHeaderCap);
@@ -303,6 +305,9 @@ const unitStyles = StyleSheet.create((theme) => ({
     },
     container: {
         marginHorizontal: theme.space.s16,
+    },
+    containerPlainFeedFooterMargin: {
+        marginBottom: theme.space.s8,
     },
     containerFooterMargin: {
         marginBottom: 22,

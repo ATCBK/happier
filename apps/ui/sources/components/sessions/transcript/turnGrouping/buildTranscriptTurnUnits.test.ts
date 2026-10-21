@@ -88,18 +88,6 @@ function collapsedAlways(): boolean {
 }
 
 describe('buildTranscriptTurnUnits', () => {
-    it('does not reserve a trailing card-cap row for background-free tool groups', () => {
-        const messagesById = indexMessages([toolMessage('t1', 1), toolMessage('t2', 2)]);
-        const result = buildTranscriptTurnUnits({
-            toolCallsGroupChromeVariant: 'feed',
-            items: [{ kind: 'tool-calls-group', id: 'tools', toolMessageIds: ['t1', 't2'], createdAt: 1 }],
-            getMessageById: lookupIn(messagesById),
-            isGroupExpanded: collapsedAlways,
-            collapsedPreviewCount: 0,
-        });
-        expect(result.map((item) => item.kind)).toEqual(['tool-group-header']);
-    });
-
     it('keeps a workflow invocation and its reply together for row-local quiet-turn disclosure', () => {
         const user = { ...userMessage('habit', 1, 1), meta: { happierProvenanceV1: {
             v: 2, kind: 'workflow_invocation', runId: 'daily', invocationRecordId: 'summary',
@@ -109,7 +97,7 @@ describe('buildTranscriptTurnUnits', () => {
             { kind: 'tool_calls', id: 'habit-tools', toolMessageIds: ['habit-tool'] },
             { kind: 'message', messageId: 'reply' },
         ] });
-        const result = buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background', items: [item], getMessageById: lookupIn(messagesById),
+        const result = buildTranscriptTurnUnits({ items: [item], getMessageById: lookupIn(messagesById),
             isGroupExpanded: expandedAlways, collapsedPreviewCount: 2, quietWorkflowTurnIds: new Set(['turn:habit']) });
         expect(result).toEqual([item]);
         expect(resolveTranscriptViewportAnchorIndex({ items: result,
@@ -122,7 +110,7 @@ describe('buildTranscriptTurnUnits', () => {
         const messagesById = indexMessages([userMessage('habit', 100), agentMessage('reply', 200), userMessage('next', 300)]);
         const request = (id: string, createdAt: number): ChatListItem => ({ kind: 'pending-user-action', id,
             request: { id, tool: 'AskUserQuestion', kind: 'user_action', arguments: { question: 'Continue?' }, createdAt }, createdAt });
-        const result = buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background', items: [
+        const result = buildTranscriptTurnUnits({ items: [
             turnItem({ id: 'turn:habit', userMessageId: 'habit', content: [{ kind: 'message', messageId: 'reply' }] }),
             { kind: 'message', id: 'msg:next', messageId: 'next', createdAt: 300, seq: null }, request('early', 50), request('during', 150),
         ], getMessageById: lookupIn(messagesById), isGroupExpanded: expandedAlways, collapsedPreviewCount: 0,
@@ -139,7 +127,7 @@ describe('buildTranscriptTurnUnits', () => {
         });
         const before = build(null, ['old-question', 'recent-1', 'recent-2']);
         const after = build(before, chronological.map((message) => message.id));
-        const units = (turns: typeof before.turns) => buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const units = (turns: typeof before.turns) => buildTranscriptTurnUnits({
             items: turns.map((turn) => ({ kind: 'turn' as const, id: turn.id, turn })),
             getMessageById: lookupIn(messagesById), isGroupExpanded: expandedAlways, collapsedPreviewCount: 2,
         });
@@ -178,7 +166,7 @@ describe('buildTranscriptTurnUnits', () => {
             seq: 3,
         };
 
-        const result = buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const result = buildTranscriptTurnUnits({
             items: [forkDivider, messageItem, pendingQueue],
             getMessageById: () => null,
             isGroupExpanded: expandedAlways,
@@ -199,7 +187,7 @@ describe('buildTranscriptTurnUnits', () => {
             toolMessage('t2', 4, 13),
         ]);
 
-        const result = buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const result = buildTranscriptTurnUnits({
             items: [turnItem({
                 id: 'turn:u1',
                 userMessageId: 'u1',
@@ -251,7 +239,7 @@ describe('buildTranscriptTurnUnits', () => {
             createdAt: 400,
         };
 
-        const result = buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const result = buildTranscriptTurnUnits({
             items: [
                 turnItem({
                     id: 'turn:u1',
@@ -300,7 +288,7 @@ describe('buildTranscriptTurnUnits', () => {
             createdAt: 300,
         };
 
-        const result = buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const result = buildTranscriptTurnUnits({
             items: [
                 turnItem({
                     id: 'turn:u1',
@@ -338,7 +326,7 @@ describe('buildTranscriptTurnUnits', () => {
             agentMessage('a1', 12),
         ]);
 
-        const result = buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const result = buildTranscriptTurnUnits({
             items: [turnItem({
                 id: 'turn:u1',
                 userMessageId: 'u1',
@@ -362,7 +350,7 @@ describe('buildTranscriptTurnUnits', () => {
     it('applies fork metadata to message items via metadataByMessageId', () => {
         const messagesById = indexMessages([userMessage('u1', 1, 1)]);
 
-        const result = buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const result = buildTranscriptTurnUnits({
             items: [turnItem({ id: 'turn:u1', userMessageId: 'u1', content: [] })],
             getMessageById: lookupIn(messagesById),
             metadataByMessageId: {
@@ -393,7 +381,7 @@ describe('buildTranscriptTurnUnits', () => {
         ]);
         const groupId = 'toolCalls:turn:x:t1';
 
-        const result = buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const result = buildTranscriptTurnUnits({
             items: [turnItem({
                 id: 'turn:x',
                 userMessageId: null,
@@ -464,7 +452,7 @@ describe('buildTranscriptTurnUnits', () => {
         ]);
         const groupId = 'toolCalls:turn:x:t1';
 
-        const result = buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const result = buildTranscriptTurnUnits({
             items: [turnItem({
                 id: 'turn:x',
                 userMessageId: null,
@@ -508,7 +496,7 @@ describe('buildTranscriptTurnUnits', () => {
             content: [{ kind: 'tool_calls', id: groupId, toolMessageIds: ['t1', 't2', 't3'] }],
         })];
 
-        const noTail = buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const noTail = buildTranscriptTurnUnits({
             items,
             getMessageById: lookupIn(messagesById),
             isGroupExpanded: collapsedAlways,
@@ -517,7 +505,7 @@ describe('buildTranscriptTurnUnits', () => {
         expect(noTail.map((item) => item.kind)).toEqual(['tool-group-header', 'tool-group-footer']);
         expect(noTail[0]).toMatchObject({ hiddenCount: 3 });
 
-        const negative = buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const negative = buildTranscriptTurnUnits({
             items,
             getMessageById: lookupIn(messagesById),
             isGroupExpanded: collapsedAlways,
@@ -525,7 +513,7 @@ describe('buildTranscriptTurnUnits', () => {
         });
         expect(negative.map((item) => item.kind)).toEqual(['tool-group-header', 'tool-group-footer']);
 
-        const fractional = buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const fractional = buildTranscriptTurnUnits({
             items,
             getMessageById: lookupIn(messagesById),
             isGroupExpanded: collapsedAlways,
@@ -542,7 +530,7 @@ describe('buildTranscriptTurnUnits', () => {
         ]);
         const groupId = 'toolCalls:turn:x:t1';
 
-        const result = buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const result = buildTranscriptTurnUnits({
             items: [turnItem({
                 id: 'turn:x',
                 userMessageId: null,
@@ -564,7 +552,7 @@ describe('buildTranscriptTurnUnits', () => {
     });
 
     it('emits nothing for a group with empty toolMessageIds', () => {
-        const result = buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const result = buildTranscriptTurnUnits({
             items: [turnItem({
                 id: 'turn:x',
                 userMessageId: null,
@@ -585,7 +573,7 @@ describe('buildTranscriptTurnUnits', () => {
             toolMessage('t2', 3, 3),
         ]);
 
-        const result = buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const result = buildTranscriptTurnUnits({
             items: [turnItem({
                 id: 'turn:x',
                 userMessageId: null,
@@ -625,7 +613,7 @@ describe('buildTranscriptTurnUnits', () => {
             isReadOnlyContext: true,
         };
 
-        const result = buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const result = buildTranscriptTurnUnits({
             items: [groupItem],
             getMessageById: lookupIn(messagesById),
             isGroupExpanded: expandedAlways,
@@ -661,7 +649,7 @@ describe('buildTranscriptTurnUnits', () => {
             isReadOnlyContext: false,
         };
 
-        const result = buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const result = buildTranscriptTurnUnits({
             items: [groupItem],
             getMessageById: lookupIn(messagesById),
             metadataByMessageId: {
@@ -693,7 +681,7 @@ describe('buildTranscriptTurnUnits', () => {
         ]);
         const groupId = 'toolCalls:turn:x:t1';
 
-        const result = buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const result = buildTranscriptTurnUnits({
             items: [turnItem({
                 id: 'turn:x',
                 userMessageId: null,
@@ -722,7 +710,7 @@ describe('buildTranscriptTurnUnits', () => {
     });
 
     it('keeps all previously-emitted unit ids unchanged when a tool is appended to an expanded group (streaming growth)', () => {
-        const grow = (toolIds: string[]): TranscriptTurnUnitListItem[] => buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const grow = (toolIds: string[]): TranscriptTurnUnitListItem[] => buildTranscriptTurnUnits({
             items: [turnItem({
                 id: 'turn:x',
                 userMessageId: null,
@@ -753,7 +741,7 @@ describe('buildTranscriptTurnUnits', () => {
     });
 
     it('slides the preview tail on collapsed append: surviving tail ids and the expand id stay identical, only hiddenCount changes', () => {
-        const grow = (toolIds: string[]): TranscriptTurnUnitListItem[] => buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const grow = (toolIds: string[]): TranscriptTurnUnitListItem[] => buildTranscriptTurnUnits({
             items: [turnItem({
                 id: 'turn:x',
                 userMessageId: null,
@@ -792,7 +780,7 @@ describe('buildTranscriptTurnUnits', () => {
     });
 
     it('keeps the id of a tool row that exists in both collapsed and expanded states across a toggle', () => {
-        const build = (expanded: boolean): TranscriptTurnUnitListItem[] => buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const build = (expanded: boolean): TranscriptTurnUnitListItem[] => buildTranscriptTurnUnits({
             items: [turnItem({
                 id: 'turn:x',
                 userMessageId: null,
@@ -846,7 +834,7 @@ describe('buildTranscriptTurnUnits', () => {
         const toSourceItems = (turns: typeof windowCache.turns): TranscriptTurnUnitSourceItem[] =>
             turns.map((turn) => ({ kind: 'turn', id: turn.id, turn }));
 
-        const buildUnits = (turns: typeof windowCache.turns): TranscriptTurnUnitListItem[] => buildTranscriptTurnUnits({ toolCallsGroupChromeVariant: 'feed_background',
+        const buildUnits = (turns: typeof windowCache.turns): TranscriptTurnUnitListItem[] => buildTranscriptTurnUnits({
             items: toSourceItems(turns),
             getMessageById: lookupIn(messagesById),
             isGroupExpanded: expandedAlways,
