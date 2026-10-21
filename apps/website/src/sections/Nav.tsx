@@ -91,7 +91,7 @@ export function Nav({ variant = 'overlay', isHome = true }: NavProps) {
                     </a>
                     {/* /agents is the hub for the thirteen per-agent pages, which
                         are what people arrive on from "remote claude code app"
-                        and "mobile codex app". It earns the first nav slot
+                        and mobile-agent searches. It earns the first nav slot
                         because it answers the first question a visitor has:
                         does this run mine? (It used to be pitched
                         here as a capability matrix; that matrix was removed —

@@ -631,11 +631,11 @@ const RETRIEVAL_BUDGET_SHARE = 2;
  * unit for the whole replay budget — every length it measures and every slice it
  * takes is `String.prototype.length` — and the reservation is only equal to the
  * mention bound because the block's renderer
- * (`buildSessionReferenceContextBlockForDispatch`, `apps/cli`) enforces that
+ * (`projectSessionInputReferencesV1`, Protocol) enforces that
  * bound in this unit rather than in the mention domain's code points. Were it
  * enforced in code points, a single astral character would cost two reserved
  * units while spending one counted one, and a block inside its own bound could
- * cost up to twice this reservation. `sessionReferenceBlock.test.ts` asserts the
+ * cost up to twice this reservation. `sessionInputReferenceProjectionV1.test.ts` asserts the
  * rendered block against this constant so the two packages cannot drift apart
  * silently.
  */

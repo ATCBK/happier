@@ -391,7 +391,7 @@ around it counts code points, so this is the one place the two meet: bounded in 
 Session titled with emoji could render a block inside its own bound that still cost up to twice what
 was reserved, and the refit below — designed to be a no-op — would delete transcript the seed was
 entitled to. UTF-16 length dominates code-point length, so the stricter unit satisfies both
-contracts; `sessionReferenceBlock.test.ts` asserts the rendered block against the constant so the two
+contracts; `sessionInputReferenceProjectionV1.test.ts` asserts the bounded reference projection against the constant so the two
 packages cannot drift apart silently.
 
 That refit can still genuinely bite, and after the unit was settled that is the ONLY way it does: the

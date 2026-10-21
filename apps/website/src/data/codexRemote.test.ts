@@ -74,7 +74,7 @@ describe('Codex comparison evidence discipline', () => {
 });
 
 describe('the page never invents a product name', () => {
-    // "Codex Mobile" / "Codex Phone" / "Codex App" as a capitalised product.
+    // Do not invent a capitalised product name for a mobile Agent client.
     // "the ChatGPT mobile app" and "from your phone" are descriptions and stay.
     it('does not christen a Codex mobile product', () => {
         expect(ALL_CODEX_COPY).not.toMatch(/\bCodex (Mobile|Phone|App|Remote Control)\b/);

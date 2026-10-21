@@ -157,8 +157,8 @@ function DesktopScrollable({ visible }: { visible: boolean }) {
                 style={{
                     WebkitOverflowScrolling: 'touch',
                     // Tall enough that the desktop UI stays readable; the image
-                    // is then far wider than the viewport, so it pans (superset-
-                    // style) rather than shrinking the whole app to fit.
+                    // is then far wider than the viewport, so it pans
+                    // rather than shrinking the whole app to fit.
                     height: 'clamp(380px, 62vh, 540px)',
                     boxShadow: '0 32px 60px rgba(0,0,0,0.28), 0 8px 20px rgba(0,0,0,0.18)',
                 }}
