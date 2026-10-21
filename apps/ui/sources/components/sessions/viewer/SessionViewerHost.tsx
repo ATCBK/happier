@@ -52,8 +52,8 @@ import {
 } from './useSessionViewerMachine';
 import {
   DEFAULT_WIDTH_SHARE,
-  SESSION_VIEWER_DEFAULT_ASPECT,
   SESSION_VIEWER_EDGE,
+  resolveSessionViewerBodyAspect,
   resolveSessionViewerCentredInset,
   resolveSessionViewerReadingInset,
 } from './sessionViewerGeometry';
@@ -196,8 +196,10 @@ function MountedSessionViewerHost(
   const committedRect = controller.state.rect;
   const { setRect, apply, requestSemantic, setReadingInset } = controller;
   const facts = controller.facts[source];
-  // The picture's own shape once its source reports it; the lab's 16:10 until then.
-  const aspectRatio = facts?.aspectRatio ?? SESSION_VIEWER_DEFAULT_ASPECT;
+  // The picture's own shape once its source reports it; until then the lab's 16:10, or taller where a
+  // state card needs the room. The frame's width is where it rests, or the first floating width.
+  const frameWidth = committedRect?.width ?? (availableRect ? Math.round(availableRect.width * DEFAULT_WIDTH_SHARE) : 0);
+  const aspectRatio = resolveSessionViewerBodyAspect(facts?.aspectRatio, frameWidth);
   const watching = facts?.watching === true;
   const footer = useSessionViewerHasPresence(source);
   const chromeHeight = resolveFloatingFrameChromeHeight({ footer });

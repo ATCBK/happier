@@ -9,6 +9,23 @@ export const SESSION_VIEWER_EDGE = 16;
 export const DEFAULT_WIDTH_SHARE = 0.42;
 /** The live picture's aspect until the source reports its own. */
 export const SESSION_VIEWER_DEFAULT_ASPECT = 16 / 10;
+/**
+ * The least body height a state card (unavailable, recovery, opening) needs in the frame: its glyph,
+ * a two-line title, three lines of reason, one action and the Details disclosure inside the card's own
+ * padding. Below it the card is clipped by the body's rounded edge.
+ */
+export const SESSION_VIEWER_STATE_MIN_BODY = 272;
+
+/**
+ * The shape of the frame's body at `width`. The source's own picture shape wins; until it reports one
+ * the body is a stand-in for the picture, 16:10 unless that is too short to hold a state card, in
+ * which case it is as tall as the card needs. Frames wider than the card's height × 16:10 never change.
+ */
+export function resolveSessionViewerBodyAspect(reported: number | null | undefined, width: number): number {
+  if (reported != null && reported > 0 && Number.isFinite(reported)) return reported;
+  if (!(width > 0)) return SESSION_VIEWER_DEFAULT_ASPECT;
+  return width / Math.max(width / SESSION_VIEWER_DEFAULT_ASPECT, SESSION_VIEWER_STATE_MIN_BODY);
+}
 
 /**
  * How far the centred reading column must yield so a settled floating viewer does not cover it.

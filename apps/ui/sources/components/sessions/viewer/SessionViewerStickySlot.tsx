@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { View, useWindowDimensions } from 'react-native';
 import {
   FloatingFrame,
   type FloatingFrameMode,
@@ -15,7 +15,7 @@ import {
 import { SessionViewerControls } from './SessionViewerControls';
 import { SessionViewerBody } from './SessionViewerHost';
 import { SessionViewerPresenceFooter } from './SessionViewerPresenceFooter';
-import { SESSION_VIEWER_DEFAULT_ASPECT } from './sessionViewerGeometry';
+import { resolveSessionViewerBodyAspect } from './sessionViewerGeometry';
 import {
   resolveSessionViewerWatchingLabel,
   useSessionViewerMachine,
@@ -41,6 +41,8 @@ export function SessionViewerStickySlot(
     },
     [requestSemantic],
   );
+  // The docked frame spans the window between the reading flow's gutters.
+  const { width: windowWidth } = useWindowDimensions();
   const footer = useSessionViewerHasPresence(source ?? 'computer');
   const serverId = controller?.serverId ?? props.serverId;
   const machine = useSessionViewerMachine(
@@ -64,9 +66,10 @@ export function SessionViewerStickySlot(
         mode="docked"
         rect={NO_RECT}
         availableRect={NO_RECT}
-        aspectRatio={
-          controller.facts[source]?.aspectRatio ?? SESSION_VIEWER_DEFAULT_ASPECT
-        }
+        aspectRatio={resolveSessionViewerBodyAspect(
+          controller.facts[source]?.aspectRatio,
+          windowWidth - COMPOSER_CONTENT_HORIZONTAL_INSET * 2,
+        )}
         moveInput="chrome"
         onRectChange={() => {}}
         onModeChange={onModeChange}
