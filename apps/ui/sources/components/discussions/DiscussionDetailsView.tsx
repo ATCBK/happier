@@ -54,6 +54,10 @@ import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAcc
 import { ApprovalRequesterThreadCard } from '@/components/approvals/ApprovalRequesterThreadCard';
 import { useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
+import { useDiscussionSettings } from './useDiscussionSettings';
+import { buildDiscussionCheckInMenuAction } from './discussionCheckInMenu';
+import { useDiscussionRecipientSelection } from './useDiscussionRecipientSelection';
+import type { DiscussionParticipantRefV1 } from '@happier-dev/protocol/discussions/references';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
@@ -816,11 +820,21 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
         const result = kind === 'rename' ? await repository.rename(discussion.id, rename?.trim() ?? '') : kind === 'archive' ? await repository.archive(discussion.id) : await repository.restore(discussion.id);
         if (result.kind === 'succeeded') setRename(null); else setLifecycleFailure({ operation: kind, outcome: result });
     }, [discussion, rename, repository]);
+    const checkInSettings = useDiscussionSettings({ repository, discussionId: props.target.discussionId, accountLifetime: props.accountLifetime,
+        enabled: props.active && !accessRevoked && discussion?.capabilities.manageAccess === true });
+    const accountCheckIn = useSetting('coordinationAutonomousCheckIn');
+    const { status: checkInStatus, override: checkInOverride, saving: checkInSaving, canManage: checkInCanManage, dontPause, inherit } = checkInSettings;
+    const checkInAction = React.useMemo(() => buildDiscussionCheckInMenuAction({
+        settings: { status: checkInStatus, override: checkInOverride, saving: checkInSaving, canManage: checkInCanManage, dontPause, inherit },
+        accountAfterTurns: accountCheckIn.afterTurns,
+    }), [accountCheckIn.afterTurns, checkInCanManage, checkInOverride, checkInSaving, checkInStatus, dontPause, inherit]);
     const lifecycleActions = React.useMemo<readonly PageHeaderMenuAction[]>(() => discussion ? [
         ...(discussion.capabilities.rename ? [{ id: 'rename', title: t('session.collaboration.discussion.rename'), disabled: mutationsDisabled, onSelect: () => setRename(discussion.title ?? '') }] : []),
         ...(discussion.capabilities.archive ? [{ id: 'archive', title: t('session.collaboration.discussion.archive'), disabled: mutationsDisabled, onSelect: () => lifecycle('archive') }] : []),
         ...(discussion.capabilities.restore ? [{ id: 'restore', title: t('session.collaboration.discussion.restore'), disabled: mutationsDisabled, onSelect: () => lifecycle('restore') }] : []),
-    ] : [], [discussion, lifecycle, mutationsDisabled]);
+        // DISC-17: this Discussion's own check-in, after the lifecycle rows (its own kind, so the menu divides them).
+        ...(checkInAction && discussion.archivedAt === null ? [{ ...checkInAction, disabled: checkInAction.disabled || mutationsDisabled }] : []),
+    ] : [], [checkInAction, discussion, lifecycle, mutationsDisabled]);
     const displayMessages = React.useMemo<readonly DiscussionDisplayMessage[]>(() => {
         if (!mutation?.content || mutation.status === 'observed_success' || messages.some((message) => message.localId === mutation.localId)) return messages;
         return [...messages, {
@@ -1021,6 +1035,28 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
     }, [pane, props.onClose, props.target]);
     const retryDiscussion = React.useCallback(() => repository.refreshDiscussion(props.target.discussionId), [props.target.discussionId, repository]);
     const roster = participantManagement.roster;
+    // DISC-18: the composer's Send to chip offers this roster (never the viewer), named as the participants sheet names them.
+    const rosterSessionAddresses = React.useMemo(() => (roster?.participants ?? []).flatMap((row) => {
+        const sessionId = row.participant.kind === 'session' ? row.participant.sessionId : 'sessionId' in row ? row.sessionId : null;
+        return sessionId ? [{ serverId: props.scope.serverId, sessionId }] : [];
+    }), [props.scope.serverId, roster?.participants]);
+    const rosterSessionTitles = useSessionDisplayTitles(rosterSessionAddresses);
+    const recipientLabel = React.useCallback((participant: DiscussionParticipantRefV1): string => {
+        if (participant.kind === 'session') {
+            const index = rosterSessionAddresses.findIndex((address) => address.sessionId === participant.sessionId);
+            return (index >= 0 ? rosterSessionTitles[index] : null) ?? resolveSessionLabel(participant.sessionId)
+                ?? t('session.collaboration.discussion.participants.session');
+        }
+        const grant = roster?.grants.find((entry) => entry.principal.kind === 'account' && entry.principal.accountId === participant.accountId);
+        return resolveAccountLabel(participant.accountId) ?? grant?.display.name ?? grant?.display.username ?? t('session.collaboration.unnamed');
+    }, [resolveAccountLabel, resolveSessionLabel, roster?.grants, rosterSessionAddresses, rosterSessionTitles]);
+    const recipientSelection = useDiscussionRecipientSelection({ draft, roster, label: recipientLabel });
+    const viewerRecipientId = `account:${props.scope.accountId}`;
+    const recipientChoices = React.useMemo(() => ({
+        ...recipientSelection,
+        targets: recipientSelection.targets.filter((target) => target.id !== viewerRecipientId),
+        selectedIds: recipientSelection.selectedIds.filter((id) => id !== viewerRecipientId),
+    }), [recipientSelection, viewerRecipientId]);
     const presentAccountIds = React.useMemo(() => new Set(presentViewers.map((viewer) => viewer.account.accountId)), [presentViewers]);
     const leaveDiscussion = React.useCallback(() => {
         void participantManagement.requestLeave().then((outcome) => { if (outcome?.kind === 'succeeded') closeSurface(); });
@@ -1271,7 +1307,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
             {discussion.archivedAt !== null
                 ? <View style={[styles.stateLine, threadColumn]}><SurfaceStateCard testID="session-discussion-archived" size="line" kind="unavailable" iconName="archive" title={t('session.collaboration.discussion.archivedNotice')} /></View>
                 : discussion.capabilities.postMessages
-                    ? <DiscussionComposer scope={props.scope} accountLifetime={props.accountLifetime} address={props.target.address} discussionId={props.target.discussionId} availability="available" value={{ text: draft.text, mentions: draft.mentions }} onChange={draft.setComposer} disabled={composerBlocked || mutationsDisabled} onSend={(content) => void send(content)} prepareParticipantMentions={prepareParticipantMentions} extraActionChips={runChips} />
+                    ? <DiscussionComposer scope={props.scope} accountLifetime={props.accountLifetime} address={props.target.address} discussionId={props.target.discussionId} availability="available" value={{ text: draft.text, mentions: draft.mentions }} onChange={draft.setComposer} disabled={composerBlocked || mutationsDisabled} onSend={(content) => void send(content)} prepareParticipantMentions={prepareParticipantMentions} extraActionChips={runChips} recipients={recipientChoices} />
                     : <View style={[styles.stateLine, threadColumn]}><SurfaceStateCard testID="session-discussion-read-only" size="line" kind="denied" title={t('session.collaboration.discussion.locked')} /></View>}
         </View>
     </TranscriptMessageSelectionBoundary>;

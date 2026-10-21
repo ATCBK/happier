@@ -13,7 +13,8 @@ import { t } from '@/text';
 import { Pressable, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
-import { RecipientChip } from '../routing/RecipientChip';
+import { RecipientChip, resolveRecipientMultiSelectLabel } from '../routing/RecipientChip';
+import type { RecipientMultiSelectModel } from '../routing/recipientMultiSelectModel';
 import { SessionTalkPicker, readSessionTalkSelector, selectorTitle, type SessionTalkIntent } from '../routing/SessionTalkPicker';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
@@ -65,7 +66,50 @@ export function buildRecipientRootStep(params: Readonly<{
     };
 }
 
+/** The Send to step for several recipients: each row toggles through the caller-owned model. */
+export function buildRecipientMultiSelectRootStep(model: RecipientMultiSelectModel<unknown>): SelectionListStep {
+    return {
+        id: 'recipient-root',
+        title: t('session.participants.sendToTitle'),
+        sections: [{
+            kind: 'static',
+            id: 'recipients',
+            options: model.targets.map((target) => ({ id: target.id, label: target.label, onSelect: () => model.toggle(target.id) })),
+        }],
+    };
+}
+
 export const SESSION_RECIPIENT_CHIP_KEY = 'participants-recipient';
+
+/**
+ * The same Send to chip for a composer that addresses several recipients at once (a Discussion's
+ * participants, C3 DISC-18). The selection is the caller's controlled model; overflow opens the same list.
+ */
+export function createRecipientMultiSelectActionChip(params: Readonly<{
+    isReadOnly: boolean;
+    model: RecipientMultiSelectModel<unknown>;
+}>): AgentInputExtraActionChip | undefined {
+    const { model } = params;
+    if (params.isReadOnly || (model.targets.length === 0 && model.selectedIds.length === 0)) return undefined;
+    const label = resolveRecipientMultiSelectLabel(model);
+    return {
+        key: SESSION_RECIPIENT_CHIP_KEY,
+        controlId: 'recipient',
+        stabilityKey: JSON.stringify([model.selectedIds, model.targets.map((target) => [target.id, target.label])]),
+        collapsedOptionsPopover: {
+            presentation: 'list',
+            title: t('session.participants.sendToTitle'),
+            label,
+            icon: (tint) => <Icon name="navigation-arrow" size={AGENT_INPUT_MENU_ICON_SIZE_PX} color={tint} />,
+            rootStep: buildRecipientMultiSelectRootStep(model),
+            selection: { kind: 'multiple', selectedIds: new Set(model.selectedIds) },
+            // Rows toggle through their own onSelect (see the single-recipient chip above).
+            onSelect: () => {},
+            maxHeightCap: 360,
+        },
+        render: (ctx: AgentInputExtraActionChipRenderContext) => <RecipientChip multi={model} ctx={ctx} />,
+    };
+}
 
 /** Talking to other sessions from this composer: the canonical draft intent and its writer. */
 export type SessionTalkChipBinding = Readonly<{

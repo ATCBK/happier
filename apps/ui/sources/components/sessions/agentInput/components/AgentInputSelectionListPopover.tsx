@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import { SelectionList, resolvePopoverSelectionListHeightBehavior } from '@/components/ui/selectionList';
-import type { SelectionListHeightBehavior, SelectionListOptionPresentation, SelectionListStep } from '@/components/ui/selectionList';
+import type { SelectionListHeightBehavior, SelectionListOptionPresentation, SelectionListSelection, SelectionListStep } from '@/components/ui/selectionList';
 
 import { AgentInputSelectionPopover } from '../selection/AgentInputSelectionPopover';
 import { deferAgentInputPopoverClose } from '../selection/deferAgentInputPopoverClose';
@@ -22,6 +22,8 @@ export type AgentInputSelectionListPopoverProps = Readonly<{
     boundaryRef?: React.RefObject<any> | null;
     rootStep: SelectionListStep;
     selectedOptionId?: string | null;
+    /** Several choices at once (`kind: 'multiple'`): rows toggle and the popover stays open. */
+    selection?: SelectionListSelection;
     onSelect: (id: string) => void;
     onRequestClose: () => void;
     maxHeightCap?: number;
@@ -66,13 +68,15 @@ export function AgentInputSelectionListPopover(props: AgentInputSelectionListPop
                 >
                     <SelectionList
                         rootStep={props.rootStep}
-                        selectedOptionId={props.selectedOptionId}
+                        {...(props.selection ? { selection: props.selection } : { selectedOptionId: props.selectedOptionId })}
                         autoFocusInputOnWeb
                         onSelect={(id) => {
                             // The caller's onSelect runs synchronously so any
                             // per-row mutation/state update is committed against
                             // the still-valid synthetic event.
                             props.onSelect(id);
+                            // A multiple choice toggles in place; only a single choice is terminal.
+                            if (props.selection?.kind === 'multiple') return;
                             // FR3-B (FR3-3): on web, closing a portaled popover
                             // synchronously from an option click can allow the
                             // click event to "fall through" to the underlying

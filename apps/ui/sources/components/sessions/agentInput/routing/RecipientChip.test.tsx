@@ -292,4 +292,33 @@ describe('RecipientChip', () => {
             memberId: 'alpha',
         });
     });
+    it('selects several recipients from one controlled model and keeps the picker open while toggling (C3 DISC-18)', async () => {
+        capturedSelectionListPopoverProps = null;
+        const { RecipientChip } = await import('./RecipientChip');
+        const toggle = vi.fn();
+        const ctx = { chipStyle: () => ({ padding: 4 }), iconColor: '#000', showLabel: true, textStyle: {}, popoverAnchorRef: null } as any;
+        const multi = {
+            targets: [
+                { id: 'account:ana', label: 'Ana', recipient: { kind: 'account', accountId: 'ana' } },
+                { id: 'session:sol', label: 'GPT-6 Sol', recipient: { kind: 'session', sessionId: 'sol' } },
+                { id: 'session:ui', label: 'Checkout UI', recipient: { kind: 'session', sessionId: 'ui' } },
+            ],
+            selectedIds: ['account:ana', 'session:sol'],
+            selectedRecipients: [],
+            toggle,
+            clear: vi.fn(),
+        };
+        const screen = await renderScreen(<RecipientChip ctx={ctx} multi={multi} />);
+
+        expect(screen.findByTestId('agent-input-recipient-chip')?.props.accessibilityLabel).toBe('session.participants.cardTo:Ana, GPT-6 Sol');
+        await screen.pressByTestIdAsync('agent-input-recipient-chip');
+        expect(capturedSelectionListPopoverProps?.open).toBe(true);
+        expect(capturedSelectionListPopoverProps.selection).toEqual({ kind: 'multiple', selectedIds: new Set(['account:ana', 'session:sol']) });
+        const options = capturedSelectionListPopoverProps.rootStep.sections[0].options;
+        expect(options.map((option: { id: string }) => option.id)).toEqual(['account:ana', 'session:sol', 'session:ui']);
+        act(() => options[2].onSelect());
+        expect(toggle).toHaveBeenCalledWith('session:ui');
+        act(() => capturedSelectionListPopoverProps.onSelect('session:ui'));
+        expect(capturedSelectionListPopoverProps?.open).toBe(true);
+    });
 });

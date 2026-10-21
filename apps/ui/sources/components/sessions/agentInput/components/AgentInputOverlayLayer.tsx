@@ -439,6 +439,7 @@ export function AgentInputOverlayLayer(props: Readonly<{
                             anchorRef={anchorRef}
                             rootStep={popover.rootStep}
                             selectedOptionId={popover.selectedOptionId ?? null}
+                            {...(popover.selection ? { selection: popover.selection } : {})}
                             onSelect={() => {
                                 // Documented no-op: the wrapper handles
                                 // close-after-select via `onRequestClose`

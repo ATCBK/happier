@@ -10,7 +10,7 @@ import type { SelectionListStep } from '@/components/ui/selectionList';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 import { StyleSheet } from 'react-native-unistyles';
-import { buildRecipientRootStep } from '../definitions/createRecipientActionChip';
+import { buildRecipientMultiSelectRootStep, buildRecipientRootStep } from '../definitions/createRecipientActionChip';
 import { Icon } from '@/components/ui/icons/Icon';
 import { AGENT_INPUT_CHIP_ICON_SIZE_PX, AGENT_INPUT_CHIP_ICON_STYLE } from '@/components/sessions/agentInput/definitions/agentInputChipIconMetrics';
 import {
@@ -18,6 +18,7 @@ import {
     resolveRecipientLabel,
     resolveRecipientPopoverSelectedOptionId,
 } from './recipientOptions';
+import type { RecipientMultiSelectModel } from './recipientMultiSelectModel';
 
 const stylesheet = StyleSheet.create((theme) => ({
     anchor: {
@@ -30,7 +31,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
-export type RecipientChipProps = Readonly<{
+type SingleRecipientChipProps = Readonly<{
     targets: readonly SessionParticipantTarget[];
     recipient: ParticipantRecipientV1 | null;
     onRecipientChange: (next: ParticipantRecipientV1 | null) => void;
@@ -38,7 +39,68 @@ export type RecipientChipProps = Readonly<{
     pendingLabel?: string;
 }>;
 
-export const RecipientChip = React.memo(function RecipientChip(props: RecipientChipProps) {
+/** Several recipients at once from a caller-owned controlled model (a Discussion's participants, C3 DISC-18). */
+type MultiRecipientChipProps = Readonly<{
+    multi: RecipientMultiSelectModel<unknown>;
+    ctx: AgentInputExtraActionChipRenderContext;
+}>;
+
+export type RecipientChipProps = SingleRecipientChipProps | MultiRecipientChipProps;
+
+/** "To <recipients>": the Send to chip for one recipient, or for several from a controlled model. */
+export function RecipientChip(props: RecipientChipProps) {
+    return 'multi' in props ? <MultiRecipientChip {...props} /> : <SingleRecipientChip {...props} />;
+}
+
+/** The chip text for several recipients: none is plain "To"; two read whole; more read "Ana +2". */
+export function resolveRecipientMultiSelectLabel(model: Pick<RecipientMultiSelectModel<unknown>, 'targets' | 'selectedIds'>): string {
+    const selected = new Set(model.selectedIds);
+    const labels = model.targets.filter((target) => selected.has(target.id)).map((target) => target.label);
+    if (labels.length === 0) return t('session.participants.to');
+    const label = labels.length <= 2 ? labels.join(', ')
+        : t('session.collaboration.discussion.controls.recipientsMore', { first: labels[0]!, count: labels.length - 1 });
+    return t('session.participants.cardTo', { label });
+}
+
+const MultiRecipientChip = React.memo(function MultiRecipientChip(props: MultiRecipientChipProps) {
+    const [open, setOpen] = React.useState(false);
+    const anchorRef = React.useRef<React.ElementRef<typeof View> | null>(null);
+    const { multi } = props;
+    const label = resolveRecipientMultiSelectLabel(multi);
+    const selection = React.useMemo(() => ({ kind: 'multiple' as const, selectedIds: new Set(multi.selectedIds) }), [multi.selectedIds]);
+    const rootStep = React.useMemo(() => buildRecipientMultiSelectRootStep(multi), [multi]);
+    if (multi.targets.length === 0 && multi.selectedIds.length === 0) return null;
+    return (
+        <>
+            <View ref={anchorRef} collapsable={false} style={stylesheet.anchor}>
+                <Pressable
+                    testID="agent-input-recipient-chip"
+                    onPress={() => setOpen((v) => !v)}
+                    style={({ pressed }) => props.ctx.chipStyle(Boolean(pressed))}
+                    accessibilityRole="button"
+                    accessibilityLabel={label}
+                >
+                    <View style={stylesheet.chipRow}>
+                        <Icon name="navigation-arrow" size={AGENT_INPUT_CHIP_ICON_SIZE_PX} color={props.ctx.iconColor} style={AGENT_INPUT_CHIP_ICON_STYLE} />
+                        {props.ctx.showLabel ? <Text numberOfLines={1} style={props.ctx.textStyle}>{label}</Text> : null}
+                    </View>
+                </Pressable>
+            </View>
+            <AgentInputSelectionListPopover
+                open={open}
+                anchorRef={props.ctx.popoverAnchorRef ?? anchorRef}
+                rootStep={rootStep}
+                selection={selection}
+                // Rows toggle through their own onSelect; a multiple choice never closes the picker.
+                onSelect={() => {}}
+                onRequestClose={() => setOpen(false)}
+                maxHeightCap={360}
+            />
+        </>
+    );
+});
+
+const SingleRecipientChip = React.memo(function SingleRecipientChip(props: SingleRecipientChipProps) {
     const [open, setOpen] = React.useState(false);
     const anchorRef = React.useRef<React.ElementRef<typeof View> | null>(null);
     const styles = stylesheet;

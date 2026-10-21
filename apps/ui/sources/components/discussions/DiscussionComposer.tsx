@@ -29,6 +29,8 @@ import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributio
 import { DiscussionComposerMount } from './DiscussionComposerMount';
 import { DiscussionComposerPluginContributions } from './DiscussionComposerPluginContributions';
 import { createMentionActionChip } from '@/components/sessions/agentInput/definitions/createMentionActionChip';
+import { createRecipientMultiSelectActionChip } from '@/components/sessions/agentInput/definitions/createRecipientActionChip';
+import type { RecipientMultiSelectModel } from '@/components/sessions/agentInput/routing/recipientMultiSelectModel';
 import { useSurfaceStateSize } from '@/components/ui/surfaces/surfaceStateSize';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -82,6 +84,8 @@ export function DiscussionComposer(props: Readonly<{
     prepareParticipantMentions?: (document: DiscussionComposerValue, isCurrent: () => boolean) => Promise<ReturnType<typeof buildDiscussionContent> | null>;
     /** The page's own composer controls after `@` (a running Discussion's Run…). */
     extraActionChips?: readonly AgentInputExtraActionChip[];
+    /** Who this draft addresses by default (C3 DISC-18): the session Send to chip, leading the rail. */
+    recipients?: RecipientMultiSelectModel<unknown>;
 }>): React.ReactElement {
     const { scope, availability, disabled, accountLifetime } = props;
     const currentContext = React.useRef({ accountLifetime, discussionId: props.discussionId, disabled, availability });
@@ -288,11 +292,15 @@ export function DiscussionComposer(props: Readonly<{
         requestAnimationFrame(() => focusRequestRef.current?.());
     }, [write]);
     const pageChips = props.extraActionChips;
-    const mentionChips = React.useMemo(() => [createMentionActionChip({
-        label: t('session.collaboration.discussion.composer.mention'),
-        disabled,
-        onMention: insertMention,
-    }), ...(pageChips ?? [])], [disabled, insertMention, pageChips]);
+    const recipients = props.recipients;
+    const mentionChips = React.useMemo(() => {
+        const recipientChip = recipients ? createRecipientMultiSelectActionChip({ isReadOnly: disabled, model: recipients }) : undefined;
+        return [...(recipientChip ? [recipientChip] : []), createMentionActionChip({
+            label: t('session.collaboration.discussion.composer.mention'),
+            disabled,
+            onMention: insertMention,
+        }), ...(pageChips ?? [])];
+    }, [disabled, insertMention, pageChips, recipients]);
     const phone = useSurfaceStateSize() === 'phone';
     // A new Discussion's page says how addressing works itself, so the line beside send is for a running thread.
     const addressingHint = phone || !props.discussionId ? undefined : <Text testID="session-discussion-composer-hint" style={styles.hint} numberOfLines={1}>{t('session.collaboration.discussion.composer.mentionHint')}</Text>;

@@ -11,7 +11,7 @@ import type {
 import type { FocusReturnRef } from '@/keyboard/focusReturn';
 
 import type { ActionListItem } from '@/components/ui/lists/ActionListSection';
-import type { SelectionListHeightBehavior, SelectionListStep } from '@/components/ui/selectionList';
+import type { SelectionListHeightBehavior, SelectionListSelection, SelectionListStep } from '@/components/ui/selectionList';
 
 import type { AgentInputChipPickerOption } from './components/AgentInputChipPickerTypes';
 import type { AgentInputContentPopoverConfig } from './components/AgentInputContentPopover';
@@ -177,6 +177,8 @@ type AgentInputCollapsedOptionsPopoverBase = Readonly<{
     /** Rechecks mount/session currentness immediately before overflow opens. */
     isEnabled?: () => boolean;
     selectedOptionId?: string | null;
+    /** List presentation with several choices at once: rows toggle and the overflow stays open. */
+    selection?: SelectionListSelection;
     /**
      * Returning `false` means the selection was not applied — a Composer
      * transaction conflict or a non-editable draft — so the overflow stays open
