@@ -22,6 +22,8 @@ import { createDiscussion } from '@/app/discussions/mutations';
 import { buildDiscussionMutationRequestBodyV1 } from '@happier-dev/protocol/discussions/api';
 import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
 import { inviteDiscussionParticipant } from '@/app/discussions/accessService';
+import { createWorkflowAccountRunActionOwner } from '@happier-dev/protocol/actions/executor/workflowRunActions';
+import { WorkflowRunListResultV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
 
 describe("Workflow Run live Team access (real SQLite)", () => {
     let harness: LightSqliteHarness;
@@ -124,6 +126,64 @@ describe("Workflow Run live Team access (real SQLite)", () => {
         await expect(pauseWorkflowRun({ accountId: f.viewer.id, runId: f.runId, expectedRevision: 0 })).rejects.toMatchObject({ code: "run_access_denied" });
         await db.teamMembership.update({ where: { id: f.membership.id }, data: { status: "suspended" } });
         await expect(getWorkflowRun({ accountId: f.viewer.id, runId: f.runId })).rejects.toMatchObject({ code: "run_not_found" });
+    });
+
+    it("projects attention membership through real HTTP and Protocol without private content, preserving locked Team rows and revocation", async () => {
+        const f = await fixture();
+        await db.automationRun.update({ where: { id: f.runId }, data: { state: "failed" } });
+        await withAuthenticatedTestApp(app => registerWorkflowRunStorageRoutes(app), async app => {
+            const storage = { execute: async (operation: Readonly<Record<string, unknown>>) => {
+                const response = await app.inject({ method: "POST", url: "/v3/automations/runs/workflow-storage",
+                    headers: { "x-test-user-id": f.viewer.id }, payload: operation });
+                expect(response.statusCode, response.body).toBe(200);
+                // The HTTP boundary is untyped; the real Protocol consumer validates its producer's result below.
+                const page: Awaited<ReturnType<typeof listWorkflowRuns>> = response.json();
+                return page;
+            } };
+            const request = { attention: "required" as const, projection: "membership" as const };
+            const raw = await storage.execute({ operation: "list", request, pageByteLimit: 1_000_000 });
+            expect(raw).toMatchObject({ projection: "membership", runs: [{ id: f.runId, attentionRequired: true }],
+                acceptedEnvelopesByRunId: {}, keyCensusByRunId: {}, rootProgressByRunId: {}, heldProgressByRunId: {} });
+            for (const sidecar of [raw.acceptedEnvelopesByRunId, raw.keyCensusByRunId, raw.rootProgressByRunId, raw.heldProgressByRunId]) {
+                expect(sidecar).toEqual({});
+            }
+            const owner = createWorkflowAccountRunActionOwner({
+                resolveAccountId: async () => f.viewer.id, storage,
+                definitions: { get: async () => { throw new Error("membership_does_not_read_definitions"); } },
+                resolveEncryption: async () => { throw new Error("membership_does_not_open_private_content"); },
+                resolveRunReportPolicy: async () => ({ preset: "important" }),
+                normalizeAbsolutePath: directory => directory.startsWith("/") ? directory : null,
+                randomBytes: () => { throw new Error("membership_does_not_prepare_keys"); },
+            });
+            expect(WorkflowRunListResultV1Schema.parse(await owner.execute({ actionId: "workflow.run.list",
+                input: request, context: {} }))).toMatchObject({ projection: "membership", runs: [{ id: f.runId }], metadataByRunId: {} });
+            const full = await storage.execute({ operation: "list", request: { attention: "required" }, pageByteLimit: 1_000_000 });
+            expect(full).not.toHaveProperty("projection");
+            expect(full.acceptedEnvelopesByRunId[f.runId]).toBe(f.acceptedEnvelope);
+            expect(raw.runs).toEqual(full.runs);
+            const fullBytes = Buffer.byteLength(JSON.stringify(full), "utf8");
+            const membershipBytes = Buffer.byteLength(JSON.stringify(raw), "utf8");
+            expect(membershipBytes).toBeLessThan(fullBytes);
+            console.info("PERF-C10-membership", JSON.stringify({ fullBytes, membershipBytes,
+                acceptedSidecarBytes: Buffer.byteLength(JSON.stringify(full.acceptedEnvelopesByRunId), "utf8"),
+                keySidecarBytes: Buffer.byteLength(JSON.stringify(full.keyCensusByRunId), "utf8"),
+                rootSidecarBytes: Buffer.byteLength(JSON.stringify(full.rootProgressByRunId), "utf8"),
+                heldSidecarBytes: Buffer.byteLength(JSON.stringify(full.heldProgressByRunId), "utf8") }));
+            for (const invalid of [{ projection: "membership" }, { ...request, targetSessionId: "target" },
+                { ...request, originDiscussionId: "discussion" }, { ...request, underSessionId: "lead" },
+                { ...request, invocationProvenance: [] }]) {
+                const response = await app.inject({ method: "POST", url: "/v3/automations/runs/workflow-storage",
+                    headers: { "x-test-user-id": f.viewer.id }, payload: { operation: "list", request: invalid, pageByteLimit: 1_000_000 } });
+                expect(response.statusCode).toBe(400);
+            }
+            await db.account.update({ where: { id: f.owner.id }, data: { encryptionMode: "e2ee", ...createSignedAccountContentBinding() } });
+            const locked = WorkflowRunListResultV1Schema.parse(await owner.execute({ actionId: "workflow.run.list", input: request, context: {} }));
+            expect(locked.runs.map(run => run.id)).toEqual([f.runId]);
+            expect(locked.metadataByRunId).toEqual({});
+            await db.artifactTeamGrant.deleteMany({ where: { artifactId: f.artifact.id, teamId: f.team.id } });
+            expect(await owner.execute({ actionId: "workflow.run.list", input: request, context: {} }))
+                .toMatchObject({ projection: "membership", runs: [], metadataByRunId: {} });
+        });
     });
 
     it("shares identical live Team authority reads across a Run page and rechecks them on the next invocation", async () => {

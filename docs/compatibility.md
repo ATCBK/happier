@@ -2268,6 +2268,24 @@ summaries and recipient-key census consume the same Run access owner.
 Cursors bind both Account and source/filter scope. `workflow.run.summaries`
 reads the requested saved-workflow ids in one indexed batch and returns latest,
 recent and Needs-you facts with byte-bounded `remainingSourceArtifactIds`.
+The development attention list accepts an explicit `projection: 'membership'`
+for consumers such as the closed Inbox badge that need admitted membership but
+not private display facts. Omission keeps the full list projection. Membership
+does not open or transfer accepted, root or held private content; its explicit
+response marker distinguishes unrequested private facts from an opened untitled
+Run or unreadable content. Membership updates the existing window's ordered ids
+and paging frontier, not the full Run-body map. Exact readers therefore retain
+their normal missing-body acquisition, while the durable Account change applier
+continues to materialize changed Run bodies before advancing its cursor.
+Private destination, Discussion and subtree filters
+and requested invocation provenance require the full projection. Both modes use
+the same attention predicate and fresh Run admission; no server decryption or
+second badge cache is introduced. Cursors also bind the projection. The existing
+response-byte boundary still owns paging, so a thinner page may contain more
+valid rows. An open Inbox or Work consumer promotes the same window to full
+private display demand, including when a membership read is already in flight;
+refresh retains the previously loaded ordering frontier. These undeployed 0.3
+producers and consumers update together, without an older-development adapter.
 List, detail, wait and summaries share the server's attention predicate: failed
 Runs, or non-cancelled Runs with actionable invocation rows. Accepted managed
 Automation Runs use this Workflow predicate and are excluded from ordinary

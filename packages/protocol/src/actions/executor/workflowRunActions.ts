@@ -7,7 +7,7 @@ import { listWorkflowAcceptedLeafSelectionsV1 } from '../../workflows/workflowSt
 import { workflowBlockOrdinalV1 } from '../../workflows/workflowStepLabel.js';
 import { walkWorkflowBlocks } from '../../workflows/workflowDefinitionEditV1.js';
 import { WorkflowAuthoredInputV1Schema, WorkflowCheckpointEnvelopeV1Schema, WorkflowProgressEnvelopeV1Schema, WorkflowRunInvocationIndexV1Schema, WorkflowRunSummaryV1Schema, type WorkflowAuthoredInputV1, type WorkflowProgressEnvelopeV1, type WorkflowUsageV1, type WorkflowInvocationRecoveryAvailabilityV1, type WorkflowRunInvocationIndexV1, type WorkflowRunSummaryV1, classifyWorkflowHoldV1, isWorkflowDraftPublicationLifecycleV1, applyWorkflowInvocationFactV1 } from '../../workflows/workflowProgressV1.js';
-import { WorkflowActionOutputSchemasV1, WorkflowRunWaitSnapshotV1Schema, WorkflowRunListResultV1Schema, WorkflowRunAcceptedContextV1Schema, type WorkflowRunPrivateMetadataV1, type WorkflowRunAcceptedContextV1 } from '../../workflows/actionsV1.js';
+import { WorkflowActionOutputSchemasV1, WorkflowRunWaitSnapshotV1Schema, WorkflowRunListRequestV1Schema, WorkflowRunListResultV1Schema, WorkflowRunAcceptedContextV1Schema, type WorkflowRunPrivateMetadataV1, type WorkflowRunAcceptedContextV1 } from '../../workflows/actionsV1.js';
 import { materializeWorkflowAcceptedSnapshotV1, readWorkflowAcceptedAgentStartLeavesV1, readWorkflowRunLeafStartRequestV1 } from '../../workflows/materializeWorkflowAcceptedSnapshotV1.js';
 import { openWorkflowAcceptedSnapshotStoredEnvelopeV1, openWorkflowCheckpointStoredEnvelopeV1, openWorkflowFinalResultStoredEnvelopeV1, openWorkflowProgressStoredEnvelopeV1, parseWorkflowStoredContentEnvelopeV1, sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowCheckpointStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '../../workflows/workflowStoredContentV1.js';
 import { validateWorkflowDefinition, matchesWorkflowAcceptedDefinitionV1 } from '../../workflows/workflowValidationV1.js';
@@ -2184,17 +2184,25 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
         || (args.input.machineId !== undefined && args.input.machineId !== target.machineId))) {
         throw workflowError('target_unavailable');
       }
+      if (args.input.projection === 'membership') {
+        WorkflowRunListRequestV1Schema.parse(args.input);
+        if (target?.kind === 'machine' && target.project) throw workflowError('target_unavailable');
+      }
       try {
         const underSessionIds = args.input.underSessionId === undefined ? null
           : deps.sessionList ? await readActionCallerLedSubtreeSessionIds({ sessionList: deps.sessionList }, args.context, args.input.underSessionId) : null;
         if (args.input.underSessionId !== undefined && underSessionIds === null) throw workflowError('target_unavailable');
         const projectPage = async (raw: unknown) => {
           const storagePage = record(raw);
-          const acceptedEnvelopesByRunId = record(storagePage.acceptedEnvelopesByRunId);
+          if (storagePage.projection !== args.input.projection) throw workflowError('content_unavailable');
           const page = {
             runs: WorkflowRunListResultV1Schema.shape.runs.parse(storagePage.runs),
             nextCursor: WorkflowRunListResultV1Schema.shape.nextCursor.parse(storagePage.nextCursor),
           };
+          if (args.input.projection === 'membership') return WorkflowActionOutputSchemasV1[args.actionId].parse({
+            ...page, projection: 'membership', metadataByRunId: {},
+          });
+          const acceptedEnvelopesByRunId = record(storagePage.acceptedEnvelopesByRunId);
           const callerEncryption = await encryption(args.context.signal);
           const keyCensusByRunId = record(storagePage.keyCensusByRunId);
           const rootProgressByRunId = record(storagePage.rootProgressByRunId ?? {});

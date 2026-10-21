@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { WorkflowRunSummaryV1Schema } from "@happier-dev/protocol/workflows/workflowProgressV1";
 import { WorkflowRunRecipientCensusResponseV1Schema } from "@happier-dev/protocol/workflows/workflowRunKeyV1";
 import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from "@happier-dev/protocol/workflows";
-import { sealEncryptedDataKeyEnvelopeV1 } from "@happier-dev/protocol";
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent, sealEncryptedDataKeyEnvelopeV1 } from "@happier-dev/protocol";
 import * as privacyKit from "privacy-kit";
 import tweetnacl from "tweetnacl";
 import { db } from "@/storage/db";
@@ -70,6 +70,35 @@ afterAll(async () => {
     if (harness) await harness.close();
 });
 
+it("freshly readmits compact Team membership after capture and refuses a revoked source grant", async () => {
+    const owner = await db.account.create({ data: { encryptionMode: "plain" } });
+    const viewer = await db.account.create({ data: { encryptionMode: "plain" } });
+    const team = await db.team.create({ data: { name: "Compact attention" } });
+    await db.teamMembership.create({ data: { teamId: team.id, accountId: viewer.id, role: "member" } });
+    const artifact = await db.artifact.create({ data: { id: crypto.randomUUID(), accountId: owner.id,
+        header: new Uint8Array(privacyKit.decodeBase64(encodePlainArtifactStoredContent({ kind: "workflow-definition.v1" }))),
+        body: new Uint8Array(privacyKit.decodeBase64(encodePlainArtifactStoredContent({}))),
+        dataEncryptionKey: new Uint8Array(privacyKit.decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER)) } });
+    await db.artifactTeamGrant.create({ data: { artifactId: artifact.id, teamId: team.id, accessLevel: "view", createdByAccountId: owner.id } });
+    const machine = await db.machine.create({ data: { id: crypto.randomUUID(), accountId: owner.id, metadata: "test" } });
+    const runId = crypto.randomUUID();
+    await db.automationRun.create({ data: { id: runId, accountId: owner.id, sourceArtifactId: artifact.id, visibleTeamId: team.id,
+        originKind: "direct", causeKind: null, state: "failed", scheduledAt: new Date(), dueAt: new Date(),
+        workflowCustodyState: "pending", workflowAcceptedSnapshotEnvelope: "unopened private content",
+        assignments: { create: { machineId: machine.id, priority: 0 } } } });
+    let revoked = false;
+    nativeTransactions.afterCommit = async () => {
+        revoked = true;
+        await db.artifactTeamGrant.deleteMany({ where: { artifactId: artifact.id, teamId: team.id } });
+    };
+    try {
+        await expect(listWorkflowRuns({ accountId: viewer.id, attention: "required", projection: "membership", pageByteLimit: 1_000_000 }))
+            .rejects.toMatchObject({ code: "run_not_found" });
+        expect(revoked).toBe(true);
+        expect(nativeTransactions.leases).toBe(0);
+    } finally { nativeTransactions.afterCommit = undefined; }
+});
+
 it.each(["plain", "e2ee"] as const)("projects %s collection keys without per-Run reads or crossing Run envelopes", async mode => {
     const owner = await db.account.create({ data: { encryptionMode: mode,
         ...(mode === "e2ee" ? createSignedAccountContentBinding() : {}) } });
@@ -125,12 +154,14 @@ it.each(["plain", "e2ee"] as const)("projects %s collection keys without per-Run
     } finally { info.mockRestore(); }
 });
 
-it.each(["mode", "change-cursor", "deletion"] as const)("readmits captured content after an Account %s change", async change => {
+it.each((["mode", "change-cursor", "deletion"] as const).flatMap(change => [
+    { change, projection: undefined }, { change, projection: "membership" as const },
+]))("readmits $projection captured content after an Account $change change", async ({ change, projection }) => {
     const owner = await db.account.create({ data: { encryptionMode: "plain" } });
     const machine = await db.machine.create({ data: { id: crypto.randomUUID(), accountId: owner.id, metadata: "test" } });
     const runId = crypto.randomUUID();
     await db.automationRun.create({ data: {
-        id: runId, accountId: owner.id, originKind: "direct", causeKind: null, state: "queued",
+        id: runId, accountId: owner.id, originKind: "direct", causeKind: null, state: "failed",
         scheduledAt: new Date(), dueAt: new Date(), workflowCustodyState: "pending",
         workflowAcceptedSnapshotEnvelope: "malformed retained content",
         assignments: { create: { machineId: machine.id, priority: 0 } },
@@ -150,7 +181,8 @@ it.each(["mode", "change-cursor", "deletion"] as const)("readmits captured conte
             ? { encryptionMode: "e2ee" } : { seq: { increment: 1 } } });
     };
     try {
-        const result = await Promise.allSettled([listWorkflowRuns({ accountId: owner.id, runIds: [runId], pageByteLimit: 1_000_000 })]);
+        const result = await Promise.allSettled([listWorkflowRuns({ accountId: owner.id, runIds: [runId], pageByteLimit: 1_000_000,
+            ...(projection ? { projection, attention: "required" as const } : {}) })]);
         if (!changed && result[0].status === "rejected") throw result[0].reason;
         expect(changed).toBe(true);
         expect(materializationLeases, "validation and page serialization must run without a native lease").toEqual([0]);
@@ -161,8 +193,8 @@ it.each(["mode", "change-cursor", "deletion"] as const)("readmits captured conte
             } }]);
         } else {
             expect(result).toMatchObject([{ status: "fulfilled", value: {
-                runs: [{ id: runId }], acceptedEnvelopesByRunId: { [runId]: null },
-                keyCensusByRunId: { [runId]: { encryptionMode: "plain" } },
+                runs: [{ id: runId }], acceptedEnvelopesByRunId: projection ? {} : { [runId]: null },
+                keyCensusByRunId: projection ? {} : { [runId]: { encryptionMode: "plain" } },
             } }]);
         }
     } finally {
@@ -171,17 +203,18 @@ it.each(["mode", "change-cursor", "deletion"] as const)("readmits captured conte
     }
 });
 
-it("keeps exact list continuation across native capture batches", async () => {
+it.each([undefined, "membership"] as const)("keeps %s exact list continuation across native capture batches", async projection => {
     const owner = await db.account.create({ data: { encryptionMode: "plain" } });
     const machine = await db.machine.create({ data: { id: crypto.randomUUID(), accountId: owner.id, metadata: "test" } });
     const runIds = Array.from({ length: 129 }, () => crypto.randomUUID());
     await db.automationRun.createMany({ data: runIds.map(id => ({
-        id, accountId: owner.id, originKind: "direct", causeKind: null, state: "queued",
+        id, accountId: owner.id, originKind: "direct", causeKind: null, state: "failed",
         scheduledAt: new Date(), dueAt: new Date(), workflowCustodyState: "pending",
         workflowAcceptedSnapshotEnvelope: "malformed retained content",
     })) });
     await db.automationRunAssignment.createMany({ data: runIds.map(runId => ({ runId, machineId: machine.id, priority: 0 })) });
-    const request = { accountId: owner.id, runIds, pageByteLimit: 1_000_000 };
+    const request = { accountId: owner.id, runIds, pageByteLimit: 1_000_000,
+        attention: "required" as const, ...(projection ? { projection } : {}) };
     const materializationLeases: number[] = [];
     const debug = vi.spyOn(logger, "debug").mockImplementation(record => {
         if (record !== null && typeof record === "object" && "phase" in record
@@ -197,9 +230,11 @@ it("keeps exact list continuation across native capture batches", async () => {
         expect(second.nextCursor).toBeUndefined();
         expect([...first.runs, ...second.runs]).toEqual(whole.runs);
         expect(new Set(whole.runs.map(run => run.id))).toEqual(new Set(runIds));
-        expect(Object.values(whole.acceptedEnvelopesByRunId)).toEqual(Array.from({ length: 129 }, () => null));
+        expect(Object.values(whole.acceptedEnvelopesByRunId)).toEqual(projection ? [] : Array.from({ length: 129 }, () => null));
         // Whole-page capture crosses the native batch boundary; both CPU phases
         // must release it, as must each of the two separately continued pages.
         expect(materializationLeases).toEqual([0, 0, 0, 0]);
+        await expect(listWorkflowRuns({ ...request, cursor: first.nextCursor,
+            projection: projection ? undefined : "membership" })).rejects.toMatchObject({ code: "invalid_input" });
     } finally { debug.mockRestore(); }
 });

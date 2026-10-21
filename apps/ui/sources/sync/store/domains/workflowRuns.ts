@@ -83,6 +83,7 @@ export type WorkflowRunsDomain = {
         scope?: ServerAccountScope | null;
         windowId: WorkflowRunListWindowId | `session:${string}` | `discussion:${string}`;
         runs: readonly WorkflowRunSummaryV1[];
+        projection?: 'membership';
         automationRuns?: readonly AutomationDefinitionRun[];
         metadataByRunId?: Readonly<Record<string, WorkflowRunPrivateMetadataV1 | null>>;
         supportsAnotherRoundByRunId?: Readonly<Record<string, boolean>>;
@@ -145,6 +146,10 @@ export type WorkflowLoadedSpanMode = 'replace' | 'append' | 'refresh';
 
 export type WorkflowRunListWindowId = 'all' | 'active' | 'attention' | 'automationAttention' | `automation:${string}` | `destination:${string}` | `under:${string}`;
 export type WorkflowRunListWindow = Readonly<{
+    /** Also binds nextCursor; promotion must restart with a full first page. */
+    projection?: 'membership';
+    /** Oldest traversed list position, including when membership has never opened a body. */
+    frontier?: WorkflowRunListFrontier;
     runIds: readonly string[];
     nextCursor: string | null;
     loaded: boolean;
@@ -495,10 +500,18 @@ export function resolveVisibleWorkflowInvocations(
  * Whether `candidate` sorts strictly after `boundary` in the Run list's
  * newest-first `(createdAt desc, id desc)` order.
  */
-export function isBeyondWorkflowRunListSpan(candidate: WorkflowRunRow | undefined, boundary: WorkflowRunRow): boolean {
+export type WorkflowRunListFrontier = Readonly<{ id: string; createdAt: number }>;
+
+export function workflowRunListFrontier(row: WorkflowRunRow): WorkflowRunListFrontier | undefined {
+    const createdAt = row.summary ? toEpochMilliseconds(row.summary.createdAt) : row.automation?.createdAt;
+    return createdAt === undefined ? undefined : { id: row.id, createdAt };
+}
+
+export function isBeyondWorkflowRunListSpan(candidate: WorkflowRunRow | WorkflowRunListFrontier | undefined,
+    boundary: WorkflowRunRow | WorkflowRunListFrontier): boolean {
     if (candidate === undefined) return false;
-    const candidateCreatedAt = candidate.summary ? toEpochMilliseconds(candidate.summary.createdAt) : candidate.automation?.createdAt;
-    const boundaryCreatedAt = boundary.summary ? toEpochMilliseconds(boundary.summary.createdAt) : boundary.automation?.createdAt;
+    const candidateCreatedAt = 'createdAt' in candidate ? candidate.createdAt : workflowRunListFrontier(candidate)?.createdAt;
+    const boundaryCreatedAt = 'createdAt' in boundary ? boundary.createdAt : workflowRunListFrontier(boundary)?.createdAt;
     if (candidateCreatedAt === undefined || boundaryCreatedAt === undefined) return false;
     if (candidateCreatedAt !== boundaryCreatedAt) return candidateCreatedAt < boundaryCreatedAt;
     return candidate.id < boundary.id;
@@ -833,12 +846,15 @@ export function createWorkflowRunsDomain<S extends WorkflowRunsDomain>({
             delete workflowRunInvocationsByRunId[key];
             return { ...state, workflowRunsById, workflowRunListWindows, workflowRunInvocationsByRunId };
         }),
-        applyWorkflowRunListPage: ({ scope = getActiveServerAccountScope(), windowId, runs, automationRuns = [], metadataByRunId, supportsAnotherRoundByRunId, callerAccessByRunId, nextCursor, mode, attentionRunIds, lastSuccessfulReadAt }) =>
+        applyWorkflowRunListPage: ({ scope = getActiveServerAccountScope(), windowId, runs, projection, automationRuns = [], metadataByRunId, supportsAnotherRoundByRunId, callerAccessByRunId, nextCursor, mode, attentionRunIds, lastSuccessfulReadAt }) =>
             set((state) => {
                 const previous = state.workflowRunListWindows[windowId];
                 // Bodies merge first so the refreshed span can be measured
                 // against the rows the page just restated.
-                const workflowRunsById = mergeWorkflowRunBodies(
+                // Membership proves ids/order only. Never publish unopened summaries
+                // into the full-body map: existing exact readers treat a missing body
+                // as demand, while already opened bodies remain last-known truth.
+                const workflowRunsById = projection === 'membership' ? state.workflowRunsById : mergeWorkflowRunBodies(
                     state.workflowRunsById,
                     [...runs.map((run) => workflowRunRowFromSummary(run, metadataByRunId?.[run.id] ?? null,
                         supportsAnotherRoundByRunId?.[run.id], callerAccessByRunId?.[run.id])),
@@ -851,13 +867,22 @@ export function createWorkflowRunsDomain<S extends WorkflowRunsDomain>({
                     : mode === 'refresh'
                         ? refreshWorkflowRunListWindow({ runsById: workflowRunsById, previous, pageRunIds, nextCursor, scope })
                         : { runIds: pageRunIds, nextCursor, loaded: true };
+                const tailId = membership.runIds.at(-1);
+                const tailSummary = tailId === undefined ? undefined : runs.find(run => run.id === tailId);
+                const tailAutomation = tailId === undefined ? undefined : automationRuns.find(run => run.id === tailId);
+                const tailBody = tailId === undefined ? undefined : workflowRunsById[workflowRunStoreKey(tailId, scope)];
+                const frontier = tailSummary ? { id: tailSummary.id, createdAt: toEpochMilliseconds(tailSummary.createdAt) }
+                    : tailAutomation ? { id: tailAutomation.id, createdAt: tailAutomation.createdAt }
+                    : tailBody ? workflowRunListFrontier(tailBody) : tailId === previous?.frontier?.id ? previous?.frontier : undefined;
                 const window: WorkflowRunListWindow = { ...membership,
+                    ...(projection === undefined ? {} : { projection }),
+                    ...(frontier === undefined || (windowId !== 'attention' && windowId !== 'automationAttention') ? {} : { frontier }),
                     ...((windowId.startsWith('session:') || windowId.startsWith('discussion:')) && scope ? { scope } : {}),
                     ...(attentionRunIds === undefined ? {} : { attentionRunIds }),
                     ...(lastSuccessfulReadAt === undefined ? {} : { lastSuccessfulReadAt }),
                 };
                 const unchangedWindow = previous !== undefined && sameStrictJsonValue(previous, window);
-                const workflowRunInvocationsByRunId = reconcileRunInvocationObservations(state.workflowRunInvocationsByRunId,
+                const workflowRunInvocationsByRunId = projection === 'membership' ? state.workflowRunInvocationsByRunId : reconcileRunInvocationObservations(state.workflowRunInvocationsByRunId,
                     pageRunIds.flatMap((id) => workflowRunsById[workflowRunStoreKey(id, scope)] ?? []), scope);
                 if (unchangedWindow && workflowRunsById === state.workflowRunsById && workflowRunInvocationsByRunId === state.workflowRunInvocationsByRunId) return state;
                 return {

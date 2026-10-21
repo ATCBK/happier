@@ -30,6 +30,21 @@ describe('workflow Action contracts', () => {
     expect(schema.safeParse({ runs: [] }).success).toBe(false);
     expect(schema.safeParse({ runs: [], metadataByRunId: {} }).success).toBe(true);
   });
+  it('restricts content-free membership to public attention queries and identifies its result', () => {
+    const input = WorkflowActionInputSchemasV1['workflow.run.list'];
+    const request = { attention: 'required', projection: 'membership' };
+    expect(input.parse(request)).toEqual(request);
+    for (const invalid of [
+      { projection: 'membership' },
+      { ...request, originDiscussionId: 'discussion-1' },
+      { ...request, targetSessionId: 'session-1' },
+      { ...request, underSessionId: 'session-1' },
+      { ...request, invocationProvenance: [] },
+    ]) expect(input.safeParse(invalid).success).toBe(false);
+    expect(WorkflowActionOutputSchemasV1['workflow.run.list'].parse({
+      runs: [], metadataByRunId: {}, projection: 'membership', nextCursor: 'next',
+    })).toEqual({ runs: [], metadataByRunId: {}, projection: 'membership', nextCursor: 'next' });
+  });
   it('admits explicit Team selection only with an Artifact source grant binding', () => {
     const start = WorkflowActionInputSchemasV1['workflow.run.start'];
     const runId = '0f2cf13d-4ad7-4f4b-b5e0-cc3b7dce7f11';

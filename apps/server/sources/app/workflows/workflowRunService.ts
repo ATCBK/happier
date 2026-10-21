@@ -5,7 +5,7 @@ import { projectWorkflowBigIntV1, type WorkflowInvocationLifecycleV1, type Workf
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import { toAutomationRunExecutionInputV1Origin } from '@happier-dev/protocol/automations/automationApiV3';
 import { projectAutomationAccountCurrentnessWitnessV1, sameAutomationAccountContentIdentityV1, type AutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
-import { type WorkflowRunSummariesResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
+import { WorkflowRunListRequestV1Schema, type WorkflowRunSummariesResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
 import type { Prisma } from "@prisma/client";
 import { WorkflowDirectRunAdmissionIdV1Schema, WorkflowInvocationRecordIdSchema } from '@happier-dev/protocol/workflows/workflowIdsV1';
 import { isWorkflowDraftPublicationLifecycleV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
@@ -125,8 +125,11 @@ type NarrowedWorkflowRunRow<S extends Prisma.AutomationRunSelect> = Omit<
 > & {
     state: WorkflowRunState;
 };
-type WorkflowRunRow = NarrowedWorkflowRunRow<typeof workflowRunProjectionSelect> & { attentionRequired?: boolean };
+type WorkflowRunRow = Omit<NarrowedWorkflowRunRow<typeof workflowRunProjectionSelect>, "workflowCheckpointEnvelope">
+    & { workflowCheckpointEnvelope?: string | null; attentionRequired?: boolean };
 type WorkflowRunListRow = NarrowedWorkflowRunRow<typeof workflowRunListSelect> & { attentionRequired?: boolean };
+type WorkflowRunListCapturedRow = Omit<WorkflowRunListRow, "workflowAcceptedSnapshotEnvelope" | "workflowCheckpointEnvelope">
+    & { workflowAcceptedSnapshotEnvelope?: string | null; workflowCheckpointEnvelope?: string | null };
 type WorkflowRunFullRow = NarrowedWorkflowRunRow<typeof workflowRunSelect>;
 
 export function deriveWorkflowRunAvailability(input: Readonly<{
@@ -163,7 +166,7 @@ function availability(row: WorkflowRunRow): WorkflowRunSummaryV1["availability"]
         state: row.state as WorkflowRunState,
         workflowCustodyState: row.workflowCustodyState,
         hasExecution: row.workflowInvocations.length > 0,
-        hasCheckpoint: row.workflowCheckpointEnvelope !== null,
+        hasCheckpoint: row.workflowCheckpointEnvelope != null,
     });
 }
 
@@ -940,8 +943,14 @@ export async function listWorkflowRuns(params: PageOptions & Readonly<{
     runIds?: readonly string[];
     invocationProvenance?: readonly Readonly<{ runId: string; invocationRecordIds: readonly string[] }>[];
     originSessionId?: string; targetSessionId?: string; underSessionId?: string; automationId?: string; machineId?: string; sourceArtifactId?: string;
+    projection?: "membership";
 }>) {
     if (params.limit !== undefined && (!Number.isSafeInteger(params.limit) || params.limit <= 0)) throw new WorkflowRunServiceError("invalid_input");
+    const membershipOnly = params.projection === "membership";
+    if (membershipOnly) {
+        const { accountId: _accountId, pageByteLimit: _pageByteLimit, ...request } = params;
+        if (!WorkflowRunListRequestV1Schema.safeParse(request).success) throw new WorkflowRunServiceError("invalid_input");
+    }
     // The exact-Run selection is part of the cursor binding like every other
     // filter, so a cursor minted for a collection page cannot be replayed as
     // an exact read or vice versa. The lookup itself stays the lean list
@@ -951,7 +960,8 @@ export async function listWorkflowRuns(params: PageOptions & Readonly<{
     // Bind its selection to the same storage cursor to reject cross-filter replay.
     const queryKey = JSON.stringify({ accountId: params.accountId, sourceArtifactId: params.sourceArtifactId ?? null, runId: params.runId ?? null,
         runIds: params.runIds ? [...params.runIds].sort() : null, invocationProvenance: params.invocationProvenance ?? null,
-        origin: params.origin ?? null, states: [...(params.states ?? [])].sort(), attention: params.attention ?? null, originSessionId: params.originSessionId ?? null, targetSessionId: params.targetSessionId ?? null, underSessionId: params.underSessionId ?? null, automationId: params.automationId ?? null, machineId: params.machineId ?? null });
+        origin: params.origin ?? null, states: [...(params.states ?? [])].sort(), attention: params.attention ?? null, originSessionId: params.originSessionId ?? null, targetSessionId: params.targetSessionId ?? null, underSessionId: params.underSessionId ?? null, automationId: params.automationId ?? null, machineId: params.machineId ?? null,
+        ...(membershipOnly ? { projection: params.projection } : {}) });
     const decoded = params.cursor ? decodeKeysetCursorV1(params.cursor, queryKey) : null;
     const afterDate = decoded?.status === "ok" ? readKeysetCursorTextV1(decoded.parts[0]) : null;
     const afterId = decoded?.status === "ok" ? readKeysetCursorIdV1(decoded.parts[1]) : null;
@@ -984,16 +994,17 @@ export async function listWorkflowRuns(params: PageOptions & Readonly<{
                 ...(params.machineId ? { assignments: { some: { machineId: params.machineId } } } : {}),
                 ...(additionalWhere.length > 0 ? { AND: additionalWhere } : {}),
             },
-            orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: batchSize + 1, select: workflowRunListSelect,
-        }) as WorkflowRunListRow[];
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: batchSize + 1,
+            select: membershipOnly ? { ...workflowRunListSelect, workflowAcceptedSnapshotEnvelope: false, workflowCheckpointEnvelope: false } : workflowRunListSelect,
+        }) as WorkflowRunListCapturedRow[];
         const candidateRows = rows.slice(0, batchSize);
-        const roots = candidateRows.length === 0 ? [] : await tx.workflowRunInvocation.findMany({
+        const roots = membershipOnly || candidateRows.length === 0 ? [] : await tx.workflowRunInvocation.findMany({
             where: { runId: { in: candidateRows.map((row) => row.id) }, parentRecordId: null,
                 sequence: 0n, memberOrdinal: 0n, attempt: 0n }, select: invocationSelect,
         });
         // One bounded relation per visible page member, matching the Inbox's first-hold intent.
         // Keep the ordinary execution-exists relation independent of attention membership.
-        const heldRuns = params.attention !== "required" || candidateRows.length === 0 ? [] : await tx.automationRun.findMany({
+        const heldRuns = membershipOnly || params.attention !== "required" || candidateRows.length === 0 ? [] : await tx.automationRun.findMany({
             where: { id: { in: candidateRows.map(row => row.id) } },
             select: { id: true, workflowInvocations: { where: { lifecycle: "waiting_for_review" },
                 orderBy: { sequence: "asc" }, take: 1, select: invocationSelect } },
@@ -1029,7 +1040,7 @@ export async function listWorkflowRuns(params: PageOptions & Readonly<{
             const wanted = params.limit ?? Number.POSITIVE_INFINITY;
             let pageAfterDate = afterDate;
             let pageAfterId = afterId;
-            let collected: Array<WorkflowRunListRow & { keyCensus: WorkflowRunRecipientCensusResponseV1;
+            let collected: Array<WorkflowRunListCapturedRow & { workflowAcceptedSnapshotEnvelope: string | null; keyCensus: WorkflowRunRecipientCensusResponseV1;
                 invocationProgress: Array<{ index: ReturnType<typeof projectInvocation>; contentEnvelope: string }>;
                 heldProgress: { index: ReturnType<typeof projectInvocation>; contentEnvelope: string } | null;
                 rootProgress: { index: ReturnType<typeof projectInvocation>; contentEnvelope: string } | null }> = [];
@@ -1063,8 +1074,9 @@ export async function listWorkflowRuns(params: PageOptions & Readonly<{
                         });
                         const held = heldByRunId.get(candidate.id);
                         const heldProgress = held ? projectPrivateInvocation(held) : null;
-                        const row = { ...candidate, attentionRequired: attentionIds.has(candidate.id), keyCensus, rootProgress, invocationProgress, heldProgress };
-                        if (row.workflowAcceptedSnapshotEnvelope === null) return row;
+                        const row = { ...candidate, workflowAcceptedSnapshotEnvelope: candidate.workflowAcceptedSnapshotEnvelope ?? null,
+                            attentionRequired: attentionIds.has(candidate.id), keyCensus, rootProgress, invocationProgress, heldProgress };
+                        if (membershipOnly || row.workflowAcceptedSnapshotEnvelope === null) return row;
                         try {
                             assertWorkflowStoredEnvelopeOuterForMode({
                                 raw: row.workflowAcceptedSnapshotEnvelope,
@@ -1084,7 +1096,7 @@ export async function listWorkflowRuns(params: PageOptions & Readonly<{
                         byteLimit: params.pageByteLimit,
                         // Each Run occupies the `runs` array and the private accepted
                         // sidecar object, so it contributes both exact members.
-                        serializeMembers: (row) => [
+                        serializeMembers: (row) => membershipOnly ? [JSON.stringify(projectRun(row))] : [
                             JSON.stringify(projectRun(row)),
                             `${JSON.stringify(row.id)}:${JSON.stringify(row.workflowAcceptedSnapshotEnvelope)}`,
                             `${JSON.stringify(row.id)}:${JSON.stringify(row.keyCensus)}`,
@@ -1092,7 +1104,8 @@ export async function listWorkflowRuns(params: PageOptions & Readonly<{
                             ...(params.attention === "required" ? [`${JSON.stringify(row.id)}:${JSON.stringify(row.heldProgress)}`] : []),
                             ...(params.invocationProvenance ? [`${JSON.stringify(row.id)}:${JSON.stringify(row.invocationProgress)}`] : []),
                         ],
-                        emptyPage: (nextCursor) => ({ runs: [], acceptedEnvelopesByRunId: {}, keyCensusByRunId: {}, rootProgressByRunId: {},
+                        emptyPage: (nextCursor) => ({ ...(membershipOnly ? { projection: "membership" } : {}),
+                            runs: [], acceptedEnvelopesByRunId: {}, keyCensusByRunId: {}, rootProgressByRunId: {},
                             ...(params.attention === "required" ? { heldProgressByRunId: {} } : {}),
                             ...(params.invocationProvenance ? { invocationProgressByRunId: {} } : {}), ...(nextCursor ? { nextCursor } : {}) }),
                         nextCursorFor: (row) => encodeKeysetCursorV1({ queryKey, parts: [row.createdAt.toISOString(), row.id] }),
@@ -1135,11 +1148,12 @@ export async function listWorkflowRuns(params: PageOptions & Readonly<{
     }, { transactionClass: "workflow-list-runs" });
     const last = page.rows.at(-1);
     return {
+        ...(membershipOnly ? { projection: "membership" as const } : {}),
         runs: page.rows.map(projectRun),
-        acceptedEnvelopesByRunId: Object.fromEntries(page.rows.map((row) => [row.id, row.workflowAcceptedSnapshotEnvelope])),
-        keyCensusByRunId: Object.fromEntries(page.rows.map((row) => [row.id, row.keyCensus])),
-        rootProgressByRunId: Object.fromEntries(page.rows.map((row) => [row.id, row.rootProgress])),
-        ...(params.attention === "required" ? { heldProgressByRunId: Object.fromEntries(page.rows.map(row => [row.id, row.heldProgress])) } : {}),
+        acceptedEnvelopesByRunId: Object.fromEntries(membershipOnly ? [] : page.rows.map((row) => [row.id, row.workflowAcceptedSnapshotEnvelope])),
+        keyCensusByRunId: Object.fromEntries(membershipOnly ? [] : page.rows.map((row) => [row.id, row.keyCensus])),
+        rootProgressByRunId: Object.fromEntries(membershipOnly ? [] : page.rows.map((row) => [row.id, row.rootProgress])),
+        ...(params.attention === "required" ? { heldProgressByRunId: Object.fromEntries(membershipOnly ? [] : page.rows.map(row => [row.id, row.heldProgress])) } : {}),
         ...(params.invocationProvenance ? { invocationProgressByRunId: Object.fromEntries(page.rows.map(row => [row.id, row.invocationProgress])) } : {}),
         ...(page.hasMore && last ? { nextCursor: encodeKeysetCursorV1({ queryKey, parts: [last.createdAt.toISOString(), last.id] }) } : {}),
     };

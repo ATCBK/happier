@@ -10,7 +10,12 @@ import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } 
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installVitestRnShim } from '@/dev/vitestRnShim';
-import { createAutomationRunFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { createAutomationRunFixture, createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { createDeferred } from '@/dev/testkit';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
+import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowStoredContentV1';
+import { WorkflowRunRecipientCensusResponseV1Schema } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
 import { storage } from '@/sync/domains/state/storageStore';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
@@ -37,7 +42,7 @@ import { Text } from '@/components/ui/text/Text';
  * column reads. Only HTTP, Socket.IO and the device credential store are replaced;
  * the Action parser, store, loader, applied Home lifetime and Account wake are real.
  */
-const listRuns = vi.fn<(input: { operation: string; request: { attention?: string } }) => Promise<unknown>>();
+const listRuns = vi.fn<(input: { operation: string; request: { attention?: string; projection?: 'membership' } }) => Promise<unknown>>();
 const listAutomationRuns = vi.fn<() => Promise<unknown>>();
 let workflowsEnabled = true;
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
@@ -140,7 +145,12 @@ describe('useInboxSummary workflow source', () => {
             if (path === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
             if (path === '/health') return Response.json({ status: 'ok' });
             if (path === '/v3/automations/runs') return Response.json(await listAutomationRuns());
-            if (path === '/v3/automations/runs/workflow-storage') return Response.json(await listRuns(JSON.parse(String(init?.body))));
+            if (path === '/v3/automations/runs/workflow-storage') {
+                const input = JSON.parse(String(init?.body));
+                const result = await listRuns(input);
+                return Response.json(input.request?.projection === 'membership' && result && typeof result === 'object'
+                    ? { ...result, projection: 'membership' } : result);
+            }
             if (path === `/v1/artifacts/${artifactRead.id}`) {
                 if (refuseArtifactRead) return Response.json({ error: 'artifact_access_forbidden' }, { status: 403 });
                 if (init?.method === 'POST') {
@@ -183,15 +193,66 @@ describe('useInboxSummary workflow source', () => {
         storage.setState(initialState, true);
     });
 
-    it("counts the server's attention window in the badge, in the window the Workflows column reads", async () => {
+    it("counts compact server attention membership in the badge's canonical window", async () => {
         listRuns.mockResolvedValueOnce(page(['run-held', 'run-interrupted']));
 
         await renderSummary();
 
         expect(listRuns, JSON.stringify(attention)).toHaveBeenCalledTimes(1);
         expect(listRuns.mock.calls[0]?.[0].request.attention).toBe('required');
+        const request = listRuns.mock.calls[0]![0];
+        expect(Buffer.byteLength(JSON.stringify(request))).toBe(106);
+        expect(request.request.projection).toBe('membership');
         expect(latest).toEqual({ count: 2, hasContent: true });
         expect(storage.getState().workflowRunListWindows.attention?.runIds).toEqual(['run-held', 'run-interrupted']);
+    });
+
+    it('promotes the shell window only while Inbox rows are open, then removes cleared membership on the next wake', async () => {
+        const run = createWorkflowRunSummaryFixture({ id: 'release-review', ownerAccountId: 'account-a', state: 'interrupted',
+            origin: { kind: 'direct' } });
+        const materialized = await materializeWorkflowAcceptedSnapshotV1({ definition: createWorkflowDefinitionFixture({
+            blocks: [{ kind: 'wait', id: 'wait', document: { text: 'Continue', references: [], attachments: [] } }],
+        }),
+            admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true },
+            context: { source: { kind: 'inline' }, inputs: {}, machineId: run.machineId, executionTarget: { kind: 'session' },
+                workspaceTarget: { project: { machineId: run.machineId, directory: '/repo', checkoutRootPath: '/repo' } },
+                origin: { kind: 'direct' }, metadata: { title: 'Release review' }, authorization: { principal: { kind: 'host' } } } });
+        if (!materialized.ok) throw new Error(`fixture_materialization_failed:${materialized.error.code}`);
+        const envelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+            binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-a', runId: run.id }, acceptedSnapshot: materialized.snapshot }));
+        const census = WorkflowRunRecipientCensusResponseV1Schema.parse({ runId: run.id, ownerAccountId: 'account-a', access: 'owner',
+            encryptionMode: 'plain', dataEncryptionKey: null, callerDataEncryptionKey: null, recipients: [], visibleTeamId: null,
+            ownerAccountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null } });
+        const pending = createDeferred<void>();
+        listRuns.mockImplementation(async input => input.request.projection === 'membership'
+            ? { runs: [run], acceptedEnvelopesByRunId: {}, keyCensusByRunId: {} }
+            : (await pending.promise, { runs: [run], acceptedEnvelopesByRunId: { [run.id]: envelope }, keyCensusByRunId: { [run.id]: census } }));
+        let setOpen: (open: boolean) => void = () => {};
+        let inbox: InboxModel | null = null;
+        function ModelProbe() { inbox = useInboxModel(); return null; }
+        function Journey() {
+            const [open, update] = React.useState(false); setOpen = update;
+            return <InboxSummaryProvider><Probe />{open ? <InboxModelProvider><ModelProbe /></InboxModelProvider> : null}</InboxSummaryProvider>;
+        }
+        await renderScreen(<Journey />);
+        await waitForHomeGovernance(() => expect(latest?.count).toBe(1));
+        expect(listRuns).toHaveBeenCalledTimes(1);
+        expect(storage.getState().workflowRunsById).toEqual({});
+        await act(async () => setOpen(true));
+        await waitForHomeGovernance(() => expect(listRuns).toHaveBeenCalledTimes(2));
+        expect(inbox!.workflowAttention.phase).toBe('loading');
+        expect(inbox!.workGroups).toEqual([]);
+        await act(async () => pending.resolve());
+        await waitForHomeGovernance(() => expect(inbox!.workflowAttention.phase).toBe('loaded'));
+        expect(JSON.stringify(inbox!.workGroups)).toContain('Release review');
+        await act(async () => setOpen(false));
+        listRuns.mockResolvedValue(page([]));
+        await act(async () => publishHomeAccountChange(connection!.home.id, [`workflow-run:${run.id}`]));
+        await waitForHomeGovernance(() => expect(latest?.count).toBe(0));
+        expect(listRuns.mock.calls.map(([input]) => ({ projection: input.request.projection ?? 'full',
+            bytes: Buffer.byteLength(JSON.stringify(input)) }))).toEqual([
+            { projection: 'membership', bytes: 106 }, { projection: 'full', bytes: 80 }, { projection: 'membership', bytes: 106 },
+        ]);
     });
 
     it('counts an ordinary Automation failure with Workflows disabled', async () => {

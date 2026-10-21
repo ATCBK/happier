@@ -51,8 +51,8 @@ export const EMPTY_WORKFLOW_ATTENTION_SOURCE: WorkflowAttentionSource = Object.f
     loadMore: NOOP,
 });
 
-function useAttentionSource(windowId: WorkflowRunListWindowId, available: boolean): WorkflowAttentionSource {
-    const window = useWorkflowRunWindow(windowId, { enabled: available });
+function useAttentionSource(windowId: WorkflowRunListWindowId, available: boolean, projection?: 'membership'): WorkflowAttentionSource {
+    const window = useWorkflowRunWindow(windowId, { enabled: available, projection });
     const phase = !available ? 'idle' : window.knownAt !== null ? 'loaded' : window.status;
     return React.useMemo(() => available ? {
         serverId: window.serverId, available, phase, runIds: window.runIds,
@@ -71,7 +71,7 @@ const WorkflowAttentionSourceContext = React.createContext<Readonly<{
 export function WorkflowAttentionSourceProvider(props: Readonly<{ children: React.ReactNode }>) {
     const workflows = useWorkflowsAvailability();
     const automations = useFeatureDecision('automations', { scopeKind: 'runtime' });
-    const workflow = useAttentionSource('attention', workflows.available);
+    const workflow = useAttentionSource('attention', workflows.available, 'membership');
     // Ordinary failures remain available when structured Workflows are disabled.
     const automation = useAttentionSource('automationAttention', automations?.state === 'enabled');
     const source = React.useMemo(() => ({ workflow, automation }), [workflow, automation]);
@@ -94,6 +94,12 @@ export function WorkflowAttentionSourceBoundary(props: Readonly<{ children: Reac
 
 export function useWorkflowAttentionSource(): WorkflowAttentionSource {
     return React.useContext(WorkflowAttentionSourceContext)?.workflow ?? EMPTY_WORKFLOW_ATTENTION_SOURCE;
+}
+
+/** An open Inbox needs private rows; demand promotes the shell's same canonical window. */
+export function useFullWorkflowAttentionSource(): WorkflowAttentionSource {
+    const source = useWorkflowAttentionSource();
+    return useAttentionSource('attention', source.available);
 }
 
 export function useAutomationAttentionSource(): WorkflowAttentionSource {

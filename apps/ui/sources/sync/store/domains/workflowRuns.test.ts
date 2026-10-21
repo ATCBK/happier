@@ -70,6 +70,54 @@ function summary(input: Readonly<{
 }
 
 describe('workflow run body store', () => {
+    it('does not promote an older title after a newer full read becomes unavailable', () => {
+        const metadata = { kind: 'unavailable' as const, reason: 'run_access_denied' as const };
+        const harness = createHarness();
+        const run = summary({ id: 'private-revision', revision: 7 });
+        harness.get().applyWorkflowRunListPage({ windowId: 'all', runs: [run],
+            metadataByRunId: { [run.id]: { kind: 'available', value: { title: 'Old title' } } }, mode: 'replace', nextCursor: null });
+        const current = { ...run, revision: 8 };
+        harness.get().applyWorkflowRunListPage({ windowId: 'attention', runs: [current], projection: 'membership',
+            metadataByRunId: {}, mode: 'replace', nextCursor: null });
+        harness.get().applyWorkflowRunListPage({ windowId: 'all', runs: [current],
+            metadataByRunId: { [run.id]: metadata }, mode: 'replace', nextCursor: null });
+        const row = resolveWorkflowRunRows(harness.get().workflowRunsById, [run.id])[0];
+        expect(row?.metadata).toEqual(metadata);
+    });
+
+    it('keeps membership out of the full body map and preserves opened rows across compact refresh', () => {
+        const harness = createHarness();
+        const run = summary({ id: 'attention-member', revision: 7 });
+        const emptyBodies = harness.get().workflowRunsById;
+        harness.get().applyWorkflowRunListPage({ windowId: 'attention', runs: [run], projection: 'membership',
+            metadataByRunId: {}, mode: 'replace', nextCursor: 'membership-tail' });
+        expect(harness.get().workflowRunListWindows.attention?.runIds).toEqual([run.id]);
+        expect(resolveWorkflowRunRows(harness.get().workflowRunsById, [run.id])).toEqual([]);
+        expect(harness.get().workflowRunsById).toBe(emptyBodies);
+
+        const heldStep = { invocationId: 'held-review', label: 'Review the changelog', laneLabel: 'Changelog' };
+        // Another full window can finish before the pending compact attention read.
+        harness.get().applyWorkflowRunListPage({ windowId: 'all', runs: [{ ...run, heldStep }],
+            metadataByRunId: { [run.id]: { kind: 'available', value: { title: 'Release review' } } },
+            mode: 'replace', nextCursor: 'full-tail' });
+        const opened = resolveWorkflowRunRows(harness.get().workflowRunsById, [run.id])[0];
+        const openedBodies = harness.get().workflowRunsById;
+        expect(opened).toMatchObject({ metadata: { kind: 'available', value: { title: 'Release review' } }, summary: { heldStep } });
+        harness.get().applyWorkflowRunListPage({ windowId: 'attention', runs: [run], projection: 'membership',
+            metadataByRunId: {}, mode: 'replace', nextCursor: 'membership-tail' });
+        expect(resolveWorkflowRunRows(harness.get().workflowRunsById, [run.id])[0]).toBe(opened);
+        expect(harness.get().workflowRunsById).toBe(openedBodies);
+
+        harness.get().applyWorkflowRunListPage({ windowId: 'attention', runs: [{ ...run, revision: 8 }], projection: 'membership',
+            metadataByRunId: {}, mode: 'replace', nextCursor: null });
+        expect(resolveWorkflowRunRows(harness.get().workflowRunsById, [run.id])[0]).toBe(opened);
+        expect(harness.get().workflowRunsById).toBe(openedBodies);
+        const automation = automationRun({ id: run.id, revision: 9 });
+        harness.get().upsertWorkflowRuns([workflowRunRowFromAutomationRun(automation)]);
+        expect(resolveAutomationRunProjections(harness.get().workflowRunsById, [run.id])).toEqual([automation]);
+        expect(resolveWorkflowRunRows(harness.get().workflowRunsById, [run.id])[0]?.summary).toBe(opened?.summary);
+    });
+
     it('publishes Session relation membership with its qualified bodies and removes only the matching Home window', () => {
         const store = createStore<State>()((set, get) => createWorkflowRunsDomain({ set, get }));
         const scopes = [{ serverId: 'home-a', accountId: 'account' }, { serverId: 'home-b', accountId: 'account' }];
@@ -419,6 +467,7 @@ describe('workflow run body store', () => {
 
         expect(harness.get().workflowRunListWindows.attention).toEqual({
             runIds: ['run-1', 'run-2'], nextCursor: null, loaded: true,
+            frontier: { id: 'run-2', createdAt: Date.parse(summary({ id: 'run-2' }).createdAt) },
         });
         expect(resolveWorkflowRunRows(
             harness.get().workflowRunsById,

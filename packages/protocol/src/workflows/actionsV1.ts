@@ -183,6 +183,8 @@ export function parseWorkflowRunStartActionResultReferenceV1(
 export const WorkflowRunAttentionFilterV1Schema = lazyZodSchema(() => z.literal('required'));
 export const WorkflowRunListRequestV1Schema = lazyZodSchema(() => z.strictObject({
   cursor: zMini.optional(CursorSchema), limit: z.optional(PositivePagePreferenceSchema),
+  /** Public attention membership only; private facts are opened when a surface demands them. */
+  projection: z.optional(z.literal('membership')),
   /**
    * Exact-Run selection for background refresh and transcript initial
    * materialization. The page stays the lean list projection — Run summaries
@@ -208,7 +210,13 @@ export const WorkflowRunListRequestV1Schema = lazyZodSchema(() => z.strictObject
   underSessionId: zMini.optional(preservedBoundedNfcString(191, 'Session ids')),
   automationId: zMini.optional(preservedBoundedNfcString(191, 'Automation ids')),
   machineId: zMini.optional(WorkflowMachineIdV1Schema),
-}));
+}).check(z.superRefine((value, context) => {
+  if (value.projection !== 'membership') return;
+  if (value.attention !== 'required') context.addIssue({ code: 'custom', path: ['attention'], message: 'Membership requires attention selection' });
+  for (const key of ['originDiscussionId', 'targetSessionId', 'underSessionId', 'invocationProvenance'] as const) {
+    if (value[key] !== undefined) context.addIssue({ code: 'custom', path: [key], message: 'Membership cannot select private facts' });
+  }
+})));
 export const WorkflowRunPrivateMetadataV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('available'), value: WorkflowDefinitionMetadataV1Schema }),
   z.strictObject({ kind: z.literal('unavailable'), reason: WorkflowOperationErrorCodeV1Schema }),
@@ -217,6 +225,8 @@ export type WorkflowRunPrivateMetadataV1 = z.infer<typeof WorkflowRunPrivateMeta
 export const WorkflowRunCallerAccessV1Schema = lazyZodSchema(() => z.strictObject({ canEdit: z.boolean() }));
 export const WorkflowRunListResultV1Schema = lazyZodSchema(() => z.strictObject({
   runs: z.array(WorkflowRunSummaryV1Schema),
+  /** Absent means the existing complete private list projection, including readable untitled Runs. */
+  projection: z.optional(z.literal('membership')),
   /** Private authored support opened with the page; this grants no start/control authority. */
   supportsAnotherRoundByRunId: z.optional(z.record(z.string(), z.boolean())),
   callerAccessByRunId: z.optional(z.record(z.string(), WorkflowRunCallerAccessV1Schema)),
@@ -229,6 +239,17 @@ export const WorkflowRunListResultV1Schema = lazyZodSchema(() => z.strictObject(
   }))),
   nextCursor: zMini.optional(CursorSchema),
 }).check(z.superRefine((value, context) => {
+  if (value.projection === 'membership') {
+    if (Object.keys(value.metadataByRunId).length > 0 || Object.keys(value.supportsAnotherRoundByRunId ?? {}).length > 0
+      || Object.keys(value.callerAccessByRunId ?? {}).length > 0 || (value.invocationProvenance?.length ?? 0) > 0) {
+      context.addIssue({ code: 'custom', message: 'Membership does not carry private sidecars' });
+    }
+    for (const [index, run] of value.runs.entries()) {
+      for (const key of ['where', 'startedBy', 'heldStep', 'stepProgress', 'stepProgressCurrentness'] as const) {
+        if (run[key] !== undefined) context.addIssue({ code: 'custom', path: ['runs', index, key], message: 'Membership does not carry opened private facts' });
+      }
+    }
+  }
   const pageRunIds = new Set(value.runs.map((run) => run.id));
   for (const [index, fact] of (value.invocationProvenance ?? []).entries()) {
     if (!pageRunIds.has(fact.index.runId)) context.addIssue({ code: "custom",

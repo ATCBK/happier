@@ -8,7 +8,7 @@ import { prepareWorkflowRunDataKeyV1, resolveWorkflowRunDataKeyV1 } from '../../
 
 import { validateWorkflowDefinition } from '../../workflows/workflowValidationV1.js';
 import { materializeWorkflowAcceptedSnapshotV1 } from '../../workflows/materializeWorkflowAcceptedSnapshotV1.js';
-import { WorkflowRunGetResultV1Schema, WorkflowRunStartRequestV1Schema, WorkflowRunWaitRequestV1Schema } from '../../workflows/actionsV1.js';
+import { WorkflowRunGetResultV1Schema, WorkflowRunStartRequestV1Schema, WorkflowRunWaitRequestV1Schema, WorkflowRunListRequestV1Schema } from '../../workflows/actionsV1.js';
 import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '../../workflows/workflowStoredContentV1.js';
 import { WorkflowRunSummaryV1Schema, WorkflowRunInvocationIndexV1Schema, WorkflowProgressEnvelopeV1Schema } from '../../workflows/workflowProgressV1.js';
 import { openWorkflowAcceptedSnapshotStoredEnvelopeV1, parseWorkflowStoredContentEnvelopeV1 } from '../../workflows/workflowStoredContentV1.js';
@@ -86,6 +86,30 @@ function ownerDeps(storage: WorkflowAccountRunActionDeps['storage']): WorkflowAc
 }
 
 describe('shared Account workflow run owner', () => {
+  it('keeps membership private facts unrequested and rejects mismatched storage projection modes', async () => {
+    const snapshot = runSnapshot();
+    let projection: unknown = 'membership';
+    const owner = createWorkflowAccountRunActionOwner({ ...ownerDeps({ execute: async () => ({
+      runs: [snapshot.run], acceptedEnvelopesByRunId: {}, keyCensusByRunId: {}, rootProgressByRunId: {},
+      heldProgressByRunId: {}, ...(projection === undefined ? {} : { projection }), nextCursor: 'next',
+    }) }), resolveEncryption: async () => { throw new Error('membership_must_not_resolve_private_encryption'); } });
+    const input = WorkflowRunListRequestV1Schema.parse({ attention: 'required', projection: 'membership' });
+    expect(await owner.execute({ actionId: 'workflow.run.list', input, context: {} })).toEqual({
+      projection: 'membership', runs: [snapshot.run], metadataByRunId: {}, nextCursor: 'next',
+    });
+    for (const invalid of [undefined, 'full', null]) {
+      projection = invalid;
+      await expect(owner.execute({ actionId: 'workflow.run.list', input, context: {} }))
+        .rejects.toMatchObject({ code: 'content_unavailable' });
+    }
+    projection = 'membership';
+    await expect(owner.execute({ actionId: 'workflow.run.list', input: {}, context: {} }))
+      .rejects.toMatchObject({ code: 'content_unavailable' });
+    await expect(owner.execute({ actionId: 'workflow.run.list', input, context: {
+      externalActionTarget: { kind: 'machine', machineId: 'machine-a', project: { machineId: 'machine-a', directory: '/repo' } },
+    } })).rejects.toMatchObject({ code: 'target_unavailable' });
+  });
+
   it.each([401, 403])('preserves an untyped HTTP %s history refusal as access denied during Another round', async status => {
     if (!acceptedSnapshotResult.ok) throw new Error('snapshot_fixture_failed');
     const rounds = { ...definition, inputs: [{ name: 'previousRoundContext', valueType: 'json' as const, required: false }] };

@@ -58,7 +58,7 @@ import { useSessionContentDemand } from '@/sync/domains/session/useSessionConten
 import { useInboxFriendRequests } from './useInboxFriendRequests';
 import { useInboxDiscussionSource } from './useInboxDiscussionSource';
 import {
-    useWorkflowAttentionSource,
+    useFullWorkflowAttentionSource,
     useAutomationAttentionSource,
     WorkflowAttentionSourceBoundary,
     type WorkflowAttentionSource,
@@ -246,7 +246,7 @@ function useCreateInboxModel(): InboxModel {
         return header ? [{ artifact, header }] : [];
     }), [artifacts, profileScope?.accountId]);
     const openAccountNotices = React.useMemo(() => accountNotices.filter(entry => isOpenAccountNotice(entry.header)), [accountNotices]);
-    const workflowAttention = useWorkflowAttentionSource();
+    const workflowAttention = useFullWorkflowAttentionSource();
     const workflowRuns = useWorkflowRunRows(workflowAttention.runIds);
     const automationAttention = useAutomationAttentionSource();
     const automationRuns = useWorkflowRunRows(automationAttention.runIds);

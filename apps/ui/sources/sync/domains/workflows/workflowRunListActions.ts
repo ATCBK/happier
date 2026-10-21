@@ -55,12 +55,14 @@ export type WorkflowRunListFilter = Readonly<{
 }>;
 
 export type WorkflowRunListPage = Readonly<{
+    projection?: 'membership';
     runs: readonly WorkflowRunSummaryV1[];
     /**
-     * Sparse per-page private metadata: a missing key is a readable Run
+     * Full pages' sparse private metadata: a missing key is a readable Run
      * whose accepted snapshot opened but carries no authored title — the
      * canonical display projector names it Untitled — while an explicit
-     * `unavailable` value is content this host could not open.
+     * `unavailable` value is content this host could not open. Membership pages
+     * never open private content and leave this map empty instead.
      */
     metadataByRunId: Readonly<Record<string, WorkflowRunPrivateMetadataV1 | null>>;
     supportsAnotherRoundByRunId?: Readonly<Record<string, boolean>>;
@@ -74,6 +76,7 @@ export type WorkflowRunListPage = Readonly<{
  * filter, so a caller must not mix cursors across filters.
  */
 export async function listWorkflowRuns(params: Readonly<{
+    projection?: 'membership';
     filter?: WorkflowRunListFilter;
     cursor?: string;
     limit?: number;
@@ -88,6 +91,7 @@ export async function listWorkflowRuns(params: Readonly<{
     params.signal?.throwIfAborted();
     const request = WorkflowRunListRequestV1Schema.parse({
         ...(params.filter ?? {}),
+        ...(params.projection === undefined ? {} : { projection: params.projection }),
         ...(params.cursor === undefined ? {} : { cursor: params.cursor }),
         ...(params.limit === undefined ? {} : { limit: params.limit }),
     });
@@ -100,7 +104,7 @@ export async function listWorkflowRuns(params: Readonly<{
         ...(params.accountLifetime === undefined && accountLifetime === null ? {} : { accountLifetime }),
     });
     const sidecar = result.metadataByRunId;
-    const metadataByRunId: Record<string, WorkflowRunPrivateMetadataV1 | null> = Object.fromEntries(
+    const metadataByRunId: Record<string, WorkflowRunPrivateMetadataV1 | null> = result.projection === 'membership' ? {} : Object.fromEntries(
         result.runs.map((run) => [
             run.id,
             // An omitted key is the current host's readable untitled Run.
@@ -108,6 +112,7 @@ export async function listWorkflowRuns(params: Readonly<{
         ]),
     );
     return { runs: result.runs, metadataByRunId, nextCursor: result.nextCursor,
+        ...(result.projection === undefined ? {} : { projection: result.projection }),
         ...(result.supportsAnotherRoundByRunId ? { supportsAnotherRoundByRunId: result.supportsAnotherRoundByRunId } : {}),
         ...(result.callerAccessByRunId ? { callerAccessByRunId: result.callerAccessByRunId } : {}),
         ...(result.invocationProvenance ? { invocationProvenance: result.invocationProvenance } : {}) };
