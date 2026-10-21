@@ -1,16 +1,22 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 
 const network = await installSessionOpsNetworkBoundary();
 const { workspaceGetDirectoryTree } = await import('./workspaceFileSystem');
 const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
 let serverId: string;
-const TREE_ACTION = 'daemon.filesystem.getDirectoryTree';
+let accountId: string;
+let serverUrl: string;
+const executed: Array<{ input: unknown; machineId: string }> = [];
+const TREE_ACTION = 'daemon.filesystem.getDirectoryTree' as const;
 
 beforeEach(async () => {
     network.resetRequests();
-    serverId = (await network.addHome('https://directory-tree.test', 'directory-account')).id;
+    executed.length = 0;
+    const home = await network.addHome('https://directory-tree.test', 'directory-account', { serverIdentityId: 'srv_directory_tree' });
+    serverId = home.id; accountId = home.accountId; serverUrl = home.serverUrl;
 });
 afterEach(async () => {
     await serverScopedRpcSocketPool.stopAll();
@@ -21,7 +27,11 @@ afterAll(async () => { await network.dispose(); });
 describe('workspaceFileSystem policy choke point', () => {
     it('reads the exact Machine tree through real Action admission', async () => {
         const response = { success: true, tree: { name: 'repo', path: '~/repo', type: 'directory' } };
-        network.respond(TREE_ACTION, response);
+        // Filesystem Actions are admitted through the Account external-Action HTTP carrier; the Machine RPC is the far side of it.
+        const boundary = await createExternalActionAccountHttpBoundary({ serverUrl, serverIdentityId: 'srv_directory_tree', accountId,
+            machineId: 'machine-1', actionId: TREE_ACTION, tokenEpoch: 0,
+            execute: async (input, context) => { executed.push({ input, machineId: context.target.machineId }); return response; } });
+        network.setHttpResponder(async (input, init) => await boundary.handle(new URL(String(input)), init));
 
         await expect(
             workspaceGetDirectoryTree(
@@ -31,16 +41,7 @@ describe('workspaceFileSystem policy choke point', () => {
             ),
         ).resolves.toEqual(response);
 
-        expect(network.requests).toContainEqual(expect.objectContaining({
-            serverUrl: 'https://directory-tree.test',
-            targetId: 'machine-1',
-            method: TREE_ACTION,
-            payload: {
-                rootPath: '~/repo',
-                path: '~/repo/src',
-                maxDepth: 3,
-            },
-        }));
+        expect(executed).toContainEqual({ machineId: 'machine-1', input: { rootPath: '~/repo', path: '~/repo/src', maxDepth: 3 } });
     });
 
     it('enforces Account Action policy before any Machine RPC leaves the process', async () => {

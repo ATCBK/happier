@@ -29,7 +29,7 @@ export async function createExternalActionAccountHttpBoundary(params: Readonly<{
     | {
         requesterInvocation?: 'required';
         execute(input: unknown, context: Readonly<{
-            target: NonNullable<ExternalActionRequestEnvelopeV1['target']>;
+            target: Extract<NonNullable<ExternalActionRequestEnvelopeV1['target']>, { kind: 'machine' }>;
             invocation: ExternalActionRequesterInvocationV1;
             requestId?: string;
             signal?: AbortSignal | null;
@@ -39,7 +39,7 @@ export async function createExternalActionAccountHttpBoundary(params: Readonly<{
         /** Own Account Actions do not transfer private requester credentials. */
         requesterInvocation: 'none';
         execute(input: unknown, context: Readonly<{
-            target: NonNullable<ExternalActionRequestEnvelopeV1['target']>;
+            target: Extract<NonNullable<ExternalActionRequestEnvelopeV1['target']>, { kind: 'machine' }>;
             requestId?: string;
             signal?: AbortSignal | null;
         }>): Promise<unknown> | unknown;

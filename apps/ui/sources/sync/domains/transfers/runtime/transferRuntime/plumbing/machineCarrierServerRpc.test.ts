@@ -5,7 +5,7 @@ import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { MachinePublishedDaemonStateV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import { FilesystemDownloadInputSchema, FilesystemUploadInputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
-import { TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions/actionRpcTransport';
+import { createTargetedActionRpcRequestV1, TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions/actionRpcTransport';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import {
     PreparedTransferRpcRequestV1Schema,
@@ -13,10 +13,11 @@ import {
     resolvePreparedTransferRpcPhaseV1,
     type PreparedTransferRpcRequestV1,
 } from '@happier-dev/protocol/machines/transfer/preparedTransferRpcV1';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createDeferred } from '@/dev/testkit';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 import { parseBrowserIrohClientCommand, type BrowserIrohClientCommand, type BrowserIrohWorkerReply } from '@/sync/runtime/browserIroh/protocol';
 import type { BrowserIrohMessagePort } from '@/sync/runtime/browserIroh/workerConnection';
 
@@ -150,7 +151,8 @@ beforeEach(async () => {
     installHomeGovernanceBoundaries(homes);
     const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
     await loadSyncSingletonForTests();
-    serverId = await homes.addHome({ name: 'Prepared transfer Home', serverUrl: 'https://prepared-transfer.test', accountId: 'account-a' });
+    serverId = await homes.addHome({ name: 'Prepared transfer Home', serverUrl: 'https://prepared-transfer.test', accountId: 'account-a',
+        serverIdentityId: 'srv_prepared_transfer', currentAccount: true });
     homes.answer(serverId, '/v1/features', { body: FeaturesResponseSchema.parse({ features: {
         machines: { enabled: true, transfer: { enabled: true } },
     }, capabilities: {} }) });
@@ -163,7 +165,8 @@ beforeEach(async () => {
     homes.answer(serverId, `/v1/machines/${machineId}`, { body: { machine: row } });
     homes.answer(serverId, '/v1/machines', { body: [row] });
     homes.answer(serverId, '/v1/machines?includeRevoked=true', { body: [row] });
-    connection = await restoreServerAccountForTest({ serverUrl: 'https://prepared-transfer.test', accountId: 'account-a', request: homes.request });
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://prepared-transfer.test', accountId: 'account-a', serverIdentityId: 'srv_prepared_transfer',
+        credentials: { token: createAccountTokenForTests('account-a', { currentAccount: true }) }, request: homes.request });
     const { storage } = await import('@/sync/domains/state/storage');
     storage.getState().applyMachines([createMachineFixture({ id: machineId, storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
         daemonState })]);
@@ -280,6 +283,33 @@ describe('prepared transfer Home RPC carrier', () => {
             }
             return { ok: true, result: rpcResponse(body) };
         };
+        // Filesystem Actions are admitted through the Account external-Action HTTP carrier; the physical prepared-transfer
+        // phases then travel over the Home RPC carrier below.
+        const actionId = 'daemon.filesystem.download' as const;
+        const admittedActions: string[] = [];
+        const external = await createExternalActionAccountHttpBoundary({ serverUrl: 'https://prepared-transfer.test',
+            serverIdentityId: 'srv_prepared_transfer', accountId: 'account-a', machineId, actionId, tokenEpoch: 0,
+            execute: async (input, context) => {
+                admittedActions.push(actionId);
+                const result = await respond({ method: `${machineId}:${actionId}`,
+                    params: createTargetedActionRpcRequestV1(input, context.target) } as SocketRpcRequestPayload);
+                return (result as { result: unknown }).result;
+            } });
+        const preparedRow = { ...external.machine, daemonState: encodePlainMachineStoredContent(MachinePublishedDaemonStateV1Schema.parse({
+            status: 'running', transfer: { supported: { import: true, export: true }, listenerClasses: {
+                loopback_http: { enabled: false, configured: false, active: false },
+                tailscale_serve_https: { enabled: false, configured: false, active: false },
+            }, lifecycle: { mode: 'lazy_idle_shutdown', version: 1 } } })) };
+        homes.answer(serverId, `/v1/machines/${machineId}`, { body: { machine: preparedRow } });
+        homes.answer(serverId, '/v1/machines', { body: [preparedRow] });
+        homes.answer(serverId, '/v1/machines?includeRevoked=true', { body: [preparedRow] });
+        for (const path of [`/v1/actions/${actionId}/execution-authorization`, `/v1/actions/${actionId}`]) {
+            homes.answer(serverId, path, { select: async (_input, request) => {
+                const response = await external.handle(new URL(request.url), request.init);
+                if (!response) throw new Error(`Unhandled external Action boundary: ${request.url}`);
+                return { status: response.status, body: await response.json() };
+            } });
+        }
         const received: number[] = [];
         const target = { machineId, serverId, rootPath: '/repo' };
         const { resolveMachineCarrierRoute } = await import('./machineCarrierHttpLease');
@@ -301,8 +331,9 @@ describe('prepared transfer Home RPC carrier', () => {
         }
         // Preview selection and the bounded byte reader each admit the file
         // size; the accepted publication and byte phases must still run once.
+        expect(admittedActions).toEqual([actionId]);
         expect(outgoing.map(value => value.method)).toEqual([...(surface === 'preview' ? [RPC_METHODS.STAT_FILE, RPC_METHODS.STAT_FILE] : []),
-            'daemon.filesystem.download', RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_INIT,
+            RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_INIT,
             RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_CHUNK, RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_FINALIZE].map(method => `${machineId}:${method}`));
         const { getSyncSingleton } = await import('@/sync/runtime/getSyncSingleton');
         expect(getSyncSingleton().encryption).toBeNull();

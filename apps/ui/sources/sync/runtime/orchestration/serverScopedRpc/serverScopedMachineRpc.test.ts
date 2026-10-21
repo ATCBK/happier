@@ -649,10 +649,18 @@ describe('machineRpcWithServerScope', () => {
 
     it.each(['daemon.filesystem.upload', 'daemon.filesystem.download'] as const)('keeps concrete transfer custody mounted while blocking approval is pending (%s)', async (actionId) => {
         const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-        listServerProfilesSpy.mockReturnValue([{ id: 'server-a', serverUrl: 'https://server-a.example.test' }]);
-        getCredentialsSpy.mockResolvedValue({ token: TOKEN_A });
-        setRuntimeFetch(async input => {
-            const response = filesystemActionHomeResponse(input);
+        listServerProfilesSpy.mockReturnValue([{ id: 'server-a', serverUrl: 'https://server-a.example.test', serverIdentityId: 'srv_server_a' }]);
+        const { createAccountTokenForTests } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+        getCredentialsSpy.mockResolvedValue({ token: createAccountTokenForTests('account-a', { currentAccount: true }) });
+        let resolveResult!: (value: unknown) => void;
+        // Finite transfer Actions execute through the Home; the pending execution is the blocking approval.
+        const { createExternalActionAccountHttpBoundary } = await import('@/dev/testkit/harness/externalActionAccountHttpBoundary');
+        const homeBoundary = await createExternalActionAccountHttpBoundary({ serverUrl: 'https://server-a.example.test',
+            serverIdentityId: 'srv_server_a', accountId: 'account-a', machineId: 'machine-1', actionId, tokenEpoch: 0,
+            execute: async () => await new Promise(resolve => { resolveResult = resolve; }) });
+        setRuntimeFetch(async (input, init) => {
+            const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+            const response = filesystemActionHomeResponse(input) ?? await homeBoundary.handle(url, init);
             if (!response) throw new Error(`Unexpected Action Home request: ${String(input)}`);
             return response;
         });
@@ -663,11 +671,6 @@ describe('machineRpcWithServerScope', () => {
             getReadyServerFeaturesSpy.mockResolvedValue(createRootLayoutFeaturesResponse({ features: { machines: {
                 transfer: FeatureGatesSchema.parse({ machines: { enabled: true, transfer: { enabled: true } } }).machines.transfer,
             } } }));
-            let resolveResult!: (value: unknown) => void;
-            machineRpcSpy.mockImplementation(async (_machineId, _method, _params, options) => {
-                options?.onIssued?.();
-                return await new Promise(resolve => { resolveResult = resolve; });
-            });
             const { callFilesystemTransferAction } = await import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/filesystemTransferActionClient');
             const input = actionId === 'daemon.filesystem.upload'
                 ? { rootPath: '/repo', path: 'binary.dat', source: { sourceId: 'source-1', sizeBytes: 0 }, overwrite: false } satisfies FilesystemUploadInput
