@@ -30,6 +30,18 @@ describe('useModalCardDimensions', () => {
         standardCleanup();
     });
 
+    it('fits the modal host viewport when safe areas or the keyboard reduce the window', async () => {
+        const { renderHook } = await import('@/dev/testkit');
+        const { ModalBoundaryProvider } = await import('../../context/ModalBoundaryContext');
+        const { useModalCardDimensions } = await import('./useModalCardDimensions');
+        windowState.width = 1024;
+        windowState.height = 768;
+        const hook = await renderHook(() => useModalCardDimensions({ size: 'lg' }), {
+            wrapper: ({ children }) => <ModalBoundaryProvider viewport={{ width: 360, height: 420, bottomInset: 0 }}>{children}</ModalBoundaryProvider>,
+        });
+        expect(hook.getCurrent()).toEqual({ width: 320, maxHeight: 324 });
+    });
+
     it('clamps the modal card dimensions to the current window', async () => {
         const { renderHook } = await import('@/dev/testkit');
         const { useModalCardDimensions } = await import('./useModalCardDimensions');

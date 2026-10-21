@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet as ReactNativeStyleSheet, View } from 'react-native';
+import { StyleSheet as ReactNativeStyleSheet, Text, View } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -88,6 +88,21 @@ vi.mock('react-native-unistyles', async () => {
 });
 
 describe('BaseModal (native)', () => {
+    it.each([['center', 0], ['fullscreen', 16]] as const)('reports the rendered %s viewport without reserving its safe area twice', async (placement, bottomInset) => {
+        nativePlatform.os = 'ios';
+        const { BaseModal } = await import('./BaseModal');
+        const { useModalContentViewport } = await import('../context/ModalBoundaryContext');
+        function ViewportProbe() {
+            const viewport = useModalContentViewport();
+            return <Text>{viewport ? `${viewport.width}x${viewport.height}; bottom=${viewport.bottomInset}` : 'unmeasured'}</Text>;
+        }
+        const screen = await renderScreen(<BaseModal visible placement={placement}><ViewportProbe /></BaseModal>);
+        const scroll = screen.findAll(node => node.props.keyboardShouldPersistTaps === 'handled' && 'contentContainerStyle' in node.props)[0];
+        act(() => scroll.props.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width: 440, height: 860 } } }));
+        expect(screen.getTextContent()).toContain(`440x860; bottom=${bottomInset}`);
+        act(() => scroll.props.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width: 440, height: 480 } } }));
+        expect(screen.getTextContent()).toContain(`440x480; bottom=${bottomInset}`);
+    });
     it('keeps native Back and dialog custody without a motion frame for a stage', async () => {
         const { BaseModal } = await import('./BaseModal');
         const { OverlayMotionFrame } = await import('@/components/ui/overlays/motion/overlayMotion');
@@ -142,24 +157,6 @@ describe('BaseModal (native)', () => {
         expect(modalSurface?.props.accessibilityViewIsModal).toBe(true);
     });
 
-    it('pads the keyboard-aware modal frame by the safe area insets', async () => {
-        const { BaseModal } = await import('./BaseModal');
-
-        const screen = await renderScreen(
-            React.createElement(BaseModal, {
-                visible: true,
-                children: React.createElement('Child'),
-            }),
-        );
-
-        const container = screen.findByType(KeyboardAvoidingView);
-        const style = flattenStyleProp(container?.props?.style);
-        expect(style.paddingTop).toBe(24);
-        expect(style.paddingRight).toBe(12);
-        expect(style.paddingBottom).toBe(16);
-        expect(style.paddingLeft).toBe(10);
-    });
-
     it.each([['android', 120], ['android', 1200], ['ios', 120], ['ios', 1200]] as const)(
         'bottom-aligns a %s %i px phone sheet inside its keyboard-resized scroll viewport', async (platform, height) => {
         nativePlatform.os = platform;
@@ -170,7 +167,6 @@ describe('BaseModal (native)', () => {
         const keyboard = screen.findByType(KeyboardAvoidingView);
         expect(keyboard.props.enabled).toBe(true);
         expect(keyboard.props.behavior).toBe(platform === 'android' ? 'height' : 'padding');
-        expect(flattenStyleProp(keyboard.props.style)).toMatchObject({ paddingTop: 24, paddingLeft: 10, paddingRight: 12, paddingBottom: 0 });
         const scroll = screen.findAll((node) => node.props.keyboardShouldPersistTaps === 'handled' && 'contentContainerStyle' in node.props)[0];
         // flexGrow retains the viewport for short sheets; overflow remains owned by this ScrollView.
         expect(flattenStyleProp(scroll.props.contentContainerStyle)).toMatchObject({ flexGrow: 1, justifyContent: 'flex-end' });
@@ -183,8 +179,6 @@ describe('BaseModal (native)', () => {
         const screen = await renderScreen(<BaseModal visible><View style={{ height: 120 }} /></BaseModal>);
         const scroll = screen.findAll((node) => node.props.keyboardShouldPersistTaps === 'handled' && 'contentContainerStyle' in node.props)[0];
         expect(flattenStyleProp(scroll.props.contentContainerStyle).justifyContent).toBe('center');
-        const keyboard = screen.findByType(KeyboardAvoidingView);
-        expect(flattenStyleProp(keyboard.props.style).paddingBottom).toBe(16);
     });
 
     it('bottom-aligns a bounded sheet while leaving its body as the sole scroll owner', async () => {

@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { useWindowDimensions } from 'react-native';
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
+import { useModalContentViewport } from '../../context/ModalBoundaryContext';
 
 export type ModalCardSizePreset = 'dialog' | 'md' | 'lg';
 
@@ -121,8 +122,10 @@ export function resolveModalCardDimensions(
 
 export function useModalCardDimensions(options: ModalCardDimensionOptions = {}): ModalCardDimensions {
     const windowDimensions = useWindowDimensions();
+    const modalViewport = useModalContentViewport();
+    const viewport = modalViewport ?? windowDimensions;
     return React.useMemo(
-        () => resolveModalCardDimensions(windowDimensions, options),
-        [options, windowDimensions.height, windowDimensions.width],
+        () => resolveModalCardDimensions(viewport, options),
+        [options, viewport.height, viewport.width],
     );
 }

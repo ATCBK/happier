@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect } from 'react';
-import { View, TouchableWithoutFeedback, Animated, BackHandler, Platform, ScrollView, type ViewStyle } from 'react-native';
+import { View, TouchableWithoutFeedback, Animated, BackHandler, Platform, ScrollView, type LayoutChangeEvent, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { KeyboardAwareModalFrame } from '@/components/ui/keyboardAvoidance';
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
@@ -126,6 +126,15 @@ export function BaseModal({
     );
     const { blurEnabled: materialBlurEnabled } = useGlassBlurSetting();
     const insets = useChromeSafeAreaInsets();
+    const [nativeViewportSize, setNativeViewportSize] = React.useState<Readonly<{ width: number; height: number }> | null>(null);
+    const onNativeViewportLayout = React.useCallback((event: LayoutChangeEvent) => {
+        const { width, height } = event.nativeEvent.layout;
+        setNativeViewportSize(previous => previous?.width === width && previous.height === height ? previous : { width, height });
+    }, []);
+    const nativeContentViewport = React.useMemo(() => nativeViewportSize ? {
+        ...nativeViewportSize,
+        bottomInset: placement === 'center' ? 0 : insets.bottom,
+    } : null, [nativeViewportSize, placement, insets.bottom]);
     const baseZ = zIndexBase ?? MODAL_Z_INDEX;
     const inheritedWebPortalTarget = useModalPortalTarget();
     const [modalPortalTarget, setModalPortalTarget] = React.useState<HTMLElement | null>(null);
@@ -432,10 +441,14 @@ export function BaseModal({
         >
             <OverlayPortalProvider>
                 <KeyboardAwareModalFrame
-                    style={[
+                    style={styles.container}
+                    contentContainerStyle={[
                         styles.container,
                         placement === 'bottom' ? styles.containerBottom : null,
                         {
+                            // Keyboard-controller owns the outer paddingBottom animation.
+                            // Keep safe-area padding on its ordinary content View.
+                            alignSelf: 'stretch',
                             paddingTop: placement === 'fullscreen' ? 0 : insets.top,
                             paddingRight: placement === 'fullscreen' ? 0 : insets.right,
                             paddingBottom: placement !== 'center' ? 0 : insets.bottom,
@@ -471,10 +484,11 @@ export function BaseModal({
                             placement === 'fullscreen' ? styles.contentFullscreen : null,
                         ]}
                     >
-                        <ModalBoundaryProvider>
+                        <ModalBoundaryProvider viewport={nativeContentViewport}>
                             {/* Keep the body's native parent when chrome transfers scroll ownership. */}
                             <ScrollView
                                 ref={nativeScrollRef}
+                                onLayout={onNativeViewportLayout}
                                 style={styles.scrollContainer}
                                 contentContainerStyle={[styles.scrollContent, placement === 'bottom' ? styles.scrollContentBottom : null]}
                                 scrollEnabled={scrollHost === 'overlay'}

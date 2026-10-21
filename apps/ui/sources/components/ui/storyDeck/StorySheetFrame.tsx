@@ -13,6 +13,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { shadowLevelStyle } from '@/shadowElevation';
+import { useModalContentViewport } from '@/modal/context/ModalBoundaryContext';
 
 import { resolveStoryDeckPresentation } from './storyDeckPresentation';
 
@@ -87,7 +88,9 @@ const stylesheet = StyleSheet.create((theme) => ({
 export function StorySheetFrame(props: StorySheetFrameProps) {
     useUnistyles();
     const styles = stylesheet;
-    const { width, height } = useWindowDimensions();
+    const windowDimensions = useWindowDimensions();
+    const modalViewport = useModalContentViewport();
+    const { width, height } = modalViewport ?? windowDimensions;
     const insets = useChromeSafeAreaInsets();
     const reducedMotion = useReducedMotionPreference();
 
@@ -191,7 +194,7 @@ export function StorySheetFrame(props: StorySheetFrameProps) {
             style={[
                 containerStyle,
                 isPhoneSheet ? { width, height } : null,
-                { paddingBottom: isPhoneSheet ? insets.bottom : 0 },
+                { paddingBottom: isPhoneSheet ? modalViewport?.bottomInset ?? insets.bottom : 0 },
             ]}
             testID={props.testID}
             pointerEvents="box-none"
