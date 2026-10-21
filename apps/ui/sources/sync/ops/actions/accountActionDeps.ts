@@ -5,6 +5,7 @@ import { resolveVisibleMachinesForActiveServerFromState } from '@/sync/store/dom
 import type { ActionAccountContext, LazyActionAccountContext } from './actionAccountContext';
 import { executeOriginalAccountMachineAction } from '@/sync/api/externalActionAccountTransport';
 import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import {
     createUiAccountActionTransport,
     type AccountActionTransport,
@@ -12,10 +13,23 @@ import {
 } from './accountActionTransport';
 
 /** The existing Account relay's serving machine; shared by its cold projection readers. */
-export function resolveUiAccountActionFallbackMachineId(account: Pick<ActionAccountContext, 'serverId' | 'accountId'>): string | null {
-    return areServerProfileIdentifiersEquivalent(getActiveServerSnapshot().serverId, account.serverId)
-        ? resolveVisibleMachinesForActiveServerFromState(storage.getState()).find((machine) => isMachineReachable(account, machine))?.id ?? null
-        : null;
+export function resolveUiAccountActionFallbackMachineId(account: Pick<ActionAccountContext, 'serverId' | 'accountId'>,
+    options?: Readonly<{
+        candidateMachineIds?: readonly string[];
+        target?: ActionExecutorContext['externalActionTarget'];
+        /** Registry's user-triggered refresh retries its supplier after a failed request. */
+        allowUnreachableFallback?: boolean;
+    }>): string | null {
+    if (!areServerProfileIdentifiersEquivalent(getActiveServerSnapshot().serverId, account.serverId)) return null;
+    const machines = resolveVisibleMachinesForActiveServerFromState(storage.getState(), account);
+    const candidateMachineIds = options?.candidateMachineIds;
+    const candidates = candidateMachineIds === undefined ? machines
+        : machines.filter(machine => candidateMachineIds.includes(machine.id));
+    const target = options?.target;
+    if (target) return target.kind === 'machine'
+        ? candidates.find(machine => machine.id === target.machineId)?.id ?? null : null;
+    return candidates.find(machine => isMachineReachable(account, machine))?.id
+        ?? (options?.allowUnreachableFallback ? candidates[0]?.id ?? null : null);
 }
 
 /** Compose the existing machine relay with the invocation's captured Account. */

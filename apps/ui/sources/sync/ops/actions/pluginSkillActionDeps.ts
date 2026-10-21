@@ -9,6 +9,7 @@ import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plu
 import { readPluginUiContributionSupplies } from '@/sync/domains/plugins/ui/projectionUnion';
 import { randomUUID } from '@/platform/randomUUID';
 import type { LazyActionAccountContext } from './actionAccountContext';
+import { resolveUiAccountActionFallbackMachineId } from './accountActionDeps';
 
 function sources(account: LazyActionAccountContext) {
     const projection = readCurrentAppShellPluginUiProjection({ scope: account, declarationsOnly: true });
@@ -20,21 +21,12 @@ function sources(account: LazyActionAccountContext) {
 type Source = ReturnType<typeof sources>[number];
 const unavailable = (code: string): never => { throw Object.assign(new Error(code), { code }); };
 
-async function accountExecutor(account: LazyActionAccountContext) {
-    const [{ storage }, { resolveVisibleMachinesForActiveServerFromState }, { isMachineReachable }] = await Promise.all([
-        import('@/sync/domains/state/storageStore'), import('@/sync/store/domains/machines/resolveMachinesForActiveServerFromState'),
-        import('@/sync/domains/machines/reachability/machineReachability'),
-    ]);
-    const machines = resolveVisibleMachinesForActiveServerFromState(storage.getState(), account);
-    // This Machine executes the Account Action; the canonical Account owner may read a different supplier.
-    const machine = machines.find(machine => isMachineReachable(account, machine)) ?? machines[0];
-    if (!machine) return unavailable('needs_machine');
-    return machine.id;
-}
-
-async function execute(account: LazyActionAccountContext, context: ActionExecutorContext, machineId: string, actionId: ActionId, input: unknown) {
+async function execute(account: LazyActionAccountContext, context: ActionExecutorContext, actionId: ActionId, input: unknown) {
     const { executeOriginalAccountMachineAction } = await import('@/sync/api/externalActionAccountTransport');
     account.assertCurrent(); context.signal?.throwIfAborted();
+    // The carrier executes the Account Action; the Account owner may read a different supplier.
+    const machineId = resolveUiAccountActionFallbackMachineId(account, { target: context.externalActionTarget });
+    if (!machineId) return unavailable('needs_machine');
     const result = await executeOriginalAccountMachineAction({ account, machineId, actionId, input,
         requestId: context.actionRequestId ?? randomUUID(), authority: context.authority,
         actionCaller: context.actionCaller, signal: context.signal }).catch((error: unknown) => {
@@ -61,7 +53,7 @@ export async function readUiPluginSkillItemsV1(account: LazyActionAccountContext
     const expected = sources(account).filter(source => !skillIds || skillIds.includes(source.skillId));
     if (!expected.length) return [];
     const received = await readAvailablePluginSkillItemsV1(async () => SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(await execute(account, context,
-        await accountExecutor(account), 'skills.list', input)).items, context.signal);
+        'skills.list', input)).items, context.signal);
     account.assertCurrent(); context.signal?.throwIfAborted();
     const current = new Map(sources(account).map(source => [source.skillId, source]));
     const expectedIds = new Set(expected.map(source => source.skillId));
@@ -75,7 +67,7 @@ export async function readUiPluginSkillV1(account: LazyActionAccountContext, req
     if (!('skillId' in request)) return unavailable('not_found');
     const source = sources(account).find(source => source.skillId === request.skillId);
     if (!source) return unavailable('not_found');
-    const result = SkillReadResultV1Schema.parse(await execute(account, context, await accountExecutor(account), 'skills.read', request));
+    const result = SkillReadResultV1Schema.parse(await execute(account, context, 'skills.read', request));
     const current = sources(account).find(source => source.skillId === result.skillId);
     if (!sources(account).some(source => source.skillId === request.skillId)) return unavailable('not_found');
     if (result.skillId !== request.skillId || !current || !owns(current, result)) return unavailable('skill_content_unavailable');

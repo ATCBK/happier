@@ -11,6 +11,7 @@ import { createUiRegistryHttpV1 } from './registryHttpV1';
 import { projectPluginRegistrySources } from './pluginRegistrySources';
 import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
 import { invalidatePromptLibraryCatalogAfterAcknowledgedMutation } from '@/sync/engine/settings/promptLibraryCatalogEngine';
+import { resolveUiAccountActionFallbackMachineId } from '@/sync/ops/actions/accountActionDeps';
 
 type RegistrySessionMemo = { values: Map<string, unknown>; pending: Map<string, Readonly<{ account: LazyActionAccountContext; signal?: AbortSignal; promise: Promise<unknown> }>>;
     refreshReads: Set<string>; rateLimitedUntil: Map<string, number>; sourceSignature: string | null };
@@ -66,44 +67,34 @@ export async function createUiRegistryHostV1(account: LazyActionAccountContext, 
             requestId: context.actionRequestId ?? randomUUID(), authority: context.authority,
             actionCaller: context.actionCaller, signal: context.signal });
     };
-    const machineForSource = async (source?: RegistrySourceDescriptorV1 | null) => {
-        const [{ storage }, { resolveVisibleMachinesForActiveServerFromState }, { isMachineReachable }] = await Promise.all([
-            import('@/sync/domains/state/storageStore'), import('@/sync/store/domains/machines/resolveMachinesForActiveServerFromState'),
-            import('@/sync/domains/machines/reachability/machineReachability'),
-        ]);
-        const machines = resolveVisibleMachinesForActiveServerFromState(storage.getState(), account);
-        const candidates = source?.origin.kind === 'plugin' ? machines.filter(machine => source.origin.kind === 'plugin' && source.origin.suppliers.includes(machine.id)) : machines;
-        if (context.externalActionTarget?.kind === 'machine') {
-            const machineId = context.externalActionTarget.machineId;
-            return candidates.find(machine => machine.id === machineId);
-        }
-        return candidates.find(machine => isMachineReachable(account, machine))
-            ?? (options?.explicitRefresh ? candidates[0] : undefined);
-    };
+    const carrierForSource = (source?: RegistrySourceDescriptorV1 | null) => resolveUiAccountActionFallbackMachineId(account, {
+        candidateMachineIds: source?.origin.kind === 'plugin' ? source.origin.suppliers : undefined,
+        target: context.externalActionTarget, allowUnreachableFallback: options?.explicitRefresh,
+    });
     const executeActionForSource = async (sourceId: string, actionId: ActionId, input: unknown) => {
         const source = (await readSources()).find(source => source.id === sourceId);
         if (!source) throw new RegistryFetchErrorV1({ state: 'invalid_source' });
-        const machine = await machineForSource(source);
-        if (!machine) throw new RegistryFetchErrorV1({ state: 'needs_machine' });
-        return executeOnMachine(machine.id, actionId, input);
+        const machineId = carrierForSource(source);
+        if (!machineId) throw new RegistryFetchErrorV1({ state: 'needs_machine' });
+        return executeOnMachine(machineId, actionId, input);
     };
     const host = createRegistryHostV1({ host: Platform.OS === 'web' ? 'web' : 'native', signal: context.signal,
         http: createUiRegistryHttpV1(runtimeFetch, context.signal, Date.now, memo.rateLimitedUntil), readSources,
         mutateSources: mutation => updatePromptLibraryRegistrySourcesV1(port, mutation, context.signal),
         updates: async filter => {
             account.assertCurrent(); context.signal?.throwIfAborted();
-            const machine = await machineForSource();
-            if (!machine) throw new RegistryFetchErrorV1({ state: 'needs_machine' });
-            const result = await executeOnMachine(machine.id, 'registries.updates.check', filter ?? {});
+            const machineId = carrierForSource();
+            if (!machineId) throw new RegistryFetchErrorV1({ state: 'needs_machine' });
+            const result = await executeOnMachine(machineId, 'registries.updates.check', filter ?? {});
             account.assertCurrent(); context.signal?.throwIfAborted();
             if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode, details: result.details });
             return REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.updates.check'].parse(result.result);
         },
         createSourceOnDaemon: async input => {
             account.assertCurrent();context.signal?.throwIfAborted();
-            const machine=await machineForSource();
-            if(!machine)throw new RegistryFetchErrorV1({state:'needs_machine'});
-            const result=await executeOnMachine(machine.id,'registries.sources.create',input);
+            const machineId=carrierForSource();
+            if(!machineId)throw new RegistryFetchErrorV1({state:'needs_machine'});
+            const result=await executeOnMachine(machineId,'registries.sources.create',input);
             if(!result.ok)throw Object.assign(new Error(result.error),{code:result.errorCode,details:result.details});
             const created=REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.sources.create'].parse(result.result);
             // The daemon wrote the Account row; a write from this client revalidates its own copy, this one must too.
@@ -116,8 +107,8 @@ export async function createUiRegistryHostV1(account: LazyActionAccountContext, 
                 readSources(), import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc'),
             ]);
             const source = 'sourceId' in request ? sources.find(source => source.id === request.sourceId) : null;
-            const machine = await machineForSource(source);
-            if (!machine) return { op: 'error', status: { state: 'needs_machine' } };
+            const machineId = carrierForSource(source);
+            if (!machineId) return { op: 'error', status: { state: 'needs_machine' } };
             if (source?.token && (request.op === 'list' || request.op === 'read')) {
                 // A raw shared-Machine request has custodian custody. The
                 // incumbent Action carrier admits this exact requester's Home.
@@ -126,32 +117,32 @@ export async function createUiRegistryHostV1(account: LazyActionAccountContext, 
                     ...(request.query === undefined ? {} : { query: request.query }), ...(request.cursor === undefined ? {} : { cursor: request.cursor }) }
                     : { kind: request.kind, sourceId: request.sourceId, itemId: request.itemId,
                         ...(request.version === undefined ? {} : { version: request.version }) };
-                const result = await executeOnMachine(machine.id, actionId, input);
+                const result = await executeOnMachine(machineId, actionId, input);
                 account.assertCurrent(); context.signal?.throwIfAborted();
                 if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode, details: result.details });
                 if (actionId === 'registries.items.list') {
                     const page = REGISTRY_ACTION_OUTPUT_SCHEMAS_V1[actionId].parse(result.result).pages.find(page => page.sourceId === request.sourceId);
                     if (!page) throw new RegistryFetchErrorV1({ state: 'invalid_source' });
-                    return { op: 'list', page: { ...page, machineId: machine.id } };
+                    return { op: 'list', page: { ...page, machineId } };
                 }
                 return { op: 'read', item: REGISTRY_ACTION_OUTPUT_SCHEMAS_V1[actionId].parse(result.result).item };
             }
             if (request.op === 'files') {
                 const { downloadRegistrySkillFiles } = await import('@/sync/domains/transfers/runtime/transferRuntime/families/registryTransfers');
-                const downloaded = await downloadRegistrySkillFiles(machine.id, { kind: 'skill', sourceId: request.sourceId,
+                const downloaded = await downloadRegistrySkillFiles(machineId, { kind: 'skill', sourceId: request.sourceId,
                     itemId: request.itemId, version: request.version }, { serverId: account.serverId, signal: context.signal });
                 account.assertCurrent(); context.signal?.throwIfAborted();
                 if (!downloaded.ok) throw new Error(downloaded.error);
                 return { op: 'files', files: downloaded.payload };
             }
             const payload: RegistryFetchRequestV1 = RegistryFetchRequestV1Schema.parse(request);
-            const response = await withActionAccountRequestSignal(account, context.signal, signal => machineRpcWithServerScope<unknown, RegistryFetchRequestV1>({ machineId: machine.id,
+            const response = await withActionAccountRequestSignal(account, context.signal, signal => machineRpcWithServerScope<unknown, RegistryFetchRequestV1>({ machineId,
                 serverId: account.serverId, accountId: account.accountId, preferScoped: true, method: 'daemon.registries.fetch', payload,
                 authorization: context.rpcSessionAuthorization, signal, operationTimeoutMs: null,
                 requestId: context.actionRequestId ?? undefined, onDispatched: account.assertCurrent }));
             account.assertCurrent(); context.signal?.throwIfAborted();
             const parsed = RegistryFetchResponseV1Schema.parse(response);
-            return parsed.op === 'list' ? { ...parsed, page: { ...parsed.page, machineId: machine.id } } : parsed;
+            return parsed.op === 'list' ? { ...parsed, page: { ...parsed.page, machineId } } : parsed;
         },
     });
     const execute = async (actionId: RegistryActionIdV1, input: unknown): Promise<unknown> => {
