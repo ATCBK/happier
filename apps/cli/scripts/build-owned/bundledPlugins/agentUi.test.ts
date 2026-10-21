@@ -10,6 +10,7 @@ import { ScriptKind, ScriptTarget, createSourceFile, isCallExpression, isIdentif
 
 import { renderBundledAgentPresentationTs, renderUiBundledPluginEntriesTs } from './agentUi.ts';
 import { CLAUDE_UI_DESCRIPTOR } from '../../../../../packages/plugins/claude/src/ui/descriptor';
+import { PLUGIN_MANIFEST as CLAUDE_MANIFEST } from '../../../../../packages/plugins/claude/src/manifest';
 import { renderCliBundledPluginEntriesTs, renderCliBundledPluginManifestEntriesTs } from './registry.ts';
 import { renderAgentIdsTs } from './agentFacts.ts';
 import type { BundledPluginPackage } from './projectionFacts.ts';
@@ -38,6 +39,29 @@ function emittedMapKeys(source: string, name: string): string[] {
 }
 
 describe('bundled Agent exclusion projections', () => {
+    it('preserves the declared Claude organization usage requirement in the bundled account fallback', () => {
+        const parsed = ingestPluginManifestV2(CLAUDE_MANIFEST);
+        if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
+        const pluginPackages: readonly BundledPluginPackage[] = [{
+            pluginPackageId: 'claude', pluginId: parsed.manifest.id, packageName: '@happier-dev/plugins-claude',
+            packageVersion: '0.0.0', agentId: 'claude', manifest: parsed.manifest,
+            agentUiDescriptor: CLAUDE_UI_DESCRIPTOR,
+        }];
+        const source = renderUiBundledPluginEntriesTs({ packageNames: [], pluginPackages });
+        const file = createSourceFile('projection.ts', source, ScriptTarget.Latest, true, ScriptKind.TS);
+        const declaration = file.statements.find(statement => isVariableStatement(statement)
+            && statement.declarationList.declarations.some(entry => isIdentifier(entry.name)
+                && entry.name.text === 'BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS'));
+        if (!declaration) throw new Error('Missing bundled account fallback');
+        const exports: Record<string, unknown> = {};
+        runInNewContext(transpileModule(declaration.getText(file), { compilerOptions: { module: ModuleKind.CommonJS } }).outputText, { exports });
+        expect(exports.BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS).toMatchObject({
+            'happier.agent.claude/claude-subscription': {
+                descriptor: { usageIdentity: { requiredContext: 'organization' } },
+            },
+        });
+    });
+
     it('publishes exact contributed presentation through the existing no-execute producer', () => {
         const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find(entry => entry.pluginId === 'happier.agent.claude');
         const parsed = ingestPluginManifestV2(locator ? readBundledPluginManifest(locator) : undefined);
