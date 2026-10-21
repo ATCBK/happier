@@ -125,10 +125,11 @@ const artifactInventoryReads = createScopedResolutionSingleFlight<ArtifactListPa
 
 function captureArtifactReadBinding(opts: Pick<ArtifactApiOptions, 'request' | 'readTransport'>) {
     const active = getActiveServerSnapshot();
-    const activeRequest = opts.request ? undefined : createServerFetchForActiveServer(active);
+    const activeRequest = opts.request || opts.readTransport ? undefined : createServerFetchForActiveServer(active);
+    const key = opts.readTransport?.key;
     // Opaque callbacks may own another caller's cancellation or carrier lease.
     // Only a proven neutral binding can share its physical continuation.
-    const scope = opts.readTransport?.key ?? (opts.request ? {} : JSON.stringify([
+    const scope = opts.readTransport?.scope ?? key ?? (opts.request ? {} : JSON.stringify([
         active.serverId, active.serverUrl, active.generation, readHomeAccountReadRevision(active.serverId),
     ]));
     const read = async <T>(path: string, init: RequestInit, consume: (response: Response) => Promise<T>): Promise<T> => {
@@ -137,7 +138,7 @@ function captureArtifactReadBinding(opts: Pick<ArtifactApiOptions, 'request' | '
         if (activeRequest) return activeRequest(path, init, options, consume);
         return consume(await opts.request!(path, init, options));
     };
-    return { scope, read };
+    return { scope, key, read };
 }
 
 /** Both HTTP read forms retain the incumbent single-read status classification. */
@@ -162,7 +163,7 @@ export async function fetchArtifactReadBatch(credentials: AuthCredentials, artif
     if (artifactIds.length === 0) return [];
     ArtifactReadBatchInputV1Schema.parse({ artifactIds });
     const binding = captureArtifactReadBinding(opts);
-    const result = await artifactDetailReads.run(JSON.stringify(['artifact-detail-census', resolveAuthCredentialsScopeKey(credentials)]),
+    const result = await artifactDetailReads.run(JSON.stringify(['artifact-detail-census', binding.key, resolveAuthCredentialsScopeKey(credentials)]),
         artifactIds, async (demandedIds, sharedSignal) => {
             const items = new Map<string, ArtifactReadBatchItem>();
             const batches: string[][] = [];
@@ -367,7 +368,7 @@ export async function fetchArtifactListPage(credentials: AuthCredentials, opts: 
     if (opts.includeBody) query.set('includeBody', 'true');
     if (filtered && opts.coarseKind) query.set('kind', opts.coarseKind);
     const search = query.toString();
-    const key = JSON.stringify(['artifact-inventory', resolveAuthCredentialsScopeKey(credentials), search, opts.ownerAccountId, opts.retry ?? 'default']);
+    const key = JSON.stringify(['artifact-inventory', binding.key, resolveAuthCredentialsScopeKey(credentials), search, opts.ownerAccountId, opts.retry ?? 'default']);
     const result = await artifactInventoryReads.run(key, async sharedSignal => {
         const run = () => {
             throwIfAborted(sharedSignal);
@@ -413,7 +414,7 @@ export async function fetchArtifact(
 ): Promise<Artifact> {
     throwIfAborted(opts.signal);
     const binding = captureArtifactReadBinding(opts);
-    const key = JSON.stringify(['artifact-opaque-detail', resolveAuthCredentialsScopeKey(credentials), artifactId, opts.retry ?? 'default']);
+    const key = JSON.stringify(['artifact-opaque-detail', binding.key, resolveAuthCredentialsScopeKey(credentials), artifactId, opts.retry ?? 'default']);
     const result = await artifactOpaqueReads.run(key, async sharedSignal => {
         const run = () => {
             throwIfAborted(sharedSignal);

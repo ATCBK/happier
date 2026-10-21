@@ -81,7 +81,8 @@ export async function readMachineRows(params: Readonly<{
     /** Conditional mutation/readback witnesses must not borrow an older read. */
     fresh?: boolean;
 }>): Promise<ReadonlyMap<string, MachinePublishedRowV1 | null>> {
-    return selectedReads.run('machine-exact-v1', params.machineIds, async (ids, signal) => {
+    const transportKey = params.readTransport.key;
+    return selectedReads.run(JSON.stringify(['machine-exact-v1', transportKey]), params.machineIds, async (ids, signal) => {
         const emptyBody = { machineIds: [] as string[] };
         const batches: string[][] = [];
         let budget = createServerHttpRequestBodyItemBudgetV1(emptyBody);
@@ -116,7 +117,7 @@ export async function readMachineRows(params: Readonly<{
             if (expected.size) throw new Error('Incomplete Machine batch response');
         }
         return result;
-    }, { scope: params.readTransport.key, signal: params.signal, fresh: params.fresh });
+    }, { scope: params.readTransport.scope ?? transportKey, signal: params.signal, fresh: params.fresh });
 }
 
 /** The complete include-revoked census remains a different projection from exact selection. */
@@ -137,9 +138,10 @@ export async function readMachineCensus(params: Readonly<{
     if (!params.readTransport) return consume(await params.request(path, { headers: params.headers, signal: params.signal }));
     const headers = new Headers(params.headers);
     headers.delete('Authorization');
-    return censusReads.run('machine-census-include-revoked-v1', signal => params.readTransport!.read(path,
+    const transportKey = params.readTransport.key;
+    return censusReads.run(JSON.stringify(['machine-census-include-revoked-v1', transportKey]), signal => params.readTransport!.read(path,
         { method: 'GET', headers, signal }, undefined, consume),
-    { scope: params.readTransport.key, signal: params.signal, fresh: params.fresh });
+    { scope: params.readTransport.scope ?? transportKey, signal: params.signal, fresh: params.fresh });
 }
 
 export function resetMachineRowReadsForTests(): void {

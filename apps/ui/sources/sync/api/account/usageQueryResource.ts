@@ -13,6 +13,7 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import { areServerAccountScopesEqual, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { getServerProfileById, areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { createServerFetchAtEndpoint, type ServerFetch } from '@/sync/http/client';
+import { bindAccountEncryptionObservation, captureAccountEncryptionObservationForHome } from '@/sync/http/accountEncryptionObservationBinding';
 import { resolveServerScopedTransport } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerScopedTransport';
 import { subscribeHomeAccountChange, type HomeAccountChangeEvent } from '@/sync/runtime/orchestration/homeAccountChange';
 import { parseToken } from '@/utils/auth/parseToken';
@@ -181,7 +182,8 @@ export async function readUiUsageModelPrices(context: UsageQueryAccountContext, 
     signal?: AbortSignal): Promise<UsageModelPriceCatalog> {
     requireCurrent(context, signal);
     const transport = context.readTransport;
-    const scope = transport?.key;
+    const bindingKey = transport?.key;
+    const scope = transport?.scope ?? bindingKey;
     const abort = new AbortController();
     const retirement = context.accountLifetime.onRetire(() => abort.abort());
     const cancellation = mergeAbortSignals([signal, abort.signal]);
@@ -200,7 +202,7 @@ export async function readUiUsageModelPrices(context: UsageQueryAccountContext, 
             headers: { Authorization: `Bearer ${context.credentials.token}`, ...(refresh ? { 'Content-Type': 'application/json' } : {}) },
             ...(refresh ? { body: '{}' } : {}) };
         const value = !refresh && transport && scope
-            ? await modelPriceReads.run(path, sharedSignal => transport.read(path, { ...init, signal: sharedSignal }, undefined, consume),
+            ? await modelPriceReads.run(JSON.stringify([bindingKey, path]), sharedSignal => transport.read(path, { ...init, signal: sharedSignal }, undefined, consume),
                 { scope, signal: cancellation.signal })
             : await consume(await context.request(path, { ...init, signal: cancellation.signal }));
         requireCurrent(context, cancellation.signal);
@@ -753,6 +755,10 @@ export function captureUiUsageQueryAccountContext(credentials: AuthCredentials):
     if (!accountLifetime?.isCurrent() || parseToken(credentials.token) !== accountLifetime.scope.accountId) return null;
     const profile = getServerProfileById(accountLifetime.scope.serverId);
     if (!profile) return null;
+    const accountEncryptionObservation = captureAccountEncryptionObservationForHome({
+        serverId: accountLifetime.scope.serverId, endpointUrl: profile.canonicalServerUrl ?? profile.serverUrl,
+        credentials, isCurrent: accountLifetime.isCurrent,
+    });
     const request: ServerFetch = async (path, init, options) => {
         if (!accountLifetime.isCurrent()) throw Object.assign(new Error('Usage Account authority retired'), { code: 'stale_surface' });
         const transport = await resolveServerScopedTransport({ profile, credentials });
@@ -761,14 +767,16 @@ export function captureUiUsageQueryAccountContext(credentials: AuthCredentials):
                 endpointUrl: transport.canonicalServerUrl, runtimeOrigin: transport.runtimeOrigin,
                 serverId: accountLifetime.scope.serverId, credentials,
                 isCurrent: accountLifetime.isCurrent,
+                accountEncryptionObservation,
                 ...(transport.homeCarrier ? { homeCarrier: transport.homeCarrier } : {}),
             })(path, init, options);
             if (!accountLifetime.isCurrent()) throw Object.assign(new Error('Usage Account authority retired'), { code: 'stale_surface' });
             return response;
         } finally { await transport.release(); }
     };
+    bindAccountEncryptionObservation(request, accountEncryptionObservation);
     return { credentials, accountLifetime, request,
-        readTransport: createCapturedServerReadTransport({ serverId: accountLifetime.scope.serverId, profile, credentials }) };
+        readTransport: createCapturedServerReadTransport({ serverId: accountLifetime.scope.serverId, profile, credentials, accountEncryptionObservation }) };
 }
 
 /** One Action port batches resolved A requests; B/backfill never delays available A. */
@@ -1120,10 +1128,12 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
                     { request: sharedContext.request, readTransport: sharedContext.readTransport, signal: readSignal });
                 // Opaque invocation-bound request closures cannot prove neutral cancellation.
                 // Only the captured physical transport enables cross-batch borrowing.
-                const value = sharedContext.readTransport
-                    ? await accountingReads.run(JSON.stringify([sharedContext.readTransport.key,
+                const transport = sharedContext.readTransport;
+                const bindingKey = transport?.key;
+                const value = transport
+                    ? await accountingReads.run(JSON.stringify([bindingKey,
                         createCanonicalJsonSigningInput(projectNativeJsonValueForTransport(request))]), load,
-                        { signal: cancellation.signal })
+                        { scope: transport.scope ?? bindingKey, signal: cancellation.signal })
                     : await load(cancellation.signal);
                 requireCurrent(sharedContext, cancellation.signal);
                 return value;
@@ -1367,7 +1377,7 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
             if (!lifetime.isCurrent()) return;
             // A replacement demanded by this wake must not join pre-wake accounting.
             // Existing borrowers retain their own publication and Account fences.
-            accountingReads.invalidate();
+            accountingReads.invalidate(sharedContext.readTransport?.scope ?? sharedContext.readTransport?.key);
             for (const listener of [...listeners.keys()]) listener({ version: 1, subscriptionId: 'usage-query', kind: 'invalidated', digest: INVALIDATION_DIGEST }, homeChange);
         },
     };

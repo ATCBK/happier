@@ -121,6 +121,7 @@ it('keeps standalone Capacity independent of accounting across unrelated Account
   const view = (reset: boolean) => <InjectedAuthProvider credentials={credentials}><Capacity reset={reset} /></InjectedAuthProvider>;
   const screen = await renderScreen(view(false));
   try {
+    await expect.poll(() => seen.at(-1)?.slice?.quota?.[0]?.current?.meters[0]?.usedPct).toBe(40);
     await expect.poll(() => seen.at(-1)?.slice?.pending).toBe(false);
     const first = seen.at(-1)!.slice!;
     expect(first.accounting).toBeUndefined();

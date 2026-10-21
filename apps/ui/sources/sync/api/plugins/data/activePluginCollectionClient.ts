@@ -296,12 +296,13 @@ export async function readPluginCollectionHttpResponse(input: Readonly<{
     const requestInit = (signal = input.init.signal) => withAccountStoredContentCompatibilityRequestDeclaration(
         { ...input.init, signal }, PLUGIN_DATA_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION);
     if (!transport) return await consume(await input.authority.request(input.path, requestInit()));
+    const transportKey = transport.key;
     const headers = [...new Headers(input.init.headers)].sort(([left], [right]) => left.localeCompare(right));
     const body: unknown = input.init.body === undefined ? null : JSON.parse(input.init.body);
-    const key = createCanonicalJsonSigningInput([input.path, input.init.method,
+    const key = createCanonicalJsonSigningInput([transportKey, input.path, input.init.method,
         body, headers, input.encryptionMode ?? null]);
     return await collectionHttpReads.run(key, signal => transport.read(input.path, requestInit(signal), undefined, consume),
-        { scope: transport.key, signal: input.init.signal, fresh: input.fresh });
+        { scope: transport.scope ?? transportKey, signal: input.init.signal, fresh: input.fresh });
 }
 
 function unavailable(reason: ActivePluginCollectionUnavailableReasonV1): ActivePluginCollectionUnavailableV1 {
@@ -507,7 +508,8 @@ export async function requestCollectionOperation(input: Readonly<{
     // participant cancellation, for example — reaches the transport only if it
     // is composed here, at the one place the physical request is issued.
     const cancellation = mergeAbortSignals([input.operation.signal, input.options?.signal]);
-    const mutationReadScope = input.operation.authority.readTransport?.key;
+    const mutationTransport = input.operation.authority.readTransport;
+    const mutationReadScope = mutationTransport ? mutationTransport.scope ?? mutationTransport.key : undefined;
     let mutationIssued = false;
     try {
         if (cancellation.signal.aborted) {

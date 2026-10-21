@@ -30,9 +30,17 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualifiedConnectedAccountPersistence';
 import { applyAcknowledgedConnectedMetadata } from '@/sync/store/settings/connectedMetadataCatalogSnapshot';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import type { CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
+import { createScopedResolutionSingleFlight, type ScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
+import { withActionAccountRequestSignal } from '@/sync/ops/actions/actionAccountContext';
 
 export type ConnectedMetadataAccountContext = Awaited<ReturnType<typeof import('@/sync/ops/actions/actionAccountContext').captureLazyActionAccountContext>>;
-type CapturedRead = Pick<CapturedAccountSettingsRequest, 'request' | 'isCurrent'>;
+type CapturedRead = Pick<CapturedAccountSettingsRequest, 'request' | 'isCurrent'> & Readonly<{
+    readTransport?: CapturedServerReadTransport;
+    fresh?: boolean;
+}>;
+const presentationRowReads = createScopedResolutionSingleFlight<ReturnType<typeof ConnectedPresentationRowReadResponseV1Schema.parse>>();
+const acknowledgementRowReads = createScopedResolutionSingleFlight<ReturnType<typeof ConnectedAcknowledgementsRowReadResponseV1Schema.parse>>();
 type MutationResult = ReturnType<typeof ConnectedMetadataRowMutationResponseV1Schema.parse>;
 export class ConnectedMetadataRowOperationError extends Error {
     constructor(readonly code: string, readonly cause?: unknown) { super(code); this.name = 'ConnectedMetadataRowOperationError'; }
@@ -40,22 +48,35 @@ export class ConnectedMetadataRowOperationError extends Error {
 function assertReadCurrent(captured: CapturedRead): void {
     if (!captured.isCurrent()) throw new ConnectedMetadataRowOperationError('scope-retired');
 }
-async function rawRead(captured: CapturedRead, route: string, signal?: AbortSignal): Promise<unknown> {
+async function rawRead<T>(captured: CapturedRead, route: string, parse: (value: unknown) => T,
+    reads: ScopedResolutionSingleFlight<T>, signal?: AbortSignal): Promise<T> {
     assertReadCurrent(captured);
-    const response = await captured.request(route, { method: 'GET', signal }, { retry: 'none' });
-    assertReadCurrent(captured);
-    if (!response.ok) throw new ConnectedMetadataRowOperationError(response.status === 401 ? 'unauthorized'
-        : response.status === 403 ? 'forbidden' : response.status === 404 ? 'unsupported' : 'unreachable');
-    const value: unknown = await response.json();
+    signal?.throwIfAborted();
+    const consume = async (response: Response) => {
+        if (!response.ok) throw new ConnectedMetadataRowOperationError(response.status === 401 ? 'unauthorized'
+            : response.status === 403 ? 'forbidden' : response.status === 404 ? 'unsupported' : 'unreachable');
+        const value: unknown = await response.json();
+        return parse(value);
+    };
+    const transport = captured.readTransport;
+    let value: T;
+    if (transport) {
+        const key = transport.key;
+        value = await reads.run(JSON.stringify([key, route]), sharedSignal => transport.read(route, { method: 'GET', signal: sharedSignal },
+            { retry: 'none' }, consume), { scope: transport.scope ?? key, signal, fresh: captured.fresh });
+    } else {
+        value = await consume(await captured.request(route, { method: 'GET', signal }, { retry: 'none' }));
+    }
+    signal?.throwIfAborted();
     assertReadCurrent(captured);
     return value;
 }
 /** Conversion borrows its initiating Home request; these readers never recapture ambient state. */
 export async function apiReadConnectedPresentationRow(captured: CapturedRead, signal?: AbortSignal) {
-    return ConnectedPresentationRowReadResponseV1Schema.parse(await rawRead(captured, CONNECTED_PRESENTATION_ROWS_ROUTE_V1, signal));
+    return rawRead(captured, CONNECTED_PRESENTATION_ROWS_ROUTE_V1, ConnectedPresentationRowReadResponseV1Schema.parse, presentationRowReads, signal);
 }
 export async function apiReadConnectedAcknowledgementsRow(captured: CapturedRead, signal?: AbortSignal) {
-    return ConnectedAcknowledgementsRowReadResponseV1Schema.parse(await rawRead(captured, CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1, signal));
+    return rawRead(captured, CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1, ConnectedAcknowledgementsRowReadResponseV1Schema.parse, acknowledgementRowReads, signal);
 }
 async function admit<T>(context: ConnectedMetadataAccountContext, usage: 'identity' | 'fresh-authority',
     operation: (mode: 'plain' | 'e2ee', material: AccountScopedCryptoMaterial | null) => Promise<T>): Promise<T> {
@@ -108,16 +129,26 @@ async function readInventory(context: ConnectedMetadataAccountContext): Promise<
 type Write<Record> = Readonly<{ record: Record; expectedRevision: number | 'absent'; sourceSettingsVersion?: number }>;
 async function writeRow(context: ConnectedMetadataAccountContext, route: string, body: unknown, signal?: AbortSignal): Promise<MutationResult> {
     context.assertCurrent();
-    let response: Response;
     try {
-        response = await context.request(route, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body), signal }, { retry: 'none' });
-    } catch (error) {
-        throw new ConnectedMetadataRowOperationError(classifyHttpMutationRequestFailure({ error, issued: true, signal }), error);
+        let response: Response;
+        try {
+            response = await context.request(route, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body), signal }, { retry: 'none' });
+        } catch (error) {
+            throw new ConnectedMetadataRowOperationError(classifyHttpMutationRequestFailure({ error, issued: true, signal }), error);
+        }
+        const result = ConnectedMetadataRowMutationResponseV1Schema.safeParse(await response.json().catch(() => null));
+        if (!result.success) throw new ConnectedMetadataRowOperationError(response.ok || response.status >= 500 ? 'outcome_unknown' : `connected_metadata_http_${response.status}`);
+        return result.data;
+    } finally {
+        // A lost acknowledgement can have committed too. Later reads cannot
+        // borrow a pre-write observation while the Account socket wake is pending.
+        if (context.readTransport) {
+            const scope = context.readTransport.scope ?? context.readTransport.key;
+            presentationRowReads.invalidate(scope);
+            acknowledgementRowReads.invalidate(scope);
+        }
     }
-    const result = ConnectedMetadataRowMutationResponseV1Schema.safeParse(await response.json().catch(() => null));
-    if (!result.success) throw new ConnectedMetadataRowOperationError(response.ok || response.status >= 500 ? 'outcome_unknown' : `connected_metadata_http_${response.status}`);
-    return result.data;
 }
 function writePresentation(context: ConnectedMetadataAccountContext, input: Write<ConnectedPresentationRecordV1>, signal?: AbortSignal) {
     return admit(context, 'fresh-authority', (mode, material) => writeRow(context, CONNECTED_PRESENTATION_ROWS_ROUTE_V1,
@@ -164,32 +195,18 @@ async function persistDisclosure(context: ConnectedMetadataAccountContext, entri
     // The incumbent owner synchronously persists through MMKV before returning.
     storage.getState().applyLocalSettings({ collapsedGroupKeysV1: keys }, { source: 'ui' });
 }
-// Read-only consumers of one captured Account share the live admission and
-// catalog GETs. Completed values are never retained, and maintenance/publication
-// operations keep their own effects. Distinct cancellation lifetimes do not join.
-const pendingMetadataReads = new Set<Readonly<{
-    context: ConnectedMetadataAccountContext;
-    signal: AbortSignal | undefined;
-    result: Promise<ConnectedMetadataCatalogV1>;
-}>>();
 export async function readConnectedMetadataCatalogInContext(context: ConnectedMetadataAccountContext, signal?: AbortSignal,
     publication?: Publication, maintenance = true): Promise<ConnectedMetadataCatalogV1> {
-    if (maintenance || publication) return readConnectedMetadataCatalog(context, signal, publication, maintenance);
-    context.assertCurrent();
-    const pending = [...pendingMetadataReads].find(read => read.context === context && read.signal === signal);
-    if (pending) return await pending.result;
-    const result = readConnectedMetadataCatalog(context, signal, undefined, false);
-    const read = { context, signal, result };
-    pendingMetadataReads.add(read);
-    try { return await result; }
-    finally { pendingMetadataReads.delete(read); }
+    return readConnectedMetadataCatalog(context, signal, publication, maintenance);
 }
 async function readConnectedMetadataCatalog(context: ConnectedMetadataAccountContext, signal?: AbortSignal,
-    publication?: Publication, maintenance = true): Promise<ConnectedMetadataCatalogV1> {
-    return admit(context, 'identity', async (mode, material) => {
+    publication?: Publication, maintenance = true, fresh = false): Promise<ConnectedMetadataCatalogV1> {
+    return withActionAccountRequestSignal(context, signal, signal => admit(context, 'identity', async (mode, material) => {
+        const captured = { request: context.request, isCurrent: context.accountLifetime.isCurrent,
+            readTransport: context.readTransport, fresh: fresh || maintenance || publication !== undefined };
         const result = await loadConnectedMetadataCatalogV1({ mode, material, signal,
-        readPresentationRow: () => apiReadConnectedPresentationRow({ request: context.request, isCurrent: context.accountLifetime.isCurrent }, signal),
-        readAcknowledgementsRow: () => apiReadConnectedAcknowledgementsRow({ request: context.request, isCurrent: context.accountLifetime.isCurrent }, signal),
+        readPresentationRow: () => apiReadConnectedPresentationRow(captured, signal),
+        readAcknowledgementsRow: () => apiReadConnectedAcknowledgementsRow(captured, signal),
         hasPendingCleanup: publication?.hasPendingCleanup,
         ...(publication?.onReady ? { onReadyBeforeCleanup: async catalog => { await assertModeCurrent(context, mode); publication.onReady!(catalog, context.accountLifetime.isCurrent); } } : {}),
         ...(maintenance ? { transfer: {
@@ -218,10 +235,10 @@ async function readConnectedMetadataCatalog(context: ConnectedMetadataAccountCon
         });
         await assertModeCurrent(context, mode);
         return result;
-    });
+    }));
 }
 async function readForMutation(context: ConnectedMetadataAccountContext, domain: 'presentation' | 'acknowledgements', signal?: AbortSignal) {
-    const current = await readConnectedMetadataCatalogInContext(context, signal, undefined, false);
+    const current = await readConnectedMetadataCatalog(context, signal, undefined, false, true);
     const snapshot = current[domain];
     return snapshot.status === 'unavailable' && snapshot.reason === 'authority-not-confirmed'
         ? readConnectedMetadataCatalogInContext(context, signal) : current;
@@ -333,7 +350,7 @@ export async function prepareConnectedMetadataCleanupInContext(context: Connecte
 export async function cleanupConnectedMetadataInContext(context: ConnectedMetadataAccountContext,
     subject: QualifiedConnectedEntityRef, signal?: AbortSignal, prepared?: PreparedConnectedMetadataCleanup): Promise<void> {
     // Never seed or requalify historical subjects after their identity disappeared.
-    const catalog = await readConnectedMetadataCatalogInContext(context, signal, undefined, false);
+    const catalog = await readConnectedMetadataCatalog(context, signal, undefined, false, true);
     const oldPresentation: ConnectedPresentationRecordV1 = { v: 1,
         entries: catalog.presentation.status === 'ready' ? [...catalog.presentation.entries] : [] };
     const oldAcknowledgements: ConnectedAcknowledgementsRecordV1 = { v: 1,

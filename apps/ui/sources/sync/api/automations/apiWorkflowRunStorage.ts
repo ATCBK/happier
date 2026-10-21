@@ -38,12 +38,13 @@ export function createWorkflowRunAccountStorage(params: Readonly<{
             const read = READ_OPERATIONS.has(operationName);
             if (read && params.readTransport) {
                 const transport = params.readTransport;
-                const scope = transport.key;
+                const bindingKey = transport.key;
+                const scope = transport.scope ?? bindingKey;
                 const abort = new AbortController();
                 const retirement = params.accountLifetime?.onRetire(() => abort.abort());
                 const cancellation = mergeAbortSignals([options?.signal, abort.signal]);
                 try {
-                    const result = await storageReads.run(createCanonicalJsonSigningInput(projectNativeJsonValueForTransport(operation)),
+                    const result = await storageReads.run(JSON.stringify([bindingKey, createCanonicalJsonSigningInput(projectNativeJsonValueForTransport(operation))]),
                         signal => transport.read(path, { method: 'POST',
                             headers: getAutomationAuthHeaders(params.credentials, { includeJsonContentType: true }),
                             body: JSON.stringify(operation), signal }, { includeAuth: false }, readAutomationJsonOrThrow),
@@ -54,7 +55,7 @@ export function createWorkflowRunAccountStorage(params: Readonly<{
                 } finally { cancellation.dispose(); retirement?.dispose(); }
             }
             const mutation = !read && !UNSHARED_OBSERVATIONS.has(operationName);
-            const invalidate = () => { if (mutation && params.readTransport) storageReads.invalidate(params.readTransport.key); };
+            const invalidate = () => { if (mutation && params.readTransport) storageReads.invalidate(params.readTransport.scope ?? params.readTransport.key); };
             invalidate();
             try {
                 const response = await params.request(path, {

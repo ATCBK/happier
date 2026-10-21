@@ -31,11 +31,14 @@ import { sealProviderAccountUsagePageProjectionV1, openProviderAccountUsagePageP
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { getProviderAccountUsageDerivationInterval } from '@happier-dev/protocol/connect/deriveProviderAccountUsagePace';
-import type { CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
-import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
+import { createCapturedServerReadTransport, type CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
+import { createScopedResolutionSingleFlight, type ScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
+import { getActiveServerHomeCarrier, getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { resolveActiveServerRuntimeOrigin } from '@/sync/runtime/nativeLoopbackTunnels/runtimeOrigin';
 
 type UsageHttpObservation = Readonly<{
-    status: number; ok: boolean; json: unknown; etag: string | null; documentEtag: string | null;
+    status: number; ok: boolean; json: unknown; jsonFailure?: Readonly<{ error: unknown }>;
+    etag: string | null; documentEtag: string | null;
     complete: string | null; prefix: string | null;
 }>;
 const usageHttpReads = createScopedResolutionSingleFlight<UsageHttpObservation>();
@@ -344,7 +347,7 @@ async function readProviderAccountUsageProjectedQuota(credentials: AuthCredentia
                             // duplicate check. Only an actual write needs its
                             // complete packed/encrypted representation.
                             const body = materialize();
-                            const writeScope = options.readTransport?.key;
+                            const writeScope = options.readTransport?.scope ?? options.readTransport?.key;
                             if (writeScope) usageHttpReads.invalidate(writeScope);
                             const response = await (options.request ?? createServerFetchForActiveServer(options.expectedActiveServer))('/v4/connect/qualified/provider-account-usage/history', {
                                 method: 'PUT', signal: options.signal, headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' },
@@ -519,23 +522,28 @@ async function readProviderAccountUsageWaitingWork(credentials: AuthCredentials,
 type UsageReadTransportOptions = Pick<ProviderAccountUsageQuotaReadOptions,
     'request' | 'readTransport' | 'assertCurrent' | 'signal' | 'expectedActiveServer'>;
 
+async function observeProviderUsageHttp(response: Response, method?: string): Promise<UsageHttpObservation> {
+    let json: unknown = null;
+    let jsonFailure: UsageHttpObservation['jsonFailure'];
+    if (method !== 'HEAD' && response.status !== 404 && response.status !== 401 && response.status !== 403) {
+        try { json = await response.json(); } catch (error) { jsonFailure = { error }; }
+    }
+    return { status: response.status, ok: response.ok, json, ...(jsonFailure ? { jsonFailure } : {}),
+        etag: response.headers.get('etag'), documentEtag: response.headers.get('x-happier-usage-projection-document-etag'),
+        complete: response.headers.get('x-happier-usage-projection-complete'),
+        prefix: response.headers.get('x-happier-usage-projection-prefix') };
+}
+
 async function acquireProviderUsageHttp(credentials: AuthCredentials, path: string, init: RequestInit,
     options: UsageReadTransportOptions, fresh = false): Promise<UsageHttpObservation> {
     options.signal?.throwIfAborted(); options.assertCurrent?.();
-    const consume = async (response: Response): Promise<UsageHttpObservation> => ({
-        status: response.status, ok: response.ok,
-        json: init.method === 'HEAD' || response.status === 404 || response.status === 401 || response.status === 403
-            ? null : await response.json(),
-        etag: response.headers.get('etag'),
-        documentEtag: response.headers.get('x-happier-usage-projection-document-etag'),
-        complete: response.headers.get('x-happier-usage-projection-complete'),
-        prefix: response.headers.get('x-happier-usage-projection-prefix'),
-    });
+    const consume = (response: Response) => observeProviderUsageHttp(response, init.method);
     const fetchOptions = { includeAuth: false, ...(options.expectedActiveServer ? { expectedActiveServer: options.expectedActiveServer } : {}) };
     const transport = options.readTransport;
-    const scope = transport?.key;
+    const bindingKey = transport?.key;
+    const scope = transport?.scope ?? bindingKey;
     const value = transport && scope
-        ? await usageHttpReads.run(JSON.stringify([scope, init.method, path,
+        ? await usageHttpReads.run(JSON.stringify([bindingKey, init.method, path,
             new Headers(init.headers).get('If-None-Match'), init.body ?? null]), signal => transport.read(path, { ...init, signal }, fetchOptions, consume),
             { scope, signal: options.signal, fresh })
         : await consume(await (options.request ?? createServerFetchForActiveServer(options.expectedActiveServer))(path, init, fetchOptions));
@@ -554,6 +562,7 @@ async function requestProviderAccountUsageRead(credentials: AuthCredentials, pat
         throw new HappyError('Provider account usage authority refused', false,
             { status: response.status, kind: 'auth', code: 'denied' });
     }
+    if (response.jsonFailure) throw response.jsonFailure.error;
     const json = response.json;
     options.assertCurrent?.();
     if (response.status === 409 && QualifiedProviderAccountUsageReadErrorV4Schema.safeParse(json).success) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_content_mode_mismatch');
@@ -631,18 +640,12 @@ function rejectContentModeMismatch(
     );
 }
 
-async function rejectQualifiedProviderAccountUsageReadFailure(
-    response: Response,
+function rejectQualifiedProviderAccountUsageReadFailure(
+    response: UsageHttpObservation,
     recordId: ProviderAccountUsageRecordId,
     fallbackMessage: string,
-): Promise<never> {
-    let json: unknown = null;
-    try {
-        json = await response.json();
-    } catch {
-        // The generic HTTP failure below remains the boundary for malformed
-        // or unrelated error responses.
-    }
+): never {
+    const json = response.json;
     if (
         response.status === 409
         && QualifiedProviderAccountUsageReadErrorV4Schema.safeParse(json).success
@@ -656,117 +659,86 @@ async function rejectQualifiedProviderAccountUsageReadFailure(
     );
 }
 
+export type ProviderAccountUsageSnapshotReadOptions = Readonly<{
+    signal?: AbortSignal;
+    expectedActiveServer?: ExpectedActiveServerFetchBasis;
+    readTransport?: CapturedServerReadTransport;
+    /** The retained row observer owns its existing failure/recovery cadence. */
+    retry?: 'none';
+}>;
+
+const plainSnapshotReads = createScopedResolutionSingleFlight<ProviderAccountUsageSnapshotV1 | null>();
+const sealedSnapshotReads = createScopedResolutionSingleFlight<EncryptedQualifiedProviderAccountUsageRecordResponse | null>();
+
+async function readProviderSnapshotWithOwner<T>(credentials: AuthCredentials, recordId: ProviderAccountUsageRecordId,
+    opts: ProviderAccountUsageSnapshotReadOptions | undefined, pending: ScopedResolutionSingleFlight<T>,
+    consume: (response: UsageHttpObservation) => T): Promise<T> {
+    opts?.signal?.throwIfAborted();
+    const snapshot = getActiveServerSnapshot();
+    const request = createServerFetchForActiveServer(opts?.expectedActiveServer ?? snapshot);
+    const transport = opts?.readTransport ?? createCapturedServerReadTransport({ serverId: snapshot.serverId, credentials,
+        prepared: { endpointUrl: snapshot.serverUrl, runtimeOrigin: resolveActiveServerRuntimeOrigin(snapshot),
+            homeCarrier: getActiveServerHomeCarrier(), generation: snapshot.generation, request } });
+    const bindingKey = transport.key;
+    const scope = transport.scope ?? bindingKey;
+    const path = `/v4/connect/qualified/provider-account-usage/record?recordId=${encodeURIComponent(recordId)}`;
+    const init = { method: 'GET', headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' } };
+    const options = { includeAuth: false, ...(opts?.expectedActiveServer ? { expectedActiveServer: opts.expectedActiveServer } : {}) };
+    // Observer-owned demand shares raw record acquisition with quota. Standalone
+    // demand keeps its incumbent finite validation/retry lifecycle inside one flight.
+    const value = opts?.retry === 'none'
+        ? consume(await acquireProviderUsageHttp(credentials, path, { ...init, signal: opts.signal }, { ...opts, request, readTransport: transport }))
+        : await pending.run(JSON.stringify([bindingKey, recordId]), signal => backoff(async () =>
+            await transport.read(path, { ...init, signal }, options, async response => consume(await observeProviderUsageHttp(response, 'GET')))),
+            { scope, signal: opts?.signal });
+    opts?.signal?.throwIfAborted();
+    return value;
+}
+
+function readSnapshotRecord(response: UsageHttpObservation, recordId: ProviderAccountUsageRecordId, sealed = false) {
+    if (response.status === 404) return null;
+    const message = `Failed to load ${sealed ? 'sealed ' : ''}provider account usage for ${recordId}`;
+    if (!response.ok) {
+        if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
+            return rejectQualifiedProviderAccountUsageReadFailure(response, recordId, message);
+        }
+        throw new Error(`${message}: ${response.status}`);
+    }
+    if (response.jsonFailure) throw response.jsonFailure.error;
+    return parseQualifiedProviderAccountUsageRecordResponse(response.json, recordId);
+}
+
 export async function getProviderAccountUsageSnapshotPlain(
     credentials: AuthCredentials,
     params: Readonly<{ recordId: ProviderAccountUsageRecordId }>,
-    opts?: Readonly<{
-        signal?: AbortSignal;
-        expectedActiveServer?: ExpectedActiveServerFetchBasis;
-        /** The retained row observer owns its existing failure/recovery cadence. */
-        retry?: 'none';
-    }>,
+    opts?: ProviderAccountUsageSnapshotReadOptions,
 ): Promise<ProviderAccountUsageSnapshotV1 | null> {
     const recordId = parseRecordId(params.recordId);
-    const request = createServerFetchForActiveServer(opts?.expectedActiveServer);
-    const read = async () => {
-        const response = await request(
-            `/v4/connect/qualified/provider-account-usage/record?recordId=${encodeURIComponent(recordId)}`,
-            {
-                method: 'GET',
-                signal: opts?.signal,
-                headers: {
-                    Authorization: `Bearer ${credentials.token}`,
-                    'Content-Type': 'application/json',
-                },
-            },
-            {
-                includeAuth: false,
-                ...(opts?.expectedActiveServer
-                    ? {
-                        expectedActiveServer:
-                            opts.expectedActiveServer,
-                    }
-                    : {}),
-            },
-        );
-
-        if (response.status === 404) return null;
-
-        if (!response.ok) {
-            if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-                return await rejectQualifiedProviderAccountUsageReadFailure(
-                    response,
-                    recordId,
-                    `Failed to load provider account usage for ${recordId}`,
-                );
-            }
-            throw new Error(`Failed to load provider account usage for ${recordId}: ${response.status}`);
-        }
-
-        const parsed = parseQualifiedProviderAccountUsageRecordResponse(await response.json(), recordId);
+    return await readProviderSnapshotWithOwner(credentials, recordId, opts, plainSnapshotReads, response => {
+        const parsed = readSnapshotRecord(response, recordId);
+        if (!parsed) return null;
         if (parsed.content.t !== 'plain') {
             return rejectContentModeMismatch(recordId);
         }
 
         return openProviderAccountUsageRecordV4({ recordId, accountMode: 'plain', record: parsed });
-    };
-    return opts?.retry === 'none' ? await read() : await backoff(read);
+    });
 }
 
 export async function getProviderAccountUsageSnapshotSealed(
     credentials: AuthCredentials,
     params: Readonly<{ recordId: ProviderAccountUsageRecordId }>,
-    opts?: Readonly<{
-        signal?: AbortSignal;
-        expectedActiveServer?: ExpectedActiveServerFetchBasis;
-        /** The retained row observer owns its existing failure/recovery cadence. */
-        retry?: 'none';
-    }>,
+    opts?: ProviderAccountUsageSnapshotReadOptions,
 ): Promise<EncryptedQualifiedProviderAccountUsageRecordResponse | null> {
     const recordId = parseRecordId(params.recordId);
-    const request = createServerFetchForActiveServer(opts?.expectedActiveServer);
-    const read = async () => {
-        const response = await request(
-            `/v4/connect/qualified/provider-account-usage/record?recordId=${encodeURIComponent(recordId)}`,
-            {
-                method: 'GET',
-                signal: opts?.signal,
-                headers: {
-                    Authorization: `Bearer ${credentials.token}`,
-                    'Content-Type': 'application/json',
-                },
-            },
-            {
-                includeAuth: false,
-                ...(opts?.expectedActiveServer
-                    ? {
-                        expectedActiveServer:
-                            opts.expectedActiveServer,
-                    }
-                    : {}),
-            },
-        );
-
-        if (response.status === 404) return null;
-
-        if (!response.ok) {
-            if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-                return await rejectQualifiedProviderAccountUsageReadFailure(
-                    response,
-                    recordId,
-                    `Failed to load sealed provider account usage for ${recordId}`,
-                );
-            }
-            throw new Error(`Failed to load sealed provider account usage for ${recordId}: ${response.status}`);
-        }
-
-        const parsed = parseQualifiedProviderAccountUsageRecordResponse(await response.json(), recordId);
+    return await readProviderSnapshotWithOwner(credentials, recordId, opts, sealedSnapshotReads, response => {
+        const parsed = readSnapshotRecord(response, recordId, true);
+        if (!parsed) return null;
         if (!hasEncryptedProviderAccountUsageContent(parsed)) {
             return rejectContentModeMismatch(recordId);
         }
         return parsed;
-    };
-    return opts?.retry === 'none' ? await read() : await backoff(read);
+    });
 }
 
 export async function requestProviderAccountUsageSnapshotRefresh(

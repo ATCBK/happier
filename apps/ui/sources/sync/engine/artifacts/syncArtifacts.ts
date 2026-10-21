@@ -964,15 +964,17 @@ async function openArtifactWithRecipientKeyPreparation(params: Readonly<{
     params.signal?.throwIfAborted();
     if (opened?.isDecrypted && opened.storageMode === 'e2ee' && params.prepareRecipientKeys !== false) {
         const key = artifactDataKeys.get(artifact.id);
-        if (!key || key.envelope !== artifact.dataEncryptionKey) {
+        const census = params.recipientCensus;
+        // Keyholding reads obtain this matching census in the selected-read response.
+        // The opaque inspection path cannot enter recipient preparation.
+        if (!key || key.envelope !== artifact.dataEncryptionKey || !census) {
             throw Object.assign(new Error('artifact_content_unavailable'), { code: 'artifact_content_unavailable' });
         }
         const accessApi = createArtifactAccessApi(params.credentials, { request: params.request });
         await runArtifactRecipientKeyPreparationV1({ artifactId: artifact.id, dataKey: key.dataKey,
             provenanceDataKey: key.provenanceDataKey, openedProvenanceDataEncryptionKey: key.provenanceEnvelope,
             openedDataEncryptionKey: key.envelope, randomBytes: getRandomBytes, signal: params.signal,
-            readCensus: () => params.recipientCensus ? Promise.resolve(params.recipientCensus)
-                : accessApi.readRecipients(artifact.id, params.signal),
+            readCensus: () => Promise.resolve(census),
             commit: input => accessApi.commitKeyEnvelopes(input, params.signal),
         });
     }
@@ -1218,7 +1220,7 @@ export async function createArtifactWithHeaderViaApi(params: {
     try {
         // Generate unique artifact ID
         const artifactId = params.artifactId ?? randomUUID();
-        const accountMode = (await fetchAccountEncryptionMode(credentials, { request: params.request })).mode;
+        const accountMode = (await fetchAccountEncryptionMode(credentials, { request: params.request, usage: 'fresh-authority' })).mode;
 
         let storedDataEncryptionKey: string;
         let storedHeader: string;

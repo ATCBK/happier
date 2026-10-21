@@ -54,12 +54,13 @@ export function createEnvelopeTransport(bound: BoundEnvelopeCollection,
     state: SessionDataKeyEnvelopeCollectionState = 'action_required'): CurrentSessionDataKeyEnvelopeTransport {
     const path = envelopeCollectionPath(bound.sessionId);
     const transport = bound.authority.readTransport;
-    const readScope = () => transport ? JSON.stringify([transport.key, bound.sessionId]) : undefined;
+    const readScope = (key = transport?.key) => transport?.scope ?? (key ? JSON.stringify([key, bound.sessionId]) : undefined);
     return {
         fetchPage: async cursor => {
             bound.guard.check();
-            const scope = readScope();
-            const key = JSON.stringify([transport?.key ?? null, bound.sessionId, state, cursor || null]);
+            const transportKey = transport?.key;
+            const scope = readScope(transportKey);
+            const key = JSON.stringify([transportKey ?? null, bound.sessionId, state, cursor || null]);
             try {
                 return await envelopePages.run(key, async signal => {
                     const consume = async (response: Response) => SessionDataKeyEnvelopePageV1Schema.parse(
