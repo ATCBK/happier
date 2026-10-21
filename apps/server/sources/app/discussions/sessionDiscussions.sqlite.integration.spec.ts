@@ -207,13 +207,17 @@ describe('First-class Discussions service (SQLite)', () => {
             expect((await app.inject({ method: 'GET', url: messagesUrl })).statusCode).toBe(404);
         } finally { await app.close(); }
     });
-    it.each(['quiet', 'important'] as const)('carries persisted Discussion receive policy %s and the committed addressed event', async preset => {
+    it.each([
+        { preset: 'quiet', answerPolicy: 'when_addressed' },
+        { preset: 'important', answerPolicy: 'when_addressed' },
+        { preset: 'quiet', answerPolicy: 'drafts_for_approval' },
+    ] as const)('carries persisted Discussion receive policy $preset/$answerPolicy and the committed addressed event', async ({ preset, answerPolicy }) => {
         const { owner, discussionId } = await fixture();
         await inTx(tx => updateAccountFollowCreationPreferencesInTx(tx, { accountId: owner.id,
             patch: { discussionReceivePolicy: { preset } } }));
         const receiver = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
         expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
-            request: { participant: { kind: 'session', sessionId: receiver.id } } })).toMatchObject({ ok: true });
+            request: { participant: { kind: 'session', sessionId: receiver.id }, answerPolicy } })).toMatchObject({ ok: true });
         // Later creation preferences must not rewrite an existing attachment.
         await inTx(tx => updateAccountFollowCreationPreferencesInTx(tx, { accountId: owner.id,
             patch: { discussionReceivePolicy: { preset: preset === 'quiet' ? 'important' : 'quiet' } } }));
@@ -538,7 +542,7 @@ describe('First-class Discussions service (SQLite)', () => {
             const owner = await db.account.findUniqueOrThrow({ where: { id: runner.accountId } });
             const result = await createDiscussion({ actorAccountId: owner.id, authentication, request: createRequest() });
             if (!result.ok) throw new Error(result.error);
-            return { owner, discussionId: result.value.discussion.id, created: result.value };
+            return { owner, discussionId: result.value.discussion.id, created: result.value, invitee: undefined };
         })() : await fixture();
         const { owner, discussionId, created } = selected;
         const session = runner ? await db.session.findUniqueOrThrow({ where: { id: runner.sessionId } })
@@ -597,7 +601,7 @@ describe('First-class Discussions service (SQLite)', () => {
         await db.workflowRunInvocation.update({ where: { id: invocation.id }, data: { lifecycle: 'completed' } });
         expect(await publish({ ...marker, workflow: { ...marker.workflow, invocationAttempt: '1' } })).toMatchObject({ ok: false });
         expect(await publish({ ...marker, workflow: { ...marker.workflow, runId: 'forged-run' } })).toMatchObject({ ok: false });
-        if (mode === 'unregistered' && 'invitee' in selected) {
+        if (mode === 'unregistered' && selected.invitee) {
             const review = { artifactId: 'reviewed-workflow-answer', decidingAccountId: selected.invitee.id };
             expect(await publish(marker, review)).toMatchObject({ ok: true });
             expect(await setDiscussionGrant({ authentication, actorAccountId: owner.id, discussionId,

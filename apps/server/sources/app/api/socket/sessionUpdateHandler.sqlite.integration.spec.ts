@@ -120,7 +120,7 @@ describe("session update handler on SQLite", () => {
 
         const acknowledgements: unknown[] = [];
         // Logging is the output boundary; publisher custody and SQLite stay real.
-        const trace = vi.spyOn(logger, 'info').mockImplementation(() => undefined);
+        const trace = vi.spyOn(logger, 'debug').mockImplementation(() => undefined);
         try {
             await getSocketHandler(socket, "session-runtime-activity-snapshot")({
                 sessionId: session.id,

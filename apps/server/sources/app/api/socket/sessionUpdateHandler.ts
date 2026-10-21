@@ -670,6 +670,9 @@ export function sessionUpdateHandler(
         }
     });
 
+    // Follow observation/ACK callers wait for their socket lifetime. Storage
+    // owns transaction acquisition, execution and retry budgets; these handlers
+    // must not impose a shorter request deadline on valid Follow work.
     registerSessionEvent(SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1, async (data: unknown, callback?: (response: unknown) => void) => {
         const respond = (response: unknown) => callback?.(SessionFollowObservePendingResponseV1Schema.parse(response));
         const request = SessionFollowObservePendingRequestV1Schema.safeParse(data);
@@ -684,7 +687,7 @@ export function sessionUpdateHandler(
             }
             const autonomousExchangeEnabled = await isServerFeatureEnabledForHome('sessions.autonomousExchange');
             const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({
-                socket, deadlineAtMs: Date.now() + 5_000,
+                socket,
                 authorityMode: "snapshot",
                 isolationLevel: "Serializable", // Follow sources, access and frontiers must describe one observation.
                 operation: async (authority, tx) => {
@@ -733,6 +736,7 @@ export function sessionUpdateHandler(
             log({
                 module: "websocket",
                 level: "warn",
+                ...(request.success ? { destinationSessionId: request.data.sessionId } : {}),
                 ...(isTransactionDeadlineExceededError(error) && error.transactionClass
                     ? { transactionClass: error.transactionClass }
                     : {}),
@@ -766,7 +770,7 @@ export function sessionUpdateHandler(
             }
             phase = 'publisher_transaction';
             const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({
-                socket, deadlineAtMs: Date.now() + 5_000,
+                socket,
                 // Legacy frontier ACK only advances private route progress.
                 // Admitted rule progress conditionally enters canonical Session
                 // publication admission and revalidates inside the edge owner.
@@ -856,7 +860,7 @@ export function sessionUpdateHandler(
                 return;
             }
             const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({
-                socket, deadlineAtMs: Date.now() + 5_000,
+                socket,
                 isolationLevel: "Serializable", // Voice-follow admission, active target and source observations share one snapshot.
                 operation: async (authority, tx) => {
                     if (!await hasExactCurrentPublisherAuthorityInTx(tx, authority, userId, request.data.voiceSessionId)) return null;
@@ -931,7 +935,7 @@ export function sessionUpdateHandler(
                 return;
             }
             const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({
-                socket, deadlineAtMs: Date.now() + 5_000,
+                socket,
                 isolationLevel: "Serializable", // Voice frontier acceptance participates in the target/edge replacement family.
                 operation: async (authority, tx) => {
                     if (!await hasExactCurrentPublisherAuthorityInTx(tx, authority, userId, request.data.voiceSessionId)) return null;
