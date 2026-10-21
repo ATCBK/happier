@@ -200,6 +200,7 @@ function surfaceFinishGradientSchema() {
     colors: z.tuple([PluginUiHostApiSurfaceNonBlankStringV1Schema, PluginUiHostApiSurfaceNonBlankStringV1Schema], PluginUiHostApiSurfaceNonBlankStringV1Schema),
     locations: z.optional(z.tuple([z.number(), z.number()], z.number())),
     start: z.optional(point), end: z.optional(point),
+    band: z.optional(z.object({ edge: z.enum(['top', 'bottom']), height: z.number() })),
   });
 }
 

@@ -208,6 +208,7 @@ export type PluginUiHostApiSurfaceThemeV1 = {
         locations?: [number, number, ...number[]];
         start?: { x: number; y: number };
         end?: { x: number; y: number };
+        band?: { edge: 'top' | 'bottom'; height: number };
     } | null>>;
     colors: {
         canvas: string;
