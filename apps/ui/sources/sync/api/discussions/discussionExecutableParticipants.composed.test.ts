@@ -603,6 +603,12 @@ it.each(['stopped', 'already_stopped', 'active', 'unknown', 'not_found', 'unread
     } };
     homes.answer(serverId, `/v2/sessions/${sessionId}`, sessionAnswer);
     homes.answer(serverId, `/v2/sessions/${sessionId}?accessProjectionVersion=1`, sessionAnswer);
+    // Stop first persists the explicit-Stop hold through the owner metadata tuple (Home HTTP persistence boundary).
+    homes.answer(serverId, `PATCH /v2/sessions/${sessionId}`, { select: input => {
+        const patch = input as { sharedMetadata: { expectedVersion: number }; agentState: { expectedVersion: number } };
+        return { body: { success: true, metadataLayoutVersion: 1, sharedMetadata: { version: patch.sharedMetadata.expectedVersion + 1 },
+            agentState: { version: patch.agentState.expectedVersion + 1 } } };
+    } });
     stopAnswer = async request => {
         if (request.method === `${sessionId}:killSession`) {
             effects.push('runner-stop');

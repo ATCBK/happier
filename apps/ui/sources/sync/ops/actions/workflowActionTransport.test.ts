@@ -129,6 +129,11 @@ describe('Workflow Action relay and resource target', () => {
                 roleSelection: { defaultEngine: { agentTargetKey: 'agent:happier.agent.codex/codex' },
                     availableAgentTargetKeys: ['agent:happier.agent.codex/codex'] },
                 effects: { resolveTargetAvailability: async () => true,
+                    // The invoking Session is the Run origin; its exact address resolves to its Machine.
+                    resolveSessionTarget: async value => typeof value === 'string'
+                        ? { address: { serverId: 'home', sessionId: value }, machineId: 'executor-a' }
+                        : value && typeof value === 'object' && !Array.isArray(value) && value.serverId === 'home' && typeof value.sessionId === 'string'
+                            ? { address: { serverId: value.serverId, sessionId: value.sessionId }, machineId: 'executor-a' } : null,
                     readActionContract: async () => ({ inputSchema: { type: 'object' }, outputSchema: {} }) },
             }),
             storage: { execute: async (operation) => {

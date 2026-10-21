@@ -59,7 +59,7 @@ async function saved(id = definitionId, title = 'Saved', description?: string) {
     return await createWorkflowDefinition({ definitionId: id, definition: content, metadata: { title, ...(description ? { description } : {}) } });
 }
 
-async function runPage(runs: readonly ReturnType<typeof createWorkflowRunSummaryFixture>[], nextCursor?: string, destination?: string) {
+async function runPage(runs: readonly ReturnType<typeof createWorkflowRunSummaryFixture>[], nextCursor?: string, destination?: string, title?: string) {
     const acceptedEnvelopesByRunId: Record<string, string> = {};
     const keyCensusByRunId: Record<string, ReturnType<typeof WorkflowRunRecipientCensusResponseV1Schema.parse>> = {};
     for (const run of runs) {
@@ -73,7 +73,7 @@ async function runPage(runs: readonly ReturnType<typeof createWorkflowRunSummary
                 executionTarget: { kind: 'session' }, workspaceTarget: { project: { machineId: run.machineId, directory: '/repo', checkoutRootPath: '/repo' } },
                 ...(run.origin.kind === 'direct' ? { origin: run.origin } : { actionCaller: {
                     kind: 'automationRun' as const, runId: run.id, automationId: run.origin.automationId, cause: { kind: 'manual' as const, invokedAt: 1 },
-                } }), authorization: { principal: { kind: 'host' } } } });
+                } }), ...(title ? { metadata: { title } } : {}), authorization: { principal: { kind: 'host' } } } });
         if (!materialized.ok) throw new Error(`fixture_materialization_failed:${materialized.error.code}`);
         acceptedEnvelopesByRunId[run.id] = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
             binding: { v: 1, purpose: 'accepted_snapshot', accountId: run.ownerAccountId, runId: run.id }, acceptedSnapshot: materialized.snapshot }));
@@ -338,6 +338,158 @@ describe('Workflow library reads through real Account Actions and HTTP', () => {
 });
 
 describe('Workflow Run windows through real Account storage', () => {
+    const membershipPage = (runs: readonly ReturnType<typeof createWorkflowRunSummaryFixture>[], nextCursor?: string) => ({
+        projection: 'membership', runs, acceptedEnvelopesByRunId: {}, keyCensusByRunId: {}, ...(nextCursor ? { nextCursor } : {}),
+    });
+
+    it('promotes completed membership through the same window, then returns to compact demand on a shell-only wake', async () => {
+        const summary = run('compact-attention');
+        const fullPage = await runPage([summary], undefined, undefined, 'Release review');
+        home.answer(serverId, route, { body: membershipPage([summary]) });
+        const member = await renderHook(() => useWorkflowRunWindow('attention', { projection: 'membership' }));
+        await waitLoaded(member);
+        expect(home.requestsFor(route)[0]?.input).toMatchObject({ request: { attention: 'required', projection: 'membership' } });
+        expect(member.getCurrent().runIds).toEqual([summary.id]);
+        expect(member.getCurrent().rows).toEqual([]);
+        const pending = createDeferred<void>();
+        home.answer(serverId, route, { body: fullPage, respondAfter: pending.promise });
+        const full = await renderHook(() => useWorkflowRunWindow('attention'));
+        await waitForHomeGovernance(() => expect(home.requestsFor(route)).toHaveLength(2));
+        expect(full.getCurrent().status).toBe('loading');
+        expect(full.getCurrent().knownAt).toBeNull();
+        expect(full.getCurrent().rows).toEqual([]);
+        expect(home.requestsFor(route)[1]?.input).toMatchObject({ request: { attention: 'required' } });
+        expect(home.requestsFor(route)[1]?.input).not.toHaveProperty('request.projection');
+        await act(async () => pending.resolve()); await waitLoaded(full);
+        expect(full.getCurrent().rows[0]?.metadata).toEqual({ kind: 'available', value: { title: 'Release review' } });
+        const opened = full.getCurrent().rows[0];
+        await full.unmount();
+        home.answer(serverId, route, { body: membershipPage([summary]) });
+        await act(async () => publishHomeAccountChange(serverId, [`workflow-run:${summary.id}`]));
+        await waitForHomeGovernance(() => expect(home.requestsFor(route)).toHaveLength(3));
+        await waitLoaded(member);
+        expect(home.requestsFor(route).at(-1)?.input).toHaveProperty('request.projection', 'membership');
+        expect(storage.getState().workflowRunsById[Object.keys(storage.getState().workflowRunsById)[0]!]).toBe(opened);
+        await act(async () => retireActiveServerAccountScopeLifetime());
+        await waitForHomeGovernance(() => expect(home.requestsFor(route)).toHaveLength(4));
+        expect(home.requestsFor(route).at(-1)?.input).toHaveProperty('request.projection', 'membership');
+    });
+
+    it.each([false, true])('honors richer demand while the first membership response is pending (compact failure: %s)', async compactFails => {
+        const summary = run('in-flight-attention');
+        const pending = createDeferred<void>();
+        home.answer(serverId, route, { ...(compactFails ? { status: 503, body: { error: 'storage_unavailable' } }
+            : { body: membershipPage([summary]) }), respondAfter: pending.promise });
+        await renderHook(() => useWorkflowRunWindow('attention', { projection: 'membership' }));
+        await waitForHomeGovernance(() => expect(home.requestsFor(route)).toHaveLength(1));
+        const full = await renderHook(() => useWorkflowRunWindow('attention'));
+        expect(home.requestsFor(route)).toHaveLength(1);
+        home.answer(serverId, route, { body: await runPage([summary], undefined, undefined, 'Current review') });
+        await act(async () => pending.resolve());
+        await waitLoaded(full);
+        expect(home.requestsFor(route)).toHaveLength(2);
+        expect(home.requestsFor(route)[1]?.input).not.toHaveProperty('request.projection');
+        expect(full.getCurrent().rows[0]?.metadata).toEqual({ kind: 'available', value: { title: 'Current review' } });
+    });
+
+    it('retains opened rows and their Home qualification while promoting compact membership', async () => {
+        const summary = run('retained-private');
+        const opened = workflowRunRowFromSummary(summary, { kind: 'available', value: { title: 'Last known review' } });
+        storage.getState().upsertWorkflowRuns([opened]);
+        const bodies = storage.getState().workflowRunsById;
+        home.answer(serverId, route, { body: membershipPage([summary]) });
+        const member = await renderHook(() => useWorkflowRunWindow('attention', { projection: 'membership' })); await waitLoaded(member);
+        expect(member.getCurrent().rows).toEqual([]);
+        expect(storage.getState().workflowRunsById).toBe(bodies);
+        const pending = createDeferred<void>();
+        home.answer(serverId, route, { body: await runPage([summary], undefined, undefined, 'Last known review'), respondAfter: pending.promise });
+        const full = await renderHook(() => useWorkflowRunWindow('attention'));
+        await waitForHomeGovernance(() => expect(home.requestsFor(route)).toHaveLength(2));
+        expect(full.getCurrent().status).toBe('loading');
+        expect(full.getCurrent().knownAt).toBeNull();
+        expect(full.getCurrent().serverId).toBe(serverId);
+        expect(full.getCurrent().rows).toEqual([opened]);
+        await act(async () => pending.resolve()); await waitLoaded(full);
+    });
+
+    it('retires a pending compact read and its queued promotion without letting its late answer affect the new lifetime', async () => {
+        const old = run('retired-member');
+        const pending = createDeferred<void>();
+        home.answer(serverId, route, { body: membershipPage([old]), respondAfter: pending.promise });
+        await renderHook(() => useWorkflowRunWindow('attention', { projection: 'membership' }));
+        await waitForHomeGovernance(() => expect(home.requestsFor(route)).toHaveLength(1));
+        const full = await renderHook(() => useWorkflowRunWindow('attention'));
+        const current = run('current-member');
+        const fullPage = await runPage([current], undefined, undefined, 'Current lifetime');
+        home.answer(serverId, route, { select: input => ({ body: input && typeof input === 'object' && 'request' in input
+            && input.request && typeof input.request === 'object' && 'projection' in input.request
+            ? membershipPage([current]) : fullPage }) });
+        await act(async () => retireActiveServerAccountScopeLifetime());
+        await waitLoaded(full);
+        expect(full.getCurrent().runIds).toEqual([current.id]);
+        const count = home.requestsFor(route).length;
+        await act(async () => pending.resolve());
+        expect(home.requestsFor(route)).toHaveLength(count);
+        expect(full.getCurrent().runIds).toEqual([current.id]);
+        expect(full.getCurrent().rows[0]?.metadata).toEqual({ kind: 'available', value: { title: 'Current lifetime' } });
+    });
+
+    it('restates compact membership through its body-free frontier and clears an exhausted window', async () => {
+        const ordered = [60, 50, 40, 30, 20, 10].map(value => createWorkflowRunSummaryFixture({ ...run(`member-${value}`),
+            createdAt: new Date(value * 1000).toISOString() }));
+        home.answer(serverId, route, { body: membershipPage(ordered.slice(1, 3), 'member-second') });
+        const member = await renderHook(() => useWorkflowRunWindow('attention', { projection: 'membership' })); await waitLoaded(member);
+        home.answer(serverId, route, { body: membershipPage(ordered.slice(3, 5), 'member-tail') });
+        await act(async () => member.getCurrent().loadMore());
+        await waitForHomeGovernance(() => expect(member.getCurrent().runIds).toHaveLength(4));
+        const pages = [membershipPage(ordered.slice(0, 2), 'fresh-second'), membershipPage(ordered.slice(2, 4), 'fresh-third'),
+            membershipPage(ordered.slice(5))];
+        home.answer(serverId, route, { select: () => ({ body: pages.shift() }) });
+        await act(async () => publishHomeAccountChange(serverId, ['workflow-run:member-20']));
+        await waitForHomeGovernance(() => expect(member.getCurrent().runIds).toEqual(ordered.filter(row => row.id !== 'member-20').map(row => row.id)));
+        expect(storage.getState().workflowRunsById).toEqual({});
+        expect(storage.getState().workflowRunListWindows.attention?.frontier).toEqual({ id: 'member-10', createdAt: 10_000 });
+        home.answer(serverId, route, { body: membershipPage([]) });
+        await act(async () => publishHomeAccountChange(serverId, ['workflow-run:member-10']));
+        await waitForHomeGovernance(() => expect(member.getCurrent().runIds).toEqual([]));
+        expect(storage.getState().workflowRunListWindows.attention?.frontier).toBeUndefined();
+        expect(member.getCurrent().hasMore).toBe(false);
+    });
+
+    it('issues one full refresh for one wake while shell and row demand are both mounted', async () => {
+        const summary = run('shared-wake');
+        home.answer(serverId, route, { body: membershipPage([summary]) });
+        const member = await renderHook(() => useWorkflowRunWindow('attention', { projection: 'membership' })); await waitLoaded(member);
+        home.answer(serverId, route, { body: await runPage([summary]) });
+        const full = await renderHook(() => useWorkflowRunWindow('attention')); await waitLoaded(full);
+        expect(home.requestsFor(route)).toHaveLength(2);
+        const pending = createDeferred<void>();
+        const current = { ...summary, revision: summary.revision + 1 };
+        home.answer(serverId, route, { body: await runPage([current]), respondAfter: pending.promise });
+        await act(async () => publishHomeAccountChange(serverId, [`workflow-run:${summary.id}`]));
+        await waitForHomeGovernance(() => expect(home.requestsFor(route)).toHaveLength(3));
+        await act(async () => pending.resolve());
+        await waitForHomeGovernance(() => expect(full.getCurrent().rows[0]?.summary?.revision).toBe(current.revision));
+        expect(home.requestsFor(route)).toHaveLength(3);
+    });
+
+    it('replays the membership frontier through full pages without mixing projection-bound cursors', async () => {
+        const ordered = [50, 40, 30, 20].map(value => createWorkflowRunSummaryFixture({ ...run(`frontier-${value}`),
+            createdAt: new Date(value * 1000).toISOString() }));
+        home.answer(serverId, route, { body: membershipPage(ordered.slice(1), 'compact-tail') });
+        const member = await renderHook(() => useWorkflowRunWindow('attention', { projection: 'membership' }));
+        await waitLoaded(member);
+        const pages = [await runPage(ordered.slice(0, 2), 'full-second'), await runPage(ordered.slice(2), 'full-tail')];
+        home.answer(serverId, route, { select: () => ({ body: pages.shift() }) });
+        const full = await renderHook(() => useWorkflowRunWindow('attention')); await waitLoaded(full);
+        expect(full.getCurrent().runIds).toEqual(ordered.map(row => row.id));
+        expect(home.requestsFor(route).slice(1).map(request => request.input)).toEqual([
+            expect.objectContaining({ request: { attention: 'required' } }),
+            expect.objectContaining({ request: { attention: 'required', cursor: 'full-second' } }),
+        ]);
+        expect(storage.getState().workflowRunListWindows.attention?.nextCursor).toBe('full-tail');
+    });
+
     it('shares destination demand, keeps destinations distinct from origins, and avoids unrelated renders', async () => {
         const summary = createWorkflowRunSummaryFixture({ id: 'writes-here', ownerAccountId: accountId, origin: { kind: 'direct', originSessionId: 'another-session' } });
         const pending = createDeferred<void>();

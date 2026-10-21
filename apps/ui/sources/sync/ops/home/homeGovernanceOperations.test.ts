@@ -232,7 +232,11 @@ describe('home governance mutations', () => {
 
     it('reports a Home with no such operation as unsupported rather than a generic failure', async () => {
         const home = await addHome();
-        // No answer registered: this Home does not serve the operation.
+        // This Home does not serve the operation: its router answers an unmatched route with a bare 404
+        // (not a typed domain refusal such as `{ error: 'not_found' }`, which other domains publish).
+        harness.answer(home, '/v1/home/accounts/enable', {
+            status: 404, body: { message: 'Route POST:/v1/home/accounts/enable not found', error: 'Not Found', statusCode: 404 },
+        });
 
         const { enableHomeAccount } = await operations();
         const outcome = await enableHomeAccount({
