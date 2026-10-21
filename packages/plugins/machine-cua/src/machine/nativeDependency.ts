@@ -1,4 +1,5 @@
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import type { ManagedExecutableRef } from '@happier-dev/plugin-sdk/managed-services';
 
 export const CUA_DEPENDENCY_ID = 'cua-cli';
 /**
@@ -22,7 +23,7 @@ function atLeast(version: string, floor: string): boolean {
 }
 
 /** The one place the managed `cua` dependency becomes an executable: installed, and not older than the floor. */
-export async function resolveCuaExecutable(context: Pick<PluginInvocationContext, 'services' | 'signal'>) {
+export async function resolveCuaExecutable(context: Pick<PluginInvocationContext, 'services' | 'signal'>): Promise<ManagedExecutableRef> {
     const status = await context.services.managedServices.dependencies.status(CUA_DEPENDENCY_ID, { signal: context.signal });
     // Only a status that says the CLI is absent is "not installed"; a failed status read says nothing about it.
     if (status.state === 'missing' || status.state === 'unsupported') throw new Error('cua_native_unavailable');
