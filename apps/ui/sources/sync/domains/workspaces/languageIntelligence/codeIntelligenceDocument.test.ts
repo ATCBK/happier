@@ -19,7 +19,7 @@ describe('language document custody', () => {
                     if (watches === 1) return Promise.resolve({ status: 'ok', revision: 1, servers: [], diagnostics: {} });
                     if (watches === 2) return new Promise((resolve, reject) => {
                         disconnect = () => failure === 'throw' ? reject(new Error('Disconnected'))
-                            : resolve({ status: 'unavailable', reason: 'offline' });
+                            : resolve({ status: 'unavailable', reason: 'session_unavailable' });
                     });
                     // Connectivity can recover while the first re-park is still failing.
                     // The successful query must restore delivery even without another edit.
@@ -37,7 +37,7 @@ describe('language document custody', () => {
             await holder.query('hover', { line: 0, character: 2 }, new AbortController().signal);
             await vi.waitFor(() => expect(received).toEqual([1]));
             disconnect();
-            await vi.waitFor(() => expect(unavailable).toEqual([failure === 'throw' ? 'transport_failed' : 'offline']));
+            await vi.waitFor(() => expect(unavailable).toEqual([failure === 'throw' ? 'transport_failed' : 'session_unavailable']));
             expect(await holder.query('hover', { line: 0, character: 2 }, new AbortController().signal)).toMatchObject({ status: 'ok' });
             await vi.waitFor(() => expect(received).toEqual([1, 3]));
         } finally { holder.dispose(); }

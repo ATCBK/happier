@@ -6,6 +6,11 @@ import { ActionOperationSnapshotV1Schema, ACTION_OPERATION_RPC_METHODS_V1, ACTIO
 import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { subscribeAcknowledgedWorkspaceFileWrites } from '@/sync/domains/workspaces/files/workspaceFileAcknowledgements';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+
+// Stopping an operation uses its existing policy confirmation. The modal is
+// the genuine UI boundary; accept it while leaving Action admission real.
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -79,7 +84,7 @@ describe('workspace replace admitted Account carrier', () => {
             expect(await apply()).toEqual(receipt);
             expect(homes.requestsFor('/v1/actions/workspace.files.replace')).toHaveLength(1);
             expect(rpc.call).toHaveBeenCalledWith(expect.objectContaining({ method: ACTION_OPERATION_RPC_METHODS_V2.get,
-                serverId, accountId: 'alice', machineId: 'machine', payload: { operationId: 'replace-operation', waitForTerminal: true }, operationTimeoutMs: null }));
+                serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'alice', machineId: 'machine', payload: { operationId: 'replace-operation', waitForTerminal: true }, operationTimeoutMs: null }));
             expect(writes).toEqual([{ path: 'a.ts', hash: nextHash }]);
         } finally { unsubscribe(); }
     });
@@ -97,7 +102,7 @@ describe('workspace replace admitted Account carrier', () => {
         cancellation.abort(); release();
         expect(await result).toEqual(receipt);
         expect(rpc.call).toHaveBeenCalledWith(expect.objectContaining({ method: ACTION_OPERATION_RPC_METHODS_V1.cancel,
-            serverId, accountId: 'alice', machineId: 'machine', payload: { operationId: 'replace-operation' } }));
+            serverId: resolveServerProfileScopeIdForIdentifier(serverId), machineId: 'machine', payload: { operationId: 'replace-operation' } }));
     });
 
     it('rejects a different Account before any replacement reaches the Machine', async () => {

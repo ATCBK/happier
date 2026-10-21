@@ -210,10 +210,10 @@ describe('useWorkspaceReplace', () => {
     beforeEach(async () => {
         await homes.reset(); rpc.call.mockReset();
         scope = { ...scope, serverId: await homes.addHome({ name: 'Replace Home', serverUrl: 'https://replace-review.test',
-            serverIdentityId: 'home', accountId: 'acct', currentAccount: true, active: false }) };
+            serverIdentityId: 'srv_replace_review', accountId: 'acct', currentAccount: true, active: false }) };
         account = lifetime(scope.serverId);
         const boundary = await createExternalActionAccountHttpBoundary({ serverUrl: 'https://replace-review.test',
-            serverIdentityId: 'home', accountId: 'acct', machineId: 'mac', actionId: 'workspace.files.replace', tokenEpoch: 0,
+            serverIdentityId: 'srv_replace_review', accountId: 'acct', machineId: 'mac', actionId: 'workspace.files.replace', tokenEpoch: 0,
             execute: async (request, context) => {
                 const { machineId, ...payload } = WorkspaceFilesReplaceActionInputSchema.parse(request);
                 return rpc.call({ method: 'workspace.files.replace', machineId, payload, serverId: scope.serverId,
