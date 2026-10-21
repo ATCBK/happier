@@ -69,6 +69,7 @@ type RootState = {
 };
 type HostedSession = {
     session: ServerSession;
+    closing?: Promise<void>;
     timer: (() => void) | undefined;
     lastActivity: number;
     activeOperations: number;
@@ -147,6 +148,21 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
     function retireEmptySession(id: string, session: ServerSession): void {
         if (session.paths().length === 0) retireSession(id, session);
     }
+    async function closeDocument(id: string, session: ServerSession, path: string): Promise<void> {
+        const hosted = sessions.get(id);
+        if (hosted?.session !== session) return await session.close(path);
+        // Keep the actual closing process visible until its native teardown
+        // settles. Acquisition joins this same close before selecting a session.
+        const closing = hosted.closing
+            ? hosted.closing.then(() => session.close(path)) : session.close(path);
+        hosted.closing = closing;
+        try {
+            await closing;
+            if (hosted.closing === closing) retireEmptySession(id, session);
+        } finally {
+            if (hosted.closing === closing) hosted.closing = undefined;
+        }
+    }
     function localPath(session: ServerSession, root: RootState, path: string): string {
         const absolute = resolveWorkspacePath({ rootPath: root.path, platform }, path);
         const local = relative(session.workspaceRoot, absolute).replaceAll('\\', '/');
@@ -213,7 +229,8 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
                 error => logger.debug('[LSP] Idle cleanup failed', { error }));
         }, { unref: true });
     }
-    async function ensureSession(root: RootState, path: string, definition: LanguageServerDefinition, context?: RequestContext, isCurrent?: () => boolean): Promise<{
+    async function ensureSession(root: RootState, path: string, definition: LanguageServerDefinition,
+        acquire: (selected: { id: string; session: ServerSession }) => Promise<void>, context?: RequestContext, isCurrent?: () => boolean): Promise<{
         id: string;
         session: ServerSession;
     }> {
@@ -221,6 +238,11 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
         if (disposed || (isCurrent && !isCurrent())) throw new LanguageServerSessionError('cancelled');
         const id = JSON.stringify([definition.id, key(nativeRoot)]);
         let hosted = sessions.get(id);
+        while (hosted?.closing) {
+            await hosted.closing;
+            if (disposed || (isCurrent && !isCurrent())) throw new LanguageServerSessionError('cancelled');
+            hosted = sessions.get(id);
+        }
         if (!hosted) {
             const session = createServerSession({ definition, rootPath: nativeRoot, workspaceRoot: nativeRoot, platform, openProtocol,
                 requesterWorkAttributionV1: context?.requesterWorkAttributionV1,
@@ -231,7 +253,11 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
             sessions.set(id, hosted);
         }
         root.sessions.add(id);
-        return { id, session: hosted.session };
+        const selected = { id, session: hosted.session };
+        // Enqueue document acquisition before publishing the selection across
+        // an await (including another stacked definition's root discovery).
+        await acquire(selected);
+        return selected;
     }
     function errorResponse(error: unknown): Extract<DaemonLspQueryResponse, {
         status: 'error' | 'unavailable';
@@ -281,17 +307,13 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
                 }
                 else if (op.op === 'close') {
                     const document = root.documents.get(op.path);
-                    if (document) {
-                        await Promise.all([...document.sessions].map(async (id) => { const hosted = sessions.get(id); if (hosted)
-                            await hosted.session.close(localPath(hosted.session, root, op.path)); }));
+                    if (document && document.references > 0) {
+                        const heldSessions = [...document.sessions];
                         document.references--;
-                        if (document.references === 0)
+                        await Promise.all(heldSessions.map(async (id) => { const hosted = sessions.get(id); if (hosted)
+                            await closeDocument(id, hosted.session, localPath(hosted.session, root, op.path)); }));
+                        if (document.references === 0 && root.documents.get(op.path) === document)
                             root.documents.delete(op.path);
-                        for (const id of document.sessions) {
-                            const session = sessions.get(id)?.session;
-                            if (session)
-                                retireEmptySession(id, session);
-                        }
                     }
                 }
                 else if (op.op === 'change') {
@@ -305,7 +327,8 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
                     const matching = definitions.findDefinitionsForDocument({ languageId: op.languageId, path: op.path });
                     if (!matching.length)
                         return { status: 'unavailable', reason: 'no_capable_server' };
-                    const prior = root.documents.get(op.path);
+                    const held = root.documents.get(op.path);
+                    const prior = held && held.references > 0 ? held : undefined;
                     if (op.op === 'snapshot' && !prior)
                         return { status: 'error', errorCode: 'document_out_of_sync' };
                     const document = prior ?? { languageId: op.languageId, references: 0, sessions: new Set<string>() };
@@ -314,35 +337,40 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
                         document.references++;
                     const isCurrent = () => !disposed && root.documents.get(op.path) === document && document.references > 0;
                     for (const definition of matching) {
-                        const { id, session } = await ensureSession(root, op.path, definition, context, isCurrent);
-                        if (!isCurrent()) throw new LanguageServerSessionError('cancelled');
-                        document.sessions.add(id);
-                        const text = { path: localPath(session, root, op.path), languageId: op.languageId, text: op.text, version: op.version, unsaved: op.unsaved };
-                        if (op.op === 'open' || !session.document(text.path)) {
-                            const holders = session.document(text.path) ? 1 : document.references;
-                            for (let index = 0; index < holders; index++) await session.open(text);
+                        await ensureSession(root, op.path, definition, async ({ id, session }) => {
                             if (!isCurrent()) throw new LanguageServerSessionError('cancelled');
-                            const hosted = sessions.get(id)!;
-                            hosted.activeOperations++;
-                            try {
-                                await session.start();
+                            document.sessions.add(id);
+                            const text = { path: localPath(session, root, op.path), languageId: op.languageId, text: op.text, version: op.version, unsaved: op.unsaved };
+                            if (op.op === 'open' || !session.document(text.path)) {
+                                const holders = session.document(text.path) ? 1 : document.references;
+                                for (let index = 0; index < holders; index++) await session.open(text);
+                                if (!isCurrent()) throw new LanguageServerSessionError('cancelled');
+                                const hosted = sessions.get(id)!;
+                                hosted.activeOperations++;
+                                try {
+                                    await session.start();
+                                }
+                                catch (error) {
+                                    if (session.status().state !== 'unavailable' && session.status().state !== 'crashed')
+                                        throw error;
+                                }
+                                finally {
+                                    hosted.activeOperations--;
+                                    touch(id);
+                                }
                             }
-                            catch (error) {
-                                if (session.status().state !== 'unavailable' && session.status().state !== 'crashed')
-                                    throw error;
-                            }
-                            finally {
-                                hosted.activeOperations--;
-                                touch(id);
-                            }
-                        }
-                        else
-                            await session.snapshot(text);
+                            else
+                                await session.snapshot(text);
+                        }, context, isCurrent);
                     }
                 }
                 for (const id of root.sessions)
                     touch(id);
-                const active = rootSessions(root);
+                const active = op.op === 'external' ? rootSessions(root)
+                    : [...(root.documents.get(op.path)?.sessions ?? [])].flatMap(id => {
+                        const hosted = sessions.get(id);
+                        return hosted ? [hosted.session] : [];
+                    });
                 return { status: 'ok', generation: root.generation, ...('version' in op ? { version: op.version } : {}), servers: active.map(s => s.status()), capabilities: active.length ? combineCapabilities(active) : emptyCapabilities() };
             }
             catch (error) {
@@ -363,44 +391,41 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
                 const root = rootFor(input.rootPath);
                 if (input.generation !== undefined && input.generation !== root.generation)
                     return { status: 'error', errorCode: 'stale_query' };
-                const sourceDocument = root.documents.get(input.path);
-                const languageId = input.languageId ?? sourceDocument?.languageId ?? getFileLanguageFromPath(input.path) ?? '';
+                const languageId = input.languageId ?? root.documents.get(input.path)?.languageId ?? getFileLanguageFromPath(input.path) ?? '';
                 const matching = definitions.findDefinitionsForDocument({ languageId: languageId || null, path: input.path }).filter(d => !input.serverId || d.id === input.serverId);
                 if (!matching.length)
                     return { status: 'unavailable', reason: 'no_capable_server' };
-                const selected = await Promise.all(matching.map(definition => ensureSession(root, input.path, definition, context)));
                 const absolute = resolveWorkspacePath({ rootPath: root.path, platform }, input.path);
                 let diskText: string | undefined, fileHash: string | undefined;
-                const existing = selected.flatMap(({ session }) => { const document = session.document(localPath(session, root, input.path)); return document ? [document] : []; })[0];
+                const existing = heldDocument(root, input.path);
                 if (input.text === 'disk' || !existing) {
                     const bytes = await readFile(absolute);
                     diskText = bytes.toString('utf8');
                     fileHash = createHash('sha256').update(bytes).digest('hex');
                 }
-                for (const { session } of selected) {
+                const selections = await Promise.allSettled(matching.map(definition => ensureSession(root, input.path, definition, async ({ id, session }) => {
                     const path = localPath(session, root, input.path), held = session.document(path);
                     if (input.text === 'disk' && held?.unsaved)
-                        return { status: 'error', errorCode: 'unsaved_editor_changes', diskHash: fileHash! };
-                }
-                for (const { id, session } of selected) {
-                    const path = localPath(session, root, input.path), held = session.document(path);
-                    if (held) {
-                        if (diskText !== undefined && diskText !== held.text)
-                            await session.snapshot({ ...held, text: diskText, version: held.version + 1, unsaved: false });
+                        throw new LspWorkspaceEditError('unsaved_editor_changes', fileHash!);
+                    const sourceDocument = root.documents.get(input.path);
+                    const selectedDiskText = input.text === 'disk' || !held ? diskText : undefined;
+                    if (held && input.text !== 'disk') fileHash = undefined;
+                    const changed = held && selectedDiskText !== undefined && selectedDiskText !== held.text;
+                    const document = { path, languageId: held?.languageId ?? languageId, text: selectedDiskText ?? held?.text ?? existing?.text ?? '',
+                        version: held ? held.version + (changed ? 1 : 0) : existing?.version ?? 0,
+                        unsaved: selectedDiskText === undefined && (held?.unsaved ?? existing?.unsaved ?? false) };
+                    // Enqueue the query's own reference before any await. An
+                    // editor close or sibling cleanup cannot end its custody.
+                    transient.push({ id, session, path });
+                    await session.open(document);
+                    if (!held && sourceDocument) {
+                        for (let i = 0; i < sourceDocument.references; i++) await session.open(document);
+                        sourceDocument.sessions.add(id);
                     }
-                    else {
-                        const document = { path, languageId, text: diskText ?? existing?.text ?? '', version: existing?.version ?? 0, unsaved: existing?.unsaved ?? false };
-                        for (let i = 0; i < (sourceDocument?.references ?? 0); i++)
-                            await session.open(document);
-                        if (sourceDocument)
-                            sourceDocument.sessions.add(id);
-                    }
-                    if (input.text === 'disk' || !sourceDocument) {
-                        const document = session.document(path) ?? { path, languageId, text: diskText ?? existing?.text ?? '', version: existing?.version ?? 0, unsaved: existing?.unsaved ?? false };
-                        await session.open(document);
-                        transient.push({ id, session, path });
-                    }
-                }
+                }, context)));
+                const failedSelection = selections.find(selection => selection.status === 'rejected');
+                if (failedSelection?.status === 'rejected') throw failedSelection.reason;
+                const selected = selections.flatMap(selection => selection.status === 'fulfilled' ? [selection.value] : []);
                 const document = selected[0].session.document(localPath(selected[0].session, root, input.path));
                 if (!document)
                     return { status: 'error', errorCode: 'session_unavailable' };
@@ -446,8 +471,7 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
             }
             finally {
                 await Promise.all(transient.map(async ({ id, session, path }) => { try {
-                    await session.close(path);
-                    retireEmptySession(id, session);
+                    await closeDocument(id, session, path);
                 }
                 catch (error) {
                     logger.debug('[LSP] Transient cleanup failed', { error });
@@ -502,10 +526,12 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
                 const languageId = input.languageId ?? root.documents.get(input.path)?.languageId ?? getFileLanguageFromPath(input.path) ?? '';
                 const definition = definitions.findDefinitionsForDocument({ languageId, path: input.path }).find(item => item.id === operation.action.serverId);
                 if (!definition) return { status: 'unavailable', reason: 'no_capable_server' };
-                const { id, session } = await ensureSession(root, input.path, definition, context);
-                const path = localPath(session, root, input.path), previous = session.document(path);
-                await session.open({ path, languageId, text: bytes.toString('utf8'), version: previous?.version ?? 0, unsaved: false });
-                retained.push({ id, session, path });
+                const { id, session } = await ensureSession(root, input.path, definition, async ({ id, session }) => {
+                    const path = localPath(session, root, input.path), previous = session.document(path);
+                    retained.push({ id, session, path });
+                    await session.open({ path, languageId, text: bytes.toString('utf8'), version: previous?.version ?? 0, unsaved: false });
+                }, context);
+                const path = localPath(session, root, input.path);
                 const hosted = sessions.get(id)!;
                 hosted.activeOperations++;
                 try {
@@ -534,7 +560,7 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
                 if (results.length) return { ok: true, results: [...results, { path: input.path, status: 'failed', reason: context?.signal?.aborted ? 'cancelled' : error instanceof LanguageServerSessionError ? error.code : 'request_failed' }], ...(context?.signal?.aborted ? { cancelled: [input.path] } : {}) };
                 return errorResponse(error);
             } finally {
-                await Promise.all(retained.map(async ({ id, session, path }) => { await session.close(path); retireEmptySession(id, session); }));
+                await Promise.all(retained.map(({ id, session, path }) => closeDocument(id, session, path)));
             }
         },
         async watch(input, context) {
