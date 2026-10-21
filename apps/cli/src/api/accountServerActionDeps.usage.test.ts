@@ -382,6 +382,15 @@ describe('CLI and MCP personal usage Account transport', () => {
     expect(head.quota?.[0]?.pageFacts).toBeUndefined();
     expect((await read()).quota).toMatchObject([{ history: { entries: [{ id: 'history' }], nextCursor: null } }]);
     expect(rangeHistoryReads).toBe(beforeHead + 1);
+    // A head-only sibling neither suppresses the later full clause nor widens
+    // its history range (the real HTTP route above requires exactly 100–200).
+    const mixed = await executor.execute('usage.query', { queries: [
+      normalizeUsageQuery({ ...query, period: { startMs: 0, endMs: 300 }, includeQuotaHistory: false }), query,
+    ] }, { surface: 'cli', serverId: 'home' });
+    expect(mixed.ok).toBe(true);
+    expect(UsageQueryBatchResultSchema.parse(mixed.ok ? mixed.result : undefined).results
+      .find(result => result.key === slice.key)?.quota).toMatchObject([{ history: { entries: [{ id: 'history' }], nextCursor: null } }]);
+    expect(rangeHistoryReads).toBe(beforeHead + 2);
     expect(slice.pools).toMatchObject([{ group: group.ref, memberAccountIds: ['work'], activeAccountId: 'work',
       selection: { status: 'unsupported', errorCode: 'machine_context_unavailable' } }]);
     expect(slice.sources).toEqual(expect.arrayContaining([{ source: 'accounting', status: 'available', asOfMs: 180 },
