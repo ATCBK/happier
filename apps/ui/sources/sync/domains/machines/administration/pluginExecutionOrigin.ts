@@ -119,7 +119,7 @@ export function serializePluginMachineExecutionOriginMachineFacts(params: Machin
     pluginId: string;
     materializations: readonly PluginMachineMaterializationV1[];
     sources: readonly PluginMachineSourceExecutionOriginCandidateV1[];
-}>): string {
+}>): Readonly<{ eligibilityKey: string; activityKey: string }> {
     const targets = [
         ...params.materializations.filter((entry) => entry.pluginId === params.pluginId),
         ...params.sources.filter((entry) => entry.source.origin.sourceRef.pluginId === params.pluginId)
@@ -131,11 +131,18 @@ export function serializePluginMachineExecutionOriginMachineFacts(params: Machin
     // Activity only ranks executable targets. Moving a refused Machine around
     // an eligible one changes neither admission nor the automatic choice.
     const rankedActivity = (fact: typeof facts[number]) => fact.rejection === null ? fact.activeAt : 0;
-    return JSON.stringify(facts.sort((left, right) => rankedActivity(right) - rankedActivity(left)
-        || left.target.serverIdentityId.localeCompare(right.target.serverIdentityId)
-        || left.target.machineId.localeCompare(right.target.machineId)).map(({ target, rejection, eligible }) => [
+    const compareTarget = (left: typeof facts[number], right: typeof facts[number]) =>
+        left.target.serverIdentityId.localeCompare(right.target.serverIdentityId)
+        || left.target.machineId.localeCompare(right.target.machineId);
+    const project = ({ target, rejection, eligible }: typeof facts[number]) => [
         target.serverIdentityId, target.machineId, rejection, eligible,
-    ]));
+    ];
+    // Ranking may change on a heartbeat while every candidate remains admitted.
+    // Keep that input separate so re-election does not rebuild candidate facts.
+    const eligibilityKey = JSON.stringify([...facts].sort(compareTarget).map(project));
+    const activityKey = JSON.stringify(facts.sort((left, right) => rankedActivity(right) - rankedActivity(left)
+        || compareTarget(left, right)).map(project));
+    return { eligibilityKey, activityKey };
 }
 
 export function buildPluginMachineSourceExecutionOriginCandidates(params: MachineFactInputs & Readonly<{

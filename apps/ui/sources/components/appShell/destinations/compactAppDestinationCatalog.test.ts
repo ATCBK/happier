@@ -724,6 +724,41 @@ describe('useActivateAppDestination', () => {
 });
 
 describe('useCompactAppDestinations', () => {
+    it('retains navigation identity through execution-only projection updates while publishing declaration changes', async () => {
+        const placement = createProjectedAppPage();
+        const value = {
+            interactionEnabled: true, pluginBrowserProjection: null, phase: 'current' as const,
+            machineId: 'machine-a', serverId: 'home-a', platform: 'web' as const, accountLifetime: null,
+            clientExecutableActivation: { status: 'ready' as const },
+            reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {},
+            pluginUiProjection: { ...EMPTY_PLUGIN_UI_PROJECTION, generation: 1,
+                surfacePlacementsById: { [placement.id]: placement } },
+        };
+        const render = (next: typeof value) => React.createElement(AppShellPluginUiProjectionValueProvider,
+            { value: next, children: React.createElement(CompactCatalogProbe) });
+        const screen = await renderScreen(render(value));
+        const read = (): ReturnType<typeof useCompactAppDestinations> => screen.tree.findByType('CompactCatalogProbe' as never).props.destinations;
+        const notes = (rows: ReturnType<typeof useCompactAppDestinations>) => rows.find(row =>
+            row.kind === 'plugin' && row.destination.pluginId === 'acme.notes');
+        const initial = read();
+        expect(notes(initial)?.title).toBe('Notes');
+        await screen.update(render({ ...value, machineId: 'machine-b', pluginUiProjection: {
+            ...value.pluginUiProjection, generation: 2, surfacePlacementsById: {
+                [placement.id]: { ...placement, occurrenceId: 'replacement-occurrence' },
+            },
+        } }));
+        expect(read()).toBe(initial);
+        await screen.update(render({ ...value, pluginUiProjection: {
+            ...value.pluginUiProjection, surfacePlacementsById: {
+                [placement.id]: { ...placement, display: { ...placement.display, developerFallback: 'Renamed notes' } },
+            },
+        } }));
+        expect(read()).not.toBe(initial);
+        expect(notes(read())?.title).toBe('Renamed notes');
+        await screen.update(render({ ...value, pluginUiProjection: { ...value.pluginUiProjection, surfacePlacementsById: {} } }));
+        expect(notes(read())).toBeUndefined();
+    });
+
     it('makes Bots available to every list once the app-wide roster runtime is mounted, and opens it there', async () => {
         const outside = await renderScreen(React.createElement(CompactCatalogProbe));
         expect(outside.tree.findByType('CompactCatalogProbe' as never).props.destinations

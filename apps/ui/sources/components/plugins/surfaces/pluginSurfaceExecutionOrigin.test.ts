@@ -9,7 +9,13 @@ import { mergeInstalledPluginUiProjections, readPluginUiContributionSupplies, un
 import { AppShellPluginUiProjectionValueProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { storage } from '@/sync/domains/state/storageStore';
-import { createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { createDeferred, createMachineFixture, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
+import { DaemonPluginUiTargetedContributionsReadResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import * as machineRpcBoundary from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
+import { readMachineInventoryRowReadiness } from '@/sync/domains/machines/resolveServerScopedMachines';
+import { getMachineContributionRegistryProjectionRevision } from '@/sync/ops/machineContributionRegistryProjection';
+import { useMountedTargetedContributions } from './mountedTargetedContributions';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -104,7 +110,8 @@ describe('plugin surface execution requirement', () => {
             source: { kind: 'bundled', locator: 'app-bundle:acme.surface-source' },
             declaredExecution: { daemonActions: true, contributionPoints: true } });
         let committedProjection = initialProjection;
-        const machine = createMachineFixture({ id: machineId, active: true, activeAt: Date.now() });
+        const machine = createMachineFixture({ id: machineId, active: true, activeAt: Date.now(),
+            daemonState: { status: 'running', pid: 17, runtimeId: 'surface-source-runtime', contributionRegistryProjectionRevision: 55 } });
         storage.setState({ profileScope: scope, settingsScope: scope, isDataReady: true,
             machines: { [machineId]: machine }, machineListByServerId: { [connection.home.id]: [machine] },
             machineListStatusByServerId: { [connection.home.id]: 'idle', srv_surface_source: 'idle' },
@@ -185,10 +192,78 @@ describe('plugin surface execution requirement', () => {
                 machineListByServerId: { [connection.home.id]: [machine], srv_surface_source: [machine] },
                 machineListStatusByServerId: { [connection.home.id]: 'idle', srv_surface_source: 'idle' } }));
             await hook.rerender();
-            const mounted = hook.getCurrent();
+            let mounted = hook.getCurrent();
             expect(mounted.selectedSupply, JSON.stringify(mounted.selection.state)).toMatchObject({ occurrenceId: 'occurrence-a', generation: 1 });
             expect(mounted.selection.machineCandidates).toHaveLength(0);
             expect(mounted.isExecutionOriginCurrent()).toBe(true);
+            // A published content hint can advance before its opened Machine
+            // row. Keep the projection source constant to isolate inventory
+            // readiness from genuine registry/occurrence replacement.
+            const targetedStarted = createDeferred<void>();
+            const targetedReply = createDeferred<unknown>();
+            const targetSignals: AbortSignal[] = [];
+            const transport = vi.spyOn(machineRpcBoundary, 'machineRpcWithServerScope').mockImplementation(async request => {
+                if (request.method !== RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ || !request.signal) {
+                    throw new Error('The diagnostic expects only a signal-bound targeted Machine read');
+                }
+                targetSignals.push(request.signal);
+                targetedStarted.resolve();
+                return targetedReply.promise;
+            });
+            const targetHook = await renderHook(() => {
+                const origin = usePluginSurfaceExecutionOrigin({ pluginId, projection: initialProjection,
+                    entry: initialProjection.surfacePlacementsById[entryId], includeMachineCandidates: false, enabled: true });
+                const occurrenceId = origin.selectedSupply?.occurrenceId;
+                const targeted = useMountedTargetedContributions({ machineId, serverId: connection.home.id, pluginId,
+                    mountedOccurrenceId: occurrenceId, enabled: Boolean(occurrenceId) });
+                return { origin, targeted };
+            }, { wrapper: Wrapper });
+            try {
+                await targetedStarted.promise;
+                expect(targetHook.getCurrent().origin.selectedSupply).toMatchObject({ occurrenceId: 'occurrence-a' });
+                expect(targetSignals[0]?.aborted).toBe(false);
+                const revisionScope = { machineId, serverId: connection.home.id };
+                const revisionBefore = getMachineContributionRegistryProjectionRevision(revisionScope);
+                const pendingMachine = { ...machine, keyBasis: { metadataVersion: machine.metadataVersion + 1,
+                    daemonStateVersion: machine.daemonStateVersion + 1, dataEncryptionKey: machine.dataEncryptionKey ?? null } };
+                await act(async () => storage.getState().applyMachines([pendingMachine], false,
+                    { sourceServerId: connection.home.id, sourceAccountId: scope.accountId }));
+                await flushHookEffects({ cycles: 3, turns: 2 });
+                expect(readMachineInventoryRowReadiness(storage.getState().machines[machineId]!)).toBe('pending');
+                expect(getMachineContributionRegistryProjectionRevision(revisionScope)).toBe(revisionBefore);
+                expect(targetHook.getCurrent().origin.selection.canExecute).toBe(false);
+                expect(targetHook.getCurrent().origin.selection.state).toMatchObject({ kind: 'unavailable', reasons: ['unknown'] });
+                expect(targetHook.getCurrent().origin.selectedSupply).toBeNull();
+                expect(targetSignals[0]?.aborted).toBe(true);
+                const openedMachine = { ...pendingMachine, metadataVersion: pendingMachine.keyBasis.metadataVersion,
+                    daemonStateVersion: pendingMachine.keyBasis.daemonStateVersion };
+                await act(async () => storage.getState().applyMachines([openedMachine], false,
+                    { sourceServerId: connection.home.id, sourceAccountId: scope.accountId }));
+                await flushHookEffects({ cycles: 3, turns: 2 });
+                expect(readMachineInventoryRowReadiness(storage.getState().machines[machineId]!)).toBe('available');
+                expect(getMachineContributionRegistryProjectionRevision(revisionScope)).toBe(revisionBefore);
+                expect(targetHook.getCurrent().origin.selection.canExecute).toBe(true);
+                expect(targetHook.getCurrent().origin.selectedSupply).toMatchObject({ occurrenceId: 'occurrence-a' });
+                expect(targetSignals).toHaveLength(2);
+                expect(targetSignals[1]?.aborted).toBe(false);
+                targetedReply.resolve(DaemonPluginUiTargetedContributionsReadResponseSchema.parse({ status: 'current',
+                    targetedContributions: { target: { pluginId, occurrenceId: 'occurrence-a', sourceCustody }, points: [] },
+                    targetedSurfaceMounts: [] }));
+                await flushHookEffects({ cycles: 3, turns: 2 });
+                expect(targetHook.getCurrent().targeted).toMatchObject({ phase: 'ready',
+                    targetedContributions: { target: { pluginId, occurrenceId: 'occurrence-a' } } });
+            } finally {
+                targetedReply.resolve(undefined);
+                await targetHook.unmount();
+                transport.mockRestore();
+                await act(async () => storage.getState().applyMachines([machine], false,
+                    { sourceServerId: connection.home.id, sourceAccountId: scope.accountId }));
+            }
+            // The intentional inventory round-trip above may replace semantic
+            // selection facts. The next checks concern unrelated rerenders of
+            // the now-settled selection, not its pre-round-trip object identity.
+            await hook.rerender();
+            mounted = hook.getCurrent();
             const composerEntry = initialProjection.composerControlsById[`${pluginId}/review`];
             expect(composerEntry).toBeDefined();
             const composerOrigin = await renderHook(() => usePluginSurfaceExecutionOrigin({ pluginId,

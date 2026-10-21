@@ -454,10 +454,10 @@ function pluginDeclarationContent(member: PluginUiProjectionUnionMember & Readon
         ...declarationMaps(model).map(map => Object.entries(map)
             .filter(([, entry]) => asRecord(entry)?.pluginId === pluginId)
             .sort(([left], [right]) => left.localeCompare(right))
-            .map(([key, entry]) => [key, declarationContent(entry)])),
+            .map(([key, entry]) => [key, readDeclarationComparisonSnapshot(entry)])),
         Object.entries(model.resourcesById).filter(([, entry]) => entry.pluginId === pluginId)
             .sort(([left], [right]) => left.localeCompare(right))
-            .map(([key, entry]) => [key, declarationContent(entry)]),
+            .map(([key, entry]) => [key, readDeclarationComparisonSnapshot(entry)]),
     ]);
 }
 

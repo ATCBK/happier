@@ -33,7 +33,8 @@ import {
     AppShellPluginUiProjectionValueProvider,
     type AppShellPluginUiProjectionValue,
 } from './AppShellPluginUiProjection';
-import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
+import { EMPTY_PLUGIN_UI_PROJECTION, createPluginUiProjectedActionResolver } from '@/sync/domains/plugins/ui/projection';
+import { readCurrentAppShellPluginUiProjection } from './committedPluginUiProjection';
 import { selectPluginSurfacePlacementsForBinding } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
 import { resolveAdmittedPluginSettingsPage } from '@/components/settings/catalog/runtime/pluginSettingsPageCatalog';
 import { resolvePluginAppPages, selectPluginAppPagePlacements } from './pluginAppPages';
@@ -68,6 +69,10 @@ import { storage as persistentStorage } from '@/sync/domains/state/storageStore'
 import { normalizeAccountSettingsForLocalStorage } from '@/sync/domains/settings/accountSettingsNormalization';
 import { clearPluginMachineExecutionOriginPreference, setPluginMachineExecutionOriginPreference } from '@/sync/domains/machines/administration/selectionPreferences';
 import { usePluginSurfaceExecutionOrigin } from '@/components/plugins/surfaces/pluginSurfaceExecutionOrigin';
+import { useMountedTargetedContributions } from '@/components/plugins/surfaces/mountedTargetedContributions';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { MachinePublishedDaemonStateV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
+import { DaemonPluginUiTargetedContributionsReadResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { PluginUiPageHeaderActionProjection, PluginUiPhysicalSurfacePlacementProjection } from '@/sync/domains/plugins/ui/projection';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import {
@@ -160,6 +165,9 @@ const projectionDescribeSpy = vi.hoisted(() => vi.fn<
 const artifactByteRead = vi.hoisted(() => vi.fn<(
     params: ServerScopedMachineRpcParams<unknown>,
 ) => Promise<DaemonPluginUiArtifactBytesReadResponse>>());
+const targetedProjectionRead = vi.hoisted(() => vi.fn<(
+    params: ServerScopedMachineRpcParams<unknown>,
+) => Promise<unknown>>());
 const pluginExecutableHostState = vi.hoisted(() => ({
     override: null as PluginUiExecutableModuleHost | null,
 }));
@@ -225,6 +233,8 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
         machineRpcWithServerScope: (params: ServerScopedMachineRpcParams<unknown>) => (
             params.method === RPC_METHODS.DAEMON_PLUGIN_UI_ARTIFACT_BYTES_READ
                 ? artifactByteRead(params)
+                : params.method === RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ
+                    ? targetedProjectionRead(params)
                 : describe(params)
         ),
     };
@@ -286,6 +296,7 @@ afterEach(async () => {
     persistentStorage.setState(initialPersistentStorageState, true);
     projectionDescribeSpy.mockReset();
     artifactByteRead.mockReset();
+    targetedProjectionRead.mockReset();
     pluginExecutableHostState.override = null;
     appShellClientExecutableRuntimeState.loaderBackend = null;
     storageState.machines = [];
@@ -580,6 +591,20 @@ function SourceExecutionProbe(props: Readonly<{ pluginId: string }>) {
         entry: Object.values<PluginUiPhysicalSurfacePlacementProjection>(pluginUiProjection?.surfacePlacementsById ?? {})
             .find(entry => entry.pluginId === props.pluginId), enabled: true });
     return React.createElement('SourceExecutionProbe', { execution });
+}
+
+function PendingSourceExecutionProbe(props: Readonly<{ pluginId: string }>) {
+    const { pluginUiProjection } = useAppShellPluginUiProjection();
+    const execution = usePluginSurfaceExecutionOrigin({ pluginId: props.pluginId, projection: pluginUiProjection,
+        entry: Object.values(pluginUiProjection?.surfacePlacementsById ?? {})
+            .find(entry => entry.pluginId === props.pluginId), enabled: true });
+    // These are the real mount inputs from PluginSurfaceHost: withdrawing the
+    // selected supplier retires the read even when its plugin did not reload.
+    const targeted = useMountedTargetedContributions({ machineId: execution.selectedSupply?.machineId,
+        serverId: execution.selectedSupply?.serverId, pluginId: props.pluginId,
+        mountedOccurrenceId: execution.selectedSupply?.occurrenceId,
+        enabled: Boolean(execution.selectedSupply?.occurrenceId) });
+    return React.createElement('PendingSourceExecutionProbe', { execution, targeted });
 }
 
 function ClientActionHeaderPresentationProbe(props: Readonly<{
@@ -3024,6 +3049,134 @@ describe('AppShellPluginUiProjectionProvider', () => {
         expect(readPlacements().map((placement) => placement.descriptorId)).toEqual(['panel-a', 'panel-b']);
         expect(readPluginUiContributionOrigin(readPlacements()[0])).toBeNull();
 
+        await screen.unmount();
+    });
+
+    it.each(['opened', 'pending'] as const)('retains an admitted source read through a same-key %s daemon content publication', async (publication) => {
+        const projectionOps = await import('@/sync/ops/machineContributionRegistryProjection');
+        // Observe the caller signal without substituting the shared read owner.
+        const readObserver = vi.spyOn(projectionOps, 'machinePluginUiTargetedContributionsRead');
+        onTestFinished(() => readObserver.mockRestore());
+        const { createBoundPluginSurfaceController } = await import('@/components/plugins/surfaces/boundPluginSurfaceController');
+        const { settlePluginSurfaceHostApiRequest } = await import('@/components/plugins/surfaces/createPluginSurfaceHostApi');
+        const pluginId = 'acme.pending-source';
+        const machineId = 'machine-pending-source';
+        const occurrenceId = `${pluginId}:panel:occurrence`;
+        const sourceCustody = { kind: 'development' as const, registeredRootId: 'pending-source-root' };
+        const executionOrigin = PluginMachineExecutionOriginV1Schema.parse({
+            serverIdentityId: APP_SCOPE_FIXTURE.serverIdentityId, sourceRef: { machineId, pluginId, sourceCustody },
+        });
+        const targetedResponse = DaemonPluginUiTargetedContributionsReadResponseSchema.parse({
+            status: 'current', targetedContributions: {
+                target: { pluginId, occurrenceId, sourceCustody }, points: [],
+            }, targetedSurfaceMounts: [],
+        });
+        const daemonState = MachinePublishedDaemonStateV1Schema.parse({ status: 'running', pid: 17,
+            runtimeId: 'pending-source-runtime', contributionRegistryProjectionRevision: 1 });
+        const machine = createLiveMachine(machineId);
+        persistentStorage.getState().applyMachines([{ ...machine, daemonState, daemonStateVersion: 2,
+            storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+            keyBasis: { dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+                metadataVersion: machine.metadataVersion, daemonStateVersion: 2 },
+        }], true, { sourceServerId: storageState.activeServer.serverId });
+        const raw = pluginUiProjectionWithAppTab({ generation: 7, pluginId, origin: executionOrigin });
+        projectionDescribeSpy.mockResolvedValue({ supported: true, projection: PluginProjectionV2Schema.parse({ ...raw,
+            actionsById: { [`${pluginId}/read-source`]: { id: 'read-source', pluginId, occurrenceId,
+                title: 'Read source', scopes: ['global'], surfaces: ['ui'], dangerLevel: 'safe',
+                execution: { target: 'daemon' }, available: true, executionOrigin } },
+            installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'Pending source', version: '1.0.0',
+                enabled: true, source: { kind: 'localPath', locator: 'pending-source-root' },
+                sourceCustody, executionOrigin, occurrenceId, declaresContributionPoints: true } },
+        }) });
+        const pending = createDeferred<unknown>();
+        const signals: AbortSignal[] = [];
+        const cancellations: Array<Readonly<{ stack?: string }>> = [];
+        // Only the external daemon RPC is deferred. Selection, committed
+        // projection, mounted read sharing and cancellation remain real.
+        targetedProjectionRead.mockImplementation(async request => {
+            const signal = request.signal;
+            if (!signal) throw new Error('Targeted RPC must carry the real cancellation signal');
+            signals.push(signal);
+            const cancel = () => {
+                const error = Object.assign(new Error('Daemon read cancelled'), { code: 'MACHINE_RPC_ABORTED' });
+                cancellations.push({ stack: error.stack });
+                pending.reject(error);
+            };
+            signal.addEventListener('abort', cancel, { once: true });
+            try { return await pending.promise; }
+            finally { signal.removeEventListener('abort', cancel); }
+        });
+        const { AppShellPluginUiProjectionProvider } = await import('./AppShellPluginUiProjection');
+        const screen = await renderScreen(<AppShellPluginUiProjectionProvider>
+            <PendingSourceExecutionProbe pluginId={pluginId} />
+        </AppShellPluginUiProjectionProvider>);
+        const read = () => screen.tree.findByType('PendingSourceExecutionProbe' as never).props as {
+            execution: ReturnType<typeof usePluginSurfaceExecutionOrigin>;
+            targeted: ReturnType<typeof useMountedTargetedContributions>;
+        };
+        await vi.waitFor(() => {
+            expect(read().execution.selectedSupply?.occurrenceId).toBe(occurrenceId);
+            expect(signals).toHaveLength(1);
+        });
+        const callerSignal = readObserver.mock.calls[0]?.[1].signal;
+        if (!callerSignal) throw new Error('The mounted read did not expose its original cancellation signal');
+        let callerCancellationStack: string | undefined;
+        const recordCallerCancellation = () => { callerCancellationStack = new Error('Mounted reader cancelled').stack; };
+        callerSignal.addEventListener('abort', recordCallerCancellation, { once: true });
+        onTestFinished(() => callerSignal.removeEventListener('abort', recordCallerCancellation));
+        const admitted = read().execution.selectedSupply;
+        const accountLifetime = captureActiveServerAccountScopeLifetime();
+        const revision = (await import('@/sync/ops/machineContributionRegistryProjectionRevision'))
+            .getMachineContributionRegistryProjectionRevision({ machineId, serverId: storageState.activeServer.serverId });
+        await act(async () => {
+            const current = persistentStorage.getState().machines[machineId]!;
+            if (!current.keyBasis) throw new Error('The admitted fixture lost its published basis');
+            persistentStorage.getState().applyMachines([{ ...current,
+                keyBasis: { ...current.keyBasis, daemonStateVersion: 3 },
+                ...(publication === 'opened' ? { daemonStateVersion: 3 } : {}),
+            }], false, { sourceServerId: storageState.activeServer.serverId });
+        });
+        await flushHookEffects();
+        // Fresh execution remains closed, but an un-opened same-key hint is
+        // not proof that this exact plugin occurrence/custody was replaced.
+        expect(captureActiveServerAccountScopeLifetime()).toBe(accountLifetime);
+        expect((await import('@/sync/ops/machineContributionRegistryProjectionRevision'))
+            .getMachineContributionRegistryProjectionRevision({ machineId, serverId: storageState.activeServer.serverId })).toBe(revision);
+        expect(read().execution.selection.canExecute).toBe(publication === 'opened');
+        if (publication === 'pending') expect(read().execution.isExecutionOriginCurrent()).toBe(false);
+        expect.soft(signals[0]!.aborted, JSON.stringify({ callerCancellationStack, cancellations,
+            selection: read().execution.selection.state.kind, targetedPhase: read().targeted.phase })).toBe(false);
+        expect.soft(read().execution.selectedSupply?.occurrenceId).toBe(admitted?.occurrenceId);
+        // Consume the selected producer through the same bound-controller
+        // front door: content pending must refuse execution, not erase caller
+        // provenance and misclassify it as an unmounted caller.
+        if (publication === 'pending') {
+            const supply = read().execution.selectedSupply;
+            const mountedProjection = readCurrentAppShellPluginUiProjection();
+            const controller = createBoundPluginSurfaceController({ facts: {
+                pluginId, contributionId: 'panel', surfaceId: `surfacePlacement:${pluginId}:panel`,
+                placement: 'rightSidebarSurface', platform: 'web', accountLifetime,
+                machineId: supply?.machineId, serverId: supply?.serverId,
+                projectionGeneration: supply?.generation, occurrenceId: supply?.occurrenceId,
+                executionOrigin: supply?.executionOrigin, interactionEnabled: true,
+                daemonInteractionEnabled: read().execution.selection.canExecute,
+                pluginUiProjection: mountedProjection,
+                resolveContributedAction: createPluginUiProjectedActionResolver(mountedProjection?.actionsById),
+            }, binding: { isExecutionOriginCurrent: () => read().execution.isExecutionOriginCurrent() } });
+            try {
+                const request = { version: 1 as const, requestId: 'pending-source-read', surface: controller.surfaceContext,
+                    method: 'executeAction' as const, payload: { action: { pluginId, localId: 'read-source' }, input: {} } };
+                const refusal = await settlePluginSurfaceHostApiRequest(request, () => controller.hostApi.handleRequest(request));
+                expect(refusal, JSON.stringify(refusal)).toMatchObject({ kind: 'error', payload: { code: 'unavailable' } });
+                expect.soft(refusal.kind === 'error' ? refusal.payload.diagnostics : [])
+                    .not.toContain('plugin_mounted_caller_unavailable');
+            } finally { controller.dispose(); }
+        }
+        await act(async () => { pending.resolve(targetedResponse); });
+        await flushHookEffects();
+        expect.soft(read().targeted.phase).toBe('ready');
+        callerSignal.removeEventListener('abort', recordCallerCancellation);
+        readObserver.mockRestore();
         await screen.unmount();
     });
 

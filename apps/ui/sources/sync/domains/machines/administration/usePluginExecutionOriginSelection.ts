@@ -87,6 +87,7 @@ const EMPTY_EXECUTION_ORIGIN_MATERIALIZATIONS: readonly PluginMachineMaterializa
 const EMPTY_EXECUTION_ORIGIN_SOURCES: readonly PluginMachineSourceExecutionOriginCandidateV1[] = Object.freeze([]);
 type ExecutionOriginMachineSnapshotSelection = Readonly<{
     key: string;
+    eligibilityKey: string;
     snapshots: readonly ServerMachineInventorySnapshotV1[];
     nextRefreshAtMs: number | null;
     readMachineFact: PluginExecutionOriginMachineFactReader;
@@ -94,6 +95,7 @@ type ExecutionOriginMachineSnapshotSelection = Readonly<{
 const EMPTY_MACHINE_FACT = Object.freeze({ activeAt: 0, rejection: 'unknown' as const, eligible: false });
 const DISABLED_EXECUTION_ORIGIN_MACHINE_SNAPSHOT_SELECTION = Object.freeze({
     key: '',
+    eligibilityKey: '',
     snapshots: EMPTY_EXECUTION_ORIGIN_MACHINE_SNAPSHOTS,
     nextRefreshAtMs: null,
     readMachineFact: () => EMPTY_MACHINE_FACT,
@@ -141,16 +143,18 @@ function readExecutionOriginMachineFacts(
     // Even a plugin with no candidate has a meaningful pending census. Keep
     // that Home's readiness in the semantic key alongside candidate admission.
     const inventoryPending = producer.pendingServerIdentityIds.has(inputs.readinessServerIdentityId ?? '');
-    const key = previous?.materializations === inputs.materializations && previous.sources === inputs.sources
-        && previous.readinessServerIdentityId === inputs.readinessServerIdentityId && previous.inventoryPending === inventoryPending
-        ? previous.selection.key
-        : `${producer.accountScopeKey}\u0000${inputs.readinessServerIdentityId ?? ''}\u0000${inventoryPending}\u0000${serializePluginMachineExecutionOriginMachineFacts({
+    const unchanged = previous?.materializations === inputs.materializations && previous.sources === inputs.sources
+        && previous.readinessServerIdentityId === inputs.readinessServerIdentityId && previous.inventoryPending === inventoryPending;
+    const facts = unchanged ? null : serializePluginMachineExecutionOriginMachineFacts({
             pluginId: inputs.pluginId, materializations: inputs.materializations, sources: inputs.sources,
             machineSnapshots: producer.snapshots,
             readMachineFact: producer.readMachineFact,
-        })}`;
+        });
+    const prefix = `${producer.accountScopeKey}\u0000${inputs.readinessServerIdentityId ?? ''}\u0000${inventoryPending}\u0000`;
+    const key = unchanged ? previous.selection.key : `${prefix}${facts!.activityKey}`;
+    const eligibilityKey = unchanged ? previous.selection.eligibilityKey : `${prefix}${facts!.eligibilityKey}`;
     const selection = previous?.selection.key === key && previous.selection.snapshots === producer.snapshots
-        ? previous.selection : Object.freeze({ key, snapshots: producer.snapshots, nextRefreshAtMs: producer.nextRefreshAtMs,
+        ? previous.selection : Object.freeze({ key, eligibilityKey, snapshots: producer.snapshots, nextRefreshAtMs: producer.nextRefreshAtMs,
             readMachineFact: producer.readMachineFact });
     producer.factsByPluginId.set(inputs.pluginId, { pluginId: inputs.pluginId,
         materializations: inputs.materializations, sources: inputs.sources,
@@ -578,6 +582,7 @@ export function usePluginMachineExecutionOriginSelection(params: Readonly<{
     );
     // Picker presentation can refresh independently of canonical eligibility.
     const machineFactsKey = semanticMachineSelection.key;
+    const machineEligibilityKey = semanticMachineSelection.eligibilityKey;
     // Raw inventory can refresh presentation without changing any selection fact.
     const candidates = React.useMemo(() => enabled ? combinePluginMachineExecutionOriginCandidates(buildPluginMachineExecutionOriginCandidates({
         pluginId: params.pluginId,
@@ -589,7 +594,7 @@ export function usePluginMachineExecutionOriginSelection(params: Readonly<{
         classifyRelease: params.classifyRelease,
         machineRejections: params.machineRejections,
     }), buildPluginMachineSourceExecutionOriginCandidates({ pluginId: params.pluginId,
-        sources: params.sourceCandidates ?? [], machineSnapshots, readMachineFact })) : Object.freeze([]), [enabled, machineFactsKey, materializationAdmission, params.classifyRelease, params.pluginId, params.sourceCandidates, params.machineRejections]);
+        sources: params.sourceCandidates ?? [], machineSnapshots, readMachineFact })) : Object.freeze([]), [enabled, machineEligibilityKey, materializationAdmission, params.classifyRelease, params.pluginId, params.sourceCandidates, params.machineRejections]);
     const rememberedTarget = storedTarget ?? (storedOrigin ? { serverIdentityId: storedOrigin.serverIdentityId,
         machineId: getPluginMachineExecutionOriginRef(storedOrigin).machineId } : null);
     const storedOriginMachinePresence = rememberedTarget ? readMachineFact(rememberedTarget).rejection

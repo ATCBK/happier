@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
 import { readWorkflowRunTarget } from '@/sync/domains/workflows/workflowRunRoute';
 import { useShallow } from 'zustand/react/shallow';
@@ -833,11 +834,17 @@ export function useCompactAppDestinations(owners: AppDestinationActivationOwners
             }).filter((tab): tab is RightSidebarPluginTabDefinition => tab.owner === 'plugin')
             : []
     ), [localizePluginText, projection.pluginUiProjection]);
-    return React.useMemo(() => resolveCompactAppDestinations({
+    const destinations = React.useMemo(() => resolveCompactAppDestinations({
         builtins,
         pages,
         rightSidebarTabs,
     }), [builtins, pages, rightSidebarTabs]);
+    // The compact catalog carries navigation/presentation, not executable
+    // custody. A producer/diagnostic refresh with the same visible destinations
+    // must not invalidate every workspace tab and destination row.
+    const retained = React.useRef(destinations);
+    if (!sameStrictJsonValue(retained.current, destinations)) retained.current = destinations;
+    return retained.current;
 }
 
 export type ActivateAppDestination = (

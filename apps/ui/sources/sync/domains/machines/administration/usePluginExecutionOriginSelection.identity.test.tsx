@@ -135,9 +135,14 @@ describe('execution-origin plugin identity with real Account and machine owners'
         await act(async () => { storage.setState({ machineListStatusByServerId: { [home.id]: 'idle' } }); });
         // Recency is a ranking fact. A changed order must reach the chip before
         // invocation, while timestamps that retain the order stay presentation-only.
+        const admittedCandidates = hook.getCurrent().candidates;
         await act(async () => { storage.setState({ machineListByServerId: { [home.id]: [{ ...a, activeAt: b.activeAt + 1 }, b] } }); });
         expect(hook.getCurrent().selectedOrigin).toEqual(sources[0]!.source.origin);
+        // A heartbeat changes the choice, not the admitted candidate set consumed
+        // by AppShell's selectable-origin publication and plugin UI union.
+        expect(hook.getCurrent().candidates).toBe(admittedCandidates);
         await act(async () => { storage.setState({ machineListByServerId: { [home.id]: [a, b] } }); });
+        expect(hook.getCurrent().candidates).toBe(admittedCandidates);
         // Machine RPC records its exact routing profile; Administration reads
         // the portable Home identity. Both must observe the same refusal.
         await act(async () => { recordMachineRequestFailed({ ...scope, machineId: b.id }); });

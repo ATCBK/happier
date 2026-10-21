@@ -32,7 +32,7 @@ describe('execution-origin Machine fact serialization', () => {
                 ...(includeEligibility ? { executionEligibleMachineIds: revoked ? [] : rows } : {}),
                 machines: rows.map((id, index) => createMachineFixture({ id, active: true,
                     activeAt: Date.now() + activity[index], ...(revoked ? { revokedAt: 1 } : {}) })) }],
-        });
+        }).activityKey;
         expect(serialize([1, 2], true)).toBe(serialize([2, 1], true));
         expect(serialize([1, 2], false)).not.toBe(serialize([2, 1], false));
         expect(serialize([1, 2], false, false)).not.toBe(serialize([2, 1], false, false));
@@ -57,7 +57,7 @@ describe('execution-origin Machine fact serialization', () => {
                 serverName: 'Home', accountId, observation: 'live', inventoryStatus: 'loading', machines }],
         });
         // Actual Fleet policy still refuses each revoked target during a pending census.
-        expect(JSON.parse(actual)).toEqual([...rows].sort((a, b) => a.id.localeCompare(b.id))
+        expect(JSON.parse(actual.activityKey)).toEqual([...rows].sort((a, b) => a.id.localeCompare(b.id))
             .map(row => ['srv_one', row.id, 'revoked', false]));
         expect(activityReads).toBe(rows.length);
     });

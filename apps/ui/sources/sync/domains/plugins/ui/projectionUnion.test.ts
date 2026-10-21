@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createActionExecutor, PluginProjectionV2Schema, PluginProjectedResourceV2Schema, RPC_METHODS } from '@happier-dev/protocol';
 import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { PluginSourceCustodyV1Schema } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
+import { PluginDeclarativeProjectedModelV1Schema } from '@happier-dev/protocol/plugins/contributions/ui/declarativeProjectedModelV1';
 import {
     normalizePluginUiDestinationBindingV1,
     normalizePluginUiSettingsPageBindingV1,
@@ -335,6 +336,38 @@ it('reuses the live occurrence for the same declared root without confusing runt
         [String(entry.id)]: { ...declared.surfacePlacementsById[String(entry.id)]!, renderer: { ...declaredEntry.renderer,
             model: { ...declarative, root: { ...declarative.root, text: 'New content' } } } } } };
     expect(mergeInstalledPluginUiProjections([changed], runtime)?.surfacePlacementsById[String(entry.id)]?.occurrenceId).toBeUndefined();
+});
+
+it('reuses validated declaration comparisons when only fleet execution selection changes', () => {
+    const pluginId = 'acme.stable-declaration';
+    const entry = placementEntry({ pluginId, localId: 'stable', container: 'appPage' });
+    const model = {
+        identity: { pluginId, localId: 'inspector', qualifiedId: `${pluginId}/inspector` },
+        visible: true, requiredHostMethods: [],
+        declarativeInventory: { actions: [], destinations: [], settings: [], uiQueries: [] },
+        root: { kind: 'text', path: 'root', order: 0, text: 'Stable declaration' },
+    };
+    const members = ['machine-a', 'machine-b'].map(machineId => member({ machineId, generation: 1, entriesById: {
+        [entry.id]: { ...entry, renderer: { kind: 'declarative', contributionId: 'inspector', model } },
+    } }));
+    // Observe the real decoder without replacing validation or union policy.
+    const parse = vi.spyOn(PluginDeclarativeProjectedModelV1Schema, 'safeParse');
+    try {
+        const initial = unionPluginUiProjections(members);
+        expect(initial.pluginUiProjection?.surfacePlacementsById[entry.id]).toBeDefined();
+        expect(parse.mock.calls.length).toBeGreaterThan(0);
+        parse.mockClear();
+        unionPluginUiProjections([...members], selectedOrigins(selectedOrigin(pluginId, 'machine-b')));
+        expect(parse).not.toHaveBeenCalled();
+        const changed = member({ machineId: 'machine-b', generation: 2, entriesById: {
+            [entry.id]: { ...entry, renderer: { kind: 'declarative', contributionId: 'inspector', model: {
+                ...model, root: { ...model.root, text: 'Changed declaration' },
+            } } },
+        } });
+        const replaced = unionPluginUiProjections([members[0]!, changed]);
+        expect(replaced.pluginUiProjection?.surfacePlacementsById[entry.id]).toMatchObject({ hostCompatibility: 'conflict' });
+        expect(parse.mock.calls.length).toBeGreaterThan(0);
+    } finally { parse.mockRestore(); }
 });
 
 it('compares declaration snapshots without serialization while preserving native optional fields and authored payloads', () => {

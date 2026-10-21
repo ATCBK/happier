@@ -20,19 +20,25 @@ import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/
 
 const projectionRuntime = vi.hoisted(() => ({
     describe: vi.fn<(machineId: string, options?: unknown) => Promise<unknown>>(),
+    targeted: vi.fn<(machineId: string, options?: unknown) => Promise<unknown>>(),
     pendingReplies: new Map<() => void, Promise<void>>(),
 }));
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
     const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
     return createServerScopedMachineRpcBoundaryMock((params) => {
-        if (params.method !== RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) throw new Error(`Unexpected currentness fixture RPC: ${params.method}`);
+        const read = params.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
+            ? projectionRuntime.describe
+            : params.method === RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ
+                ? projectionRuntime.targeted
+                : null;
+        if (!read) throw new Error(`Unexpected currentness fixture RPC: ${params.method}`);
         // Pending external replies belong to the test Home transport. A case
         // may deliver a late answer, but disposing the fixture must settle
         // unanswered reads rather than leaking them into the next Account.
         let disconnect!: () => void;
         const reply = new Promise<unknown>((resolve, reject) => {
             disconnect = () => reject(new Error('Test projection Home transport disconnected'));
-            void Promise.resolve(projectionRuntime.describe(params.machineId, params)).then(resolve, reject);
+            void Promise.resolve(read(params.machineId, params)).then(resolve, reject);
         });
         const settled = reply.then(
             () => { projectionRuntime.pendingReplies.delete(disconnect); },
@@ -63,7 +69,7 @@ const { resolveServerScopedMachine } = await import('@/sync/domains/machines/res
 const { getPreferredLanguage } = await import('@/text');
 const { resolveNativeReactNativeHostRuntimeIdentity } = await import('@/components/plugins/reactNative/hostRuntimeIdentity');
 const { resolveHostedWebFrameCapability } = await import('@/components/plugins/hostedWeb/hostedWebFrameCapability');
-const { publishMachineContributionRegistryProjectionInvalidation, publishMachineContributionRegistryProjectionReconnect } = await import('@/sync/ops/machineContributionRegistryProjectionRevision');
+const { getMachineContributionRegistryProjectionRevision, publishMachineContributionRegistryProjectionInvalidation, publishMachineContributionRegistryProjectionReconnect } = await import('@/sync/ops/machineContributionRegistryProjectionRevision');
 
 const { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 const {
@@ -251,6 +257,7 @@ describe('usePluginUiProjectionCurrentness', () => {
         setMachine({ active: true, daemonStateVersion: 1 });
         await assertProjectionFixtureReady();
         projectionRuntime.describe.mockReset();
+        projectionRuntime.targeted.mockReset();
     });
 
     afterEach(async () => {
@@ -1232,6 +1239,133 @@ describe('usePluginUiProjectionCurrentness', () => {
         });
     });
 
+    it('keeps a mounted target read and its selected occurrence through unrelated Machine publications', async ({ onTestFailed }) => {
+        let phase = 'fixture';
+        onTestFailed(() => console.info('Mounted target composition phase:', phase));
+        const { artifactHtmlBundleFromBodyV1 } = await import('@happier-dev/protocol/artifacts/artifactHtmlV1');
+        const { normalizePluginUiDestinationBindingV1 } = await import('@happier-dev/protocol/plugins/ui');
+        const { PluginMachineExecutionOriginV1Schema } = await import('@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1');
+        const { DaemonPluginUiTargetedContributionsReadResponseSchema } = await import('@happier-dev/protocol/daemon/contributionRegistryProjection');
+        const { usePluginSurfaceExecutionOrigin } = await import('@/components/plugins/surfaces/pluginSurfaceExecutionOrigin');
+        const { useMountedTargetedContributions } = await import('@/components/plugins/surfaces/mountedTargetedContributions');
+        const pluginId = 'acme.preview';
+        const entryId = `surfacePlacement:${pluginId}:home`;
+        const sourceCustody = { kind: 'development' as const, registeredRootId: 'preview-root' };
+        const executionOrigin = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId,
+            sourceRef: { machineId: 'machine-1', pluginId, sourceCustody } });
+        const binding = normalizePluginUiDestinationBindingV1({ pluginId, destinationId: 'home', rendererId: 'home',
+            container: 'appPage', target: { kind: 'app' } });
+        if (!binding) throw new Error('The source fixture has no admitted destination');
+        const response = DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1,
+            projection: { v: 2, generation: 1,
+                installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'Preview', version: '1.0.0',
+                    enabled: true, source: { kind: 'localPath', locator: 'preview-root' },
+                    occurrenceId: 'occurrence-preview', sourceCustody, executionOrigin,
+                    declaresContributionPoints: true, executionTarget: { default: 'installation' } } },
+                familiesById: { pluginUi: { family: 'pluginUi', entriesById: { [entryId]: {
+                    id: entryId, pluginId, occurrenceId: 'occurrence-preview', executionOrigin,
+                    contributionKind: 'surfacePlacement', descriptorId: 'home', binding, target: binding.target,
+                    renderer: { kind: 'hostedHtml', contributionId: 'home',
+                        source: artifactHtmlBundleFromBodyV1('<p>Preview</p>'), requiredHostMethods: [] },
+                    display: {}, headerActions: [], availability: { state: 'available', reason: 'available', diagnostics: [] },
+                } } } },
+            } });
+        projectionRuntime.describe.mockResolvedValue(response);
+        const signals: AbortSignal[] = [];
+        const deliver: (() => void)[] = [];
+        projectionRuntime.targeted.mockImplementation((_machineId, options) => {
+            const signal = options && typeof options === 'object' && 'signal' in options
+                && options.signal instanceof AbortSignal ? options.signal : null;
+            if (!signal) throw new Error('The real targeted RPC did not carry its cancellation signal');
+            signals.push(signal);
+            return new Promise(resolve => deliver.push(() => resolve(DaemonPluginUiTargetedContributionsReadResponseSchema.parse({ status: 'current',
+                targetedContributions: { target: { pluginId, occurrenceId: 'occurrence-preview', sourceCustody }, points: [] },
+                targetedSurfaceMounts: [] }))));
+        });
+        const daemonState = { status: 'running', pid: 17, runtimeId: 'runtime-preview',
+            contributionRegistryProjectionRevision: 0 };
+        setMachine({ daemonStateVersion: 2, daemonState });
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime) throw new Error('The real Account lifetime was not admitted');
+        replacePluginAccountAvailabilityProjection({ scope: lifetime.scope, snapshot: {
+            availabilityCursor: 1, intentReads: [], materializations: [{ serverIdentityId, machineId: 'machine-1',
+                materializationId: 'preview-installation', pluginId, version: '1.0.0', sourceClass: 'localPath',
+                portableRelease: false, enabled: true, trustState: 'trusted', observedAt: 1, uiArtifacts: [] }], snapshots: [],
+        } });
+        function Wrapper({ children }: React.PropsWithChildren) {
+            return React.createElement(AppShellPluginUiProjectionProvider, null, children);
+        }
+        phase = 'mount real AppShell';
+        const rendered = await renderHook(() => {
+            const currentness = useAppShellPluginUiProjection();
+            const selected = usePluginSurfaceExecutionOrigin({ pluginId, projection: currentness.pluginUiProjection,
+                entry: currentness.pluginUiProjection?.surfacePlacementsById[entryId], enabled: true,
+                includeMachineCandidates: false });
+            const targeted = useMountedTargetedContributions({ machineId: selected.selectedSupply?.machineId,
+                serverId: selected.selectedSupply?.serverId, pluginId,
+                mountedOccurrenceId: selected.selectedSupply?.occurrenceId,
+                enabled: Boolean(selected.selectedSupply?.occurrenceId) });
+            return { currentness, selected, targeted };
+        }, { wrapper: Wrapper });
+        phase = 'await initial selected supply and targeted read';
+        await waitForHomeGovernance(() => {
+            expect(rendered.getCurrent().selected.selectedSupply?.occurrenceId).toBe('occurrence-preview');
+            expect(signals).toHaveLength(1);
+        });
+        const firstSupply = rendered.getCurrent().selected.selectedSupply;
+        const revision = getMachineContributionRegistryProjectionRevision({ machineId: 'machine-1', serverId: serverIdentityId });
+        phase = 'publish unrelated Machine content';
+        await act(async () => {
+            const current = storage.getState().machines['machine-1']!;
+            storage.getState().applyMachines([createMachineFixture({ ...current,
+                metadataVersion: current.metadataVersion + 1,
+                daemonStateVersion: 3, daemonState: { ...daemonState, resources: { cpu: { usage: 0.5 } } },
+            })], false, { sourceServerId: connection!.home.id });
+        });
+        await flushHookEffects();
+        expect(getMachineContributionRegistryProjectionRevision({ machineId: 'machine-1', serverId: serverIdentityId })).toBe(revision);
+        expect(signals).toHaveLength(1);
+        expect(signals[0]!.aborted).toBe(false);
+        expect(rendered.getCurrent().selected.selectedSupply).toEqual(firstSupply);
+        expect(rendered.getCurrent().targeted.phase).toBe('loading');
+        // An actual registry revision, unlike resource telemetry, retires the
+        // old physical read through the shared writer/currentness lifecycle.
+        phase = 'invalidate registry';
+        await act(async () => {
+            setMachine({ daemonStateVersion: 4,
+                daemonState: { ...daemonState, contributionRegistryProjectionRevision: 1 } });
+        });
+        phase = 'await replacement target read';
+        await waitForHomeGovernance(() => expect(signals).toHaveLength(2));
+        expect(signals[0]!.aborted).toBe(true);
+        expect(signals[1]!.aborted).toBe(false);
+        expect(rendered.getCurrent().selected.selectedSupply?.occurrenceId).toBe('occurrence-preview');
+        phase = 'deliver retired target reply';
+        await act(async () => { deliver[0]!(); });
+        await flushHookEffects();
+        expect(rendered.getCurrent().targeted.phase).toBe('loading');
+        phase = 'deliver current target reply';
+        await act(async () => { deliver[1]!(); });
+        await flushHookEffects();
+        expect(rendered.getCurrent().targeted).toMatchObject({ phase: 'ready',
+            targetedContributions: { target: { pluginId, occurrenceId: 'occurrence-preview' } } });
+        phase = 'invalidate before Account retirement';
+        await act(async () => { invalidateProjection(); });
+        await waitForHomeGovernance(() => expect(signals).toHaveLength(3));
+        phase = 'retire active Account lifetime';
+        await act(async () => { retireActiveServerAccountScopeLifetime(); });
+        expect(signals[2]!.aborted).toBe(true);
+        phase = 'deliver retired Account target reply';
+        await act(async () => { deliver[2]!(); });
+        await flushHookEffects();
+        // Capturing the unchanged Account can admit a successor lifetime; it
+        // still cannot publish the former lifetime's late targeted answer.
+        expect(lifetime.isCurrent()).toBe(false);
+        expect(rendered.getCurrent().targeted.targetedContributions).toBeNull();
+        phase = 'unmount';
+        await rendered.unmount();
+    });
+
     it('re-describes an equal-generation projection when daemon state version advances', async () => {
         projectionRuntime.describe
             .mockResolvedValueOnce(supportedProjection('Before daemon republish'))
@@ -1348,6 +1482,71 @@ describe('usePluginUiProjectionCurrentness', () => {
         expect(projectionRuntime.describe).toHaveBeenCalledTimes(3);
         expect(rendered.getCurrent().pluginUiProjection?.translationsByPluginId['acme.preview']?.bundles)
             .toEqual({ en: { title: 'After refresh' } });
+    });
+
+    it('shares the recovery cadence between simultaneous readers of one Machine authority', async () => {
+        vi.useFakeTimers();
+        try {
+            projectionRuntime.describe.mockResolvedValue({ protocolVersion: 1, projection: null });
+            const rendered = await renderHook(() => [
+                usePluginUiProjectionCurrentness({ machineId: 'machine-1', serverId: serverIdentityId }),
+                usePluginUiProjectionCurrentness({ machineId: 'machine-1', serverId: serverIdentityId }),
+            ]);
+            await flushHookEffects();
+            expect(projectionRuntime.describe).toHaveBeenCalledTimes(1);
+            expect(rendered.getCurrent().every(reader => !reader.interactionEnabled)).toBe(true);
+            await flushHookEffects({ advanceTimersMs: 250, cycles: 1, turns: 2 });
+            expect(projectionRuntime.describe).toHaveBeenCalledTimes(2);
+            await flushHookEffects({ advanceTimersMs: 50, cycles: 1, turns: 2 });
+            const lateReader = await renderHook(() => usePluginUiProjectionCurrentness({
+                machineId: 'machine-1', serverId: serverIdentityId,
+            }));
+            await flushHookEffects();
+            expect(projectionRuntime.describe).toHaveBeenCalledTimes(2);
+            // Departing readers cannot cancel the remaining reader's recovery,
+            // and a new mount cannot reset the shared failure to its first rung.
+            await rendered.unmount();
+            await flushHookEffects({ advanceTimersMs: 949, cycles: 1, turns: 2 });
+            expect(projectionRuntime.describe).toHaveBeenCalledTimes(2);
+            await flushHookEffects({ advanceTimersMs: 1, cycles: 1, turns: 2 });
+            expect(projectionRuntime.describe).toHaveBeenCalledTimes(3);
+            await lateReader.unmount();
+            await flushHookEffects({ advanceTimersMs: 10_000, cycles: 1, turns: 2 });
+            expect(projectionRuntime.describe).toHaveBeenCalledTimes(3);
+        } finally { vi.useRealTimers(); }
+    });
+
+    it('resets a failed projection recovery on explicit refresh and reconnect', async () => {
+        vi.useFakeTimers();
+        try {
+            let reloadRevision = 0;
+            projectionRuntime.describe.mockResolvedValue({ protocolVersion: 1, projection: null });
+            const rendered = await renderHook(() => {
+                const params = { machineId: 'machine-1', serverId: serverIdentityId, reloadRevision };
+                return [usePluginUiProjectionCurrentness(params), usePluginUiProjectionCurrentness(params)];
+            });
+            await flushHookEffects();
+            await flushHookEffects({ advanceTimersMs: 250, cycles: 1, turns: 2 });
+            expect(projectionRuntime.describe).toHaveBeenCalledTimes(2);
+            reloadRevision++;
+            await rendered.rerender();
+            await flushHookEffects();
+            expect(projectionRuntime.describe).toHaveBeenCalledTimes(3);
+            await flushHookEffects({ advanceTimersMs: 250, cycles: 1, turns: 2 });
+            expect(projectionRuntime.describe).toHaveBeenCalledTimes(4);
+            await act(async () => { publishMachineContributionRegistryProjectionReconnect(); });
+            await flushHookEffects();
+            expect(projectionRuntime.describe).toHaveBeenCalledTimes(5);
+            projectionRuntime.describe.mockResolvedValue(supportedProjection('Recovered after reconnect'));
+            await flushHookEffects({ advanceTimersMs: 250, cycles: 1, turns: 2 });
+            expect(projectionRuntime.describe).toHaveBeenCalledTimes(6);
+            for (const reader of rendered.getCurrent()) {
+                expect(reader.interactionEnabled).toBe(true);
+                expect(reader.pluginUiProjection?.translationsByPluginId['acme.preview']?.bundles)
+                    .toEqual({ en: { title: 'Recovered after reconnect' } });
+            }
+            await rendered.unmount();
+        } finally { vi.useRealTimers(); }
     });
 
     it('retries a transient projection failure while retaining an inert last-known-good snapshot', async () => {

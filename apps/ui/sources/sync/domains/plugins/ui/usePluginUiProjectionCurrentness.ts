@@ -28,7 +28,7 @@ import {
     subscribeMachineContributionRegistryProjectionInvalidation,
     type MachineContributionRegistryProjectionFailureReason,
 } from '@/sync/ops/machineContributionRegistryProjection';
-import { loadDaemonMergedProjectionCacheEntry } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
+import { loadDaemonMergedProjectionCacheEntry, readDaemonMergedProjectionRetryDelayMs } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import {
     useEndpointStatus,
     useMachineCliDetectionTarget,
@@ -51,13 +51,6 @@ import {
     type ConnectedAccountDescriptorMachineProjection,
 } from '@/sync/domains/connectedServices/connectedAccountDescriptorProjection';
 
-/**
- * The first rungs cover a transport blip around mount or reconnect. The final
- * rung preserves the incumbent 30 s recovery cadence while the failure lasts.
- * Successful snapshots refresh through the canonical machine invalidation
- * subscription, not a second AppShell full-projection poll.
- */
-const PLUGIN_UI_PROJECTION_RETRY_BACKOFF_MS = [250, 1_000, 2_500, 5_000, 30_000] as const;
 const CONNECTED_ACCOUNT_PROJECTION_TRANSPORT_ERROR = Object.freeze({
     kind: 'error' as const,
     reason: 'transport' as const,
@@ -329,6 +322,9 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
         : null;
     const currentAuthorityKeyRef = React.useRef(authorityKey);
     currentAuthorityKeyRef.current = authorityKey;
+    // A real reload/reconnect starts a fresh attempt; a newly mounted sibling
+    // instead joins the shared owner's existing failure/recovery cadence.
+    const lastRequestedAuthorityKeyRef = React.useRef<string | null>(null);
     const currentAccountLifetimeRef = React.useRef(accountLifetime);
     currentAccountLifetimeRef.current = accountLifetime;
     const currentPluginUiProjectionRef = React.useRef<PluginUiProjectionModel | null>(null);
@@ -412,7 +408,10 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
         let cancelled = false;
         const abort = new AbortController();
         let retryTimer: ReturnType<typeof setTimeout> | null = null;
-        let retryAttempts = 0;
+        let nextRetryEntry: Awaited<ReturnType<typeof loadDaemonMergedProjectionCacheEntry>> = null;
+        let shareRetryCadence = lastRequestedAuthorityKeyRef.current === null
+            || lastRequestedAuthorityKeyRef.current === authorityKey;
+        lastRequestedAuthorityKeyRef.current = authorityKey;
 
         const isRequestCurrent = (): boolean => (
             !cancelled
@@ -432,10 +431,7 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
                 return { ...retained, failureReason, phase: retained.phase === 'current' ? 'current' : 'unavailable',
                     connectedAccountProjection: CONNECTED_ACCOUNT_PROJECTION_TRANSPORT_ERROR };
             });
-            const delayMs = PLUGIN_UI_PROJECTION_RETRY_BACKOFF_MS[
-                Math.min(retryAttempts, PLUGIN_UI_PROJECTION_RETRY_BACKOFF_MS.length - 1)
-            ]!;
-            retryAttempts += 1;
+            const delayMs = readDaemonMergedProjectionRetryDelayMs(nextRetryEntry);
             retryTimer = setTimeout(() => {
                 retryTimer = null;
                 requestProjection();
@@ -451,10 +447,12 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
                 serverId: target.serverId,
                 accountLifetime,
                 signal: abort.signal,
-                reuseFreshReady: loadedProjection.authorityKey === null
-                    || loadedProjection.authorityKey === authorityKey,
+                reuseFreshReady: shareRetryCadence,
+                shareRetryCadence,
             }).then((entry) => {
                 if (!isRequestCurrent()) return;
+                nextRetryEntry = entry;
+                shareRetryCadence = true;
                 if (!entry || entry.kind === 'error') {
                     // Keep the last-known snapshot, but retry a current
                     // transient failure without letting it regain authority.
@@ -487,7 +485,6 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
                     scheduleRetry();
                     return;
                 }
-                retryAttempts = 0;
                 // This is the one moment admission currentness is confirmed,
                 // so it is the only moment the Account-qualified snapshot is
                 // recorded for the next fresh process.
