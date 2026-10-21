@@ -16,6 +16,7 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -151,20 +152,25 @@ export function ProcessesOwnerPage(
     return (
       <View style={styles.page} testID="machine-processes-process-page">
         <MachineTabSubHead title={describeProcessTitle(row)} back={backTo} />
-        <ProcessDetail
-          row={row}
-          owner={process?.owner.owner ?? left?.owner ?? null}
-          ownerTitle={
-            process ? (titles.get(process.owner.rowId) ?? null) : null
-          }
-          machineName={machineName}
-          platform={answer.platform}
-          homeDir={target.machine?.metadata?.homeDir}
-          samples={answer.history?.[row.ref]}
-          ceiling={process?.owner.ceiling}
-          onCopyCommand={row.level === 'proven' ? controller.copy : null}
-          onOpenSession={controller.openSession}
-        />
+        {/* The detail is drawn for a row's own region; on its page the column's gutter is its owner's, once. */}
+        <ItemGroup surface="none" header="none">
+          <ListPresentationProvider value="page" pageInsets="contained">
+            <ProcessDetail
+              row={row}
+              owner={process?.owner.owner ?? left?.owner ?? null}
+              ownerTitle={
+                process ? (titles.get(process.owner.rowId) ?? null) : null
+              }
+              machineName={machineName}
+              platform={answer.platform}
+              homeDir={target.machine?.metadata?.homeDir}
+              samples={answer.history?.[row.ref]}
+              ceiling={process?.owner.ceiling}
+              onCopyCommand={row.level === 'proven' ? controller.copy : null}
+              onOpenSession={controller.openSession}
+            />
+          </ListPresentationProvider>
+        </ItemGroup>
       </View>
     );
   }

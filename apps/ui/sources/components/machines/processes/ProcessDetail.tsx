@@ -166,7 +166,7 @@ export const ProcessDetail = React.memo(function ProcessDetail(
         </View>
       ) : null}
       <View style={[styles.columns, wide ? styles.columnsWide : null]}>
-        <View style={styles.column}>
+        <View style={[styles.column, wide ? styles.columnWide : null]}>
           <View style={styles.keyRow}>
             <Text style={styles.key}>
               {t('machineProcesses.detail.howHappierKnows')}
@@ -215,7 +215,7 @@ export const ProcessDetail = React.memo(function ProcessDetail(
             {t(`machineProcesses.platform.${props.platform}`)}
           </Text>
         </View>
-        <View style={styles.column}>
+        <View style={[styles.column, wide ? styles.columnWide : null]}>
           <ProcessHistory
             row={row}
             samples={props.samples}
@@ -465,9 +465,11 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
   },
   column: {
-    flex: 1,
     gap: theme.space.s10,
     minWidth: 0,
+  },
+  columnWide: {
+    flex: 1,
   },
   keyRow: {
     flexDirection: 'row',
@@ -516,6 +518,10 @@ const styles = StyleSheet.create((theme) => ({
   },
   inline: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    flexShrink: 1,
+    minWidth: 0,
     gap: theme.space.s6,
   },
   mono: {
