@@ -927,6 +927,8 @@ describe('Channels control-response outward custody', () => {
       reconcile,
     })).resolves.toEqual({
       kind: 'settled',
+      attemptSettlement: { custodyId: record.custodyId, operation: 'reconcile',
+        providerResult: { kind: 'delivered', providerMessageIds: ['provider-message-1'] } },
       custody: {
         state: 'delivered',
         attemptCount: 1,
@@ -1020,6 +1022,8 @@ describe('Channels control-response outward custody', () => {
       actions: { executeAdmittedTargetedOperationWithExecutionOrigin } as never,
     })).resolves.toEqual({
       kind: 'settled',
+      attemptSettlement: { custodyId: record.custodyId, operation: 'deliver',
+        providerResult: { kind: 'delivered', providerMessageIds: ['provider-message-1'] } },
       custody: {
         state: 'delivered',
         attemptCount: 1,
@@ -1288,6 +1292,8 @@ describe('Channels control-response outward custody', () => {
       actions: { executeAdmittedTargetedOperationWithExecutionOrigin } as never,
     })).resolves.toEqual({
       kind: 'settled',
+      attemptSettlement: { custodyId: record.custodyId, operation: 'deliver',
+        providerResult: { kind: 'notDelivered', retry: 'never' } },
       custody: {
         state: 'notDelivered',
         attemptCount: 1,
@@ -3724,6 +3730,8 @@ describe('Channels control-response outward custody', () => {
         providerMessageIds: ['provider-message-1'],
       },
       providerResult,
+      attemptSettlement: { custodyId: JSON.stringify(['connection-1', 'binding-1', obligation().source]),
+        operation: 'deliver', providerResult },
     });
   });
 

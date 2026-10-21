@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { PluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { isPluginActionHandlerInvocationNotStartedAdvisory } from '@happier-dev/plugin-sdk/actions';
 import {
   assertConversationChannelsCoreCallerV1, rethrowConversationProviderLifecycleFailureV1,
   hasCurrentConversationProviderConnectionV1,
@@ -244,7 +245,10 @@ export async function deliverEmailMessage(input: unknown, context: PluginInvocat
       ? { ...result, endpoint: { kind: 'thread', audience: 'direct', id: composed.messageId, parentId: config.mailbox } } : result;
   } catch (error) {
     rethrowConversationProviderLifecycleFailureV1(error, context.signal);
-    return { kind: 'outcomeUnknown' };
+    // Only this submit invocation's host refusal proves no SMTP effect began.
+    // A failed Sent lookup cannot establish that about an earlier submission.
+    return isPluginActionHandlerInvocationNotStartedAdvisory(error)
+      ? { kind: 'notDelivered', retry: 'safe' } : { kind: 'outcomeUnknown' };
   }
 }
 

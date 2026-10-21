@@ -17,6 +17,7 @@ import { ComposerAttachmentKeyV1Schema } from '@happier-dev/protocol/runtime/inp
 import { PluginSessionInputSourceV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { compilePluginJsonSchema, isValidPluginJsonSchemaValue } from '@happier-dev/plugin-sdk/manifest';
 import { createPluginTestkit, type PluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { createPluginActionHandlerNotStartedError } from '@happier-dev/plugin-sdk/host/registration';
 
 import { createImapSmtpTransport, type ImapSmtpAccount } from './client';
 import { IMAP_SMTP_CONNECTED_ACCOUNT_ID } from './connectedAccount';
@@ -30,7 +31,7 @@ import { channelsOperationOnlyTargetedContributionsFixture } from '../../../../c
 import { createChannelsJourneyFixture } from '../../../../channels/src/testkit/channelsJourney';
 import { createCurrentConversationConnectionFixture } from '../../../../channels/src/testkit/currentConnectionFixture';
 import { createConversationSessionProjectionFrontierRow } from '../../../../channels/src/sessionProjection';
-import { CHANNEL_STATE_COLLECTION, CHANNEL_DELIVERIES_COLLECTION } from '../../../../channels/src/collections';
+import { CHANNEL_STATE_COLLECTION, CHANNEL_DELIVERIES_COLLECTION, CHANNEL_DELIVERIES_FIELD } from '../../../../channels/src/collections';
 import { EMAIL_CONFIG_SCHEMA } from '../../config';
 import { textPdf } from '../../../../channels/src/testkit/textPdf';
 import { ChannelFileValueV1Schema } from '../../../../channels/src/channelAttachment';
@@ -104,7 +105,9 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
     if (originalCertificates) setDefaultCACertificates(originalCertificates);
   });
 
-  it.each([false, true])('composes trusted mail through registered Channels ingress and reply custody (wrong transport=%s)', async (wrongTransport) => {
+  it.each(['ready', 'wrong-transport', 'submit-handler-not-started', 'submit-result-lost'] as const)('composes trusted mail through registered Channels ingress and reply custody (%s)', async (scenario) => {
+    const wrongTransport = scenario === 'wrong-transport';
+    let refuseSubmission = scenario === 'submit-handler-not-started';
     const credentialRef = { service: { pluginId: emailPlugin.manifest.id, localId: IMAP_SMTP_CONNECTED_ACCOUNT_ID }, accountId: mailbox };
     const config = EMAIL_CONFIG_SCHEMA.parse({ mailbox, transport: { pluginId: emailPlugin.manifest.id, contributionId: 'imap-smtp' },
       transportConfig: {}, trustStrategy: { kind: 'authenticationResults', authservId: 'mx.example.com' }, allowedDomains: ['example.com'] });
@@ -144,8 +147,25 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
                 materialization: providerMaterialization,
                 executionOrigin: { serverIdentityId: 'srv_plugin_testkit', materializationRef: providerMaterialization } }, services: { ...context.services, storage } });
             };
-            const invocation = { ...context, services: { ...context.services, targetedContributions: fixtureCatalog,
-              actions: { ...context.services.actions, execute: executeCore as PluginServices['actions']['execute'] } } };
+            const actions = new Proxy({ ...context.services.actions, execute: executeCore as PluginServices['actions']['execute'] }, {
+              get(target, property, receiver) {
+                if (property !== 'executeAdmittedTargetedOperationWithExecutionOrigin') return Reflect.get(target, property, receiver);
+                return (...args: Parameters<typeof target.executeAdmittedTargetedOperationWithExecutionOrigin>) => {
+                  // The host refuses dispatch before entering the real TCP
+                  // adapter; this is no evidence about a prior SMTP attempt.
+                  if (refuseSubmission && args[0].identity.role === 'submitRaw') {
+                    throw createPluginActionHandlerNotStartedError({ code: 'plugin_action_handler_missing', message: 'Submission handler unavailable' });
+                  }
+                  if (scenario === 'submit-result-lost' && args[0].identity.role === 'submitRaw') {
+                    return target.executeAdmittedTargetedOperationWithExecutionOrigin(...args).then(() => {
+                      throw new Error('Host lost the submission result after SMTP acceptance');
+                    });
+                  }
+                  return target.executeAdmittedTargetedOperationWithExecutionOrigin(...args);
+                };
+              },
+            });
+            const invocation = { ...context, services: { ...context.services, targetedContributions: fixtureCatalog, actions } };
             if (id === 'transport/imap-smtp/submit-raw-v1') nativeSubmissions.push(EmailTransportSubmitRawInputV1Schema.parse(input));
             // The negative control deliberately misbinds a host Action; its
             // declared generic input/result stay unchanged at this boundary.
@@ -273,7 +293,21 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
       if (origin.kind !== 'userText') throw new Error('Expected the admitted user transcript input');
       transcript.push({ kind: 'assistantText', sessionId, seq: 2, itemId: 'email-answer', turnId: 'email-turn', final: 'completed',
         text: 'Oui, **disponible**.', consumedInputs: [{ localId: origin.localId, origin: origin.origin }] });
-      await journey.outward();
+      if (refuseSubmission) {
+        await journey.outward();
+        expect(submitted).toHaveLength(0);
+        expect(nativeSubmissions).toHaveLength(0);
+        const pending = [...journey.deliveries.rows.values()].find(row => row.value[CHANNEL_DELIVERIES_FIELD.bindingId] === binding.id);
+        expect(pending?.value.payload).toMatchObject({ state: 'retryDue', attemptCount: 1 });
+        const retryAt = pending?.value[CHANNEL_DELIVERIES_FIELD.retryNotBefore];
+        if (!pending || typeof retryAt !== 'number') throw new Error('Expected the custody owner retry deadline');
+        refuseSubmission = false;
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(retryAt);
+        try { await journey.outward(); } finally { clock.mockRestore(); }
+        expect((await journey.deliveries.get(pending.rowId))?.value.payload).toMatchObject({ state: 'delivered', attemptCount: 2 });
+      } else {
+        await journey.outward();
+      }
       expect(submitted).toHaveLength(1);
       expect(nativeSubmissions[0]?.envelope).toEqual({ from: mailbox, to: ['sales@example.com'] });
       const reply = await simpleParser(submitted[0]!);
@@ -286,7 +320,9 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
       expect(reply.text).toContain('Bonjour');
       expect(reply.html).toContain('<strong>disponible</strong>');
       expect(imap.control.listMessages('Sent')).toHaveLength(1);
-      expect([...journey.deliveries.rows.values()].map(row => row.value.payload)).toContainEqual(expect.objectContaining({ state: 'delivered' }));
+      expect([...journey.deliveries.rows.values()].map(row => row.value.payload)).toContainEqual(expect.objectContaining({
+        state: scenario === 'submit-result-lost' ? 'outcomeUnknown' : 'delivered',
+      }));
       for (const [collection, definition] of [[journey.state, CHANNEL_STATE_COLLECTION], [journey.deliveries, CHANNEL_DELIVERIES_COLLECTION]] as const) {
         const schema = compilePluginJsonSchema(definition.schema);
         for (const row of collection.rows.values()) expect(isValidPluginJsonSchemaValue(schema, row.value),

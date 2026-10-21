@@ -3227,8 +3227,15 @@ function normalizeConversationStartedThreadResult(
   return { kind: 'outcomeUnknown', ...(result.providerMessageIds === undefined ? {} : { providerMessageIds: result.providerMessageIds }) };
 }
 
+/** Invocation-local evidence only; rejoining terminal custody is not a new settlement. */
+type ConversationOutwardDeliveryAttemptSettlement = Readonly<{
+  custodyId: string;
+  operation: 'deliver' | 'reconcile';
+  providerResult: ConversationDeliveryResultV1;
+}>;
+
 export type ConversationOutwardDeliveryResult =
-  | Readonly<{ kind: 'settled'; custody: ConversationDeliveryCustody }>
+  | Readonly<{ kind: 'settled'; custody: ConversationDeliveryCustody; attemptSettlement?: ConversationOutwardDeliveryAttemptSettlement }>
   | Readonly<{ kind: 'retired' }>
   | Readonly<{
     kind: 'suppressed';
@@ -3239,6 +3246,7 @@ export type ConversationOutwardDeliveryResult =
     kind: 'settlementPending';
     custody: ConversationDeliveryCustody;
     providerResult: ConversationDeliveryResultV1;
+    attemptSettlement?: ConversationOutwardDeliveryAttemptSettlement;
     suppressionReason?: ConversationOutwardDeliverySuppressionReason;
   }>
   | Readonly<{
@@ -3459,6 +3467,7 @@ export async function deliverConversationOutwardDelivery(input: Readonly<{
       providerResult = { kind: 'outcomeUnknown' };
     }
   }
+  const attemptSettlement = { custodyId: claimed.record.custodyId, operation: 'deliver', providerResult } as const;
   const settled = settleConversationDeliveryAttempt({
     custody: claimed.record.custody,
     attemptId: input.attemptId,
@@ -3470,6 +3479,7 @@ export async function deliverConversationOutwardDelivery(input: Readonly<{
       kind: 'settlementPending',
       custody: claimed.record.custody,
       providerResult,
+      attemptSettlement,
     };
   }
   let persisted: Awaited<ReturnType<ConversationOutwardDeliveryStore['compareAndSwap']>>;
@@ -3487,9 +3497,10 @@ export async function deliverConversationOutwardDelivery(input: Readonly<{
       kind: 'settlementPending',
       custody: settled.custody,
       providerResult,
+      attemptSettlement,
     };
   }
-  return { kind: 'settled', custody: persisted.record.custody };
+  return { kind: 'settled', custody: persisted.record.custody, attemptSettlement };
 }
 
 /**
@@ -3599,6 +3610,7 @@ export async function reconcileConversationOutwardDeliveryAttempt(input: Readonl
       providerResult = { kind: 'outcomeUnknown' };
     }
   }
+  const attemptSettlement = { custodyId: claimed.record.custodyId, operation: 'reconcile', providerResult } as const;
   const settled = settleConversationDeliveryAttempt({
     custody: claimed.record.custody,
     attemptId: input.recoveryAttemptId,
@@ -3606,7 +3618,7 @@ export async function reconcileConversationOutwardDeliveryAttempt(input: Readonl
     now: input.now(),
   });
   if (settled.kind === 'staleAttempt') {
-    return { kind: 'settlementPending', custody: claimed.record.custody, providerResult };
+    return { kind: 'settlementPending', custody: claimed.record.custody, providerResult, attemptSettlement };
   }
   let persisted: Awaited<ReturnType<ConversationOutwardDeliveryStore['compareAndSwap']>>;
   try {
@@ -3619,9 +3631,9 @@ export async function reconcileConversationOutwardDeliveryAttempt(input: Readonl
     persisted = { kind: 'unavailable', reason: 'storageUnavailable' };
   }
   if (persisted.kind === 'conflict' || persisted.kind === 'invalid' || persisted.kind === 'unavailable') {
-    return { kind: 'settlementPending', custody: settled.custody, providerResult };
+    return { kind: 'settlementPending', custody: settled.custody, providerResult, attemptSettlement };
   }
-  return { kind: 'settled', custody: persisted.record.custody };
+  return { kind: 'settled', custody: persisted.record.custody, attemptSettlement };
 }
 
 export function createReadyConversationOutwardDeliveryRecord(input: Readonly<{

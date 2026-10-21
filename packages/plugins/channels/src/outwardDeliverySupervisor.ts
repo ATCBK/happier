@@ -238,10 +238,12 @@ function logOutwardDeliverySupervisorWorkFailure(
     bindingId?: string;
     error?: unknown;
     outcome?: Readonly<{ code: string; retryable: boolean; informational: boolean }>;
+    attemptSettlement?: JsonRecord;
     skippedAssistantItem?: ConversationSessionProjectionSkippedAssistantItem;
   }>,
 ): void {
-  if (context.signal.aborted) return;
+  // Cancellation cannot erase a provider result that already crossed the boundary.
+  if (context.signal.aborted && identifiers?.attemptSettlement === undefined) return;
   if (isInactiveSupervisorCollectionFailure(identifiers?.error)) return;
   const informational = identifiers?.outcome?.informational === true;
   context.services.logger[informational ? 'info' : 'warn'](
@@ -256,6 +258,7 @@ function logOutwardDeliverySupervisorWorkFailure(
       ...(identifiers?.connectionId === undefined ? {} : { connectionId: identifiers.connectionId }),
       ...(identifiers?.bindingId === undefined ? {} : { bindingId: identifiers.bindingId }),
       ...identifiers?.skippedAssistantItem,
+      ...identifiers?.attemptSettlement,
     },
   );
 }
@@ -267,13 +270,30 @@ function logOutwardDeliverySupervisorDeliveryOutcome(
   result: ConversationOutwardDeliveryResult | ConversationOutwardDeliveryRecoveryResult,
   retryable: boolean,
 ): boolean {
-  if (result.kind === 'settled' && result.custody.state === 'delivered') return false;
+  if (result.kind === 'settled' && result.attemptSettlement === undefined) return false;
+  const settlement = 'attemptSettlement' in result ? result.attemptSettlement : undefined;
+  const providerResult = settlement?.providerResult;
   const prefix = boundary === 'transcript-projection' ? 'channels_projection_' : 'channels_delivery_';
   const code = `${prefix}${'reason' in result ? result.reason
     : 'custody' in result ? result.custody.state : result.kind}`;
   logOutwardDeliverySupervisorWorkFailure(context, boundary, {
     ...identifiers,
-    outcome: { code, retryable, informational: result.kind === 'retired' },
+    outcome: { code, retryable, informational: result.kind === 'retired'
+      || (result.kind === 'settled' && result.custody.state === 'delivered') },
+    ...(settlement === undefined || providerResult === undefined || !('custody' in result) ? {} : {
+      attemptSettlement: {
+        custodyId: settlement.custodyId,
+        attemptCount: result.custody.attemptCount,
+        settledState: result.custody.state,
+        settlementStatus: result.kind,
+        providerOperation: settlement.operation,
+        providerResultKind: providerResult.kind,
+        ...(providerResult.kind === 'notReady' ? { providerResultCode: providerResult.reason } : {}),
+        ...(providerResult.kind === 'notDelivered' ? { providerRetry: providerResult.retry } : {}),
+        ...(providerResult.kind === 'endpointArchived' ? { providerRecovery: providerResult.recovery } : {}),
+        ...(result.custody.retryNotBefore === undefined ? {} : { retryNotBefore: result.custody.retryNotBefore }),
+      },
+    }),
   });
   return true;
 }
@@ -516,8 +536,9 @@ export async function runConversationOutwardDeliveryCycle(
       });
       if ('custody' in result) noteCustody(result.custody);
       if (result.kind === 'notAttempted' && result.reason === 'attemptStillCurrent') noteCustody(record.custody);
-      const retryable = result.kind === 'settlementPending' || (result.kind === 'notAttempted' && result.reason === 'custodyUnavailable');
-      if (retryable) noteDeadline(now() + RECONCILIATION_INTERVAL_MS);
+      const recoveryPending = result.kind === 'settlementPending' || (result.kind === 'notAttempted' && result.reason === 'custodyUnavailable');
+      if (recoveryPending) noteDeadline(now() + RECONCILIATION_INTERVAL_MS);
+      const retryable = recoveryPending || ('custody' in result && result.custody.state === 'retryDue');
       logOutwardDeliverySupervisorDeliveryOutcome(context, 'delivery-operation', {
         connectionId: record.obligation.connectionId, bindingId: record.obligation.bindingId,
       }, result, retryable);

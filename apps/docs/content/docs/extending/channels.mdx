@@ -36,6 +36,11 @@ codes without transcript content. In unreleased development source, the same
 diagnostics distinguish typed unavailability, deferred transcript approval,
 paused projection and pages with no eligible reply. A deferred approval does
 not start a repeating approval-request loop.
+Each delivery or reconciliation attempt also records its custody and binding
+identifiers, attempt count, settled state, typed provider result kind and any
+typed refusal reason or retry mode, plus the retry deadline when set. These
+development records exclude message content, addresses and raw provider errors;
+rejoining an already settled delivery does not create another attempt record.
 When `repliesOnly` excludes a final answer because it consumed no input from
 that binding, development diagnostics record that decision with the semantic
 item and turn identifiers, sequence and consumed-input count, without message
@@ -283,6 +288,11 @@ the connection. For missing provider permissions, follow the provider's setup
 guidance and verify again. Blocked ingress and polling use their existing
 retry Actions; an automatic backoff remains scheduled rather than becoming a
 second manual send. A history gap requires an explicit baseline decision.
+
+In unreleased development source, Email also retries through that backoff when
+the host explicitly confirms that its SMTP submission handler never started.
+If the submission may have started, a missing result remains unknown. A failed
+Sent-folder reconciliation does not make the earlier submission safe to resend.
 
 Review a partial or unknown delivery before recording it as accepted or
 discarded. A recommendation deliberately omits that decision until you make

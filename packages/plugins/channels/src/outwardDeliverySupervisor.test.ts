@@ -1,6 +1,6 @@
 import { PluginError } from '@happier-dev/plugin-sdk';
 import { ConversationDeliveryContentV1Schema, ConversationDeliveryInputV1Schema } from '@happier-dev/channels-protocol/v1';
-import type { ConversationDeliveryInputV1 } from '@happier-dev/channels-protocol/v1';
+import type { ConversationDeliveryInputV1, ConversationDeliveryResultV1 } from '@happier-dev/channels-protocol/v1';
 import type {
   PluginInvocationContext,
   PluginServices,
@@ -3269,29 +3269,84 @@ describe('Channels outward-delivery supervisor', () => {
     expect(state.rows.get('projection-frontier:binding-1')?.value.payload).toMatchObject({ lastScannedSeq: finalSeq });
   });
 
-  it('records terminal provider non-delivery once even when durable custody lets the frontier advance', async () => {
+  it.each([
+    { state: 'delivered', result: { kind: 'delivered', providerMessageIds: ['private-receipt'] } },
+    { state: 'notDelivered', result: { kind: 'notDelivered', retry: 'never' } },
+    { state: 'retryDue', result: { kind: 'notDelivered', retry: 'after', retryAfterMs: 5_000 } },
+    { state: 'outcomeUnknown', result: { kind: 'outcomeUnknown', providerMessageIds: ['private-receipt'] } },
+    { state: 'partial', result: { kind: 'partial', providerMessageIds: ['private-receipt'], failedChunk: 1, retrySafe: false } },
+    { state: 'retryDue', result: { kind: 'notReady', reason: 'network', diagnostic: 'private provider error and address' } },
+  ] satisfies readonly { state: string; result: ConversationDeliveryResultV1 }[])(
+    'records a $state attempt settlement once with content-free provider evidence', async ({ state: settledState, result }) => {
     const state = new MemoryCollection();
     const deliveries = new MemoryCollection();
     await seedProjectionState(state);
-    const logger = { warn: vi.fn() };
+    const logger = { info: vi.fn(), warn: vi.fn() };
     const execute = vi.fn(async (action: string) => action === 'session.permission.remote.pending.list'
       ? emptyPendingPermissionPage()
       : { ok: true, projection: 'externalShareableV1', sessionId: 'session-1',
         items: [{ kind: 'assistantText', sessionId: 'session-1', seq: 5, itemId: 'final-5',
           turnId: 'turn-5', final: 'completed', text: 'private answer', consumedInputs: [] }],
         scannedThroughSeq: 5, nextCursor: '5', hasMore: false });
+    const deliver = vi.fn(async () => ({ result, executionOrigin: providerTransportOrigin }));
     const context = backgroundContext({ state, deliveries, execute, logger,
-      executeAdmittedTargetedOperationWithExecutionOrigin: vi.fn(async () => ({
-        result: { kind: 'notDelivered', retry: 'never' }, executionOrigin: providerTransportOrigin,
-      })) });
+      executeAdmittedTargetedOperationWithExecutionOrigin: deliver });
     await runConversationOutwardDeliveryCycle({ context, now: () => 100 });
-    expect(logger.warn.mock.calls).toEqual([['[Channels] outward delivery supervisor work failed', {
+    const row = [...deliveries.rows.values()][0];
+    const records = () => [...logger.info.mock.calls, ...logger.warn.mock.calls]
+      .map(call => call[1]).filter(detail => detail.custodyId !== undefined);
+    expect(records()).toEqual([{
       boundary: 'transcript-projection', bindingId: 'binding-1',
-      code: 'channels_projection_notDelivered', retryable: false,
-    }]]);
-    expect(state.rows.get('projection-frontier:binding-1')?.value.payload).toMatchObject({ lastScannedSeq: 5 });
-    expect([...deliveries.rows.values()][0]?.value).toMatchObject({ attention: true, payload: { state: 'notDelivered' } });
-    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('private answer');
+      code: `channels_projection_${settledState}`, retryable: settledState === 'retryDue',
+      custodyId: row?.rowId, attemptCount: 1, settledState,
+      settlementStatus: 'settled', providerOperation: 'deliver', providerResultKind: result.kind,
+      ...('retry' in result ? { providerRetry: result.retry } : {}),
+      ...('reason' in result ? { providerResultCode: result.reason } : {}),
+      ...(settledState === 'retryDue' ? { retryNotBefore: result.kind === 'notReady' ? 1_100 : 5_100 } : {}),
+    }]);
+    expect(row?.value.payload).toMatchObject({ state: settledState, attemptCount: 1 });
+    // A blocked projection can rejoin this same row before retry is due;
+    // terminal rows can also be revisited if their frontier write was lost.
+    const frontier = state.rows.get('projection-frontier:binding-1');
+    if (frontier === undefined) throw new Error('Expected projection frontier');
+    await state.put(createConversationSessionProjectionFrontierRow({
+      bindingId: 'binding-1', targetSessionId: 'session-1', transcriptCursor: null,
+      lastScannedSeq: 0, revision: 1, now: 0,
+    }), { expectedRevision: frontier.revision });
+    await runConversationOutwardDeliveryCycle({ context, now: () => 101 });
+    expect(records()).toHaveLength(1);
+    expect(deliver).toHaveBeenCalledOnce();
+    const serialized = JSON.stringify([logger.info.mock.calls, logger.warn.mock.calls]);
+    for (const secret of ['private answer', 'private-receipt', 'private provider error and address']) {
+      expect(serialized).not.toContain(secret);
+    }
+  });
+
+  it('records provider acceptance even when cancellation prevents durable settlement', async () => {
+    const state = new MemoryCollection();
+    const deliveries = new MemoryCollection();
+    await seedProjectionState(state);
+    const controller = new AbortController();
+    const logger = { warn: vi.fn() };
+    const context = { ...backgroundContext({ state, deliveries, execute: vi.fn(), logger,
+      executeAdmittedTargetedOperationWithExecutionOrigin: vi.fn(async () => {
+        controller.abort();
+        return { result: { kind: 'delivered', providerMessageIds: ['private-receipt'] }, executionOrigin: providerTransportOrigin };
+      }),
+    }), signal: controller.signal };
+    const store = createConversationOutwardDeliveryCollectionStore({ stateCollection: state as never,
+      deliveriesCollection: deliveries as never, signal: context.signal, now: () => 0 });
+    const admitted = await store.ensure(outwardObligation());
+    if (admitted.kind !== 'created') throw new Error('Expected retained custody');
+    await runConversationOutwardDeliveryCycle({ context, now: () => 100 });
+    expect(logger.warn.mock.calls.map(call => call[1])).toEqual([{
+      boundary: 'delivery-operation', connectionId: 'connection-1', bindingId: 'binding-1',
+      code: 'channels_delivery_delivered', retryable: true,
+      custodyId: admitted.record.custodyId, attemptCount: 1, settledState: 'delivered',
+      settlementStatus: 'settlementPending', providerOperation: 'deliver', providerResultKind: 'delivered',
+    }]);
+    expect(deliveries.rows.get(admitted.record.custodyId)?.value.payload).toMatchObject({ state: 'attempting' });
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('private-receipt');
   });
 
   it('records a retained delivery terminal refusal through the same work record without needing a projection item', async () => {
@@ -3315,6 +3370,8 @@ describe('Channels outward-delivery supervisor', () => {
     expect(logger.warn.mock.calls).toEqual([['[Channels] outward delivery supervisor work failed', {
       boundary: 'delivery-operation', connectionId: 'connection-1', bindingId: 'binding-1',
       code: 'channels_delivery_notDelivered', retryable: false,
+      custodyId: admitted.record.custodyId, attemptCount: 1, settledState: 'notDelivered',
+      settlementStatus: 'settled', providerOperation: 'deliver', providerResultKind: 'notDelivered', providerRetry: 'never',
     }]]);
     expect(deliveries.rows.get(admitted.record.custodyId)?.value).toMatchObject({
       attention: true, payload: { state: 'notDelivered' },
@@ -3867,7 +3924,8 @@ describe('Channels outward-delivery supervisor', () => {
       result: { kind: 'notDelivered', retry: 'safe' },
       executionOrigin: providerTransportOrigin,
     }));
-    const context = backgroundContext({ state, deliveries, execute, executeAdmittedTargetedOperationWithExecutionOrigin });
+    const logger = { warn: vi.fn() };
+    const context = backgroundContext({ state, deliveries, execute, executeAdmittedTargetedOperationWithExecutionOrigin, logger });
     const store = createConversationOutwardDeliveryCollectionStore({
       stateCollection: state as never,
       deliveriesCollection: deliveries as never,
@@ -3905,6 +3963,13 @@ describe('Channels outward-delivery supervisor', () => {
       state: 'retryDue',
       attemptCount: 1,
     });
+    expect(logger.warn.mock.calls.map(call => call[1]).filter(detail => detail.custodyId !== undefined)).toEqual([{
+      boundary: 'delivery-operation', connectionId: 'connection-1', bindingId: 'binding-1',
+      code: 'channels_delivery_retryDue', retryable: true,
+      custodyId: admitted.record.custodyId, attemptCount: 1, settledState: 'retryDue',
+      settlementStatus: 'settled', providerOperation: 'reconcile', providerResultKind: 'notDelivered', providerRetry: 'safe',
+      retryNotBefore: 1_100,
+    }]);
   });
 
   it('redrives retained Automation result custody through the same generic provider path', async () => {
