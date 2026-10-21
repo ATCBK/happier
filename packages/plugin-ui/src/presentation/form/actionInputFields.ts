@@ -10,7 +10,7 @@ type InputRecord = Readonly<Record<string, unknown>>;
  * the dependency direction: presentation never imports host/SDK transport.
  */
 export type HappierActionInputField = Pick<InputFieldHint, 'widget'>
-  & Partial<Pick<InputFieldHint, 'listSeparator' | 'inputType' | 'options' | 'optionsSourceId' | 'connectedAccountOptions'>>;
+  & Partial<Pick<InputFieldHint, 'unit' | 'listSeparator' | 'inputType' | 'options' | 'optionsSourceId' | 'connectedAccountOptions'>>;
 
 export function readHappierActionInputPath(input: InputRecord, path: string): unknown {
   return readInputPath(input, path);
@@ -87,6 +87,21 @@ function parseNumericDraft(widget: 'number' | 'integer', text: string): number |
   return Number.isFinite(parsed) ? parsed : text;
 }
 
+/** A byte-size integer (`unit: 'bytes'`) is entered in whole GiB; this is the one place the value converts. */
+export const HAPPIER_BYTES_PER_GIB = 1024 ** 3;
+
+function displayBytesAsGib(value: unknown): string {
+  // Non-numbers are an in-progress or inadmissible entry, shown exactly as typed.
+  return typeof value === 'number' && Number.isFinite(value) ? String(value / HAPPIER_BYTES_PER_GIB) : String(value);
+}
+
+function parseGibDraft(text: string): number | string | undefined {
+  const trimmed = text.trim();
+  if (trimmed === '') return undefined;
+  const bytes = /^\d+$/.test(trimmed) ? Number(trimmed) * HAPPIER_BYTES_PER_GIB : NaN;
+  return Number.isSafeInteger(bytes) ? bytes : text;
+}
+
 /**
  * One widget/display/text-parser decision shared by public Form and core Actions.
  *
@@ -117,13 +132,14 @@ export function resolveHappierActionFieldPresentation<OptionValue = unknown>(
   const isJson = field.widget === 'json';
   const isList = field.widget === 'text_list';
   const newlineList = isList && field.listSeparator === 'newline';
+  const gib = field.widget === 'integer' && field.unit === 'bytes';
   const display = isJson
     ? value === undefined
       ? ''
       : (() => { try { return JSON.stringify(value, null, 2); } catch { return ''; } })()
     : isList
       ? readTextList(field, value).join(newlineList ? '\n' : ', ')
-      : value === undefined || value === null ? '' : String(value);
+      : value === undefined || value === null ? '' : gib ? displayBytesAsGib(value) : String(value);
 
   return {
     kind: 'text',
@@ -136,6 +152,7 @@ export function resolveHappierActionFieldPresentation<OptionValue = unknown>(
         ? 'numeric'
         : 'default',
     parseText(text: string): unknown {
+      if (gib) return parseGibDraft(text);
       if (field.widget === 'number' || field.widget === 'integer') {
         return parseNumericDraft(field.widget, text);
       }

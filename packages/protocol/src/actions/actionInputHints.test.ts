@@ -17,6 +17,15 @@ describe('Action input hint path grammar', () => {
     expect(normalizeActionInputHintsText(admitted, (text) => typeof text === 'string' ? text : text.fallback)).toEqual(hints);
   });
 
+  it('carries a byte-size unit on an integer field through plugin and host admission, and refuses it elsewhere', async () => {
+    const { PluginActionInputHintsV2Schema } = await import('../plugins/actions/v2.js');
+    const hints = { fields: [{ path: 'size.memoryBytes', title: 'Memory', widget: 'integer', unit: 'bytes', defaultValue: 4 * 1024 ** 3 }] };
+    const admitted = PluginActionInputHintsV2Schema.parse(hints);
+    expect(ActionInputHintsSchema.parse(admitted)).toEqual(hints);
+    expect(normalizeActionInputHintsText(admitted, (text) => typeof text === 'string' ? text : text.fallback)).toEqual(hints);
+    expect(ActionInputHintsSchema.safeParse({ fields: [{ path: 'name', title: 'Name', widget: 'text', unit: 'bytes' }] }).success).toBe(false);
+  });
+
   it.each([
     { fields: Array.from({ length: 65 }, (_, index) => ({ path: `field${index}`, title: `Field ${index}`, widget: 'text' })) },
     { fields: [{ path: 'choice', title: 'Choice', widget: 'select', options: Array.from({ length: 257 }, (_, index) => ({ value: `choice${index}`, label: `Choice ${index}` })) }] },

@@ -78,7 +78,8 @@ export type HappierInputFieldProps<Value> = Readonly<{
  */
 export function HappierInputField<Value>(props: HappierInputFieldProps<Value>): ReactElement {
   const { field, theme } = props;
-  const label = field.prompt ?? field.title;
+  // The unit symbol is not a translation: a byte-size integer is entered in GiB, and its label says so.
+  const label = `${field.prompt ?? field.title}${field.widget === 'integer' && field.unit === 'bytes' ? ' (GiB)' : ''}`;
   const presentation = resolveHappierActionFieldPresentation<Value>(field, props.value, props.selection);
   const optionsSettled = props.optionsStatus === undefined || props.optionsStatus === 'ready';
   const picker = useHappierInputPicker({

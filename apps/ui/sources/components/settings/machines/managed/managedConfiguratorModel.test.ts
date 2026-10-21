@@ -8,6 +8,7 @@ import { FlyLaunchQueryV1Schema, FlyLaunchV1Schema } from '../../../../../../../
 import { CRABBOX_PLUGIN } from '../../../../../../../packages/plugins/machine-crabbox/src/manifest';
 import { CUA_PLUGIN } from '../../../../../../../packages/plugins/machine-cua/src/manifest';
 import { DEVCONTAINER_PLUGIN } from '../../../../../../../packages/plugins/devcontainer/src/manifest';
+import { resolveHappierActionFieldPresentation } from '@happier-dev/plugin-ui/presentation';
 import { resolveEffectiveActionInputFields } from '@happier-dev/protocol/actions/actionInputHintsRuntime';
 import { createManagedConfiguratorDraft, refreshManagedConfiguratorOptions, selectManagedConfiguratorChoice, selectManagedConfiguratorDimension, managedConfiguratorDimensionSelection, managedConfiguratorDimensionChoices, managedConfiguratorFacts, managedConfiguratorAcquireInput, managedConfiguratorOptionsSelectors, setManagedConfiguratorOptionsSelectors, managedConfiguratorCredentialSelections } from './managedConfiguratorModel';
 
@@ -74,6 +75,19 @@ describe('managed configurator draft owner', () => {
         // What the person typed wins over the default; an unfilled field is still seeded.
         const edited = setManagedConfiguratorOptionsSelectors(draft, { size: { cpu: 8 } });
         expect(managedConfiguratorOptionsSelectors(edited, action.inputSchema!, hints)).toEqual({ size: { cpu: 8, memoryBytes: 4 * 1024 ** 3 } });
+    });
+    it('shows the Cua sandbox memory in GiB while the stored and submitted value stays bytes, and leaves unlabelled integers raw', () => {
+        const descriptor = MachineProvisionerContributionV1Schema.parse(CUA_PLUGIN.manifest.contributes.machineProvisioners?.find(entry => entry.id === 'local-sandbox'));
+        const action = PluginActionContributionV2Schema.parse(CUA_PLUGIN.manifest.contributes.actions?.find(entry => entry.id === descriptor.actions.options));
+        const fields = resolveEffectiveActionInputFields({ inputHints: normalizePluginActionInputHintsV2(action.inputHints) }, {});
+        const memory = fields.find(field => field.path === 'size.memoryBytes');
+        const cpu = fields.find(field => field.path === 'size.cpu');
+        if (!memory || !cpu) throw new Error('The Cua sandbox options declare memory and CPU');
+        const shown = resolveHappierActionFieldPresentation(memory, memory.defaultValue);
+        expect(shown).toMatchObject({ kind: 'text', value: '4' });
+        expect(shown.kind === 'text' && shown.parseText('8')).toBe(8 * 1024 ** 3);
+        const rawCpu = resolveHappierActionFieldPresentation(cpu, 2);
+        expect(rawCpu.kind === 'text' && [rawCpu.value, rawCpu.parseText('4')]).toEqual(['2', 4]);
     });
     it('qualifies saved BYOC recipes using the current selected native variant, with descriptor fallback', () => {
         const descriptor = MachineProvisionerContributionV1Schema.parse(CUA_PLUGIN.manifest.contributes.machineProvisioners?.find(entry => entry.id === 'byoc'));

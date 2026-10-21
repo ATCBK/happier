@@ -110,8 +110,8 @@ export const LUME_PLUGIN = definePlugin({
       inputHints: { fields: [
         { path: 'storage', title: label('storage'), description: label('storageDescription'), widget: 'text' },
         { path: 'cpu', title: label('cpu'), widget: 'integer' },
-        { path: 'memoryBytes', title: label('memory'), widget: 'integer' },
-        { path: 'diskBytes', title: label('disk'), widget: 'integer' },
+        { path: 'memoryBytes', title: label('memory'), widget: 'integer', unit: 'bytes' },
+        { path: 'diskBytes', title: label('disk'), widget: 'integer', unit: 'bytes' },
         { path: 'image.kind', title: label('imageKind'), widget: 'select', requireExplicitSelection: true,
           options: [{ value: 'catalog', label: label('publishedImage') }, { value: 'native-image', label: label('nativeReference') }] },
         { path: 'image.id', title: label('publishedReference'), widget: 'text',

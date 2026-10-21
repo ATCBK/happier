@@ -86,6 +86,8 @@ const InputHintCoreFieldSchema = lazyZodSchema(() => z.strictObject({
   listSeparator: z.optional(z.enum(['comma', 'newline'])),
   maxSelections: z.optional(z.number().check(z.int(), z.positive())),
   defaultValue: z.optional(StrictJsonValueSchema),
+  /** Display hint for an integer: `bytes` is entered in GiB while the stored and submitted value stays bytes. */
+  unit: z.optional(z.literal('bytes')),
   visibleWhen: z.optional(InputPredicateSchema),
   /** Surface-aware editors show this field only when the host declares the named context slot. */
   visibleWhenContextSlot: z.optional(InputPathSchema),
@@ -136,6 +138,8 @@ export type InputFieldHintDescriptor<TText, TValue = InputOptionValue> = Readonl
   maxSelections?: number;
   /** Initial form value only; explicit draft values and later edits take precedence. */
   defaultValue?: JsonValue;
+  /** An integer declared as `bytes` is entered in GiB; the stored and submitted value stays bytes. */
+  unit?: 'bytes';
   /** Choices restrict the type's admitted values; they cannot widen its schema. */
   options?: readonly InputHintOptionDescriptor<TText, TValue>[];
   optionsSourceId?: string;
@@ -254,6 +258,13 @@ function validateInputHintField(
       code: "custom",
       path: ['listSeparator'],
       message: 'listSeparator is only valid for text_list fields.',
+    });
+  }
+  if (value.unit !== undefined && widget !== 'integer') {
+    context.addIssue({
+      code: "custom",
+      path: ['unit'],
+      message: 'unit is only valid for integer fields.',
     });
   }
   if (value.maxSelections !== undefined && widget !== 'multiselect') {
@@ -480,6 +491,7 @@ export function normalizeInputHintsText<TText>(
       ...(field.listSeparator === undefined ? {} : { listSeparator: field.listSeparator }),
       ...(field.maxSelections === undefined ? {} : { maxSelections: field.maxSelections }),
       ...(field.defaultValue === undefined ? {} : { defaultValue: field.defaultValue }),
+      ...(field.unit === undefined ? {} : { unit: field.unit }),
       ...(field.options === undefined ? {} : {
         options: field.options.map((option) => ({
           value: option.value,

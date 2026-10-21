@@ -59,9 +59,9 @@ function roles(id: CuaLocalProvisionerId) {
                 { path: 'runtimeId', title: configurationLabel('runtimeId'), widget: 'text' as const },
                 { path: 'imageId', title: configurationLabel('imageId'), widget: 'text' as const },
                 { path: 'size.cpu', title: configurationLabel('cpu'), widget: 'integer' as const, required: true, defaultValue: 2 },
-                { path: 'size.memoryBytes', title: configurationLabel('memoryBytes'), widget: 'integer' as const, required: true, defaultValue: 4 * GIB },
+                { path: 'size.memoryBytes', title: configurationLabel('memoryBytes'), widget: 'integer' as const, unit: 'bytes' as const, required: true, defaultValue: 4 * GIB },
                 // The disk follows the chosen image; only a Space may be given its own.
-                ...(id === 'local-space' ? [{ path: 'size.diskBytes', title: configurationLabel('diskBytes'), widget: 'integer' as const }] : []),
+                ...(id === 'local-space' ? [{ path: 'size.diskBytes', title: configurationLabel('diskBytes'), widget: 'integer' as const, unit: 'bytes' as const }] : []),
             ] },
             async run(input: CuaLocalOptionsQueryV1, context: PluginInvocationContext) {
                 return (await provider(id, context)).options(input);

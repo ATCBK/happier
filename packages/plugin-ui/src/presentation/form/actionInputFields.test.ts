@@ -41,6 +41,22 @@ describe('shared Action form semantics', () => {
     )).toEqual({ kind: 'select', value: ['a', '2'], multiple: true });
   });
 
+  it('shows a byte-size integer in GiB and submits bytes, while a field without the unit stays a raw integer', () => {
+    const GIB = 1024 ** 3;
+    const sized = resolveHappierActionFieldPresentation({ widget: 'integer', unit: 'bytes' }, 4 * GIB);
+    expect(sized).toMatchObject({ kind: 'text', value: '4', keyboardType: 'numeric' });
+    expect(sized.kind === 'text' && sized.parseText('8')).toBe(8 * GIB);
+    expect(sized.kind === 'text' && sized.parseText('')).toBeUndefined();
+    // Partial or inadmissible entry stays as typed text and is shown as typed.
+    expect(sized.kind === 'text' && sized.parseText('1.5')).toBe('1.5');
+    expect(resolveHappierActionFieldPresentation({ widget: 'integer', unit: 'bytes' }, '1.5')).toMatchObject({ value: '1.5' });
+    // A stored value that is not a whole GiB is shown exactly, never rounded.
+    expect(resolveHappierActionFieldPresentation({ widget: 'integer', unit: 'bytes' }, GIB * 1.5)).toMatchObject({ value: '1.5' });
+    const raw = resolveHappierActionFieldPresentation({ widget: 'integer' }, 4 * GIB);
+    expect(raw).toMatchObject({ value: String(4 * GIB) });
+    expect(raw.kind === 'text' && raw.parseText('8')).toBe(8);
+  });
+
   it('preserves incomplete numeric edits until they become admissible finite numbers', () => {
     const integer = resolveHappierActionFieldPresentation(
       { widget: 'integer' },

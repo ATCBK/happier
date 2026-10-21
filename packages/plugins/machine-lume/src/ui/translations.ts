@@ -4,7 +4,7 @@ import type { UiTranslationBundle } from '@happier-dev/plugin-sdk/ui';
 export const LUME_CONFIGURATION_LABELS = {
   en: {
     storage: 'Storage', storageDescription: 'Exact native storage name from the available locations.',
-    cpu: 'CPU cores', memory: 'Memory (bytes)', disk: 'Disk (bytes)', imageKind: 'Image selection',
+    cpu: 'CPU cores', memory: 'Memory', disk: 'Disk', imageKind: 'Image selection',
     publishedImage: 'Published image', nativeReference: 'Native image reference', publishedReference: 'Published image reference',
     nativeDescription: 'A tagged or digest-qualified Lume-format image prepared for this guest.',
     privateCarrier: 'Prepared private connection',
@@ -14,7 +14,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   de: {
     storage: 'Speicherort', storageDescription: 'Der genaue native Speichername aus den verfügbaren Speicherorten.',
-    cpu: 'CPU-Kerne', memory: 'Arbeitsspeicher (Bytes)', disk: 'Festplatte (Bytes)', imageKind: 'Image-Auswahl',
+    cpu: 'CPU-Kerne', memory: 'Arbeitsspeicher', disk: 'Festplatte', imageKind: 'Image-Auswahl',
     publishedImage: 'Veröffentlichtes Image', nativeReference: 'Native Image-Referenz', publishedReference: 'Referenz des veröffentlichten Images',
     nativeDescription: 'Ein für diesen Gast vorbereitetes Image im Lume-Format mit Tag oder Digest.',
     privateCarrier: 'Vorbereitete private Verbindung',
@@ -24,7 +24,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   ru: {
     storage: 'Хранилище', storageDescription: 'Точное нативное имя хранилища из доступных расположений.',
-    cpu: 'Ядра CPU', memory: 'Память (байты)', disk: 'Диск (байты)', imageKind: 'Выбор образа',
+    cpu: 'Ядра CPU', memory: 'Память', disk: 'Диск', imageKind: 'Выбор образа',
     publishedImage: 'Опубликованный образ', nativeReference: 'Ссылка на нативный образ', publishedReference: 'Ссылка на опубликованный образ',
     nativeDescription: 'Образ в формате Lume с тегом или дайджестом, подготовленный для этого гостя.',
     privateCarrier: 'Подготовленное приватное подключение',
@@ -34,7 +34,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   pl: {
     storage: 'Magazyn', storageDescription: 'Dokładna natywna nazwa magazynu z dostępnych lokalizacji.',
-    cpu: 'Rdzenie CPU', memory: 'Pamięć (bajty)', disk: 'Dysk (bajty)', imageKind: 'Wybór obrazu',
+    cpu: 'Rdzenie CPU', memory: 'Pamięć', disk: 'Dysk', imageKind: 'Wybór obrazu',
     publishedImage: 'Opublikowany obraz', nativeReference: 'Odwołanie do natywnego obrazu', publishedReference: 'Odwołanie do opublikowanego obrazu',
     nativeDescription: 'Obraz w formacie Lume z tagiem lub skrótem, przygotowany dla tego gościa.',
     privateCarrier: 'Przygotowane połączenie prywatne',
@@ -44,7 +44,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   es: {
     storage: 'Almacenamiento', storageDescription: 'El nombre nativo exacto del almacenamiento entre las ubicaciones disponibles.',
-    cpu: 'Núcleos de CPU', memory: 'Memoria (bytes)', disk: 'Disco (bytes)', imageKind: 'Selección de imagen',
+    cpu: 'Núcleos de CPU', memory: 'Memoria', disk: 'Disco', imageKind: 'Selección de imagen',
     publishedImage: 'Imagen publicada', nativeReference: 'Referencia de imagen nativa', publishedReference: 'Referencia de imagen publicada',
     nativeDescription: 'Una imagen en formato Lume con etiqueta o resumen, preparada para este huésped.',
     privateCarrier: 'Conexión privada preparada',
@@ -54,7 +54,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   fr: {
     storage: 'Stockage', storageDescription: 'Le nom natif exact du stockage parmi les emplacements disponibles.',
-    cpu: 'Cœurs du processeur', memory: 'Mémoire (octets)', disk: 'Disque (octets)', imageKind: 'Choix de l’image',
+    cpu: 'Cœurs du processeur', memory: 'Mémoire', disk: 'Disque', imageKind: 'Choix de l’image',
     publishedImage: 'Image publiée', nativeReference: 'Référence d’image native', publishedReference: 'Référence d’image publiée',
     nativeDescription: 'Une image au format Lume avec une étiquette ou une empreinte, préparée pour cet invité.',
     privateCarrier: 'Connexion privée préparée',
@@ -64,7 +64,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   it: {
     storage: 'Archiviazione', storageDescription: 'Il nome nativo esatto dell’archiviazione tra le posizioni disponibili.',
-    cpu: 'Core CPU', memory: 'Memoria (byte)', disk: 'Disco (byte)', imageKind: 'Selezione dell’immagine',
+    cpu: 'Core CPU', memory: 'Memoria', disk: 'Disco', imageKind: 'Selezione dell’immagine',
     publishedImage: 'Immagine pubblicata', nativeReference: 'Riferimento all’immagine nativa', publishedReference: 'Riferimento all’immagine pubblicata',
     nativeDescription: 'Un’immagine in formato Lume con tag o digest, preparata per questo ospite.',
     privateCarrier: 'Connessione privata preparata',
@@ -74,7 +74,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   pt: {
     storage: 'Armazenamento', storageDescription: 'O nome nativo exato do armazenamento entre os locais disponíveis.',
-    cpu: 'Núcleos de CPU', memory: 'Memória (bytes)', disk: 'Disco (bytes)', imageKind: 'Seleção da imagem',
+    cpu: 'Núcleos de CPU', memory: 'Memória', disk: 'Disco', imageKind: 'Seleção da imagem',
     publishedImage: 'Imagem publicada', nativeReference: 'Referência da imagem nativa', publishedReference: 'Referência da imagem publicada',
     nativeDescription: 'Uma imagem no formato Lume com tag ou resumo, preparada para este hóspede.',
     privateCarrier: 'Conexão privada preparada',
@@ -84,7 +84,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   ca: {
     storage: 'Emmagatzematge', storageDescription: 'El nom natiu exacte de l’emmagatzematge entre les ubicacions disponibles.',
-    cpu: 'Nuclis de CPU', memory: 'Memòria (bytes)', disk: 'Disc (bytes)', imageKind: 'Selecció de la imatge',
+    cpu: 'Nuclis de CPU', memory: 'Memòria', disk: 'Disc', imageKind: 'Selecció de la imatge',
     publishedImage: 'Imatge publicada', nativeReference: 'Referència de la imatge nativa', publishedReference: 'Referència de la imatge publicada',
     nativeDescription: 'Una imatge en format Lume amb etiqueta o resum, preparada per a aquest convidat.',
     privateCarrier: 'Connexió privada preparada',
@@ -94,7 +94,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   'zh-Hans': {
     storage: '存储位置', storageDescription: '可用位置中的确切原生存储名称。',
-    cpu: 'CPU 核心数', memory: '内存（字节）', disk: '磁盘（字节）', imageKind: '镜像选择',
+    cpu: 'CPU 核心数', memory: '内存', disk: '磁盘', imageKind: '镜像选择',
     publishedImage: '已发布镜像', nativeReference: '原生镜像引用', publishedReference: '已发布镜像引用',
     nativeDescription: '为此客户机准备的带标签或摘要的 Lume 格式镜像。',
     privateCarrier: '已准备的私有连接', privateDescription: '仅选择经过审核并为使用默认密码的 Lume 原生 SSH 准备好的镜像。',
@@ -103,7 +103,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   'zh-Hant': {
     storage: '儲存位置', storageDescription: '可用位置中的確切原生儲存名稱。',
-    cpu: 'CPU 核心數', memory: '記憶體（位元組）', disk: '磁碟（位元組）', imageKind: '映像選擇',
+    cpu: 'CPU 核心數', memory: '記憶體', disk: '磁碟', imageKind: '映像選擇',
     publishedImage: '已發佈映像', nativeReference: '原生映像參照', publishedReference: '已發佈映像參照',
     nativeDescription: '為此客體準備的帶標籤或摘要的 Lume 格式映像。',
     privateCarrier: '已準備的私有連線', privateDescription: '僅選擇經過審查並為使用預設密碼的 Lume 原生 SSH 準備好的映像。',
@@ -112,7 +112,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   ja: {
     storage: 'ストレージ', storageDescription: '利用可能な場所に含まれる正確なネイティブストレージ名。',
-    cpu: 'CPU コア数', memory: 'メモリ（バイト）', disk: 'ディスク（バイト）', imageKind: 'イメージの選択',
+    cpu: 'CPU コア数', memory: 'メモリ', disk: 'ディスク', imageKind: 'イメージの選択',
     publishedImage: '公開イメージ', nativeReference: 'ネイティブイメージの参照', publishedReference: '公開イメージの参照',
     nativeDescription: 'このゲスト用に準備された、タグまたはダイジェスト付きの Lume 形式イメージ。',
     privateCarrier: '準備済みのプライベート接続', privateDescription: 'Lume ネイティブ SSH の既定パスワードを使うよう準備された、確認済みのイメージのみ選択してください。',
