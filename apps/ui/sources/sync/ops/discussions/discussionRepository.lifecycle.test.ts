@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, createElement, StrictMode } from 'react';
+import { act, createElement, StrictMode, useEffect, useLayoutEffect } from 'react';
 import { SessionMessageAccountActorV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
+import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
+import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
+import { encodeBase64 } from '@/encryption/base64';
 import { createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
 import { createUsageNoticeArtifactFixture } from '@/dev/testkit/fixtures/usageNoticeFixtures';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { answerDiscussionThreadForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { answerDiscussionThreadForTests, createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
 // Genuine third-party render boundary, as in the shared storage-hook tests;
@@ -22,11 +25,64 @@ const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 const { getDiscussionRepository, clearDiscussionRepositoryRegistryForTests, readRegisteredDiscussionRepository } = await import('./discussionRepositoryRegistry');
 const { useDiscussionListSearch } = await import('./useDiscussionListSearch');
 const { getStorage } = await import('@/sync/domains/state/storageStore');
+const { useDiscussionRepositorySnapshot } = await import('./useDiscussionRepositorySnapshot');
 
 beforeEach(async () => { await homes.reset(); });
 afterEach(async () => { standardCleanup(); clearDiscussionRepositoryRegistryForTests(); await homes.reset(); });
 
 describe('shared Discussion repository Account custody', () => {
+    it('opens a cold encrypted thread through the detail subscription without a connected socket', async () => {
+        const secret = new Uint8Array(32).fill(17);
+        const credentials = { token: createAccountTokenForTests('alice', { currentAccount: true }), secret: encodeBase64(secret, 'base64url') };
+        const serverId = await homes.addHome({ name: 'Cold Discussion', serverUrl: 'https://cold-discussion.test',
+            accountId: 'alice', currentAccount: true, accountEncryptionMode: 'e2ee', credentials });
+        const contentKeyFingerprint = convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(
+            createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material: { type: 'legacy', secret } }).contentPublicKeyFingerprint);
+        homes.answer(serverId, '/v1/account/encryption/currentness', { body: { mode: 'e2ee', version: 1,
+            signingKeyFingerprint: 'a'.repeat(64), contentKeyFingerprint, updatedAt: 1, recipientEnvelopeReadiness: { status: 'available' } } });
+        const scope = { serverId, accountId: 'alice' };
+        const fixture = answerDiscussionThreadForTests(homes, serverId, { mode: 'e2ee', loseCreate: false, loseFirstRejoin: false });
+        const client = createDiscussionClient({ scope, availability: 'available' });
+        expect(await client.create({ creationLocalId: 'cold-thread', messageLocalId: 'cold-root', title: 'Cold encrypted title',
+            content: { v: 1, parts: [{ t: 'text', text: 'First decrypted message' }] } })).toMatchObject({ kind: 'succeeded' });
+        const started = performance.now();
+        const timings: Record<string, number> = {};
+        homes.answer(serverId, 'GET /v1/discussions/committed-thread', { select: () => {
+            timings.lastHttpResponse = performance.now() - started;
+            timings.firstDetailResponse ??= timings.lastHttpResponse;
+            return { body: { discussion: fixture.stored()!.discussion } };
+        } });
+        homes.answer(serverId, 'GET /v1/discussions/committed-thread/messages', { select: () => {
+            timings.lastHttpResponse = timings.messagesResponse = performance.now() - started;
+            return { body: { messages: fixture.messages, hasMoreOlder: false, messageSeq: fixture.messages.length } };
+        } });
+        const binding = await renderHook(() => useServerCredentialAccountScopeBindings([serverId]));
+        const repository = getDiscussionRepository({ scope, address: { serverId }, client, accountLifetime: binding.getCurrent().get(serverId)! });
+        let opening: Promise<void> | undefined;
+        const hook = await renderHook(() => {
+            const snapshot = useDiscussionRepositorySnapshot(repository);
+            useEffect(() => {
+                const dispose = repository.mount();
+                opening = repository.refreshDiscussion('committed-thread');
+                return dispose;
+            }, []);
+            const thread = snapshot.threads['committed-thread'];
+            useLayoutEffect(() => {
+                if (thread?.status === 'ready' && timings.firstMessageCommit === undefined) {
+                    timings.firstMessageCommit = performance.now() - started;
+                }
+            }, [thread]);
+            return thread;
+        });
+        await act(async () => { await opening; });
+        expect(hook.getCurrent()).toMatchObject({ status: 'ready', summary: { title: 'Cold encrypted title' },
+            messages: [{ content: { parts: [{ t: 'text', text: 'First decrypted message' }] } }] });
+        expect(timings.firstMessageCommit).toBeGreaterThanOrEqual(timings.lastHttpResponse!);
+        timings.afterLastResponse = timings.firstMessageCommit! - timings.lastHttpResponse!;
+        // Intentional timing output for the reported post-HTTP opening stall;
+        // this is a cold data-hook measurement, not loaded-browser paint timing.
+    });
+
     it('completes a delayed whole-list search under the canonical StrictMode wrapper and keeps unrelated thread updates local', async () => {
         const serverId = await homes.addHome({ name: 'Search Strict Effects', serverUrl: 'https://search-strict.test', accountId: 'alice', currentAccount: true });
         const scope = { serverId, accountId: 'alice' };
