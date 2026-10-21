@@ -262,6 +262,27 @@ describe('AcpBackendEditorScreen', () => {
             expect(shared.routerReplaceSpy).not.toHaveBeenCalled();
         }
     });
+    it.each([false, true])('persists a changed resume declaration through the catalog action (initially %s)', async (initialSupport) => {
+        shared.settingsState.value = { v: 2, backends: [{ ...existingKiro,
+            capabilities: { ...existingKiro.capabilities, supportsLoadSession: initialSupport },
+        }] };
+        const screen = await renderEditor('kiro');
+        const toggleId = `${EDITOR}.supportsLoadSession`;
+        const toggle = screen.findByTestId(toggleId);
+        expect(toggle).not.toBeNull();
+        expect(toggle?.props.value).toBe(initialSupport);
+        await act(async () => { toggle?.props.onValueChange(!initialSupport); });
+        await press(screen, `${EDITOR}.save`);
+        expect(shared.writes).toHaveLength(1);
+        expect(shared.settingsState.value.backends[0]?.capabilities).toEqual({
+            ...existingKiro.capabilities,
+            supportsLoadSession: !initialSupport,
+        });
+        await screen.unmount();
+        const reopened = await renderEditor('kiro');
+        expect(reopened.findByTestId(toggleId)?.props.value).toBe(!initialSupport);
+    });
+
     it.each(['reject', 'cancel'] as const)('releases the pending editor without writing or losing its draft when approval is %s', async (decision) => {
         const approvalPolicy = ActionsSettingsV1Schema.parse({ v: 1, actions: {
             'agents.acp.backends.upsert': { approvalRequiredSurfaces: ['ui'] },
