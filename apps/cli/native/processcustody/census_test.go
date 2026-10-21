@@ -152,9 +152,9 @@ func TestCensusUnreadableJobMembershipIsPartialForSelectedRows(t *testing.T) {
 func TestDarwinProcargsPreservesArgumentsAndOnlyOwnershipEnvironment(t *testing.T) {
 	buffer := make([]byte, 4)
 	binary.LittleEndian.PutUint32(buffer, 3)
-	buffer = append(buffer, []byte("/bin/tool\x00\x00\x00tool\x00\x00arg with spaces\x00HAPPIER_PROCESS_OWNER=v1.scope.session.id\x00HAPPIER_HOME_DIR= /home/test \x00SECRET_TOKEN=must-not-survive\x00PATH=/bin\x00")...)
+	buffer = append(buffer, []byte("/Users/测试/bin/tool\x00\x00\x00tool\x00\x00arg with spaces café\x00HAPPIER_PROCESS_OWNER=v1.scope.session.id\x00HAPPIER_HOME_DIR= /Users/测试 \x00SECRET_TOKEN=must-not-survive\x00PATH=/bin\x00")...)
 	exe, argv, tag, env, err := decodeDarwinProcargs(buffer)
-	if err != nil || exe != "/bin/tool" || !reflect.DeepEqual(argv, []string{"tool", "", "arg with spaces"}) || tag != "v1.scope.session.id" || !reflect.DeepEqual(env, map[string]string{"HAPPIER_HOME_DIR": "/home/test"}) {
+	if err != nil || exe != "/Users/测试/bin/tool" || !reflect.DeepEqual(argv, []string{"tool", "", "arg with spaces café"}) || tag != "v1.scope.session.id" || !reflect.DeepEqual(env, map[string]string{"HAPPIER_HOME_DIR": "/Users/测试"}) {
 		t.Fatalf("incorrect native argv/environment reduction: exe=%q argv=%q tag=%q env=%v err=%v", exe, argv, tag, env, err)
 	}
 	for _, raw := range [][]byte{nil, {3, 0, 0, 0}, append([]byte{2, 0, 0, 0}, []byte("/bin/tool\x00\x00tool\x00")...)} {
