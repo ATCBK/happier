@@ -1,4 +1,5 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
+import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { zhHans as actionTitlesZhHans } from './actionTitles/zh-Hans';
@@ -15617,6 +15618,7 @@ settingsSession: {
             unavailableTitle: "本期的 Coach 证据尚未加载",
           },
           charts: {
+            ...usageChartInputTranslations['zh-Hans'],
             // usage-board:charts
             showValues: "精确数值",
             hideValues: "隐藏数值",

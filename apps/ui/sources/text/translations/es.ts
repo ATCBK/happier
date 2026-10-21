@@ -1,4 +1,5 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
+import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { es as actionTitlesEs } from './actionTitles/es';
@@ -15986,6 +15987,7 @@ settingsSession: {
             unavailableTitle: "La evidencia del Coach no está cargada para este periodo",
           },
           charts: {
+            ...usageChartInputTranslations.es,
             // usage-board:charts
             showValues: "Valores exactos",
             hideValues: "Ocultar valores",

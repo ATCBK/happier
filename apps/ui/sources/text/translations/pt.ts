@@ -1,4 +1,5 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
+import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
 import { pt as actionTitlesPt } from './actionTitles/pt';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
@@ -16097,6 +16098,7 @@ settingsSession: {
             unavailableTitle: "As evidências do Coach não foram carregadas para este período",
           },
           charts: {
+            ...usageChartInputTranslations.pt,
             // usage-board:charts
             showValues: "Valores exatos",
             hideValues: "Ocultar valores",

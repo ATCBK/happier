@@ -1,4 +1,5 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
+import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { ca as actionTitlesCa } from './actionTitles/ca';
@@ -14121,7 +14122,7 @@ settingsSession: {
 
     usage: {
         widgets: { usage_source_coverage: "Cobertura", usage_unpriced: "Sense preu" },
-        board: { recap: {
+        board: { charts: usageChartInputTranslations.ca, recap: {
             deliveryUnconfirmed: "S’ha obert el full per compartir, però no s’ha pogut confirmar el resultat. Comprova l’aplicació triada abans de tornar-ho a provar.",
             statMergedPrs: "PR fusionades",
         }, sources: {

@@ -1,4 +1,5 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
+import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { fr as actionTitlesFr } from './actionTitles/fr';
@@ -15858,6 +15859,7 @@ settingsSession: {
             unavailableTitle: "Les preuves du Coach ne sont pas chargées pour cette période",
           },
           charts: {
+            ...usageChartInputTranslations.fr,
             // usage-board:charts
             showValues: "Valeurs exactes",
             hideValues: "Masquer les valeurs",

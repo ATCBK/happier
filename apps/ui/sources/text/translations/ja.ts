@@ -1,4 +1,5 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
+import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { ja as actionTitlesJa } from './actionTitles/ja';
@@ -16259,6 +16260,7 @@ settingsSession: {
             unavailableTitle: "この期間の Coach の根拠は読み込まれていません",
           },
           charts: {
+            ...usageChartInputTranslations.ja,
             // usage-board:charts
             showValues: "正確な値",
             hideValues: "値を隠す",

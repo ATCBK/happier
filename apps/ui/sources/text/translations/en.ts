@@ -1,4 +1,5 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
+import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
@@ -19562,6 +19563,7 @@ const enUsage = {
       unavailableTitle: "Coach evidence isn't loaded for this period",
     },
     charts: {
+      ...usageChartInputTranslations.en,
       // usage-board:charts — the shared chart bodies (Sky of days, Week tide, Daylight, A day in agents, Score, Orbit, Crew, Agent river, Shipped, Constellation, Your planet, Steering by Agent, Run length)
       showValues: "Exact values",
       hideValues: "Hide values",

@@ -1,4 +1,5 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
+import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { pl as actionTitlesPl } from './actionTitles/pl';
@@ -15119,7 +15120,7 @@ settingsSession: {
 
   usage: {
     widgets: { usage_source_coverage: "Pokrycie", usage_unpriced: "Bez ceny" },
-    board: { recap: {
+    board: { charts: usageChartInputTranslations.pl, recap: {
       deliveryUnconfirmed: "Otwarto systemowy panel udostępniania, ale nie można potwierdzić zakończenia. Przed ponowną próbą sprawdź wybraną aplikację.",
       statMergedPrs: "scalone PR",
     }, sources: {

@@ -1,4 +1,5 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
+import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { zhHant as actionTitlesZhHant } from './actionTitles/zh-Hant';
@@ -12459,7 +12460,7 @@ settingsSession: {
     },
 
     usage: {
-        board: { recap: {
+        board: { charts: usageChartInputTranslations['zh-Hant'], recap: {
             deliveryUnconfirmed: "系統分享面板已開啟，但無法確認是否完成。重試前請檢查所選應用程式。",
             statMergedPrs: "已合併 PR",
         }, sources: {

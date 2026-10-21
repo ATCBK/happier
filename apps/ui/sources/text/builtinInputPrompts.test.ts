@@ -8,6 +8,7 @@ import {
   type TranslationKeyNoParams,
 } from './i18n';
 import { localizeBuiltinInputHints } from './builtinInputPrompts';
+import { readBuiltinWidgetDescriptorV1 } from '@happier-dev/protocol/widgets/builtinWidgetDescriptorV1';
 
 const initialLanguage = getPreferredLanguage();
 beforeAll(async () => { await preloadTranslationsForSettings('es'); });
@@ -15,6 +16,13 @@ beforeEach(() => { setPreferredLanguageFromSettings('es'); });
 afterEach(() => { setPreferredLanguageFromSettings(initialLanguage); });
 
 describe('host input declarations read in the viewer’s language', () => {
+  it('localizes the shared chart own inputs without changing their Style identities', () => {
+    const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_rhythm' })!;
+    const fields = localizeBuiltinInputHints(descriptor.inputs!).fields;
+    expect(fields.find(field => field.path === 'colourBy')!.title).toBe(t('usage.board.charts.inputColourBy'));
+    expect(fields.find(field => field.path === 'style')!.options!.find(option => option.value === 'sky')!.label).toBe(t('usage.board.charts.inputSky'));
+    expect(fields.find(field => field.path === 'style')!.options!.map(option => option.value)).toEqual(['heatmap', 'weekdayHour', 'sky', 'weekTide', 'daylight']);
+  });
   it('localizes the current Usage inputs’ titles, choices and placeholders (F4 D-11)', () => {
     const fields = localizeBuiltinInputHints({
       fields: [...USAGE_QUERY_INPUT_FIELDS],
@@ -40,6 +48,10 @@ describe('host input declarations read in the viewer’s language', () => {
       'API equivalent': 'widgetAdd.inputLabels.apiEquivalent',
       Tokens: 'usage.tokens',
       Cost: 'usage.cost',
+      Sessions: 'usage.board.charts.metric_sessions',
+      'Busy time': 'usage.board.charts.metric_busy',
+      'Accepted steers': 'usage.board.charts.metric_steering',
+      'Peak parallel': 'usage.board.charts.metric_peakParallel',
     } satisfies Record<string, TranslationKeyNoParams>;
     // Exercise the real locale reader; legitimate cognates need not differ from English.
     expect(getPreferredLanguage()).toBe('es');
@@ -68,6 +80,7 @@ describe('host input declarations read in the viewer’s language', () => {
     expect(byPath.metric!.options!.map((option) => option.value)).toEqual([
       'tokens',
       'cost',
+      'sessions', 'busy', 'steering', 'peakParallel',
     ]);
   });
   it('localizes an explicit host question without inventing one for a declaration that has none', () => {

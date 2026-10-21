@@ -1,4 +1,5 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
+import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { ru as actionTitlesRu } from './actionTitles/ru';
@@ -15926,6 +15927,7 @@ settingsSession: {
             unavailableTitle: "Данные Coach за этот период не загружены",
           },
           charts: {
+            ...usageChartInputTranslations.ru,
             // usage-board:charts
             showValues: "Точные значения",
             hideValues: "Скрыть значения",

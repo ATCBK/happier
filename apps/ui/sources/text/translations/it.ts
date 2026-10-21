@@ -1,4 +1,5 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
+import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { it as actionTitlesIt } from './actionTitles/it';
@@ -16357,6 +16358,7 @@ settingsSession: {
             unavailableTitle: "Le prove del Coach non sono caricate per questo periodo",
           },
           charts: {
+            ...usageChartInputTranslations.it,
             // usage-board:charts
             showValues: "Valori esatti",
             hideValues: "Nascondi valori",

@@ -1,4 +1,5 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
+import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { de as actionTitlesDe } from './actionTitles/de';
@@ -16135,6 +16136,7 @@ settingsSession: {
             unavailableTitle: "Coach-Belege sind für diesen Zeitraum nicht geladen",
           },
           charts: {
+            ...usageChartInputTranslations.de,
             // usage-board:charts
             showValues: "Genaue Werte",
             hideValues: "Werte ausblenden",
