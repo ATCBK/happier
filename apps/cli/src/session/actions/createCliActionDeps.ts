@@ -3288,11 +3288,12 @@ export function createCliActionDeps(params: Readonly<{
         ...(context.signal ? { signal: context.signal } : {}) })) return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
       // Only the installed daemon has a serving runtime. A runner on the same
       // Machine must still take transport; it cannot recreate that registry.
-      const localRuntime = !retainedReviewAction && actionId.startsWith('scm.diffSummary.')
+      const nativeScmAction = actionId.startsWith('scm.diffSummary.') || actionId === 'scm.blame.get';
+      const localRuntime = !retainedReviewAction && nativeScmAction
         ? tryAcquireAuthoritativePluginRuntimeRegistryLease() : null;
       const installedScmOwner = localRuntime !== null;
       await localRuntime?.release();
-      if (params.credentials && actionId.startsWith('scm.diffSummary.') && (retainedReviewAction || installedScmOwner)) {
+      if (params.credentials && nativeScmAction && (retainedReviewAction || installedScmOwner)) {
         const currentMachine = await readCurrentMachineControlIdentity();
         if (currentMachine.machineId === machineId) {
           if (!await localReviewHomeCurrent()) return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
