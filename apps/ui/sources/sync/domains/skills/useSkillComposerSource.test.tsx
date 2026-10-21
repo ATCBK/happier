@@ -79,8 +79,8 @@ it.each(['http', 'header'] as const)('opens the same mounted Session composer af
             if (!signal.aborted && source) completed.push(rows.map(row => row.label ?? row.text));
             return rows;
         }, [source]);
-        const [suggestions, selected, moveUp, moveDown, selectionPending] = useActiveSuggestions(query, handler);
-        const menu = useAgentInputCommandMenu({ suggestions, selected, selectionPending, moveUp, moveDown, activeWord: query,
+        const [suggestions, selected, moveUp, moveDown, selectionPending, , selectionForKind] = useActiveSuggestions(query, handler);
+        const menu = useAgentInputCommandMenu({ suggestions, selected, selectionPending, selectionForKind, moveUp, moveDown, activeWord: query,
             activeWordRange: query ? { start: 0, end: query.length } : null, inputTextLength: query?.length ?? 0,
             handleSuggestionSelect: () => {} });
         return { source, ...menu };
@@ -388,6 +388,7 @@ it.each([
         expect(menu.find(item => item.label === 'happier')).toMatchObject({ disabled: true, description: 'Applies to new sessions' });
         // Mouse, Enter and Tab all reach the menu's one selection entry, which refuses a disabled row.
         const picker = await renderHook(() => useAgentInputCommandMenu({ suggestions, selected: suggestions.indexOf(library),
+            selectionForKind: () => ({ selected: suggestions.indexOf(library), selectionPending: false }),
             activeWord: '$', activeWordRange: { start: 0, end: 1 }, inputTextLength: 1, moveUp: () => {}, moveDown: () => {}, handleSuggestionSelect }));
         try {
             await act(async () => { picker.getCurrent().onSelectFromMenu(); picker.getCurrent().onSelectIndexFromMenu(suggestions.indexOf(library)); });

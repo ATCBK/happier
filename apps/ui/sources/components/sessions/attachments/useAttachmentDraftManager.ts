@@ -38,6 +38,8 @@ export function useAttachmentDraftManager(params: Readonly<{
     initialDrafts?: readonly AttachmentDraft[];
     eagerUpload?: Readonly<{ sessionId: string; sessionTarget?: ExactSessionMachineTargetIdentity;
         config: AttachmentsUploadConfig; transferContext?: SessionAttachmentTransferContext }>;
+    /** Picked uploads mention the exact drafts admitted by this intake owner. */
+    onPickedDrafts?: (drafts: readonly AttachmentDraft[]) => void;
     /** The mounted document owner removes exact chip occurrences in the same user action. */
     onRemoveDraft?: (id: string) => void;
 }>): Readonly<{
@@ -63,6 +65,8 @@ export function useAttachmentDraftManager(params: Readonly<{
     const draftRevisionRef = React.useRef(0);
     const onRemoveDraftRef = React.useRef(params.onRemoveDraft);
     onRemoveDraftRef.current = params.onRemoveDraft;
+    const onPickedDraftsRef = React.useRef(params.onPickedDrafts);
+    onPickedDraftsRef.current = params.onPickedDrafts;
     const eagerUploadRef = React.useRef(params.eagerUpload);
     eagerUploadRef.current = params.eagerUpload;
     const eagerUploadsRef = React.useRef(new Map<string, AbortController>());
@@ -163,7 +167,8 @@ export function useAttachmentDraftManager(params: Readonly<{
     }, [addSources]);
 
     const addPickedAttachments = React.useCallback((picked: readonly PickedAttachment[]) => {
-        addSources(picked);
+        const added = addSources(picked);
+        if (added.length > 0) onPickedDraftsRef.current?.(added);
     }, [addSources]);
 
     const removeDraft = React.useCallback((id: string) => {

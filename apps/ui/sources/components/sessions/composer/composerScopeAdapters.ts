@@ -3,7 +3,7 @@ import { ComposerAttachmentDraftV1Schema, type ComposerAttachmentDraftV1, type C
 import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 import { readHappierStructuredInputV1FromMeta } from '@happier-dev/protocol/sessions/userMessageRpc';
 import type { ComposerSnapshotV1 } from '@happier-dev/protocol/plugins/ui/composer';
-import { admitMentionRefsV1ForText, MentionRefV1Schema, parseMentionRefV1, type MentionRefV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
+import { admitMentionRefsV1ForText, buildMentionRefV1, MentionRefV1Schema, parseMentionRefV1, type MentionRefV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
 import { formatInlineReferenceTokenV1, scanInlineReferenceTokensV1, INLINE_REFERENCE_ATTACHMENT_SCHEME_V1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 import type { PluginProjectedComposerAttachmentEntryV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 
@@ -226,12 +226,29 @@ export function normalizeComposerDraftReferenceTokens(input: Readonly<{
 /** Message envelopes are positionless; editable custody starts at this seed boundary. */
 export function hydrateComposerDraftReferencesFromMessage(input: Readonly<{
     text: string; meta?: unknown; references?: readonly MentionRefV1[];
-}>) {
-    const candidates = input.references ?? readHappierStructuredInputV1FromMeta(input.meta)?.mentions ?? [];
+    attachments?: readonly ComposerAttachmentDraftV1[];
+}>): Readonly<{ text: string; mentions: readonly ComposerStructuredInputMention[]; attachments: readonly ComposerAttachmentDraftV1[] }> {
+    const envelope = readHappierStructuredInputV1FromMeta(input.meta);
+    const candidates = input.references ?? envelope?.mentions ?? [];
+    const attachments = input.attachments ?? (envelope?.composerAttachments ?? [])
+        .flatMap(({ content, ...attachment }) => content ? [] : [attachment]);
     const references = placePositionlessComposerReferences({ text: input.text,
-        references: admitMentionRefsV1ForText(input.text, candidates) });
-    return normalizeComposerDraftReferenceTokens({ text: input.text,
-        mentions: composerStructuredMentionsFromReferences({ references, existing: [] }) });
+        references: admitMentionRefsV1ForText(input.text, candidates), allOccurrences: true });
+    const attachmentByRef = new Map(attachments.map(attachment => [
+        buildMentionRefV1(INLINE_REFERENCE_ATTACHMENT_SCHEME_V1, attachment.instanceId), attachment,
+    ]));
+    const attachmentReferences: ComposerMentionRef[] = [];
+    for (const token of scanInlineReferenceTokensV1(input.text)) {
+        const attachment = attachmentByRef.get(token.ref);
+        if (!attachment || references.some(reference => token.start < reference.end && token.end > reference.start)) continue;
+        attachmentReferences.push({ kind: 'happier.attachment', ref: token.ref,
+            token: input.text.slice(token.start, token.end), label: attachment.presentation.label, start: token.start, end: token.end });
+    }
+    const hydrated = normalizeComposerDraftReferenceTokens({ text: input.text,
+        mentions: composerStructuredMentionsFromReferences({
+            references: [...references, ...attachmentReferences].sort((left, right) => left.start - right.start), existing: [],
+        }) });
+    return { ...hydrated, attachments };
 }
 
 /**
@@ -315,27 +332,26 @@ export function placePositionlessComposerReferences(input: Readonly<{
     references: readonly MentionRefV1[];
     /** Migration reserves already exact current occurrences instead of rebinding them. */
     occupied?: readonly Readonly<{ start: number; end: number }>[];
+    /** Message admission binds every equal exact token; editable drafts retain their own ranges. */
+    allOccurrences?: boolean;
 }>): readonly ComposerMentionRef[] {
     const occupied: Array<Readonly<{ start: number; end: number }>> = [...(input.occupied ?? [])];
     const placed: ComposerMentionRef[] = [];
     for (const reference of input.references) {
         if (reference.token.length === 0) continue;
         let searchFrom = 0;
-        let start = -1;
         while (searchFrom <= input.text.length) {
             const index = input.text.indexOf(reference.token, searchFrom);
             if (index < 0) break;
             const end = index + reference.token.length;
             const overlaps = occupied.some((range) => index < range.end && end > range.start);
             if (!overlaps) {
-                start = index;
-                break;
+                occupied.push({ start: index, end });
+                placed.push({ ...reference, start: index, end });
+                if (!input.allOccurrences) break;
             }
             searchFrom = index + 1;
         }
-        if (start < 0) continue;
-        occupied.push({ start, end: start + reference.token.length });
-        placed.push({ ...reference, start, end: start + reference.token.length });
     }
     return placed.sort((left, right) => left.start - right.start || left.end - right.end);
 }

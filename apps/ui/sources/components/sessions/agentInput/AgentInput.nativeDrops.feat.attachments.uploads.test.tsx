@@ -50,8 +50,8 @@ it('routes a native folder through the shared intake and mentions it at the rele
     expect(input().props.references[0].state).toBe('ready');
     await act(async () => updateStatus?.('error'));
     expect(input().props.references[0].state).toBe('removed');
-    const { dropOrphanComposerAttachmentReferences } = await import('@/components/sessions/composer/composerSubmissionCoordinator');
-    expect(dropOrphanComposerAttachmentReferences({ text: input().props.value, references: input().props.references.map((reference: { ref: string; start: number; end: number }) => ({
+    const { prepareComposerSubmissionSnapshot } = await import('@/components/sessions/composer/composerSubmissionCoordinator');
+    expect(prepareComposerSubmissionSnapshot({ text: input().props.value, references: input().props.references.map((reference: { ref: string; start: number; end: number }) => ({
         ...reference, kind: 'happier.attachment', token: input().props.value.slice(reference.start, reference.end),
     })), attachments: [] }, [])).toMatchObject({ text: 'Before  after', references: [] });
 });

@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import type { AutocompleteSuggestion } from '@/components/autocomplete/autocompleteTypes';
 import type { ComposerSuggestionKindId } from '@/components/autocomplete/composerSuggestionGrammar';
+import type { ActiveSuggestionKindSelection } from '@/components/autocomplete/useActiveSuggestions';
 import type { CommandMenuItem } from '@/components/ui/commandMenu/commandMenuTypes';
 import { buildAgentInputCommandMenuItems } from './buildAgentInputCommandMenuItems';
 
@@ -14,8 +15,9 @@ export function useAgentInputCommandMenu(
     activeWord: string | null;
     activeWordRange: Readonly<{ start: number; end: number }> | null;
     inputTextLength: number;
-    moveUp: () => void;
-    moveDown: () => void;
+    moveUp: (kind?: ComposerSuggestionKindId | null) => void;
+    moveDown: (kind?: ComposerSuggestionKindId | null) => void;
+    selectionForKind: ActiveSuggestionKindSelection;
     handleSuggestionSelect: (index: number) => void;
     onOpenPromptPicker?: () => void;
     /** The settled answer for the active word is empty: no matches, not still looking. */
@@ -121,8 +123,7 @@ export function useAgentInputCommandMenu(
     [kindTab, kindTabs, triggerStart],
   );
 
-  // Within a kind tab the picker owns its own row position over the rows that kind contributes; each
-  // row still resolves to its index in the whole list when chosen.
+  // Tabs project the canonical selection; row dispatch retains the complete snapshot's indices.
   const shown = React.useMemo(
     () =>
       kindTab === null
@@ -132,8 +133,6 @@ export function useAgentInputCommandMenu(
           ),
     [kindTab, suggestions],
   );
-  const [tabSelected, setTabSelected] = React.useState(0);
-  React.useEffect(() => setTabSelected(0), [kindTab, activeWord]);
   const shownSuggestions = React.useMemo(
     () => shown?.map((row) => row.suggestion) ?? suggestions,
     [shown, suggestions],
@@ -159,11 +158,11 @@ export function useAgentInputCommandMenu(
       }),
     [shownSuggestions, includePromptPicker],
   );
+  const kindSelection = kindTab === null ? null : input.selectionForKind(kindTab);
+  const shownSelectionPending = kindSelection?.selectionPending ?? selectionPending;
   const selectedIndex =
     shown !== null
-      ? shown.length === 0
-        ? -1
-        : Math.min(tabSelected, shown.length - 1)
+      ? shown.findIndex((row) => row.index === kindSelection?.selected)
       : includePromptPicker && (pickerRowSelected || suggestions.length === 0)
         ? suggestions.length
         : selected;
@@ -171,7 +170,7 @@ export function useAgentInputCommandMenu(
     (index: number) => {
       if (shown !== null) {
         const row = shown[index >= 0 ? index : 0];
-        if (row && !selectionPending && row.suggestion.disabled !== true)
+        if (row && !shownSelectionPending && row.suggestion.disabled !== true)
           handleSuggestionSelect(row.index);
         return;
       }
@@ -179,7 +178,7 @@ export function useAgentInputCommandMenu(
         setDismissedTriggerKey(activeTriggerKey);
         input.onOpenPromptPicker?.();
       } else if (
-        !selectionPending &&
+        !shownSelectionPending &&
         suggestions[index >= 0 ? index : 0]?.disabled !== true
       )
         handleSuggestionSelect(index >= 0 ? index : 0);
@@ -189,7 +188,7 @@ export function useAgentInputCommandMenu(
       handleSuggestionSelect,
       includePromptPicker,
       input.onOpenPromptPicker,
-      selectionPending,
+      shownSelectionPending,
       shown,
       suggestions,
     ],
@@ -205,15 +204,6 @@ export function useAgentInputCommandMenu(
     }
   }, [activeTriggerKey]);
 
-  const stepTab = (step: 1 | -1) => {
-    if (shown === null || shown.length === 0) return;
-    setTabSelected(
-      (current) =>
-        (Math.min(current, shown.length - 1) + step + shown.length) %
-        shown.length,
-    );
-  };
-
   return {
     commandMenuOpen,
     items,
@@ -223,7 +213,7 @@ export function useAgentInputCommandMenu(
     onSelectIndexFromMenu,
     onCloseMenu,
     moveUp: () => {
-      if (shown !== null) stepTab(-1);
+      if (shown !== null) moveUp(kindTab);
       else if (includePromptPicker && selectedIndex === 0)
         setPickerRowSelected(true);
       else if (pickerRowSelected) {
@@ -232,7 +222,7 @@ export function useAgentInputCommandMenu(
       } else moveUp();
     },
     moveDown: () => {
-      if (shown !== null) stepTab(1);
+      if (shown !== null) moveDown(kindTab);
       else if (includePromptPicker && selectedIndex === suggestions.length - 1)
         setPickerRowSelected(true);
       else if (pickerRowSelected) {

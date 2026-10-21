@@ -72,9 +72,9 @@ describe('useAttachmentDraftManager (attachments.uploads)', () => {
             const manager = hook.getCurrent();
             expect(manager.getSendableDraftsSnapshot()).toEqual([]);
             expect(manager.hasSendableAttachments).toBe(false);
-            const { dropOrphanComposerAttachmentReferences } = await import('@/components/sessions/composer/composerSubmissionCoordinator');
+            const { prepareComposerSubmissionSnapshot } = await import('@/components/sessions/composer/composerSubmissionCoordinator');
             const token = '[project](happier-ref:attachment:draft-1)';
-            expect(dropOrphanComposerAttachmentReferences({ text: `Read ${token}`, attachments: [], references: [{
+            expect(prepareComposerSubmissionSnapshot({ text: `Read ${token}`, attachments: [], references: [{
                 kind: 'happier.attachment', ref: 'attachment:draft-1', token, start: 5, end: 5 + token.length,
             }] }, manager.getSendableDraftsSnapshot().map(draft => draft.id))).toMatchObject({ text: 'Read ', references: [] });
         }

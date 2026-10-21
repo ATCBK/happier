@@ -1,8 +1,32 @@
 import { describe, expect, it } from 'vitest';
 import { applyRecentComposerSkillSelection, buildComposerRecentReferenceSuggestions } from './composerRecentReferences';
-import { recordComposerReferenceInsertion, readRecentComposerReferenceInsertions } from './composerReferenceInsertion';
+import { recordComposerReferenceInsertion, recordComposerReferencePublication, readRecentComposerReferenceInsertions } from './composerReferenceInsertion';
 
 describe('Recent composer references', () => {
+    it('refreshes recency when a successful insertion replaces an equal reference occurrence', () => {
+        const scope = { serverId: 'replacement-recent-home', accountId: 'account' };
+        const workflow = { kind: 'happier.workflow', ref: 'workflow:review', label: 'Review' };
+        recordComposerReferenceInsertion(scope, workflow);
+        recordComposerReferenceInsertion(scope, { kind: 'happier.widget', ref: 'widget:build', label: 'Build' });
+        const token = '[Review](happier-ref:workflow:review)';
+        const snapshot = { text: token, references: [{ ...workflow, token, start: 0, end: token.length }] };
+        recordComposerReferencePublication({ scope, next: snapshot, insertedRefs: [workflow.ref] });
+        expect(readRecentComposerReferenceInsertions(scope)[0]?.reference.ref).toBe(workflow.ref);
+    });
+    it('offers attachment references only while this composer still owns a usable tray item', () => {
+        const scope = { serverId: 'attachment-recent-home', accountId: 'account' };
+        recordComposerReferenceInsertion(scope, { kind: 'attachment', ref: 'attachment:local-image', label: 'photo.png' });
+        recordComposerReferenceInsertion(scope, { kind: 'happier.workflow', ref: 'workflow:review', label: 'Review' });
+        const input = { inserted: readRecentComposerReferenceInsertions(scope), files: [], sessions: [],
+            kinds: ['composerReference'] as const, group: 'Recent' };
+        const currentDraft = buildComposerRecentReferenceSuggestions({ ...input, attachmentIds: ['local-image'] });
+        expect(currentDraft.map(row => row.label)).toEqual(['Review', 'photo.png']);
+        // Another draft, or the original after remove/send, no longer has custody of the upload.
+        for (const attachmentIds of [undefined, []]) {
+            expect(buildComposerRecentReferenceSuggestions({ ...input, attachmentIds }).map(row => row.label))
+                .toEqual(['Review']);
+        }
+    });
     it('refuses a skill candidate disabled by the current host before inserting its Recent reference', async () => {
         expect(await applyRecentComposerSkillSelection({ kind: 'skill', key: 'library-review', text: '$review',
             disabled: true, structuredInput: { kind: 'skill', id: 'review', name: 'review' } }, 'unavailable'))

@@ -25,7 +25,8 @@ import type { PluginUiComposerAttachmentProjection } from '@/sync/domains/plugin
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { renderHook, requireComposerDraftDocument } from '@/dev/testkit';
-import { planComposerReferenceInsertion } from '@/components/sessions/composer/composerReferenceInsertion';
+import { planComposerReferenceInsertion, readRecentComposerReferenceInsertions } from '@/components/sessions/composer/composerReferenceInsertion';
+import { buildComposerRecentReferenceSuggestions } from '@/components/sessions/composer/composerRecentReferences';
 import { ComposerEntityDropTarget } from '@/components/sessions/composer/ComposerEntityDropTarget';
 import { useEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropHooks';
 import { formatWidgetInstanceRefKeyV1 } from '@happier-dev/protocol/widgets';
@@ -242,6 +243,85 @@ function createDocumentTarget(
 
 describe('composer presentation targets', () => {
     const cleanups: Array<() => void | Promise<void>> = [];
+
+    it('records only successful workflow and qualified widget Action publications in this Home Recent', async () => {
+        const scope = { serverId: 'publication-home', accountId: 'publication-account' };
+        activeScopeState.value = scope;
+        const ref = { kind: 'newSession', instanceId: 'publication-input' } as const;
+        const workspace = { serverId: scope.serverId, machineId: 'publication-machine', rootPath: '/repo' };
+        let editable = true;
+        const document = createDocumentTarget(createSnapshot({ ref, text: 'Before after', selection: { start: 7, end: 7 } }));
+        cleanups.push(registerComposerPresentationTarget(ref, { ...document, readScope: () => scope,
+            readReferenceWorkspace: () => workspace,
+            readSnapshot: () => ({ ...document.readCurrent(), state: { ...document.readCurrent().state, editable } }) }));
+        const executor = createActionExecutor({ composerIngress: executeComposerIngressAction,
+            isActionApprovalRequired: () => false } as unknown as ActionExecutorDeps);
+        const execute = (input: unknown) => executor.execute('composer.transaction.apply', input,
+            { surface: 'ui', serverId: scope.serverId, runtimeAccountId: scope.accountId });
+        const recent = () => buildComposerRecentReferenceSuggestions({ inserted: readRecentComposerReferenceInsertions(scope),
+            files: [], sessions: [], kinds: ['composerReference'], group: 'Recent' });
+        for (const [item, label] of [
+            [{ kind: 'workflow', scope, workflowId: 'review-flow' }, 'Review workflow'],
+            [{ kind: 'work-board-widget', scope, boardId: 'board-1', instanceId: 'widget-1' }, 'Build status'],
+        ] as const) {
+            const admission = resolveComposerEntityDrop(item, { scope, ref, snapshot: document.readCurrent(), sessions: [],
+                workspace: null, itemLabel: label, preview: { verb: 'Mention', target: 'Composer' }, reason: code => code });
+            expect(admission.status).toBe('allowed');
+            if (admission.status !== 'allowed') throw new Error('Expected a reusable reference');
+            expect(recent().some(row => row.label === label)).toBe(false);
+            editable = false;
+            expect(await execute(admission.effect.input)).toMatchObject({ ok: true, result: { status: 'notEditable' } });
+            expect(recent().some(row => row.label === label)).toBe(false);
+            editable = true;
+            expect(await execute(admission.effect.input)).toMatchObject({ ok: true, result: { status: 'applied' } });
+            expect(recent()[0]).toMatchObject({ label });
+            expect(await execute(admission.effect.input)).toMatchObject({ ok: true, result: { status: 'conflict' } });
+        }
+        expect(recent().map(row => row.label)).toEqual(['Build status', 'Review workflow']);
+        const widget = document.readCurrent().references.find(reference => reference.kind === MENTION_KIND_V1.widget);
+        expect(recent()[0]?.structuredInput).toMatchObject({ ref: widget?.ref });
+        const admission = resolveComposerEntityDrop({ kind: 'repository-file', scope, machineId: workspace.machineId, path: '/repo/src/a.ts' },
+            { scope, ref, snapshot: document.readCurrent(), sessions: [], workspace, preview: { verb: 'Mention', target: 'Composer' }, reason: code => code });
+        if (admission.status !== 'allowed') throw new Error('Expected a file reference');
+        expect(await execute(admission.effect.input)).toMatchObject({ ok: true, result: { status: 'applied' } });
+        expect(readRecentComposerReferenceInsertions(scope, workspace)[0]?.reference).toMatchObject({ ref: 'file:src/a.ts' });
+        expect(readRecentComposerReferenceInsertions(scope, { ...workspace, rootPath: '/another-repo' })
+            .some(item => item.reference.ref === 'file:src/a.ts')).toBe(false);
+        expect(readRecentComposerReferenceInsertions({ ...scope, accountId: 'another-account' })).toEqual([]);
+    });
+
+    it('refuses Action text edits inside bound tokens without publishing a partial reference', async () => {
+        const scope = { serverId: 'atomic-action-home', accountId: 'atomic-action-account' };
+        activeScopeState.value = scope;
+        const ref = { kind: 'newSession', instanceId: 'atomic-action-input' } as const;
+        const token = formatInlineReferenceTokenV1({ label: 'Auth', ref: 'session:auth' });
+        const initial = createSnapshot({ ref, text: `See ${token} now`, references: [{
+            kind: MENTION_KIND_V1.session, ref: 'session:auth', label: 'Auth', token, start: 4, end: 4 + token.length,
+        }] });
+        const target = createDocumentTarget(initial);
+        cleanups.push(registerComposerPresentationTarget(ref, { ...target, readScope: () => scope }));
+        const executor = createActionExecutor({ composerIngress: executeComposerIngressAction,
+            isActionApprovalRequired: () => false } as unknown as ActionExecutorDeps);
+        const execute = (operations: ComposerTransactionV1['operations']) => executor.execute('composer.transaction.apply', {
+            scope, ref, transaction: { expectedRevision: target.readCurrent().revision, operations },
+        }, { surface: 'agent', authority: 'account_automation', serverId: scope.serverId, runtimeAccountId: scope.accountId });
+        for (const operation of [
+            { kind: 'text.insert', position: { offset: 6 }, text: 'x' },
+            { kind: 'text.replaceRange', range: { start: 6, end: 7 }, text: 'x' },
+            { kind: 'text.replaceRange', range: { start: 0, end: 7 }, text: '' },
+            { kind: 'text.set', text: `${initial.text.slice(0, 6)}x${initial.text.slice(6)}` },
+        ] satisfies ComposerTransactionV1['operations']) {
+            expect(await execute([operation])).toMatchObject({ ok: true, result: { status: 'invalidOperation', operationIndex: 0 } });
+            expect(target.readCurrent()).toBe(initial);
+        }
+        expect(await execute([{ kind: 'text.insert', position: { offset: 4 }, text: 'before ' },
+            { kind: 'text.insert', position: { offset: 4 + token.length }, text: ' after' }]))
+            .toMatchObject({ ok: true, result: { status: 'applied' } });
+        expect(target.readCurrent().references).toEqual([{ ...initial.references[0], start: 11, end: 11 + token.length }]);
+        expect(await execute([{ kind: 'text.replaceRange', range: { start: 11, end: 11 + token.length }, text: 'plain' }]))
+            .toMatchObject({ ok: true, result: { status: 'applied' } });
+        expect(target.readCurrent()).toMatchObject({ text: 'See before plain after now', references: [] });
+    });
 
     it('removes upload-draft chips through the exact mounted document in the same removal action', async () => {
         const { useAttachmentDraftManager } = await import('@/components/sessions/attachments/useAttachmentDraftManager');

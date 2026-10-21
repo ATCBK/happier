@@ -35,7 +35,7 @@ import { buildMentionRefV1, parseMentionRefV1, MENTION_KIND_V1, readMentionRefOp
 import { INLINE_REFERENCE_ATTACHMENT_SCHEME_V1, scanInlineReferenceTokensV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 import { formatSessionInputMentionMarkerV1 } from '@happier-dev/protocol/sessions/messages/sessionInputReferenceProjectionV1';
 import { parseComposerStructuredInputMentionsForText } from '@/sync/domains/input/draftValues/sessionDraftValueTypes';
-import { planComposerReferenceInsertion, recordComposerReferenceInsertion, readRecentComposerReferenceInsertions, type ComposerReferenceInsertion } from '@/components/sessions/composer/composerReferenceInsertion';
+import { planComposerReferenceInsertion, recordComposerReferencePublication, readRecentComposerReferenceInsertions, type ComposerReferenceInsertion } from '@/components/sessions/composer/composerReferenceInsertion';
 import { applyRecentComposerSkillSelection, buildComposerRecentReferenceSuggestions } from '@/components/sessions/composer/composerRecentReferences';
 import { readQuickOpenRecentFiles } from '@/components/workspaces/files/useQuickOpenEmptyState';
 import { readComposerSessionSuggestionItems } from '@/sync/domains/input/suggestionSession';
@@ -2195,6 +2195,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             inserted: readRecentComposerReferenceInsertions(composerDropScope, props.composerFileScope),
             files: props.autocompleteKinds.includes('file') ? readQuickOpenRecentFiles(props.composerFileScope ?? null).map(file => file.fullPath) : [],
             sessions, kinds: props.autocompleteKinds, group: t('newSession.machinePicker.recentTitle'), sessionKindLabel: t('composerReferences.kindSession'),
+            attachmentIds: props.attachmentRowItems?.flatMap(item => item.attachmentId && item.status !== 'error'
+                && item.availability !== 'unavailable' && item.availability !== 'invalid' ? [item.attachmentId] : []),
             skillSelectionEffect: reference => async () => {
                 const current = await props.autocompleteSuggestions(`$${reference.label}`, new AbortController().signal, () => {});
                 const candidate = current.find(item => {
@@ -2211,8 +2213,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         const withRecent = (rows: readonly AutocompleteSuggestion[]) => [...recent, ...rows.filter(row => !recentIdentities.has(getAutocompleteSuggestionIdentity(row)))];
         publish(recent);
         return withRecent(await props.autocompleteSuggestions(query, signal, (rows, status) => publish(withRecent(rows), status)));
-    }, [composerDropScope, props.autocompleteKinds, props.autocompleteSuggestions, props.composerFileScope, props.sessionId]);
-    const [suggestions, selected, moveUp, moveDown, selectionPending, suggestionsSettledEmpty] = useActiveSuggestions(activeSuggestionQuery, resolveSuggestions, { wrapAround: true });
+    }, [composerDropScope, props.autocompleteKinds, props.autocompleteSuggestions, props.composerFileScope, props.sessionId, props.attachmentRowItems]);
+    const [suggestions, selected, moveUp, moveDown, selectionPending, suggestionsSettledEmpty, selectionForKind] = useActiveSuggestions(activeSuggestionQuery, resolveSuggestions, { wrapAround: true });
     // Lab P1–P3: a reference trigger (@, $) gets the reference picker — kind tabs, a held frame and its
     // own empty state. Commands keep the plain list.
     const activeTrigger = activeWord?.charAt(0) ?? null;
@@ -2236,9 +2238,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         let text = inputStateRef.current.text;
         let selection = inputStateRef.current.selection;
         let mentions = structuredInputMentionsRef.current;
+        const insertedRefs: string[] = [];
         let at = firstAt;
         let cursor: number | null = null;
-        for (const { reference, template, suggestion } of insertions) {
+        for (const { reference, template } of insertions) {
             const operations = planComposerReferenceInsertion({ snapshot: { text, selection,
                 references: composerReferencesFromStructuredMentions({ text, mentions }) }, reference, at });
             const edit = operations[0];
@@ -2258,12 +2261,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             cursor = range.start + edit.text.length;
             selection = { start: cursor, end: cursor };
             at = { kind: 'offset', offset: cursor };
-            if (composerDropScope) recordComposerReferenceInsertion(composerDropScope, reference, suggestion, props.composerFileScope);
+            insertedRefs.push(reference.ref);
         }
         if (cursor === null) return null;
         inputRef.current?.setTextAndSelection(text, { start: cursor, end: cursor });
         // After the editor's own report, which cannot know the chips it has not been given yet.
         updateStructuredInputMentions(mentions);
+        if (composerDropScope) recordComposerReferencePublication({ scope: composerDropScope, insertedRefs,
+            next: { text, references: composerReferencesFromStructuredMentions({ text, mentions }) }, workspace: props.composerFileScope,
+            suggestions: new Map(insertions.flatMap(item => item.suggestion ? [[item.reference.ref, item.suggestion] as const] : [])) });
         return cursor;
     }, [composerDropScope, props.composerFileScope, updateStructuredInputMentions]);
     const insertReferenceInInput = React.useCallback((reference: ComposerReferenceInsertion,
@@ -2453,6 +2459,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         suggestions,
         selected,
         selectionPending,
+        selectionForKind,
         activeWord,
         activeWordRange: activeWordState
             ? { start: activeWordState.offset, end: activeWordState.endOffset }

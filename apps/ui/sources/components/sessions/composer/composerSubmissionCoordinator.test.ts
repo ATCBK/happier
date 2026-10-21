@@ -7,6 +7,9 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { getComposerMediaContentAvailability } from '@/sync/domains/transfers/runtime/transferRuntime';
+import { buildComposerSnapshotStructuredInputMetaOverrides } from './composerScopeAdapters';
+import { readHappierStructuredInputV1FromMeta } from '@happier-dev/protocol/sessions/userMessageRpc';
+import { projectSessionInputReferencesV1 } from '@happier-dev/protocol/sessions/messages/sessionInputReferenceProjectionV1';
 
 const getComposerMediaContentAvailabilitySpy = vi.hoisted(() => (
     vi.fn<typeof getComposerMediaContentAvailability>()
@@ -117,6 +120,39 @@ function createSnapshot(input: Readonly<{
 }
 
 describe('composerSubmissionCoordinator', () => {
+    it('canonicalizes only bound variants before the message identity set is written and dispatched', async () => {
+        const first = '[Old title](happier-ref:session:session-1)';
+        const second = '[Renamed session](happier-ref:session:session-1)';
+        const text = `${first} / ${second} / ${second}`;
+        const snapshot = createSnapshot({ text, attachments: [], references: [
+            { kind: 'happier.session', ref: 'session:session-1', token: first, label: 'Old title', start: 0, end: first.length },
+            { kind: 'happier.session', ref: 'session:session-1', token: second, label: 'Renamed session', start: first.length + 3, end: first.length + 3 + second.length },
+        ] });
+        const clearAcceptedSnapshot = vi.fn(() => true);
+        let receivedText = '';
+        let receivedMentions = 0;
+        let receivedBlock = '';
+        const result = await submitComposerSnapshot({ snapshot, clearAcceptedSnapshot, route: {
+            kind: 'session', ref: snapshot.ref as Extract<ComposerRefV1, { kind: 'session' }>,
+            admit: submitted => {
+                const envelope = readHappierStructuredInputV1FromMeta(buildComposerSnapshotStructuredInputMetaOverrides(submitted));
+                const projected = projectSessionInputReferencesV1({ text: submitted.text, references: { mentions: envelope?.mentions } });
+                receivedText = projected.text;
+                receivedMentions = envelope?.mentions?.length ?? 0;
+                receivedBlock = projected.block;
+                for (const reference of submitted.references) {
+                    expect(submitted.text.slice(reference.start, reference.end)).toBe(reference.token);
+                }
+                return { status: 'accepted' };
+            },
+        } });
+        expect(result.status).toBe('accepted');
+        expect(receivedText).toBe('@Session "Old title" / @Session "Old title" / Renamed session');
+        expect(receivedMentions).toBe(1);
+        expect(receivedBlock.match(/session_id=/g)).toHaveLength(1);
+        expect(clearAcceptedSnapshot).toHaveBeenCalledWith(snapshot);
+        expect(snapshot.text).toBe(text);
+    });
     it('drops only bound orphan attachment chips before admission and keeps captured custody for clearing', async () => {
         const removed = '[missing](happier-ref:attachment:gone)';
         const retained = '[screen](happier-ref:attachment:upload-1)';

@@ -35,7 +35,9 @@ import {
   MAX_COMPOSER_ATTACHMENT_VALUE_JSON_BYTES_V1,
 } from './composerAttachmentV1.js';
 
-function mention(overrides: Partial<MentionRefV1> = {}): Record<string, unknown> {
+function mention(
+  overrides: Partial<MentionRefV1> = {},
+): Record<string, unknown> {
   return {
     kind: MENTION_KIND_V1.file,
     ref: 'file:src/index.ts',
@@ -51,8 +53,20 @@ describe('mention reference grammar', () => {
     expect(parseMentionRefV1(ref)).toEqual({ scheme: 'skill', opaque });
   });
 
+  it('reads a character outside the basic plane that a hand-written ref left unescaped', () => {
+    expect(parseMentionRefV1('file:notes/🎉 launch.md')).toEqual({
+      scheme: 'file',
+      opaque: 'notes/🎉 launch.md',
+    });
+    expect(
+      parseMentionRefV1(buildMentionRefV1('file', 'notes/🎉 launch.md')),
+    ).toEqual({ scheme: 'file', opaque: 'notes/🎉 launch.md' });
+  });
+
   it('keeps the readable case readable and splits on the first colon only', () => {
-    expect(buildMentionRefV1('skill', 'vendor:codex:review')).toBe('skill:vendor:codex:review');
+    expect(buildMentionRefV1('skill', 'vendor:codex:review')).toBe(
+      'skill:vendor:codex:review',
+    );
     expect(parseMentionRefV1('skill:vendor:codex:review')).toEqual({
       scheme: 'skill',
       opaque: 'vendor:codex:review',
@@ -61,7 +75,10 @@ describe('mention reference grammar', () => {
 
   it('rejects an authority form, a malformed escape and an empty opaque part', () => {
     // D-8: the authority form would embed a device-local profile id in a persisted reference.
-    expect(parseMentionRefV1('session://scope/abc')).toEqual({ scheme: 'session', opaque: '//scope/abc' });
+    expect(parseMentionRefV1('session://scope/abc')).toEqual({
+      scheme: 'session',
+      opaque: '//scope/abc',
+    });
     expect(parseMentionRefV1('skill:%zz')).toBeNull();
     expect(parseMentionRefV1('skill:')).toBeNull();
     expect(parseMentionRefV1(':abc')).toBeNull();
@@ -88,22 +105,42 @@ describe('built-in kind reference schemes', () => {
       'happier.widget': 'widget',
       'happier.workflowInput': 'workflowInput',
     });
-    expect(buildMentionRefForKindV1(MENTION_KIND_V1.skill, 'vendor:codex:review'))
-      .toBe('skill:vendor:codex:review');
-    expect(buildMentionRefForKindV1(MENTION_KIND_V1.vendorPlugin, 'plugin://linear@happier'))
-      .toBe('vendorPlugin:plugin://linear@happier');
-    expect(buildMentionRefForKindV1(MENTION_KIND_V1.session, 'sess_1')).toBe('session:sess_1');
-    expect(buildMentionRefForKindV1(MENTION_KIND_V1.file, 'src/a.ts')).toBe('file:src/a.ts');
+    expect(
+      buildMentionRefForKindV1(MENTION_KIND_V1.skill, 'vendor:codex:review'),
+    ).toBe('skill:vendor:codex:review');
+    expect(
+      buildMentionRefForKindV1(
+        MENTION_KIND_V1.vendorPlugin,
+        'plugin://linear@happier',
+      ),
+    ).toBe('vendorPlugin:plugin://linear@happier');
+    expect(buildMentionRefForKindV1(MENTION_KIND_V1.session, 'sess_1')).toBe(
+      'session:sess_1',
+    );
+    expect(buildMentionRefForKindV1(MENTION_KIND_V1.file, 'src/a.ts')).toBe(
+      'file:src/a.ts',
+    );
   });
 
   it('reads back only through the kind that wrote it (INV-4)', () => {
-    const ref = buildMentionRefForKindV1(MENTION_KIND_V1.skill, 'vendor:codex:review');
-    expect(readMentionRefOpaqueForKindV1(MENTION_KIND_V1.skill, ref)).toBe('vendor:codex:review');
+    const ref = buildMentionRefForKindV1(
+      MENTION_KIND_V1.skill,
+      'vendor:codex:review',
+    );
+    expect(readMentionRefOpaqueForKindV1(MENTION_KIND_V1.skill, ref)).toBe(
+      'vendor:codex:review',
+    );
     // A reference tagged with one kind but schemed for another must never resolve as the
     // kind asked for — that is what stops a known kind from swallowing a foreign reference.
-    expect(readMentionRefOpaqueForKindV1(MENTION_KIND_V1.vendorPlugin, ref)).toBeNull();
-    expect(readMentionRefOpaqueForKindV1(MENTION_KIND_V1.skill, 'ticket:ACME-1')).toBeNull();
-    expect(readMentionRefOpaqueForKindV1(MENTION_KIND_V1.skill, 'skill:%zz')).toBeNull();
+    expect(
+      readMentionRefOpaqueForKindV1(MENTION_KIND_V1.vendorPlugin, ref),
+    ).toBeNull();
+    expect(
+      readMentionRefOpaqueForKindV1(MENTION_KIND_V1.skill, 'ticket:ACME-1'),
+    ).toBeNull();
+    expect(
+      readMentionRefOpaqueForKindV1(MENTION_KIND_V1.skill, 'skill:%zz'),
+    ).toBeNull();
   });
 });
 
@@ -115,19 +152,23 @@ describe('mentionRefV1SurvivesRenderedTokenAlone', () => {
    * only the token, does the agent reach the same thing the user picked?".
    */
   it('admits a file reference whose rendered token carries the whole path', () => {
-    expect(mentionRefV1SurvivesRenderedTokenAlone({
-      kind: MENTION_KIND_V1.file,
-      ref: buildMentionRefForKindV1(MENTION_KIND_V1.file, 'docs/README.md'),
-      token: '@docs/README.md',
-    })).toBe(true);
+    expect(
+      mentionRefV1SurvivesRenderedTokenAlone({
+        kind: MENTION_KIND_V1.file,
+        ref: buildMentionRefForKindV1(MENTION_KIND_V1.file, 'docs/README.md'),
+        token: '@docs/README.md',
+      }),
+    ).toBe(true);
 
     // The composer quotes a path with a token-boundary character. The path is
     // still literally present, so the same run still reaches the same file.
-    expect(mentionRefV1SurvivesRenderedTokenAlone({
-      kind: MENTION_KIND_V1.file,
-      ref: buildMentionRefForKindV1(MENTION_KIND_V1.file, 'docs/read me.md'),
-      token: '@"docs/read me.md"',
-    })).toBe(true);
+    expect(
+      mentionRefV1SurvivesRenderedTokenAlone({
+        kind: MENTION_KIND_V1.file,
+        ref: buildMentionRefForKindV1(MENTION_KIND_V1.file, 'docs/read me.md'),
+        token: '@"docs/read me.md"',
+      }),
+    ).toBe(true);
   });
 
   it('refuses every kind whose identity the rendered token cannot express', () => {
@@ -136,13 +177,19 @@ describe('mentionRefV1SurvivesRenderedTokenAlone', () => {
       // the bare display name, which no catalog lookup can resolve back.
       {
         kind: MENTION_KIND_V1.skill,
-        ref: buildMentionRefForKindV1(MENTION_KIND_V1.skill, 'vendor:codex:review'),
+        ref: buildMentionRefForKindV1(
+          MENTION_KIND_V1.skill,
+          'vendor:codex:review',
+        ),
         token: '$review',
       },
       // `vendorPlugin:` carries the marketplace ref; the token is the plugin name.
       {
         kind: MENTION_KIND_V1.vendorPlugin,
-        ref: buildMentionRefForKindV1(MENTION_KIND_V1.vendorPlugin, 'plugin://linear@happier'),
+        ref: buildMentionRefForKindV1(
+          MENTION_KIND_V1.vendorPlugin,
+          'plugin://linear@happier',
+        ),
         token: '@Linear',
       },
       // `session:` carries the session id; the token is a title slug plus a short
@@ -168,30 +215,32 @@ describe('mentionRefV1SurvivesRenderedTokenAlone', () => {
       },
     ];
 
-    expect(verdicts.map((mention) => mentionRefV1SurvivesRenderedTokenAlone(mention))).toEqual([
-      false,
-      false,
-      false,
-      false,
-      false,
-    ]);
+    expect(
+      verdicts.map((mention) =>
+        mentionRefV1SurvivesRenderedTokenAlone(mention),
+      ),
+    ).toEqual([false, false, false, false, false]);
   });
 
   it('refuses a file reference whose token does not carry its path', () => {
     // `reference.insert` lets a plugin supply the token itself, so a file-kind
     // reference is not automatically a self-describing one.
-    expect(mentionRefV1SurvivesRenderedTokenAlone({
-      kind: MENTION_KIND_V1.file,
-      ref: buildMentionRefForKindV1(MENTION_KIND_V1.file, 'docs/README.md'),
-      token: '@the readme',
-    })).toBe(false);
+    expect(
+      mentionRefV1SurvivesRenderedTokenAlone({
+        kind: MENTION_KIND_V1.file,
+        ref: buildMentionRefForKindV1(MENTION_KIND_V1.file, 'docs/README.md'),
+        token: '@the readme',
+      }),
+    ).toBe(false);
 
     // A file-tagged reference schemed for another kind never reads back as a path.
-    expect(mentionRefV1SurvivesRenderedTokenAlone({
-      kind: MENTION_KIND_V1.file,
-      ref: 'session:docs/README.md',
-      token: '@docs/README.md',
-    })).toBe(false);
+    expect(
+      mentionRefV1SurvivesRenderedTokenAlone({
+        kind: MENTION_KIND_V1.file,
+        ref: 'session:docs/README.md',
+        token: '@docs/README.md',
+      }),
+    ).toBe(false);
   });
 });
 
@@ -215,10 +264,12 @@ describe('sanitizeMentionRefsV1', () => {
   });
 
   it('preserves unknown fields on an element so an older build does not strip newer data', () => {
-    const sanitized = sanitizeMentionRefsV1([mention()].map((entry) => ({
-      ...entry,
-      futureField: { nested: true },
-    })));
+    const sanitized = sanitizeMentionRefsV1(
+      [mention()].map((entry) => ({
+        ...entry,
+        futureField: { nested: true },
+      })),
+    );
     expect(sanitized[0]).toMatchObject({ futureField: { nested: true } });
   });
 
@@ -229,20 +280,45 @@ describe('sanitizeMentionRefsV1', () => {
       // The same reference mentioned a second time in the text carries nothing extra.
       mention({ token: '@b.ts', ref: 'file:b.ts' }),
     ]);
-    expect(sanitized.map((entry) => entry.ref)).toEqual(['file:b.ts', 'file:a.ts']);
+    expect(sanitized.map((entry) => entry.ref)).toEqual([
+      'file:b.ts',
+      'file:a.ts',
+    ]);
   });
 
   it('enforces the per-message and per-field bounds', () => {
-    const many = Array.from({ length: MENTION_BOUNDS.maxPerMessage + 5 }, (_, index) => mention({
-      token: '@ab',
-      ref: `file:${index}`,
-    }));
-    expect(sanitizeMentionRefsV1(many)).toHaveLength(MENTION_BOUNDS.maxPerMessage);
+    const many = Array.from(
+      { length: MENTION_BOUNDS.maxPerMessage + 5 },
+      (_, index) =>
+        mention({
+          token: '@ab',
+          ref: `file:${index}`,
+        }),
+    );
+    expect(sanitizeMentionRefsV1(many)).toHaveLength(
+      MENTION_BOUNDS.maxPerMessage,
+    );
 
-    expect(sanitizeMentionRefsV1([mention({ ref: `file:${'x'.repeat(MENTION_BOUNDS.maxRefChars)}` })])).toEqual([]);
-    expect(sanitizeMentionRefsV1([mention({ kind: 'k'.repeat(MENTION_BOUNDS.maxKindChars + 1) })])).toEqual([]);
-    expect(sanitizeMentionRefsV1([mention({ token: 't'.repeat(MENTION_BOUNDS.maxTokenChars + 1) })])).toEqual([]);
-    expect(sanitizeMentionRefsV1([mention({ label: 'l'.repeat(MENTION_BOUNDS.maxLabelChars + 1) })])).toEqual([]);
+    expect(
+      sanitizeMentionRefsV1([
+        mention({ ref: `file:${'x'.repeat(MENTION_BOUNDS.maxRefChars)}` }),
+      ]),
+    ).toEqual([]);
+    expect(
+      sanitizeMentionRefsV1([
+        mention({ kind: 'k'.repeat(MENTION_BOUNDS.maxKindChars + 1) }),
+      ]),
+    ).toEqual([]);
+    expect(
+      sanitizeMentionRefsV1([
+        mention({ token: 't'.repeat(MENTION_BOUNDS.maxTokenChars + 1) }),
+      ]),
+    ).toEqual([]);
+    expect(
+      sanitizeMentionRefsV1([
+        mention({ label: 'l'.repeat(MENTION_BOUNDS.maxLabelChars + 1) }),
+      ]),
+    ).toEqual([]);
   });
 });
 
@@ -277,18 +353,28 @@ describe('admitMentionRefsV1ForText', () => {
     const composed = sanitizeMentionRefsV1([
       mention({ ref: 'file:src/a.ts', token: '@src/a.ts' }),
     ]);
-    expect(admitMentionRefsV1ForText('\nsee @src/a.ts', composed).map((entry) => entry.ref))
-      .toEqual(['file:src/a.ts']);
-    expect(admitMentionRefsV1ForText('review this\n\nsee @src/a.ts', composed).map((entry) => entry.ref))
-      .toEqual(['file:src/a.ts']);
+    expect(
+      admitMentionRefsV1ForText('\nsee @src/a.ts', composed).map(
+        (entry) => entry.ref,
+      ),
+    ).toEqual(['file:src/a.ts']);
+    expect(
+      admitMentionRefsV1ForText('review this\n\nsee @src/a.ts', composed).map(
+        (entry) => entry.ref,
+      ),
+    ).toEqual(['file:src/a.ts']);
   });
 
   it('matches the token verbatim, without trimming or normalizing it', () => {
     const quoted = sanitizeMentionRefsV1([
       mention({ ref: 'file:my notes.md', token: '@"my notes.md"' }),
     ]);
-    expect(admitMentionRefsV1ForText('read @"my notes.md" first', quoted)).toHaveLength(1);
-    expect(admitMentionRefsV1ForText('read @my notes.md first', quoted)).toEqual([]);
+    expect(
+      admitMentionRefsV1ForText('read @"my notes.md" first', quoted),
+    ).toHaveLength(1);
+    expect(
+      admitMentionRefsV1ForText('read @my notes.md first', quoted),
+    ).toEqual([]);
   });
 });
 
@@ -302,7 +388,9 @@ describe('HappierStructuredInputV1 envelope carries mentions additively', () => 
       ],
     });
     expect(envelope?.v).toBe(1);
-    expect(envelope?.mentions?.map((entry) => entry.ref)).toEqual(['file:a.ts']);
+    expect(envelope?.mentions?.map((entry) => entry.ref)).toEqual([
+      'file:a.ts',
+    ]);
   });
 
   it('is accepted by the passthrough envelope schema an older reader parses with', () => {
@@ -313,13 +401,21 @@ describe('HappierStructuredInputV1 envelope carries mentions additively', () => 
       skillMentions: [{ name: 'review', path: '/skills/review.md' }],
     });
     expect(parsed.success).toBe(true);
-    expect(parsed.success && parsed.data.skillMentions?.[0]?.name).toBe('review');
+    expect(parsed.success && parsed.data.skillMentions?.[0]?.name).toBe(
+      'review',
+    );
   });
 
   it('survives a load -> save round trip with an unknown kind unreinterpreted', () => {
     const source = {
       v: 1,
-      mentions: [mention({ kind: 'acme.ticket', ref: 'ticket:ACME-1', token: '@ACME-1' })],
+      mentions: [
+        mention({
+          kind: 'acme.ticket',
+          ref: 'ticket:ACME-1',
+          token: '@ACME-1',
+        }),
+      ],
     };
     const loaded = sanitizeHappierStructuredInputV1(source);
     const saved = sanitizeHappierStructuredInputV1(loaded);
@@ -338,79 +434,131 @@ describe('HappierStructuredInputV1 envelope carries mentions additively', () => 
       },
       key: 'review-42',
       value: { reviewId: '42' },
-      presentation: { label: 'Review #42', typeLabel: 'Review comment', icon: 'info' },
+      presentation: {
+        label: 'Review #42',
+        typeLabel: 'Review comment',
+        icon: 'info',
+      },
     };
-    expect(ComposerAttachmentInputV1Schema.safeParse(attachment).success).toBe(true);
-    expect(HappierStructuredInputV1Schema.parse({
-      v: 1,
-      composerAttachments: [attachment],
-    }).composerAttachments).toEqual([attachment]);
-    expect(HappierStructuredInputV1Schema.safeParse({
-      v: 1,
-      composerAttachments: Array.from({ length: 65 }, () => attachment),
-    }).success).toBe(false);
+    expect(ComposerAttachmentInputV1Schema.safeParse(attachment).success).toBe(
+      true,
+    );
+    expect(
+      HappierStructuredInputV1Schema.parse({
+        v: 1,
+        composerAttachments: [attachment],
+      }).composerAttachments,
+    ).toEqual([attachment]);
+    expect(
+      HappierStructuredInputV1Schema.safeParse({
+        v: 1,
+        composerAttachments: Array.from({ length: 65 }, () => attachment),
+      }).success,
+    ).toBe(false);
   });
 
   it('keeps an attachment value at the exact canonical JSON byte boundary and rejects one byte over without truncation', () => {
-    const emptyEnvelopeBytes = new TextEncoder().encode(JSON.stringify({ payload: '' })).byteLength;
+    const emptyEnvelopeBytes = new TextEncoder().encode(
+      JSON.stringify({ payload: '' }),
+    ).byteLength;
     const exactValue = {
-      payload: 'x'.repeat(MAX_COMPOSER_ATTACHMENT_VALUE_JSON_BYTES_V1 - emptyEnvelopeBytes),
+      payload: 'x'.repeat(
+        MAX_COMPOSER_ATTACHMENT_VALUE_JSON_BYTES_V1 - emptyEnvelopeBytes,
+      ),
     };
     const oneByteOver = { payload: `${exactValue.payload}x` };
 
-    expect(new TextEncoder().encode(JSON.stringify(exactValue)).byteLength)
-      .toBe(MAX_COMPOSER_ATTACHMENT_VALUE_JSON_BYTES_V1);
-    expect(ComposerAttachmentValueV1Schema.safeParse(exactValue).success).toBe(true);
-    expect(ComposerAttachmentValueV1Schema.safeParse(oneByteOver).success).toBe(false);
+    expect(
+      new TextEncoder().encode(JSON.stringify(exactValue)).byteLength,
+    ).toBe(MAX_COMPOSER_ATTACHMENT_VALUE_JSON_BYTES_V1);
+    expect(ComposerAttachmentValueV1Schema.safeParse(exactValue).success).toBe(
+      true,
+    );
+    expect(ComposerAttachmentValueV1Schema.safeParse(oneByteOver).success).toBe(
+      false,
+    );
     expect(oneByteOver.payload).toHaveLength(exactValue.payload.length + 1);
   });
 
   it('fails closed on a raw malformed composer attachment selection before sanitization', () => {
-    expect(hasRawComposerAttachmentSelectionV1({
-      happierStructuredInputV1: { v: 1 },
-    })).toBe(false);
-    expect(hasRawComposerAttachmentSelectionV1({
-      happierStructuredInputV1: { v: 1, composerAttachments: [] },
-    })).toBe(false);
-    expect(hasRawComposerAttachmentSelectionV1({
-      happierStructuredInputV1: { v: 1, composerAttachments: [{ malformed: true }] },
-    })).toBe(true);
-    expect(hasRawComposerAttachmentSelectionV1({
-      happierStructuredInputV1: { v: 1, composerAttachments: 'malformed' },
-    })).toBe(true);
+    expect(
+      hasRawComposerAttachmentSelectionV1({
+        happierStructuredInputV1: { v: 1 },
+      }),
+    ).toBe(false);
+    expect(
+      hasRawComposerAttachmentSelectionV1({
+        happierStructuredInputV1: { v: 1, composerAttachments: [] },
+      }),
+    ).toBe(false);
+    expect(
+      hasRawComposerAttachmentSelectionV1({
+        happierStructuredInputV1: {
+          v: 1,
+          composerAttachments: [{ malformed: true }],
+        },
+      }),
+    ).toBe(true);
+    expect(
+      hasRawComposerAttachmentSelectionV1({
+        happierStructuredInputV1: { v: 1, composerAttachments: 'malformed' },
+      }),
+    ).toBe(true);
   });
 
   it('identifies raw structured-input semantics a text-only editor cannot faithfully project', () => {
     expect(hasRawStructuredInputSemanticContentV1({})).toBe(false);
-    expect(hasRawStructuredInputSemanticContentV1({
-      happierStructuredInputV1: { v: 1 },
-    })).toBe(false);
-    expect(hasRawStructuredInputSemanticContentV1({
-      happierStructuredInputV1: {
-        v: 1,
-        mentions: [],
-        imageInputs: [],
-        composerAttachments: [],
-      },
-    })).toBe(false);
-    expect(hasRawStructuredInputSemanticContentV1({
-      happierStructuredInputV1: { v: 1, mentions: [mention()] },
-    })).toBe(true);
-    expect(hasRawStructuredInputSemanticContentV1({
-      happierStructuredInputV1: { v: 1, imageInputs: [{ kind: 'image' }] },
-    })).toBe(true);
-    expect(hasRawStructuredInputSemanticContentV1({
-      happierStructuredInputV1: { v: 1, composerAttachments: [{ malformed: true }] },
-    })).toBe(true);
-    expect(hasRawStructuredInputSemanticContentV1({
-      happierStructuredInputV1: { v: 1, mentions: 'malformed' },
-    })).toBe(true);
-    expect(hasRawStructuredInputSemanticContentV1({
-      happierStructuredInputV1: { v: 1, futureSemanticField: { opaque: true } },
-    })).toBe(true);
-    expect(hasRawStructuredInputSemanticContentV1({
-      happierStructuredInputV1: 'malformed-envelope',
-    })).toBe(true);
+    expect(
+      hasRawStructuredInputSemanticContentV1({
+        happierStructuredInputV1: { v: 1 },
+      }),
+    ).toBe(false);
+    expect(
+      hasRawStructuredInputSemanticContentV1({
+        happierStructuredInputV1: {
+          v: 1,
+          mentions: [],
+          imageInputs: [],
+          composerAttachments: [],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      hasRawStructuredInputSemanticContentV1({
+        happierStructuredInputV1: { v: 1, mentions: [mention()] },
+      }),
+    ).toBe(true);
+    expect(
+      hasRawStructuredInputSemanticContentV1({
+        happierStructuredInputV1: { v: 1, imageInputs: [{ kind: 'image' }] },
+      }),
+    ).toBe(true);
+    expect(
+      hasRawStructuredInputSemanticContentV1({
+        happierStructuredInputV1: {
+          v: 1,
+          composerAttachments: [{ malformed: true }],
+        },
+      }),
+    ).toBe(true);
+    expect(
+      hasRawStructuredInputSemanticContentV1({
+        happierStructuredInputV1: { v: 1, mentions: 'malformed' },
+      }),
+    ).toBe(true);
+    expect(
+      hasRawStructuredInputSemanticContentV1({
+        happierStructuredInputV1: {
+          v: 1,
+          futureSemanticField: { opaque: true },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      hasRawStructuredInputSemanticContentV1({
+        happierStructuredInputV1: 'malformed-envelope',
+      }),
+    ).toBe(true);
   });
 
   it('rejects surrounding whitespace instead of collapsing attachment identity or persisted presentation bytes', () => {
@@ -430,25 +578,51 @@ describe('HappierStructuredInputV1 envelope carries mentions additively', () => 
       },
     };
 
-    expect(ComposerAttachmentInputV1Schema.safeParse(attachment).success).toBe(true);
-    expect(ComposerAttachmentInputV1Schema.safeParse({ ...attachment, instanceId: ' instance-1 ' }).success).toBe(false);
-    expect(ComposerAttachmentInputV1Schema.safeParse({ ...attachment, key: ' review-42 ' }).success).toBe(false);
-    expect(ComposerAttachmentInputV1Schema.safeParse({
-      ...attachment,
-      presentation: { ...attachment.presentation, label: ' Review #42 ' },
-    }).success).toBe(false);
-    expect(ComposerAttachmentInputV1Schema.safeParse({
-      ...attachment,
-      presentation: { ...attachment.presentation, description: ' Requested change ' },
-    }).success).toBe(false);
-    expect(ComposerAttachmentInputV1Schema.safeParse({
-      ...attachment,
-      presentation: { ...attachment.presentation, typeLabel: ' Review comment ' },
-    }).success).toBe(false);
-    expect(ComposerAttachmentInputV1Schema.safeParse({
-      ...attachment,
-      content: [{ mediaId: 'media-42' }],
-    }).success).toBe(false);
+    expect(ComposerAttachmentInputV1Schema.safeParse(attachment).success).toBe(
+      true,
+    );
+    expect(
+      ComposerAttachmentInputV1Schema.safeParse({
+        ...attachment,
+        instanceId: ' instance-1 ',
+      }).success,
+    ).toBe(false);
+    expect(
+      ComposerAttachmentInputV1Schema.safeParse({
+        ...attachment,
+        key: ' review-42 ',
+      }).success,
+    ).toBe(false);
+    expect(
+      ComposerAttachmentInputV1Schema.safeParse({
+        ...attachment,
+        presentation: { ...attachment.presentation, label: ' Review #42 ' },
+      }).success,
+    ).toBe(false);
+    expect(
+      ComposerAttachmentInputV1Schema.safeParse({
+        ...attachment,
+        presentation: {
+          ...attachment.presentation,
+          description: ' Requested change ',
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      ComposerAttachmentInputV1Schema.safeParse({
+        ...attachment,
+        presentation: {
+          ...attachment.presentation,
+          typeLabel: ' Review comment ',
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      ComposerAttachmentInputV1Schema.safeParse({
+        ...attachment,
+        content: [{ mediaId: 'media-42' }],
+      }).success,
+    ).toBe(false);
   });
 
   it('drops bounded future presentation fields without erasing the known attachment fallback', () => {
@@ -475,14 +649,18 @@ describe('HappierStructuredInputV1 envelope carries mentions additively', () => 
       description: 'Requested change',
       typeLabel: 'Review comment',
     });
-    expect(sanitizeHappierStructuredInputV1({
-      v: 1,
-      composerAttachments: [attachment],
-    })?.composerAttachments).toEqual([parsed]);
-    expect(ComposerAttachmentInputV1Schema.safeParse({
-      ...attachment,
-      presentation: { ...attachment.presentation, label: '' },
-    }).success).toBe(false);
+    expect(
+      sanitizeHappierStructuredInputV1({
+        v: 1,
+        composerAttachments: [attachment],
+      })?.composerAttachments,
+    ).toEqual([parsed]);
+    expect(
+      ComposerAttachmentInputV1Schema.safeParse({
+        ...attachment,
+        presentation: { ...attachment.presentation, label: '' },
+      }).success,
+    ).toBe(false);
   });
 
   it('sanitizes composer attachments element-wise and never preserves dispatch-only resolution', () => {
@@ -492,11 +670,18 @@ describe('HappierStructuredInputV1 envelope carries mentions additively', () => 
       attachment: { pluginId: 'com.acme.review', localId: 'review' },
       key: 'review-42',
       value: { reviewId: '42' },
-      presentation: { label: 'Review #42', typeLabel: 'Review comment', icon: 'info' },
+      presentation: {
+        label: 'Review #42',
+        typeLabel: 'Review comment',
+        icon: 'info',
+      },
     };
     const sanitized = sanitizeHappierStructuredInputV1({
       v: 1,
-      composerAttachments: [valid, { ...valid, attachment: { kind: 'host', owner: 'forged' } }],
+      composerAttachments: [
+        valid,
+        { ...valid, attachment: { kind: 'host', owner: 'forged' } },
+      ],
       resolvedComposerAttachments: [{ instanceId: 'forged' }],
     });
 
@@ -511,101 +696,148 @@ describe('HappierStructuredInputV1 envelope carries mentions additively', () => 
       attachment: { pluginId: 'com.acme.review', localId: 'review' },
       key: 'review-42',
       value: { reviewId: '42' },
-      presentation: { label: 'Review #42', typeLabel: 'Review comment', icon: 'info' },
+      presentation: {
+        label: 'Review #42',
+        typeLabel: 'Review comment',
+        icon: 'info',
+      },
     };
     const resolved = { ...attachment, data: { fresh: true } };
 
-    expect(AgentDispatchStructuredInputV1Schema.safeParse({
-      v: 1,
-      resolvedComposerAttachments: [resolved],
-    }).success).toBe(true);
-    expect(AgentDispatchStructuredInputV1Schema.safeParse({
-      v: 1,
-      composerAttachments: [attachment],
-    }).success).toBe(false);
-    expect(AgentDispatchStructuredInputV1Schema.safeParse({
-      v: 1,
-      composerAttachments: [],
-    }).success).toBe(false);
-    expect(AgentDispatchStructuredInputV1Schema.safeParse({
-      v: 1,
-      composerAttachments: [attachment],
-      resolvedComposerAttachments: [resolved],
-    }).success).toBe(false);
-    expect(AgentDispatchStructuredInputV1Schema.safeParse({
-      v: 1,
-      resolvedComposerAttachments: [{ ...resolved, content: { custody: 'forged' } }],
-    }).success).toBe(false);
+    expect(
+      AgentDispatchStructuredInputV1Schema.safeParse({
+        v: 1,
+        resolvedComposerAttachments: [resolved],
+      }).success,
+    ).toBe(true);
+    expect(
+      AgentDispatchStructuredInputV1Schema.safeParse({
+        v: 1,
+        composerAttachments: [attachment],
+      }).success,
+    ).toBe(false);
+    expect(
+      AgentDispatchStructuredInputV1Schema.safeParse({
+        v: 1,
+        composerAttachments: [],
+      }).success,
+    ).toBe(false);
+    expect(
+      AgentDispatchStructuredInputV1Schema.safeParse({
+        v: 1,
+        composerAttachments: [attachment],
+        resolvedComposerAttachments: [resolved],
+      }).success,
+    ).toBe(false);
+    expect(
+      AgentDispatchStructuredInputV1Schema.safeParse({
+        v: 1,
+        resolvedComposerAttachments: [
+          { ...resolved, content: { custody: 'forged' } },
+        ],
+      }).success,
+    ).toBe(false);
   });
 
   it('reads an admitted envelope without rerunning raw local-image trust and rejects dispatch-only data', () => {
     const admitted = {
       v: 1,
-      imageInputs: [{
-        id: 'image-1',
-        kind: 'localImage',
-        path: '.happier/uploads/messages/message-1/image.png',
-        mimeType: 'image/png',
-        provenance: { kind: 'sessionAttachmentUpload' },
-      }],
-    };
-
-    expect(readAdmittedHappierStructuredInputV1FromMeta({
-      happierStructuredInputV1: admitted,
-    })).toEqual({
-      status: 'admitted',
-      structuredInput: {
-        v: 1,
-        imageInputs: [{
+      imageInputs: [
+        {
           id: 'image-1',
           kind: 'localImage',
           path: '.happier/uploads/messages/message-1/image.png',
           mimeType: 'image/png',
-        }],
+          provenance: { kind: 'sessionAttachmentUpload' },
+        },
+      ],
+    };
+
+    expect(
+      readAdmittedHappierStructuredInputV1FromMeta({
+        happierStructuredInputV1: admitted,
+      }),
+    ).toEqual({
+      status: 'admitted',
+      structuredInput: {
+        v: 1,
+        imageInputs: [
+          {
+            id: 'image-1',
+            kind: 'localImage',
+            path: '.happier/uploads/messages/message-1/image.png',
+            mimeType: 'image/png',
+          },
+        ],
       },
     });
-    expect(readAdmittedHappierStructuredInputV1FromMeta({
-      happierStructuredInputV1: {
-        ...admitted,
-        resolvedComposerAttachments: [{ instanceId: 'forged' }],
-      },
-    })).toEqual({ status: 'invalid' });
-    expect(readAdmittedHappierStructuredInputV1FromMeta({
-      happier: { kind: 'attachments.v1' },
-    })).toEqual({ status: 'absent' });
+    expect(
+      readAdmittedHappierStructuredInputV1FromMeta({
+        happierStructuredInputV1: {
+          ...admitted,
+          resolvedComposerAttachments: [{ instanceId: 'forged' }],
+        },
+      }),
+    ).toEqual({ status: 'invalid' });
+    expect(
+      readAdmittedHappierStructuredInputV1FromMeta({
+        happier: { kind: 'attachments.v1' },
+      }),
+    ).toEqual({ status: 'absent' });
   });
 
   it('uses only the canonical qualified plugin contribution schema for attachment identities', () => {
-    expect(PluginContributionIdentityV1Schema.safeParse({
-      kind: 'host',
-      owner: 'browserContext',
-    }).success).toBe(false);
-    expect(PluginContributionIdentityV1Schema.safeParse({
-      pluginId: 'com.acme.review',
-      localId: 'review',
-    }).success).toBe(true);
-    expect(PluginContributionIdentityV1Schema.safeParse({
-      kind: 'plugin',
-      contribution: { pluginId: 'com.acme.review', localId: 'review' },
-    }).success).toBe(false);
+    expect(
+      PluginContributionIdentityV1Schema.safeParse({
+        kind: 'host',
+        owner: 'browserContext',
+      }).success,
+    ).toBe(false);
+    expect(
+      PluginContributionIdentityV1Schema.safeParse({
+        pluginId: 'com.acme.review',
+        localId: 'review',
+      }).success,
+    ).toBe(true);
+    expect(
+      PluginContributionIdentityV1Schema.safeParse({
+        kind: 'plugin',
+        contribution: { pluginId: 'com.acme.review', localId: 'review' },
+      }).success,
+    ).toBe(false);
   });
 
   it('does not publish a Composer-specific alias for the canonical attachment identity', async () => {
-    expect(composerAttachmentV1).not.toHaveProperty('ComposerAttachmentDefinitionIdentityV1Schema');
-    const publicBarrel = await readFile(new URL('../../index.ts', import.meta.url), 'utf8');
-    expect(publicBarrel).not.toContain('ComposerAttachmentDefinitionIdentityV1');
+    expect(composerAttachmentV1).not.toHaveProperty(
+      'ComposerAttachmentDefinitionIdentityV1Schema',
+    );
+    const publicBarrel = await readFile(
+      new URL('../../index.ts', import.meta.url),
+      'utf8',
+    );
+    expect(publicBarrel).not.toContain(
+      'ComposerAttachmentDefinitionIdentityV1',
+    );
     expect(publicBarrel).toContain('PluginContributionIdentityV1Schema');
   });
 
   it('dedupes attachment drafts by the exact direct contribution identity and key', () => {
     const review = { pluginId: 'com.acme.review', localId: 'review' } as const;
 
-    expect(buildComposerAttachmentDedupeKeyV1(review, 'review-42')).toBe('plugin:com.acme.review/review:review-42');
     expect(buildComposerAttachmentDedupeKeyV1(review, 'review-42')).toBe(
-      buildComposerAttachmentDedupeKeyV1({ pluginId: 'com.acme.review', localId: 'review' }, 'review-42'),
+      'plugin:com.acme.review/review:review-42',
+    );
+    expect(buildComposerAttachmentDedupeKeyV1(review, 'review-42')).toBe(
+      buildComposerAttachmentDedupeKeyV1(
+        { pluginId: 'com.acme.review', localId: 'review' },
+        'review-42',
+      ),
     );
     expect(buildComposerAttachmentDedupeKeyV1(review, 'review-42')).not.toBe(
-      buildComposerAttachmentDedupeKeyV1({ pluginId: 'com.acme.issue', localId: 'review' }, 'review-42'),
+      buildComposerAttachmentDedupeKeyV1(
+        { pluginId: 'com.acme.issue', localId: 'review' },
+        'review-42',
+      ),
     );
     expect(buildComposerAttachmentDedupeKeyV1(review, 'review-42')).not.toBe(
       buildComposerAttachmentDedupeKeyV1(review, 'review-43'),
@@ -618,11 +850,13 @@ describe('D-4 precedence', () => {
   const bothShapes = {
     happierStructuredInputV1: {
       v: 1,
-      mentions: [mention({
-        kind: MENTION_KIND_V1.skill,
-        ref: skillRef,
-        token: '$review',
-      })],
+      mentions: [
+        mention({
+          kind: MENTION_KIND_V1.skill,
+          ref: skillRef,
+          token: '$review',
+        }),
+      ],
       skillMentions: [{ name: 'review', path: '/skills/review.md' }],
     },
     happierSkillMentions: [{ name: 'review', path: '/skills/review.md' }],
@@ -641,17 +875,25 @@ describe('D-4 precedence', () => {
     // The envelope still carries the legacy array so a dual-written message stays
     // readable on an older build; only the enumeration decision changes.
     expect(envelope?.skillMentions).toHaveLength(1);
-    expect(readStructuredInputMentionSourcesV1(envelope).skillMentions).toEqual([]);
+    expect(readStructuredInputMentionSourcesV1(envelope).skillMentions).toEqual(
+      [],
+    );
   });
 
   it('falls back to the legacy arrays and aliases when mentions are absent', () => {
     const envelope = readHappierStructuredInputV1FromMeta({
-      happierStructuredInputV1: { v: 1, skillMentions: [{ name: 'review', path: '/skills/review.md' }] },
+      happierStructuredInputV1: {
+        v: 1,
+        skillMentions: [{ name: 'review', path: '/skills/review.md' }],
+      },
       happierSkillMentions: [{ name: 'audit', path: '/skills/audit.md' }],
     });
     const sources = readStructuredInputMentionSourcesV1(envelope);
     expect(sources.mentions).toEqual([]);
-    expect(sources.skillMentions.map((entry) => entry.name)).toEqual(['review', 'audit']);
+    expect(sources.skillMentions.map((entry) => entry.name)).toEqual([
+      'review',
+      'audit',
+    ]);
   });
 
   it('admits references against the submitted text at the request boundary', () => {
@@ -665,14 +907,25 @@ describe('D-4 precedence', () => {
       },
     };
 
-    const admitted = sanitizeSessionStructuredInputMeta(meta, { text: 'see @src/a.ts and @src/b.ts' });
-    const envelope = admitted.happierStructuredInputV1 as { mentions?: readonly MentionRefV1[] };
-    expect(envelope.mentions?.map((entry) => entry.ref)).toEqual(['file:src/a.ts']);
+    const admitted = sanitizeSessionStructuredInputMeta(meta, {
+      text: 'see @src/a.ts and @src/b.ts',
+    });
+    const envelope = admitted.happierStructuredInputV1 as {
+      mentions?: readonly MentionRefV1[];
+    };
+    expect(envelope.mentions?.map((entry) => entry.ref)).toEqual([
+      'file:src/a.ts',
+    ]);
 
     // Without the composed step the metadata is parsed independently of the text.
     const unchecked = sanitizeSessionStructuredInputMeta(meta);
-    expect((unchecked.happierStructuredInputV1 as { mentions?: readonly MentionRefV1[] }).mentions)
-      .toHaveLength(2);
+    expect(
+      (
+        unchecked.happierStructuredInputV1 as {
+          mentions?: readonly MentionRefV1[];
+        }
+      ).mentions,
+    ).toHaveLength(2);
   });
 
   it('leaves image inputs untouched by the precedence rule', () => {

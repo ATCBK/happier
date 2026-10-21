@@ -67,6 +67,10 @@ const MENTION_REF_UNRESERVED = /^[A-Za-z0-9._~:@/-]$/;
 const MENTION_REF_SCHEME_PATTERN = /^[A-Za-z][A-Za-z0-9+.-]*$/;
 const MENTION_REF_PERCENT_ESCAPE = /^%[0-9A-Fa-f]{2}/;
 
+/** One encoder for every call: refs are parsed on each composer keystroke, once per reference. */
+let utf8Encoder: TextEncoder | null = null;
+const encodeUtf8 = (value: string): Uint8Array => (utf8Encoder ??= new TextEncoder()).encode(value);
+
 export function encodeMentionRefComponent(value: string): string {
   let encoded = '';
   for (const character of value) {
@@ -74,7 +78,7 @@ export function encodeMentionRefComponent(value: string): string {
       encoded += character;
       continue;
     }
-    for (const byte of new TextEncoder().encode(character)) {
+    for (const byte of encodeUtf8(character)) {
       encoded += `%${byte.toString(16).toUpperCase().padStart(2, '0')}`;
     }
   }
@@ -86,10 +90,12 @@ export function decodeMentionRefComponent(value: string): string | null {
   const bytes: number[] = [];
   let index = 0;
   while (index < value.length) {
-    const character = value[index] as string;
-    if (character !== '%') {
-      for (const byte of new TextEncoder().encode(character)) bytes.push(byte);
-      index += 1;
+    if (value[index] !== '%') {
+      // A whole unescaped run at once, so a character outside the basic plane keeps its surrogate pair.
+      const next = value.indexOf('%', index);
+      const end = next === -1 ? value.length : next;
+      for (const byte of encodeUtf8(value.slice(index, end))) bytes.push(byte);
+      index = end;
       continue;
     }
     const escape = value.slice(index, index + 3);

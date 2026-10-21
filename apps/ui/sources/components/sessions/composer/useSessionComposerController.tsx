@@ -58,14 +58,14 @@ import { COMPOSER_SOURCE_REF_PRIVATE_META_FIELD_V1, composerRefV1Key } from "@ha
 import { PluginContextualResourceStoreProvider } from "@/components/plugins/surfaces/PluginContextualResourceStoreProvider";
 import { projectComposerAttachmentRowItems } from "@/components/sessions/composer/composerAttachmentProjection";
 import { createExistingSessionComposerDocumentOwner } from "@/components/sessions/composer/existingSessionComposerDocumentOwner";
-import { removeMountedComposerAttachmentReferences } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
+import { insertMountedComposerAttachmentReferences, removeMountedComposerAttachmentReferences } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
 import { createPendingMessageComposerDocumentOwner, withdrawPendingMessageToComposerWithActionApproval } from "@/components/sessions/composer/pendingMessageComposerDocumentOwner";
 import { useActionApprovalContinuation } from "@/components/approvals/useActionApprovalContinuation";
 import type { ComposerDraftFieldCurrentness, MutableComposerDocumentOwner } from "@/components/sessions/composer/composerDocumentOwner";
 import { createEphemeralComposerDocumentOwner, sameComposerAttachmentViews } from "@/components/sessions/composer/composerDocumentOwner";
 import { projectComposerDocumentSnapshot } from "@/components/sessions/composer/composerSnapshotProjection";
 import { composerAttachmentDraftToView, composerAttachmentViewToDraft, composerReferencesFromStructuredMentions, composerStructuredMentionsFromReferences, resolveCurrentComposerAttachmentCatalogEntry } from "@/components/sessions/composer/composerScopeAdapters";
-import { dropOrphanComposerAttachmentReferences, submitComposerSnapshot, type ComposerSubmissionAdmissionHandoff, type ComposerSubmissionAdmissionOutcome, type ComposerSubmissionResult, type ComposerSubmissionSnapshot } from "@/components/sessions/composer/composerSubmissionCoordinator";
+import { prepareComposerSubmissionSnapshot, submitComposerSnapshot, type ComposerSubmissionAdmissionHandoff, type ComposerSubmissionAdmissionOutcome, type ComposerSubmissionResult, type ComposerSubmissionSnapshot } from "@/components/sessions/composer/composerSubmissionCoordinator";
 import type { PendingMessageEditRequest } from "@/components/sessions/pending/PendingMessagesTranscriptBlock";
 import { useDraft } from "@/hooks/session/useDraft";
 import { SessionDraftConflictResolution, useSessionDraftConflictComposerBanner } from "@/components/sessions/drafts/SessionDraftConflictResolution";
@@ -2907,6 +2907,11 @@ export function useSessionComposerController({
         maxFileBytes: attachmentsUploadConfig.maxFileBytes,
         initialDrafts: initialSessionAttachmentDrafts,
         eagerUpload: { sessionId, config: attachmentsUploadConfig },
+        onPickedDrafts: (drafts) => {
+            if (!sessionAccountLifetime?.isCurrent()) return;
+            insertMountedComposerAttachmentReferences({ ref: activeComposerRefRef.current,
+                scope: sessionAccountLifetime.scope, drafts });
+        },
         onRemoveDraft: (attachmentId) => {
             if (!sessionAccountLifetime?.isCurrent()) return;
             removeMountedComposerAttachmentReferences({ ref: activeComposerRefRef.current,
@@ -4822,6 +4827,7 @@ export function useSessionComposerController({
     };
     const activeComposerPresentationTarget = useStableComposerPresentationTarget(activeComposerRef, {
         readScope: () => composerPresentationAccountLifetime?.scope ?? null,
+        readReferenceWorkspace: () => companionAddress ? resolveWorkspaceTargetForSession(companionAddress) : null,
         readAttachmentComposition: () => !composerPluginActionScopeSignal.aborted && composerAttachmentAvailabilityEntriesById
             ? { composerAttachmentsById: composerAttachmentAvailabilityEntriesById, localize: composerPluginPresentation.localizePluginText } : null,
         readRevision: readActiveComposerPresentationRevision,
@@ -4886,6 +4892,7 @@ export function useSessionComposerController({
     });
     const sessionComposerPresentationTarget = useStableComposerPresentationTarget(sessionComposerRef, {
         readScope: () => composerPresentationAccountLifetime?.scope ?? null,
+        readReferenceWorkspace: () => companionAddress ? resolveWorkspaceTargetForSession(companionAddress) : null,
         readAttachmentComposition: () => !composerPluginActionScopeSignal.aborted && composerAttachmentAvailabilityEntriesById
             ? { composerAttachmentsById: composerAttachmentAvailabilityEntriesById, localize: composerPluginPresentation.localizePluginText } : null,
         readRevision: () => existingSessionComposerOwner.read().revision,
@@ -6553,7 +6560,7 @@ export function useSessionComposerController({
                         const semanticDraftSnapshot = captureComposerSemanticDraftCurrentnessSnapshot();
                         const submittedAttachmentDrafts = sendableAttachmentDrafts(getAttachmentDraftsSnapshot());
                         const sourceComposerSubmissionSnapshot = readSessionComposerSubmissionSnapshot(composerTextBeforeSend);
-                        const composerSubmissionSnapshot = dropOrphanComposerAttachmentReferences(
+                        const composerSubmissionSnapshot = prepareComposerSubmissionSnapshot(
                             sourceComposerSubmissionSnapshot, submittedAttachmentDrafts.map(draft => draft.id),
                         );
                         if (messageToSend === sourceComposerSubmissionSnapshot.text) messageToSend = composerSubmissionSnapshot.text;
@@ -7077,10 +7084,10 @@ export function useSessionComposerController({
                                     if (
                                         acceptedSnapshot.ref.kind !== 'session'
                                         || acceptedSnapshot.ref.sessionId !== sessionId
-                                        || acceptedSnapshot.revision !== composerSubmissionSnapshot.revision
-                                        || acceptedSnapshot.text !== composerSubmissionSnapshot.text
-                                        || !sameStrictJsonValue(acceptedSnapshot.references, composerSubmissionSnapshot.references)
-                                        || !sameComposerAttachmentViews(acceptedSnapshot.attachments, composerSubmissionSnapshot.attachments)
+                                        || acceptedSnapshot.revision !== sourceComposerSubmissionSnapshot.revision
+                                        || acceptedSnapshot.text !== sourceComposerSubmissionSnapshot.text
+                                        || !sameStrictJsonValue(acceptedSnapshot.references, sourceComposerSubmissionSnapshot.references)
+                                        || !sameComposerAttachmentViews(acceptedSnapshot.attachments, sourceComposerSubmissionSnapshot.attachments)
                                     ) {
                                         return false;
                                     }
@@ -7816,7 +7823,7 @@ export function useSessionComposerController({
 
                     // Resolve commands/templates from the cleaned authoring text, before
                     // expansion moves its ranges. Custody still compares the original draft.
-                    const messageForResolution = dropOrphanComposerAttachmentReferences(
+                    const messageForResolution = prepareComposerSubmissionSnapshot(
                         readSessionComposerSubmissionSnapshot(composerMessage),
                         getAttachmentDraftsSnapshot().map(draft => draft.id),
                     ).text;

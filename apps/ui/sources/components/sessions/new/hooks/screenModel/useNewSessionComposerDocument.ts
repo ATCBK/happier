@@ -50,6 +50,7 @@ import type { DaemonMergedProjectionPhase } from '@/agents/backendCatalog/useDae
 import { randomUUID } from '@/platform/randomUUID';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { ComposerStructuredInputMention } from '@/sync/domains/input/draftValues/sessionDraftValueTypes';
 import type { NewSessionComposerAttachmentSeedV1 } from '@/sync/domains/state/persistence';
@@ -169,6 +170,7 @@ export function useNewSessionComposerDocument(params: Readonly<{
     draftId?: string;
     draftScope?: ServerAccountScope | null;
     promptStore: NewSessionPromptStore;
+    referenceWorkspace?: WorkspaceScopeBase | null;
     persistedAttachments: readonly ComposerAttachmentDraftV1[];
     /** Draft-local attachment requests waiting for current catalog admission. */
     persistedAttachmentSeeds?: readonly NewSessionComposerAttachmentSeedV1[];
@@ -590,6 +592,7 @@ export function useNewSessionComposerDocument(params: Readonly<{
         },
         readSnapshot,
         readScope: () => draftScope ?? composerAccountLifetime?.scope ?? null,
+        readReferenceWorkspace: () => params.referenceWorkspace ?? null,
         readAttachmentComposition: () => !composerPluginPresentation.scopeSignal.aborted && composerPluginPresentation.attachmentEntriesById
             ? { composerAttachmentsById: composerPluginPresentation.attachmentEntriesById, localize: composerPluginPresentation.localizePluginText } : null,
         isPresented: () => layoutPresented && params.isPresented !== false,

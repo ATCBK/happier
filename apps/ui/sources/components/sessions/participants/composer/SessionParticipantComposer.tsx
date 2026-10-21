@@ -67,6 +67,7 @@ import {
 } from '@/components/sessions/composer/composerSubmissionCoordinator';
 import {
     applyComposerPresentationTransaction,
+    insertMountedComposerAttachmentReferences,
     removeMountedComposerAttachmentReferences,
     notifyComposerPresentationTargetChanged,
     readComposerPresentationSnapshot,
@@ -417,6 +418,11 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
         maxFileBytes: attachmentsUploadConfig.maxFileBytes,
         initialDrafts: initialTransferDrafts,
         ...(props.sessionId ? { eagerUpload: { sessionId: props.sessionId, config: attachmentsUploadConfig } } : {}),
+        onPickedDrafts: (drafts) => {
+            if (!composerAccountLifetime?.isCurrent()) return;
+            insertMountedComposerAttachmentReferences({ ref: composerRef,
+                scope: composerAccountLifetime.scope, drafts });
+        },
         onRemoveDraft: (attachmentId) => {
             if (!composerAccountLifetime?.isCurrent()) return;
             removeMountedComposerAttachmentReferences({ ref: composerRef,
@@ -554,6 +560,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
 
     const composerTarget = useStableComposerPresentationTarget(composerRef, {
         readScope: () => composerAccountLifetime?.scope ?? null,
+        readReferenceWorkspace: () => props.sessionId === null ? null : resolveWorkspaceTargetForSession(participantSessionAddress ?? props.sessionId),
         readRevision: () => participantComposerDocumentOwner.read().revision,
         replace: (text, expectedRevision) => {
             if (participantComposerDocumentOwner.read().revision !== expectedRevision) return participantComposerDocumentOwner.read().revision;

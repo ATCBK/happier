@@ -36,7 +36,7 @@ import {
 } from '@/components/plugins/surfaces/createPluginSurfaceHostApi';
 import { projectComposerDocumentSnapshot } from '@/components/sessions/composer/composerSnapshotProjection';
 import { planComposerAttachmentReferenceRemoval } from '@/components/sessions/composer/composerAttachmentReferences';
-import { planComposerReferenceInsertion, snapComposerReferenceOffset } from '@/components/sessions/composer/composerReferenceInsertion';
+import { planComposerReferenceInsertion, recordComposerReferencePublication, snapComposerReferenceOffset } from '@/components/sessions/composer/composerReferenceInsertion';
 import { buildMentionRefV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
 import { INLINE_REFERENCE_ATTACHMENT_SCHEME_V1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 import { createExistingSessionComposerDocumentOwner } from '@/components/sessions/composer/existingSessionComposerDocumentOwner';
@@ -66,6 +66,7 @@ import type { PluginUiComposerAttachmentProjection } from '@/sync/domains/plugin
 import type { PluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
 import { normalizeSessionAddress, sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import type { SessionCompanionMutationObserver } from '@/components/sessions/companion/presentation/sessionCompanionPresentationAdapter';
+import type { AttachmentDraft } from '@/components/sessions/attachments/attachmentDraftModel';
 
 type ComposerMentionRef = ComposerSnapshotV1['references'][number];
 
@@ -180,6 +181,8 @@ export type ComposerPresentationTarget = Readonly<{
     isCurrent?: () => boolean;
     /** Exact incumbent Account placement for client Actions; never inferred from a Composer id. */
     readScope?: () => ServerAccountScope | null;
+    /** File-reference identities are relative to this incumbent composer workspace. */
+    readReferenceWorkspace?: () => WorkspaceScopeBase | null;
     /**
      * Whether this input is visible to the viewer now. Several presentations of one Session may be
      * mounted at once (a retained hidden route surface, an embedded plugin pane); command
@@ -283,6 +286,7 @@ export function useStableComposerPresentationTarget(
                     isCurrent: () => readCurrent().isCurrent?.() ?? true,
                 } : {}),
                 ...(target.readScope ? { readScope: () => readCurrent().readScope?.() ?? null } : {}),
+                ...(target.readReferenceWorkspace ? { readReferenceWorkspace: () => readCurrent().readReferenceWorkspace?.() ?? null } : {}),
                 ...(target.isPresented ? {
                     isPresented: () => readCurrent().isPresented?.() ?? true,
                 } : {}),
@@ -521,6 +525,7 @@ function createPersistentSessionComposerTarget(
             return result.status === 'applied' ? result.revision : owner.read().revision;
         },
         isCurrent,
+        readScope: () => scope,
         readSnapshot,
         commitDocument: ({ expectedRevision, mutation }) => owner.apply(expectedRevision, mutation),
         commitDocumentEmitsChange: true,
@@ -674,6 +679,9 @@ function resolveTextMutation(input: Readonly<{
     if (exclusive) {
         const nextText = exclusive.operation.kind === 'text.set' ? exclusive.operation.text : '';
         const edit = findSingleTextEdit(input.snapshot.text, nextText);
+        if (edit && splitsBoundReference(edit, input.snapshot)) {
+            return { ok: false, result: invalidOperation(exclusive.operationIndex, 'text_range_splits_reference') };
+        }
         return { ok: true, text: nextText, edits: edit ? [{ ...edit, operationIndex: exclusive.operationIndex }] : [] };
     }
 
@@ -704,6 +712,10 @@ function resolveTextMutation(input: Readonly<{
         }
     }
 
+    const partialReferenceEdit = edits.find(edit => splitsBoundReference(edit, input.snapshot));
+    if (partialReferenceEdit) {
+        return { ok: false, result: invalidOperation(partialReferenceEdit.operationIndex, 'text_range_splits_reference') };
+    }
     const replacements = edits.filter((edit) => edit.start < edit.end).sort((left, right) => left.start - right.start);
     for (let index = 1; index < replacements.length; index += 1) {
         if (replacements[index]!.start < replacements[index - 1]!.end) {
@@ -717,6 +729,12 @@ function resolveTextMutation(input: Readonly<{
     }
 
     return { ok: true, text: applyTextEdits(input.snapshot.text, edits), edits };
+}
+
+function splitsBoundReference(edit: Pick<TextEdit, 'start' | 'end'>, snapshot: ComposerSnapshotV1): boolean {
+    const boundReferences = snapshot.references.filter(reference => snapshot.text.slice(reference.start, reference.end) === reference.token);
+    return snapComposerReferenceOffset(edit.start, boundReferences) !== edit.start
+        || snapComposerReferenceOffset(edit.end, boundReferences) !== edit.end;
 }
 
 function resolveReferences(input: Readonly<{
@@ -1132,6 +1150,7 @@ type PreparedComposerPresentationTransactionApply = Readonly<{
     references: readonly ComposerMentionRef[];
     attachments: readonly ComposerAttachmentViewV1[];
     attachmentInstanceIds: readonly string[];
+    insertedReferenceRefs: readonly string[];
     /** Publication claims the caller must admit before this plan may commit. */
     stagedMediaClaims: readonly Readonly<{
         operationIndex: number;
@@ -1207,6 +1226,7 @@ function prepareComposerPresentationTransactionApply(input: Readonly<{
         edits: text.edits,
     });
     if (!references.ok) return { ok: false, result: references.result };
+    const insertedReferenceRefs = transaction.data.operations.flatMap(operation => operation.kind === 'reference.insert' ? [operation.reference.ref] : []);
     const attachments = resolveAttachments({
         target,
         composer: request.ref,
@@ -1238,6 +1258,7 @@ function prepareComposerPresentationTransactionApply(input: Readonly<{
         if (!insertedReferences.ok) return { ok: false, result: insertedReferences.result };
         text = insertedText;
         references = insertedReferences;
+        insertedReferenceRefs.push(operations[1].reference.ref);
     }
     const remainingAttachmentIds = new Set(attachments.attachments.map((attachment) => attachment.instanceId));
     const removedAttachmentIds = snapshot.attachments
@@ -1265,6 +1286,7 @@ function prepareComposerPresentationTransactionApply(input: Readonly<{
             references: cleanedReferences.references,
             attachments: attachments.attachments,
             attachmentInstanceIds: attachments.attachmentInstanceIds,
+            insertedReferenceRefs,
             stagedMediaClaims: attachments.stagedMediaClaims,
             selection: selection ? {
                 start: snapComposerReferenceOffset(mapSelectionOffset(selection.start), cleanedReferences.references),
@@ -1299,6 +1321,13 @@ function commitComposerPresentationTransactionApply(
         },
     });
     if (committed.status !== 'applied') return committed;
+    const scope = prepared.target.readScope?.();
+    if (scope) {
+        recordComposerReferencePublication({ scope, insertedRefs: prepared.insertedReferenceRefs,
+            next: { text: prepared.text, references: prepared.references },
+            workspace: prepared.target.readReferenceWorkspace?.()
+                ?? (ref.kind === 'session' ? resolveWorkspaceTargetForSession({ ...scope, sessionId: ref.sessionId }) : null) });
+    }
     // Validation and document currentness must succeed before publishing host
     // chips through the very same writer used by editor/diff/Problems Ask.
     if (prepared.reviewComments) {
@@ -1659,6 +1688,46 @@ export function applyMountedComposerPresentationTransaction(request: ComposerPre
         isTargetCurrent: candidate => !request.signal?.aborted
             && readScopedMountedComposerTarget(request.ref, request.scope) === candidate,
     });
+}
+
+/** Upload drafts live outside the portable document; their chips still use its transaction owner. */
+export function insertMountedComposerAttachmentReferences(input: Readonly<{
+    ref: ComposerRefV1;
+    scope: ServerAccountScope;
+    drafts: readonly AttachmentDraft[];
+}>): ComposerTransactionResultV1 {
+    const snapshot = readMountedComposerPresentationSnapshot(input);
+    if (!snapshot) return { status: 'composerUnavailable' };
+    if (input.drafts.length === 0) return { status: 'applied', revision: snapshot.revision };
+    let working = snapshot;
+    let firstEdit: ReturnType<typeof planComposerReferenceInsertion>[0] | undefined;
+    const inserted: ComposerMentionRef[] = [];
+    // Compose all receipts against one private working snapshot, then publish once. The
+    // insertion planner and transaction validator still own boundaries, spacing and rebasing.
+    for (const draft of input.drafts) {
+        const operations = planComposerReferenceInsertion({ snapshot: working, at: { kind: 'caret' },
+            reference: { kind: INLINE_REFERENCE_ATTACHMENT_SCHEME_V1,
+                ref: buildMentionRefV1(INLINE_REFERENCE_ATTACHMENT_SCHEME_V1, draft.id),
+                label: draft.source.kind === 'web' ? draft.source.file.name : draft.source.name } });
+        const text = resolveTextMutation({ snapshot: working, operations });
+        if (!text.ok) return text.result;
+        const references = resolveReferences({ snapshot: working, operations, nextText: text.text, edits: text.edits });
+        if (!references.ok) return references.result;
+        const edit = operations[0];
+        firstEdit ??= edit;
+        const start = edit.kind === 'text.insert' ? edit.position.offset : edit.range.start;
+        const cursor = start + edit.text.length;
+        working = { ...working, text: text.text, references: [...references.references], selection: { start: cursor, end: cursor } };
+        inserted.push(operations[1].reference);
+    }
+    if (!firstEdit) return { status: 'applied', revision: snapshot.revision };
+    const range = firstEdit.kind === 'text.insert'
+        ? { start: firstEdit.position.offset, end: firstEdit.position.offset } : firstEdit.range;
+    const text = working.text.slice(range.start, working.text.length - (snapshot.text.length - range.end));
+    const edit = { ...firstEdit, text };
+    return applyMountedComposerPresentationTransaction({ ref: input.ref, scope: input.scope,
+        transaction: { expectedRevision: snapshot.revision,
+            operations: [edit, ...inserted.map(reference => ({ kind: 'reference.insert' as const, reference }))] } });
 }
 
 /** Upload drafts live outside the portable document; their chips still use its transaction owner. */

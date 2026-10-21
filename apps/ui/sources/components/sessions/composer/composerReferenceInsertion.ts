@@ -40,6 +40,24 @@ export function readRecentComposerReferenceInsertions(scope: ServerAccountScope,
         || Boolean(workspaceKey && item.workspaceKey === workspaceKey));
 }
 
+/** Both editor and Action adapters call this only after publishing the complete document. */
+export function recordComposerReferencePublication(input: Readonly<{
+    scope: ServerAccountScope;
+    next: Pick<ComposerSnapshotV1, 'text' | 'references'>;
+    insertedRefs: readonly string[];
+    workspace?: WorkspaceScopeBase | null;
+    suggestions?: ReadonlyMap<string, AutocompleteSuggestion>;
+}>): void {
+    for (const ref of new Set(input.insertedRefs)) {
+        const reference = input.next.references.find(reference => reference.ref === ref
+            && input.next.text.slice(reference.start, reference.end) === reference.token);
+        if (!reference) continue;
+        const { token: _token, start: _start, end: _end, ...payload } = reference;
+        recordComposerReferenceInsertion(input.scope, { kind: reference.kind, ref: reference.ref,
+            label: reference.label ?? reference.ref, payload }, input.suggestions?.get(reference.ref), input.workspace);
+    }
+}
+
 /** Bound reference ranges are atomic in the shared composer-text offset space. */
 export function snapComposerReferenceOffset(offset: number, references: readonly Readonly<{ start: number; end: number }>[]): number {
     const reference = references.find(item => offset > item.start && offset < item.end);

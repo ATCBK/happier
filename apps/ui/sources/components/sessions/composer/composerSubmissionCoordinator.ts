@@ -7,7 +7,7 @@ import type {
 } from '@happier-dev/protocol';
 import { composerRefsV1Equal } from '@happier-dev/protocol/plugins/ui/composerRef';
 import { admitMentionRefsV1ForText, parseMentionRefV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
-import { INLINE_REFERENCE_ATTACHMENT_SCHEME_V1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
+import { INLINE_REFERENCE_ATTACHMENT_SCHEME_V1, scanInlineReferenceTokensV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 import { ComposerContentHandleV1Schema } from '@happier-dev/protocol/runtime/input/composerContentV1';
 import { hasSessionInputContentV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAuthoringV1';
 import { SessionExecutionTargetV1Schema } from '@happier-dev/protocol/sessions/creation/sessionExecutionTargetV1';
@@ -84,7 +84,7 @@ export type ComposerSubmissionFieldCurrentness = Readonly<{
 }>;
 
 /** Typed attachment ranges have custody; literal token text never acquires it. */
-export function dropOrphanComposerAttachmentReferences<Snapshot extends Readonly<{
+function dropOrphanComposerAttachmentReferences<Snapshot extends Readonly<{
     text: string;
     references: readonly ComposerMentionRef[];
     attachments: readonly Readonly<{ instanceId: string }>[];
@@ -111,6 +111,38 @@ export function dropOrphanComposerAttachmentReferences<Snapshot extends Readonly
     }
     if (removedChars === 0) return snapshot;
     return { ...snapshot, text: text + snapshot.text.slice(boundary), references };
+}
+
+/** Keep the positionless message identity set coherent without rebinding literal text. */
+export function prepareComposerSubmissionSnapshot<Snapshot extends Readonly<{
+    text: string;
+    references: readonly ComposerMentionRef[];
+    attachments: readonly Readonly<{ instanceId: string }>[];
+}>>(input: Snapshot, attachmentDraftIds: readonly string[] = []): Snapshot {
+    const snapshot = dropOrphanComposerAttachmentReferences(input, attachmentDraftIds);
+    const firstByIdentity = new Map<string, ComposerMentionRef>();
+    const references: ComposerMentionRef[] = [];
+    let text = '';
+    let boundary = 0;
+    let changed = false;
+    for (const reference of snapshot.references) {
+        const tokens = scanInlineReferenceTokensV1(reference.token);
+        const isInline = tokens.length === 1 && tokens[0]?.start === 0 && tokens[0]?.end === reference.token.length
+            && tokens[0]?.ref === reference.ref;
+        const identity = `${reference.kind}\u0000${reference.ref}`;
+        const first = isInline ? firstByIdentity.get(identity) : undefined;
+        if (isInline && !first) firstByIdentity.set(identity, reference);
+        const canonical = first ?? reference;
+        text += snapshot.text.slice(boundary, reference.start);
+        const start = text.length;
+        text += canonical.token;
+        const end = text.length;
+        const moved = start !== reference.start || end !== reference.end || canonical.token !== reference.token;
+        references.push(moved ? { ...reference, token: canonical.token, label: canonical.label, start, end } : reference);
+        changed ||= moved;
+        boundary = reference.end;
+    }
+    return changed ? { ...snapshot, text: text + snapshot.text.slice(boundary), references } : snapshot;
 }
 
 function hasCanonicalComposerReferenceRanges(
@@ -308,7 +340,7 @@ export async function submitComposerSnapshot(input: Readonly<{
 
     const captured = captureComposerSubmissionSnapshot(capturedSnapshot);
     if (!captured) return { status: 'unavailable' };
-    const snapshot = dropOrphanComposerAttachmentReferences(captured, input.attachmentDraftIds);
+    const snapshot = prepareComposerSubmissionSnapshot(captured, input.attachmentDraftIds);
     if (!isSubmissionRouteForSnapshot(snapshot, input.route)) {
         return { status: 'blocked', reason: 'scopeMismatch', snapshot };
     }

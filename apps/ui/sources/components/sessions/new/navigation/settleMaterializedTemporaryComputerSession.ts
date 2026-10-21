@@ -5,7 +5,7 @@ import {
 } from '@/components/sessions/attachments/uploadAttachmentDraftsToSession';
 import { mergeMessageMetaOverrides } from '@/components/sessions/agentInput/structuredInputMentions';
 import { buildComposerSnapshotStructuredInputMetaOverrides } from '@/components/sessions/composer/composerScopeAdapters';
-import { dropOrphanComposerAttachmentReferences } from '@/components/sessions/composer/composerSubmissionCoordinator';
+import { prepareComposerSubmissionSnapshot } from '@/components/sessions/composer/composerSubmissionCoordinator';
 import { resolveReviewCommentDraftAnchorsForPrompt } from '@/components/sessions/reviews/comments/resolveReviewCommentDraftAnchorsForPrompt';
 import { buildReviewCommentsOutboundMessage } from '@/sync/domains/input/reviewComments/buildReviewCommentsOutboundMessage';
 import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
@@ -50,7 +50,7 @@ export function buildTemporaryComputerFirstPromptDelivery(input: Readonly<{
     displayText?: string;
     metaOverrides: Record<string, unknown> | undefined;
 }> {
-    const composer = dropOrphanComposerAttachmentReferences(input.composer, input.uploaded.map(attachment => attachment.id));
+    const composer = prepareComposerSubmissionSnapshot(input.composer, input.uploaded.map(attachment => attachment.id));
     const structuredInputMeta = buildComposerSnapshotStructuredInputMetaOverrides(composer);
     const baseMetaOverrides = mergeMessageMetaOverrides(
         input.uploaded.length > 0 ? buildAttachmentMessageMeta(input.uploaded) : undefined,

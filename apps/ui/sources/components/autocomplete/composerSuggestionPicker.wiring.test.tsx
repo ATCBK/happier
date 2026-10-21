@@ -224,7 +224,7 @@ async function renderComposerPickerWithHandler(args: Readonly<{
                 kinds,
             );
             const activeWord = activeWordState?.activeWord ?? null;
-            const [suggestions, selected, moveUp, moveDown, selectionPending] = useActiveSuggestions(
+            const [suggestions, selected, moveUp, moveDown, selectionPending, , selectionForKind] = useActiveSuggestions(
                 activeWord,
                 handler,
                 { wrapAround: true },
@@ -233,6 +233,7 @@ async function renderComposerPickerWithHandler(args: Readonly<{
                 suggestions,
                 selected,
                 selectionPending,
+                selectionForKind,
                 activeWord,
                 activeWordRange: activeWordState
                     ? { start: activeWordState.offset, end: activeWordState.endOffset }

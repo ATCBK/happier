@@ -2225,10 +2225,14 @@ export function useNewSessionScreenModel(input?: Readonly<{
     const newSessionRouteIsFocused = useIsFocused();
     const newSessionComposerPresentedRef = React.useRef(false);
     newSessionComposerPresentedRef.current = newSessionRouteIsFocused && newSessionLayoutPresented;
+    const newSessionComposerFileScope = React.useMemo(() => resolveNewSessionFileSuggestionScope({
+        targetServerId, selectedMachineId, selectedMachineHomeDir, selectedPath,
+    }), [selectedMachineHomeDir, selectedMachineId, selectedPath, targetServerId]);
     const newSessionComposerDocument = useNewSessionComposerDocument({
         draftId,
         draftScope,
         promptStore,
+        referenceWorkspace: newSessionComposerFileScope,
         persistedAttachments: scopedPersistedDraft?.composerAttachments ?? [],
         persistedAttachmentSeeds: scopedPersistedDraft?.composerAttachmentSeeds ?? [],
         composerAttachmentEntriesById,
@@ -2283,9 +2287,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
                 && newSessionComposerDocument.isCurrent() && newSessionComposerPresentedRef.current,
         } : null
     ), [newSessionComposerDocument.isCurrent, newSessionComposerReferenceHost, newSessionLayoutPresented, newSessionRouteIsFocused]);
-    const newSessionComposerFileScope = React.useMemo(() => resolveNewSessionFileSuggestionScope({
-        targetServerId, selectedMachineId, selectedMachineHomeDir, selectedPath,
-    }), [selectedMachineHomeDir, selectedMachineId, selectedPath, targetServerId]);
 
     React.useEffect(() => {
         setResumeSessionId(hydratedResumeSessionId);

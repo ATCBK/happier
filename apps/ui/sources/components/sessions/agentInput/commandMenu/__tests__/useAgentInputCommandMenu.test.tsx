@@ -2,7 +2,9 @@ import { act } from 'react-test-renderer';
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderHook } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, renderHook } from '@/dev/testkit';
+import type { AutocompleteSuggestion, AutocompleteSuggestionUpdate } from '@/components/autocomplete/autocompleteTypes';
+import { useActiveSuggestions, type ActiveSuggestionsHandler } from '@/components/autocomplete/useActiveSuggestions';
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -24,6 +26,7 @@ function buildDefaultArgs(overrides: Partial<HookArgs> = {}): HookArgs {
         inputTextLength: 2,
         moveUp: vi.fn(),
         moveDown: vi.fn(),
+        selectionForKind: () => ({ selected: overrides.selected ?? 0, selectionPending: overrides.selectionPending ?? false }),
         handleSuggestionSelect: vi.fn(),
         ...overrides,
     };
@@ -145,7 +148,12 @@ describe('useAgentInputCommandMenu', () => {
 
         it('cycles the kind tabs and shows only that kind, keeping each row selectable by its own index', async () => {
             const handleSuggestionSelect = vi.fn();
-            const hook = await renderHook((props: HookArgs) => useAgentInputCommandMenu(props), { initialProps: referenceArgs({ handleSuggestionSelect }) });
+            const handler: ActiveSuggestionsHandler = async () => references;
+            const hook = await renderHook(() => {
+                const [suggestions, selected, moveUp, moveDown, selectionPending, settledEmpty, selectionForKind] = useActiveSuggestions('@', handler);
+                return useAgentInputCommandMenu(referenceArgs({ suggestions, selected, moveUp, moveDown, selectionPending, settledEmpty, selectionForKind, handleSuggestionSelect }));
+            });
+            await flushHookEffects();
             expect(hook.getCurrent().kindTab).toBeNull();
             expect(hook.getCurrent().items.map((item) => item.id)).toHaveLength(3);
             await act(async () => hook.getCurrent().cycleKindTab?.());
@@ -160,6 +168,82 @@ describe('useAgentInputCommandMenu', () => {
             expect(hook.getCurrent().kindTab).toBe('session');
             await act(async () => hook.getCurrent().cycleKindTab?.());
             expect(hook.getCurrent().kindTab).toBeNull();
+        });
+
+        it('keeps a kind-tab choice pinned through delayed rows and query refinement, pending while absent', async () => {
+            const first = createDeferred<AutocompleteSuggestion[]>();
+            const refined = createDeferred<AutocompleteSuggestion[]>();
+            const publications = new Map<string, AutocompleteSuggestionUpdate>();
+            const handler: ActiveSuggestionsHandler = (query, signal, publish) => {
+                publications.set(query, publish);
+                if (query === '@') {
+                    signal.addEventListener('abort', () => first.resolve([]), { once: true });
+                    return first.promise;
+                }
+                return refined.promise;
+            };
+            const selectedKeys: string[] = [];
+            const hook = await renderHook(({ query }: { query: string }) => {
+                const [suggestions, selected, moveUp, moveDown, selectionPending, settledEmpty, selectionForKind] = useActiveSuggestions(query, handler);
+                return useAgentInputCommandMenu(referenceArgs({
+                    suggestions, selected, moveUp, moveDown, selectionPending, settledEmpty, selectionForKind,
+                    activeWord: query, activeWordRange: { start: 4, end: 4 + query.length },
+                    handleSuggestionSelect: (index) => selectedKeys.push(suggestions[index]!.key),
+                }));
+            }, { initialProps: { query: '@' } });
+            await flushHookEffects();
+            await act(async () => publications.get('@')!([...references]));
+            await act(async () => hook.getCurrent().setKindTab('file'));
+            await act(async () => hook.getCurrent().moveDown());
+            expect(hook.getCurrent().items[hook.getCurrent().selectedIndex]?.label).toBe('b.ts');
+
+            const added: AutocompleteSuggestion = { kind: 'file', key: 'new', text: '@new.ts', label: 'new.ts' };
+            await act(async () => publications.get('@')!([added, ...references]));
+            expect(hook.getCurrent().items[hook.getCurrent().selectedIndex]?.label).toBe('b.ts');
+            await act(async () => hook.getCurrent().onSelectFromMenu());
+            expect(selectedKeys).toEqual(['f2']);
+
+            await hook.rerender({ query: '@b' });
+            await flushHookEffects();
+            await act(async () => publications.get('@b')!([references[0]!]));
+            expect(hook.getCurrent().kindTab).toBe('file');
+            expect(hook.getCurrent().commandMenuOpen).toBe(true);
+            expect(hook.getCurrent().selectedIndex).toBe(-1);
+            await act(async () => hook.getCurrent().onSelectFromMenu());
+            expect(selectedKeys).toEqual(['f2']);
+
+            refined.resolve([references[0]!, references[2]!]);
+            await flushHookEffects();
+            expect(hook.getCurrent().items[hook.getCurrent().selectedIndex]?.label).toBe('b.ts');
+            await act(async () => hook.getCurrent().onSelectFromMenu());
+            expect(selectedKeys).toEqual(['f2', 'f2']);
+        });
+
+        it('uses enabled candidates for automatic kind selection and navigation', async () => {
+            const rows: AutocompleteSuggestion[] = [
+                references[1]!,
+                { ...references[0]!, key: 'disabled-first', disabled: true },
+                references[0]!,
+                { ...references[0]!, key: 'disabled-middle', disabled: true },
+                references[2]!,
+            ];
+            const handler: ActiveSuggestionsHandler = async () => rows;
+            const handleSuggestionSelect = vi.fn();
+            const hook = await renderHook(() => {
+                const [suggestions, selected, moveUp, moveDown, selectionPending, settledEmpty, selectionForKind] = useActiveSuggestions('@', handler);
+                return useAgentInputCommandMenu(referenceArgs({ suggestions, selected, moveUp, moveDown, selectionPending, settledEmpty, selectionForKind, handleSuggestionSelect }));
+            });
+            await flushHookEffects();
+            await act(async () => hook.getCurrent().setKindTab('file'));
+            expect(hook.getCurrent().selectedIndex).toBe(1);
+            await act(async () => hook.getCurrent().moveDown());
+            expect(hook.getCurrent().selectedIndex).toBe(3);
+            await act(async () => hook.getCurrent().onSelectFromMenu());
+            expect(handleSuggestionSelect).toHaveBeenLastCalledWith(4);
+            await act(async () => hook.getCurrent().moveUp());
+            expect(hook.getCurrent().selectedIndex).toBe(1);
+            await act(async () => hook.getCurrent().onSelectFromMenu());
+            expect(handleSuggestionSelect).toHaveBeenLastCalledWith(2);
         });
 
         it('stays open on a settled empty answer to show its empty state, and holds no keys but Escape', async () => {

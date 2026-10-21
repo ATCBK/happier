@@ -5,6 +5,7 @@ import {
     type AutocompleteSuggestion,
     type AutocompleteSuggestionUpdate,
 } from './autocompleteTypes';
+import type { ComposerSuggestionKindId } from './composerSuggestionGrammar';
 
 /**
  * Resolves the suggestion list for the active composer token and owns which
@@ -36,6 +37,12 @@ interface SuggestionOptions {
     wrapAround?: boolean;      // If true, wrap around when reaching top/bottom
 }
 
+export type ActiveSuggestionKindSelection = (kind: ComposerSuggestionKindId) => Readonly<{
+    /** The selected row's index in the complete suggestion snapshot. */
+    selected: number;
+    selectionPending: boolean;
+}>;
+
 type ActiveSuggestionState = Readonly<{
     query: string | null;
     suggestions: AutocompleteSuggestion[];
@@ -54,15 +61,27 @@ function stepToEnabled(
     from: number,
     step: 1 | -1,
     wrapAround: boolean,
+    kind: ComposerSuggestionKindId | null = null,
 ): number {
     const count = suggestions.length;
     for (let taken = 1; taken <= count; taken += 1) {
         const raw = from + step * taken;
         if (!wrapAround && (raw < 0 || raw >= count)) return -1;
         const index = ((raw % count) + count) % count;
-        if (suggestions[index]?.disabled !== true) return index;
+        const suggestion = suggestions[index];
+        if (suggestion?.disabled !== true && (kind === null || suggestion?.kind === kind)) return index;
     }
     return -1;
+}
+
+function readKindSelection(state: ActiveSuggestionState, kind: ComposerSuggestionKindId | null, autoSelectFirst: boolean) {
+    if (kind === null || state.selectionPending || state.suggestions[state.selected]?.kind === kind) {
+        return { selected: state.selected, selectionPending: state.selectionPending };
+    }
+    return {
+        selected: autoSelectFirst ? stepToEnabled(state.suggestions, -1, 1, false, kind) : -1,
+        selectionPending: false,
+    };
 }
 
 function sameSuggestionSnapshot(
@@ -164,14 +183,13 @@ export function useActiveSuggestions(
     const activeSyncRef = React.useRef<ValueSync<string | null> | null>(null);
     const inFlightRef = React.useRef<AbortController | null>(null);
 
-    const moveUp = React.useCallback(() => {
+    const move = React.useCallback((step: 1 | -1, kind: ComposerSuggestionKindId | null = null) => {
         const previous = stateRef.current;
         if (previous.suggestions.length === 0) return;
-
-        // Moves onto the previous row the user can take; at the top (or with nothing selected) it wraps to
-        // the bottom, or stays when wrapping is off.
-        const moved = stepToEnabled(previous.suggestions, Math.max(previous.selected, 0), -1, wrapAround);
-        const selected = moved === -1 ? previous.selected : moved;
+        const current = readKindSelection(previous, kind, autoSelectFirst).selected;
+        const from = step === -1 ? Math.max(current, 0) : current;
+        const moved = stepToEnabled(previous.suggestions, from, step, wrapAround, kind);
+        const selected = moved === -1 ? current : moved;
         const next: ActiveSuggestionState = {
             ...previous,
             selected,
@@ -182,27 +200,13 @@ export function useActiveSuggestions(
         };
         stateRef.current = next;
         setState(next);
-    }, [wrapAround]);
-
-    const moveDown = React.useCallback(() => {
-        const previous = stateRef.current;
-        if (previous.suggestions.length === 0) return;
-
-        // Moves onto the next row the user can take; at the bottom it wraps to the top, or stays when
-        // wrapping is off. Nothing selected: the first row the user can take.
-        const moved = stepToEnabled(previous.suggestions, previous.selected, 1, wrapAround);
-        const selected = moved === -1 ? previous.selected : moved;
-        const next: ActiveSuggestionState = {
-            ...previous,
-            selected,
-            pinnedKey: previous.suggestions[selected]
-                ? getAutocompleteSuggestionIdentity(previous.suggestions[selected])
-                : null,
-            selectionPending: false,
-        };
-        stateRef.current = next;
-        setState(next);
-    }, [wrapAround]);
+    }, [autoSelectFirst, wrapAround]);
+    const moveUp = React.useCallback((kind: ComposerSuggestionKindId | null = null) => move(-1, kind), [move]);
+    const moveDown = React.useCallback((kind: ComposerSuggestionKindId | null = null) => move(1, kind), [move]);
+    const selectionForKind = React.useCallback<ActiveSuggestionKindSelection>((kind) => {
+        if (!query || stateRef.current.query !== query) return { selected: -1, selectionPending: false };
+        return readKindSelection(stateRef.current, kind, autoSelectFirst);
+    }, [autoSelectFirst, query]);
 
     // Sync query to suggestions
     const sync = React.useMemo(() => {
@@ -300,10 +304,10 @@ export function useActiveSuggestions(
 
     // If no query return empty suggestions
     if (!query || state.query !== query) {
-        return [[], -1, moveUp, moveDown, false, false] as const;
+        return [[], -1, moveUp, moveDown, false, false, selectionForKind] as const;
     }
 
     // Return state suggestions
     // The sixth value says the settled answer for this query is empty ("no matches", not "still looking").
-    return [state.suggestions, state.selected, moveUp, moveDown, state.selectionPending, state.settledEmpty] as const;
+    return [state.suggestions, state.selected, moveUp, moveDown, state.selectionPending, state.settledEmpty, selectionForKind] as const;
 }

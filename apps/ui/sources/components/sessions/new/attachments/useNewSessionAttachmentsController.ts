@@ -29,7 +29,7 @@ import { openAttachmentFilePickerFiles, openAttachmentFilePickerImages } from '@
 import { attachRecoverableAttachmentDrafts } from '@/components/sessions/attachments/recoverableAttachmentDrafts';
 import { useWorkspaceReviewCommentDraftHandlers } from '@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceReviewCommentDraftHandlers';
 import { useAttachmentDraftManager } from '@/components/sessions/attachments/useAttachmentDraftManager';
-import { removeMountedComposerAttachmentReferences } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
+import { insertMountedComposerAttachmentReferences, removeMountedComposerAttachmentReferences } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { useAttachmentsUploadConfig } from '@/components/sessions/attachments/useAttachmentsUploadConfig';
 import { buildAttachmentMessageMeta, uploadAttachmentDraftsToSession } from '@/components/sessions/attachments/uploadAttachmentDraftsToSession';
@@ -137,6 +137,12 @@ export function useNewSessionAttachmentsController(params: Readonly<{
         enabled: attachmentsUploadsEnabled,
         maxFileBytes: attachmentsUploadConfig.maxFileBytes,
         initialDrafts: initialDraftsRef.current,
+        onPickedDrafts: (drafts) => {
+            const document = params.composerDocument;
+            const scope = getActiveServerAccountScope();
+            if (!document?.isCurrent() || !scope) return;
+            insertMountedComposerAttachmentReferences({ ref: document.ref, scope, drafts });
+        },
         onRemoveDraft: (attachmentId) => {
             const document = params.composerDocument;
             const scope = getActiveServerAccountScope();
