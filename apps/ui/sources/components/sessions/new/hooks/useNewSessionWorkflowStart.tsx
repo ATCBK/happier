@@ -102,7 +102,7 @@ export function useNewSessionWorkflowStart(params: Readonly<{ panelProps: NewSes
         pendingRunId.current = null;
         router.push(createWorkflowRunRoute(admitted.run.id, lifetime.scope.serverId) as never);
     }, [props.selectedMachineId, props.selectedPath, retained, router, runNow, selection, targetIsCurrent, workflowDecision?.state]);
-    const retainedMachine = retained?.project ? machines.find((machine) => machine.id === retained.project?.machineId) : undefined;
+    const retainedMachine = retained?.project ? machines?.find((machine) => machine.id === retained.project?.machineId) : undefined;
     const retainedWhere = React.useMemo(() => retained?.project === undefined ? null : [createWorkflowStartWhereChip({
         target: retained.project, machineName: retainedMachine ? getMachineDisplayName(retainedMachine) : retained.project.machineId,
         machineHomeDir: retainedMachine?.metadata?.homeDir ?? null,
