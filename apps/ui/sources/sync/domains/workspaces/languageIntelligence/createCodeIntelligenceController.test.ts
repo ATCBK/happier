@@ -129,6 +129,57 @@ describe('fallback code intelligence controller', () => {
 });
 
 describe('on-demand language intelligence controller', () => {
+    it('starts a cold Check problems without a hover and exposes checking through empty startup watches', async () => {
+        let finishOpen!: (answer: LanguageIntelligenceSyncResult) => void;
+        let finishQuery!: (answer: LanguageIntelligenceQueryResult) => void;
+        const operations: string[] = [];
+        const queries: string[] = [];
+        const watches: Array<{ resolve(answer: LanguageIntelligenceWatchResult): void }> = [];
+        const server = { serverId: 'ts', label: 'TypeScript', state: 'starting' as const, loading: false, generation: 'server-g1' };
+        const controller = createCodeIntelligenceController({
+            scope: { serverId: 'home', machineId: 'machine', rootPath: '/repo' }, path: 'a.ts', languageId: 'typescript',
+            accountLifetime: { scope: { serverId: 'home', accountId: 'account' }, isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
+            getText: () => 'answer()', query: async () => result, openLocation() {},
+            languageServer: {
+                sync: request => {
+                    operations.push(request.op.op);
+                    return request.op.op === 'open' ? new Promise(resolve => { finishOpen = resolve; })
+                        : Promise.resolve({ status: 'ok', generation: 'root-g1', servers: [] });
+                },
+                watch: (_request, signal) => new Promise((resolve, reject) => {
+                    watches.push({ resolve });
+                    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+                }),
+                query: request => { queries.push(request.kind); return new Promise(resolve => { finishQuery = resolve; }); },
+                restart: async () => ({ status: 'ok' }),
+            },
+        });
+        try {
+            expect(await controller.outline()).toBeNull();
+            expect(operations).toEqual([]);
+            const pending = controller.checkProblems();
+            expect(controller.getSnapshot()).toMatchObject({ mode: 'server', status: 'loading', kind: 'diagnostics',
+                diagnostics: { state: 'checking', count: null } });
+            await vi.waitFor(() => expect(operations).toEqual(['open']));
+            watches[0].resolve({ status: 'ok', revision: 1, servers: [server], diagnostics: {} });
+            await vi.waitFor(() => expect(controller.getSnapshot().servers).toEqual([server]));
+            expect(controller.getSnapshot().diagnostics).toMatchObject({ state: 'checking', count: null });
+            const loading = { ...server, state: 'ready' as const, loading: true };
+            watches[1].resolve({ status: 'ok', revision: 2, servers: [loading], diagnostics: {} });
+            await vi.waitFor(() => expect(controller.getSnapshot().servers).toEqual([loading]));
+            finishOpen({ status: 'ok', generation: 'root-g1', version: 1, servers: [loading] });
+            await vi.waitFor(() => expect(queries).toEqual(['diagnostics']));
+            expect(controller.getSnapshot().diagnostics).toMatchObject({ state: 'checking', count: null });
+            watches[2].resolve({ status: 'ok', revision: 3, servers: [{ ...loading, loading: false }], diagnostics: {
+                'a.ts': { ts: { state: 'ready', generation: 'server-g1', version: 1, items: [] } },
+            } });
+            finishQuery({ status: 'ok', kind: 'diagnostics', diagnostics: [], hasMore: false });
+            await pending;
+            await vi.waitFor(() => expect(controller.getSnapshot().diagnostics).toMatchObject({ state: 'ready', count: 0 }));
+            expect(queries).toEqual(['diagnostics']);
+        } finally { controller.dispose(); }
+    });
+
     it.each([1, 2])('revalidates pre-ack root diagnostics version %s once the opened document version is known', async diagnosticVersion => {
         let finishOpen!: (answer: LanguageIntelligenceSyncResult) => void;
         const server = { serverId: 'ts', label: 'TypeScript', state: 'ready' as const, loading: false, generation: 'g1' };

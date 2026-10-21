@@ -1199,7 +1199,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         machineName: checkoutReachability.machineName, machineUnreachable: checkoutReachability.unreachable,
         agentName: editorAttribution.agentName, saveFileEdits,
         readSavedText: () => ({ savedText: fileContent?.isBinary ? '' : fileContent?.content ?? '', unsaved: editorState.readSnapshot().dirty }),
-        revealLine: (line) => setJumpToAnchor({ kind: 'line', filePath, line }),
+        revealLine: (line) => setJumpToAnchor(line === null ? null : { kind: 'line', filePath, line }),
     });
     bindCodeIntelligenceEditor.current = codeIntelligence.bindEditor;
     // Gutter marks come from the diff of the Changes scope the person selected (this turn, the session or
@@ -1355,6 +1355,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                         find={find}
                         liveMoment={displayMode === 'file' ? liveMoment : null}
                         intelligence={displayMode === 'file' || displayMode === 'diff' ? codeIntelligence.viewBinding : null}
+                        codeBottomInset={codeIntelligence.phoneSheetInset}
                         theme={theme}
                         displayMode={displayMode}
                         sessionId={sessionId}

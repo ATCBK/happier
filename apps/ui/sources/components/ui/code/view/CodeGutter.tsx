@@ -53,7 +53,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     gutterText: {
         fontFamily: resolveCodeMonoFontFamily(),
         fontSize: CODE_GUTTER_METRICS.numberFontSize,
+        // The code line's own line box, so the smaller number sits on the line's centre, not its top.
+        lineHeight: CODE_EDITOR_BASE_LINE_HEIGHT,
         position: 'absolute',
+        top: 0,
         right: 0,
         textAlign: 'right',
         fontVariant: ['tabular-nums'],

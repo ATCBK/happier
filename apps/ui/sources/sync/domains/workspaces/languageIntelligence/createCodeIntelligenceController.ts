@@ -53,6 +53,16 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
 
     function publish(next: CodeIntelligenceSnapshot): void {
         if (disposed || next === snapshot) return;
+        // Before the first pull exists the root projection is idle, but the
+        // Problems consumer must already show the user's explicit check. Derive
+        // this view state here; do not manufacture diagnostic entries/counts.
+        if ((next.kind === 'diagnostics' || snapshot.kind === 'diagnostics')
+            && (next.kind !== snapshot.kind || next.status !== snapshot.status || next.diagnostics !== snapshot.diagnostics)) {
+            const selected = selectCodeDiagnostics(diagnostics);
+            const checking = next.kind === 'diagnostics' && (next.status === 'searching' || next.status === 'loading');
+            next = { ...next, diagnostics: checking && selected.state === 'idle'
+                ? { ...selected, state: 'checking', count: null } : selected };
+        }
         snapshot = next;
         for (const listener of listeners) listener();
     }

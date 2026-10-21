@@ -44,9 +44,31 @@ export type UseAskSelectionInput = Readonly<{
     active?: boolean;
 }>;
 
+type AskSelectionTargetInput = Readonly<Pick<UseAskSelectionInput, 'accountLifetime' | 'withoutSessionTarget' | 'openDetailsTab' | 'onDetachedUnavailable'>>;
+
+/**
+ * Where an Ask without a mounted Session composer lands (a side run or a new-session composer), for every
+ * host of one: selection toolbars and the Problems tab's "Ask to fix" share this one context.
+ */
+export function useAskSelectionTargetContext(read: () => AskSelectionTargetInput): () => AskSelectionTargetContext {
+    const router = useRouter();
+    return React.useCallback((): AskSelectionTargetContext => {
+        const params = read();
+        const lifetime = params.accountLifetime === undefined ? captureActiveServerAccountScopeLifetime() : params.accountLifetime;
+        return { accountLifetime: lifetime, withoutSessionTarget: params.withoutSessionTarget,
+            openDetailsTab: params.openDetailsTab, onDetachedUnavailable: params.onDetachedUnavailable,
+            navigateToNewSession: ({ draftId, ...route }) => {
+                if (!lifetime?.isCurrent()) return;
+                router.push({ pathname: '/new', params: {
+                    draftId, draftServerId: lifetime.scope.serverId, draftAccountId: lifetime.scope.accountId,
+                    ...Object.fromEntries(Object.entries(route).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
+                } });
+            } };
+    }, [read, router]);
+}
+
 /** One Ask operation behind toolbars, phone actions, menus and the selection keyboard command. */
 export function useAskSelection(input: UseAskSelectionInput) {
-    const router = useRouter();
     const sourceId = React.useId();
     const ownerKey = JSON.stringify([input.scopeId, buildWorkspaceCacheKey(input.workspaceScope), input.filePath ?? null,
         input.source, input.source === 'markdown' && input.sourceLinesMapped === true]);
@@ -81,22 +103,13 @@ export function useAskSelection(input: UseAskSelectionInput) {
     const lastSource = React.useSyncExternalStore(askSelectionContext.subscribe,
         () => askSelectionContext.read(input.scopeId), () => null);
 
-    const getTargetContext = React.useCallback((): AskSelectionTargetContext => {
+    const getTargetContext = useAskSelectionTargetContext(React.useCallback(() => {
         const params = latest.current;
-        const lifetime = params.accountLifetime === undefined ? captureActiveServerAccountScopeLifetime() : params.accountLifetime;
-        return { accountLifetime: lifetime, withoutSessionTarget: params.withoutSessionTarget,
-            openDetailsTab: params.openDetailsTab, onDetachedUnavailable: (reason) => {
-                setUnavailableReason(reason);
-                params.onDetachedUnavailable?.(reason);
-            },
-            navigateToNewSession: ({ draftId, ...route }) => {
-                if (!lifetime?.isCurrent()) return;
-                router.push({ pathname: '/new', params: {
-                    draftId, draftServerId: lifetime.scope.serverId, draftAccountId: lifetime.scope.accountId,
-                    ...Object.fromEntries(Object.entries(route).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
-                } });
-            } };
-    }, [router]);
+        return { ...params, onDetachedUnavailable: (reason: string) => {
+            setUnavailableReason(reason);
+            params.onDetachedUnavailable?.(reason);
+        } };
+    }, []));
 
     const ask = React.useCallback(async (options?: Readonly<{ sideRun?: boolean }>): Promise<boolean> => {
         const params = latest.current;

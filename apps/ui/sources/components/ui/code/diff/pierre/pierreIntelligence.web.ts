@@ -72,6 +72,7 @@ export function bindPierreIntelligence(
         root.removeEventListener('pointerup', touch, true);
         root.removeEventListener('pointerout', leave, true);
         stopHighlights();
-        intelligence.onPointerAway?.();
+        // A repaint replaces this binding without moving the pointer. Only native departure events
+        // (or a move outside code) report pointer-away; the page controller owns its final disposal.
     };
 }

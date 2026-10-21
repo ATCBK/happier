@@ -109,6 +109,8 @@ type FileContentPanelProps = {
      * 1-based file lines and 0-based UTF-16 characters. Keep it referentially stable.
      */
     intelligence?: FileCodeIntelligenceBinding | null;
+    /** Room under the code while a phone sheet covers the bottom of the page (P7 name sheet). */
+    codeBottomInset?: number;
     scrollTestID?: string;
     onLayout?: (e: any) => void;
     onContentSizeChange?: (width: number, height: number) => void;
@@ -235,6 +237,7 @@ function FileContentPanelInner({
     emphasizedLines,
     liveMoment,
     intelligence,
+    codeBottomInset,
     scrollTestID,
     onLayout,
     onContentSizeChange,
@@ -581,6 +584,7 @@ function FileContentPanelInner({
                 intelligence={codeIntelligence}
                 contentPaddingHorizontal={CODE_CANVAS_CONTENT_PADDING}
                 contentPaddingVertical={CODE_CANVAS_CONTENT_PADDING}
+                contentPaddingBottom={codeBottomInset}
                 externalScrollView={!virtualized && Platform.OS !== 'web' ? externalCodeScrollView : undefined}
                 virtualized={virtualized}
                 scrollToLineId={scrollToLineId}

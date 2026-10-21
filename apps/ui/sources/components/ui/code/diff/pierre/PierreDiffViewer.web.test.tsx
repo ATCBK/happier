@@ -11,6 +11,10 @@ import { buildCodeLinesFromFile } from '@/components/ui/code/model/buildCodeLine
 import { resolveCodeLineRangeSelection } from '@/components/ui/code/interactions/resolveCodeLineRangeSelection';
 import { storage } from '@/sync/domains/state/storageStore';
 import { BrowserWorker } from './pierreWorkerTestHelpers';
+import { createCodeIntelligenceController } from '@/sync/domains/workspaces/languageIntelligence/createCodeIntelligenceController';
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
+import type { CodeIntelligenceFallbackInput } from '@happier-dev/protocol/machines/codeIntelligenceFallback';
+import type { DiffViewerProps } from '../diffViewerTypes';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -88,8 +92,96 @@ async function findPierreHoverUtilityButtonProps(utility: any): Promise<any> {
 
 // Load the real runtime graph after installing its boundaries, before behavior deadlines begin.
 await import('./PierreDiffViewer.web');
+const { FileContentPanel } = await import('@/components/workspaces/files/file/FileContentPanel');
 
 describe('PierreDiffViewer (web)', () => {
+    it('keeps real Changes identifier selection through subscribed parent repaints and definition navigation', async () => {
+        storage.setState({ settings: { ...storage.getState().settings, filesDiffRendererMode: 'pierre' } });
+        const source = ['export function delayFor() {}', '', '', '', '', '', '', 'delayFor(1);'].join('\n');
+        const patch = '--- a/retry.ts\n+++ b/retry.ts\n@@ -8 +8 @@\n-oldDelay(1);\n+delayFor(1);\n';
+        const query = vi.fn(async (_input: CodeIntelligenceFallbackInput) => ({ status: 'ok' as const, source: 'text_matches' as const, coverage: 'complete' as const, hasMore: false,
+            locations: [{ path: 'retry.ts', range: { start: { line: 0, character: 16 }, end: { line: 0, character: 24 } }, lineText: 'export function delayFor() {}' }] }));
+        const opened: string[] = [];
+        const controller = createCodeIntelligenceController({
+            scope: { serverId: 'home', machineId: 'machine', rootPath: '/repo' }, path: 'retry.ts', languageId: 'typescript',
+            accountLifetime: { scope: { serverId: 'home', accountId: 'account' }, isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
+            getText: () => source, query, openLocation: location => { opened.push(`${location.path}:${location.range.start.line + 1}`); },
+        });
+        const screen = await renderScreen(<FileContentPanel theme={createThemeFixture()} displayMode="diff" sessionId="session"
+            filePath="retry.ts" diffContent={patch} fileContent={source} language="typescript" selectedLineKeys={new Set()}
+            lineSelectionEnabled={false} onToggleLine={() => {}} intelligence={{
+                onPointer: (line, character, anchor) => controller.inspect({ line: line - 1, character, ...(anchor ? { anchor } : {}) }),
+                onPointerAway: () => controller.inspect(null),
+                onActivate: (line, character) => { void controller.definition({ line: line - 1, character }); },
+                getDiagnosticsByLine: () => undefined, subscribeDiagnostics: controller.subscribe,
+            }} />);
+        await vi.dynamicImportSettled();
+        await renderer.act(async () => {});
+        // Vitest resolves the portable DiffViewer entry; consume the real panel's renderer props at
+        // the web platform seam rather than mocking either the panel or its intelligence callbacks.
+        const panelProps = screen.tree.root.findAll(node => node.props.mode === 'unified' && node.props.unifiedDiff === patch)[0].props;
+        if (panelProps.mode !== 'unified' || typeof panelProps.unifiedDiff !== 'string') {
+            throw new Error('The real FileContentPanel must bind a unified diff');
+        }
+        const diffProps: DiffViewerProps = { ...panelProps, mode: 'unified', unifiedDiff: panelProps.unifiedDiff };
+        const intelligence = diffProps.intelligence;
+        if (!intelligence) throw new Error('The real FileContentPanel must bind Changes intelligence');
+        const { onPointerToken, onActivateToken } = intelligence;
+        if (!onPointerToken || !onActivateToken) throw new Error('The real Changes intelligence must bind pointer and activation');
+        const boundIntelligence = { ...intelligence, onPointerToken, onActivateToken };
+        const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
+        function SubscribedChanges() {
+            React.useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+            // A parent commit may refresh the binding even though the pointer did not move.
+            return <PierreDiffViewer {...diffProps} intelligence={{ ...boundIntelligence }} />;
+        }
+        const webScreen = await renderScreen(<SubscribedChanges />);
+        const body = webScreen.findAllByType('FileDiff')[0];
+        expect(body).toBeDefined();
+        const { FileDiff } = await import('@pierre/diffs');
+        // JSDOM cannot parse CSS @layer; painting is a live-browser check, not this position contract.
+        const instance = new FileDiff<React.ReactNode, undefined>({ ...body.props.options, theme: 'pierre-light', unsafeCSS: undefined });
+        // JSDOM omits constructed stylesheet replacement (same platform fixture as Pierre's DOM tests).
+        const replaceSync = Object.getOwnPropertyDescriptor(CSSStyleSheet.prototype, 'replaceSync');
+        Object.defineProperty(CSSStyleSheet.prototype, 'replaceSync', { configurable: true, value() {} });
+        vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+        const host = document.createElement('diffs-container');
+        document.body.append(host);
+        const root = host.shadowRoot ?? host.attachShadow({ mode: 'open' });
+        const previousCaret = Object.getOwnPropertyDescriptor(document, 'caretPositionFromPoint');
+        try {
+            instance.hydrate({ fileDiff: body.props.fileDiff, fileContainer: host });
+            await vi.waitFor(() => expect([...root.querySelectorAll('[data-line="8"][data-line-type="change-addition"] span')]
+                .some(span => span.textContent === 'delayFor')).toBe(true));
+            const addition = root.querySelector('[data-line="8"][data-line-type="change-addition"]')!;
+            const name = [...addition.querySelectorAll('span')].find(span => span.textContent === 'delayFor')!;
+            const text = name.firstChild!;
+            Object.defineProperty(document, 'caretPositionFromPoint', { configurable: true, value: () => ({ offsetNode: text, offset: 3 }) });
+            await renderer.act(async () => {
+                name.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, composed: true, clientX: 42, clientY: 22 }));
+            });
+            expect(controller.getSnapshot().selection).toMatchObject({ position: { line: 7, character: 3 }, identifier: { symbol: 'delayFor' } });
+            await renderer.act(async () => {
+                name.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true, ctrlKey: true, clientX: 42, clientY: 22 }));
+            });
+            await vi.waitFor(() => expect(opened).toEqual(['retry.ts:1']));
+            expect(query.mock.calls[0]?.[0]).toMatchObject({ kind: 'definition', line: 8, symbol: 'delayFor' });
+            await renderer.act(async () => {
+                name.dispatchEvent(new MouseEvent('pointerout', { bubbles: true, composed: true, relatedTarget: document.body }));
+            });
+            expect(controller.getSnapshot().selection).toBeNull();
+        } finally {
+            await webScreen.unmount();
+            await screen.unmount();
+            controller.dispose();
+            instance.cleanUp();
+            host.remove();
+            if (replaceSync) Object.defineProperty(CSSStyleSheet.prototype, 'replaceSync', replaceSync);
+            else Reflect.deleteProperty(CSSStyleSheet.prototype, 'replaceSync');
+            if (previousCaret) Object.defineProperty(document, 'caretPositionFromPoint', previousCaret);
+            else Reflect.deleteProperty(document, 'caretPositionFromPoint');
+        }
+    });
     it('resolves expanded text-comparison context through the existing new-file row coordinates', async () => {
         const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
         const { FileDiff } = await import('@pierre/diffs');

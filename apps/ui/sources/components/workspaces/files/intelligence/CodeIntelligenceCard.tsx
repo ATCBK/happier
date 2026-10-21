@@ -35,16 +35,45 @@ const SIGNATURE_FONT_SIZE = 12;
 const SIGNATURE_LINE_HEIGHT = 19;
 const MONO_ADVANCE_EM = 0.6;
 
-/** Wide enough for the signature's longest line on one line, within the card's bounds and the room beside the name. */
-function resolveCardWidth(signature: string | null, room: number, inset: number): number {
-  const longest = signature
-    ? Math.max(...signature.split('\n').map((line) => line.length))
+/** Inter's average advance for meta text, for the footer's estimate (labels truncate if it is short). */
+const META_ADVANCE_PX = 12 * 0.56;
+const MICRO_MONO_ADVANCE_PX = 11 * MONO_ADVANCE_EM;
+
+/**
+ * One width for the card, decided before it opens (the popover is as wide as its cap): wide enough for
+ * the signature's longest line and for the footer (two actions with their keys and "TypeScript ·
+ * {machine}") on one line each, never narrower than the lab's card or wider than the cap.
+ */
+function resolveCardWidth(
+  input: Readonly<{
+    signature: string | null;
+    actions: readonly Readonly<{ label: string; shortcut?: string }>[];
+    sourceLabel: string | null;
+    space: Readonly<{ s4: number; s6: number; s8: number; s12: number }>;
+  }>,
+): number {
+  const { space } = input;
+  const longest = input.signature
+    ? Math.max(...input.signature.split('\n').map((line) => line.length))
     : 0;
-  const wanted = Math.ceil(longest * SIGNATURE_FONT_SIZE * MONO_ADVANCE_EM) + inset * 2 + 2;
-  return Math.max(
-    Math.min(CARD_MIN_WIDTH, room),
-    Math.min(CARD_MAX_WIDTH, room, wanted),
+  const signature =
+    Math.ceil(longest * SIGNATURE_FONT_SIZE * MONO_ADVANCE_EM) + space.s12 * 2 + 2;
+  const actions = input.actions.reduce(
+    (width, action) =>
+      width +
+      space.s6 * 2 +
+      action.label.length * META_ADVANCE_PX +
+      (action.shortcut ? space.s6 + action.shortcut.length * MICRO_MONO_ADVANCE_PX : 0),
+    0,
   );
+  const footer = Math.ceil(
+    space.s6 * 2 +
+      actions +
+      space.s4 * (input.actions.length + 1) +
+      space.s8 +
+      (input.sourceLabel?.length ?? 0) * META_ADVANCE_PX,
+  );
+  return Math.max(CARD_MIN_WIDTH, Math.min(CARD_MAX_WIDTH, Math.max(signature, footer)));
 }
 
 export type CodeIntelligenceCardModel = Readonly<{
@@ -94,6 +123,8 @@ export function CodeIntelligenceCard(
   props: CodeIntelligenceCardProps,
 ): React.ReactElement | null {
   const { theme } = useUnistyles();
+  const definitionKey = useKeyboardShortcutLabel('code.goToDefinition');
+  const referencesKey = useKeyboardShortcutLabel('code.findReferences');
   const anchor = props.anchor;
   const popoverAnchor = React.useMemo(
     () =>
@@ -112,6 +143,18 @@ export function CodeIntelligenceCard(
     [anchor?.x, anchor?.y, anchor?.width, anchor?.height],
   );
   if (!props.open) return null;
+  const webKeys = Platform.OS === 'web';
+  const cardWidth = resolveCardWidth({
+    signature: props.model.hover?.signature?.code ?? null,
+    actions: [
+      ...(props.model.outsidePath
+        ? []
+        : [{ label: t('files.pane.intelligence.goToDefinition'), ...(webKeys && definitionKey ? { shortcut: definitionKey } : {}) }]),
+      { label: t('files.pane.intelligence.findReferences'), ...(webKeys && referencesKey ? { shortcut: referencesKey } : {}) },
+    ],
+    sourceLabel: props.model.sourceLabel,
+    space: theme.space,
+  });
   return (
     <Popover
       open
@@ -137,7 +180,7 @@ export function CodeIntelligenceCard(
       flip
       gap={4}
       minWidth={0}
-      maxWidthCap={CARD_MAX_WIDTH}
+      maxWidthCap={cardWidth}
       maxHeightCap={CARD_MAX_HEIGHT}
     >
       {({ presentation, maxHeight, maxWidth }) =>
@@ -152,13 +195,7 @@ export function CodeIntelligenceCard(
             <View
               testID="code-hover-card"
               accessibilityRole={Platform.OS === 'web' ? undefined : 'summary'}
-              style={{
-                width: resolveCardWidth(
-                  props.model.hover?.signature?.code ?? null,
-                  maxWidth,
-                  theme.space.s12,
-                ),
-              }}
+              style={{ width: Math.min(cardWidth, maxWidth) }}
               {...(Platform.OS === 'web'
                 ? {
                     onPointerEnter: () => props.onHoverChange?.(true),

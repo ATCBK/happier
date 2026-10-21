@@ -1,3 +1,4 @@
+import { useWindowDimensions } from 'react-native';
 import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
 import type { LanguageIntelligenceDiagnostic } from '@happier-dev/protocol/machines/languageIntelligence';
@@ -24,6 +25,7 @@ import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider
 import { useWorkspaceRefs } from '@/sync/store/hooks';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { askCodeDiagnosticsToFix } from '@/sync/domains/workspaces/languageIntelligence/askCodeDiagnosticsToFix';
+import { useAskSelectionTargetContext } from '@/components/ui/code/selection/useAskSelection';
 import { selectCodeDiagnostics } from '@/sync/domains/workspaces/languageIntelligence/codeDiagnostics';
 import type { CodeIdentifier } from '@/sync/domains/workspaces/languageIntelligence/codeIdentifiers';
 import type {
@@ -174,8 +176,8 @@ export type UseFilePageCodeIntelligenceInput = Readonly<{
   /** P4's save of this page's buffer; resolves false when nothing was saved. */
   saveFileEdits: () => Promise<unknown> | unknown;
   readSavedText: () => Readonly<{ savedText: string; unsaved: boolean }>;
-  /** Phones: bring the tapped line (1-based) into the top of the view, above the name sheet (LS2 T). */
-  revealLine?: (line: number) => void;
+  /** Phones: bring the tapped line (1-based) into the top of the view, above the name sheet (LS2 T); null lets it go. */
+  revealLine?: (line: number | null) => void;
 }>;
 
 /** One stable selection of the controller's snapshot, re-rendering its caller only when `select` changes. */
@@ -211,6 +213,9 @@ function useControllerSelector<T>(
 }
 
 const selectSummary = (snapshot: CodeIntelligenceSnapshot) => snapshot;
+
+/** The share of a phone screen kept free under the code while a sheet is up (the sheet's tallest form). */
+const PHONE_SHEET_RESERVE = 0.6;
 
 /**
  * P7's File page composition (N5: regions handed to the PAGE owner): the one controller, the read
@@ -409,7 +414,10 @@ export function useFilePageCodeIntelligence(
             onActivate: (line, character, activation) => {
               const position = { line: line - 1, character };
               if (activation.via === 'touch') {
-                latest.current.revealLine?.(line);
+                // After the sheet's room under the code has been laid out, so the line can scroll above it.
+                requestAnimationFrame(() =>
+                  requestAnimationFrame(() => latest.current.revealLine?.(line)),
+                );
                 controller.inspect({
                   ...position,
                   ...(activation.rect ? { anchor: activation.rect } : {}),
@@ -555,6 +563,12 @@ export function useFilePageCodeIntelligence(
           ? t('files.pane.intelligence.saveAndAsk', { count: askCount })
           : t('files.pane.intelligence.ask', { count: askCount })
       : null;
+  // Without a Session composer on this page, Ask lands where the selection toolbar's Ask does (P5).
+  const readAskTarget = React.useCallback(
+    () => ({ openDetailsTab: pane.openDetailsTab }),
+    [pane],
+  );
+  const askTargetContext = useAskSelectionTargetContext(readAskTarget);
   const askToFix = React.useCallback(async (): Promise<boolean> => {
     const current = latest.current;
     if (!controller || !current.scope) return false;
@@ -571,6 +585,7 @@ export function useFilePageCodeIntelligence(
             },
           }
         : null,
+      targetContext: askTargetContext(),
       isCurrent: () =>
         latestController.current === owner && (lifetime?.isCurrent() ?? true),
       readFile: async (path) =>
@@ -584,7 +599,7 @@ export function useFilePageCodeIntelligence(
       },
     });
     return result.created > 0;
-  }, [controller, mainColumn]);
+  }, [askTargetContext, controller, mainColumn]);
   const latestController = React.useRef(controller);
   latestController.current = controller;
 
@@ -768,10 +783,26 @@ export function useFilePageCodeIntelligence(
     />
   ) : null;
 
+  // Phones: while the name sheet is up, the code gets room beneath it so the tapped line can sit above it.
+  const { height: windowHeight } = useWindowDimensions();
+  const phoneSheetOpen = React.useSyncExternalStore(
+    interaction.subscribe,
+    () => phone && interaction.getState() !== null,
+    () => false,
+  );
+  const wasPhoneSheetOpen = React.useRef(false);
+  React.useEffect(() => {
+    if (wasPhoneSheetOpen.current && !phoneSheetOpen) latest.current.revealLine?.(null);
+    wasPhoneSheetOpen.current = phoneSheetOpen;
+  }, [phoneSheetOpen]);
+  const phoneSheetInset = phoneSheetOpen
+    ? Math.round(windowHeight * PHONE_SHEET_RESERVE)
+    : 0;
   return {
     controller,
     bindEditor,
     viewBinding,
+    phoneSheetInset,
     headerFacts,
     notice,
     layer,
