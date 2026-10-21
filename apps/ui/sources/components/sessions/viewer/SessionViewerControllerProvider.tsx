@@ -64,6 +64,14 @@ export function SessionViewerControllerProvider(
   const inputRef = React.useRef(props);
   inputRef.current = props;
 
+  // A dock belongs to the mounted shell: a phone's reading slot cannot present it after the
+  // desktop shell takes over (including a destination-preserving shell remount).
+  React.useEffect(() => {
+    const current = readState();
+    if (!props.phone && current.mode === 'docked' && current.source)
+      inputRef.current.openDocked(current.source);
+  }, [props.phone, readState]);
+
   const { binding: accountBinding } = useServerCredentialAccountScopeBinding(props.serverId);
   const semanticScope = React.useMemo(() => ({ lifetime: new AbortController() }), [props.sessionId, props.serverId]);
   React.useEffect(() => {
@@ -102,6 +110,12 @@ export function SessionViewerControllerProvider(
       openDocked(intent.source);
     return next.result;
   }, [readState, setState]);
+  React.useEffect(() => {
+    // Only a space-driven dock returns automatically. A deliberate Dock remains a pane until
+    // the person chooses Float, using the same current placement verdict and pane handoff.
+    if (!props.phone && floatFits && state.mode === 'docked' && state.restore?.mode === 'floating')
+      applyPresentation({ kind: 'viewer.float' });
+  }, [applyPresentation, floatFits, props.phone, state.mode, state.restore?.mode]);
   const executeAction = React.useMemo(() => createFrontDoorActionExecute(undefined, accountBinding ? {
     currentSessionPresentationApply: {
       serverId: accountBinding.serverId,

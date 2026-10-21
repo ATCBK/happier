@@ -370,7 +370,15 @@ describe('SessionViewerHost', () => {
   });
 
   it('offers to float a docked desktop viewer again only once the area can hold the frame', async () => {
-    const { result, harness } = await mountOpen(AGENT_PRESENCE, { width: 1200, height: 70 });
+    const { result, harness } = await mountOpen(AGENT_PRESENCE, { width: 1200, height: 800 });
+    await act(async () => {
+      harness.controller!.apply({ kind: 'viewer.dock' });
+      invokeTestInstanceHandler(
+        result.tree.root.findByProps({ testID: 'session-viewer-host' }),
+        'onLayout',
+        { nativeEvent: { layout: { x: 0, y: 0, width: 1200, height: 70 } } },
+      );
+    });
     expect(harness.controller!.state.mode).toBe('docked');
     expect(harness.controller!.floatFits).toBe(false);
     expect(harness.controller!.apply({ kind: 'viewer.float' }).status).toBe('unavailable');
@@ -385,12 +393,72 @@ describe('SessionViewerHost', () => {
     expect(harness.controller!.state.mode).toBe('docked');
     expect(result.tree.root.findAllByType(FloatingFrame)).toHaveLength(0);
     expect(harness.controller!.floatFits).toBe(true);
+    // A resize may temporarily leave no area at all. A previous successful placement must not
+    // keep Float available while the current geometry cannot present it.
+    await act(async () => {
+      invokeTestInstanceHandler(
+        result.tree.root.findByProps({ testID: 'session-viewer-host' }),
+        'onLayout',
+        { nativeEvent: { layout: { x: 0, y: 0, width: 1200, height: 0 } } },
+      );
+    });
+    expect(harness.controller!.floatFits).toBe(false);
+    expect(harness.controller!.apply({ kind: 'viewer.float' }).status).toBe('unavailable');
+    await act(async () => {
+      invokeTestInstanceHandler(
+        result.tree.root.findByProps({ testID: 'session-viewer-host' }),
+        'onLayout',
+        { nativeEvent: { layout: { x: 0, y: 0, width: 1200, height: 800 } } },
+      );
+    });
+    expect(harness.controller!.floatFits).toBe(true);
     await act(async () => {
       expect(harness.controller!.apply({ kind: 'viewer.float' }).status).toBe('applied');
     });
     expect(harness.controller!.state.mode).toBe('floating');
     expect(result.tree.root.findAllByType(FloatingFrame)).toHaveLength(1);
     await result.unmount();
+  });
+
+  it('returns a geometry-docked source to its floating presentation when resize restores room', async () => {
+    const { result, harness } = await mountOpen(AGENT_PRESENCE, { width: 1200, height: 70 });
+    try {
+      expect(harness.controller!.state.mode).toBe('docked');
+      await act(async () => {
+        invokeTestInstanceHandler(
+          result.tree.root.findByProps({ testID: 'session-viewer-host' }),
+          'onLayout',
+          { nativeEvent: { layout: { x: 0, y: 0, width: 1200, height: 800 } } },
+        );
+      });
+      expect(harness.controller!.state.mode).toBe('floating');
+      expect(result.tree.root.findAllByType(FloatingFrame)).toHaveLength(1);
+    } finally { await result.unmount(); }
+  });
+
+  it('fits an unavailable picture using the controls minimum instead of stretching a narrow retained placeholder aspect', async () => {
+    const { result, harness } = await mountOpen(AGENT_PRESENCE, { width: 1200, height: 450 });
+    try {
+      await result.update(<Tree harness={harness} presence={AGENT_PRESENCE} aspectRatio={0} />);
+      await act(async () => { harness.controller!.setRect({ x: 980, y: 30, width: 200, height: 312 }); });
+      const layOut = async (testID: string, width: number) => {
+        await act(async () => {
+          invokeTestInstanceHandler(
+            result.tree.root.find(node => node.props.testID === testID && typeof node.props.onLayout === 'function'),
+            'onLayout',
+            { nativeEvent: { layout: { x: 0, y: 0, width, height: 32 } } },
+          );
+        });
+      };
+      await layOut('session-viewer-source-capsule', 300);
+      await layOut('session-viewer-machine', 51);
+      await layOut('session-viewer-buttons-capsule', 90);
+      expect(harness.controller!.state.mode).toBe('floating');
+      const frame = result.tree.root.findByType(FloatingFrame);
+      expect(frame.props.minWidth).toBe(453);
+      expect(frame.props.rect.width).toBeGreaterThanOrEqual(453);
+      expect(frame.props.rect.height).toBeLessThanOrEqual(frame.props.availableRect.height);
+    } finally { await result.unmount(); }
   });
 
 });

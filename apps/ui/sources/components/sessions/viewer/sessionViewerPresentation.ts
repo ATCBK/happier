@@ -4,7 +4,7 @@ import type { FrameRect, FloatingFrameMode } from '@happier-dev/plugin-ui/presen
 export type SessionViewerSource = 'computer' | 'browser';
 export type SessionViewerSemanticIntent = Extract<CurrentSessionPresentationIntentV1, { kind: `viewer.${string}` }>;
 export type SessionViewerLocalIntent = SessionViewerSemanticIntent
-    | Readonly<{ kind: 'viewer.dock' }>
+    | Readonly<{ kind: 'viewer.dock'; restoreFloating?: boolean }>
     | Readonly<{ kind: 'viewer.float' }>
     | Readonly<{ kind: 'viewer.corner.set'; corner: 'tl' | 'tr' | 'bl' | 'br' }>
     | Readonly<{ kind: 'viewer.size.set'; width: number }>;
@@ -48,17 +48,24 @@ export function resolveSessionViewerPresentation(
             return state.mode === 'closed' ? unchanged() : applied({ ...state, mode: 'closed', restore: null });
         case 'viewer.expand':
             if (state.mode === 'closed' || state.mode === 'expanded') return unchanged();
-            return applied({ ...state, mode: 'expanded', restore: { mode: state.mode, rect: state.rect } });
+            return applied({ ...state, mode: 'expanded', restore: state.restore ?? { mode: state.mode, rect: state.rect } });
         case 'viewer.restore':
             if (state.mode !== 'expanded' || !state.restore) return unchanged();
             return applied({ ...state, mode: state.restore.mode, rect: state.restore.rect, restore: null });
-        case 'viewer.dock':
-            return state.mode === 'closed' || state.mode === 'docked' ? unchanged()
-                : applied({ ...state, mode: 'docked', restore: null });
+        case 'viewer.dock': {
+            if (state.mode === 'closed') return unchanged();
+            // Space can temporarily project a floating viewer into a dock. Keep its return
+            // placement just as expansion does; the person's explicit Dock clears that return.
+            const restore = intent.restoreFloating
+                ? state.mode === 'floating' ? { mode: 'floating' as const, rect: state.rect } : state.restore
+                : null;
+            return state.mode === 'docked' && state.restore === restore ? unchanged()
+                : applied({ ...state, mode: 'docked', restore });
+        }
         case 'viewer.float':
             // Back from the desktop dock to the frame at its retained placement; a phone docks in Chat.
             if (input.phone) return unavailable();
-            return state.mode === 'docked' ? applied({ ...state, mode: 'floating' }) : unchanged();
+            return state.mode === 'docked' ? applied({ ...state, mode: 'floating', restore: null }) : unchanged();
         case 'viewer.corner.set':
             if (input.phone) return unavailable();
             return state.corner === intent.corner ? unchanged() : applied({ ...state, corner: intent.corner });

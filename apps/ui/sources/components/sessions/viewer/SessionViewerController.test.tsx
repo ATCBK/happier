@@ -207,6 +207,35 @@ describe('SessionViewerController', () => {
     await hook.unmount();
   });
 
+  it('reveals the desktop pane when a geometry-docked viewer returns from phone reflow', async () => {
+    const input = { phone: false };
+    const { render, openDocked } = mountController(input);
+    const hook = await render();
+    try {
+      await act(async () => {
+        hook.getCurrent().controller.port.apply({ kind: 'viewer.open', source: 'computer' });
+        hook.getCurrent().controller.apply({ kind: 'viewer.dock' });
+      });
+      input.phone = true;
+      await hook.rerender();
+      openDocked.mockClear();
+      input.phone = false;
+      await hook.rerender();
+      expect(hook.getCurrent().controller.state.mode).toBe('docked');
+      expect(openDocked).toHaveBeenCalledWith('computer');
+      openDocked.mockClear();
+      await hook.rerender();
+      expect(openDocked).not.toHaveBeenCalled();
+      await act(async () => { hook.getCurrent().controller.port.apply({ kind: 'viewer.close' }); });
+      input.phone = true;
+      await hook.rerender();
+      input.phone = false;
+      await hook.rerender();
+      expect(hook.getCurrent().controller.state.mode).toBe('closed');
+      expect(openDocked).not.toHaveBeenCalled();
+    } finally { await hook.unmount(); }
+  });
+
   it('publishes the reading column yield only while a settled viewer floats', async () => {
     const { render } = mountController({ phone: false });
     const hook = await render();

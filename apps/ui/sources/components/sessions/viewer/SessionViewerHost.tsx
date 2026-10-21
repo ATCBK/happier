@@ -196,15 +196,15 @@ function MountedSessionViewerHost(
   const committedRect = controller.state.rect;
   const { setRect, apply, requestSemantic, setReadingInset } = controller;
   const facts = controller.facts[source];
+  // The narrowest frame whose controls still fit across, as the controls measured themselves.
+  const [minWidth, setMinWidth] = React.useState(0);
   // The picture's own shape once its source reports it; until then the lab's 16:10, or taller where a
   // state card needs the room. The frame's width is where it rests, or the first floating width.
-  const frameWidth = committedRect?.width ?? (availableRect ? Math.round(availableRect.width * DEFAULT_WIDTH_SHARE) : 0);
+  const frameWidth = Math.max(minWidth, committedRect?.width ?? (availableRect ? Math.round(availableRect.width * DEFAULT_WIDTH_SHARE) : 0));
   const aspectRatio = resolveSessionViewerBodyAspect(facts?.aspectRatio, frameWidth);
   const watching = facts?.watching === true;
   const footer = useSessionViewerHasPresence(source);
   const chromeHeight = resolveFloatingFrameChromeHeight({ footer });
-  // The narrowest frame whose controls still fit across, as the controls measured themselves.
-  const [minWidth, setMinWidth] = React.useState(0);
   // Open, viewport, obstacle, aspect and footer changes revalidate the settled placement at the one
   // geometry owner; the height always follows the width through the picture's aspect.
   const { setFloatFits } = controller;
@@ -215,8 +215,10 @@ function MountedSessionViewerHost(
       !availableRect ||
       availableRect.width <= 0 ||
       availableRect.height <= 0
-    )
+    ) {
+      setFloatFits(false);
       return;
+    }
     const width =
       committedRect?.width ??
       Math.round(availableRect.width * DEFAULT_WIDTH_SHARE);
@@ -235,12 +237,10 @@ function MountedSessionViewerHost(
       chromeHeight,
       minWidth,
     });
-    if (docked) {
-      setFloatFits(placement.fits);
-      return;
-    }
+    setFloatFits(placement.fits);
+    if (docked) return;
     if (!placement.fits) {
-      apply({ kind: 'viewer.dock' });
+      apply({ kind: 'viewer.dock', restoreFloating: true });
       return;
     }
     const next = placement.rect;
@@ -305,7 +305,7 @@ function MountedSessionViewerHost(
         rect: next, availableRect: available, avoidRects: avoid, aspectRatio: aspect, chromeHeight: chrome, minWidth: min,
       });
       if (placement.fits) setRect(placement.rect);
-      else apply({ kind: 'viewer.dock' });
+      else apply({ kind: 'viewer.dock', restoreFloating: true });
     };
     return {
       moveToCorner: (corner) => {
@@ -327,7 +327,7 @@ function MountedSessionViewerHost(
   }, [apply, setRect]);
   const onModeChange = React.useCallback(
     (next: FloatingFrameMode) => {
-      if (next === 'docked') apply({ kind: 'viewer.dock' });
+      if (next === 'docked') apply({ kind: 'viewer.dock', restoreFloating: true });
       else if (next === 'expanded') void requestSemantic({ kind: 'viewer.expand' });
       else if (next === 'floating') void requestSemantic({ kind: 'viewer.restore' });
       else void requestSemantic({ kind: 'viewer.close' });
