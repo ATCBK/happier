@@ -247,6 +247,33 @@ describe('machine resource visibility and demand', () => {
         pendingFirst.resolve({ state: 'reporting', sample: null, series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] } });
     });
 
+    it('re-reads only the machines that join the demanded set when another machine comes or goes', async () => {
+        const { useMachineResourceLiveDemand } = await import('./useMachineResourceLiveDemand');
+        const sampledAt = Date.now();
+        const key = (machineId: string) => ({ serverId: homeA, machineId });
+        boundary.rpc.mockImplementation(async input => {
+            if (input.method === 'daemon.vitals.watch') {
+                const answer = createDeferred<unknown>();
+                input.signal?.addEventListener('abort', () => answer.resolve({ changed: false }), { once: true });
+                return answer.promise;
+            }
+            return { state: 'reporting', sample: { v: 1, sampledAt, intervalMs: 15_000,
+                cpu: { reported: true, busyPct: 30 }, memory: { reported: true, totalBytes: 100, availableBytes: 80, usedBytes: 20, pressure: { level: 'calm', source: 'psi' } },
+                disk: { reported: true, volumes: [] }, network: { reported: true, rxBps: 12, txBps: 3 } },
+                series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] } };
+        });
+        const hook = await renderHook(({ ids }: { ids: readonly string[] }) => useMachineResourceLiveDemand(ids.map(key), { detail: 'summary' }),
+            { initialProps: { ids: ['one', 'two', 'three'] } });
+        await flushHookEffects({ cycles: 3, turns: 3 });
+        const reads = () => boundary.rpc.mock.calls.filter(([input]) => input.method === 'machines.vitals.get').map(([input]) => input.machineId);
+        expect(reads().sort()).toEqual(['one', 'three', 'two']);
+        // A machine going offline and another coming online changes the demanded set, not the demand of its neighbours.
+        await hook.rerender({ ids: ['one', 'three', 'four'] });
+        await flushHookEffects({ cycles: 3, turns: 3 });
+        expect(reads().sort()).toEqual(['four', 'one', 'three', 'two']);
+        await hook.unmount();
+    });
+
     it.each([
         { reason: 'helper_missing', expected: { kind: 'not_reported', reason: 'unsupported' } },
         { reason: 'reader_failed', expected: { kind: 'reporting', summary: null, freshness: 'stale', attention: { level: 'calm', reasons: [] } } },

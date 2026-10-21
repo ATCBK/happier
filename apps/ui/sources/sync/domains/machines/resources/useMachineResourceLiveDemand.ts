@@ -3,11 +3,16 @@ import { useMachineDaemonReadIdentities } from '../useMachineDaemonReadTarget';
 import { machineResourceStore } from './machineResourceStore';
 import type { MachineResourceKey, MachineVitalsView } from './machineRpc';
 
+type Demand = Readonly<{ binding: NonNullable<ReturnType<typeof useMachineDaemonReadIdentities>[number]['accountBinding']>; release(): void }>;
+
 /** Mounted visible surfaces own demand; passive row readers never start an RPC. */
 export function useMachineResourceLiveDemand(machineKeys: readonly MachineResourceKey[], options: Readonly<{ detail: MachineVitalsView; enabled?: boolean }>): void {
     const identities = useMachineDaemonReadIdentities(machineKeys.map(input => ({ ...input, enabled: options.enabled })));
     const versionsKey = JSON.stringify(identities.map((target, index) => ({ ...target.key,
         daemonStateVersion: machineKeys[index]?.daemonStateVersion })));
+    // One demand per machine. A machine that comes or goes changes only its own demand, so its neighbours
+    // keep their held read and watch instead of releasing and re-reading with the whole fleet.
+    const demands = React.useRef(new Map<string, Demand>());
 
     React.useEffect(() => {
         for (const input of JSON.parse(versionsKey) as MachineResourceKey[]) {
@@ -16,11 +21,23 @@ export function useMachineResourceLiveDemand(machineKeys: readonly MachineResour
     }, [versionsKey]);
 
     React.useEffect(() => {
-        const releases = identities.filter(target => target.enabled).map(target => {
+        const wanted = new Map(identities.filter(target => target.enabled).map(target => [JSON.stringify([target.key, options.detail]), target] as const));
+        for (const [key, demand] of demands.current) {
+            if (wanted.get(key)?.accountBinding === demand.binding) continue;
+            demand.release();
+            demands.current.delete(key);
+        }
+        for (const [key, target] of wanted) {
+            if (demands.current.has(key)) continue;
+            const binding = target.accountBinding!;
             const release = machineResourceStore.demand({ ...target.key, view: options.detail });
-            const retirement = target.accountBinding!.onRetire(release);
-            return () => { retirement.dispose(); release(); };
-        });
-        return () => { for (const release of releases) release(); };
+            const retirement = binding.onRetire(release);
+            demands.current.set(key, { binding, release: () => { retirement.dispose(); release(); } });
+        }
     }, [identities, options.detail]);
+
+    React.useEffect(() => () => {
+        for (const demand of demands.current.values()) demand.release();
+        demands.current.clear();
+    }, []);
 }

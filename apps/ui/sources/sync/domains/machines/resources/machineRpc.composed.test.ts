@@ -408,7 +408,8 @@ it('retires same-Home Account reads and never selects another Account’s retain
         const probe = () => screen.findByType('ResourceProbe').props;
         try {
             await act(async () => { await vi.waitFor(() => expect(probe().summary?.summary?.sampledAt).toBe(first.sample?.sampledAt)); });
-            const watch = home.calls.find(call => call.method === 'daemon.vitals.watch')!;
+            // The parked watch dispatches after transport preparation, which follows the first summary.
+            const watch = await vi.waitFor(() => { const issued = home.calls.find(call => call.method === 'daemon.vitals.watch'); expect(issued).toBeDefined(); return issued!; });
             accountB = true;
             await act(async () => { await homes.switchAccount(home.serverId, 'next-owner', { currentAccount: true }); });
             await vi.waitFor(() => expect(home.cancellations).toContain(watch.requestId));
