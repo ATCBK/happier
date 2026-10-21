@@ -4,6 +4,7 @@ import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot'
 import { useActiveServerAccountScope, useIsDataReady, useSetting } from '@/sync/domains/state/storage';
 import { getActiveServerHomeCarrier, getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { createServerFetchAtEndpoint } from '@/sync/http/client';
+import { captureAccountEncryptionObservationForHome } from '@/sync/http/accountEncryptionObservationBinding';
 import { createAccountKvJsonTransport } from '@/sync/ops/account/accountKvJsonTransport';
 import { subscribeKvPrefixChanges } from '@/sync/engine/socket/kvUpdateDispatcher';
 import { apiSocket } from '@/sync/api/session/apiSocket';
@@ -100,9 +101,12 @@ export function useWorkspaceTabSync(input: Readonly<{
                 && current.generation === server.generation && current.runtimeOrigin === server.runtimeOrigin
                 && current.carrier === server.carrier && getActiveServerHomeCarrier() === carrier;
         };
+        const accountEncryptionObservation = captureAccountEncryptionObservationForHome({
+            serverId: server.serverId, endpointUrl: server.serverUrl, credentials, isCurrent: shouldContinue,
+        });
         const request = createServerFetchAtEndpoint({ endpointUrl: server.serverUrl, serverId: server.serverId,
             ...(server.runtimeOrigin ? { runtimeOrigin: server.runtimeOrigin } : {}),
-            ...(carrier ? { homeCarrier: carrier } : {}), credentials, isCurrent: shouldContinue });
+            ...(carrier ? { homeCarrier: carrier } : {}), credentials, isCurrent: shouldContinue, accountEncryptionObservation });
         const normalizeRecord = (record: SharedWorkspaceTabs) => normalizeWorkspaceSingletonTabs(record, latest.current.catalog);
         const controller = syncEnabled ? createWorkspaceTabsSync({
             transport: createAccountKvJsonTransport({ credentials, request, key: 'workspace:tabs:v1', shouldContinue }),
