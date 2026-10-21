@@ -3,6 +3,7 @@ import { resolveUsageBucketBounds, resolveUsageCalendarInstant } from '@happier-
 import { resolveUsageDayStreaks } from '@happier-dev/protocol/usage/usageActivitySummary';
 import { resolveUsageTokenCategories } from '@happier-dev/protocol/usage/usageTokenCategories';
 import { normalizeLegacyUsageTokens } from '@happier-dev/protocol/usage/legacyUsageTokens';
+import type { UsageAccountingMetric } from '@happier-dev/protocol/inputs/usageQuery';
 import { agentIdFromEngineKey } from '@happier-dev/protocol/usage/usageFilterOptions';
 import type {
     UsageAnalyticsBreakdownDimension,
@@ -20,7 +21,7 @@ import { formatUsageDimensionLabel } from './formatUsageDimensionLabel';
 import { formatUsageWeekdayHourLabel } from './formatUsageRhythmLabel';
 import type { UsagePeriod } from './usagePeriods';
 
-export type UsageMetric = 'tokens' | 'cost';
+export type UsageMetric = UsageAccountingMetric;
 export type UsageCostMode = ProtocolUsageCostMode;
 
 export type UsageDimension =

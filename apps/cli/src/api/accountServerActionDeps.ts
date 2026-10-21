@@ -593,10 +593,11 @@ export function createAccountServerActionDeps(input: Readonly<{
             })),
           })));
           const accounts = profile.connectedAccountsV4.filter(account => account.status !== 'needs_reauth');
-          const periods = request.queries.map(query => resolveUsageQueryPeriod(query, accountingNowMs));
+          const periods = request.queries.filter(query => query.includeQuotaHistory)
+            .map(query => resolveUsageQueryPeriod(query, accountingNowMs));
           const starts = periods.flatMap(period => period.startMs === undefined ? [] : [period.startMs]);
           const ends = periods.flatMap(period => period.endMs === undefined ? [] : [period.endMs]);
-          const range = starts.length === request.queries.length && ends.length === request.queries.length
+          const range = periods.length > 0 && starts.length === periods.length && ends.length === periods.length
             ? { startAtMs: Math.min(...starts), endAtMs: Math.max(...ends) } : undefined;
           const rows = await Promise.all(accounts.map(async account => {
             const source = { bindingKind: 'account' as const, ref: account.ref };

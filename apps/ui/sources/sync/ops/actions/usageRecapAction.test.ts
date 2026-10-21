@@ -14,7 +14,7 @@ import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionEx
 import { captureUiUsageQueryAccountContext, decodeUsageQueryResource, getUsageQueryResourceStore } from '@/sync/api/account/usageQueryResource';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { createHomeDomainActionExecutorForScope } from '@/sync/api/home/homeDomainActions';
-import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1, PublicProfileReadResultV1Schema } from '@happier-dev/protocol/account/publicProfilePublication';
 
 const clipboard = vi.hoisted(() => ({ image: vi.fn(async (_base64: string) => {}) }));
 // The operating-system clipboard is the boundary; captured Account, Action admission,
@@ -44,14 +44,26 @@ describe('recap export through the real captured UI Account Action', () => {
     const heldReads = createDeferred<void>();
     const heldWrite = createDeferred<void>();
     const writeIssued = createDeferred<void>();
+    let published = true;
+    const publicView = PublicProfileReadResultV1Schema.parse({ kind: 'published', view: {
+      v: 1, handle: 'public-person', indexable: false, state: 'published', identity: {}, metadata: {},
+      service: { displayName: 'Test Home', publicBaseUrl: 'https://public.test' },
+      snapshot: { v: 1, computedAtMs: 500, period: { startMs: 100, endMs: 900, timeZoneOffsetMinutes: 0 },
+        coverage: { status: 'complete_for_supplied_facts', method: 'runtime' }, fieldCoverage: {}, facts: { tokens: 12 } },
+      layout: { v: 1, items: [] }, appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1,
+      urls: { page: 'https://public.test/person', json: 'https://public.test/person.json', badgeBase: 'https://public.test/badge',
+        card: 'https://public.test/card', og: 'https://public.test/og', report: 'https://public.test/report' },
+    } });
     const caller = await context(false, async request => {
       if (request.path === '/v1/account/public-profile/view') {
+        const view = published ? publicView : { kind: 'unavailable' };
         await heldReads.promise;
-        return Response.json({ kind: 'unavailable' });
+        return Response.json(view);
       }
       if (request.method !== 'GET' && request.path.startsWith('/v1/account/public-profile')) {
         writeIssued.resolve();
         await heldWrite.promise;
+        if (outcome !== 'unavailable') published = false;
         if (outcome === 'outcome_unknown') throw new TypeError('Response lost after mutation dispatch');
         return Response.json(outcome === 'updated' ? { kind: 'updated', record: null }
           : { kind: 'unavailable', reason: 'feature_disabled' });
@@ -61,19 +73,16 @@ describe('recap export through the real captured UI Account Action', () => {
     const executor = createDefaultActionExecutor();
     const recap = () => executor.execute('usage.recap.compose', { source: { kind: 'public_profile' } }, caller);
     const reads = () => home!.requests.filter(request => request.path === '/v1/account/public-profile/view');
-    let publicationWakes = 0;
-    const unsubscribe = subscribeHomeAccountChange(event => { if (event.serverId === caller.serverId) publicationWakes++; });
     const before = recap();
     const pending: Promise<unknown>[] = [before];
     try {
       await vi.waitFor(() => expect(reads()).toHaveLength(1));
       // This is the real Home family mutation transport, below independent Action admission.
       const mutation = createHomeDomainActionExecutorForScope({ serverId: caller.serverId, accountId: 'account-a' })({
-        actionId: 'account.public_profile.unpublish', input: {},
+        actionId: 'account.public_profile.unpublish', input: {}, context: caller,
       });
       pending.push(mutation);
       await writeIssued.promise;
-      expect(publicationWakes).toBe(0);
       const during = recap();
       pending.push(during);
       await vi.waitFor(() => expect(reads()).toHaveLength(2));
@@ -81,15 +90,17 @@ describe('recap export through the real captured UI Account Action', () => {
       expect(await mutation).toMatchObject(outcome === 'updated' ? { kind: 'updated', record: null }
         : outcome === 'unavailable' ? { kind: 'unavailable', reason: 'feature_disabled' }
           : { ok: false, errorCode: 'outcome_unknown' });
-      expect(publicationWakes).toBe(outcome === 'updated' ? 1 : 0);
       const after = recap();
       pending.push(after);
       await vi.waitFor(() => expect(reads()).toHaveLength(3));
       heldReads.resolve();
-      for (const result of await Promise.all([before, during, after])) {
-        expect(result).toMatchObject({ ok: true, result: { kind: 'unavailable', reason: 'public_profile_unavailable' } });
-      }
-    } finally { unsubscribe(); heldReads.resolve(); heldWrite.resolve(); await Promise.allSettled(pending); }
+      const [beforeResult, duringResult, afterResult] = await Promise.all([before, during, after]);
+      for (const result of [beforeResult, duringResult]) expect(result).toMatchObject({ ok: true,
+        result: { kind: 'composed', source: 'public_profile', publicSnapshot: { facts: { tokens: 12 } } } });
+      expect(afterResult).toMatchObject(outcome === 'unavailable' ? { ok: true,
+        result: { kind: 'composed', source: 'public_profile', publicSnapshot: { facts: { tokens: 12 } } } }
+        : { ok: true, result: { kind: 'unavailable', reason: 'public_profile_unavailable' } });
+    } finally { heldReads.resolve(); heldWrite.resolve(); await Promise.allSettled(pending); }
   });
 
   it('shares public-view acquisition after independent recap admission while cancellation stays private', async () => {

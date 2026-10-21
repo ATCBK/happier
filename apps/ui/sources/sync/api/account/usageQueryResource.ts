@@ -13,7 +13,6 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import { areServerAccountScopesEqual, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { getServerProfileById, areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { createServerFetchAtEndpoint, type ServerFetch } from '@/sync/http/client';
-import { bindAccountEncryptionObservation, captureAccountEncryptionObservationForHome } from '@/sync/http/accountEncryptionObservationBinding';
 import { resolveServerScopedTransport } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerScopedTransport';
 import { subscribeHomeAccountChange, type HomeAccountChangeEvent } from '@/sync/runtime/orchestration/homeAccountChange';
 import { parseToken } from '@/utils/auth/parseToken';
@@ -53,7 +52,7 @@ import type { ProviderAccountUsageProjectionDocuments } from './apiProviderAccou
 import { encodeUsageQueryResource, type UsageByteRange } from './usageQueryResourceEncoding';
 import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
 import { createCapturedServerReadTransport, type CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
-import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
+import { mergeAbortSignals, throwIfAborted } from '@/utils/runtime/abortSignals';
 
 function readOpenedQuotaScope(context: UsageQueryAccountContext) {
     const state = readRegisteredStorageState();
@@ -170,7 +169,7 @@ export type UsageQueryAccountContext = Readonly<{
 }>;
 
 function requireCurrent(context: UsageQueryAccountContext, signal?: AbortSignal): void {
-    signal?.throwIfAborted();
+    throwIfAborted(signal);
     if (!context.accountLifetime.isCurrent()) {
         throw Object.assign(new Error('Usage Account authority retired'), { code: 'stale_surface' });
     }
@@ -218,7 +217,7 @@ export async function readUiUsageModelPrices(context: UsageQueryAccountContext, 
 async function withUiConnectedServiceReader<T>(context: UsageQueryAccountContext, signal: AbortSignal | undefined,
     consume: (read: (input: ConnectedServiceQuotaGetInputV1) => Promise<ConnectedServiceQuotaGetResultV1>,
         readSelection: (input: ConnectedServicePoolSelectionGetRequestV1) => Promise<ConnectedServicePoolSelectionGetResponseV1>) => Promise<T>,
-    quotaReadOptions?: Pick<import('./apiProviderAccountUsage').ProviderAccountUsageQuotaReadOptions, 'readAllHistory'>) {
+    quotaReadOptions?: Pick<import('./apiProviderAccountUsage').ProviderAccountUsageQuotaReadOptions, 'readAllHistory' | 'includePendingWork'>) {
     const [{ captureLazyActionAccountContext }, { createUiConnectedServiceAction }] = await Promise.all([
         import('@/sync/ops/actions/actionAccountContext'), import('@/sync/ops/actions/connectedServiceActionDeps'),
     ]);
@@ -310,9 +309,9 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
     if (!scope?.sources.length || readQuotaFeatureDecision(context, scope)?.state !== 'enabled') return opened;
     // Start at the existing transport batch size; the admitted B reader grows
     // subsequent pages and publishes their accepted change points progressively.
-    const range = { startAtMs: Math.min(...periods.map(period => period.startMs ?? 0)),
-        endAtMs: Math.max(...periods.map(period => period.endMs ?? nowMs)) };
-    if (range.endAtMs <= range.startAtMs) return { status: 'unknown', errorCode: 'quota_query_range_empty' };
+    const range = periods.length ? { startAtMs: Math.min(...periods.map(period => period.startMs ?? 0)),
+        endAtMs: Math.max(...periods.map(period => period.endMs ?? nowMs)) } : undefined;
+    if (range && range.endAtMs <= range.startAtMs) return { status: 'unknown', errorCode: 'quota_query_range_empty' };
     const retainedBySource = new Map(opened.value?.map(value => [createCanonicalJsonSigningInput(value.source), value]));
     const admissionBySource = new Map(scope.sources.map(({ source, key }) => [createCanonicalJsonSigningInput(source), key]));
     for (const value of previous?.results.flatMap(result => result.quota ?? []) ?? []) {
@@ -422,11 +421,11 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
     try {
         await withUiConnectedServiceReader(context, signal, async read => Promise.all(scope.sources.map(async ({ source }, index) => {
             try {
-                const accepted = await read({ source, projection: { range, resolution: 'accepted_observations' } });
+                const accepted = await read({ source, ...(range ? { projection: { range, resolution: 'accepted_observations' as const } } : {}) });
                 acceptedBySource.set(index, accepted);
                 publishProgress(index, accepted, true);
             } catch (error) { failSource(index, error); }
-        })), { readAllHistory: { onProgress: value => {
+        })), { includePendingWork: !!range, readAllHistory: { onProgress: value => {
             const index = sourceIndices.get(createCanonicalJsonSigningInput(value.source));
             if (index === undefined) throw new Error('Quota reader returned an unrequested source');
             acceptedBySource.set(index, value);
@@ -755,10 +754,6 @@ export function captureUiUsageQueryAccountContext(credentials: AuthCredentials):
     if (!accountLifetime?.isCurrent() || parseToken(credentials.token) !== accountLifetime.scope.accountId) return null;
     const profile = getServerProfileById(accountLifetime.scope.serverId);
     if (!profile) return null;
-    const accountEncryptionObservation = captureAccountEncryptionObservationForHome({
-        serverId: accountLifetime.scope.serverId, endpointUrl: profile.canonicalServerUrl ?? profile.serverUrl,
-        credentials, isCurrent: accountLifetime.isCurrent,
-    });
     const request: ServerFetch = async (path, init, options) => {
         if (!accountLifetime.isCurrent()) throw Object.assign(new Error('Usage Account authority retired'), { code: 'stale_surface' });
         const transport = await resolveServerScopedTransport({ profile, credentials });
@@ -767,16 +762,14 @@ export function captureUiUsageQueryAccountContext(credentials: AuthCredentials):
                 endpointUrl: transport.canonicalServerUrl, runtimeOrigin: transport.runtimeOrigin,
                 serverId: accountLifetime.scope.serverId, credentials,
                 isCurrent: accountLifetime.isCurrent,
-                accountEncryptionObservation,
                 ...(transport.homeCarrier ? { homeCarrier: transport.homeCarrier } : {}),
             })(path, init, options);
             if (!accountLifetime.isCurrent()) throw Object.assign(new Error('Usage Account authority retired'), { code: 'stale_surface' });
             return response;
         } finally { await transport.release(); }
     };
-    bindAccountEncryptionObservation(request, accountEncryptionObservation);
     return { credentials, accountLifetime, request,
-        readTransport: createCapturedServerReadTransport({ serverId: accountLifetime.scope.serverId, profile, credentials, accountEncryptionObservation }) };
+        readTransport: createCapturedServerReadTransport({ serverId: accountLifetime.scope.serverId, profile, credentials }) };
 }
 
 /** One Action port batches resolved A requests; B/backfill never delays available A. */
@@ -1011,7 +1004,7 @@ export async function readUiUsageQueryBatch(
             settledHowYouWorkQueries.add(getUsageQueryKey(query));
             publish();
         }),
-        (async () => { quota = await readOpenedQuotaHistory(context, queries.map(query => periods.get(getUsageQueryKey(query))!), accountingNowMs, signal, value => { quota = value; publish(); }, previous); publish(); })(),
+        (async () => { quota = await readOpenedQuotaHistory(context, queries.filter(query => query.includeQuotaHistory).map(query => periods.get(getUsageQueryKey(query))!), accountingNowMs, signal, value => { quota = value; publish(); }, previous); publish(); })(),
         (async () => { pools = await readUiUsagePools(context, pools, signal, value => { pools = value; publish(); }); publish(); })(),
         ]);
         return compose();
@@ -1277,8 +1270,9 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
                             return { ...slice, quota: [...quota.values()], sources: settledSources };
                         }) };
                     }
-                    const first = batch.results[0];
-                    if (first) allowance = { key: first.key, requestedQuery: first.requestedQuery, shownQuery: first.shownQuery,
+                    const first = batch.results.find(slice => slice.requestedQuery.includeQuotaHistory) ?? batch.results[0];
+                    // A current-only sibling cannot replace the Account's richer admitted history.
+                    if (first && (!allowance?.requestedQuery.includeQuotaHistory || first.requestedQuery.includeQuotaHistory)) allowance = { key: first.key, requestedQuery: first.requestedQuery, shownQuery: first.shownQuery,
                         quota: first.quota, sources: first.sources.filter(source => source.source === 'quota' || source.source.startsWith('quota:')),
                         pending: first.sources.some(source => (source.source === 'quota' || source.source.startsWith('quota:')) && source.status === 'pending') };
                     for (const slice of batch.results) slicesByQuery.set(slice.key, slice);

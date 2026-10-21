@@ -262,7 +262,8 @@ describe('CLI and MCP personal usage Account transport', () => {
       { source: 'native', path: 'native', status: 'available', asOfMs: 180, eventCount: 1, historyComplete: true },
     ], missingDimensions: [], range: { startMs: 100, endMs: 200, complete: true }, ranked: [] }, contributions: [
       { id: 'native-cost', observedAtMs: 150, sessionId: null, turnId: null, agentId: null, modelId: null,
-        machineId: 'machine', projectKey: null, workspaceId: null, source: 'native', tokens: response.totals.tokens, cost: response.totals.cost },
+        machineId: 'machine', projectKey: null, workspaceId: null, source: 'native',
+        sourceContext: { path: 'native', execution: 'outside' }, tokens: response.totals.tokens, cost: response.totals.cost },
     ] };
     const targets = [{ id: 'personal', scope: { kind: 'personal' }, utilizationFraction: 0.5 }];
     const group = QualifiedConnectedAccountGroupV4Schema.parse({ v: 1, ref: { service: source.ref.service, groupId: 'shared' },
@@ -377,7 +378,7 @@ describe('CLI and MCP personal usage Account transport', () => {
     const head = await read(normalizeUsageQuery({ ...query, includeQuotaHistory: false }));
     expect(rangeHistoryReads).toBe(beforeHead);
     expect(head.key).not.toBe(slice.key);
-    expect(head.quota).toMatchObject([{ current: snapshot, unusedCapacity: { historyStatus: 'unavailable' }, targets }]);
+    expect(head.quota).toMatchObject([{ current: snapshot, unusedCapacity: { historyStatus: 'not_loaded' }, targets }]);
     expect(head.quota?.[0]?.history).toBeUndefined();
     expect(head.quota?.[0]?.pageFacts).toBeUndefined();
     expect((await read()).quota).toMatchObject([{ history: { entries: [{ id: 'history' }], nextCursor: null } }]);

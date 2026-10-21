@@ -11,7 +11,7 @@ import { BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS } from '@/agents/registr
 import { getAccountConnectedServiceConfigurationMode } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import type { ProviderAccountUsageQuotaReadOptions } from '@/sync/api/account/apiProviderAccountUsage';
 
-export function createUiConnectedServiceAction(account: LazyActionAccountContext, quotaReadOptions?: Pick<ProviderAccountUsageQuotaReadOptions, 'readAllHistory' | 'projectionDocuments'>): NonNullable<ActionExecutorDeps['connectedServiceAction']> {
+export function createUiConnectedServiceAction(account: LazyActionAccountContext, quotaReadOptions?: Pick<ProviderAccountUsageQuotaReadOptions, 'readAllHistory' | 'projectionDocuments' | 'includePendingWork'>): NonNullable<ActionExecutorDeps['connectedServiceAction']> {
     const invoke = async ({ actionId, input, signal }: Parameters<NonNullable<ActionExecutorDeps['connectedServiceAction']>>[0], prepare: boolean) => {
         const assertCurrent = () => { signal?.throwIfAborted(); account.assertCurrent(); };
         const localSettings = actionId === 'connectedServices.identityPrivacy.set'

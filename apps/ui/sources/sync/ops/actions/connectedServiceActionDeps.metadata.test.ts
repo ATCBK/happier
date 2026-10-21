@@ -23,6 +23,140 @@ await import('@/sync/api/account/apiConnectedMetadataCatalog');
 afterEach(() => { resetRuntimeFetch(); vi.restoreAllMocks(); });
 
 describe('Connected metadata raw read ownership', () => {
+    it('does not detach pending row readers for a typed Home read', async () => {
+        const home = createHomeGovernanceHarness();
+        installHomeGovernanceBoundaries(home);
+        setRuntimeFetch(home.request);
+        const serverId = await home.addHome({ name: 'Home read control', serverUrl: 'https://home-read-control.test',
+            accountId: 'home-read-owner', currentAccount: true });
+        const path = '/v1/account/entity-rows/connected-accounts/purposes';
+        const held = createDeferred<void>();
+        home.answer(serverId, `GET ${path}`, { respondAfter: held.promise, body: { status: 'deleted', revision: 3 } });
+        home.answer(serverId, `GET ${CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1}`, { body: { status: 'deleted', revision: 4 } });
+        const { captureLazyActionAccountContext } = await import('./actionAccountContext');
+        const { readConnectedAccountCatalogRowInContext } = await import('@/sync/api/account/apiConnectedAccountCatalog');
+        const { ConnectedAccountCatalogRowReadResponseV1Schema } = await import('@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1');
+        const { requestHomeDomain } = await import('@/sync/api/home/homeServerActionTransport');
+        const context = await captureLazyActionAccountContext(serverId);
+        const reads: Promise<unknown>[] = [];
+        try {
+            reads.push(readConnectedAccountCatalogRowInContext(context, 'purposes', undefined, { fresh: false }));
+            await vi.waitFor(() => expect(home.requestsFor(path)).toHaveLength(1));
+            await expect(requestHomeDomain({ scope: context.accountLifetime.scope,
+                path: CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1, method: 'GET', input: undefined, effect: 'read',
+                schema: ConnectedAccountCatalogRowReadResponseV1Schema, requestAuthority: context }))
+                .resolves.toMatchObject({ ok: true });
+            reads.push(readConnectedAccountCatalogRowInContext(context, 'purposes', undefined, { fresh: false }));
+            await flushHookEffects();
+            expect(home.requestsFor(path)).toHaveLength(1);
+            held.resolve();
+            await expect(Promise.all(reads)).resolves.toEqual([{ status: 'deleted', revision: 3 }, { status: 'deleted', revision: 3 }]);
+        } finally {
+            held.resolve(); await Promise.allSettled(reads); context.dispose(); await home.reset();
+        }
+    });
+
+    it.each(['updated', 'outcome_unknown'] as const)('separates raw rows before, during and after an issued Home write with %s outcome', async outcome => {
+        const home = createHomeGovernanceHarness();
+        installHomeGovernanceBoundaries(home);
+        setRuntimeFetch(home.request);
+        const serverId = await home.addHome({ name: 'Composite row writer', serverUrl: `https://composite-row-${outcome}.test`,
+            accountId: 'composite-row-owner', currentAccount: true });
+        const path = '/v1/account/entity-rows/connected-accounts/purposes';
+        const heldReads = createDeferred<void>();
+        const heldWrite = createDeferred<void>();
+        home.answer(serverId, `GET ${path}`, { respondAfter: heldReads.promise, body: { status: 'deleted', revision: 3 } });
+        home.answer(serverId, `POST ${path}`, { respondAfter: heldWrite.promise,
+            ...(outcome === 'outcome_unknown' ? { dispatchThenFail: true } : { body: { status: 'updated', revision: 4, cursor: 4 } }) });
+        const { captureLazyActionAccountContext } = await import('./actionAccountContext');
+        const { readConnectedAccountCatalogRowInContext } = await import('@/sync/api/account/apiConnectedAccountCatalog');
+        const { ConnectedAccountCatalogRowMutationResponseV1Schema } = await import('@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1');
+        const { requestHomeDomain } = await import('@/sync/api/home/homeServerActionTransport');
+        const { subscribeHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+        const context = await captureLazyActionAccountContext(serverId);
+        const changes: string[] = [];
+        const unsubscribe = subscribeHomeAccountChange(event => { changes.push(event.serverId); });
+        const reads: Promise<unknown>[] = [];
+        let write: Promise<unknown> | undefined;
+        try {
+            const read = () => readConnectedAccountCatalogRowInContext(context, 'purposes', undefined, { fresh: false });
+            reads.push(read());
+            await vi.waitFor(() => expect(home.requestsFor(path)).toHaveLength(1));
+            write = requestHomeDomain({ scope: context.accountLifetime.scope, path, effect: 'write',
+                input: { expectedRevision: 3, content: { t: 'plain', v: { v: 1, bindings: [] } } },
+                schema: ConnectedAccountCatalogRowMutationResponseV1Schema, requestAuthority: context });
+            await vi.waitFor(() => expect(home.requestsFor(path)).toHaveLength(2));
+            reads.push(read());
+            await vi.waitFor(() => expect(home.requestsFor(path)).toHaveLength(3));
+            heldWrite.resolve();
+            await expect(write).resolves.toMatchObject(outcome === 'updated'
+                ? { ok: true, value: { status: 'updated', revision: 4 } }
+                : { ok: false, failure: { kind: 'outcome_unknown' } });
+            home.answer(serverId, `GET ${path}`, { body: { status: 'deleted', revision: 4 } });
+            reads.push(read());
+            await vi.waitFor(() => expect(home.requestsFor(path)).toHaveLength(4));
+            // Join invalidation is not evidence of a committed domain change.
+            expect(changes).toEqual([]);
+            heldReads.resolve();
+            await expect(Promise.all(reads)).resolves.toEqual([
+                { status: 'deleted', revision: 3 }, { status: 'deleted', revision: 3 }, { status: 'deleted', revision: 4 },
+            ]);
+        } finally {
+            heldReads.resolve(); heldWrite.resolve(); await Promise.allSettled([...reads, write]);
+            unsubscribe(); context.dispose(); await home.reset();
+        }
+    });
+
+    it.each(['configurations', 'purposes'] as const)('shares the admitted %s row without sharing caller cancellation or mutation witnesses', async key => {
+        const home = createHomeGovernanceHarness();
+        installHomeGovernanceBoundaries(home);
+        setRuntimeFetch(home.request);
+        const serverId = await home.addHome({ name: 'Connected row readers', serverUrl: `https://connected-row-${key}.test`,
+            accountId: 'connected-row-reader', currentAccount: true });
+        const path = `/v1/account/entity-rows/connected-accounts/${key}`;
+        const held = createDeferred<void>();
+        let physicalSignal: AbortSignal | null | undefined;
+        home.answer(serverId, `GET ${path}`, { select: (_input, request) => {
+            physicalSignal = request.signal;
+            return { respondAfter: held.promise, body: { status: 'deleted', revision: 3 } };
+        } });
+        const { captureLazyActionAccountContext } = await import('./actionAccountContext');
+        const { readAdmittedConnectedAccountCatalogInContext, readConnectedAccountCatalogRowInContext,
+            readConnectedAccountCatalogForMutationInContext, writeConnectedAccountCatalogRecordInContext } = await import('@/sync/api/account/apiConnectedAccountCatalog');
+        const abort = new AbortController();
+        const first = await captureLazyActionAccountContext(serverId, abort.signal);
+        const second = await captureLazyActionAccountContext(serverId);
+        let firstRead: Promise<unknown> | undefined;
+        let secondRead: Promise<unknown> | undefined;
+        try {
+            await Promise.all([first.resolveAccountEncryption(), second.resolveAccountEncryption()]);
+            firstRead = readAdmittedConnectedAccountCatalogInContext(first, key);
+            secondRead = readAdmittedConnectedAccountCatalogInContext(second, key);
+            await vi.waitFor(() => expect(home.requestsFor(path).length).toBeGreaterThan(0));
+            await flushHookEffects();
+            expect(home.requestsFor(path)).toHaveLength(1);
+            abort.abort();
+            await expect(firstRead).resolves.toMatchObject({ status: 'unavailable' });
+            expect(physicalSignal?.aborted).toBe(false);
+            home.answer(serverId, `GET ${path}`, { body: { status: 'deleted', revision: 3 } });
+            // Direct raw callers include exact Saved Secret reference censuses.
+            await expect(readConnectedAccountCatalogRowInContext(second, key)).resolves.toEqual({ status: 'deleted', revision: 3 });
+            await expect(readConnectedAccountCatalogForMutationInContext(second, key)).resolves.toMatchObject({ status: 'ready', revision: 3 });
+            home.answer(serverId, `POST ${path}`, { body: { status: 'updated', revision: 4, cursor: 4 } });
+            const record = key === 'purposes' ? { key, value: { v: 1 as const, bindings: [] } }
+                : { key, value: { v: 1 as const, entries: [] } };
+            await expect(writeConnectedAccountCatalogRecordInContext(second, { record, expectedRevision: 3 }))
+                .resolves.toMatchObject({ status: 'updated', revision: 4 });
+            home.answer(serverId, `GET ${path}`, { body: { status: 'deleted', revision: 4 } });
+            await expect(readConnectedAccountCatalogRowInContext(second, key)).resolves.toEqual({ status: 'deleted', revision: 4 });
+            held.resolve();
+            await expect(secondRead).resolves.toMatchObject({ status: 'ready', revision: 3 });
+        } finally {
+            held.resolve(); await Promise.allSettled([firstRead, secondRead]);
+            first.dispose(); second.dispose(); await home.reset();
+        }
+    });
+
     it('leaves opaque request callbacks independent and retries a strict rejected raw observation', async () => {
         const home = createHomeGovernanceHarness();
         installHomeGovernanceBoundaries(home);
