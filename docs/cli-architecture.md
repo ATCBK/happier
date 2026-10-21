@@ -1880,6 +1880,10 @@ contract does not certify cancellation in an already-loaded daemon.
 Recovery uses the installed exact Machine Action transport for detached reads,
 stops and waits, as normal Workflow execution does; raw remote execution-run
 RPC methods need not be exposed by the daemon.
+The direct transport preserves the admitted Workflow caller and original Action
+request identity through the host-private RPC context. Native start uses that
+identity for its existing deterministic Run id, so observation after a lost
+reply or reclaim addresses the actual input rather than an unrelated Run.
 For a terminal parent, a successful read of its exact detached Run in a terminal
 state with no active input also proves that custody has stopped when historical
 input correspondence is unavailable. Recovery administratively cancels that row
