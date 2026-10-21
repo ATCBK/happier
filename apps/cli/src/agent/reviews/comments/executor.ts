@@ -11,7 +11,7 @@ import type { ReviewCommentPublicationCryptoContextV1, ReviewCommentClaimPublica
 import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
 
 import { createHttpStatusError, isAuthenticationStatus } from '@/api/client/httpStatusError';
-import { createConnectedServiceCredentialApi } from '@/api/client/connectedServiceCredentialApi';
+import { createConnectedServiceCredentialApi, type AccountEncryptionModeReadOptions } from '@/api/client/connectedServiceCredentialApi';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { configuration } from '@/configuration';
 import { readOrCreateInstallationIdentity } from '@/daemon/identity/store';
@@ -321,20 +321,27 @@ export function createCliReviewCommentActionExecutorFromCredentials(
         resolvePrincipalSigningContext?: () => Promise<ReviewCommentPrincipalSigningContext>;
         assertPrincipalCurrent?: (principal: ReviewCommentPrincipalHeaderV1) => void | Promise<void>;
         resolveAccountId?: (token: string) => string;
-        resolveAccountEncryptionMode?: () => Promise<ReviewCommentAccountEncryptionMode>;
+        resolveAccountEncryptionMode?: (options?: AccountEncryptionModeReadOptions) => Promise<ReviewCommentAccountEncryptionMode>;
         randomBytes?: (length: number) => Uint8Array;
     }>,
 ): ReviewCommentActionExecutor {
     const accountModeApi = params.resolveAccountEncryptionMode
         ? null
         : createConnectedServiceCredentialApi(params.credentials);
+    const readMode = async (options: AccountEncryptionModeReadOptions) => await (params.resolveAccountEncryptionMode
+        ? params.resolveAccountEncryptionMode(options) : accountModeApi!.getAccountEncryptionMode(options));
+    const assertWriteMode = async (expected: 'plain' | 'e2ee', signal?: AbortSignal) => {
+        const mode = await readMode({ usage: 'fresh-authority', ...(signal ? { signal } : {}) });
+        const code = mode === 'unknown' ? 'review_comment_encryption_mode_unavailable'
+            : mode !== expected ? 'review_comment_encryption_mode_mismatch' : null;
+        if (code) throw Object.assign(new Error(code), { code });
+    };
     return async (actionId, input, options) => {
         const parsedActionId = ReviewCommentActionIdV1Schema.parse(actionId);
         const parsedInput = asRecord(ReviewCommentActionInputSchemasV1[parsedActionId].parse(input));
         if (parsedActionId === 'reviews.comments.get' || parsedActionId === 'reviews.comments.list'
             || isReviewCommentMutationAction(parsedActionId)) {
-            const mode = await (params.resolveAccountEncryptionMode
-                ? params.resolveAccountEncryptionMode() : accountModeApi!.getAccountEncryptionMode());
+            const mode = await readMode({ usage: 'identity', ...(options?.signal ? { signal: options.signal } : {}) });
             if (mode === 'unknown') throw new Error('review_comment_encryption_mode_unavailable');
             if (mode === 'e2ee' || parsedActionId === 'reviews.comments.get' || parsedActionId === 'reviews.comments.list') {
                 const accountId = (params.resolveAccountId ?? resolveAccountIdFromToken)(params.credentials.token);
@@ -359,6 +366,9 @@ export function createCliReviewCommentActionExecutorFromCredentials(
                             assertPrincipalCurrent: async () => { if (originalPrincipal) await params.assertPrincipalCurrent?.(originalPrincipal); },
                         }) : undefined;
                         if (originalPrincipal) await params.assertPrincipalCurrent?.(originalPrincipal);
+                        if (request.path === '/v1/reviews/comments/mutations/commit') {
+                            await assertWriteMode(mode, options?.signal);
+                        }
                         return executeReviewCommentHttpRequest({ credentials: params.credentials, request,
                             ...(principalHeader ? { principalHeader } : {}), ...(options?.signal ? { signal: options.signal } : {}) });
                     },
@@ -368,8 +378,7 @@ export function createCliReviewCommentActionExecutorFromCredentials(
         let requestInput = parsedInput;
         let publicationContext: ReviewCommentPublicationCryptoContextV1 | null = null;
         if (parsedActionId === 'reviews.comments.claimPublicationDispatch') {
-            const mode = await (params.resolveAccountEncryptionMode
-                ? params.resolveAccountEncryptionMode() : accountModeApi!.getAccountEncryptionMode());
+            const mode = await readMode({ usage: 'identity', ...(options?.signal ? { signal: options.signal } : {}) });
             if (mode === 'unknown') throw new Error('review_comment_encryption_mode_unavailable');
             publicationContext = {
                 accountId: (params.resolveAccountId ?? resolveAccountIdFromToken)(params.credentials.token),
@@ -407,6 +416,9 @@ export function createCliReviewCommentActionExecutorFromCredentials(
             : undefined;
         if (options?.principal) {
             await params.assertPrincipalCurrent?.(options.principal);
+        }
+        if (publicationContext || isReviewCommentMutationAction(parsedActionId)) {
+            await assertWriteMode(publicationContext?.mode ?? 'plain', options?.signal);
         }
         const output = await executeReviewCommentHttpRequest({
             credentials: params.credentials,

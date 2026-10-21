@@ -598,7 +598,9 @@ describe('createCliReviewCommentActionExecutorFromCredentials', () => {
 
         const claim = await executor('reviews.comments.claimPublicationDispatch', publicationPlan);
 
-        expect(resolveAccountEncryptionMode).toHaveBeenCalledTimes(1);
+        expect(resolveAccountEncryptionMode.mock.calls).toEqual([
+            [{ usage: 'identity' }], [{ usage: 'fresh-authority' }],
+        ]);
         expect(axiosPostMock).toHaveBeenCalledTimes(1);
         expect(axiosPostMock.mock.calls[0]?.[0]).toMatch(/\/v1\/reviews\/comments\/publication\/claim$/);
         expect(axiosPostMock.mock.calls[0]?.[1]).not.toHaveProperty('eventEnvelope');

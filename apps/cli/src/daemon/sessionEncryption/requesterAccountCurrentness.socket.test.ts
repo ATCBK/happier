@@ -24,11 +24,12 @@ import { buildSessionFollowChangeHintV1 } from '@happier-dev/protocol/sessions/f
 import type { ChangeEntry } from '@happier-dev/protocol/changes';
 import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
 import { createCliReviewCommentActionExecutorFromCredentials } from '@/agent/reviews/comments/executor';
-import { ReviewCommentPrepareMutationRequestV1Schema, ReviewCommentPublicationTransportRequestV1Schema,
-    splitReviewCommentV1, type ReviewCommentV1 } from '@happier-dev/protocol';
+import { ReviewCommentPrepareMutationRequestV1Schema } from '@happier-dev/protocol/reviews/comments/mutation';
+import { splitReviewCommentV1 } from '@happier-dev/protocol/reviews/comments/content';
+import type { ReviewCommentV1 } from '@happier-dev/protocol/reviews/comments/v1';
 import { createProviderAccountUsagePersistenceScheduler } from '@/daemon/connectedServices/accountUsage/persistence';
 import { buildProviderAccountUsageRecordId, openSealedProviderAccountUsageSnapshot,
-    type ProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol';
+    type ProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/accountUsage';
 import { QualifiedProviderAccountUsageWriteV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 
 const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-root', binding: {
@@ -44,22 +45,22 @@ describe('requester Account currentness over the installed socket wiring', () =>
         ['reviews.comments.claimPublicationDispatch', 'mode-change'],
         ['reviews.comments.create', 'mode-change'],
         ['reviews.comments.claimPublicationDispatch', 'revoked'],
+        ['reviews.comments.create', 'after-signing'],
+        ['reviews.comments.claimPublicationDispatch', 'after-final-principal'],
     ] as const)(
         'refuses %s publication sealing after %s while its warm socket identity stays unchanged', async (actionId, change) => {
         const channel = await createRequesterCurrentnessSocketHarness();
         const fact = { mode: 'plain' as const, version: 1, updatedAt: 1,
             signingKeyFingerprint: null, contentKeyFingerprint: null };
+        let mode = change === 'mode-change' ? 'e2ee' as const : 'plain' as 'plain' | 'e2ee';
+        let principalChecks = 0;
+        const signed = change === 'after-signing' || change === 'after-final-principal';
+        const signingKeys = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(9));
         const get = vi.spyOn(axios, 'get').mockImplementation(async (url: string) => url.endsWith('/currentness')
             ? { status: 200, data: fact } : change === 'revoked'
                 ? { status: 403, data: { error: 'not_authenticated' } }
-                : { status: 200, data: { mode: 'e2ee', updatedAt: 2 } });
-        const post = vi.spyOn(axios, 'post').mockImplementation(async (_url, body) => {
-            const request = ReviewCommentPublicationTransportRequestV1Schema.parse(body);
-            return { status: 200, data: { disposition: 'dispatch', dispatchToken: 'dispatch',
-                publicationPlanId: request.publicationPlanId, entries: request.entries,
-                verdict: request.verdict, instructions: { entries: request.entries.map(() => 'dispatch'), verdict: 'dispatch' },
-                priorResult: null } };
-        });
+                : { status: 200, data: { mode, updatedAt: 2 } });
+        const post = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: {} });
         const scope = { accountId: 'bob', token: 'bob', serverBaseUrl: 'https://home.example' };
         const observation = acquireRequesterAccountEncryptionCurrentness(scope);
         try {
@@ -67,14 +68,25 @@ describe('requester Account currentness over the installed socket wiring', () =>
             const executor = createCliReviewCommentActionExecutorFromCredentials({
                 credentials: { token: scope.token, encryption: { type: 'legacy', secret: new Uint8Array(32).fill(7) } },
                 resolveAccountId: () => scope.accountId,
+                resolvePrincipalSigningContext: async () => {
+                    await Promise.resolve();
+                    if (change === 'after-signing') mode = 'e2ee';
+                    return { machineId: 'machine', installationId: 'installation',
+                        privateKeyBase64Url: Buffer.from(signingKeys.secretKey).toString('base64url') };
+                },
+                assertPrincipalCurrent: async () => {
+                    await Promise.resolve();
+                    if (++principalChecks === 2 && change === 'after-final-principal') mode = 'e2ee';
+                },
             });
             const failure = await runWithServerHttpBaseUrl(scope.serverBaseUrl, () => executor(actionId,
                 actionId === 'reviews.comments.create' ? { projectId: 'project', anchor: { kind: 'file', filePath: 'PRIVATE-file' },
                     snapshot: { kind: 'none', capturedAt: 1 }, body: 'PRIVATE-body', clientMutationId: 'mutation' } : {
                 target: { providerId: 'PRIVATE-provider', configuredAccountId: 'PRIVATE-account',
                     entryRef: { sourceId: 'PRIVATE-source', kindId: 'PRIVATE-kind', collisionScope: 'PRIVATE-scope', entryId: 'PRIVATE-entry' },
-                    subtarget: null }, baseRevision: null, headRevision: null, entries: [], verdict: { kind: 'comment', body: 'PRIVATE-body' },
-            })).then(() => null, error => error);
+                    subtarget: null }, baseRevision: 'PRIVATE-base', headRevision: 'PRIVATE-head', entries: [], verdict: { kind: 'comment', body: 'PRIVATE-body' },
+            }, signed ? { principal: { actor: { kind: 'agent', agentId: 'codex', sessionId: 'session' } } } : undefined))
+                .then(() => null, error => error);
             expect(post).not.toHaveBeenCalled();
             expect(failure).toMatchObject({ code: change === 'revoked'
                 ? 'review_comment_encryption_mode_unavailable' : 'review_comment_encryption_mode_mismatch' });
