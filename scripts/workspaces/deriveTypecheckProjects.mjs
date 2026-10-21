@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import ts from 'typescript';
 import { writeJsonAtomic } from '../../apps/stack/scripts/utils/fs/json.mjs';
+import { resolveTypeScriptCliInvocation } from './resolveTypeScriptCliInvocation.mjs';
 
 export function readTypecheckProject(path) {
   const config = ts.readConfigFile(path, ts.sys.readFile);
@@ -353,7 +354,10 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
     });
   }
   const changed = [];
-  const outputDir = resolve(packageDir, 'node_modules/.cache/tsc');
+  const { cacheSuffix } = resolveTypeScriptCliInvocation({
+    args: ['-p', resolve(packageDir, `tsconfig.${names[0]}.json`)], workspaceDir: packageDir,
+  });
+  const outputDir = resolve(packageDir, `node_modules/.cache/tsc${cacheSuffix}`);
   const targets = names.map(name => resolve(outputDir, `tsconfig.${name}.json`));
   for (let index = 0; index < names.length; index++) {
     const target = targets[index];
@@ -361,7 +365,11 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
     // type roots and declaration outputs keep their existing meaning.
     const config = {
       extends: resolve(packageDir, `tsconfig.${names[index]}.json`),
-      ...(index >= sourceNames.length ? { compilerOptions: testOptionOverrides[index - sourceNames.length] } : {}),
+      compilerOptions: {
+        ...(index >= sourceNames.length ? testOptionOverrides[index - sourceNames.length] : {}),
+        ...(cacheSuffix && projects[index].parsed.options.outDir
+          ? { outDir: `${projects[index].parsed.options.outDir}${cacheSuffix}` } : {}),
+      },
       files: results[index].files.map(file => resolve(packageDir, file)),
       include: [], exclude: [],
       references: (projects[index].config.references ?? []).map(reference => {

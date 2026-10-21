@@ -2,6 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
 import { writeJsonAtomic } from '../../apps/stack/scripts/utils/fs/json.mjs';
 import { readTypecheckAmbientModules, readTypecheckProject } from './deriveTypecheckProjects.mjs';
+import { resolveTypeScriptCliInvocation } from './resolveTypeScriptCliInvocation.mjs';
 
 function absoluteTypecheckPaths(project, configPath) {
   const base = project.parsed.options.baseUrl ?? project.parsed.options.pathsBasePath ?? dirname(configPath);
@@ -55,7 +56,10 @@ export async function prepareReferencedTypecheckDeclarations(projects, cwd, inve
   for (const foreign of inventory?.foreignProjects ?? []) {
     if (preparedOwners.has(foreign.configPath)) continue;
     const ownerDir = dirname(foreign.configPath);
-    const cache = resolve(ownerDir, 'node_modules/.cache/tsc');
+    const { cacheSuffix } = resolveTypeScriptCliInvocation({
+      args: ['-p', foreign.configPath, '--noEmit', 'false', '--emitDeclarationOnly'], workspaceDir: cwd,
+    });
+    const cache = resolve(ownerDir, `node_modules/.cache/tsc${cacheSuffix}`);
     const project = resolve(cache, 'tsconfig.consumer-declarations.json');
     const source = readTypecheckProject(foreign.configPath);
     // Retain producer strictness and explicit aliases. Host workspace defaults

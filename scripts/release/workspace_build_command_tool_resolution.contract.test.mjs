@@ -18,8 +18,9 @@ async function readTypeScriptWorkspacePackages() {
   const packagePaths = [];
   for (const pattern of patterns) {
     if (pattern === 'packages/plugins/[a-z]*') {
-      const names = await readdir(resolve(repoRoot, 'packages/plugins'));
-      packagePaths.push(...names.filter((name) => /^[a-z]/.test(name)).map((name) => `packages/plugins/${name}`));
+      const entries = await readdir(resolve(repoRoot, 'packages/plugins'), { withFileTypes: true });
+      packagePaths.push(...entries.filter((entry) => entry.isDirectory() && /^[a-z]/.test(entry.name))
+        .map((entry) => `packages/plugins/${entry.name}`));
       continue;
     }
     packagePaths.push(pattern);
@@ -58,6 +59,14 @@ test('root owns the native TypeScript 7 compiler and the TypeScript 5 API packag
 
   assert.equal(pkg?.devDependencies?.['@typescript/native'], 'npm:typescript@7.1.0-beta');
   assert.equal(pkg?.devDependencies?.typescript, '5.9.3');
+});
+
+test('Turbo retains the compiler override in finite typecheck environments and cache keys', async () => {
+  const config = await readJson('turbo.json');
+  for (const task of ['typecheck:finite', 'typecheck:source:finite']) {
+    assert.ok(config.tasks[task].env.includes('HAPPIER_TYPESCRIPT_COMPILER'),
+      `${task} must retain and hash the selected compiler`);
+  }
 });
 
 test('compiler orchestration has one native TypeScript resolver with no TS5 fallback', async () => {

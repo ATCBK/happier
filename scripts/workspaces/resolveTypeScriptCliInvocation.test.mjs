@@ -343,6 +343,7 @@ test('resolves the native TypeScript CLI from its exported package manifest', ()
     command: '/managed/node',
     argsPrefix: ['/repo/node_modules/@typescript/native/bin/tsc'],
     compilerPath: '/repo/node_modules/@typescript/native/bin/tsc',
+    cacheSuffix: '',
   });
 });
 
