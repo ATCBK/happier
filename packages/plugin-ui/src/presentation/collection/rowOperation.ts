@@ -7,4 +7,10 @@ export const HappierRowOperationContext = createContext<Readonly<{
   disabled: boolean;
   onSelect(): void;
   onKeyDown(key: string, event: unknown): boolean;
+  additionalOperations?: readonly Readonly<{
+    id: string;
+    label: string;
+    disabled: boolean;
+    onSelect(): void;
+  }>[];
 }> | null>(null);

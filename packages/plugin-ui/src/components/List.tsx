@@ -2223,12 +2223,14 @@ function ListItemRow(props: ListItemProps): ReactElement {
   // The row menu's Select is the only way a finger builds a set, so it follows the set: it adds this row to a live
   // selection (never replaces it) and offers Deselect for a row already chosen.
   const selectionRow = useListMultiSelectionRow(selection?.itemKey ?? '');
-  const operationActions = selection !== null && operation !== null ? [{ id: operation.id, label: operation.label, disabled: operation.disabled }] : [];
+  const operations = selection !== null && operation !== null ? [operation, ...(operation.additionalOperations ?? [])] : [];
+  const operationActions = operations.map(({ id, label, disabled }) => ({ id, label, disabled }));
   const rowProps = operationActions.length === 0 ? props : {
     ...props,
     secondaryActions: [...(props.secondaryActions ?? []), ...operationActions],
     onSecondaryAction: (id: string) => {
-      if (id === operation?.id) operation.onSelect();
+      const selected = operations.find(operation => operation.id === id);
+      if (selected) selected.onSelect();
       else props.onSecondaryAction?.(id);
     },
   };

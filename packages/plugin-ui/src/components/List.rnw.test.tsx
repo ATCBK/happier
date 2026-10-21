@@ -12,6 +12,7 @@ import { Item, ItemGroup, List } from './List.js';
 import { useListMultiSelectionController } from './ListMultiSelection.js';
 import { PluginUiProvider } from './PluginUiProvider.js';
 import { Text } from './Text.js';
+import { HappierRowOperationContext } from '../presentation/collection/rowOperation.js';
 
 function mountList(children: ReactNode) {
   const context = createSurfaceContext();
@@ -27,6 +28,36 @@ function listTree(context: ReturnType<typeof createSurfaceContext>, children: Re
 }
 
 describe('plugin-ui List item presentation', () => {
+  it('keeps the staged Move and additional composer operation in the same row menu', async () => {
+    const move = vi.fn();
+    const mention = vi.fn();
+    const context = createSurfaceContext();
+    const host = { renderMarkdown: () => null, renderCodeBlock: () => null, renderIcon: () => null,
+      renderPopover: (input) => input.content({ requestClose: input.onRequestClose, maxHeight: 240 }),
+    } satisfies PluginUiPresentationHost;
+    const mount = mountThroughReactNativeWeb(
+      <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+        <PluginUiPresentationHostProviderInternal host={host}>
+        <HappierRowOperationContext.Provider value={{ id: 'move', label: 'Move', disabled: false,
+          onSelect: move, onKeyDown: () => false,
+          additionalOperations: [{ id: 'mention', label: 'Mention in composer', disabled: false, onSelect: mention }] }}>
+          <List accessibilityLabel="References" items={[{ id: 'entry' }]} keyForItem={item => item.id}
+            selection={{ selectedKey: 'entry', onSelectedKeyChange: () => {} }}
+            renderItem={() => <List.Item testID="reference-row" title="Review" />} />
+        </HappierRowOperationContext.Provider>
+        </PluginUiPresentationHostProviderInternal>
+      </PluginUiProvider>,
+    );
+    const row = mount.container.querySelector<HTMLElement>('[data-testid="reference-row"]')!;
+    await act(async () => { row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); });
+    expect(mount.container.querySelector('[role="menuitem"][aria-label="Move"]')).not.toBeNull();
+    const action = mount.container.querySelector<HTMLElement>('[role="menuitem"][aria-label="Mention in composer"]');
+    expect(action).not.toBeNull();
+    await act(async () => { action!.click(); });
+    expect(mention).toHaveBeenCalledOnce();
+    expect(move).not.toHaveBeenCalled();
+    mount.unmount();
+  });
   it('rejects duplicate row identities before the flat virtualizer receives them', () => {
     const context = createSurfaceContext();
     expect(() => mountThroughReactNativeWeb(
