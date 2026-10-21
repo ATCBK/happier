@@ -35,13 +35,7 @@ export function resolveFilesComparisonPresentation(
         case 'workingTree': return { kind: 'changedFiles', mode: 'repository' };
         case 'session': return { kind: 'captured' };
         case 'turnCheckpoint':
-            if (!comparison.turnId) return comparison.checkpointReceiptId ? { kind: 'captured' } : { kind: 'unsupported' };
-            return {
-                kind: 'changedFiles',
-                mode: comparison.evidence === 'checkpoint'
-                    ? 'turn_checkpoint'
-                    : comparison.evidence === 'agent_reported' ? 'turn_agent_reported' : 'turn',
-            };
+            return comparison.turnId || comparison.checkpointReceiptId ? { kind: 'captured' } : { kind: 'unsupported' };
         case 'branch':
         case 'commit':
         case 'pullRequest':

@@ -11,6 +11,7 @@ import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/
 import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
+import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 
 export type FileViewRpcRequest = Readonly<{ targetId: string; method: string; payload: unknown }>;
 type FileViewTransport = Readonly<{
@@ -119,18 +120,47 @@ export async function createSessionFilesViewFixture(input: Readonly<{
     const { resolveServerProfileScopeId } = await import('@/sync/domains/server/serverProfiles');
     const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
     const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+    const serverIdentityId = input.serverIdentityId;
+    const machineId = input.machine?.id ?? input.machineId ?? 'm1';
+    const serverUrl = input.serverUrl ?? 'https://session-file-views.test';
     const requests: FileViewRpcRequest[] = [];
+    type ActionIssuer = Awaited<ReturnType<typeof import('@/dev/testkit/harness/externalActionAccountHttpBoundary').createExternalActionAccountHttpBoundary>>;
+    const actionIssuers = new Map<string, ActionIssuer>();
     const emissions: FileViewTransport['emissions'] = [];
     const dispatch = (request: FileViewRpcRequest) => {
         requests.push(request);
         return input.rpc?.(request) ?? { success: false, error: 'RPC method not available', errorCode: 'METHOD_NOT_AVAILABLE' };
     };
     const features = createRootLayoutFeaturesResponse({ features: { machines: transferFeatures().features.machines },
-        capabilities: { serverIdentity: { serverIdentityId: input.serverIdentityId ?? null } } });
+        capabilities: { serverIdentity: { serverIdentityId: serverIdentityId ?? null } } });
     const authoringMemory = createAuthoringMemoryHttpBoundary();
+    // The Account-carrier Action transport admits only a Home Machine row that proves its custodian and ready access.
+    const { createPlainMachineRowFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+    const issuerFor = async (actionId: string) => {
+        if (!serverIdentityId) return null;
+        const { createExternalActionAccountHttpBoundary } = await import('@/dev/testkit/harness/externalActionAccountHttpBoundary');
+        let issuer = actionIssuers.get(actionId);
+        if (!issuer) {
+            issuer = await createExternalActionAccountHttpBoundary({ serverUrl, serverIdentityId, accountId: 'alice',
+                machineId: machineId, actionId: actionId as ActionId, tokenEpoch: 0,
+                execute: (actionInput, context) => {
+                    const { machineId: targetId = context.target.machineId, ...payload } = actionInput as Record<string, unknown> & { machineId?: string };
+                    return dispatch({ targetId, method: actionId, payload });
+                } });
+            actionIssuers.set(actionId, issuer);
+        }
+        return issuer;
+    };
+    // With an advertised Home identity (required by the Account-carrier Action transport), the Machine's installation key is shared by every Action issuer, so its rows publish the one the carrier seals to.
+    const installationPublicKey = (await issuerFor('daemon.filesystem.list'))?.machine.installationPublicKey;
     const machine = input.machine === null ? null
         : { ...(input.machine ?? transferMachine({ id: input.machineId ?? 'm1', storageMode: 'plain' })), active: true, activeAt: Date.now() };
-    const machineRow = machine ? { ...machine, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+    // Own-Machine Action admission reads the Machine's ready custody from the full row.
+    const ownedMachine = machine && serverIdentityId && !machine.access
+        ? { ...machine, access: createPlainMachineRowFixture({ id: machine.id, accountId: 'alice' }).access, installationId: machine.installationId ?? 'test-installation', installationPublicKey }
+        : machine;
+    const machineRow = machine ? { ...(serverIdentityId ? createPlainMachineRowFixture({ id: machine.id, accountId: 'alice' }) : {}), ...machine, ...(installationPublicKey ? { installationPublicKey } : {}),
+        dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
         metadata: encodePlainMachineStoredContent(machine.metadata),
         daemonState: machine.daemonState ? encodePlainMachineStoredContent(machine.daemonState) : null } : null;
     const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'alice', encryptionMode: 'plain' });
@@ -139,6 +169,13 @@ export async function createSessionFilesViewFixture(input: Readonly<{
         const path = requestUrl.pathname;
         const handled = await input.request?.(url, init);
         if (handled && handled.status !== 404) return handled;
+        const filesystemAction = /^\/v1\/actions\/(daemon\.filesystem\.[a-z.]+?)(?:\/execution-authorization)?$/.exec(path)?.[1];
+        if (filesystemAction && machine) {
+            // The admitted Account carrier: the Home issues the authorization and the Machine executes the Action.
+            const issuer = await issuerFor(filesystemAction);
+            const issued = await issuer?.handle(requestUrl, init);
+            if (issued) return issued;
+        }
         const memoryResponse = await authoringMemory.handle(url, init);
         if (memoryResponse) return memoryResponse;
         if (path === '/v1/account/project-rows/list') return Response.json(createPlainProjectAccountRowListFixture());
@@ -160,12 +197,15 @@ export async function createSessionFilesViewFixture(input: Readonly<{
         }
         return Response.json({}, { status: 404 });
     };
-    const serverUrl = input.serverUrl ?? 'https://session-file-views.test';
     const origin = new URL(serverUrl).origin;
     const transport = { rpc: dispatch, http: homeRequest, emissions } satisfies FileViewTransport;
     transportsByOrigin.set(origin, transport);
+    // An Account Action is signed only by a present-user Account token with its epoch.
+    const accountToken = serverIdentityId && !input.credentials
+        ? { token: (await import('@/dev/testkit/harness/homeGovernanceHarness')).createAccountTokenForTests('alice', { currentAccount: true }) } : undefined;
     const connection = await restoreServerAccountForTest({ serverUrl, accountId: 'alice', request: homeRequest,
-        credentials: input.credentials, serverIdentityId: input.serverIdentityId });
+        credentials: input.credentials ?? accountToken,
+        serverIdentityId });
     const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
     setRuntimeFetch(async (url, init) => {
         const requestUrl = new URL(String(url));
@@ -182,7 +222,7 @@ export async function createSessionFilesViewFixture(input: Readonly<{
     });
     const scope = { serverId: resolveServerProfileScopeId(connection.home), machineId: input.machineId ?? 'm1', rootPath: input.rootPath ?? '/workspace' };
     const session = createSessionFixture({ id: input.sessionId ?? 's1', serverId: scope.serverId, active: true, metadata: { path: scope.rootPath, machineId: scope.machineId, host: 'tester.local' } });
-    installTransferProjection({ serverId: scope.serverId, session, machine, features });
+    installTransferProjection({ serverId: scope.serverId, session, machine: ownedMachine, features });
     await vi.waitFor(() => {
         const accountScope = getActiveServerAccountScope();
         if (accountScope?.serverId !== scope.serverId || accountScope.accountId !== 'alice') {

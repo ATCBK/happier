@@ -18,8 +18,10 @@ export function useCapturedScmComparison(params: Readonly<{
     active?: boolean;
     knownComparison?: ScmComparison | null;
 }>) {
-    const binding = useServerCredentialAccountScopeBinding(params.serverId).binding;
-    const scope = binding?.isCurrent() ? binding.scope : null;
+    const { binding, resolution } = useServerCredentialAccountScopeBinding(params.serverId);
+    // Hydrated evidence follows the retained Account identity during Home revalidation;
+    // only the current credential binding may issue a refresh.
+    const scope = resolution.kind === 'bound' ? resolution.scope : null;
     const { machine, identity } = params;
     const sessionId = params.host.sessionId ?? null;
     const sourceAvailable = Boolean(sessionId) || (params.comparison.kind !== 'session' && params.comparison.kind !== 'turnCheckpoint');
@@ -33,7 +35,7 @@ export function useCapturedScmComparison(params: Readonly<{
     const selectorRef = React.useRef(params.comparison);
     selectorRef.current = params.comparison;
     React.useEffect(() => {
-        if (!binding || !scope || !machine || params.active === false || known || !sourceAvailable) return;
+        if (!binding?.isCurrent() || !scope || !machine || params.active === false || known || !sourceAvailable) return;
         const abort = new AbortController();
         const retirement = binding.onRetire(() => abort.abort());
         const current = () => !abort.signal.aborted && binding.isCurrent();

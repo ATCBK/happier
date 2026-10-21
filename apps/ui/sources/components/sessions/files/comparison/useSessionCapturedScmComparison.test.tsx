@@ -336,13 +336,19 @@ describe('Files reads the canonical captured comparison through authenticated RP
         expect(switchView.props.view).toBe('files');
     });
     it.each([
+        { kind: 'turnCheckpoint', turnId: 'deleted-file-turn' },
         { kind: 'branch', head: 'HEAD', base: 'main' },
         { kind: 'commit', commit: 'HEAD' },
         { kind: 'pullRequest', locator: { providerId: 'github', repository: 'owner/repo', number: 42 } },
     ] as const)('pins captured $kind evidence when Files opens its first Walkthrough', async (source) => {
+        const deletedDiff = 'diff --git a/src/auth.js b/src/auth.js\ndeleted file mode 100644\n--- a/src/auth.js\n+++ /dev/null\n@@ -1 +0,0 @@\n-export const allowed = true;\n';
         const comparison = ScmComparisonSchema.parse({ id: 'a'.repeat(64), source,
             repository: { rootPath: '/repo/exact' }, endpoints: { before: 'captured-before', after: 'captured-after' },
-            inventory: { state: 'complete', files: [], reasons: [] } });
+            inventory: { state: 'complete', files: source.kind === 'turnCheckpoint' ? [{ ...changedFile,
+                path: 'src/auth.js', changeKind: 'deleted', evidence: { state: 'available', unifiedDiff: deletedDiff },
+                occurrences: [{ id: 'capture:deleted-auth', alias: 'deleted-auth', path: 'src/auth.js', position: 0,
+                    before: { startLine: 1, lineCount: 1 }, after: { startLine: 0, lineCount: 0 } }],
+            }] : [], reasons: [] } });
         boundary.response = { success: true, comparison, metadata: { sourceKey: comparison.id, source } };
         const hook = await mount(source);
         await hook.unmount();
@@ -355,6 +361,11 @@ describe('Files reads the canonical captured comparison through authenticated RP
         await vi.waitFor(() => expect(screen.findByTestId('captured-comparison-files')).toBeTruthy());
         expect(screen.findByType((await import('./CapturedComparisonFilesView')).CapturedComparisonFilesView).props.comparison.endpoints)
             .toEqual(comparison.endpoints);
+        if (source.kind === 'turnCheckpoint') {
+            const { DiffViewer } = await import('@/components/ui/code/diff/DiffViewer');
+            await vi.waitFor(() => expect(screen.findAllByType(DiffViewer)).toHaveLength(1));
+            expect(screen.findByType(DiffViewer).props.unifiedDiff).toBe(deletedDiff);
+        }
         await act(async () => screen.pressByTestId('scm-comparison-view:walkthrough'));
         expect(screen.findByType('PaneProbe' as never).props.state.details.tabs[0]?.resource)
             .toMatchObject({ comparison: { ...source, comparisonId: comparison.id }, view: 'walkthrough' });

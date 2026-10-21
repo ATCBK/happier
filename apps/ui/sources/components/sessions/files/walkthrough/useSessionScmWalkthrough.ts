@@ -4,7 +4,7 @@ import type { ScmDiffSummaryOutputKind, ScmDiffSummaryResult } from '@happier-de
 import type { SessionScmReviewComparison } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import type { ScmDiffSummaryEntry, ScmDiffSummaryViewModel, ScmDiffSummaryRestoreState } from '@/sync/domains/scm/diffSummary/state';
 import { selectScmWalkthroughKey, scmReviewComparisonMatchesSource, scmDiffSummaryOutputNeedsPublishedFallback } from '@/sync/domains/scm/diffSummary/selection';
-import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
+import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import {
     getScmDiffSummaryOperationState,
@@ -32,19 +32,23 @@ export function useSessionScmWalkthrough(sessionId: string, comparison: SessionS
 
 export function useScmWalkthroughState(host: Readonly<{ sessionId: string }> | Readonly<{ machineId: string; cwd: string }>,
     comparison: SessionScmReviewComparison | null, output: ScmDiffSummaryOutputKind = 'walkthrough', serverId?: string | null) {
-    const binding = useServerCredentialAccountScopeBinding(serverId).binding;
-    const scopeKey = binding?.isCurrent() ? serverAccountScopeKeySuffix(binding.scope) : null;
+    const admittedScope = React.useRef<ServerAccountScope | null>(null);
+    const projectionLifecycle = React.useMemo(() => ({
+        beforeBinding: (binding: Readonly<{ scope: ServerAccountScope }>) => { admittedScope.current = binding.scope; },
+        onCredentialMutation: (changedServerId: string) => {
+            if (admittedScope.current?.serverId === changedServerId) retireScmDiffSummaryScope(admittedScope.current);
+        },
+    }), []);
+    const { binding, resolution } = useServerCredentialAccountScopeBinding(serverId, projectionLifecycle);
+    // Profile/reconnect revalidation retires request authority, not hydrated Account data.
+    // The scope owner retains this identity until it confirms a different Account or sign-out.
+    const scopeKey = resolution.kind === 'bound' ? serverAccountScopeKeySuffix(resolution.scope) : null;
     const comparisonKey = comparison ? scmComparisonKey(comparison) : null;
-    React.useEffect(() => {
-        if (!binding) return;
-        const retirement = binding.onRetire(() => retireScmDiffSummaryScope(binding.scope));
-        return () => retirement.dispose();
-    }, [binding]);
     const getSnapshot = React.useMemo(() => {
         let previousEntry: ScmDiffSummaryEntry | undefined;
         let projection: ScmDiffSummaryViewModel | null = null;
         return () => {
-            if (!scopeKey || !binding?.isCurrent()) return null;
+            if (!scopeKey) return null;
             const state = getScmDiffSummaryState();
             const key = selectScmWalkthroughKey(state, host, comparison, output, scopeKey);
             const entry = key ? state.entriesByKey[key] : undefined;
@@ -54,7 +58,7 @@ export function useScmWalkthroughState(host: Readonly<{ sessionId: string }> | R
             return projection;
         };
     }, ['sessionId' in host ? host.sessionId : null, 'machineId' in host ? host.machineId : null,
-        'cwd' in host ? host.cwd : null, comparisonKey, output, scopeKey, binding]);
+        'cwd' in host ? host.cwd : null, comparisonKey, output, scopeKey]);
     const viewModel = React.useSyncExternalStore(subscribeScmDiffSummaryState, getSnapshot, getSnapshot);
     const sessionId = 'sessionId' in host ? host.sessionId : null;
     // The control-target owner admits an exact metadata target before presence hydrates; transport still

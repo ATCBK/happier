@@ -50,7 +50,6 @@ describe('SessionFileDetailsView (binary)', () => {
     it('renders header actions even when file content is binary', async () => {
         const { SessionFileDetailsView } = await import('./SessionFileDetailsView');
         const { FilePageHeader } = await import('@/components/workspaces/files/file/FilePageHeader');
-        const { FileErrorState } = await import('@/components/workspaces/files/file/FileScreenState');
         const { FileViewerBody } = await import('@/components/workspaces/files/file/FileViewerBody');
         const screen = await fixture.render(<SessionFileDetailsView serverId={fixture.home.id} sessionId="s1" scopeId="session:s1" filePath={filePath} />);
         await vi.waitFor(() => expect(screen.findByTestId('file-action-toolbar')).not.toBeNull());
@@ -62,7 +61,7 @@ describe('SessionFileDetailsView (binary)', () => {
         expect(items).not.toContain('wrap');
         expect(items).toContain('download');
         expect(screen.tree.root.findAllByType(FileViewerBody)).toHaveLength(1);
-        expect(fixture.requests.some((request) => request.method === 'statFile')).toBe(true);
+        expect(screen.tree.root.findByType(FileViewerBody).props.viewer.kind).toBe('binary');
         await act(async () => { await fileMenu(screen)?.props.onSelect('download'); });
         expect(fixture.requests).toEqual(expect.arrayContaining([expect.objectContaining({
             targetId: 'm1',

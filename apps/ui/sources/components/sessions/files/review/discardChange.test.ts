@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -7,6 +8,8 @@ import { act } from 'react-test-renderer';
 import { createEncryptedTransferChunkEnvelope } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
 import { createTransferManifestHasher } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferManifestHasher';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
+import type { DetailsTab } from '@/components/appShell/panes/model/appPaneReducer';
+import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -32,8 +35,11 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 const { discardChange } = await import('./discardChange');
 const { useHunkDiscard } = await import('@/components/workspaces/scm/review/hunkReview/useHunkDiscard');
+const { useFileChangesReview } = await import('@/components/workspaces/files/file/changes/useFileChangesReview');
+const { useAskSelectionTargetContext } = await import('@/components/ui/code/selection/useAskSelection');
 const { readPresentationNotice, retirePresentationNotice, publishPresentationNotice } = await import('@/components/sessions/presentation/presentationNotices');
 
 const messages = { discarded: 'discarded', restored: 'restored', kept_edited: 'kept', undone: 'undone', undo_conflict: 'undo conflict',
@@ -49,6 +55,9 @@ describe('comparison Discard and guarded Undo', () => {
     retirePresentationNotice();
     await homes.reset(); await loadSyncSingletonForTests();
     serverId = await homes.addHome({ name: 'Review Home', serverUrl: 'https://discard-review.test', serverIdentityId: 'srv_discard_review', accountId: 'review-account', currentAccount: true });
+    const sessions = V2SessionListResponseSchema.parse({ sessions: [], hasNext: false, nextCursor: null });
+    homes.answer(serverId, '/v2/sessions', { body: sessions });
+    homes.answer(serverId, '/v2/sessions/active', { body: sessions });
     const boundary = await createExternalActionAccountHttpBoundary({ serverUrl: 'https://discard-review.test',
       serverIdentityId: 'srv_discard_review', accountId: 'review-account', machineId: 'm1',
       actionId: 'daemon.filesystem.writeFile', tokenEpoch: 0,
@@ -150,6 +159,89 @@ describe('comparison Discard and guarded Undo', () => {
     const count = rpc.requests.length;
     await act(async () => { hook.getCurrent().undo(); });
     expect(rpc.requests).toHaveLength(count);
+  });
+
+  it('retires a just-remembered inverse in the same React batch', async () => {
+    rpc.responses.push({ success: true, entries: [{ path: 'a.txt', status: 'restored', hashBefore: beforeHash, hashAfter: afterHash,
+      previous: { inlineBase64: 'b2xkCg==' } }] });
+    const result = await discardChange(input());
+    if (!result.ok || !result.undo) throw new Error('Undo must be available');
+    const hook = await renderHook(() => useHunkDiscard({ scope: { machineId: 'm1', rootPath: '/repo', serverId },
+      sessionId: null, machineName: 'Machine', unreachable: false, refresh: () => {} }));
+    await act(async () => { hook.getCurrent().remember(result); hook.getCurrent().retireUndo(); });
+    expect(hook.getCurrent().undoAvailable).toBe(false);
+    expect(readPresentationNotice()).toBeNull();
+    const count = rpc.requests.length;
+    expect(await result.undo()).toEqual({ success: false });
+    expect(rpc.requests).toHaveLength(count);
+  });
+
+  it('retains File-page restore Undo on the same file until used, and retires it on file change or unmount', async () => {
+    const hook = await renderHook(({ path, rootPath = '/repo' }: { path: string; rootPath?: string }) => useFileChangesReview({
+      scope: { machineId: 'm1', rootPath, serverId }, filePath: path,
+      liveDiff: '@@ -1 +1 @@\n-old\n+new\n', refreshLiveDiff: () => {}, contentHash: beforeHash,
+      view: { changesScope: { kind: 'workingTree' } }, onChangesScopeChange: () => {}, active: true,
+    }), { initialProps: { path: 'a.txt' } });
+    const restore = async () => {
+      rpc.responses.push({ success: true, entries: [{ path: 'a.txt', status: 'restored', hashBefore: beforeHash, hashAfter: afterHash,
+        previous: { inlineBase64: 'b2xkCg==' } }] });
+      await act(async () => { await hook.getCurrent().menuChanges.discardAll?.(); });
+      expect(hook.getCurrent().undoAvailable).toBe(true);
+      expect(hook.getCurrent().keyboard.undo).toBeTypeOf('function');
+      expect(readPresentationNotice()?.undo).toBeDefined();
+    };
+    await restore();
+    await hook.rerender();
+    expect(hook.getCurrent().undoAvailable).toBe(true);
+    rpc.responses.push({ success: true, hash: beforeHash });
+    await act(async () => { hook.getCurrent().keyboard.undo?.(); });
+    expect(rpc.requests).toEqual(expect.arrayContaining([expect.objectContaining({ payload: expect.objectContaining({
+      content: 'b2xkCg==', expectedHash: afterHash,
+    }) })]));
+    expect(hook.getCurrent().undoAvailable).toBe(false);
+    await restore();
+    const fileUndo = readPresentationNotice()!.undo!.run;
+    await hook.rerender({ path: 'b.txt' });
+    expect(readPresentationNotice()).toBeNull();
+    expect(await fileUndo()).toEqual({ success: false });
+    await hook.rerender({ path: 'a.txt' });
+    await restore();
+    const previousCheckoutUndo = readPresentationNotice()!.undo!.run;
+    await hook.rerender({ path: 'a.txt', rootPath: '/other-repo' });
+    expect(readPresentationNotice()).toBeNull();
+    expect(await previousCheckoutUndo()).toEqual({ success: false });
+    await hook.rerender({ path: 'a.txt' });
+    await restore();
+    const unmountedUndo = readPresentationNotice()!.undo!.run;
+    await hook.unmount();
+    expect(readPresentationNotice()).toBeNull();
+    expect(await unmountedUndo()).toEqual({ success: false });
+    expect(rpc.responses).toHaveLength(0);
+  });
+
+  it('offers project per-change Ask through the existing detached run destination', async () => {
+    const opened: DetailsTab[] = [];
+    const hook = await renderHook(() => {
+      const getAskTargetContext = useAskSelectionTargetContext(React.useCallback(() => ({
+        openDetailsTab: (tab: DetailsTab) => { opened.push(tab); },
+      }), []));
+      return useFileChangesReview({
+        scope: { machineId: 'm1', rootPath: '/repo', serverId }, filePath: 'a.txt',
+        liveDiff: '@@ -1 +1 @@\n-old\n+new\n', refreshLiveDiff: () => {},
+        view: { changesScope: { kind: 'workingTree' } }, onChangesScopeChange: () => {}, active: true,
+        getAskTargetContext,
+      });
+    });
+    expect(hook.getCurrent().keyboard.askCurrent).toBeTypeOf('function');
+    rpc.responses.push({ protocolVersion: 1, results: { 'tool.executionRuns': { ok: true, checkedAt: Date.now(),
+      data: { protocolVersion: 2, features: { detachedScope: true, exactInputResults: true } } } } });
+    await act(async () => { hook.getCurrent().keyboard.askCurrent?.(); });
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatchObject({ kind: 'executionRunLauncher', resource: {
+      sessionId: null, workspace: { machineId: 'm1', cwd: '/repo' }, initialInstructions: expect.stringContaining('new'),
+    } });
+    expect(opened[0]?.resource).toMatchObject({ initialInstructions: expect.stringContaining('a.txt:1') });
+    expect(rpc.responses).toHaveLength(0);
   });
 
   it('reports Undo note failure separately from the successful one-shot file write', async () => {

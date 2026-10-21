@@ -24,14 +24,14 @@ describe('Files comparison (one owner for what Files shows)', () => {
     it('shows exactly the comparison the link names, with its evidence', () => {
         expect(resolveFilesComparisonPresentation({ kind: 'workingTree' }, ALL)).toEqual({ kind: 'changedFiles', mode: 'repository' });
         expect(resolveFilesComparisonPresentation({ kind: 'session' }, ALL)).toEqual({ kind: 'captured' });
-        expect(resolveFilesComparisonPresentation({ kind: 'turnCheckpoint', turnId: 't1' }, ALL)).toEqual({ kind: 'changedFiles', mode: 'turn' });
-        expect(resolveFilesComparisonPresentation({ kind: 'turnCheckpoint', turnId: 't1', evidence: 'checkpoint' }, ALL)).toEqual({ kind: 'changedFiles', mode: 'turn_checkpoint' });
-        expect(resolveFilesComparisonPresentation({ kind: 'turnCheckpoint', turnId: 't1', evidence: 'agent_reported' }, ALL)).toEqual({ kind: 'changedFiles', mode: 'turn_agent_reported' });
+        expect(resolveFilesComparisonPresentation({ kind: 'turnCheckpoint', turnId: 't1' }, ALL)).toEqual({ kind: 'captured' });
+        expect(resolveFilesComparisonPresentation({ kind: 'turnCheckpoint', turnId: 't1', evidence: 'checkpoint' }, ALL)).toEqual({ kind: 'captured' });
+        expect(resolveFilesComparisonPresentation({ kind: 'turnCheckpoint', turnId: 't1', evidence: 'agent_reported' }, ALL)).toEqual({ kind: 'captured' });
     });
 
     it('reads hosted and immutable comparisons from the captured evidence owner', () => {
         // A named turn without evidence stays that turn (its empty state says so), never pending changes.
-        expect(resolveFilesComparisonPresentation({ kind: 'turnCheckpoint', turnId: 't1' }, NONE)).toEqual({ kind: 'changedFiles', mode: 'turn' });
+        expect(resolveFilesComparisonPresentation({ kind: 'turnCheckpoint', turnId: 't1' }, NONE)).toEqual({ kind: 'captured' });
         expect(resolveFilesComparisonPresentation({ kind: 'branch', head: 'feature', base: 'main' }, ALL)).toEqual({ kind: 'captured' });
         expect(resolveFilesComparisonPresentation({ kind: 'commit', commit: 'abc1234' }, ALL)).toEqual({ kind: 'captured' });
         expect(resolveFilesComparisonPresentation({ kind: 'pullRequest', locator: { providerId: 'github', repository: 'owner/repo', number: 42 } }, NONE)).toEqual({ kind: 'captured' });

@@ -66,6 +66,44 @@ afterEach(async () => {
 });
 
 describe('saved output restoration', () => {
+    it('keeps hydrated captured evidence through Home revalidation', async () => {
+        const { useCapturedScmComparison } = await import('../comparison/useCapturedScmComparison');
+        const observed: Array<unknown> = [];
+        const hook = await renderHook(() => {
+            const value = useCapturedScmComparison({ host: { sessionId }, serverId,
+                machine: { machineId: 'restore-machine', basePath: '/repo/exact' },
+                identity: { machineId: 'restore-machine', basePath: '/repo/exact' },
+                comparison: { kind: 'workingTree', comparisonId: comparison.id }, knownComparison: comparison });
+            observed.push(value.comparison);
+            return value;
+        });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().comparison).toEqual(comparison));
+        const previous = hook.getCurrent().comparison;
+        observed.length = 0;
+        const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
+        await act(async () => { await upsertServerProfile({ serverUrl: 'https://restore.example.test', name: 'Reconnected' }); });
+        expect(hook.getCurrent().comparison).toBe(previous);
+        expect(observed.every(value => value === previous)).toBe(true);
+    });
+    it('retains hydrated readings through Home profile revalidation, but clears them on Account replacement', async () => {
+        inventory([saved('kept-reading', { walkthrough: reading }, ['walkthrough'])]);
+        const observations: Array<string | null | undefined> = [];
+        const hook = await renderHook(() => {
+            const value = useScmWalkthroughState({ sessionId }, { kind: 'workingTree' }, 'walkthrough', serverId);
+            observations.push(value.viewModel?.resultId);
+            return value;
+        });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().viewModel?.resultId).toBe('kept-reading'));
+        const original = hook.getCurrent().viewModel;
+        observations.length = 0;
+        boundary.inventory = { success: false, errorCode: 'result_unavailable', error: 'Transport reconnecting' };
+        const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
+        await act(async () => { await upsertServerProfile({ serverUrl: 'https://restore.example.test', name: 'Reconnected Home' }); });
+        expect(hook.getCurrent().viewModel).toBe(original);
+        expect(observations.every(id => id === 'kept-reading')).toBe(true);
+        await act(async () => { await homes.switchAccount(serverId, 'replacement-account'); });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().viewModel).toBeNull());
+    });
     it.each(['walkthrough', 'commitPlan'] as const)('settles an ambiguous Session target as unavailable for %s and recovers when its target resolves', async output => {
         inventory([]);
         const session = createSessionFixture({ id: sessionId, serverId, active: false,
