@@ -97,6 +97,7 @@ export function createRunnerAgentProjectLaunchInvocation(input: Readonly<{
         try { const result = await work(); status = 'completed'; return result; }
         finally {
             logger.debug('[PluginExec] Native launch preparation phase', { phase, status,
+                ...(phase === 'project_preparation' && status === 'failed' ? owner?.readPreparationDiagnostic() : {}),
                 ...(input.sessionId ? { sessionId: input.sessionId } : {}),
                 ...(input.executionRun ? { executionRunId: input.executionRun.runId } : {}),
                 durationMs: Math.round(performance.now() - startedAt) });

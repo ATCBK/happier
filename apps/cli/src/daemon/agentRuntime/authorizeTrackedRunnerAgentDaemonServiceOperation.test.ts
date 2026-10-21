@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { TrackedSession } from '../types';
 import {
@@ -68,6 +68,17 @@ function tracked(): TrackedSession {
 }
 
 describe('tracked Runner Agent daemon-service operation authority', () => {
+  it.each(['snapshot', 'session', 'source_custody', 'runner_process'] as const)('diagnoses only the failed %s predicate', predicate => {
+    const current = tracked();
+    if (predicate === 'session') current.happySessionId = 'other-session';
+    if (predicate === 'source_custody') delete current.runnerAgentSourceCustodyV1;
+    if (predicate === 'runner_process') current.runnerProcessIdentity = { ...runner, pid: runner.pid + 1 };
+    const onRefused = vi.fn();
+    expect(authorizeTrackedRunnerAgentDaemonServiceOperation({ tracked: current, ...direct, witness: undefined,
+      allowIdleCurrentGeneration: true, runSnapshotCurrent: predicate !== 'snapshot', onRefused })).toBe(false);
+    expect(onRefused.mock.calls).toEqual([[predicate]]);
+  });
+
   it('refuses an unwitnessed child role even when wrapper and child birth samples coincide', () => {
     const unwitnessed = tracked();
     delete unwitnessed.runnerProcessIdentity;

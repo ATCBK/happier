@@ -8,6 +8,8 @@ import { performance } from 'node:perf_hooks';
 import { logger } from '@/utils/logger';
 
 export type ProjectAgentLaunchPreparationInput = Readonly<{
+    /** Content-free observation for the containing native-launch diagnostic. */
+    onPhase?(phase: 'association' | 'secret_inputs' | 'manifest' | 'setup_preparation'): void;
     cwd: string;
     machineId: string;
     serverId: string;
@@ -62,6 +64,7 @@ export async function prepareProjectAgentLaunch(input: ProjectAgentLaunchPrepara
     presentation?: Pick<ProjectSetupReviewPresentation, 'provenance'>): Promise<ProjectAgentLaunchPreparation> {
     try {
         input.signal?.throwIfAborted();
+        input.onPhase?.('association');
         const associationStartedAt = performance.now();
         const association = await resolveProjectSetupAcceptedWorkspace({
             ...input.account, serverId: input.serverId, serverHttpBaseUrl: input.serverHttpBaseUrl,
@@ -71,9 +74,11 @@ export async function prepareProjectAgentLaunch(input: ProjectAgentLaunchPrepara
         });
         logger.debug('[ProjectSetup] launch phase', { phase: 'association', durationMs: Math.round(performance.now() - associationStartedAt) });
         if (!association) return { kind: 'notAssociated' };
+        input.onPhase?.('secret_inputs');
         const secretsStartedAt = performance.now();
         const secretInputs = input.resolveSecretInputs ? await input.resolveSecretInputs() : input;
         logger.debug('[ProjectSetup] launch phase', { phase: 'secret_inputs', durationMs: Math.round(performance.now() - secretsStartedAt) });
+        input.onPhase?.('manifest');
         const manifest = secretInputs.environmentBindings ? await readProjectManifest({ root: association.workspace.rootPath }) : null;
         const secretNames = new Set(manifest?.document?.status === 'valid'
             ? manifest.document.manifest.environmentVariables?.filter(requirement => requirement.kind === 'secret').map(requirement => requirement.name) : []);
@@ -91,6 +96,7 @@ export async function prepareProjectAgentLaunch(input: ProjectAgentLaunchPrepara
             ...(input.approvalContext ? { approvalContext: input.approvalContext } : {}),
             ...(input.signal ? { signal: input.signal } : {}),
         };
+        input.onPhase?.('setup_preparation');
         const outcome = await prepareProjectSetup(preparation, presentation);
         return outcome.kind === 'refused' ? outcome : { kind: 'prepared', preparation, outcome };
     } catch (error) {

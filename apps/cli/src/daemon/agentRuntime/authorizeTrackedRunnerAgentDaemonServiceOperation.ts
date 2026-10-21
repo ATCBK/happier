@@ -21,28 +21,30 @@ export function authorizeTrackedRunnerAgentDaemonServiceOperation(
     witness:
       AgentRuntimeDaemonServiceTurnWitnessInputV1 | undefined;
     allowIdleCurrentGeneration: boolean;
+    /** The retained Execution Run snapshot owner supplies its current comparison. */
+    runSnapshotCurrent?: boolean;
+    onRefused?(predicate: 'snapshot' | 'session' | 'source_custody' | 'runner_process' | 'turn_witness'): void;
   }>,
 ): boolean {
-  const runnerIdentity = resolveTrackedSessionRunnerIdentity(input.tracked);
-  if (
-    input.tracked.happySessionId !== input.sessionId
-    || !input.tracked.runnerAgentSourceCustodyV1
-    || !pluginSourceCustodyV1Equal(
+  const refuse = (predicate: Parameters<NonNullable<typeof input.onRefused>>[0]) => {
+    input.onRefused?.(predicate);
+    return false;
+  };
+  if (input.runSnapshotCurrent === false) return refuse('snapshot');
+  if (input.tracked.happySessionId !== input.sessionId) return refuse('session');
+  if (!input.tracked.runnerAgentSourceCustodyV1 || !pluginSourceCustodyV1Equal(
       input.tracked.runnerAgentSourceCustodyV1,
       input.retainedAgent.sourceCustody,
-    )
-    || !runnerIdentity
-    || !processIdentityMatches(runnerIdentity, input.runner)
-  ) {
-    return false;
-  }
+    )) return refuse('source_custody');
+  const runnerIdentity = resolveTrackedSessionRunnerIdentity(input.tracked);
+  if (!runnerIdentity || !processIdentityMatches(runnerIdentity, input.runner)) return refuse('runner_process');
   const admittedTurnId =
     input.tracked
       .agentRuntimeDaemonServiceAdmittedTurnId;
   if (!input.witness) {
-    return input.allowIdleCurrentGeneration;
+    return input.allowIdleCurrentGeneration || refuse('turn_witness');
   }
-  if (!admittedTurnId) return false;
+  if (!admittedTurnId) return refuse('turn_witness');
   return Boolean(
     input.witness.turnId === admittedTurnId
     && input.witness.inputId
@@ -64,5 +66,5 @@ export function authorizeTrackedRunnerAgentDaemonServiceOperation(
             .agentRuntimeDaemonServiceAdmittedUserMessageSeqs
             ?.[index],
     ),
-  );
+  ) || refuse('turn_witness');
 }
