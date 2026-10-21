@@ -95,6 +95,21 @@ describe('mounted managed configurator', () => {
         expect(catalogState()).toContain('empty');
         await screen.unmount();
     });
+    it('names the controller it could not read and offers Retry when the catalog read fails, instead of a bare refusal', async () => {
+        const serverId = await harness.addHome({ name: 'Compute', serverUrl: 'https://unreadable-controller.example',
+            serverIdentityId: 'srv_unreadable_controller', accountId: 'owner', currentAccount: true });
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'host', installationId: 'installation' })] } });
+        harness.answer(serverId, '/v1/actions/machines.provisioners.list', { status: 503, body: { code: 'service_unavailable' } });
+        const { ManagedMachineConfigurationView } = await import('./ManagedMachineConfigurationView');
+        const screen = await renderScreen(<ManagedMachineConfigurationView serverId={serverId}
+            provisioner={buildQualifiedPluginContributionKey(provisioner.contribution)} initialController={defaultController} />);
+        const errorCards = () => screen.tree.findAll(node => node.props.testID === 'managed-config.catalog' && node.props.kind === 'error');
+        await waitForHomeGovernance(() => expect(errorCards().length).toBeGreaterThan(0));
+        expect(errorCards()[0]!.props.action?.label).toBeTruthy();
+        expect(String(errorCards()[0]!.props.title)).toContain('tester.local');
+        await screen.unmount();
+    });
     it('refuses a schema-less options Action without probing native options or losing the configurator', async () => {
         const serverId = await harness.addHome({ name: 'Compute', serverUrl: 'https://missing-options-schema.example',
             serverIdentityId: 'srv_missing_options_schema', accountId: 'owner', currentAccount: true });

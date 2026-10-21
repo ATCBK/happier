@@ -160,7 +160,9 @@ function ProvisionerFooter(
           the text column. A status never truncates and never decides the button's place. */}
       <View style={styles.statusGroup}>
         {card.status.tone === 'none' ? null : (
-          <StatusDot color={toneColor(theme, card.status.tone)} />
+          <View style={styles.statusDot}>
+            <StatusDot color={toneColor(theme, card.status.tone)} />
+          </View>
         )}
         {card.status.label ? <Text style={styles.status}>{card.status.label}</Text> : null}
       </View>
@@ -208,9 +210,14 @@ const styles = StyleSheet.create((theme) => ({
   },
   statusGroup: {
     flexDirection: 'row',
-    alignItems: 'center',
+    // A status that wraps ("Not installed · get it from cua.ai") keeps its dot on the first line.
+    alignItems: 'flex-start',
     gap: theme.space.s6,
     alignSelf: 'stretch',
+  },
+  statusDot: {
+    height: happierPageTextMetrics('meta').lineHeight,
+    justifyContent: 'center',
   },
   status: {
     ...Typography.default(),

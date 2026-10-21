@@ -529,15 +529,26 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     // Before the provisioner is known the page keeps its own header (and with it the one way back), so the
     // state reads as this page's state rather than a loose section under the host's floating Back.
     const loadingCatalog = catalog.loading || controllerAwaitsMachineList;
-    if (!presetQuery.sameScope || !provisioner) return <ItemList pageColumn="wide">
-        <PageHeader title={props.presetOnly ? t('machinePresets.title') : t('managedMachines.picker.newMachine')} actions={scope.chip} />
-        {creationDisabledNotice}
-        <ItemGroup surface="none">
-            <SurfaceStateCard kind={loadingCatalog ? 'loading' : catalog.error ? 'error' : 'empty'} size="line"
-                title={t(loadingCatalog ? 'managedMachines.providers.loading' : 'managedMachines.providers.unavailable')}
-                diagnosticCode={catalog.error} testID="managed-config.catalog" />
-        </ItemGroup>
-    </ItemList>;
+    if (!presetQuery.sameScope || !provisioner) {
+        // A read that failed names the controller it could not read and offers Retry, as Add does; on a phone the
+        // header folds the chip into its overflow, so the scope leads as its own row and the way to another machine stays in view.
+        const unreadableController = !loadingCatalog && catalog.error ? knownControllerName : undefined;
+        return <ItemList pageColumn="wide">
+            <PageHeader title={props.presetOnly ? t('machinePresets.title') : t('managedMachines.picker.newMachine')} actions={compact ? undefined : scope.chip} />
+            {creationDisabledNotice}
+            {compact && scope.chip ? <ItemGroup>
+                <Item testID="managed-config.scope" title={t('managedMachines.config.managedFrom')} mode="info" showChevron={false} rightElement={scope.chip}
+                    accessoryLayout="stacked" />
+            </ItemGroup> : null}
+            <ItemGroup surface="none">
+                <SurfaceStateCard kind={loadingCatalog ? 'loading' : catalog.error ? 'error' : 'empty'} size="line"
+                    title={unreadableController ? t('managedMachines.add.controllerUnreadable', { controller: unreadableController })
+                        : t(loadingCatalog ? 'managedMachines.providers.loading' : 'managedMachines.providers.unavailable')}
+                    diagnosticCode={catalog.error} testID="managed-config.catalog"
+                    {...(catalog.error && !loadingCatalog ? { action: { label: t('common.retry'), onPress: catalog.refresh } } : {})} />
+            </ItemGroup>
+        </ItemList>;
+    }
     // Choices the provider returned without a native size, image, place or duration (those have their own sections).
     const otherChoices = draft ? draft.choices.filter(choice => !choice.nativeFacts?.size && !choice.nativeFacts?.image
         && !choice.nativeFacts?.location && !choice.nativeFacts?.duration) : [];
