@@ -1297,10 +1297,18 @@ describe('managed acquisition durable custody', () => {
             contributionRef: input.selection.launch.provider, schemaVersion: 1, value: {},
         } });
         let installing = false;
+        let failedReads = 0;
+        const startedAt = Date.now();
+        let nowMs = startedAt;
+        const clock = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
         // Real HTTP producer, installer/task runner and operation store. Only
         // the unavailable native process boundary comes from nativeFixture.
         const server = createServer((request, response) => {
             if (request.url?.endsWith('/current') && installing) {
+                failedReads++;
+                // Currentness reads now share the install/sign-in budget.
+                // Expire that real owner after one retry; schema errors stay terminal.
+                if (category !== 'schema' && failedReads === 2) nowMs = startedAt + 10 * 60_000 + 1;
                 if (category === 'transport') { request.socket.destroy(); return; }
                 response.writeHead(category === 'status' ? 500 : 200, { 'Content-Type': 'application/json' });
                 response.end(JSON.stringify(category === 'status'
@@ -1348,7 +1356,9 @@ describe('managed acquisition durable custody', () => {
             if (result.kind !== 'found' || legacy.kind !== 'found') throw new Error('Operation read did not retain its terminal failure');
             expect(legacy.operation.error).toEqual({ errorCode: result.operation.error!.errorCode, error: result.operation.error!.error });
             expect(installing).toBe(true);
+            expect(failedReads).toBe(category === 'schema' ? 1 : 2);
         } finally {
+            clock.mockRestore();
             server.closeAllConnections();
             await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
         }
