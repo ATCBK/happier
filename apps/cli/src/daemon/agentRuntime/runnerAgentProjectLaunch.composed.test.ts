@@ -24,10 +24,16 @@ import { readStoredCredentialsForServerId, writeStoredCredentialsForServerId } f
 import { createExecutionRunHostBackendFromConversationRuntime, type AgentExecutionRunRuntimeContextV1,
   type AgentExecutionRunOpenRequest, type AgentExecutionRunConversationEventV1, type AgentRuntime } from '@happier-dev/plugin-sdk/agents/runtime';
 import { definePlugin } from '@happier-dev/plugin-sdk';
+import { createExecutionRunHostBackendFromSessionRuntime } from '@happier-dev/plugin-sdk/host/registration';
+import { createCodexAppServerRuntime } from '../../../../../packages/plugins/codex/src/agent/runtime/appServer/runtime';
+import { createCodexNativeAppServerClient } from '../../../../../packages/plugins/codex/src/agent/runtime/appServer/client';
+import { createCodexNativeAppServerSessionRuntime } from '../../../../../packages/plugins/codex/src/agent/runtime/appServer/native';
+import type { AgentSessionRuntimeEvent, AgentExecutionRunEvent } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { PluginDaemonModuleNamespace } from '@/plugins/runtime/types';
 import { bindRequesterSessionRuntimeMachineAdmissionCurrentness } from '@/daemon/sessionEncryption/requesterSessionCredentials';
 import { MachineAdmissionVerifyResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { performance } from 'node:perf_hooks';
+import { logger } from '@/utils/logger';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -124,8 +130,9 @@ async function harness(options: Readonly<{ setup?: boolean; trusted?: boolean; b
   if (options.trusted !== false) await createProjectSetupTrustClient({ credentials: f.bootstrap.credentials, serverHttpBaseUrl: 'https://session-home.test' })
     .approveReviewedEffect({ project: plan.project, expectedRevision: 'absent', authority: 'present_user',
       reviewedEffectDigest: plan.reviewedEffectDigest, currentEffectDigest: plan.reviewedEffectDigest, approvedAtMs: 1 });
+  let runnerCurrent = true;
   const invocation = createRunnerAgentProjectLaunchInvocation({ cwd, signal, sessionId: 'session',
-    requester: { bootstrap: f.bootstrap, isCurrent: f.bootstrap.isCurrent }, isCurrent: () => true,
+    requester: { bootstrap: f.bootstrap, isCurrent: f.bootstrap.isCurrent }, isCurrent: () => runnerCurrent,
     resolveRuntime: context => factory({ operationRuntime, terminalSessions }, context) });
   onTestFinished(() => invocation.disposeProjectAgentLaunch());
   const executable = { kind: 'systemTool' as const, id: 'fixture.agent' };
@@ -190,6 +197,7 @@ async function harness(options: Readonly<{ setup?: boolean; trusted?: boolean; b
     async changeSetup() { await writeFile(join(cwd, '.happier/project.json'), JSON.stringify({ ...manifest,
       workspace: { setup: [{ kind: 'command', command: 'printf changed' }] } })); },
     reassignProject() { projectKey = 'replacement-project'; rowRevision++; },
+    retireRunner: () => { runnerCurrent = false; },
     nativeEffects: () => nativeEffects, toolReads: () => toolReads, unavailable: () => { available = false; },
     accountReadTokens: () => [...accountReadTokens],
     launchWithoutRequester: () => authorizePluginExecLaunchForHost(missingCustodyService, { executable, cwd },
@@ -202,6 +210,90 @@ async function harness(options: Readonly<{ setup?: boolean; trusted?: boolean; b
     duringNative(work: () => Promise<void>) { duringNative = work; },
   };
 }
+
+it('retains a known host executable-resolution refusal before native input dispatch', async () => {
+  const controller = new AbortController();
+  onTestFinished(() => controller.abort());
+  let executableDispatches = 0;
+  const exec = createStablePluginExecService({
+    signal: controller.signal, isOccurrenceCurrent: () => true, allowedExecutables: [],
+    resolveExecutable: async () => { executableDispatches++; return { command: process.execPath }; },
+    resolvePath: async () => process.cwd(),
+  });
+  const runtime = createCodexAppServerRuntime({ directory: process.cwd(), happierSessionId: 'session', host: {
+    baseProcessEnv: {}, logger: { debug() {}, warn() {} },
+    accountUsage: { resolveSourceContext: async () => null, recordSnapshot: async () => ({ status: 'recorded' }),
+      adoptProvisionalRecord: async () => ({ status: 'adopted', fromRecordId: 'from', toRecordId: 'to' }) },
+    createClient: async () => await createCodexNativeAppServerClient({ exec, processEnv: {},
+      transport: { kind: 'daemonProxy' }, signal: controller.signal }),
+  } });
+  const native = createCodexNativeAppServerSessionRuntime(runtime, 'session');
+  const host = await createExecutionRunHostBackendFromSessionRuntime({ sessionId: 'session', openSession: () => native,
+    request: { kind: 'resume', checkpointId: 'thread', runId: 'run', cwd: process.cwd(),
+      profile: { pluginId: 'acme.agent', localId: 'delegate' } } });
+  onTestFinished(() => host.dispose());
+  const result = await host.send({ text: 'Start' }, { localInputId: 'input' });
+  expect(executableDispatches).toBe(0);
+  expect(result).toMatchObject({ status: 'rejected', diagnostic: { code: 'plugin_exec_system_tool_resolution_unavailable' } });
+});
+
+it.each(['before_launch', 'after_dispatch'] as const)('preserves native input custody across a known host refusal: %s', async phase => {
+  const h = await harness();
+  let turnDispatched = false;
+  const appServer = createCodexAppServerRuntime({ directory: h.cwd, happierSessionId: 'session', host: {
+    baseProcessEnv: {}, logger: { debug() {}, warn() {} },
+    accountUsage: { resolveSourceContext: async () => null, recordSnapshot: async () => ({ status: 'recorded' }),
+      adoptProvisionalRecord: async () => ({ status: 'adopted', fromRecordId: 'from', toRecordId: 'to' }) },
+    async createClient() {
+      // Native process/transport boundary: real host Project and Exec admission
+      // must complete before this fixture can receive any native turn.
+      const launch = await h.launch();
+      await launch.release();
+      return { launchFeatures: { realtimeConversationAdvertised: false },
+        async request(method) {
+          if (method === 'thread/start') return { thread: { id: 'native-thread' } };
+          if (method === 'turn/start') {
+            turnDispatched = true;
+            h.retireRunner();
+            await h.launch();
+            throw new Error('Expected the retired runner to refuse launch');
+          }
+          return {};
+        },
+        async notify() {}, registerRequestHandler: () => () => {}, registerNotificationHandler: () => () => {},
+        onExit: () => () => {}, async dispose() {},
+      };
+    },
+  } });
+  const native = createCodexNativeAppServerSessionRuntime(appServer, 'session');
+  onTestFinished(() => native.dispose());
+  const events: AgentSessionRuntimeEvent[] = [];
+  native.watch(event => events.push(event));
+  if (phase === 'before_launch') {
+    h.retireRunner();
+    await expect(h.launch()).rejects.toMatchObject({ code: 'project_requester_credentials_unavailable' });
+  }
+  const host = await createExecutionRunHostBackendFromSessionRuntime({ sessionId: 'session', openSession: () => native,
+    request: { kind: 'resume', checkpointId: 'thread', runId: 'run', cwd: h.cwd,
+      profile: { pluginId: 'acme.agent', localId: 'delegate' } } });
+  const runEvents: AgentExecutionRunEvent[] = [];
+  host.watch(event => runEvents.push(event));
+  onTestFinished(() => host.dispose());
+  const result = await host.send({ text: 'Start' }, { localInputId: 'input' });
+  expect(turnDispatched).toBe(phase === 'after_dispatch');
+  expect(result).toMatchObject(phase === 'before_launch'
+    ? { status: 'rejected', diagnostic: { code: 'project_requester_credentials_unavailable' } }
+    : { status: 'unavailable', diagnostic: { code: 'codex_send_outcome_unknown' } });
+  expect(events.some(event => event.kind === 'input-custody-unknown')).toBe(phase === 'after_dispatch');
+  expect(events.some(event => event.kind === 'input-accepted')).toBe(false);
+  expect(runEvents).toContainEqual(expect.objectContaining({ kind: 'run-failed', diagnostic: {
+    code: phase === 'before_launch' ? 'project_requester_credentials_unavailable' : 'codex_send_outcome_unknown',
+    severity: 'error', message: expect.any(String),
+  } }));
+  if (phase === 'before_launch') expect(h.nativeEffects()).toBe(0);
+  if (phase === 'before_launch') await expect(h.launch()).rejects.toMatchObject({
+    execLaunch: 'notStarted', data: { execLaunch: 'notStarted' } });
+});
 
 it('remeasures native Project inputs once per launch checkpoint without repeating full preparation', async () => {
   const h = await harness();
@@ -340,6 +432,23 @@ it.each(['continue', 'cancel'] as const)('serializes concurrent qualified native
   const launch = await launching;
   try { expect(h.spawned).toHaveLength(1); expect(h.operations()).toHaveLength(1); }
   finally { await launch.release(); }
+});
+
+it('diagnoses the pending preparation phase and cancellation source without exception contents', async () => {
+  const h = await harness({ setup: true, trusted: false });
+  const log = vi.spyOn(logger, 'debug');
+  const launching = h.launchWithOperation();
+  void launching.catch(() => {});
+  onTestFinished(() => { h.cancel(); });
+  await expect.poll(() => h.operation()?.setupReview?.reviewedEffectDigest).toEqual(expect.any(String));
+  h.cancel();
+  await expect(launching).rejects.toBeDefined();
+  const diagnostic = log.mock.calls.find(([message, fields]) => message === '[PluginExec] Native launch preparation phase'
+    && fields && typeof fields === 'object' && 'phase' in fields && fields.phase === 'project_preparation'
+    && 'status' in fields && fields.status === 'failed');
+  expect(diagnostic?.[1]).toMatchObject({ pendingPhase: 'setup_review', abortSources: expect.arrayContaining(['operation']),
+    abortReason: 'abort' });
+  expect(diagnostic?.[1]).not.toHaveProperty('error');
 });
 
 it('executes trusted cold setup inside the original startup reservation before authorizing the Agent', async () => {

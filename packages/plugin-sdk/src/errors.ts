@@ -20,10 +20,13 @@ export type PluginErrorData = Readonly<{
     remediation?: PluginRemediationData;
     diagnostics?: readonly PluginDiagnosticData[];
     actionHandlerInvocation?: PluginActionHandlerInvocation;
+    /** Host Exec refused this launch before the requested process was started. */
+    execLaunch?: 'notStarted';
 }>;
 
 export interface PluginError {
     readonly actionHandlerInvocation?: PluginActionHandlerInvocation;
+    readonly execLaunch?: 'notStarted';
 }
 
 export class PluginError extends Error {
@@ -35,7 +38,7 @@ export class PluginError extends Error {
     readonly data: PluginErrorData;
 
     constructor(
-        data: Omit<PluginErrorData, 'name' | 'actionHandlerInvocation'>,
+        data: Omit<PluginErrorData, 'name' | 'actionHandlerInvocation' | 'execLaunch'>,
         options?: ErrorOptions,
     ) {
         super(data.message ?? data.code, options);

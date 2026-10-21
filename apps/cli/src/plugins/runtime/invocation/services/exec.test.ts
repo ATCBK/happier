@@ -1517,7 +1517,7 @@ describe('createStablePluginExecService', () => {
             kind: 'jsonStream',
             launch: { executable },
             maxFrameBytes: 0,
-        })).rejects.toMatchObject({ code: 'plugin_exec_invalid_limit' });
+        })).rejects.toMatchObject({ code: 'plugin_exec_invalid_limit', execLaunch: 'notStarted', data: { execLaunch: 'notStarted' } });
     });
 
     it.skipIf(process.platform === 'win32')('rechecks protocol process cleanup after an unconfirmed disposal instead of retaining the failed observation', async () => {

@@ -74,10 +74,13 @@ describe('PluginError', () => {
         const error = new PluginError({
             code: 'author_failure_after_effect',
             actionHandlerInvocation: 'notStarted',
+            execLaunch: 'notStarted',
         } as never);
 
         expect(error).not.toHaveProperty('actionHandlerInvocation');
         expect(error.data).not.toHaveProperty('actionHandlerInvocation');
+        expect(error).not.toHaveProperty('execLaunch');
+        expect(error.data).not.toHaveProperty('execLaunch');
         expect(isPluginActionHandlerInvocationNotStartedAdvisory(error)).toBe(false);
     });
 

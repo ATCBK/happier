@@ -603,11 +603,12 @@ function mapCodexAppServerEvent(event: CodexAppServerEvent): NativeSessionEventI
 function toNativeSendFailure(
   status: 'rejected' | 'unavailable' | 'unsupported',
   message?: string,
+  refusal?: Pick<CodexAppServerSendResult, 'diagnosticCode' | 'retryable'>,
 ): Exclude<Awaited<ReturnType<AgentSessionRuntime['send']>>, { status: 'admitted' }> {
   return {
     status,
-    retryable: status === 'unavailable',
-    diagnostic: diagnostic(`codex_send_${status}`, message ?? `Codex input was ${status}.`),
+    retryable: refusal?.retryable ?? status === 'unavailable',
+    diagnostic: diagnostic(refusal?.diagnosticCode ?? `codex_send_${status}`, message ?? `Codex input was ${status}.`),
   };
 }
 
@@ -821,7 +822,7 @@ function createCodexNativeAppServerConversationRuntime(
         for (const queuedEvent of queued) emit(queuedEvent.event, queuedEvent.emittedAtMs);
         return { status: 'admitted' };
       }
-      const failure = toNativeSendFailure(result.status, result.diagnostic);
+      const failure = toNativeSendFailure(result.status, result.diagnostic, result);
       emit({
         kind: 'input-rejected',
         inputIds: request.inputIds,

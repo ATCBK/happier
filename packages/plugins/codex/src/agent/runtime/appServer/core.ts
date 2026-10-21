@@ -172,6 +172,9 @@ export type CodexAppServerSendResult = Readonly<{
   turnId?: string;
   agentTurnId?: string;
   diagnostic?: string;
+  /** A known refusal resolved before native input dispatch. */
+  diagnosticCode?: string;
+  retryable?: boolean;
 }>;
 
 export type CodexAppServerCancelResult = Readonly<{

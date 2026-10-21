@@ -21,7 +21,7 @@ import {
   canPublishSessionResumeIdentity,
   buildAgentAccountUsageRecordId,
 } from '@happier-dev/plugin-sdk/agents/runtime';
-import { PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
+import { isPluginError, PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
 import { isChangeTitleToolNameAlias, readPendingLocalId } from '@happier-dev/plugin-sdk/sessions';
 import type {
   AgentSessionRealtimeConversation,
@@ -2779,15 +2779,27 @@ export function createCodexAppServerRuntime(
   const startTurnPromptAttempt = async (
     input: CodexAppServerInput,
     options?: CodexAppServerSendOptions,
-  ): Promise<void> => {
+  ): Promise<void | CodexAppServerSendResult> => {
     const prompt = input.text;
-    await waitForConnectedServiceAuthApply();
-    const activeThreadId = await ensureThreadId();
-    await waitForConnectedServiceAuthApply();
-    if (pendingTurn) throw new Error('Codex app-server already has a turn in flight');
-    const appServerClient = await ensureClient();
-    await waitForConnectedServiceAuthApply();
-    if (pendingTurn) throw new Error('Codex app-server already has a turn in flight');
+    let activeThreadId: string;
+    let appServerClient: DisposableCodexAppServerClient;
+    try {
+      await waitForConnectedServiceAuthApply();
+      activeThreadId = await ensureThreadId();
+      await waitForConnectedServiceAuthApply();
+      if (pendingTurn) throw new Error('Codex app-server already has a turn in flight');
+      appServerClient = await ensureClient();
+      await waitForConnectedServiceAuthApply();
+      if (pendingTurn) throw new Error('Codex app-server already has a turn in flight');
+    } catch (error) {
+      // Host Exec evidence describes this launch only. This preparation boundary
+      // additionally proves that this input has not reached turn/start.
+      if (isPluginError(error) && error.execLaunch === 'notStarted' && error.data.execLaunch === 'notStarted') {
+        return { status: 'rejected', diagnosticCode: error.code, retryable: error.retryable,
+          diagnostic: 'Native process launch was refused before input dispatch.' };
+      }
+      throw error;
+    }
     const pendingProviderPrompt = trackPendingProviderPrompt(prompt, options);
     turnSeq += 1;
     const activeTurn = createPendingTurn(
@@ -2927,9 +2939,9 @@ export function createCodexAppServerRuntime(
   const sendTurnPrompt = async (
     input: CodexAppServerInput,
     options?: CodexAppServerSendOptions,
-  ): Promise<void> => {
+  ): Promise<void | CodexAppServerSendResult> => {
     terminalPendingTurnFailure = null;
-    await startTurnPromptAttempt(input, options);
+    return await startTurnPromptAttempt(input, options);
   };
 
   const waitForTurnCompletion = async (): Promise<void> => {
@@ -2945,7 +2957,7 @@ export function createCodexAppServerRuntime(
     }
   };
 
-  const observeCompletionInBackground = (submitted: Promise<void>): void => {
+  const observeCompletionInBackground = (submitted: Promise<void | CodexAppServerSendResult>): void => {
     backgroundCompletion = submitted.then(() => waitForTurnCompletion());
     void backgroundCompletion.catch((error: unknown) => {
       params.host.logger.debug(
@@ -3471,7 +3483,10 @@ export function createCodexAppServerRuntime(
       }
       const submitted = sendTurnPrompt(turnInput, options);
       observeCompletionInBackground(submitted);
-      try { await submitted; }
+      try {
+        const refusal = await submitted;
+        if (refusal) return refusal;
+      }
       catch (error) {
         const refusal = resolveStructuredInputRefusal(error, 'turn/start');
         if (!refusal) throw error;

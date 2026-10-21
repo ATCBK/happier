@@ -27,24 +27,43 @@ export function createProjectAgentNativeLaunchOwner(input: Readonly<{
 }>) {
     const { runtime, ingress } = input;
     const custody = createProjectNativeInvocationCustody(input.operation ?? { signal: ingress.signal });
+    let pendingPhase: Parameters<NonNullable<ProjectAgentLaunchPreparationInput['onPhase']>>[0]
+        | 'currentness' | 'worker_admission' | 'setup_review' | 'setup_execution' = 'currentness';
+    let launchSignal: AbortSignal | undefined;
+    let preparationSignal: AbortSignal | undefined;
     const fail = (code: string, details?: Readonly<Record<string, unknown>>): never => {
         throw new PluginError({ code, message: 'Project Agent launch preparation was refused',
             ...(details ? { details: projectNativeJsonValueForTransport(details) } : {}) });
     };
     const assertCurrent = async (signal: AbortSignal) => {
         signal.throwIfAborted();
+        pendingPhase = 'currentness';
         if (runtime.isCurrent && !await runtime.isCurrent()
             || ingress.requesterSessionBootstrap && !await ingress.requesterSessionBootstrap.isCurrent()) fail('project_requester_credentials_unavailable');
         signal.throwIfAborted();
     };
     return Object.freeze({
+        readPreparationDiagnostic() {
+            const abortSources = [
+                ...(launchSignal?.aborted ? ['launch'] : []),
+                ...(ingress.signal.aborted ? ['ingress'] : []),
+                ...(input.operation?.signal.aborted ? ['operation'] : []),
+            ];
+            const reason: unknown = preparationSignal?.reason;
+            return { pendingPhase, ...(preparationSignal?.aborted ? { abortSources,
+                abortReason: reason instanceof Error ? reason.name === 'AbortError' ? 'abort'
+                    : reason.name === 'TimeoutError' ? 'timeout' : 'error' : 'other' } : {}) };
+        },
         async prepare(signal: AbortSignal, cwd?: string, environment?: Readonly<Record<string, string>>) {
+            launchSignal = signal;
             signal = AbortSignal.any([signal, ingress.signal, ...(input.operation ? [input.operation.signal] : [])]);
+            preparationSignal = signal;
             await assertCurrent(signal);
             // The host invocation selects the Project. A native child may use a
             // contained cwd, but cannot select another Project by changing cwd.
             if (cwd && !validatePath(cwd.replaceAll('\\', '/'), input.cwd).valid) fail('outside_root');
             const read = (presentation?: Pick<ProjectSetupReviewPresentation, 'provenance'>) => prepareProjectAgentLaunch({
+                onPhase: phase => { pendingPhase = phase; },
                 cwd: input.cwd, machineId: runtime.machineId, serverId: runtime.serverId,
                 serverHttpBaseUrl: runtime.serverHttpBaseUrl, account: projectRuntimeAccountRowsInput(runtime),
                 nativeIo: runtime.nativeIo, plugins: runtime.plugins, successHomeDir: runtime.successHomeDir,
@@ -96,6 +115,7 @@ export function createProjectAgentNativeLaunchOwner(input: Readonly<{
                 const publish = () => publishProjectFiniteAdmission({ workspace: baseline.workspace, purpose: 'setup',
                     sourceWorkspace: workspaceAddressFromRefV1(baseline.workspace), requesterAccountId: runtime.accountId, operation });
                 publish();
+                pendingPhase = 'worker_admission';
                 const result = await runtime.workerAdmission.execute({ operationId: operationId!, workspaceRefId: baseline.workspace.id,
                     requesterAccountId: runtime.accountId, signal, accept() {},
                     onQueue: queueAhead => operation.operationProgress.update({ phase: 'queued', queueAhead }),
@@ -109,6 +129,7 @@ export function createProjectAgentNativeLaunchOwner(input: Readonly<{
                                 const current = await refresh();
                                 if (current.kind !== 'pendingApproval') break;
                                 if (!operation.operationReview) return { kind, result: { ok: false, errorCode: current.code, error: current.code } };
+                                pendingPhase = 'setup_review';
                                 await operation.operationReview.waitForResume(pending(current), { review: selected => runWithRequesterSessionCurrentnessCheckpoint(async () => {
                                     const reviewed = await refresh();
                                     if (reviewed.kind !== 'pendingApproval') return null;
@@ -121,9 +142,13 @@ export function createProjectAgentNativeLaunchOwner(input: Readonly<{
                                 await runWithRequesterSessionCurrentnessCheckpoint(() => assertCurrent(signal));
                                 if (decision) break;
                             }
+                            pendingPhase = 'setup_execution';
                             const executed = await executeProjectSetup({ preparation: preparation(), requesterAccountId: runtime.accountId,
                                 operation, terminalSessions: runtime.terminalSessions, environmentIo: runtime.environmentIo,
-                                deferEnvironmentToLaunch: true, beforeNativeEffect: () => runWithRequesterSessionCurrentnessCheckpoint(() => assertCurrent(signal)),
+                                deferEnvironmentToLaunch: true, beforeNativeEffect: async () => {
+                                    await runWithRequesterSessionCurrentnessCheckpoint(() => assertCurrent(signal));
+                                    pendingPhase = 'setup_execution';
+                                },
                                 ...(runtime.platform ? { platform: runtime.platform } : {}),
                                 ...(environment ?? runtime.hostEnvironment ? { hostEnvironment: environment ?? runtime.hostEnvironment } : {}) });
                             kind = executed.kind;

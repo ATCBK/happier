@@ -53,6 +53,17 @@ type AgentNativeLaunchQualifier = NonNullable<NonNullable<Parameters<ExecService
 const INTERNAL_PROTOCOL_GRACEFUL_DISPOSERS = new WeakMap<PluginProtocolClientHandle<'jsonRpc'>,
     (beforeTerminate: SupervisedPluginGracefulStop) => Promise<void>>();
 
+/** Host resolution and preparation supply this evidence only before process dispatch. */
+function withExecLaunchNotStarted(error: unknown): unknown {
+    if (!isPluginError(error)) return error;
+    const refusal = new PluginError(error.data, { cause: error });
+    Object.defineProperty(refusal, 'execLaunch', { value: 'notStarted', enumerable: true });
+    Object.defineProperty(refusal, 'data', {
+        value: Object.freeze({ ...refusal.data, execLaunch: 'notStarted' as const }), enumerable: true,
+    });
+    return refusal;
+}
+
 /** The supervisor's existing termination grace contains the entire protocol stop. */
 export async function disposePluginProtocolClientGracefullyForHost(
     handle: PluginProtocolClientHandle<'jsonRpc'>,
@@ -133,12 +144,14 @@ export async function authorizeResolvedAgentNativeExecLaunchForHost(
     signal?: AbortSignal,
     nativeLaunch?: AgentNativeLaunchQualifier,
 ): Promise<HostAuthorizedPluginExecLaunch> {
-    const authorize = INTERNAL_RESOLVED_AGENT_LAUNCH_AUTHORIZERS.get(service);
-    if (!authorize) {
-        launch.release?.();
-        return fail('plugin_exec_native_launch_unavailable', 'Native Agent launch authority is unavailable');
-    }
-    return await authorize(launch, signal, nativeLaunch);
+    try {
+        const authorize = INTERNAL_RESOLVED_AGENT_LAUNCH_AUTHORIZERS.get(service);
+        if (!authorize) {
+            launch.release?.();
+            return fail('plugin_exec_native_launch_unavailable', 'Native Agent launch authority is unavailable');
+        }
+        return await authorize(launch, signal, nativeLaunch);
+    } catch (error) { throw withExecLaunchNotStarted(error); }
 }
 
 export type ResolvedPluginExecutable = Readonly<{
@@ -391,16 +404,18 @@ export async function authorizePluginExecLaunchForHost(
         & Readonly<{ timeoutMs?: number }>,
     options?: HostPluginExecLaunchOptions,
 ): Promise<HostAuthorizedPluginExecLaunch> {
-    const authorize = INTERNAL_LAUNCH_AUTHORIZERS.get(service);
-    if (!authorize) {
-        return fail(
-            'plugin_exec_launch_authorization_unavailable',
-            'Exact process launch authorization is unavailable in this invocation host',
-        );
-    }
-    // Only this host entry point supplies the third argument. Extra properties
-    // on public run/spawn options cannot opt a plugin into Project effects.
-    return await authorize(request, options, options?.projectLaunch, options?.nativeExecutableOwner, options?.prepareAgentNativeLaunch);
+    try {
+        const authorize = INTERNAL_LAUNCH_AUTHORIZERS.get(service);
+        if (!authorize) {
+            return fail(
+                'plugin_exec_launch_authorization_unavailable',
+                'Exact process launch authorization is unavailable in this invocation host',
+            );
+        }
+        // Only this host entry point supplies the third argument. Extra properties
+        // on public run/spawn options cannot opt a plugin into Project effects.
+        return await authorize(request, options, options?.projectLaunch, options?.nativeExecutableOwner, options?.prepareAgentNativeLaunch);
+    } catch (error) { throw withExecLaunchNotStarted(error); }
 }
 
 export function createStableRunnerPluginExecService(
@@ -483,13 +498,15 @@ export function createStableRunnerPluginExecService(
                 PluginSystemToolsService['resolve']
             >[0],
         ) {
-            const resolved =
-                await params.resolveSystemTool(request);
-            systemToolResolutionIds.set(
-                resolved.result.executable,
-                resolved.resolutionId,
-            );
-            return resolved.result;
+            try {
+                const resolved =
+                    await params.resolveSystemTool(request);
+                systemToolResolutionIds.set(
+                    resolved.result.executable,
+                    resolved.resolutionId,
+                );
+                return resolved.result;
+            } catch (error) { throw withExecLaunchNotStarted(error); }
         },
     });
     const service: ExecService = Object.freeze({
@@ -551,14 +568,16 @@ export async function resolvePluginExecSystemToolForHost(
     service: ExecService,
     request: Parameters<PluginSystemToolsService['resolve']>[0],
 ): Promise<HostResolvedSystemToolExecutable> {
-    const resolveSystemTool = INTERNAL_SYSTEM_TOOL_RESOLVERS.get(service);
-    if (!resolveSystemTool) {
-        fail(
-            'plugin_exec_system_tool_resolution_unavailable',
-            'System-tool executable resolution is unavailable in this invocation host',
-        );
-    }
-    return await resolveSystemTool(request);
+    try {
+        const resolveSystemTool = INTERNAL_SYSTEM_TOOL_RESOLVERS.get(service);
+        if (!resolveSystemTool) {
+            fail(
+                'plugin_exec_system_tool_resolution_unavailable',
+                'System-tool executable resolution is unavailable in this invocation host',
+            );
+        }
+        return await resolveSystemTool(request);
+    } catch (error) { throw withExecLaunchNotStarted(error); }
 }
 
 export async function resolvePluginExecManagedDependencyForHost(
@@ -566,23 +585,25 @@ export async function resolvePluginExecManagedDependencyForHost(
     dependencyId: string,
     options?: Readonly<{ signal?: AbortSignal }>,
 ): Promise<HostResolvedManagedDependencyExecutable> {
-    const resolveExecutable = INTERNAL_EXECUTABLE_RESOLVERS.get(service);
-    if (!resolveExecutable) {
-        fail(
-            'plugin_exec_managed_dependency_resolution_unavailable',
-            'Managed-dependency executable resolution is unavailable in this invocation host',
-        );
-    }
-    const resolved = await resolveExecutable({
-        kind: 'managedDependency',
-        id: dependencyId,
-    }, options);
-    return Object.freeze({
-        command: resolved.command,
-        ...(resolved.args ? { args: resolved.args } : {}),
-        ...(resolved.env ? { env: resolved.env } : {}),
-        release: resolved.release ?? (() => undefined),
-    });
+    try {
+        const resolveExecutable = INTERNAL_EXECUTABLE_RESOLVERS.get(service);
+        if (!resolveExecutable) {
+            fail(
+                'plugin_exec_managed_dependency_resolution_unavailable',
+                'Managed-dependency executable resolution is unavailable in this invocation host',
+            );
+        }
+        const resolved = await resolveExecutable({
+            kind: 'managedDependency',
+            id: dependencyId,
+        }, options);
+        return Object.freeze({
+            command: resolved.command,
+            ...(resolved.args ? { args: resolved.args } : {}),
+            ...(resolved.env ? { env: resolved.env } : {}),
+            release: resolved.release ?? (() => undefined),
+        });
+    } catch (error) { throw withExecLaunchNotStarted(error); }
 }
 
 type ProtocolClientKind = PluginProtocolClientSpec['kind'];
@@ -790,7 +811,7 @@ export async function authorizeResolvedProjectExecLaunchForHost(input: Readonly<
         }
     } catch (error) {
         input.launch.release?.();
-        throw error;
+        throw withExecLaunchNotStarted(error);
     }
     const executableOwner = nativeExecutableOwner;
     return await finalizeHostExecLaunch({
@@ -801,7 +822,7 @@ export async function authorizeResolvedProjectExecLaunchForHost(input: Readonly<
                 resolveNativeExecutableForHost(executableOwner, executable, signal),
         } : {}),
         assertCurrent,
-    });
+    }).catch(error => { throw withExecLaunchNotStarted(error); });
 }
 
 /** Native-effect IO over the incumbent supervisor and process-tree owner.
@@ -1110,53 +1131,60 @@ export function createStablePluginExecService(params: Readonly<{
 
     const systemTools: PluginSystemToolsService = Object.freeze({
         async resolve(request: Parameters<PluginSystemToolsService['resolve']>[0]) {
-            guard(request.signal);
-            const executable = Object.freeze({
-                kind: 'systemTool' as const,
-                id: request.toolId,
-            });
-            diagnoseDeclarationMismatches({ executable });
-            if (params.systemTools === undefined) {
-                fail('plugin_exec_system_tool_resolution_unavailable', 'System-tool resolution is unavailable in this invocation host');
-            }
-            const resolved = await params.systemTools.resolve(request);
-            guard(request.signal);
-            preResolvedSystemTools.set(executable, Object.freeze({
-                launch: Object.freeze({
-                    command: resolved.launch.executablePath,
-                    args: Object.freeze([...(resolved.launch.args ?? [])]),
-                    env: Object.freeze({ ...(resolved.launch.env ?? {}) }),
-                    ...(resolved.allowedArguments ? {
-                        allowedArguments: Object.freeze([...resolved.allowedArguments]),
-                    } : {}),
-                }),
-                expiresAt: resolved.expiresAt ?? null,
-            }));
-            return Object.freeze({
-                executable,
-                executablePath: resolved.executablePath,
-                ...(resolved.providerExitOwnership === 'direct' ? { providerExitOwnership: 'direct' as const } : {}),
-                ...(resolved.diagnostics ? {
-                    diagnostics: Object.freeze(resolved.diagnostics.map((diagnostic) => {
-                        const detail = Object.freeze(Object.fromEntries(
-                            Object.entries(diagnostic.detail ?? {}).filter(
-                                (entry): entry is [string, string | number] => (
-                                    typeof entry[1] === 'string'
-                                    || (typeof entry[1] === 'number' && Number.isFinite(entry[1]))
+            try {
+                guard(request.signal);
+                const executable = Object.freeze({
+                    kind: 'systemTool' as const,
+                    id: request.toolId,
+                });
+                diagnoseDeclarationMismatches({ executable });
+                if (params.systemTools === undefined) {
+                    fail('plugin_exec_system_tool_resolution_unavailable', 'System-tool resolution is unavailable in this invocation host');
+                }
+                const resolved = await params.systemTools.resolve(request);
+                guard(request.signal);
+                preResolvedSystemTools.set(executable, Object.freeze({
+                    launch: Object.freeze({
+                        command: resolved.launch.executablePath,
+                        args: Object.freeze([...(resolved.launch.args ?? [])]),
+                        env: Object.freeze({ ...(resolved.launch.env ?? {}) }),
+                        ...(resolved.allowedArguments ? {
+                            allowedArguments: Object.freeze([...resolved.allowedArguments]),
+                        } : {}),
+                    }),
+                    expiresAt: resolved.expiresAt ?? null,
+                }));
+                return Object.freeze({
+                    executable,
+                    executablePath: resolved.executablePath,
+                    ...(resolved.providerExitOwnership === 'direct' ? { providerExitOwnership: 'direct' as const } : {}),
+                    ...(resolved.diagnostics ? {
+                        diagnostics: Object.freeze(resolved.diagnostics.map((diagnostic) => {
+                            const detail = Object.freeze(Object.fromEntries(
+                                Object.entries(diagnostic.detail ?? {}).filter(
+                                    (entry): entry is [string, string | number] => (
+                                        typeof entry[1] === 'string'
+                                        || (typeof entry[1] === 'number' && Number.isFinite(entry[1]))
+                                    ),
                                 ),
-                            ),
-                        ));
-                        return Object.freeze({
-                            code: diagnostic.code,
-                            ...(Object.keys(detail).length > 0 ? { detail } : {}),
-                        });
-                    })),
-                } : {}),
-            });
+                            ));
+                            return Object.freeze({
+                                code: diagnostic.code,
+                                ...(Object.keys(detail).length > 0 ? { detail } : {}),
+                            });
+                        })),
+                    } : {}),
+                });
+            } catch (error) { throw withExecLaunchNotStarted(error); }
         },
     });
 
-    async function authorizeLaunch(
+    async function authorizeLaunch(...args: Parameters<typeof prepareLaunch>): Promise<HostAuthorizedPluginExecLaunch> {
+        try { return await prepareLaunch(...args); }
+        catch (error) { throw withExecLaunchNotStarted(error); }
+    }
+
+    async function prepareLaunch(
         request: Parameters<ExecService['spawn']>[0] & Readonly<{ timeoutMs?: number }>,
         options?: { signal?: AbortSignal; nativeLaunch?: AgentNativeLaunchQualifier },
         projectLaunch?: HostProjectNativeLaunchAdmission,
@@ -1323,27 +1351,31 @@ export function createStablePluginExecService(params: Readonly<{
         // Exec options cannot transfer invocation authority or process custody.
         const managedCustody = readInstalledManagedProcessCustody(service, request);
         if (managedCustody && options?.descendantDisposition === 'preserve-on-success') {
-            return fail('plugin_exec_managed_handoff_forbidden', 'Managed process custody cannot be handed to a native tool');
+            throw withExecLaunchNotStarted(new PluginError({ code: 'plugin_exec_managed_handoff_forbidden', message: 'Managed process custody cannot be handed to a native tool' }));
         }
         const lifetime = managedCustody?.lifetime;
         const launch = await authorizeLaunch(request, options, undefined, undefined, undefined, lifetime);
         const authorizedAt = performance.now();
         try { guard(options?.signal, lifetime); }
-        catch (error) { await launch.release(); throw error; }
+        catch (error) { await launch.release(); throw withExecLaunchNotStarted(error); }
         let environment: Readonly<Record<string, string>>;
+        let linuxProcessLaunchScope: LinuxProcessLaunchScope | null;
         try {
-            environment = transformProtocolClientEnvironment
-                && params.transformAgentChildLaunchEnvironment
-                ? params.transformAgentChildLaunchEnvironment(launch.env)
-                : launch.env;
+            try {
+                environment = transformProtocolClientEnvironment
+                    && params.transformAgentChildLaunchEnvironment
+                    ? params.transformAgentChildLaunchEnvironment(launch.env)
+                    : launch.env;
+            } catch (error) {
+                fail('plugin_exec_spawn_failed', 'Process could not be started', error);
+            }
+            linuxProcessLaunchScope = process.platform === 'linux' && managedCustody
+                ? await prepareCgroupProcessLaunchScope() : null;
+            guard(options?.signal, lifetime);
         } catch (error) {
             await launch.release();
-            return fail('plugin_exec_spawn_failed', 'Process could not be started', error);
+            throw withExecLaunchNotStarted(error);
         }
-        const linuxProcessLaunchScope = process.platform === 'linux' && managedCustody
-            ? await prepareCgroupProcessLaunchScope() : null;
-        try { guard(options?.signal, lifetime); }
-        catch (error) { await launch.release(); throw error; }
         const supervised = spawnAuthorizedHostExecLaunchForHost({ ...launch, env: environment,
             processOwnerTag: managedCustody?.processOwnerTag ?? processOwnerTag }, {
             readSpawnFailureLimits: params.readSpawnFailureLimits,
@@ -1648,27 +1680,29 @@ export function createStablePluginExecService(params: Readonly<{
         spec: PluginProtocolClientSpec,
         options?: { signal?: AbortSignal },
     ): Promise<PluginProtocolClientHandle> {
-        if (!Number.isSafeInteger(spec.maxFrameBytes) || spec.maxFrameBytes <= 0) {
-            return fail('plugin_exec_invalid_limit', 'maxFrameBytes must be a positive safe integer');
-        }
-        if (spec.kind === 'jsonRpc' && spec.requestTimeoutMs !== undefined && (
-            !Number.isSafeInteger(spec.requestTimeoutMs) || spec.requestTimeoutMs < 0
-        )) {
-            return fail('plugin_exec_invalid_limit', 'requestTimeoutMs must be a non-negative safe integer');
-        }
-        if (spec.kind === 'loopbackWebSocketJson' && spec.endpoint && (
-            !Number.isSafeInteger(spec.endpoint.port)
-            || spec.endpoint.port < 1
-            || spec.endpoint.port > 65_535
-        )) {
-            return fail('plugin_exec_invalid_endpoint', 'Loopback WebSocket port is invalid');
-        }
-        if (spec.kind === 'loopbackWebSocketJson' && spec.handshake && (
-            spec.handshake.framing !== 'lengthPrefix'
-            || !['little-endian', 'big-endian'].includes(spec.handshake.byteOrder)
-        )) {
-            return fail('plugin_exec_invalid_handshake', 'Loopback WebSocket handshake framing is invalid');
-        }
+        try {
+            if (!Number.isSafeInteger(spec.maxFrameBytes) || spec.maxFrameBytes <= 0) {
+                return fail('plugin_exec_invalid_limit', 'maxFrameBytes must be a positive safe integer');
+            }
+            if (spec.kind === 'jsonRpc' && spec.requestTimeoutMs !== undefined && (
+                !Number.isSafeInteger(spec.requestTimeoutMs) || spec.requestTimeoutMs < 0
+            )) {
+                return fail('plugin_exec_invalid_limit', 'requestTimeoutMs must be a non-negative safe integer');
+            }
+            if (spec.kind === 'loopbackWebSocketJson' && spec.endpoint && (
+                !Number.isSafeInteger(spec.endpoint.port)
+                || spec.endpoint.port < 1
+                || spec.endpoint.port > 65_535
+            )) {
+                return fail('plugin_exec_invalid_endpoint', 'Loopback WebSocket port is invalid');
+            }
+            if (spec.kind === 'loopbackWebSocketJson' && spec.handshake && (
+                spec.handshake.framing !== 'lengthPrefix'
+                || !['little-endian', 'big-endian'].includes(spec.handshake.byteOrder)
+            )) {
+                return fail('plugin_exec_invalid_handshake', 'Loopback WebSocket handshake framing is invalid');
+            }
+        } catch (error) { throw withExecLaunchNotStarted(error); }
         switch (spec.kind) {
             case 'jsonRpc': return await spawnJsonRpcClient(spec, options);
             case 'jsonStream': return await spawnJsonStreamClient(spec, options);

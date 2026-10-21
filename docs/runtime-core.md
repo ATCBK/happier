@@ -363,6 +363,16 @@ passes the private mode in Agent SDK send options. An idle conversation has no
 active input authority, and lost private authority refuses rather than inheriting
 the opener's ceiling.
 
+In 0.3 development source, host Exec executable resolution and launch preparation mark a typed
+`PluginError` with `execLaunch: 'notStarted'` only when it refuses before starting
+the requested process. The SDK's canonical `isPluginError` reader recognizes the
+typed error across bundled SDK copies. A native send adapter must
+also establish that its input was not dispatched: the launch marker alone does
+not settle an earlier input's custody. Codex preserves a known prelaunch refusal
+as `input-rejected` with its original code, which the shared Execution Run adapter
+projects as `run-failed`; errors after native input dispatch remain outcome unknown.
+This contract applies to host Exec services for bundled and installed Agents.
+
 The new conversation operation also enforces each input's resolved public
 `permissionIntent` before native input effects. The host derives it through the
 same Run authority owner from the Run mode, original causal ceiling and current
@@ -977,6 +987,13 @@ Cancellation while queued can prove no launch. After preparation/process custody
 begins, uncertain cleanup retains that operation, output and reservation until the
 canonical owner proves settlement. Inspect and explicit Stop observe/control the
 same occurrence rather than replaying it or releasing capacity from elapsed time.
+
+Native Project preparation's existing failed-phase diagnostic includes the
+pending sub-operation and, on cancellation, the aborted launch, ingress or
+operation signals plus a fixed abort-reason category. Runner-authority refusals
+name the failed snapshot, Session, source-custody, process or turn-witness
+predicate. These diagnostics contain no exception text, paths or credential
+values and do not change cancellation, retries or preparation deadlines.
 
 Worker-copy retirement uses the existing [Project worker Action](../apps/cli/src/workspaces/execution/projectWorkerAction.ts)
 and Workspace Sync relationship owner. Active queue/preparation/process/Service/Sync

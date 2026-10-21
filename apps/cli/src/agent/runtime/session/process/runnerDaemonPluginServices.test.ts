@@ -4341,6 +4341,7 @@ describe('runner daemon PluginServices proxy', () => {
 
     it('keeps exact exec authorization in the daemon and process custody in the runner', async () => {
         const unavailable = createUnavailablePluginServices();
+        let refuseLaunch = false;
         const operations: RunnerDaemonPluginServiceOperationV1[] = [];
         let resolveReleased!: () => void;
         const released = new Promise<void>((resolve) => {
@@ -4358,6 +4359,9 @@ describe('runner daemon PluginServices proxy', () => {
                     operation.kind
                     === 'plugin_exec.launch.authorize_v1'
                 ) {
+                    if (refuseLaunch) throw createSeparatelyBundledPluginError({
+                        code: 'project_requester_credentials_unavailable', message: 'Project launch refused',
+                    });
                     return {
                         authorizationId: 'authorization-1',
                         launch: {
@@ -4420,6 +4424,10 @@ describe('runner daemon PluginServices proxy', () => {
             invocationId: 'invocation-exec',
             authorizationId: 'authorization-1',
         });
+        refuseLaunch = true;
+        await expect(services.exec.spawn({ executable: { kind: 'managedDependency', id: 'codex-acp' } }))
+            .rejects.toMatchObject({ code: 'project_requester_credentials_unavailable', execLaunch: 'notStarted',
+                data: { execLaunch: 'notStarted' } });
     });
 
     it('forwards the bounded purpose-scoped listing and exact-listed materialization to the daemon', async () => {
