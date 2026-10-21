@@ -9,6 +9,33 @@ import { syncDeepIndexForSessionsOnce } from './syncDeepIndexForSessionsOnce';
 import { memoryIndexPolicyKey, resolveMemoryIndexPolicy } from '../transcript/coveragePolicy';
 
 describe('syncDeepIndexForSessionsOnce', () => {
+  it('records an exhausted incremental inventory sequence separately from the transcript frontier', async () => {
+    const dir = await mkdtemp(join(os.tmpdir(), 'happier-memory-deep-observed-'));
+    const tier1 = openSummaryShardIndexDb({ dbPath: join(dir, 'memory.sqlite') });
+    const deep = openDeepIndexDb({ dbPath: join(dir, 'deep.sqlite') });
+    try {
+      tier1.init(); deep.init();
+      tier1.markDeepIndexSuccess({ sessionId: 'exhausted', seqTo: 6, nowMs: 1 });
+      let exhausted = false;
+      const sync = () => syncDeepIndexForSessionsOnce({ sessionIds: ['exhausted'], tier1, deep, now: () => 10_000,
+        settings: { enabled: true, indexMode: 'deep', coveragePolicy: { type: 'full' },
+          deep: { maxChunkChars: 8000, maxChunkMessages: 20, minChunkMessages: 1,
+            includeAssistantAcpMessage: true, failureBackoffBaseMs: 0, failureBackoffMaxMs: 0 } },
+        observedSnapshotSeqBySessionId: new Map([['exhausted', 100]]),
+        fetchDecryptedTranscriptPageAfterSeq: async () => exhausted ? [] : [{ seq: 7, createdAtMs: 2000,
+          role: 'user', content: { type: 'text', text: 'quartz message' } }],
+      });
+      await sync();
+      expect(tier1.getSessionCursors({ sessionId: 'exhausted', nowMs: 10_000 })).toMatchObject({
+        lastObservedSeq: 0, lastDeepIndexedSeq: 7,
+      });
+      exhausted = true;
+      await sync();
+      expect(tier1.getSessionCursors({ sessionId: 'exhausted', nowMs: 10_000 })).toMatchObject({
+        lastObservedSeq: 100, lastDeepIndexedSeq: 7,
+      });
+    } finally { deep.close(); tier1.close(); await rm(dir, { recursive: true, force: true }); }
+  });
   it('clears a prior read failure after a successful empty retry and keeps queue status consistent', async () => {
     const dir = await mkdtemp(join(os.tmpdir(), 'happier-memory-deep-retry-'));
     const tier1 = openSummaryShardIndexDb({ dbPath: join(dir, 'memory.sqlite') });

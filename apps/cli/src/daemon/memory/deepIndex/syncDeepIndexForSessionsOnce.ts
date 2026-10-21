@@ -249,10 +249,10 @@ export async function syncDeepIndexForSessionsOnce(params: Readonly<{
 
       // Empty is a successful source read too: it must retire the previous
       // read failure rather than leaving a recovered Session in error forever.
-      // A full snapshot checks the captured inventory sequence, which may also
-      // contain non-message events. Keep that fact separate from the last
-      // transcript row so a quiet source is not repeatedly fetched as new.
-      const observedSnapshotSeq = needsBoundedSnapshot && params.fetchRecentDecryptedRows
+      // A full snapshot or exhausted incremental read checks the captured
+      // inventory sequence, including non-message events. A nonempty page
+      // cannot prove exhaustion, even when the transport returns a short page.
+      const observedSnapshotSeq = (needsBoundedSnapshot && params.fetchRecentDecryptedRows) || rows.length === 0
         ? params.observedSnapshotSeqBySessionId?.get(sessionId) : undefined;
       params.tier1.markDeepIndexSuccess({ sessionId, seqTo: lastScannedSeq,
         ...(observedSnapshotSeq === undefined ? {} : { observedSnapshotSeq }), nowMs });

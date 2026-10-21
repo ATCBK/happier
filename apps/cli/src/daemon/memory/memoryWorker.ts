@@ -206,6 +206,7 @@ export async function startMemoryWorker(params: Readonly<{
     currentPhase: null,
   };
   const activeIndexOperations = new Set<Readonly<{
+    kind: 'transcript' | 'documents';
     sessionIds: ReadonlySet<string>;
     controller: AbortController;
     promise: Promise<unknown>;
@@ -235,7 +236,8 @@ export async function startMemoryWorker(params: Readonly<{
       assertCurrent: () => {
         if (stopped || settings !== basis || deep !== db) throw new Error('memory_document_scope_changed');
       } });
-    const operation = { sessionIds: new Set(scope.type === 'session' ? [scope.sessionId] : []), controller, promise };
+    const operation = { kind: 'documents' as const,
+      sessionIds: new Set(scope.type === 'session' ? [scope.sessionId] : []), controller, promise };
     activeIndexOperations.add(operation);
     try { return await promise; }
     finally { activeIndexOperations.delete(operation); }
@@ -1033,10 +1035,12 @@ export async function startMemoryWorker(params: Readonly<{
       ? AbortSignal.any([input.signal, controller.signal])
       : controller.signal;
     const operation: {
+      kind: 'transcript';
       sessionIds: ReadonlySet<string>;
       controller: AbortController;
       promise: Promise<void>;
     } = {
+      kind: 'transcript',
       sessionIds: included,
       controller,
       promise: Promise.resolve(),
@@ -1544,7 +1548,8 @@ export async function startMemoryWorker(params: Readonly<{
         const source = { type: 'happier_session' as const, sessionId };
         if (!settings.enabled || (settings.indexMode === 'hints' && !settings.hints.enabled)) return { source, state: 'disabled' };
         if (!indexesQualified || !tier1 || (settings.indexMode === 'deep' && !deep)) return { source, state: 'indexing' };
-        const pending = editedSessionIds.has(sessionId) || [...activeIndexOperations].some(operation => operation.sessionIds.has(sessionId));
+        const pending = editedSessionIds.has(sessionId) || [...activeIndexOperations].some(operation =>
+          operation.kind === 'transcript' && operation.sessionIds.has(sessionId));
         const queueStatus = tier1.getMemorySessionIndexStatus(sessionId);
         const errorCode = queueStatus === 'failed' ? tier1.getMemorySessionIndexErrorCode(sessionId) : null;
         // The completed queue outcome owns coverage. Inventory sequences also
