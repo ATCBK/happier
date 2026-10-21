@@ -97,6 +97,7 @@ export function readSessionPreparationFailureDiagnostic(error: unknown): Readonl
 
 const preparationDiagnosticCodes = new Set([
   ...ProviderErrorCodeV1Schema.options,
+  'team_credential_provider_selection_not_current',
   'account_role_overrides_unavailable',
   'context_source_unavailable', 'role_overrides_unavailable', 'role_source_incomplete',
   'role_target_unavailable', 'role_policy_unenforceable', 'preparation_pending', 'attachment_unavailable',

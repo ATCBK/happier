@@ -34,6 +34,7 @@ import { PluginError } from '@happier-dev/plugin-sdk';
 import { TeamCredentialDirectMaterialOperationError } from '@/daemon/connectedServices/directMaterial/teamCredentialDirectMaterialClient';
 import { isProvenPreDispatchConnectionFailure } from '@/api/client/classifyServerEndpointError';
 import { readMcpRequestAuthDiagnosticCode } from '@/mcp/runtime/mcpRequestAuth';
+import { SessionTeamCredentialLaunchUnavailableError } from '@/session/services/sessionTeamCredentialLaunch';
 
 export const RUNNER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_TRANSITION_CODE =
   'runner_agent_runtime_daemon_service_authority_transition';
@@ -224,6 +225,9 @@ export async function openCurrentRunnerTeamCredentialProviderBinding(
     return response.result;
   }
   if (!response.ok) {
+    if (response.error.code === 'team_credential_provider_selection_not_current') {
+      throw new SessionTeamCredentialLaunchUnavailableError();
+    }
     const providerCode = ProviderErrorCodeV1Schema.safeParse(response.error.code);
     if (providerCode.success) {
       throw Object.assign(new Error(providerCode.data), createProviderErrorV1(providerCode.data, {

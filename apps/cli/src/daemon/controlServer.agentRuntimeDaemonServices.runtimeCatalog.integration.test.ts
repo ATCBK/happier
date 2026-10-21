@@ -37,6 +37,9 @@ import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import { authorizeSessionModelTransitionProviderTargetWithLease } from '@/providers/sessions/authorizeSessionModelTransitionTarget';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
+import { openSessionTeamCredentialProviderBinding } from '@/providers/broker/sessionTeamCredentialProviderBinding';
+import { openCurrentRunnerTeamCredentialProviderBinding } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceAuthorityClient';
+import { readSessionPreparationFailureDiagnostic } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 
 type RecordAdmission = NonNullable<
   Parameters<typeof createDaemonControlApp>[0][
@@ -71,6 +74,67 @@ function createRetainedAgent() {
 }
 
 describe('daemon control server: runner-scoped Agent runtime services', () => {
+  it('preserves a real Team selection refusal from the broker producer through the runner client', async () => {
+    const fixture = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+      runtimeOptions: { pluginIds: ['happier.agent.codex'] } });
+    const lease = await acquireAuthoritativePluginRuntimeRegistryLease();
+    const sessionId = 'session-team-selection-refusal';
+    const retainedAgent = createRetainedAgent();
+    const runner = { pid: 2240, processStartTimeMs: 1_717_171_717_500,
+      processCommandHash: 'f'.repeat(64), snapshotIdentity: 'snapshot:team-selection-refusal' };
+    const path = await createAgentRuntimeDaemonServiceAuthorityPath({
+      happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing });
+    const tracked: TrackedSession = {
+      startedBy: 'daemon', pid: runner.pid, sessionRunnerPid: runner.pid, happySessionId: sessionId,
+      processStartTimeMs: runner.processStartTimeMs, processCommandHash: runner.processCommandHash,
+      runnerAgentSourceCustodyV1: retainedAgent.sourceCustody,
+      runnerAgentInvocationContext: { cwd: '/workspace', environment: {}, providerBindingActive: true },
+    };
+    const operation = { kind: 'provider_broker.binding.open', resourceId: 'resource-1',
+      expectedResourceRevision: 2, agentTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-5.5' } as const;
+    const app = createDaemonControlApp({ getChildren: () => [tracked], machineId: 'machine-1',
+      stopSession: async () => ({ status: 'not_found' as const }),
+      spawnSession: async () => ({ type: 'success' as const, sessionId: 'unused' }),
+      requestShutdown: () => {}, onHappySessionWebhook: () => {}, controlToken: 'control-token',
+      // Real broker decision and HTTP route/client; only the Home catalog read is supplied.
+      agentRuntimeDaemonServices: { dispatch: async () => {
+        await openSessionTeamCredentialProviderBinding({ sessionId, machineId: 'machine-1', agentId: 'codex',
+          agentTargetKey: operation.agentTargetKey, modelId: operation.modelId,
+          binding: { v: 1, slot: { kind: 'provider_model' }, resourceId: operation.resourceId,
+            expectedResourceRevision: 2, teamId: 'team-1', deliveryMode: 'brokered' },
+          lease, materializationBaseDir: configuration.happyHomeDir, signal: new AbortController().signal,
+          readCatalog: async () => [],
+        });
+        throw new Error('Expected the absent Team model to refuse open');
+      } },
+    });
+    let capabilityDigest: string | undefined;
+    try {
+      const url = new URL(await app.listen({ host: '127.0.0.1', port: 0 }));
+      const authority = { happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
+        path, sessionId, runner, retainedAgent };
+      const published = await publishAgentRuntimeDaemonServiceAuthority({ ...authority,
+        httpPort: Number(url.port), capability: capabilityA, readPluginHardRevocationRevision: async () => 0 });
+      capabilityDigest = published.capabilityDigest;
+      tracked.agentRuntimeDaemonServiceAuthorityFilePath = path;
+      tracked.agentRuntimeDaemonServiceCapabilityHash = capabilityDigest;
+      const refused = await openCurrentRunnerTeamCredentialProviderBinding({ authority, operation })
+        .then(() => null, (error: unknown) => error);
+      expect(refused).toBeInstanceOf(Error);
+      expect(refused).toMatchObject({ code: 'team_credential_provider_selection_not_current',
+        message: 'team_credential_provider_selection_not_current' });
+      expect(readSessionPreparationFailureDiagnostic(refused)).toEqual({
+        originalCode: 'team_credential_provider_selection_not_current', reason: 'unknown', contextSource: 'unknown',
+      });
+    } finally {
+      await app.close();
+      if (capabilityDigest) await removeAgentRuntimeDaemonServiceAuthorityIfOwned({
+        happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing, path, capabilityDigest });
+      await lease.release();
+      await fixture.dispose();
+    }
+  });
+
   it('returns a real Provider authorization refusal through the strict model-transition service response', async () => {
     const fixture = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
       runtimeOptions: { pluginIds: ['happier.agent.codex'] } });

@@ -3228,6 +3228,13 @@ export function createDaemonControlApp({
           },
       );
     } catch (error) {
+      if (request.body.operation.kind === 'provider_broker.binding.open'
+        && error instanceof Error
+        && error.message === 'team_credential_provider_selection_not_current') {
+        return { ok: false as const, error: {
+          code: 'team_credential_provider_selection_not_current', message: 'team_credential_provider_selection_not_current',
+        } };
+      }
       if (request.body.operation.kind === 'model_transition.authorize') {
         const providerError = ProviderErrorV1Schema.safeParse(error);
         if (providerError.success) {
