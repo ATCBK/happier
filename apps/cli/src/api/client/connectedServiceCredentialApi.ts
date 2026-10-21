@@ -20,12 +20,12 @@ import { fetchAccountEncryptionCurrentness } from './accountEncryptionCurrentnes
 export { AccountEncryptionCurrentnessUnavailableError, fetchAccountEncryptionCurrentness, fetchAccountEncryptionCurrentnessFromServer } from './accountEncryptionCurrentness';
 
 const CONNECTED_SERVICE_PROFILE_LIST_CACHE_TTL_MS = 10_000;
-const ACCOUNT_ENCRYPTION_MODE_CACHE_TTL_MS = 10_000;
 
 export type ConnectedServiceAccountEncryptionMode = 'e2ee' | 'plain' | 'unknown';
 
 export type AccountEncryptionModeReadOptions = Readonly<{
   refresh?: boolean;
+  usage?: 'identity' | 'fresh-authority';
   signal?: AbortSignal;
   /** Registration must preserve transport failures for its existing readiness wake owner. */
   throwOnTransportError?: boolean;
@@ -95,11 +95,6 @@ type ConnectedServiceProfileListCacheEntry = Readonly<
   | { kind: 'in_flight'; promise: Promise<ConnectedServiceProfileListResult> }
 >;
 
-type AccountEncryptionModeCacheEntry = Readonly<
-  | { kind: 'value'; expiresAtMs: number; value: 'e2ee' | 'plain' }
-  | { kind: 'in_flight'; promise: Promise<ConnectedServiceAccountEncryptionMode> }
->;
-
 export class ConnectedServiceCredentialUnsupportedFormatError extends Error {
   readonly serviceId: ConnectedServiceId;
   readonly profileId: string;
@@ -130,7 +125,6 @@ function createHeaders(token: string): Readonly<Record<string, string>> {
 export class ConnectedServiceCredentialHttpClient implements ConnectedServiceCredentialApi {
   private readonly token: string;
   private readonly connectedServiceProfileListCache = new Map<ConnectedServiceId, ConnectedServiceProfileListCacheEntry>();
-  private accountEncryptionModeCache: AccountEncryptionModeCacheEntry | null = null;
 
   constructor(credential: Readonly<{ token: string }>) {
     this.token = credential.token;
@@ -363,36 +357,17 @@ export class ConnectedServiceCredentialHttpClient implements ConnectedServiceCre
   }
 
   private async readAccountEncryptionMode(options?: AccountEncryptionModeReadOptions): Promise<ConnectedServiceAccountEncryptionMode> {
-    const observed = readObservedAccountEncryptionCurrentness({ token: this.token, serverBaseUrl: resolveServerHttpBaseUrl(), signal: options?.signal });
+    const observed = options?.refresh || options?.usage === 'fresh-authority' ? null
+      : readObservedAccountEncryptionCurrentness({ token: this.token, serverBaseUrl: resolveServerHttpBaseUrl(), signal: options?.signal });
     if (observed) return (await observed).mode;
-    if (options?.signal) return await this.fetchAccountEncryptionModeFromServer(options.signal);
-    const cached = this.accountEncryptionModeCache;
-    const nowMs = Date.now();
-    if (!options?.refresh && cached?.kind === 'value' && cached.expiresAtMs > nowMs) return cached.value;
-    if (!options?.refresh && cached?.kind === 'in_flight') return await cached.promise;
-
-    const promise = this.fetchAccountEncryptionModeFromServer();
-    this.accountEncryptionModeCache = { kind: 'in_flight', promise };
-    try {
-      const value = await promise;
-      if (this.accountEncryptionModeCache?.kind === 'in_flight' && this.accountEncryptionModeCache.promise === promise) {
-        this.accountEncryptionModeCache = value === 'unknown'
-          ? null
-          : { kind: 'value', value, expiresAtMs: Date.now() + ACCOUNT_ENCRYPTION_MODE_CACHE_TTL_MS };
-      }
-      return value;
-    } catch (error) {
-      if (this.accountEncryptionModeCache?.kind === 'in_flight' && this.accountEncryptionModeCache.promise === promise) {
-        this.accountEncryptionModeCache = null;
-      }
-      throw error;
-    }
+    return await this.fetchAccountEncryptionModeFromServer(options?.signal);
   }
 
   private async fetchAccountEncryptionModeFromServer(signal?: AbortSignal): Promise<ConnectedServiceAccountEncryptionMode> {
     const serverUrl = resolveServerHttpBaseUrl();
     try {
       const result = await readAccountEncryptionModeOnce({
+        usage: 'fresh-authority',
         request: async () => await axios.get(`${serverUrl}/v1/account/encryption`, {
           headers: createHeaders(this.token),
           timeout: resolveConnectedServicesServerApiTimeoutMs(),

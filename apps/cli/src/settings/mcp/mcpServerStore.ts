@@ -100,9 +100,9 @@ function createCapturedStore(input: Readonly<{
     }
     return response.data as unknown;
   };
-  const readStorageContext = async () => {
+  const readStorageContext = async (usage: 'identity' | 'fresh-authority' = 'fresh-authority') => {
     await verifyCurrent();
-    const context = await resolveCliAccountStorageContext({ credentials: input.credentials, serverBaseUrl: base,
+    const context = await resolveCliAccountStorageContext({ credentials: input.credentials, serverBaseUrl: base, usage,
       signal: input.signal, authorizationHeaders: headers, shouldContinue: () => { input.assertCurrent(); return true; } });
     await verifyCurrent();
     return context;
@@ -153,7 +153,7 @@ function createCapturedStore(input: Readonly<{
   let admittedCatalog: McpServerCatalogSnapshotV1 | undefined;
   const readCatalog = async (onReady?: (catalog: McpServerCatalogSnapshotV1) => void,
     options?: Readonly<{ maintainSource?: false }>) => {
-    const context = await readStorageContext();
+    const context = await readStorageContext('identity');
     let absent = false;
     const catalog = await loadMcpServerCatalogV1({ ...context, signal: input.signal, ...options,
       readRow: async () => { const row = await readRow(); absent = row.status === 'absent'; return row; },

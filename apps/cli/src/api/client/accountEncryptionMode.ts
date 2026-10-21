@@ -11,8 +11,10 @@ export type AccountEncryptionModeReadResult =
 export async function readAccountEncryptionModeOnce(input: Readonly<{
   request: () => Promise<Readonly<{ status: number; data: unknown }>>;
   scope?: Readonly<{ token: string; serverBaseUrl: string; signal?: AbortSignal }>;
+  /** Only descriptive identity may borrow; final authority stays fresh. */
+  usage?: 'identity' | 'fresh-authority';
 }>): Promise<AccountEncryptionModeReadResult> {
-  const observed = input.scope ? readObservedAccountEncryptionCurrentness(input.scope) : null;
+  const observed = input.usage === 'identity' && input.scope ? readObservedAccountEncryptionCurrentness(input.scope) : null;
   if (observed) return { kind: 'resolved', mode: (await observed).mode };
   const response = await input.request();
   if (response.status < 200 || response.status >= 300) {

@@ -85,9 +85,9 @@ export function createCliPromptLibraryStore(input: Readonly<{
     return { status: response.status, data: response.data as unknown };
   };
   const request = async (path: string, body?: unknown): Promise<unknown> => (await requestResponse(path, body)).data;
-  const readStorageContext = async () => {
+  const readStorageContext = async (usage: 'identity' | 'fresh-authority' = 'fresh-authority') => {
     await assertCredentialCurrent();
-    const context = await resolveCliAccountStorageContext({ credentials: input.credentials, serverBaseUrl: base,
+    const context = await resolveCliAccountStorageContext({ credentials: input.credentials, serverBaseUrl: base, usage,
       signal: input.signal, shouldContinue: () => { assertCurrent(); return true; }, authorizationHeaders: headers });
     await assertCredentialCurrent();
     return context;
@@ -95,7 +95,7 @@ export function createCliPromptLibraryStore(input: Readonly<{
   const readRows = async () => PromptLibraryRowsListResponseV1Schema.parse(await request(PROMPT_LIBRARY_ROWS_ROUTE_V1));
   const preparePromptLibraryCatalog = async (onReady?: (catalog: PromptLibraryCatalogSnapshotV1) => void | Promise<void>,
     options?: Readonly<{ maintainSource?: false }>) => {
-    const context = await readStorageContext();
+    const context = await readStorageContext('identity');
     const catalog = await loadPromptLibraryCatalogV1({ ...context, signal: input.signal, ...options,
       readRows,
       skillMigration: {

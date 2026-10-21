@@ -67,9 +67,9 @@ export function createCliAcpCatalogStore(input: Readonly<{
     }
     return response.data as unknown;
   };
-  const readStorageContext = async () => {
+  const readStorageContext = async (usage: 'identity' | 'fresh-authority' = 'fresh-authority') => {
     await admitCurrent();
-    const context = await resolveCliAccountStorageContext({ credentials: input.credentials, serverBaseUrl: base,
+    const context = await resolveCliAccountStorageContext({ credentials: input.credentials, serverBaseUrl: base, usage,
       signal: input.signal, authorizationHeaders: headers, shouldContinue: () => { assertCurrent(); return true; } });
     await admitCurrent();
     return context;
@@ -98,7 +98,7 @@ export function createCliAcpCatalogStore(input: Readonly<{
     return source;
   };
   const prepareCatalog = async (): Promise<AcpCatalogSnapshotV1> => {
-    const storage = await readStorageContext();
+    const storage = await readStorageContext('identity');
     const row = await readRow();
     let catalog: AcpCatalogSnapshotV1;
     if (row.status === 'present') {

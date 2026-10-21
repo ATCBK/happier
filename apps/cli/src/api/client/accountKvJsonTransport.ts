@@ -8,6 +8,7 @@ import type { AccountJsonKvCollectionPort } from '@happier-dev/protocol/todos/to
 import type { StoredCredentials } from '@/persistence';
 import { decodeBase64, encodeBase64, decryptResult, encrypt } from '@/api/encryption';
 import { readRequesterAccountEncryptionCurrentness } from './accountEncryptionCurrentnessObservation';
+import { fetchAccountEncryptionCurrentness } from './accountEncryptionCurrentness';
 import { resolveServerHttpBaseUrl } from './serverHttpBaseUrl';
 
 export type AccountKvAuthorizationRequest = Readonly<{ method: 'GET' | 'POST'; path: string; body?: unknown }>;
@@ -18,12 +19,14 @@ export type CliAccountKvJsonTransportParams = Readonly<{
 class AccountKvJsonTransportError extends Error {
   constructor(readonly code: string, message: string) { super(message); }
 }
-/** One persisted-mode/content-key admission for CLI Account storage adapters. */
+/** Identity reads may borrow; sealing and final authority use fresh admission by default. */
 export async function resolveCliAccountStorageContext(params: Readonly<{
   credentials: StoredCredentials; serverBaseUrl?: string; signal?: AbortSignal; shouldContinue?: () => boolean;
   authorizationHeaders?: Readonly<Record<string, string>>;
+  usage?: 'identity' | 'fresh-authority';
 }>) {
-  const currentness = await readRequesterAccountEncryptionCurrentness({ token: params.credentials.token,
+  const readCurrentness = params.usage === 'identity' ? readRequesterAccountEncryptionCurrentness : fetchAccountEncryptionCurrentness;
+  const currentness = await readCurrentness({ token: params.credentials.token,
     ...(params.serverBaseUrl ? { serverBaseUrl: params.serverBaseUrl } : {}),
     ...(params.authorizationHeaders ? { authorizationHeaders: params.authorizationHeaders } : {}),
     ...(params.signal ? { signal: params.signal } : {}) });
@@ -77,10 +80,10 @@ export function createCliAccountKvJsonCollectionTransport(params: Omit<CliAccoun
     if (!value) throw new AccountKvJsonTransportError('not_authenticated', 'Account authorization is unavailable');
     return value;
   };
-  const context = async () => {
+  const context = async (usage: 'identity' | 'fresh-authority') => {
     return resolveCliAccountStorageContext({ credentials: params.credentials, serverBaseUrl: base,
       authorizationHeaders: headers({ method: 'GET', path: '/v1/account/encryption/currentness' }),
-      signal: params.signal, shouldContinue: params.shouldContinue });
+      signal: params.signal, shouldContinue: params.shouldContinue, usage });
   };
   type Context = Awaited<ReturnType<typeof context>>;
   const cipher = (admitted: Context) => createAccountKvCipher({ mode: admitted.mode, material: admitted.material,
@@ -101,7 +104,18 @@ export function createCliAccountKvJsonCollectionTransport(params: Omit<CliAccoun
     return mutationResponse.parse(response.data);
   };
   const openRow = (row: { key: string; value: string | null; version: number }, admitted: Context) => openAccountKvJsonRow({
-    row, cipher: cipher(admitted), requireCurrent: check,
+    row, cipher: {
+      open: cipher(admitted).open,
+      seal: async value => {
+        // Legacy reads become writes here. A socket identity cannot authorize a
+        // re-seal after a committed change whose publication is still pending.
+        const current = await context('fresh-authority');
+        if (current.mode !== admitted.mode) {
+          throw new AccountKvJsonTransportError('account_storage_currentness_unavailable', 'Account encryption mode changed before re-sealing');
+        }
+        return await cipher(current).seal(value);
+      },
+    }, requireCurrent: check,
     compareAndSet: async (value, version) => {
       const result = await mutateEncoded([{ key: row.key, value, version }]);
       if (result.success) {
@@ -116,7 +130,7 @@ export function createCliAccountKvJsonCollectionTransport(params: Omit<CliAccoun
   });
   return {
     read: async key => {
-      check(); const admitted = await context(); const path = `/v1/kv/${encodeURIComponent(key)}`;
+      check(); const admitted = await context('identity'); const path = `/v1/kv/${encodeURIComponent(key)}`;
       const response = await axios.get(`${base}${path}`, { headers: headers({ method: 'GET', path }), validateStatus: () => true,
         ...(params.signal ? { signal: params.signal } : {}) });
       check(); if (response.status === 404) return { value: null, version: -1 };
@@ -126,7 +140,7 @@ export function createCliAccountKvJsonCollectionTransport(params: Omit<CliAccoun
       return await openRow(item, admitted);
     },
     list: async prefix => {
-      check(); const admitted = await context();
+      check(); const admitted = await context('identity');
       const rows: { key: string; value: unknown; version: number }[] = [];
       const seen = new Set<string>();
       let afterKey: string | undefined;
@@ -150,7 +164,7 @@ export function createCliAccountKvJsonCollectionTransport(params: Omit<CliAccoun
       }
     },
     mutate: async mutations => {
-      check(); const admitted = await context();
+      check(); const admitted = await context('fresh-authority');
       const codec = cipher(admitted);
       const result = await mutateEncoded(await Promise.all(mutations.map(async row => ({ key: row.key, value: await codec.seal(row.value), version: row.version }))));
       if (result.success) {

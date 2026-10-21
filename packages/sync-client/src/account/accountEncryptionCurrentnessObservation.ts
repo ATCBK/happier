@@ -5,7 +5,7 @@ import {
 import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
 
 /** Socket identity is not an exact Account-sequence or Settings cursor witness. */
-export type AccountEncryptionIdentity = Omit<AccountEncryptionCurrentnessResponse, 'version' | 'settingsVersion'>;
+export type AccountEncryptionIdentity = Readonly<Omit<AccountEncryptionCurrentnessResponse, 'version' | 'settingsVersion'>>;
 
 export function projectAccountEncryptionIdentity(currentness: AccountEncryptionCurrentnessResponse): AccountEncryptionIdentity {
     const { version: _version, settingsVersion: _settingsVersion, ...identity } = currentness;
@@ -44,7 +44,7 @@ export function createAccountEncryptionCurrentnessObservation(options: Readonly<
     readFresh: (signal: AbortSignal) => Promise<AccountEncryptionCurrentnessResponse>;
     unavailable: () => Error;
 }>) {
-    let fact: AccountEncryptionCurrentnessResponse | null = null;
+    let fact: Readonly<{ witness: AccountEncryptionCurrentnessResponse; identity: AccountEncryptionIdentity }> | null = null;
     let connected = false;
     let disposed = false;
     let lifetime = new AbortController();
@@ -63,7 +63,10 @@ export function createAccountEncryptionCurrentnessObservation(options: Readonly<
         const captured = lifetime;
         pending = waitForAccountEncryptionObservation(options.readFresh(captured.signal), captured.signal)
             .then(next => {
-                if (connected && !disposed && lifetime === captured) fact = AccountEncryptionCurrentnessResponseSchema.parse(next);
+                if (connected && !disposed && lifetime === captured) {
+                    const witness = AccountEncryptionCurrentnessResponseSchema.parse(next);
+                    fact = { witness, identity: projectAccountEncryptionIdentity(witness) };
+                }
             })
             .catch(error => { if (lifetime === captured) readError = error; })
             .finally(() => { if (lifetime === captured) pending = null; });
@@ -92,17 +95,17 @@ export function createAccountEncryptionCurrentnessObservation(options: Readonly<
             if (parsed.data.body.t !== 'update-account' || parsed.data.body.id !== options.accountId
                 || !('encryptionCurrentness' in parsed.data.body)) return false;
             const next = AccountEncryptionCurrentnessResponseSchema.safeParse(parsed.data.body.encryptionCurrentness);
-            if (next.success && fact && next.data.version < fact.version) return false;
+            if (next.success && fact && next.data.version < fact.witness.version) return false;
             // A push retires the old HTTP lifetime before publishing its fact.
             invalidate();
-            fact = next.success ? next.data : null;
+            fact = next.success ? { witness: next.data, identity: projectAccountEncryptionIdentity(next.data) } : null;
             return true;
         },
         isCurrent: (expected: AccountEncryptionIdentity) => !disposed && connected && fact !== null
-            && sameAccountEncryptionIdentity(fact, expected),
+            && sameAccountEncryptionIdentity(fact.identity, expected),
         peek: (): AccountEncryptionIdentity | null => !disposed && connected && fact
-            ? projectAccountEncryptionIdentity(fact) : null,
-        async read(signal?: AbortSignal): Promise<AccountEncryptionCurrentnessResponse> {
+            ? fact.identity : null,
+        async read(signal?: AbortSignal): Promise<AccountEncryptionIdentity> {
             if (signal?.aborted) throw abortReason(signal);
             if (disposed) throw options.unavailable();
             if (connected && !fact) refresh();
@@ -113,7 +116,7 @@ export function createAccountEncryptionCurrentnessObservation(options: Readonly<
             if (signal?.aborted) throw abortReason(signal);
             if (retirement.signal.aborted) throw abortReason(retirement.signal);
             if (!connected || !fact) throw readError ?? Object.assign(options.unavailable(), { retryable: true });
-            return fact;
+            return fact.identity;
         },
         dispose() { disposed = true; connected = false; retirement.abort(); invalidate(); },
     };

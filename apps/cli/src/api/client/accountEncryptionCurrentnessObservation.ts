@@ -1,6 +1,5 @@
-import { type AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
-import { createAccountEncryptionCurrentnessObservation, sameAccountEncryptionIdentity,
-    waitForAccountEncryptionObservation } from '@happier-dev/sync-client';
+import { createAccountEncryptionCurrentnessObservation, projectAccountEncryptionIdentity, sameAccountEncryptionIdentity,
+    waitForAccountEncryptionObservation, type AccountEncryptionIdentity } from '@happier-dev/sync-client';
 import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
 import { createManagedConnectionSupervisor, DEFAULT_MANAGED_CONNECTION_POLICY, type ManagedConnectionSupervisor, type ManagedConnectionTransport } from '@happier-dev/connection-supervisor';
 import { fetchAccountEncryptionCurrentnessFromServer, AccountEncryptionCurrentnessUnavailableError } from './accountEncryptionCurrentness';
@@ -17,8 +16,8 @@ export type RequesterAccountSettingsObservation = Readonly<
     | { kind: 'reconnected' } | { kind: 'disconnected' }
 >;
 type Observation = Readonly<{
-    read(signal?: AbortSignal): Promise<AccountEncryptionCurrentnessResponse>;
-    isCurrent(expected: AccountEncryptionCurrentnessResponse): boolean;
+    read(signal?: AbortSignal): Promise<AccountEncryptionIdentity>;
+    isCurrent(expected: AccountEncryptionIdentity): boolean;
     subscribeAccountSettings(listener: (event: RequesterAccountSettingsObservation) => void): () => void;
     subscribeSessionFollowRules(listener: () => void): () => void;
     /** Exact Session invalidation; null rebuilds demanded ranges after a gap/reconnect. */
@@ -26,6 +25,7 @@ type Observation = Readonly<{
     dispose(): Promise<void>;
 }>;
 type SharedObservation = Observation & {
+    scope: Readonly<{ accountId: string; serverBaseUrl: string }>;
     references: Map<string, { count: number }>;
     releaseCredential(token: string): Promise<void>;
 };
@@ -35,17 +35,29 @@ type SharedObservation = Observation & {
 const observations = new Map<string, SharedObservation>();
 const scopeKey = (scope: Scope) => JSON.stringify([normalizeServerHttpBaseUrl(scope.serverBaseUrl), scope.accountId]);
 
+function admittedObservation(scope: Readonly<{ accountId?: string; token: string; serverBaseUrl: string }>): SharedObservation | undefined {
+    const accountId = scope.accountId ?? readAccountIdFromToken(scope.token);
+    const candidate = accountId ? observations.get(scopeKey({ ...scope, accountId })) : undefined;
+    if (candidate?.references.has(scope.token)) return candidate;
+    if (scope.accountId !== undefined) return undefined;
+    // Opaque credentials need no decoded subject: the authenticated holder
+    // already registered this exact credential and Home. No second index.
+    const serverBaseUrl = normalizeServerHttpBaseUrl(scope.serverBaseUrl);
+    for (const observed of observations.values()) {
+        if (observed.scope.serverBaseUrl === serverBaseUrl && observed.references.has(scope.token)) return observed;
+    }
+    return undefined;
+}
+
 /** Only an authenticated live holder's exact credential can borrow the shared fact. */
 export function readObservedAccountEncryptionCurrentness(scope: Readonly<{
     token: string; serverBaseUrl: string; signal?: AbortSignal;
-}>): Promise<AccountEncryptionCurrentnessResponse> | null {
-    const accountId = readAccountIdFromToken(scope.token);
-    const observed = accountId ? observations.get(scopeKey({ ...scope, accountId })) : undefined;
-    // A decoded subject locates a candidate; the admitted credential grants borrowing.
-    return observed?.references.has(scope.token) ? observed.read(scope.signal) : null;
+}>): Promise<AccountEncryptionIdentity> | null {
+    const observed = admittedObservation(scope);
+    return observed ? observed.read(scope.signal) : null;
 }
 
-export function sameRequesterAccountEncryptionCurrentness(a: AccountEncryptionCurrentnessResponse, b: AccountEncryptionCurrentnessResponse): boolean {
+export function sameRequesterAccountEncryptionCurrentness(a: AccountEncryptionIdentity, b: AccountEncryptionIdentity): boolean {
     return sameAccountEncryptionIdentity(a, b);
 }
 
@@ -53,21 +65,21 @@ export function sameRequesterAccountEncryptionCurrentness(a: AccountEncryptionCu
 export async function readRequesterAccountEncryptionCurrentness(scope: Readonly<{
     accountId?: string; token: string; serverBaseUrl?: string; signal?: AbortSignal;
     authorizationHeaders?: Readonly<Record<string, string>>;
-}>): Promise<AccountEncryptionCurrentnessResponse> {
+}>): Promise<AccountEncryptionIdentity> {
     const serverBaseUrl = scope.serverBaseUrl ?? resolveServerHttpBaseUrl();
-    const accountId = scope.accountId ?? readAccountIdFromToken(scope.token);
     const suppliedAuthorization = scope.authorizationHeaders
         ? Object.entries(scope.authorizationHeaders).find(([key]) => key.toLowerCase() === 'authorization')?.[1]
         : null;
     // A signed Action request must retain its own fresh authenticated transport.
-    const observed = accountId && (!scope.authorizationHeaders || suppliedAuthorization === `Bearer ${scope.token}`)
-        ? observations.get(scopeKey({ ...scope, serverBaseUrl, accountId })) : undefined;
-    return observed ? await observed.read(scope.signal) : await fetchAccountEncryptionCurrentnessFromServer(scope);
+    const observed = !scope.authorizationHeaders || suppliedAuthorization === `Bearer ${scope.token}`
+        ? admittedObservation({ ...scope, serverBaseUrl }) : undefined;
+    return observed ? await observed.read(scope.signal)
+        : projectAccountEncryptionIdentity(await fetchAccountEncryptionCurrentnessFromServer({ ...scope, serverBaseUrl }));
 }
 
 /** A synchronous fence after distinct Machine/Home awaits, without another HTTP read. */
-export function isRequesterAccountEncryptionCurrentnessObserved(scope: Scope, expected: AccountEncryptionCurrentnessResponse): boolean {
-    return observations.get(scopeKey(scope))?.isCurrent(expected) ?? true;
+export function isRequesterAccountEncryptionCurrentnessObserved(scope: Scope, expected: AccountEncryptionIdentity): boolean {
+    return !observations.has(scopeKey(scope)) || (admittedObservation(scope)?.isCurrent(expected) ?? false);
 }
 
 /** One exact Account/Home observation shared by live finite and Session custody. */
@@ -265,6 +277,7 @@ function createObservation(scope: Scope): SharedObservation {
         }
     })();
     return {
+        scope: { accountId: scope.accountId, serverBaseUrl: normalizeServerHttpBaseUrl(scope.serverBaseUrl) },
         references,
         subscribeAccountSettings(listener) {
             settingsListeners.add(listener);
@@ -313,8 +326,8 @@ function createObservation(scope: Scope): SharedObservation {
             if (disposed) throw new AccountEncryptionCurrentnessUnavailableError();
             if (unsupported) {
                 const fallbackSignal = AbortSignal.any([readerSignal, lifetime.signal]);
-                return await waitForObservation(fetchAccountEncryptionCurrentnessFromServer({ token: activeToken,
-                    serverBaseUrl: scope.serverBaseUrl, signal: fallbackSignal }), fallbackSignal);
+                return projectAccountEncryptionIdentity(await waitForObservation(fetchAccountEncryptionCurrentnessFromServer({ token: activeToken,
+                    serverBaseUrl: scope.serverBaseUrl, signal: fallbackSignal }), fallbackSignal));
             }
             // A credential may retire while its previous connection is still starting.
             while (connectionReady) {

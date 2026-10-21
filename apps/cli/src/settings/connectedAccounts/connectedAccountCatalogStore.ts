@@ -76,10 +76,10 @@ export function createCliConnectedAccountCatalogStore(input: Readonly<{
     }
     return response.data;
   };
-  const readStorageContext = async () => {
+  const readStorageContext = async (usage: 'identity' | 'fresh-authority' = 'fresh-authority') => {
     await verifyCurrent();
     assertCurrent();
-    const storage = await runConnectedAccountBindingStage('account_currentness', () => resolveCliAccountStorageContext({ credentials: input.credentials, serverBaseUrl: base,
+    const storage = await runConnectedAccountBindingStage('account_currentness', () => resolveCliAccountStorageContext({ credentials: input.credentials, serverBaseUrl: base, usage,
       signal: input.signal, shouldContinue: () => { assertCurrent(); return true; },
       authorizationHeaders: headersFor({ method: 'GET', path: '/v1/account/encryption/currentness' }) }));
     await verifyCurrent();
@@ -133,7 +133,7 @@ export function createCliConnectedAccountCatalogStore(input: Readonly<{
       `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/${value.record.key}`, mutation));
   };
   const readAdmittedCatalog = async (key: ConnectedAccountCatalogKeyV1) => {
-    const storage = await readStorageContext();
+    const storage = await readStorageContext('identity');
     const catalog = await loadConnectedAccountCatalogV1({ key, ...storage, signal: input.signal, readRow: () => readRow(key) });
     const current = await readStorageContext();
     await verifyCurrent();
@@ -141,7 +141,7 @@ export function createCliConnectedAccountCatalogStore(input: Readonly<{
   };
   const readCatalog = async (key: ConnectedAccountCatalogKeyV1,
     onReadyBeforeCleanup?: (catalog: Extract<ConnectedAccountCatalogSnapshotV1, { status: 'ready' }>) => Promise<void>) => {
-    const storage = await readStorageContext();
+    const storage = await readStorageContext('identity');
     const catalog = await loadConnectedAccountCatalogV1({ key, ...storage, signal: input.signal, readRow: () => readRow(key),
       onReadyBeforeCleanup: async ready => {
         const admitted = await readStorageContext();

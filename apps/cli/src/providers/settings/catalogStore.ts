@@ -100,9 +100,9 @@ function createCapturedStore(input: Readonly<{
     return response.data as unknown;
   };
   const readRow = () => observePhase('row', async () => ProviderConnectionsRowReadResponseV1Schema.parse(await request(PROVIDER_CONNECTIONS_ROWS_ROUTE_V1)));
-  const readStorageContext = async () => {
+  const readStorageContext = async (usage: 'identity' | 'fresh-authority' = 'fresh-authority') => {
     await verifyCurrent();
-    const context = await observePhase('storage_currentness', () => resolveCliAccountStorageContext({ credentials: input.credentials, serverBaseUrl: base,
+    const context = await observePhase('storage_currentness', () => resolveCliAccountStorageContext({ credentials: input.credentials, serverBaseUrl: base, usage,
       authorizationHeaders: headers, signal: input.signal, shouldContinue: () => { input.assertCurrent(); return true; } }));
     await verifyCurrent();
     return context;
@@ -158,14 +158,14 @@ function createCapturedStore(input: Readonly<{
   };
   /** Mutations require existing row authority and never initialize or clean a retained source. */
   const readCatalogForMutation = async () => runWithRequesterSessionCurrentnessCheckpoint(async () => {
-    const context = await readStorageContext();
+    const context = await readStorageContext('identity');
     const catalog = await loadProviderConnectionsCatalogV1({ ...context, signal: input.signal, readRow });
     const admitted = await readStorageContext();
     await verifyCurrent();
     return admitted.mode === context.mode ? catalog : { status: 'unavailable' as const, reason: 'account-mode-mismatch' };
   });
   const readCatalog = async (options?: Pick<Parameters<typeof loadProviderConnectionsCatalogV1>[0], 'onReadyBeforeCleanup' | 'hasPendingCleanup'>) => runWithRequesterSessionCurrentnessCheckpoint(async () => {
-    const context = await readStorageContext();
+    const context = await readStorageContext('identity');
     let initializeSource = false;
     const catalog = await loadProviderConnectionsCatalogV1({ ...context, signal: input.signal, readRow: async () => {
       const row = await readRow();

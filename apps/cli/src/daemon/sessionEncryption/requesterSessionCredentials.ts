@@ -323,12 +323,16 @@ export async function prepareRequesterSessionBootstrap(input: Readonly<{
     bindRequesterSessionCredentialScope(credentials, { serverId: attribution.serverId,
       serverHttpBaseUrl: normalizeServerHttpBaseUrl(input.boundary.serverHttpBaseUrl) });
     let cleanup: () => Promise<void> = async () => undefined;
+    // Admission already reads a fresh authority witness. Retain its Settings
+    // minimum only until bootstrap; an idle encryption identity has no cursor.
+    let initializationSettingsWitness: { settingsVersion?: number } | undefined = {};
     const observeCurrent = async () => {
       // This is a fresh Home-authority decision, not a cached encryption-identity
       // read. A mode/key transition may precede its socket invalidation.
       const fresh = await fetchAccountEncryptionCurrentness({ token: credentials.token,
         serverBaseUrl: input.boundary.serverHttpBaseUrl, signal: currentnessSignal() });
       if (!sameRequesterAccountEncryptionCurrentness(fresh, currentness)) return false;
+      if (initializationSettingsWitness) initializationSettingsWitness.settingsVersion = fresh.settingsVersion;
       // Creation correspondence is proven around custody binding below. Once
       // bound, use the same fresh Session authority checks as cold recovery;
       // reopening immutable owner metadata at every credential fence adds no
@@ -383,10 +387,10 @@ export async function prepareRequesterSessionBootstrap(input: Readonly<{
     const accountSettingsContext = await runWithServerHttpBaseUrl(input.boundary.serverHttpBaseUrl,
       () => bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force', publication: 'invocation',
         signal: launchSignal,
-        // Requester admission already requires network authority. A known minimum
-        // of zero also preserves a failed read instead of quietly returning cache.
-        expectedAccountEncryptionMode: currentness.mode, honorAccountSettingsModeEnv: false, minSettingsVersion: currentness.settingsVersion ?? 0,
+        expectedAccountEncryptionMode: currentness.mode, honorAccountSettingsModeEnv: false,
+        minSettingsVersion: initializationSettingsWitness?.settingsVersion,
         shouldCommit: () => !input.signal?.aborted }));
+    initializationSettingsWitness = undefined;
     if (accountSettingsContext.source !== 'network' || !await readPreparationCurrentness()) return null;
     const savedSecretOperationContext = createInvocationSavedSecretOperationContextV1({ credentials,
       machineAdmission,

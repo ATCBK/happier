@@ -82,9 +82,9 @@ export function createCliConnectedMetadataStore(input: MetadataStoreInput) {
     }
     return response.data;
   };
-  const readStorageContext = async () => {
+  const readStorageContext = async (usage: 'identity' | 'fresh-authority' = 'fresh-authority') => {
     await assertCurrent();
-    const context = await resolveCliAccountStorageContext({ credentials, serverBaseUrl: base, signal: input.signal,
+    const context = await resolveCliAccountStorageContext({ credentials, serverBaseUrl: base, usage, signal: input.signal,
       authorizationHeaders: headersFor({ method: 'GET', path: '/v1/account/encryption/currentness' }),
       shouldContinue: () => readSnapshot()?.scopeKey === scopeKey });
     await assertCurrent();
@@ -158,7 +158,7 @@ export function createCliConnectedMetadataStore(input: MetadataStoreInput) {
     return result.data;
   };
   const readCatalog = async (onReady?: (catalog: ConnectedMetadataCatalogV1) => void, transferSource = true) => {
-    const context = await readStorageContext();
+    const context = await readStorageContext('identity');
     const assertMode = async () => {
       const current = await readStorageContext();
       if (current.mode !== context.mode) throw Object.assign(new Error('Account mode changed'), { code: 'account-mode-mismatch' });

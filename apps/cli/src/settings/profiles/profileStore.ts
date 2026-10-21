@@ -92,9 +92,9 @@ function createCapturedCliProfileStore(input: Readonly<{
     }
     return response.data as unknown;
   };
-  const readStorageContext = async () => {
+  const readStorageContext = async (usage: 'identity' | 'fresh-authority' = 'fresh-authority') => {
     await verifyCurrent();
-    const context = await resolveCliAccountStorageContext({ credentials: input.credentials, serverBaseUrl: base,
+    const context = await resolveCliAccountStorageContext({ credentials: input.credentials, serverBaseUrl: base, usage,
       signal: input.signal, shouldContinue: () => {
         assertCurrent();
         return true;
@@ -109,7 +109,7 @@ function createCapturedCliProfileStore(input: Readonly<{
   const mutateRecord = async (mutation: ProfileRowMutationV1) => ProfileRowMutationResponseV1Schema.parse(await request(
     PROFILE_RECORDS_ROUTE_V1, ProfileRowMutationV1Schema.parse(mutation)));
   const prepareProfileCatalogCapture = async (migrateSkills = false) => {
-    const context = await readStorageContext();
+    const context = await readStorageContext('identity');
     const settingsVersion = input.readSettingsVersion?.();
     const captured: { source: Awaited<ReturnType<typeof readSourceSnapshot>> | null } = { source: null };
     const catalog = await loadProfileCatalogV1({ ...context, signal: input.signal, readPage, readReferenceGuard, readTransfer,

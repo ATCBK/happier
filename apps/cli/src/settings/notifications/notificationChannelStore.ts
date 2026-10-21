@@ -70,9 +70,9 @@ export function createCliNotificationChannelStore(input: Readonly<{
     return response.data;
   };
   const readRow = async () => NotificationChannelCatalogReadResponseV1Schema.parse(await request(NOTIFICATION_CHANNELS_ROUTE_V1));
-  const readStorageContext = async () => {
+  const readStorageContext = async (usage: 'identity' | 'fresh-authority' = 'fresh-authority') => {
     await assertCurrent();
-    const context = await resolveCliAccountStorageContext({ credentials: input.credentials, serverBaseUrl: base,
+    const context = await resolveCliAccountStorageContext({ credentials: input.credentials, serverBaseUrl: base, usage,
       signal: input.signal, shouldContinue: isCurrent, authorizationHeaders: headers });
     await assertCurrent();
     return context;
@@ -87,7 +87,7 @@ export function createCliNotificationChannelStore(input: Readonly<{
     else commitActiveAccountSettingsSnapshot(next);
   };
   const readCapturedNotificationChannelCatalog = async (onReady?: (catalog: NotificationChannelCatalogSnapshotV1) => Promise<void>) => {
-    const context = await readStorageContext();
+    const context = await readStorageContext('identity');
     const accountId = readAccountIdFromToken(input.credentials.token);
     if (!accountId) throw Object.assign(new Error('Account identity unavailable'), { code: 'unauthorized' });
     const reobserveMode = async () => {
