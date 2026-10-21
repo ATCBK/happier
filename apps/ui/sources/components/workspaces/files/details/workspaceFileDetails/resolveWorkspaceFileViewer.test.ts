@@ -112,6 +112,18 @@ describe('resolveWorkspaceFileViewer', () => {
             preferences: preferences({}), availablePluginViewers: [],
         });
         expect(opaque.choices).toEqual([{ kind: 'builtin' }, { kind: 'text' }]);
+        const picture = resolveWorkspaceFileViewerChoiceModel({
+            metadata: { contentClass: 'image', mimeType: 'image/png', extension: '.png' },
+            preferences: preferences({}), availablePluginViewers: [],
+        });
+        expect(picture.choices).toEqual([{ kind: 'builtin' }]);
+        // A PDF, a video or a sound is binary bytes the built-in view already shows (FV5, FV6), so no text band.
+        for (const mimeType of ['application/pdf', 'video/mp4', 'audio/wav']) {
+            const document = resolveWorkspaceFileViewerChoiceModel({
+                metadata: { contentClass: 'binary', mimeType }, preferences: preferences({}), availablePluginViewers: [],
+            });
+            expect(document.choices, mimeType).toEqual([{ kind: 'builtin' }]);
+        }
     });
     it('excludes both live and first-hydration persisted editor scopes', () => {
         expect(isWorkspaceFileOpenableContentViewerEligible({

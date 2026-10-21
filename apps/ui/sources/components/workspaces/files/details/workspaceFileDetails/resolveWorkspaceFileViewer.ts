@@ -28,6 +28,7 @@ import {
     type PluginUiContributionOriginV1,
 } from '@/sync/domains/plugins/ui/projectionUnion';
 import { selectPluginSurfacePlacementsByDestination } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
+import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 
 export type WorkspaceFileViewerCandidate = Readonly<{
     entry: PluginUiOpenableContentViewerProjection;
@@ -173,9 +174,12 @@ export function resolveWorkspaceFileViewerChoiceModel(input: Readonly<{
             matchingCandidates,
             selected,
             unavailablePreference,
-            // Open as text recovers bytes the built-in view doesn't show as text (FV2b); a text file's own
-            // view already is the text, so offering it there would only add a row to every page.
-            offerText: input.metadata.contentClass !== 'text' || selected.kind === 'text',
+            // Open as text recovers bytes the built-in view can only name (binary, FV2b). A text file's view
+            // already is the text, a picture's the picture and a PDF's or a video's the document, so offering
+            // it there only adds a band.
+            offerText: (input.metadata.contentClass === 'binary'
+                && !resolveFileViewerKind({ path: '', mimeType: input.metadata.mimeType ?? null }).previewable)
+                || selected.kind === 'text',
         }),
         preferenceSelector,
         selected,
