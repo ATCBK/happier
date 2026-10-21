@@ -14,8 +14,8 @@ function isDetailsRecord(value: unknown): value is Readonly<Record<string, unkno
 
 /**
  * The redaction-safe classification of a supervisor work failure, shared by the
- * two core-owned background services so one rule decides what a failure record
- * may say.
+ * core-owned background services and direct thread recovery so one rule decides
+ * what a failure record may say.
  *
  * The record deliberately omits the throwable: a provider or transport
  * `Error.message` can carry conversation content, an endpoint, or a credential,

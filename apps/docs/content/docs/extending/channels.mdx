@@ -27,6 +27,9 @@ In the current 0.3 development source, the server prepares historical turn
 anchors automatically during startup, including after a 0.2 upgrade. Fresh
 installs and upgrades need no manual transcript-activation command. Replies
 still wait when the Session's publication or turn evidence is incomplete.
+Happier rechecks held publication pages automatically, so an eligible reply can
+go out when publication recovers without another Session message. Recovery uses
+the same delivery custody, preserving the rule against resending delivered replies.
 
 ## The two halves
 

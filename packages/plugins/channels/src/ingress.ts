@@ -95,6 +95,7 @@ import {
   type ConversationPendingOldTransportStopV1,
 } from './connectionLifecycle.js';
 import { readPersistedConversationConnectionPollFailure } from './connectionPollFailurePersistence.js';
+import { classifySupervisorFailure } from './supervisorFailure.js';
 import { hasCurrentConversationTransportCaller } from './reconciliation.js';
 import {
   CONVERSATION_NON_ADMISSION_REASONS,
@@ -2101,10 +2102,13 @@ async function bindingsForThreadObservation(input: Readonly<{
     if (spawned.type === 'error') {
       const reason = spawned.code === 'update_required' ? spawned.details.reason
         : spawned.launchError?.code ?? spawned.incompatibleTarget?.reason;
-      throw new PluginError({ code: 'channels_thread_spawn_failed',
+      const failure = new PluginError({ code: 'channels_thread_spawn_failed',
         message: 'The Session owner refused thread creation.', retryable: spawned.retryable,
         // Keep only typed codes: launch messages may contain private content.
         details: { sessionSpawnCode: spawned.code, ...(reason ? { sessionSpawnReason: reason } : {}) } });
+      // Direct recovery Actions do not pass through a background supervisor.
+      context.services.logger.warn('[Channels] thread Session creation refused', { ...classifySupervisorFailure(failure) });
+      throw failure;
     }
     // Both creation and rejoin require the Session owner's persisted birth fact.
     const birth = isJsonRecord(spawned) ? own(spawned, 'attestedContext') : undefined;

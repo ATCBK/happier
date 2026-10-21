@@ -749,6 +749,11 @@ export async function runConversationOutwardDeliveryCycle(
         },
       });
       if (projected.kind === 'advanced' && projected.hasMore) noteDeadline(now());
+      // Publication can recover without another transcript invalidation.
+      // Re-read the preserved frontier on the existing recovery cadence.
+      if (projected.kind === 'blocked' && projected.reason === 'publicationBarrier') {
+        noteDeadline(now() + RECONCILIATION_INTERVAL_MS);
+      }
       if (projected.kind === 'historyGap') {
         if (projected.disposition === 'recorded') {
           logConversationSessionProjectionHistoryGap(context, { bindingId, reason: projected.reason });
