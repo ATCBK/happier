@@ -35,13 +35,13 @@ export function createClientActionReverseDispatcher(
       ok: false as const, errorCode, error: errorCode,
     });
     const client = getMachineClient();
-    // These operations consume the addressed mounted UI. Other client Actions
-    // (for example Account configuration) do not require its Session to be open.
+    // View operations require their addressed Session. Account-wide navigation
+    // and search use the generic client room independently of that view.
+    const accountUiAction = actionId === 'session.pending.next' || actionId === 'search.conversations';
     const sessionUiAction = actionId === 'ui.find' || actionId === 'ui.prompts.picker.open'
-      || actionId === 'session.pending.next'
-      || actionId === 'search.conversations' || actionId === 'composer.transaction.apply'
+      || actionId === 'composer.transaction.apply'
       || actionId === 'composer.attachments.pick';
-    const requireSingleAnsweringClient = sessionUiAction || actionId === 'ui.current_context.read';
+    const requireSingleAnsweringClient = sessionUiAction || accountUiAction || actionId === 'ui.current_context.read';
     const composerRef = input && typeof input === 'object'
       ? Reflect.get(input, 'composerRef') ?? Reflect.get(input, 'ref') : undefined;
     const targetSessionId = composerRef
@@ -68,7 +68,9 @@ export function createClientActionReverseDispatcher(
         ? currentUiContextCommandClientRpcMethod(Reflect.get(input, 'commandId'))
       : address?.success ? workflowDraftClientRpcMethod(address.data) : RPC_METHODS.UI_ACTION_EXECUTE);
     if (!client) return machineTransportUnavailable();
-    if (!client.hasConnectedClientRpcHandler(method)) return unavailable();
+    // Advertisements are hints, not receiver authority: reconnect/withdrawal can
+    // race them. The server selects current handlers and returns typed absence
+    // or ambiguity before any client executes the Action.
     if (context.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
     const actionCaller = context.actionCaller ? projectApprovalExecutionOriginCaller(context.actionCaller) : undefined;
     if (context.actionCaller && !actionCaller) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };

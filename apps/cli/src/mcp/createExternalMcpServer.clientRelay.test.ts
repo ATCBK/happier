@@ -82,6 +82,7 @@ describe('standalone MCP client Action admission', () => {
     const clientActionExecute = createClientActionReverseDispatcher(() => ({
       hasConnectedClientRpcHandler: () => clientAvailable,
       callConnectedClientRpc: async (_method, raw, options) => {
+        if (!clientAvailable) return { ok: false, errorCode: 'RPC_CLIENT_NOT_AVAILABLE' };
         const request = UiActionDispatchRequestV1Schema.parse(raw);
         admitted.push(request);
         options.onIssued();
@@ -133,7 +134,7 @@ describe('standalone MCP client Action admission', () => {
     try {
       for (const [name, args, connectedResult, absentResult] of [
         ['ui_find', { op: 'read' }, { status: 'idle' }, { status: 'unavailable', reason: 'noClient' }],
-        ['session_pending_next', {}, { status: 'none' }, { status: 'unavailable' }],
+        ['session_pending_next', {}, { status: 'none' }, { status: 'unavailable', reason: 'noClient' }],
         ['workspace_tabs_list', {}, workspace, { errorCode: 'unsupported_action', error: 'unsupported_action:workspace.tabs.list' }],
       ] as const) {
         const response = CallToolResultSchema.parse(await client.callTool({ name, arguments: args }));

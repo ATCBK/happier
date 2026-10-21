@@ -42,11 +42,12 @@ vi.mock('expo-router', async () => {
 });
 
 const clientSockets: Socket[] = [];
-let connectDaemonSockets = false;
 let answerDaemonRpc: (method: string, params: unknown, serverUrl: string | undefined) => unknown;
 installDisconnectedServerSocketBoundary((socket, serverUrl) => {
   clientSockets.push(socket);
-  if (connectDaemonSockets) configureConnectedServerSocketBoundary(socket);
+  // The real scoped-RPC pool can retain a socket across test Account restores.
+  // This Home accepts every dial; individual daemon methods answer below.
+  configureConnectedServerSocketBoundary(socket);
   socket.timeout = vi.fn<typeof socket.timeout>(() => socket);
   // Retain real Socket listeners for the reverse receiver above; only the
   // external daemon's outgoing RPC acknowledgement is synthetic.
@@ -80,7 +81,6 @@ beforeEach(async () => {
   navigation.segments = [];
   navigation.sessionId = '';
   clientSockets.length = 0;
-  connectDaemonSockets = false;
   answerDaemonRpc = () => { throw Object.assign(new Error('RPC method not available'), { code: 'RPC_METHOD_NOT_AVAILABLE' }); };
   await homes.reset();
   serverId = await homes.addHome({ name: 'Home', serverUrl: 'https://relay.test', accountId: 'relay-account' });
@@ -101,6 +101,67 @@ afterEach(async () => {
 });
 
 describe('admitted app Actions and daemon-to-app continuations', () => {
+  it('delivers empty Next and All-Machines search through a connected app without the invoking Session view or an availability hint', async () => {
+    const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
+    const { NextPendingNavigationHost } = await import('@/components/sessions/pendingNavigation/NextPendingNavigationHost');
+    const { KeyboardShortcutProvider } = await import('@/keyboard/KeyboardShortcutProvider');
+    const { selectRpcTarget } = await import('../../../../../server/sources/app/api/socket/rpc/rpcTargetSelection');
+    const machine = createMachineFixture({ id: 'account-action-machine', activeAt: Date.now(),
+      storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
+    const offline = createMachineFixture({ id: 'account-action-offline', active: false, activeAt: 1 });
+    storage.setState(state => ({ profile: { ...state.profile!, id: 'relay-account' },
+      machines: { [machine.id]: machine, [offline.id]: offline }, machineListByServerId: {},
+      sessions: {}, sessionListRowsByServerId: {} }));
+    const socket = clientSockets.slice().reverse().find(candidate => candidate.listeners(SOCKET_RPC_EVENTS.REQUEST).length > 0);
+    if (!socket) throw new Error('Account reverse receiver absent');
+    const registered = new Set<string>();
+    const emit = vi.spyOn(socket, 'emit').mockImplementation((event, ...args) => {
+      const payload: unknown = args[0];
+      if (payload && typeof payload === 'object' && 'method' in payload && typeof payload.method === 'string') {
+        if (event === SOCKET_RPC_EVENTS.REGISTER) registered.add(payload.method);
+        if (event === SOCKET_RPC_EVENTS.UNREGISTER) registered.delete(payload.method);
+      }
+      return socket;
+    });
+    releases.push(() => emit.mockRestore());
+    const receiver = { id: 'connected-app', timeout: () => ({ emitWithAck: async (_event: string, payload: unknown) =>
+      await new Promise<unknown>(resolve => {
+        for (const receive of socket.listeners(SOCKET_RPC_EVENTS.REQUEST)) receive(payload, resolve);
+      }) }) };
+    const reverse = createClientActionReverseDispatcher(() => ({
+      // Drop the advertisement, not the real server registration. Only the
+      // network hop is synthetic; registration, selection and both executors run.
+      hasConnectedClientRpcHandler: () => false,
+      callConnectedClientRpc: async (method, payload, options) => {
+        const selection = selectRpcTarget({ targets: registered.has(`${machine.id}:${method}`) ? [receiver] : [],
+          answeringClient: options.answeringClient });
+        if (selection.type !== 'target') return { ok: false, errorCode: 'RPC_CLIENT_NOT_AVAILABLE' };
+        options.onIssued();
+        return { ok: true, result: await selection.target.timeout(0).emitWithAck(SOCKET_RPC_EVENTS.REQUEST,
+          { method: `${machine.id}:${method}`, params: JSON.parse(JSON.stringify(payload)) }) };
+      },
+    }));
+    const caller = createActionExecutor({ clientActionExecute: reverse } as unknown as ActionExecutorDeps);
+    const context = { surface: 'agent', authority: 'account_automation', defaultSessionId: 'unviewed-carrier' } as const;
+    expect(await caller.execute('session.pending.next', {}, context))
+      .toEqual({ ok: true, result: { status: 'unavailable', reason: 'noClient' } });
+    const runtime = await renderScreen(React.createElement(KeyboardShortcutProvider, {},
+      React.createElement(ClientActionReverseRuntime), React.createElement(NextPendingNavigationHost)));
+    try {
+      expect([...registered].some(method => method.includes('.session.'))).toBe(false);
+      expect(await caller.execute('session.pending.next', {}, context)).toEqual({ ok: true, result: { status: 'none' } });
+      const result = await caller.execute('search.conversations', {
+        query: { v: 1, query: 'owned-phrase', scope: { type: 'global' }, mode: 'deep' }, mode: 'indexed',
+      }, context);
+      expect(result).toMatchObject({ ok: true, result: { hits: [], machines: expect.arrayContaining([
+        { machineId: machine.id, status: 'partial' }, { machineId: offline.id, status: 'offline' },
+      ]) } });
+      expect(await caller.execute('ui.find', { op: 'read' }, context))
+        .toEqual({ ok: true, result: { status: 'unavailable', reason: 'noClient' } });
+    } finally { await runtime.unmount(); }
+    expect(await caller.execute('session.pending.next', {}, context))
+      .toEqual({ ok: true, result: { status: 'unavailable', reason: 'noClient' } });
+  });
   it('keeps reverse binding renders and in-flight Actions independent of executable-only AppShell publications', async () => {
     const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
     const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
@@ -224,7 +285,8 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
         if (event === SOCKET_RPC_EVENTS.REGISTER) registered.add(payload.method);
         if (event === SOCKET_RPC_EVENTS.UNREGISTER) {
           registered.delete(payload.method);
-          nextReceiptOrder.push('unregistered');
+          // Next owns the generic receiver, not the retiring Session view.
+          if (payload.method === `${machine.id}:${RPC_METHODS.UI_ACTION_EXECUTE}`) nextReceiptOrder.push('unregistered');
         }
       }
       return socket;
@@ -251,6 +313,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
     }));
     let foreignEffects = 0;
     let alsoViewing = false;
+    let foreignConnected = true;
     const foreign = { id: 'a-foreign-client', timeout: () => ({ emitWithAck: async () => {
       foreignEffects++; return { v: 1, execution: { ok: true, result: { status: 'noMountedSurface' } } };
     } }) };
@@ -268,7 +331,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       callConnectedClientRpc: async (method, payload, options) => {
         // Only Socket.IO is replaced. Use the real server selection owner over the
         // two clients' actual method memberships, then the actual app receiver.
-        const targets = [...(method === RPC_METHODS.UI_ACTION_EXECUTE || alsoViewing ? [foreign] : []),
+        const targets = [...((method === RPC_METHODS.UI_ACTION_EXECUTE && foreignConnected) || alsoViewing ? [foreign] : []),
           ...(registered.has(`${machine.id}:${method}`) ? [viewed] : [])];
         const selection = selectRpcTarget({ targets, answeringClient: options.answeringClient });
         if (selection.type === 'ambiguous') return { ok: false, errorCode: 'RPC_CLIENT_AMBIGUOUS' };
@@ -307,6 +370,10 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       expect(model.status).toMatchObject({ current: 2 });
       expect(foreignEffects).toBe(0);
       alsoViewing = false;
+      expect(await caller.execute('session.pending.next', {}, context))
+        .toMatchObject({ ok: false, errorCode: 'client_ambiguous' });
+      expect(foreignEffects).toBe(0);
+      foreignConnected = false;
       // Secure storage is an external boundary. A delivered request can fail
       // there before its mounted owner runs; retain a content-free cause in
       // the receipt instead of erasing it as a generic Action failure.
@@ -818,7 +885,6 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
     homes.answer(serverId, '/v1/machines', { body: [machineRow] });
     homes.answer(serverId, `/v1/machines/${machine.id}`, { body: { machine: machineRow } });
     const resumedCarrierIds: string[] = [];
-    connectDaemonSockets = true;
     answerDaemonRpc = (qualifiedMethod, params, serverUrl) => {
       expect(serverUrl?.replace(/\/+$/, '')).toBe('https://relay.test');
       const separator = qualifiedMethod.indexOf(':');

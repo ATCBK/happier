@@ -13,7 +13,7 @@ function executor(client: ClientActionMachineRpc | null) {
 
 const disconnectedClient: ClientActionMachineRpc = {
   hasConnectedClientRpcHandler: () => false,
-  callConnectedClientRpc: async () => { throw new Error('must not issue without a registered client'); },
+  callConnectedClientRpc: async () => ({ ok: false, errorCode: 'RPC_CLIENT_NOT_AVAILABLE' }),
 };
 
 describe('client Action reverse delivery', () => {
@@ -75,8 +75,6 @@ describe('client Action reverse delivery', () => {
     { actionId: 'ui.find', input: { op: 'read' }, sessionId: 'invoking-session' },
     { actionId: 'ui.prompts.picker.open', input: {}, sessionId: 'invoking-session' },
     { actionId: 'ui.prompts.picker.open', input: { composerRef: { kind: 'session', sessionId: 'target-session' } }, sessionId: 'target-session' },
-    { actionId: 'session.pending.next', input: {}, sessionId: 'invoking-session' },
-    { actionId: 'search.conversations', input: { query: { v: 1, query: 'needle', scope: { type: 'global' }, mode: 'auto' } }, sessionId: 'invoking-session' },
     { actionId: 'composer.transaction.apply', input: { scope: { serverId: 'home', accountId: 'account' },
       ref: { kind: 'session', sessionId: 'target-session' }, transaction: { expectedRevision: 1,
         operations: [{ kind: 'text.insert', position: { offset: 0 }, text: 'needle' }] } }, sessionId: 'target-session' },
@@ -97,15 +95,47 @@ describe('client Action reverse delivery', () => {
     expect(delivered).toEqual([method]);
     expect(result).not.toMatchObject({ errorCode: 'outcome_uncertain' });
   });
-  it('keeps current UI context global when a Session-originated Agent carries its default Session', async () => {
-    const method = `${RPC_METHODS.UI_ACTION_EXECUTE}.current-context.read`;
-    const checked: string[] = [];
+  it.each([
+    { actionId: 'session.pending.next', input: {}, result: { status: 'none' } },
+    { actionId: 'search.conversations', input: { query: { v: 1, query: 'needle', scope: { type: 'global' }, mode: 'auto' } },
+      result: { hits: [], machines: [] } },
+  ] as const)('delivers account-scoped $actionId without requiring the invoking Session view', async ({ actionId, input, result }) => {
     const delivered: string[] = [];
     const dispatch = createClientActionReverseDispatcher(() => ({
-      hasConnectedClientRpcHandler: actual => {
-        checked.push(actual);
-        return actual === method;
+      // A stale positive Session advertisement must not bind Account-wide work.
+      hasConnectedClientRpcHandler: () => true,
+      callConnectedClientRpc: async (method, payload, options) => {
+        delivered.push(method);
+        expect(UiActionDispatchRequestV1Schema.parse(payload).context.defaultSessionId).toBe('invoking-session');
+        expect(options.answeringClient).toEqual({ requireSingle: true });
+        options.onIssued();
+        return { ok: true, result: { v: 1, execution: { ok: true, result } } };
       },
+    }));
+    expect(await dispatch({ actionId, input, context: { surface: 'agent', defaultSessionId: 'invoking-session' } }))
+      .toEqual({ ok: true, result });
+    expect(delivered).toEqual([RPC_METHODS.UI_ACTION_EXECUTE]);
+  });
+  it('lets the authenticated server select a connected client after a missed availability advertisement', async () => {
+    const methods: string[] = [];
+    const dispatch = createClientActionReverseDispatcher(() => ({
+      hasConnectedClientRpcHandler: () => false,
+      callConnectedClientRpc: async (method, _payload, options) => {
+        methods.push(method);
+        options.onIssued();
+        return { ok: true, result: { v: 1, execution: { ok: true, result: { status: 'none' } } } };
+      },
+    }));
+    expect(await dispatch({ actionId: 'session.pending.next', input: {},
+      context: { surface: 'agent', defaultSessionId: 'invoking-session' } }))
+      .toEqual({ ok: true, result: { status: 'none' } });
+    expect(methods).toEqual([RPC_METHODS.UI_ACTION_EXECUTE]);
+  });
+  it('keeps current UI context global when a Session-originated Agent carries its default Session', async () => {
+    const method = `${RPC_METHODS.UI_ACTION_EXECUTE}.current-context.read`;
+    const delivered: string[] = [];
+    const dispatch = createClientActionReverseDispatcher(() => ({
+      hasConnectedClientRpcHandler: actual => actual === method,
       callConnectedClientRpc: async (actual, payload, options) => {
         delivered.push(actual);
         expect(UiActionDispatchRequestV1Schema.parse(payload)).toMatchObject({
@@ -124,7 +154,6 @@ describe('client Action reverse delivery', () => {
     await expect(dispatch({ actionId: 'ui.current_context.read', input: {}, context: {
       surface: 'agent', defaultSessionId: 'invoking-session',
     } })).resolves.toMatchObject({ ok: true, result: { commands: [] } });
-    expect(checked).toEqual([method]);
     expect(delivered).toEqual([method]);
   });
   it('does not replace an explicit new-session composer with the invoking Session', async () => {
@@ -580,7 +609,7 @@ describe('client Action reverse delivery', () => {
     ['workspace.tabs.list', {}, { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:workspace.tabs.list' }],
   ] as const)('returns typed absence for %s with an older or disconnected app', async (actionId, input, result) => {
     await expect(executor({ hasConnectedClientRpcHandler: () => false,
-      callConnectedClientRpc: async () => { throw new Error('must not issue'); },
+      callConnectedClientRpc: async () => ({ ok: false, errorCode: 'RPC_METHOD_NOT_FOUND' }),
     }).execute(actionId, input, { surface: 'mcp', authority: 'account_automation' })).resolves.toEqual(result);
   });
 
