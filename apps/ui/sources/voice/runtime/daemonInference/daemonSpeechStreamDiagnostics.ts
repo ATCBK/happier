@@ -76,6 +76,7 @@ export type DaemonSpeechStreamDiagnosticsSnapshot = Readonly<{
 const RETAINED_START_FAILURE_CODES = new Set([
     ...DAEMON_VOICE_INFERENCE_CLIENT_ERROR_CODES,
     'VOICE_AGENT_TARGET_MACHINE_OFFLINE',
+    'VOICE_AGENT_TARGET_MACHINE_KEY_UNAVAILABLE',
     'VOICE_CONVERSATION_TARGET_MISSING',
     'stream_transport_unavailable',
     'MACHINE_RPC_ABORTED',

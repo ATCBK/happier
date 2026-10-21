@@ -10,7 +10,7 @@ import {
 } from './voiceMachineError';
 
 describe('createVoiceMachineError', () => {
-    it.each(['VOICE_AGENT_TARGET_MACHINE_OFFLINE', 'daemon_streaming_stt_machine_unreachable'])(
+    it.each(['VOICE_AGENT_TARGET_MACHINE_OFFLINE', 'VOICE_AGENT_TARGET_MACHINE_KEY_UNAVAILABLE', 'daemon_streaming_stt_machine_unreachable'])(
         'keeps the unavailable Machine remedy for %s instead of a generic provider retry', (reason) => {
             expect(resolveVoiceMachineErrorKind(reason, 'provider_error')).toBe('execution_machine_unavailable');
         },

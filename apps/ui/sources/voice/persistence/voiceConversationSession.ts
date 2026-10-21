@@ -22,7 +22,7 @@ import { loadDaemonMergedProjectionInputs } from '@/agents/backendCatalog/loadDa
 import { createAbortRacer } from '@/voice/agent/voiceAgentAbort';
 import { resolveBundledAgentIdFromContributionIdentity } from '@/agents/catalog/catalog';
 import { resolveVoiceConfiguredAgentTarget } from '@/voice/agent/resolveVoiceConfiguredAgentTarget';
-import { canAttemptMachineSpawn } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
+import { canAttemptMachineSpawn, resolveMachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
 import { resolveMachineAbsolutePath } from '@/sync/domains/fileSystem/resolveMachineAbsolutePath';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -619,7 +619,14 @@ function resolveTargetMachineForSpawn(state: any, machineId: string): any {
 function assertTargetMachineStructurallyReadyForSpawn(machineId: string, accountLifetime = captureActiveServerAccountScopeLifetime()): void {
     const state = storage.getState();
     const machine = resolveTargetMachineForSpawn(state, machineId);
-    if (canAttemptMachineSpawn({ selectedMachineId: machineId, machine, scope: accountLifetime?.isCurrent() ? accountLifetime.scope : null })) return;
+    const target = { selectedMachineId: machineId, machine, scope: accountLifetime?.isCurrent() ? accountLifetime.scope : null };
+    if (canAttemptMachineSpawn(target)) return;
+    if (resolveMachineSpawnReadiness(target).status === 'keyUnavailable') {
+        throw Object.assign(
+            new Error('Target machine is locked because secure access is unavailable.'),
+            { code: 'VOICE_AGENT_TARGET_MACHINE_KEY_UNAVAILABLE' },
+        );
+    }
     throw Object.assign(
         new Error('Target machine daemon is offline. Start or reconnect the daemon before starting local voice.'),
         { code: 'VOICE_AGENT_TARGET_MACHINE_OFFLINE' },

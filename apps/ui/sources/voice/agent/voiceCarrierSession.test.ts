@@ -1156,6 +1156,21 @@ describe('voiceConversationSession', () => {
     });
   });
 
+  it('reports unavailable encryption material for an online locked target machine', async () => {
+    const { ensureVoiceConversationSessionForSessionRoot } = await import('@/voice/persistence/voiceConversationSession');
+    state.sessions.s_user = {
+      id: 's_user', active: true, presence: 'online', updatedAt: 1,
+      metadata: { path: '/tmp/repo', host: 'm1', machineId: 'm1', homeDir: '/home/u' },
+    };
+    state.machines.m1 = createMachineFixture({ id: 'm1', active: true, activeAt: Date.now(),
+      availability: { kind: 'locked', reason: 'encryption_material_unavailable' },
+    });
+    publishCarrierFixture();
+    await expect(ensureVoiceConversationSessionForSessionRoot({ sessionRootAddress: { serverId: homeId, sessionId: 's_user' } }))
+      .rejects.toMatchObject({ code: 'VOICE_AGENT_TARGET_MACHINE_KEY_UNAVAILABLE' });
+    expect(spawnSession).not.toHaveBeenCalled();
+  });
+
   it('fails fast when the target root machine daemon is offline', async () => {
     const { ensureVoiceConversationSessionForSessionRoot } = await import('@/voice/persistence/voiceConversationSession');
     state.sessions.s_user = {

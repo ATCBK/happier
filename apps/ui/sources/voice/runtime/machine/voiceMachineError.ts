@@ -68,6 +68,7 @@ export function resolveVoiceMachineErrorKind(reason: string, preferredKind?: Voi
     if (reason === 'agent_signed_out') return 'authentication_required';
     if (reason === 'provider_setup_required') return 'provider_setup_required';
     if (reason === 'VOICE_AGENT_TARGET_MACHINE_OFFLINE'
+        || reason === 'VOICE_AGENT_TARGET_MACHINE_KEY_UNAVAILABLE'
         || reason === 'daemon_streaming_stt_machine_unreachable') return 'execution_machine_unavailable';
     if (preferredKind) return preferredKind;
     if (reason === 'turn_aborted') return 'turn_aborted';

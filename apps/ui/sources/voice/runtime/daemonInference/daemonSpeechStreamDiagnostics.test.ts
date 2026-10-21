@@ -80,6 +80,7 @@ describe('daemonSpeechStreamDiagnostics', () => {
         'internal_error',
         'peer_route_signing_identity_unavailable',
         'MACHINE_RPC_ABORTED',
+        'VOICE_AGENT_TARGET_MACHINE_KEY_UNAVAILABLE',
     ])('retains the canonical non-secret start failure code %s', (code) => {
         const diagnostics = createDaemonSpeechStreamDiagnostics({ warn: () => undefined });
 
