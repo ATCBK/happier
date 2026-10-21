@@ -1825,6 +1825,7 @@ export type TeamsActionResultById = {
             metric: 'inference_requests' | 'total_tokens' | 'cost_usd';
             resetsAtUtc: string;
         };
+        code?: 'resource_unavailable' | 'source_unavailable' | 'broker_unavailable' | 'update_required' | 'policy_denied' | 'invalid_request' | 'resource_forbidden' | 'resource_changed' | 'session_not_active' | 'operation_not_current' | 'execution_run_not_found' | 'execution_run_terminal' | 'execution_run_authority_unavailable' | 'team_credential_usage_limit' | 'token_limit_unavailable' | 'cost_limit_unavailable' | 'duplicate_request' | 'source_invalid' | 'request_malformed' | 'route_not_allowed' | 'model_not_allowed' | 'reasoning_effort_not_allowed' | 'request_constraint_unsupported' | 'grant_invalid' | 'grant_unknown_key' | 'grant_bad_signature' | 'grant_expired' | 'grant_not_yet_valid' | 'grant_binding_mismatch' | 'transport_identity_mismatch' | 'request_too_large' | 'invalid_api_key' | 'upstream_unavailable' | 'request_cancelled' | undefined;
         recovery?: string | undefined;
     };
     readonly "teams.credentials.preparation.get": {

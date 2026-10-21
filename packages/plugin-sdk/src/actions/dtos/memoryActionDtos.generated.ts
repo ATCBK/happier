@@ -871,6 +871,16 @@ export type MemoryActionResultById = {
             lastInventoryAtMs: number | null;
             currentSessionId: string | null;
             currentPhase: string | null;
+            activeOperations?: {
+                kind: 'documents' | 'transcript';
+                sessionIds: string[];
+            }[] | undefined;
+            sessionProgress?: {
+                sessionId: string;
+                observedSeq: number | null;
+                checkedSeq: number | null;
+                indexedSeq: number;
+            }[] | undefined;
         } | null;
         queue: {
             [x: string]: unknown;

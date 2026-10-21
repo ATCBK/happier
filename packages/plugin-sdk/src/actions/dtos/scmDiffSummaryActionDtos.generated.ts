@@ -810,7 +810,7 @@ export type ScmDiffSummaryActionResultById = {
                     suggestedPrBody?: string | undefined;
                 } | undefined;
                 reason?: string | undefined;
-                reasonCode?: 'generation_cancelled' | undefined;
+                reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
             } | undefined;
             walkthrough?: {
                 state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -847,7 +847,7 @@ export type ScmDiffSummaryActionResultById = {
                     readingHint?: string | undefined;
                 } | undefined;
                 reason?: string | undefined;
-                reasonCode?: 'generation_cancelled' | undefined;
+                reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
             } | undefined;
             commitPlan?: {
                 state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -861,7 +861,7 @@ export type ScmDiffSummaryActionResultById = {
                     leftOutChangeRefs: string[];
                 } | undefined;
                 reason?: string | undefined;
-                reasonCode?: 'generation_cancelled' | undefined;
+                reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
             } | undefined;
         } | undefined;
         analysis?: {
@@ -1012,7 +1012,7 @@ export type ScmDiffSummaryActionResultById = {
                     suggestedPrBody?: string | undefined;
                 } | undefined;
                 reason?: string | undefined;
-                reasonCode?: 'generation_cancelled' | undefined;
+                reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
             } | undefined;
             walkthrough?: {
                 state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -1049,7 +1049,7 @@ export type ScmDiffSummaryActionResultById = {
                     readingHint?: string | undefined;
                 } | undefined;
                 reason?: string | undefined;
-                reasonCode?: 'generation_cancelled' | undefined;
+                reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
             } | undefined;
             commitPlan?: {
                 state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -1063,7 +1063,7 @@ export type ScmDiffSummaryActionResultById = {
                     leftOutChangeRefs: string[];
                 } | undefined;
                 reason?: string | undefined;
-                reasonCode?: 'generation_cancelled' | undefined;
+                reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
             } | undefined;
         } | undefined;
         analysis?: {
@@ -1223,7 +1223,7 @@ export type ScmDiffSummaryActionResultById = {
                     suggestedPrBody?: string | undefined;
                 } | undefined;
                 reason?: string | undefined;
-                reasonCode?: 'generation_cancelled' | undefined;
+                reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
             } | undefined;
             walkthrough?: {
                 state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -1260,7 +1260,7 @@ export type ScmDiffSummaryActionResultById = {
                     readingHint?: string | undefined;
                 } | undefined;
                 reason?: string | undefined;
-                reasonCode?: 'generation_cancelled' | undefined;
+                reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
             } | undefined;
             commitPlan?: {
                 state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -1274,7 +1274,7 @@ export type ScmDiffSummaryActionResultById = {
                     leftOutChangeRefs: string[];
                 } | undefined;
                 reason?: string | undefined;
-                reasonCode?: 'generation_cancelled' | undefined;
+                reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
             } | undefined;
         } | undefined;
         analysis?: {
@@ -1425,7 +1425,7 @@ export type ScmDiffSummaryActionResultById = {
                     suggestedPrBody?: string | undefined;
                 } | undefined;
                 reason?: string | undefined;
-                reasonCode?: 'generation_cancelled' | undefined;
+                reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
             } | undefined;
             walkthrough?: {
                 state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -1462,7 +1462,7 @@ export type ScmDiffSummaryActionResultById = {
                     readingHint?: string | undefined;
                 } | undefined;
                 reason?: string | undefined;
-                reasonCode?: 'generation_cancelled' | undefined;
+                reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
             } | undefined;
             commitPlan?: {
                 state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -1476,7 +1476,7 @@ export type ScmDiffSummaryActionResultById = {
                     leftOutChangeRefs: string[];
                 } | undefined;
                 reason?: string | undefined;
-                reasonCode?: 'generation_cancelled' | undefined;
+                reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
             } | undefined;
         } | undefined;
         analysis?: {
@@ -1695,7 +1695,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -1732,7 +1732,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -1746,7 +1746,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -1897,7 +1897,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -1934,7 +1934,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -1948,7 +1948,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -2243,7 +2243,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -2280,7 +2280,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -2294,7 +2294,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -2445,7 +2445,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -2482,7 +2482,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -2496,7 +2496,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -2791,7 +2791,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -2828,7 +2828,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -2842,7 +2842,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -2993,7 +2993,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -3030,7 +3030,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -3044,7 +3044,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -3339,7 +3339,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -3376,7 +3376,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -3390,7 +3390,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -3541,7 +3541,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -3578,7 +3578,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -3592,7 +3592,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -3887,7 +3887,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -3924,7 +3924,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -3938,7 +3938,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -4089,7 +4089,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -4126,7 +4126,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -4140,7 +4140,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -4473,7 +4473,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -4510,7 +4510,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -4524,7 +4524,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -4675,7 +4675,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -4712,7 +4712,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -4726,7 +4726,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -5021,7 +5021,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -5058,7 +5058,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -5072,7 +5072,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -5223,7 +5223,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -5260,7 +5260,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -5274,7 +5274,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -5569,7 +5569,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -5606,7 +5606,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -5620,7 +5620,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -5771,7 +5771,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -5808,7 +5808,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -5822,7 +5822,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -6127,7 +6127,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -6164,7 +6164,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -6178,7 +6178,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -6329,7 +6329,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -6366,7 +6366,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -6380,7 +6380,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -6675,7 +6675,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -6712,7 +6712,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -6726,7 +6726,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -6877,7 +6877,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -6914,7 +6914,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -6928,7 +6928,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -7223,7 +7223,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -7260,7 +7260,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -7274,7 +7274,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -7425,7 +7425,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -7462,7 +7462,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -7476,7 +7476,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
-                        reasonCode?: 'generation_cancelled' | undefined;
+                        reasonCode?: 'generation_cancelled' | 'RPC_CLIENT_NOT_AVAILABLE' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {

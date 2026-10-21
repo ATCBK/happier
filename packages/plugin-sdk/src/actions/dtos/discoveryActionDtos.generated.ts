@@ -2,7 +2,7 @@
 // Type-only projection of Protocol-owned Action DTO declarations.
 
 import type { JsonValue } from '../../identity.js';
-import type { InputPredicate, WidgetDefinitionBodyV1Input } from './pluginActionDtoSupport.generated.js';
+import type { InputPredicate, PluginJsonSchemaV2, WidgetDefinitionBodyV1Input } from './pluginActionDtoSupport.generated.js';
 
 export type DiscoveryActionInputById = {
     readonly "action.spec.search": {
@@ -438,6 +438,10 @@ export type DiscoveryActionResultById = {
                 routing?: string | undefined;
                 approvalPolicy?: string | undefined;
                 resultSchema?: Record<string, unknown> | undefined;
+            } | undefined;
+            completion?: {
+                awaits: 'execution_runs' | 'action_operations';
+                terminalOutputSchema: PluginJsonSchemaV2;
             } | undefined;
             compatibility?: Record<string, unknown> | undefined;
         };
