@@ -115,16 +115,16 @@ function createSummaryOwner(lifetime: ActiveServerAccountScopeLifetime) {
             for (const key of keys) pending.add(key);
             schedule();
         },
-        demand(kind: SummaryKind, keys: readonly string[]) {
-            const returningFromIdle = ![...demands].some(demand => demand[0]?.startsWith(`${kind}:`));
+        demand(keys: readonly string[]) {
+            const activeKeys = new Set([...demands].flat());
             demands.add(keys);
             if (!unsubscribeWake) unsubscribeWake = subscribeVisibleWorkflowRunListInvalidation({
                 lifetime, isVisibleWindowLoaded: () => true,
                 invalidate: () => { for (const demand of demands) for (const id of demand) pending.add(id); schedule(); },
             });
-            // With no visible demand the wake subscription was detached. Retain last-known
-            // facts, but refresh returning demand, including after an older in-flight reply.
-            for (const key of keys) if (returningFromIdle || (!summaries.has(key) && !inFlight.has(key))) pending.add(key);
+            // An id may miss wakes while hidden even if a sibling remains visible. Keep its
+            // last-known row, but refresh new demand after any older in-flight reply.
+            for (const key of keys) if (!activeKeys.has(key)) pending.add(key);
             schedule();
             return () => {
                 demands.delete(keys);
@@ -175,7 +175,7 @@ function useWorkflowSummaries<T>(requestedIds: readonly string[], selector: Summ
         };
         return { owner, keys, get };
     }, [key, lifetime, selector]);
-    React.useEffect(() => selection.owner?.demand(selector.kind, selection.keys), [selection, selector]);
+    React.useEffect(() => selection.owner?.demand(selection.keys), [selection]);
     return React.useSyncExternalStore(selection.owner?.subscribe ?? subscribeInactive, selection.get, selection.get);
 }
 

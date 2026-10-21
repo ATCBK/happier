@@ -3,6 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -314,6 +315,50 @@ describe('workflow library run summaries', () => {
             needsYouCount: 0, needsYouRunId: null }], remainingSourceArtifactIds: [] } });
         const returned = await renderHook(() => useWorkflowLibrarySummaries([sourceArtifactId]));
         await waitForHomeGovernance(() => expect(returned.getCurrent()?.get(sourceArtifactId)?.needsYouRunId).toBeNull());
+    });
+
+    it.each(['source', 'automation'] as const)('refreshes re-entering %s demand while another id stays visible', async kind => {
+        const second = '00000000-0000-4000-8000-000000000002';
+        const refreshed = createDeferred<unknown>();
+        let completed = false;
+        let holdReturningRead = false;
+        const response = (ids: readonly string[]) => ({ ok: true, result: kind === 'source'
+            ? { summaries: ids.map(id => ({ ...item, sourceArtifactId: id,
+                needsYouCount: completed ? 0 : 1, needsYouRunId: completed ? null : 'private-run-a' })), remainingSourceArtifactIds: [] }
+            : { automationSummaries: ids.map(automationId => ({ automationId, lastRun: {
+                id: `run-${automationId}`, state: completed ? 'succeeded' : 'running', workflowCustodyState: null,
+                attentionRequired: !completed, createdAt: '2026-10-21T03:00:00.000Z',
+            } })), remainingAutomationIds: [] },
+        });
+        executeMock.mockImplementation(async (_actionId, input) => {
+            const ids: readonly string[] = kind === 'source' ? input.sourceArtifactIds : input.automationIds;
+            return holdReturningRead && ids.includes(second) ? refreshed.promise : response(ids);
+        });
+        function useSummary(id: string) {
+            return kind === 'source' ? useWorkflowLibrarySummaries([id])?.get(id)
+                : useWorkflowAutomationSummaries([id]).summaries?.get(id);
+        }
+        const attention = (row: ReturnType<typeof useSummary>) => row && ('needsYouCount' in row
+            ? row.needsYouCount : Number(row.lastRun?.attentionRequired ?? false));
+        const first = await renderHook(() => useSummary(sourceArtifactId));
+        const secondMount = await renderHook(() => useSummary(second));
+        await waitForHomeGovernance(() => expect(attention(first.getCurrent())).toBe(1));
+        await waitForHomeGovernance(() => expect(attention(secondMount.getCurrent())).toBe(1));
+        const lastKnown = secondMount.getCurrent();
+        expect(executeMock.mock.calls).toHaveLength(2);
+        await secondMount.unmount();
+        completed = true;
+        await act(async () => { publishHomeAccountChange(serverId, ['workflow-run:completed-while-hidden']); });
+        await waitForHomeGovernance(() => expect(attention(first.getCurrent())).toBe(0));
+        expect(executeMock.mock.calls).toHaveLength(3);
+        holdReturningRead = true;
+        const returned = await renderHook(() => useSummary(second));
+        await flushHookEffects({ cycles: 10 });
+        expect(executeMock.mock.calls).toHaveLength(4);
+        expect(returned.getCurrent()).toBe(lastKnown);
+        await act(async () => { refreshed.resolve(response([second])); await refreshed.promise; });
+        await waitForHomeGovernance(() => expect(attention(returned.getCurrent())).toBe(0));
+        expect(executeMock.mock.calls).toHaveLength(4);
     });
 
     it('retires summaries on Account changes and subscribes to the new Account wake', async () => {
