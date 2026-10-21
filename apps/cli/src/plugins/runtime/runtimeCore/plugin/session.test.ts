@@ -6,8 +6,14 @@ import { logger } from '@/ui/logger';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import { createCurrentSessionPresentationHost } from '@/session/presentation/currentSessionPresentationService';
 import { createNativeAgentSessionOperations } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession';
+import { createNativeAgentSessionPublications } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionPublications';
+import { createSessionRuntimeModesPublisher } from '@/agent/runtime/controls/sessionRuntimeModesPublisher';
+import { computeSessionModePickerControl } from '../../../../../../ui/sources/sync/domains/sessionControl/sessionModeControl';
+import { projectAgentPreflightSessionControlsCatalogEntry } from '@/plugins/projection/registry/agentCatalogEntryHooks';
+import { probeAgentModesBestEffort } from '@/capabilities/probes/agentModesProbe';
+import { preflightCatalogEntryFixture } from '@/capabilities/probes/preflightSessionControlsProbeAdapter.testkit';
 import { bindSessionProviderInputOutcome, createSessionProviderInputOutcomeNormalizer, type SessionProviderInputOutcome } from '@/agent/runtime/session/input/providerInputOutcome';
-import type { AgentSessionRuntime, AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentSessionModesSnapshot, AgentSessionRuntime, AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
 import {
   ProviderConnectionIdSchema,
   PluginAgentContributionV2Schema,
@@ -183,6 +189,70 @@ function createHostFactoryParams() {
 }
 
 describe('plugin session runtime adapters', () => {
+  it.each([true, false])('retains native mode publication through the replaceable runtime into composer options (producer bound: %s)', async (bound) => {
+    const host = createHostFactoryParams();
+    const agentId = 'acme.sample.provider';
+    const sources: Array<{ publish(snapshot: AgentSessionModesSnapshot): void; stalePublish(snapshot: AgentSessionModesSnapshot): void }> = [];
+    let generation = 0;
+    let nativePublication: ReturnType<typeof createNativeAgentSessionPublications> | null = null;
+    const plan = await createPublicPluginSessionRuntimePlan({
+      backend: createBackendFixture(), agent: createAgentFixture(), policyAgentId: agentId,
+      sessionInput: buildPluginSessionBindingInput({ credentials: tokenOnlyCredentials, startedBy: 'daemon', startingMode: 'remote' }),
+      createSessionRuntime: async () => {
+        const modeId = generation++ === 0 ? 'build' : 'plan';
+        let snapshot: AgentSessionModesSnapshot = { observedAt: generation, modes: [{ id: modeId, name: modeId }], currentModeId: modeId };
+        const listeners = new Set<(value: AgentSessionModesSnapshot) => void>();
+        const staleListeners = new Set<(value: AgentSessionModesSnapshot) => void>();
+        const publications = createNativeAgentSessionPublications({ agentId, session: host.session,
+          signal: new AbortController().signal, isCurrent: () => true, supportsInFlightSteer: false });
+        nativePublication = publications;
+        // An external native Agent is the boundary. Publication, replacement,
+        // metadata projection and the composer's exact consumer remain real.
+        if (bound) publications.services.modes.bind({ read: () => snapshot, subscribe(listener) {
+          listeners.add(listener); staleListeners.add(listener);
+          return { dispose: () => { listeners.delete(listener); } };
+        } });
+        sources.push({ publish(value) { snapshot = value; for (const listener of listeners) listener(value); },
+          stalePublish(value) { for (const listener of staleListeners) listener(value); } });
+        const native: AgentSessionRuntime = { send: async () => ({ status: 'admitted' }), watch: () => ({ dispose() {} }),
+          dispose: async () => { publications.dispose(); } };
+        return createNativeAgentSessionOperations(native, 'host-session-1', undefined, undefined, undefined, undefined, undefined, {
+          context: { signal: new AbortController().signal } as AgentSessionRuntimeContext,
+          cwd: host.directory, connectedAccounts: [], capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+          cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false },
+        }, publications);
+      },
+    });
+    const runtime = (await plan.config.createSessionRuntime?.(host))?.nativeRuntime;
+    if (!runtime) throw new Error('Missing composed native runtime');
+    const projector = runtime.modes ? createSessionRuntimeModesPublisher({ agentId, session: host.session, source: runtime.modes }) : null;
+    const control = () => computeSessionModePickerControl({ agentId, metadata: host.session.getMetadataSnapshot() });
+    const projected = projectAgentPreflightSessionControlsCatalogEntry({ agentId, systemTools: [],
+      // This external Agent's native observation is also its preflight producer.
+      preflightSessionControls: { probeModes: async () => nativePublication?.modesSource.read().modes ?? null },
+      retirementSignal: new AbortController().signal, isCurrent: () => true });
+    const adapter = await projected.getPreflightSessionControlsProbeAdapter!();
+    if (!adapter) throw new Error('Missing external Agent preflight projection');
+    const probe = () => probeAgentModesBestEffort({ agentId, cwd: `${host.directory}/${generation}/${bound}`,
+      catalogEntry: preflightCatalogEntryFixture('claude', adapter) });
+    try {
+      await projector?.flush();
+      expect(control()?.options ?? []).toEqual(bound ? [{ id: 'build', name: 'build' }] : []);
+      expect(control()?.currentModeId ?? null).toBe(bound ? 'build' : null);
+      expect(await probe()).toMatchObject({ source: bound ? 'dynamic' : 'unavailable', availableModes: control()?.options ?? [] });
+      await runtime.resetOrDisposeRuntime('runtime_recovery', { kind: 'create' });
+      await projector?.flush();
+      expect(control()?.options ?? []).toEqual(bound ? [{ id: 'plan', name: 'plan' }] : []);
+      expect(await probe()).toMatchObject({ source: bound ? 'dynamic' : 'unavailable', availableModes: control()?.options ?? [] });
+      sources[0]!.stalePublish({ modes: [{ id: 'stale', name: 'Stale' }], currentModeId: 'stale' });
+      await projector?.flush();
+      expect(control()?.currentModeId ?? null).toBe(bound ? 'plan' : null);
+      sources[1]!.publish({ observedAt: 3, modes: [], currentModeId: 'plan' });
+      await projector?.flush();
+      expect(control()).toBeNull();
+    } finally { await runtime.resetOrDisposeRuntime(); await projector?.stopAndDrain(); }
+  });
+
   it.each([false, true])('preserves exact native custody through composed runtime retirement (cleanup fails: %s)', async (cleanupFails) => {
     const cleanupFailure = new Error('native cleanup failed');
     let finishCleanup!: () => void;

@@ -47,6 +47,8 @@ import type {
   AgentSessionHostServices,
   AgentSessionModelsSnapshot,
   AgentSessionModelsSource,
+  AgentSessionModesSnapshot,
+  AgentSessionModesSource,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { NativeForkSource } from '@/session/shared/spawnSessionContract';
 import type { ProviderBindingLaunchHandoffV1 } from '@/plugins/runtime/providerBindings/handoff';
@@ -187,56 +189,53 @@ function bindReplaceableNativeAgentSessionOperations(params: Readonly<{
     let runtimeEventUnsubscribe: (() => void) | null = null;
     let promptDeliveryOutcomeHandler: ((outcome: PluginRuntimePromptDeliveryOutcome) => void) | null = null;
     let promptTerminallyRejectedHandler: PluginRuntimePromptAcceptedHandler | null = null;
-    const hasModelsSource = params.initialRuntime.operations.models !== undefined;
-    const modelSubscribers = new Set<(snapshot: AgentSessionModelsSnapshot) => void>();
-    let modelSourceUnsubscribe: ReturnType<AgentSessionModelsSource['subscribe']> | null = null;
-    let modelSnapshot: AgentSessionModelsSnapshot = Object.freeze({ models: null });
-
-    const publishModelSnapshot = (snapshot: AgentSessionModelsSnapshot): void => {
-        modelSnapshot = Object.freeze({ ...snapshot });
-        for (const subscriber of Array.from(modelSubscribers)) subscriber(modelSnapshot);
-    };
-
-    const detachModelSource = (): void => {
-        const unsubscribe = modelSourceUnsubscribe;
-        modelSourceUnsubscribe = null;
-        unsubscribe?.dispose();
-    };
-
-    const attachModelSource = (): void => {
-        detachModelSource();
-        const source = currentOperations.models;
-        if (!source) {
-            publishModelSnapshot({ models: null });
-            return;
-        }
-        const bindingEpoch = runtimeBindingEpoch;
-        const apply = (snapshot: AgentSessionModelsSnapshot): void => {
-            if (runtimeClosed || bindingEpoch !== runtimeBindingEpoch) return;
-            publishModelSnapshot({
-                models: snapshot.models,
-                ...(snapshot.currentModelId === undefined ? {} : { currentModelId: snapshot.currentModelId }),
-            });
+    // Both native catalogs follow the existing runtime replacement lifetime.
+    // Keep their sources stable for host publishers and fence retired callbacks.
+    const bindCatalog = <Snapshot,>(readSource: () => Readonly<{
+        read(): Snapshot;
+        subscribe(handler: (snapshot: Snapshot) => void): Readonly<{ dispose(): void | Promise<void> }>;
+    }> | undefined, empty: Snapshot, project: (snapshot: Snapshot) => Snapshot = (next) => next) => {
+        let snapshot = empty;
+        const subscribers = new Set<(snapshot: Snapshot) => void>();
+        let subscription: Readonly<{ dispose(): void | Promise<void> }> | null = null;
+        const publish = (next: Snapshot): void => {
+            snapshot = Object.freeze({ ...next });
+            for (const subscriber of Array.from(subscribers)) subscriber(snapshot);
         };
-        apply(source.read());
-        modelSourceUnsubscribe = source.subscribe(apply);
-    };
-
-    const stableModels: AgentSessionModelsSource | undefined = hasModelsSource
-        ? Object.freeze({
-            read: () => modelSnapshot,
-            subscribe(handler: (snapshot: AgentSessionModelsSnapshot) => void) {
-                modelSubscribers.add(handler);
-                handler(modelSnapshot);
-                return Object.freeze({
-                    dispose: () => {
-                        modelSubscribers.delete(handler);
-                    },
-                });
+        const detach = (): void => {
+            const previous = subscription;
+            subscription = null;
+            void previous?.dispose();
+        };
+        const attach = (): void => {
+            detach();
+            const source = readSource();
+            if (!source) { publish(empty); return; }
+            const bindingEpoch = runtimeBindingEpoch;
+            const apply = (next: Snapshot): void => {
+                if (!runtimeClosed && bindingEpoch === runtimeBindingEpoch) publish(project(next));
+            };
+            apply(source.read());
+            subscription = source.subscribe(apply);
+        };
+        const source = readSource() ? Object.freeze({
+            read: () => snapshot,
+            subscribe(handler: (snapshot: Snapshot) => void) {
+                subscribers.add(handler);
+                handler(snapshot);
+                return Object.freeze({ dispose: () => { subscribers.delete(handler); } });
             },
-        })
-        : undefined;
-    if (hasModelsSource) attachModelSource();
+        }) : undefined;
+        if (source) attach();
+        return { source, attach, detach, clear: () => publish(empty) };
+    };
+    const models = bindCatalog<AgentSessionModelsSnapshot>(() => currentOperations.models, { models: null }, (snapshot) => ({
+        models: snapshot.models,
+        ...(snapshot.currentModelId === undefined ? {} : { currentModelId: snapshot.currentModelId }),
+    }));
+    const modes = bindCatalog<AgentSessionModesSnapshot>(() => currentOperations.modes, { modes: null });
+    const stableModels: AgentSessionModelsSource | undefined = models.source;
+    const stableModes: AgentSessionModesSource | undefined = modes.source;
 
     const detachRuntimeEvents = (): void => {
         const unsubscribe = runtimeEventUnsubscribe;
@@ -259,7 +258,7 @@ function bindReplaceableNativeAgentSessionOperations(params: Readonly<{
     const detachRuntimeSources = (): void => {
         let firstError: unknown;
         let hasError = false;
-        for (const detach of [detachRuntimeEvents, detachModelSource]) {
+        for (const detach of [detachRuntimeEvents, models.detach, modes.detach]) {
             try {
                 detach();
             } catch (error) {
@@ -309,7 +308,8 @@ function bindReplaceableNativeAgentSessionOperations(params: Readonly<{
             reapplyRuntimeHandlers();
             await replacementLifecycle?.onSuccessorBound();
             runtimeClosed = false;
-            if (hasModelsSource) attachModelSource();
+            if (stableModels) models.attach();
+            if (stableModes) modes.attach();
             attachRuntimeEvents();
             return true;
         } catch (error) {
@@ -330,6 +330,7 @@ function bindReplaceableNativeAgentSessionOperations(params: Readonly<{
             replacementLifecycle = lifecycle;
         },
         ...(stableModels ? { models: stableModels } : {}),
+        ...(stableModes ? { modes: stableModes } : {}),
         get permissionCapability() {
             return currentOperations.permissionCapability;
         },
@@ -605,7 +606,8 @@ function bindReplaceableNativeAgentSessionOperations(params: Readonly<{
                     detachError = error;
                     detachFailed = true;
                 }
-                if (hasModelsSource) publishModelSnapshot({ models: null });
+                if (stableModels) models.clear();
+                if (stableModes) modes.clear();
                 try {
                     await currentOperations.resetOrDisposeRuntime(reason);
                 } finally {
