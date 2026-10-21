@@ -17965,6 +17965,7 @@ settingsSession: {
         searchUnavailable: 'Для поиска нужна машина с включённым поиском по памяти.',
         documentSearchUnavailable: 'Поиск по документам памяти здесь недоступен.',
         accessPrivate: 'Видите только вы',
+        searchUnavailableOn: ({ machine }: { machine: string }) => `Поиск по памяти недоступен на ${machine}.`,
         accessShared: 'Общая',
         writesWithoutAsking: 'сохраняется без запроса',
         remembersWithoutAsking: ({ name }: { name: string }) => `${name} запоминает без запроса`,

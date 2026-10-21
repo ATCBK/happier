@@ -18133,6 +18133,7 @@ settingsSession: {
         searchUnavailable: 'Die Suche braucht einen Rechner mit aktivierter Gedächtnissuche.',
         turnOnSearch: "Einschalten",
         documentSearchUnavailable: 'Die Suche in Gedächtnisdokumenten ist hier nicht verfügbar.',
+        searchUnavailableOn: ({ machine }: { machine: string }) => `Die Gedächtnissuche ist auf ${machine} nicht verfügbar.`,
         accessPrivate: 'Nur du kannst es sehen',
         accessShared: 'Geteilt',
         writesWithoutAsking: 'ohne Nachfrage gespeichert',

@@ -17928,6 +17928,7 @@ settingsSession: {
         searchUnavailable: '検索には、メモリ検索を有効にしたマシンが必要です。',
         turnOnSearch: "オンにする",
         documentSearchUnavailable: 'ここではメモリ文書の検索を利用できません。',
+        searchUnavailableOn: ({ machine }: { machine: string }) => `${machine} ではメモリ検索を利用できません。`,
         accessPrivate: 'あなただけが見られます',
         accessShared: '共有中',
         writesWithoutAsking: '確認なしで保存',

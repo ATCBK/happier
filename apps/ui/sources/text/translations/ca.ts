@@ -15967,6 +15967,7 @@ settingsSession: {
         searchUnavailable: 'La cerca necessita una màquina amb la cerca de memòria activada.',
         turnOnSearch: "Activa",
         documentSearchUnavailable: 'La cerca en documents de memòria no està disponible aquí.',
+        searchUnavailableOn: ({ machine }: { machine: string }) => `La cerca de memòria no està disponible a ${machine}.`,
         accessPrivate: 'Només tu la pots veure',
         accessShared: 'Compartida',
         writesWithoutAsking: 'es desa sense preguntar',

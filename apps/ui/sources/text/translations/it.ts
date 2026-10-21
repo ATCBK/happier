@@ -18030,6 +18030,7 @@ settingsSession: {
         searchUnavailable: 'La ricerca richiede una macchina con la ricerca in memoria attiva.',
         turnOnSearch: "Attiva",
         documentSearchUnavailable: 'La ricerca nei documenti di memoria non è disponibile qui.',
+        searchUnavailableOn: ({ machine }: { machine: string }) => `La ricerca in memoria non è disponibile su ${machine}.`,
         accessPrivate: 'Solo tu puoi vederla',
         accessShared: 'Condivisa',
         writesWithoutAsking: 'salvato senza chiedere',

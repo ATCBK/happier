@@ -17048,6 +17048,7 @@ settingsSession: {
         searchUnavailable: 'Wyszukiwanie wymaga maszyny z włączonym wyszukiwaniem w pamięci.',
         turnOnSearch: "Włącz",
         documentSearchUnavailable: 'Wyszukiwanie w dokumentach pamięci jest tutaj niedostępne.',
+        searchUnavailableOn: ({ machine }: { machine: string }) => `Wyszukiwanie w pamięci nie jest dostępne na ${machine}.`,
         accessPrivate: 'Tylko ty ją widzisz',
         accessShared: 'Udostępniona',
         writesWithoutAsking: 'zapisywane bez pytania',

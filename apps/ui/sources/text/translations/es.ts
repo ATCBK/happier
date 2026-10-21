@@ -18026,6 +18026,7 @@ settingsSession: {
         searchUnavailable: 'La búsqueda necesita una máquina con la búsqueda en memoria activada.',
         turnOnSearch: "Activar",
         documentSearchUnavailable: 'La búsqueda en documentos de memoria no está disponible aquí.',
+        searchUnavailableOn: ({ machine }: { machine: string }) => `La búsqueda en memoria no está disponible en ${machine}.`,
         accessPrivate: 'Solo tú puedes verla',
         accessShared: 'Compartida',
         writesWithoutAsking: 'se guarda sin preguntar',

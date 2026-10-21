@@ -17625,6 +17625,7 @@ settingsSession: {
         searchUnavailable: '搜索需要一台已开启记忆搜索的机器。',
         turnOnSearch: "开启",
         documentSearchUnavailable: '此处无法搜索记忆文档。',
+        searchUnavailableOn: ({ machine }: { machine: string }) => `${machine} 上无法使用记忆搜索。`,
         accessPrivate: '仅你可见',
         accessShared: '已共享',
         writesWithoutAsking: '无需询问即保存',

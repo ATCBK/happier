@@ -28,7 +28,8 @@ vi.mock('expo-router', async () => {
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key: string, options?: Record<string, unknown>) =>
-        key === 'memoryContext.memory.factCount' ? `${options?.count} facts` : key });
+        key === 'memoryContext.memory.factCount' ? `${options?.count} facts`
+            : key === 'memoryContext.memory.searchUnavailableOn' ? `${key}:${options?.machine}` : key });
 });
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
@@ -304,6 +305,9 @@ describe('MemorySearchPanel corpus coverage', () => {
                 false, { sourceServerId: serverId }));
             await flushHookEffects();
             expect(screen.findByTestId('project-search.unavailable')).not.toBeNull();
+            // The Machine the person chose is the one named, never a generic "a machine".
+            expect(screen.getTextContent()).toContain(
+                `memoryContext.memory.searchUnavailableOn:${selectedMachine.metadata?.displayName ?? selectedMachine.metadata?.host}`);
             // A search that cannot run says what it needs and leads to the setting that provides it.
             expect(screen.findByTestId('project-search.unavailable-action')).not.toBeNull();
             await screen.pressByTestIdAsync('project-search.unavailable-action');
