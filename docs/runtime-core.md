@@ -432,6 +432,13 @@ Loaded-daemon replay requires the orchestrator's next authorized reload.
 
 ## Native Agent seam
 
+In 0.3 development, foreground Stop aborts the prompt-loop lifetime and starts
+native turn cancellation alongside permission withdrawal. A pending Home write
+for withdrawn permission requests must not delay the native interrupt. The Stop
+operation still joins both outcomes; durable terminal transcript publication
+retains its existing acknowledgement ordering. Independent Runs keep their own
+permission and cancellation lifetimes.
+
 [`AgentRuntime`](../packages/plugin-sdk/src/agentRuntime/runtime.ts) has two mutually exclusive forms: a Session factory or an execution-only Run factory. A Session-capable Agent does not add an independent Run lifecycle. For Session-owned Runs, the host binds its Session runtime into the shared Execution Run adapter in [`nativeAgentExecutionRun.ts`](../apps/cli/src/agent/runtime/bridges/executionRun/nativeAgentExecutionRun.ts). Detached execution requires the Session factory's declared `executionRunContextV1` facet; it cannot fabricate a parent Session. The shared SDK implementation in [`executionRun.ts`](../packages/plugin-sdk/src/agentRuntime/executionRun.ts) owns correlated Run events, cancellation, terminalization and disposal for the finite/conversation adapters.
 
 The engine registry's [`runtimeCore.ts`](../apps/cli/src/agent/runtime/registry/engineRegistry/runtimeCore.ts) resolves the admitted Agent runtime and composes host services. Agent code receives the scoped public context, not raw host lifecycle controls. Agent-native configuration in `RuntimeDescriptorV1.agent` is interpreted by its Agent; generic host code must not infer its meaning from an Agent id.

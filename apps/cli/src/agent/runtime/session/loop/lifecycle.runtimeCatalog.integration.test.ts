@@ -2111,17 +2111,22 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
     }
   });
 
-  it('physically stops the native turn after permission persistence fails and reports the failure by default', async () => {
+  it.each(['failed', 'pending'] as const)('physically stops the native turn while permission persistence is %s', async persistence => {
     const base = createLifecycleParams({ runPermissionModePromptLoopFn: runPermissionModePromptLoop });
     const session = base.session;
     const rpc = new RpcHandlerManager({ scopePrefix: session.sessionId, encryptionMode: 'plain' });
     Object.assign(session, { rpcHandlerManager: rpc });
     const permission = new ProviderEnforcedPermissionHandler(session, { logPrefix: '[Stop persistence]' });
     let failWrites = false;
+    let releaseWrite!: () => void;
+    const writeReleased = new Promise<void>(resolve => { releaseWrite = resolve; });
     const updateAgentState = session.updateAgentState.bind(session);
     // Session persistence is the boundary; the permission handler, store and coordinator stay real.
     const writer = vi.spyOn(session, 'updateAgentState').mockImplementation(async updater => {
-      if (failWrites) throw new Error('private-stop-permission-write-payload');
+      if (failWrites) {
+        if (persistence === 'pending') await writeReleased;
+        else throw new Error('private-stop-permission-write-payload');
+      }
       await updateAgentState(updater);
     });
     let pending: Promise<unknown> | undefined;
@@ -2192,17 +2197,29 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
       const signal = readTurnSignal?.();
       expect(signal).toBeDefined();
       failWrites = true;
-      await expect(rpc.invokeLocal('abort', {})).resolves.toBeUndefined();
+      const stopping = rpc.invokeLocal('abort', {});
+      void stopping.catch(() => undefined);
+      try {
+        // Persistence may remain unavailable indefinitely. Stop must reach the
+        // native cancellation boundary before that write completes.
+        await vi.waitFor(() => expect(cancelProvider).toHaveBeenCalledOnce());
+        expect(signal?.aborted).toBe(true);
+      } finally {
+        releaseWrite();
+        await stopping;
+      }
       expect(signal?.aborted).toBe(true);
       expect(cancelProvider).toHaveBeenCalledOnce();
-      expect(session.getAgentStateSnapshot()?.requests?.['stop-pending']).toBeDefined();
-      expect(info).toHaveBeenCalledWith(expect.any(String), {
-        error: 'permission_reset_failed',
-      });
-      logger.flushSync();
-      const log = await readFile(logger.getLogPath(), 'utf8');
-      expect(log).toContain('permission_reset_failed');
-      expect(log).not.toContain('private-stop-permission-write-payload');
+      if (persistence === 'failed') {
+        expect(session.getAgentStateSnapshot()?.requests?.['stop-pending']).toBeDefined();
+        expect(info).toHaveBeenCalledWith(expect.any(String), { error: 'permission_reset_failed' });
+        logger.flushSync();
+        const log = await readFile(logger.getLogPath(), 'utf8');
+        expect(log).toContain('permission_reset_failed');
+        expect(log).not.toContain('private-stop-permission-write-payload');
+      } else {
+        expect(session.getAgentStateSnapshot()?.requests?.['stop-pending']).toBeUndefined();
+      }
 
       failWrites = false;
       listener?.(canonicalRuntimeEvent({ kind: 'turn-start', sessionId: session.sessionId,
@@ -2229,6 +2246,7 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
       expect(session.getAgentStateSnapshot()?.requests?.[childRequestId]).toBeUndefined();
       expect(session.getAgentStateSnapshot()?.completedRequests?.[childRequestId]).toMatchObject({ status: 'canceled' });
     } finally {
+      releaseWrite();
       failWrites = false;
       await childScope.dispose('Test cleanup');
       await childPending?.catch(() => undefined);

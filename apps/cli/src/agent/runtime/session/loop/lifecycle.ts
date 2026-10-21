@@ -912,22 +912,30 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   const handleAbort = async () => {
     logger.debug(`${params.config.uiLogPrefix} Abort requested`);
     resetAssistantTextSnapshotTurnScope(params.session, 'abort');
-    try {
-      await params.permissionHandler.reset({ scope: 'foreground' });
-    } catch {
-      logger.infoFile(`${params.config.uiLogPrefix} Permission reset failed during Stop; continuing runtime cancellation`, {
-        error: 'permission_reset_failed',
-      });
-    }
-    try {
-      abortController.abort();
-      abortController = new AbortController();
-      await runtimeForPromptLoop.cancelTurn();
-    } catch {
-      logger.infoFile(`${params.config.uiLogPrefix} Failed to cancel current operation (non-fatal)`, {
-        error: 'runtime_cancel_failed',
-      });
-    }
+    abortController.abort();
+    abortController = new AbortController();
+    // Permission withdrawal may await Home persistence. Native cancellation
+    // must propagate while that independent write is still pending.
+    await Promise.all([
+      (async () => {
+        try {
+          await params.permissionHandler.reset({ scope: 'foreground' });
+        } catch {
+          logger.infoFile(`${params.config.uiLogPrefix} Permission reset failed during Stop; continuing runtime cancellation`, {
+            error: 'permission_reset_failed',
+          });
+        }
+      })(),
+      (async () => {
+        try {
+          await runtimeForPromptLoop.cancelTurn();
+        } catch {
+          logger.infoFile(`${params.config.uiLogPrefix} Failed to cancel current operation (non-fatal)`, {
+            error: 'runtime_cancel_failed',
+          });
+        }
+      })(),
+    ]);
   };
   params.setAbortRequestedCallback(handleAbort, () => abortController.signal);
   let inkInstance: ReturnType<typeof render> | null = null;
