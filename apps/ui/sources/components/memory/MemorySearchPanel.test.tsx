@@ -19,10 +19,11 @@ import { readMachineOnlineGraceMsFromEnv } from '@/utils/sessions/machineUtils';
 import { createRpcCallError } from '@/sync/runtime/rpcErrors';
 
 const machineRpc = vi.hoisted(() => vi.fn());
+const settingsPush = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    return createExpoRouterMock().module;
+    return createExpoRouterMock({ router: { push: settingsPush } }).module;
 });
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -102,6 +103,7 @@ afterEach(async () => {
     await administration.cleanup();
     await homes.reset();
     machineRpc.mockReset();
+    settingsPush.mockClear();
     webLocks.restore();
 });
 
@@ -277,7 +279,11 @@ describe('MemorySearchPanel corpus coverage', () => {
         const screen = await renderScreen(<InjectedAuthProvider credentials={connection!.credentials}>
             <MemorySearchPanel testID="project-search" serverId={serverId} scope={scope} />
         </InjectedAuthProvider>);
-        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('project-search.input')?.props.editable).toBe(true)); });
+        await waitForHomeGovernance(async () => {
+            caseSignal.throwIfAborted();
+            await flushHookEffects();
+            expect(screen.findByTestId('project-search.input')?.props.editable).toBe(true);
+        });
         await act(async () => screen.findByTestId('project-search.input')!.props.onChangeText('fact'));
         await act(async () => { await vi.waitFor(() => expect(machineRpc.mock.calls.some(([request]) =>
             request.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)).toBe(true)); });
@@ -300,6 +306,8 @@ describe('MemorySearchPanel corpus coverage', () => {
             expect(screen.findByTestId('project-search.unavailable')).not.toBeNull();
             // A search that cannot run says what it needs and leads to the setting that provides it.
             expect(screen.findByTestId('project-search.unavailable-action')).not.toBeNull();
+            await screen.pressByTestIdAsync('project-search.unavailable-action');
+            expect(settingsPush).toHaveBeenCalledWith((await import('@/components/settings/catalog/routes')).SETTINGS_ROUTES.search);
             expect(screen.findByTestId('project-search.remembered.0')).not.toBeNull();
             await act(async () => administration.selectTarget(administration.targets[1]!));
             await flushHookEffects();
