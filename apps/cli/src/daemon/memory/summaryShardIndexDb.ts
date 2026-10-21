@@ -89,7 +89,7 @@ export type SummaryShardIndexDbHandle = Readonly<{
   markHintRunSuccess: (args: Readonly<{ sessionId: string; seqTo: number; nowMs: number }>) => void;
   markHintRunFailure: (args: Readonly<{ sessionId: string; nowMs: number; backoffBaseMs: number; backoffMaxMs: number }>) => void;
   enforceMaxShardsPerSession: (args: Readonly<{ sessionId: string; maxShardsPerSession: number }>) => void;
-  markDeepIndexSuccess: (args: Readonly<{ sessionId: string; seqTo: number; nowMs: number }>) => void;
+  markDeepIndexSuccess: (args: Readonly<{ sessionId: string; seqTo: number; observedSnapshotSeq?: number; nowMs: number }>) => void;
   markDeepIndexFailure: (args: Readonly<{ sessionId: string; nowMs: number; backoffBaseMs: number; backoffMaxMs: number }>) => void;
   deleteOldestSummaryShards: (args: Readonly<{ limit: number }>) => number;
   /**
@@ -382,6 +382,7 @@ export function openSummaryShardIndexDb(args: Readonly<{ dbPath: string }>): Sum
     UPDATE session_cursors
     SET
       lastDeepIndexedSeq = MAX(lastDeepIndexedSeq, ?),
+      lastObservedSeq = MAX(lastObservedSeq, ?),
       lastDeepErrorAtMs = NULL,
       consecutiveDeepFailures = 0,
       nextDeepEligibleAtMs = 0,
@@ -431,7 +432,7 @@ export function openSummaryShardIndexDb(args: Readonly<{ dbPath: string }>): Sum
       AND (policyKey <> ? OR seqFrom < ? OR createdAtFromMs < ?);
   `);
   const rewindHintCursorStmt = db.prepare(`UPDATE session_cursors SET lastHintedSeq = MIN(lastHintedSeq, ?), updatedAtMs = ? WHERE sessionId = ?;`);
-  const rewindDeepCursorStmt = db.prepare(`UPDATE session_cursors SET lastDeepIndexedSeq = MIN(lastDeepIndexedSeq, ?), updatedAtMs = ? WHERE sessionId = ?;`);
+  const rewindDeepCursorStmt = db.prepare(`UPDATE session_cursors SET lastDeepIndexedSeq = MIN(lastDeepIndexedSeq, ?), lastObservedSeq = 0, updatedAtMs = ? WHERE sessionId = ?;`);
   const queueDb = createMemoryIndexQueueDb(db);
 
   return {
@@ -651,13 +652,15 @@ export function openSummaryShardIndexDb(args: Readonly<{ dbPath: string }>): Sum
       const maxShards = Number.isFinite(maxShardsPerSession) ? Math.max(1, Math.trunc(maxShardsPerSession)) : 1;
       evictStmt.run(id, maxShards);
     },
-    markDeepIndexSuccess: ({ sessionId, seqTo, nowMs }) => {
+    markDeepIndexSuccess: ({ sessionId, seqTo, observedSnapshotSeq, nowMs }) => {
       const id = String(sessionId ?? '').trim();
       if (!id) return;
       const now = Number.isFinite(nowMs) ? Math.max(0, Math.trunc(nowMs)) : 0;
       const seq = Number.isFinite(seqTo) ? Math.max(0, Math.trunc(seqTo)) : 0;
+      const observed = typeof observedSnapshotSeq === 'number' && Number.isFinite(observedSnapshotSeq)
+        ? Math.max(0, Math.trunc(observedSnapshotSeq)) : 0;
       ensureCursorStmt.run(id, now);
-      deepSuccessStmt.run(seq, now, id);
+      deepSuccessStmt.run(seq, observed, now, id);
     },
     markDeepIndexFailure: ({ sessionId, nowMs, backoffBaseMs, backoffMaxMs }) => {
       const id = String(sessionId ?? '').trim();

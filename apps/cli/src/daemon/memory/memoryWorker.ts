@@ -885,7 +885,8 @@ export async function startMemoryWorker(params: Readonly<{
     });
   };
 
-  const syncDeepForSessions = async (sessionIds: readonly string[], signal?: AbortSignal, forceSnapshot = false): Promise<ReadonlySet<string>> => {
+  const syncDeepForSessions = async (sessionIds: readonly string[], signal?: AbortSignal, forceSnapshot = false,
+    observedSnapshotSeqBySessionId?: ReadonlyMap<string, number>): Promise<ReadonlySet<string>> => {
     if (stopped || !settings.enabled || settings.indexMode !== 'deep' || !tier1 || !deep || sessionIds.length === 0) return new Set();
 
     const embeddings = resolveOperationalMemoryEmbeddingsSettings(settings.embeddings);
@@ -918,6 +919,7 @@ export async function startMemoryWorker(params: Readonly<{
       now: () => Date.now(),
       fetchDecryptedTranscriptPageAfterSeq: deps.fetchDecryptedTranscriptPageAfterSeq,
       fetchRecentDecryptedRows,
+      observedSnapshotSeqBySessionId,
       ...(embeddingsResolution?.provider ? { embedDocuments: embeddingsResolution.provider.embedDocuments } : {}),
       ...(signal ? { signal } : {}),
     });
@@ -973,9 +975,10 @@ export async function startMemoryWorker(params: Readonly<{
       const status = tier1!.getMemorySessionIndexStatus(sessionId);
       // A completed full snapshot whose source has not advanced needs no body
       // IO. Revisions still use the dirty set; moving windows still prune.
-      return input.forcePolicySnapshot === true || settings.coveragePolicy.type !== 'full'
-        || observed === undefined || (status !== 'indexed' && status !== 'empty')
-        || tier1!.getSessionCursors({ sessionId, nowMs }).lastDeepIndexedSeq < observed;
+      if (input.forcePolicySnapshot === true || settings.coveragePolicy.type !== 'full'
+        || observed === undefined || (status !== 'indexed' && status !== 'empty')) return true;
+      const cursors = tier1!.getSessionCursors({ sessionId, nowMs });
+      return Math.max(cursors.lastDeepIndexedSeq, cursors.lastObservedSeq) < observed;
     });
     if (edited.length) {
       // The same admitted revision invalidates the inactive projection too;
@@ -1003,8 +1006,8 @@ export async function startMemoryWorker(params: Readonly<{
         initialCursorSeqBySessionId: input.observedSeqBySessionId,
         ...(input.signal ? { signal: input.signal } : {}),
       });
-      await syncDeepForSessions(unchanged, input.signal, input.forcePolicySnapshot === true);
-      const completed = await syncDeepForSessions(edited, input.signal, true);
+      await syncDeepForSessions(unchanged, input.signal, input.forcePolicySnapshot === true, input.observedSeqBySessionId);
+      const completed = await syncDeepForSessions(edited, input.signal, true, input.observedSeqBySessionId);
       for (const sessionId of edited) {
         if (settings.indexMode === 'deep' ? !completed.has(sessionId)
           : tier1.getSessionCursors({ sessionId, nowMs: Date.now() }).lastHintedSeq === 0) editedSessionIds.add(sessionId);

@@ -59,6 +59,7 @@ export async function syncDeepIndexForSessionsOnce(params: Readonly<{
   now: () => number;
   fetchDecryptedTranscriptPageAfterSeq: (args: Readonly<{ sessionId: string; afterSeq: number; limit: number; signal?: AbortSignal }>) => Promise<DecryptedTranscriptRow[]>;
   fetchRecentDecryptedRows?: (sessionId: string, signal?: AbortSignal) => Promise<DecryptedTranscriptRow[]>;
+  observedSnapshotSeqBySessionId?: ReadonlyMap<string, number>;
   embedDocuments?: (texts: readonly string[], signal?: AbortSignal) => Promise<Float32Array[]>;
   signal?: AbortSignal;
 }>): Promise<ReadonlySet<string>> {
@@ -248,7 +249,13 @@ export async function syncDeepIndexForSessionsOnce(params: Readonly<{
 
       // Empty is a successful source read too: it must retire the previous
       // read failure rather than leaving a recovered Session in error forever.
-      params.tier1.markDeepIndexSuccess({ sessionId, seqTo: lastScannedSeq, nowMs });
+      // A full snapshot checks the captured inventory sequence, which may also
+      // contain non-message events. Keep that fact separate from the last
+      // transcript row so a quiet source is not repeatedly fetched as new.
+      const observedSnapshotSeq = needsBoundedSnapshot && params.fetchRecentDecryptedRows
+        ? params.observedSnapshotSeqBySessionId?.get(sessionId) : undefined;
+      params.tier1.markDeepIndexSuccess({ sessionId, seqTo: lastScannedSeq,
+        ...(observedSnapshotSeq === undefined ? {} : { observedSnapshotSeq }), nowMs });
       if (chunks.length > 0) {
         run.sessionsIndexed += 1;
       }
