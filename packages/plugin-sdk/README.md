@@ -107,6 +107,10 @@ export const activate = plugin.activateAccount;
 ```
 
 Export that module as `./happier-plugin-ui/account-runtime` in `package.json`.
+It is the portable entry, not the package-root daemon entry: the root exports
+`plugin.activate`, while the portable entry exports `plugin.activateAccount`
+as `activate`. Ordinary authoring and packaging evaluate the root with daemon
+registration rights, which do not admit Account handlers.
 KV readers and writers require the declared Account storage grant. The fixture's
 pure `echo` and `source` Actions leave `hostAccess` omitted and do not use storage.
 Optional storage declarations do not grant access.

@@ -10,14 +10,33 @@ import { compileUniversalPluginUiCommonJs } from './universalCommonJsCompiler.js
 import { packageNameOfSpecifier, readWorkspacePackages, resolveWorkspaceSource } from '../../../../cli-common/sourceRuntimeEntries.mjs';
 import { resolve } from 'node:path';
 import { PluginManifestV2Schema } from '@happier-dev/protocol/plugins/manifest';
-import { derivePluginAccountContributionRegistrationRights } from '@happier-dev/protocol/plugins/contributions/catalog';
+import { derivePluginAccountContributionRegistrationRights, derivePluginDaemonContributionRegistrationRights } from '@happier-dev/protocol/plugins/contributions/catalog';
 import { createPluginRegistrationScope, readPluginActionInputParser } from '../../host/registration/index.js';
 import type { PluginAccountActivationModule } from '../../activation.js';
-import { manifest as authoredAccountManifest } from '../../../fixtures/account-actions/src/index.js';
+import { manifest as authoredAccountManifest, activate as activateAuthoredRoot } from '../../../fixtures/account-actions/src/index.js';
 
 const roots: string[] = [];
+const moduleResolutionBoundary = vi.hoisted(() => ({ reactUnavailable: false }));
+
+// Module resolution is the OS boundary: isolated SDK-only author installs do
+// not contain React, which the invoking host supplies rather than the SDK.
+vi.mock('node:module', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('node:module')>();
+    return { ...actual, createRequire(filename: Parameters<typeof actual.createRequire>[0]) {
+        const require = actual.createRequire(filename);
+        const resolve = require.resolve;
+        require.resolve = Object.assign((request: string, options?: Parameters<typeof resolve>[1]) => {
+            if (moduleResolutionBoundary.reactUnavailable && request === 'react/package.json') {
+                throw Object.assign(new Error("Cannot find module 'react/package.json'"), { code: 'MODULE_NOT_FOUND' });
+            }
+            return resolve(request, options);
+        }, { paths: resolve.paths });
+        return require;
+    } };
+});
 
 afterEach(async () => {
+    moduleResolutionBoundary.reactUnavailable = false;
     vi.restoreAllMocks();
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -51,11 +70,31 @@ async function compileFixture(root: string, entry: string, artifactId: string) {
 }
 
 describe('compileUniversalPluginUiCommonJs', () => {
+    it('compiles a portable Account activation entry when the compiler cannot resolve host-provided React', async () => {
+        moduleResolutionBoundary.reactUnavailable = true;
+        const { root, entry } = await fixture('export function activate() { return { account: true }; }');
+        const result = await compileUniversalPluginUiCommonJs({ projectRoot: root, entryPath: entry,
+            artifactId: 'account-runtime', requestedExports: ['activate'] });
+        expect(result.exports).toEqual(['activate']);
+        expect(result.externalSpecifiers).toEqual([]);
+    });
+    it('admits the Account author fixture package root through ordinary daemon staging without registering Account handlers', async () => {
+        const manifest = PluginManifestV2Schema.parse(authoredAccountManifest);
+        const scope = createPluginRegistrationScope({ pluginId: manifest.id, target: { realm: 'daemon' },
+            rights: derivePluginDaemonContributionRegistrationRights(manifest.contributes) });
+        try {
+            await activateAuthoredRoot(scope.api);
+            expect(scope.commit()).toEqual([]);
+        } finally { await scope.dispose(); }
+    });
     it('compiles and activates a separately authored Account plugin through the shared registration owner', async () => {
         const projectRoot = resolve(import.meta.dirname, '../../../fixtures/account-actions');
         const packages = await readWorkspacePackages(resolve(import.meta.dirname, '../../../../..'));
+        const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+            exports: Record<string, string>;
+        };
         const result = await compileUniversalPluginUiCommonJs({
-            projectRoot, entryPath: join(projectRoot, 'src/index.ts'), artifactId: 'account-runtime',
+            projectRoot, entryPath: resolve(projectRoot, packageJson.exports['./happier-plugin-ui/account-runtime']!), artifactId: 'account-runtime',
             requestedExports: ['manifest', 'activate'], exportConditions: ['happier-source'],
             resolveSourceImport: (specifier) => packages.has(packageNameOfSpecifier(specifier))
                 ? resolveWorkspaceSource(packages, specifier, { conditions: ['react-native', 'browser'] }) : undefined,

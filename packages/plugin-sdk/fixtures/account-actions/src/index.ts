@@ -46,7 +46,8 @@ const plugin = definePlugin({
 });
 
 export const manifest = plugin.manifest;
-export const activate = plugin.activateAccount;
+export const activate = plugin.activate;
+export const activateAccount = plugin.activateAccount;
 
 const sourceProvider = definePlugin({
     id: 'acme.account-source-provider', version: '1.0.0',

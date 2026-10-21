@@ -1,4 +1,5 @@
 import { join, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import type { FastifyInstance } from 'fastify';
 import { encodePlainArtifactStoredContent } from '@happier-dev/protocol';
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionInputV1Schema, PluginAvailabilityIntentReadActionOutputV1Schema,
@@ -17,11 +18,15 @@ export async function registerAuthoredAccountActionRelease(app: FastifyInstance,
     options: Readonly<{ includeAccountProvider?: boolean }> = {}) {
     const projectRoot = resolve(import.meta.dirname, '../../../../../packages/plugin-sdk/fixtures/account-actions');
     const packages = await readWorkspacePackages(resolve(import.meta.dirname, '../../../../..'));
+    const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+        exports: Record<string, string>;
+    };
     const buildRelease = async (input: Readonly<{ manifest: unknown; artifactId: string; accountArtifactId: string;
         manifestExport: string; activateExport: string; archiveDigestCharacter: string }>) => {
         const manifest = normalizePluginManifestV2(input.manifest);
         const pluginId = manifest.id;
-        const compiled = await compileUniversalPluginUiCommonJs({ projectRoot, entryPath: join(projectRoot, 'src/index.ts'),
+        const compiled = await compileUniversalPluginUiCommonJs({ projectRoot,
+            entryPath: resolve(projectRoot, packageJson.exports[`./happier-plugin-ui/${input.artifactId}`]!),
             artifactId: input.artifactId, requestedExports: [input.manifestExport, input.activateExport], exportConditions: ['happier-source'],
             resolveSourceImport: specifier => packages.has(packageNameOfSpecifier(specifier))
                 ? resolveWorkspaceSource(packages, specifier, { conditions: ['react-native', 'browser'] }) : undefined });

@@ -1,5 +1,5 @@
 import { readFile, readdir } from 'node:fs/promises';
-import { builtinModules, createRequire } from 'node:module';
+import { builtinModules } from 'node:module';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { build, version as esbuildVersion, type Metafile, type Plugin } from 'esbuild';
@@ -165,11 +165,6 @@ function compilerPolicyPlugin(artifactId: string, resolveSourceImport?: (specifi
     };
 }
 
-function packageNodeModulesPath(): string {
-    const require = createRequire(import.meta.url);
-    return dirname(dirname(require.resolve('react/package.json')));
-}
-
 async function reportBundledHostModules(projectRoot: string, artifactId: string, metafile: Metafile): Promise<void> {
     const packages = new Map<string, Readonly<{ name: string; root: string }> | null>();
     async function packageAt(directory: string): Promise<Readonly<{ name: string; root: string }> | null> {
@@ -263,7 +258,6 @@ export async function compileUniversalPluginUiCommonJs(input: Readonly<{
             conditions: [...(input.exportConditions ?? []), ...UNIVERSAL_PLUGIN_UI_EXPORT_CONDITIONS],
             metafile: true,
             write: false,
-            nodePaths: [packageNodeModulesPath()],
             plugins: [
                 createZodMiniEnglishLocaleCompilerPlugin(),
                 compilerPolicyPlugin(input.artifactId, input.resolveSourceImport),

@@ -2,9 +2,12 @@
   "name": "@acme/account-actions",
   "version": "1.0.0",
   "type": "module",
+  "keywords": ["happier-plugin"],
+  "happier": { "manifest": ".happier-plugin/plugin.json" },
+  "files": ["src", "dist", ".happier-plugin"],
   "exports": {
     ".": "./src/index.ts",
-    "./happier-plugin-ui/account-runtime": "./src/index.ts",
+    "./happier-plugin-ui/account-runtime": "./src/accountRuntime.ts",
     "./happier-plugin-ui/account-source-provider-runtime": "./src/index.ts"
   },
   "dependencies": {
