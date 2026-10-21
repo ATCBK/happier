@@ -16,6 +16,24 @@ function buildJwt(payload: Record<string, unknown>): string {
 }
 
 describe('readCodexAuthStoreProviderAccountId', () => {
+  it.each([
+    ['free', 'personal'], ['go', 'personal'], ['plus', 'personal'], ['pro', 'personal'], ['prolite', 'personal'], ['promax', 'personal'],
+    ['team', 'workspace'], ['self_serve_business_prolite', 'workspace'], ['self_serve_business_usage_based', 'workspace'],
+    ['business', 'workspace'], ['ent26', 'workspace'], ['enterprise_cbp_automation', 'workspace'],
+    ['enterprise_cbp_usage_based', 'workspace'], ['enterprise', 'workspace'], ['edu', 'workspace'], ['edu_plus', 'workspace'], ['edu_pro', 'workspace'],
+  ])('classifies supported Codex 0.162.1 native plan %s as %s', (planType, accountScope) => {
+    expect(readCodexActiveProviderAccount({ account: { type: 'chatgpt', planType } })).toMatchObject({ accountScope });
+  });
+
+  it.each([
+    { account: { type: 'chatgpt', planType: 'unknown' } },
+    { account: { type: 'chatgpt', planType: 'sci' } },
+    { account: { type: 'chatgpt' } },
+    { account: { type: 'apiKey', planType: 'plus' } },
+    { profile: { planType: 'plus' } },
+  ])('does not infer scope from missing, unsupported or non-ChatGPT native plans', (value) => {
+    expect(readCodexActiveProviderAccount(value)).not.toHaveProperty('accountScope');
+  });
   it('uses the native workspace routing identity instead of a legacy account id', () => {
     expect(readCodexActiveProviderAccount({
       account: { type: 'chatgpt', id: 'legacy-account', email: 'runtime@example.test' },

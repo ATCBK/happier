@@ -100,7 +100,12 @@ export const UsageRequestAttributionSchema = lazyZodSchema(() => z.strictObject(
   v: z.literal(1),
   turnId: z.string().check(z.trim(), z.minLength(1)),
   source: z.discriminatedUnion('kind', [
-    z.strictObject({ kind: z.literal('native'), connectedAccount: zMini.nullable(asProtocolZod(QualifiedConnectedAccountRefSchema)) }),
+    z.strictObject({
+      kind: z.literal('native'),
+      connectedAccount: zMini.nullable(asProtocolZod(QualifiedConnectedAccountRefSchema)),
+      /** Native account classification witnessed for this request; omission is unknown. */
+      accountScope: z.optional(z.enum(['personal', 'workspace'])),
+    }),
     z.strictObject({ kind: z.literal('provider'), providerId: zMini.nullable(ProviderContributionKeySchema), providerConnectionId: ProviderConnectionIdSchema }),
   ]),
 }));

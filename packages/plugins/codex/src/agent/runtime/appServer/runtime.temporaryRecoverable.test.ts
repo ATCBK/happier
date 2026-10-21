@@ -4234,8 +4234,9 @@ describe('Codex app-server temporary recoverable turn failures', () => {
       await expect(startCodexAppServerRuntime(runtime)).resolves.toBe('thread-1');
       expect(clientState.requests.findIndex(({ method }) => method === 'account/login/start'))
         .toBeLessThan(clientState.requests.findIndex(({ method }) => method === 'thread/start'));
-      await expect(clientState.invokeRequestHandler('account/chatgptAuthTokens/refresh', { chatgptPlanType: 'plus' }))
-        .resolves.toMatchObject({ chatgptAccountId: 'acct_target', chatgptPlanType: 'plus' });
+      const refreshed = await clientState.invokeRequestHandler('account/chatgptAuthTokens/refresh', { chatgptPlanType: 'plus' });
+      expect(refreshed).toMatchObject({ chatgptAccountId: 'acct_target' });
+      expect(refreshed).not.toHaveProperty('chatgptPlanType');
       expect(refreshRequests).toEqual([expect.objectContaining({
         serviceId: 'openai-codex', expectedCredentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
         selection: { kind: 'profile', serviceId: 'openai-codex', profileId: 'target' },

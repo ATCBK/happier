@@ -1014,6 +1014,13 @@ including an A → B → A transition. Combined counters remain unknown. Claude'
 current usage stream does not expose request-auth evidence, so a selected
 Connected Account or materialized launch selection does not certify its rows.
 
+The prospective Codex native attribution also carries optional `accountScope`
+(`personal` or `workspace`) from the supported native Account plan contract at
+that dispatch. Missing or unrecognized plans stay unknown; a later plan read
+cannot classify historical Usage. Refresh must not attach the failed Account's
+plan hint to replacement tokens. This extends the same request attribution,
+not a separate subscription collector or provider-independent attestation.
+
 Provider tests are distributed by owner:
 
 - protocol schemas, settings, migrations, selection, compatibility, and catalog merge: `packages/protocol/src/providers/**/*.test.ts`;

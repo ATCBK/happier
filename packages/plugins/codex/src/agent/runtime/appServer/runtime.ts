@@ -270,6 +270,7 @@ type PendingTurn = {
   reportedSkillNames?: Set<string>;
   interruptWhenProviderTurnIdArrives: boolean;
   providerOperationIdentity: CodexConnectedServiceRuntimeIdentity | null;
+  providerAccountScope: CodexActiveProviderAccount['accountScope'];
   failureSettling?: boolean;
   promise: Promise<void>;
   resolve: () => void;
@@ -821,6 +822,7 @@ function createPendingTurn(
     userMessageSeqs,
     interruptWhenProviderTurnIdArrives: false,
     providerOperationIdentity,
+    providerAccountScope: undefined,
     promise,
     resolve,
     reject,
@@ -1248,6 +1250,12 @@ export function createCodexAppServerRuntime(
     }
   };
 
+  const invalidatePendingProviderOperationIdentity = (): void => {
+    if (!pendingTurn) return;
+    pendingTurn.providerOperationIdentity = null;
+    pendingTurn.providerAccountScope = undefined;
+  };
+
   const readLiveProviderAccount = async (): Promise<CodexActiveProviderAccount | null> => {
     try {
       const identityBeforeRead = latestConnectedServiceRuntimeIdentity;
@@ -1260,7 +1268,7 @@ export function createCodexAppServerRuntime(
         && isCodexRequestUsageIdentityContradicted(identityBeforeRead, liveAccount)) {
         // Negative native evidence withdraws both the current attempt and future
         // dispatch proof. A later matching read cannot restore the old attempt.
-        if (pendingTurn) pendingTurn.providerOperationIdentity = null;
+        invalidatePendingProviderOperationIdentity();
         latestConnectedServiceRuntimeIdentity = null;
       }
       return liveAccount;
@@ -1465,7 +1473,7 @@ export function createCodexAppServerRuntime(
   const refreshChatGptAuthTokens = async (requestParams: unknown): Promise<unknown> => {
     // An auth transition inside one native attempt can combine accounts.
     // No end-state comparison (including A -> B -> A) restores that proof.
-    if (pendingTurn) pendingTurn.providerOperationIdentity = null;
+    invalidatePendingProviderOperationIdentity();
     const selection = activeChatGptAuthTokensRefreshSelection;
     if (!selection) {
       throw new Error('connected_service_chatgpt_refresh_selection_unavailable');
@@ -2210,6 +2218,7 @@ export function createCodexAppServerRuntime(
             const attribution = hostTurnId ? resolveCodexRequestUsageAttribution({
               turnId: hostTurnId, service: params.connectedAccountService,
               requestIdentity: pendingTurn?.providerOperationIdentity ?? null,
+              accountScope: pendingTurn?.providerAccountScope,
               scope: observation.scope, matchesNativeAttempt: Boolean(pendingTurn?.agentTurnId && pendingTurn.agentTurnId === _nativeTurnId),
             }) : undefined;
             publishRuntimeEvent({
@@ -2507,7 +2516,7 @@ export function createCodexAppServerRuntime(
     connectedServiceAuthApplyCount += 1;
     await previousApply;
     try {
-      if (pendingTurn) pendingTurn.providerOperationIdentity = null;
+      invalidatePendingProviderOperationIdentity();
       return await apply();
     } finally {
       connectedServiceAuthApplyCount -= 1;
@@ -2857,11 +2866,27 @@ export function createCodexAppServerRuntime(
             }
           : {}),
       };
-      const requestTurnStart = async (params: Record<string, unknown>): Promise<unknown> => {
+      const captureRequestAccount = async (): Promise<void> => {
         // Capture at native dispatch, after collaboration resolution and auth
         // applications that settled while that resolution was awaiting.
         await waitForConnectedServiceAuthApply();
-        activeTurn.providerOperationIdentity = latestConnectedServiceRuntimeIdentity;
+        const identity = latestConnectedServiceRuntimeIdentity;
+        activeTurn.providerOperationIdentity = identity;
+        activeTurn.providerAccountScope = undefined;
+        if (!params.connectedAccountService || !identity) return;
+        const liveAccount = await readLiveProviderAccount();
+        await waitForConnectedServiceAuthApply();
+        // Refresh/apply invalidates the incumbent attempt, even if application
+        // fails or returns to A. Never restore it from a later read/end state.
+        if (activeTurn.providerOperationIdentity !== identity
+          || isCodexRequestUsageIdentityContradicted(identity, liveAccount)) {
+          activeTurn.providerOperationIdentity = null;
+          return;
+        }
+        activeTurn.providerAccountScope = liveAccount?.accountScope;
+      };
+      const requestTurnStart = async (params: Record<string, unknown>): Promise<unknown> => {
+        await captureRequestAccount();
         activeTurn.nativePermissionPolicyKey = serializeCodexAppServerPolicy(policy);
         return await appServerClient.request('turn/start', params)
           .then((result) => {
@@ -2877,8 +2902,7 @@ export function createCodexAppServerRuntime(
             permissionSupport = 'legacy';
             const retryParams = { ...params };
             delete retryParams.permissions;
-            await waitForConnectedServiceAuthApply();
-            activeTurn.providerOperationIdentity = latestConnectedServiceRuntimeIdentity;
+            await captureRequestAccount();
             return await appServerClient.request('turn/start', {
               ...retryParams,
               ...buildCodexAppServerLegacyPermissionParams({ policy, target: 'turn' }),

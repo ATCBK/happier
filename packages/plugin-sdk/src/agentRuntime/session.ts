@@ -410,7 +410,12 @@ export type AgentSessionRuntimeEvent =
       /** Native request evidence; the host validates it against the accepted source and matching turn. */
       attribution?: Readonly<{
         v: 1; turnId: string;
-        source: Readonly<{ kind: 'native'; connectedAccount: Readonly<{ service: Readonly<{ pluginId: string; localId: string }>; accountId: string }> | null }>
+        source: Readonly<{
+          kind: 'native';
+          connectedAccount: Readonly<{ service: Readonly<{ pluginId: string; localId: string }>; accountId: string }> | null;
+          /** Prospective native request fact; absent or invalidated evidence remains unknown. */
+          accountScope?: 'personal' | 'workspace';
+        }>
           | Readonly<{ kind: 'provider'; providerId: string | null; providerConnectionId: string & $brand<'ProviderConnectionId'> }>;
       }>;
       /** Witnessed accounting identity and counter semantics, never an inferred host turn identity. */

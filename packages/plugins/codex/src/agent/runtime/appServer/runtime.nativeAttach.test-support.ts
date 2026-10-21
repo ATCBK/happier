@@ -39,7 +39,11 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   interactions?: CodexAppServerRuntimeHost['ui'];
   models?: AgentSessionRuntimeContext['session']['services']['models'];
   modelListResponse?: unknown;
+  accountRead?: () => unknown | Promise<unknown>;
+  connectedAccountService?: Readonly<{ pluginId: string; localId: string }>;
   pluginListResponse?: unknown;
+  skillListResponse?: unknown;
+  skillListFailure?: Readonly<{ code: number; message: string }>;
   onTurnStart?: (input: Readonly<{ socket: WebSocket; params: Record<string, unknown>; turnId: string }>) => void | Promise<void>;
   beforeTurnStartResponse?: () => Promise<void>;
   beforeThreadResumeResponse?: (input: Readonly<{ socket: WebSocket; params: Record<string, unknown> }>) => void | Promise<void>;
@@ -124,6 +128,9 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
       result = { userAgent: 'happier_cli/0.162.1 (fixture)' };
     } else if (message.method === 'config/read') {
       result = { config: { mcp_servers: options.nativeMcpServers ?? (options.mcpServers ? { happier__wilson: { enabled: true } } : {}), features: { code_mode: { excluded_tool_namespaces: ['functions'] } } } };
+    } else if (message.method === 'account/read') {
+      try { result = await options.accountRead?.() ?? {}; }
+      catch { error = { code: -32000, message: 'Account read unavailable' }; }
     } else if (message.method === 'thread/start') {
       result = { model: 'fixture-model', thread: { id: 'fresh-thread', turns: [] }, sandbox: { type: 'readOnly' }, reasoningEffort: 'low' };
     } else if (message.method.startsWith('thread/goal/')) {
@@ -176,6 +183,9 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
       result = options.modelListResponse ?? { data: [{ id: 'fixture-model', model: 'fixture-model', displayName: 'Fixture Model', isDefault: true }], nextCursor: null };
     } else if (message.method === 'plugin/list') {
       result = options.pluginListResponse ?? { marketplaces: [] };
+    } else if (message.method === 'skills/list') {
+      result = options.skillListResponse ?? { data: [] };
+      error = options.skillListFailure;
     } else if (message.method === 'skills/extraRoots/set' && options.rejectExtraRootsSet) {
       error = { code: -32601, message: 'Method not found' };
     }
@@ -216,6 +226,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
     initialPermissionMode: options.permissionMode ?? undefined,
     initialProviderBinding: options.initialProviderBinding,
     processEnv: options.processEnv,
+    connectedAccountService: options.connectedAccountService,
     skills: options.skills,
     appServerTransport: options.appServerTransport,
     resolveCurrentPolicy: () => options.permissionMode

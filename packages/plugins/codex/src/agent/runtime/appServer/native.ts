@@ -162,7 +162,9 @@ function createNativeRuntimeAuthRefresh(params: Readonly<{
     return { status: 'refreshed', result: {
       accessToken,
       chatgptAccountId: providerAccountId,
-      chatgptPlanType: request.planType ?? null,
+      // The request hint describes the rejected token, not its replacement.
+      // Native Codex derives the replacement's plan from its own token claims.
+      chatgptPlanType: null,
       credentialRevision,
     } };
   };

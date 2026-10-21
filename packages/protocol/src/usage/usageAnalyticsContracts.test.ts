@@ -12,6 +12,20 @@ import {
 } from './usageAnalyticsContracts.js';
 
 describe('usageAnalyticsContracts', () => {
+  it.each(['personal', 'workspace'] as const)('retains prospective native %s scope only on a matching runtime delta', (accountScope) => {
+    const attribution = { v: 1, turnId: 'turn-1', source: {
+      kind: 'native', connectedAccount: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'account-1' }, accountScope,
+    } };
+    expect(UsageRequestAttributionSchema.parse(attribution)).toEqual(attribution);
+    expect(UsageRequestAttributionSchema.safeParse({ ...attribution, source: { ...attribution.source, accountScope: 'unknown-plan' } }).success).toBe(false);
+    const request = { sessionId: 'session-1', observedAt: 1, agentId: 'codex', source: 'native', scope: 'turn_delta',
+      turnId: 'turn-1', isCumulative: false, attribution,
+      tokens: { input: 1, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 1 },
+      cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } };
+    expect(UsageEventIngestRequestSchema.parse(request).attribution).toEqual(attribution);
+    expect(UsageEventIngestRequestSchema.safeParse({ ...request, isCumulative: true }).success).toBe(false);
+    expect(UsageEventIngestRequestSchema.safeParse({ ...request, turnId: 'other-turn' }).success).toBe(false);
+  });
   it.each([null, 'happier.agent.pi/pi'])('parses provider request attribution with provider id %s', (providerId) => {
     const attribution = {
       v: 1,
