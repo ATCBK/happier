@@ -11,6 +11,7 @@ import { parseDiffFromFile, parsePatchFiles, VirtualizedFileDiff, Virtualizer as
 import type { DiffLineAnnotation, FileDiffMetadata, FileDiffOptions, OnDiffLineClickProps, FileDiff as PierreFileDiffInstance, SelectedLineRange } from '@pierre/diffs';
 import { FileDiff, Virtualizer, VirtualizerContext, WorkerPoolContext, useVirtualizer } from '@pierre/diffs/react';
 import { usePierreScrollRootVirtualizer } from './PierreScrollRootVirtualizerProvider.web';
+import { readPierreDomLine } from './pierreDomLine';
 
 import { useSetting } from '@/sync/store/settingsReadHooks';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
@@ -118,6 +119,20 @@ const PIERRE_REVIEW_COMMENT_HOVER_SLOT_UNSAFE_CSS = `
     padding-left: calc(var(--happier-review-comment-affordance-width) + .5ch);
   }
 }
+`;
+
+// Review marks are paint only. Changing Pierre's unsafeCSS resets measured wrapped-row heights,
+// so these selectors stay static while the existing paint lifecycle marks mounted rows.
+const PIERRE_REVIEWED_LINE_UNSAFE_CSS = `
+:is([data-unified], [data-additions], [data-deletions]) [data-line][data-happier-reviewed] {
+  background-color: var(--diffs-bg);
+  transition: background-color 140ms ease-out;
+}
+:is([data-unified], [data-additions], [data-deletions]) [data-column-number][data-happier-reviewed] {
+  background-color: var(--diffs-bg);
+  box-shadow: inset -2px 0 0 var(--happier-diff-reviewed-edge);
+}
+@media (prefers-reduced-motion: reduce) { [data-line] { transition: none; } }
 `;
 
 class PierreDiffErrorBoundary extends React.Component<
@@ -873,20 +888,6 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         return `${lineSelectors.join(',\n')} {\n  box-shadow: inset 0 0 0 1px var(--diffs-selection-base);\n}\n${numberSelectors.join(',\n')} {\n  box-shadow: inset 0 0 0 1px var(--diffs-selection-base);\n}\n`;
     }, [codeLines, props.highlightLineId, props.highlightLineIds]);
 
-    // Kept review changes let go of their tint and keep a reviewed hairline (lab ade-shell RV2 R1).
-    const reviewedLineUnsafeCSS = React.useMemo(() => {
-        if (!codeLines || !props.reviewedLineIds || props.reviewedLineIds.size === 0) return '';
-        const lineSelectors: string[] = [];
-        const numberSelectors: string[] = [];
-        for (const target of codeLines) {
-            if (!props.reviewedLineIds.has(target.id) || (target.kind !== 'add' && target.kind !== 'remove')) continue;
-            lineSelectors.push(pierreCodeLineSelector(target));
-            numberSelectors.push(pierreCodeLineSelector(target, 'data-column-number'));
-        }
-        if (lineSelectors.length === 0) return '';
-        return `${lineSelectors.join(',\n')} {\n  background-color: var(--diffs-bg);\n  transition: background-color 140ms ease-out;\n}\n${numberSelectors.join(',\n')} {\n  background-color: var(--diffs-bg);\n  box-shadow: inset -2px 0 0 var(--happier-diff-reviewed-edge);\n}\n@media (prefers-reduced-motion: reduce) { [data-line] { transition: none; } }\n`;
-    }, [codeLines, props.reviewedLineIds]);
-
     const reviewCommentHoverSlotUnsafeCSS = props.onPressAddComment
         ? PIERRE_REVIEW_COMMENT_HOVER_SLOT_UNSAFE_CSS
         : '';
@@ -903,8 +904,8 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
     const textSelectionUnsafeCSS = `::selection { background-color: ${resolveCodeSelectionColor(theme.colors.accent.blue)}; }`;
 
     const composedUnsafeCSS = React.useMemo(() => {
-        return [PIERRE_MATERIAL_UNSAFE_CSS, PIERRE_UNIFIED_GUTTER_UNSAFE_CSS, PIERRE_FIND_HIGHLIGHT_CSS, textSelectionUnsafeCSS, diagnosticUnsafeCSS, reviewCommentHoverSlotUnsafeCSS, selectedLineUnsafeCSS, highlightLineUnsafeCSS, reviewedLineUnsafeCSS].filter(Boolean).join('\n');
-    }, [textSelectionUnsafeCSS, diagnosticUnsafeCSS, highlightLineUnsafeCSS, reviewCommentHoverSlotUnsafeCSS, selectedLineUnsafeCSS, reviewedLineUnsafeCSS]);
+        return [PIERRE_MATERIAL_UNSAFE_CSS, PIERRE_UNIFIED_GUTTER_UNSAFE_CSS, PIERRE_FIND_HIGHLIGHT_CSS, textSelectionUnsafeCSS, diagnosticUnsafeCSS, reviewCommentHoverSlotUnsafeCSS, selectedLineUnsafeCSS, highlightLineUnsafeCSS, PIERRE_REVIEWED_LINE_UNSAFE_CSS].filter(Boolean).join('\n');
+    }, [textSelectionUnsafeCSS, diagnosticUnsafeCSS, highlightLineUnsafeCSS, reviewCommentHoverSlotUnsafeCSS, selectedLineUnsafeCSS]);
 
     const options = React.useMemo<FileDiffOptions<React.ReactNode, undefined>>(() => {
         return {
@@ -1002,20 +1003,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         stopFindRef.current = registerPierreFindHighlights(paint.node.shadowRoot ?? paint.node, codeLines ?? [], props.findRangesByLineId);
     }, [codeLines, props.findRangesByLineId]);
 
-    const revealScrollTarget = React.useCallback((paint: PierrePaint) => {
-        const scrollId = props.scrollToLineId ?? null;
-        if (!scrollId) {
-            lastScrolledLineIdRef.current = null;
-            return;
-        }
-        const targetKey = scrollTargetKey;
-        if (!targetKey) return;
-        if (lastScrolledLineIdRef.current?.key === targetKey && lastScrolledLineIdRef.current.filePath === props.filePath) return;
-        if (!codeLines) return;
-
-        const target = codeLines.find((l) => l.id === scrollId) ?? null;
-        if (!target || target.renderIsHeaderLine) return;
-
+    const landScrollTarget = (paint: PierrePaint, target: CodeLine, targetKey: string) => {
         const side = target.kind === 'remove' ? 'deletions' : 'additions';
         const lineNumber = side === 'deletions' ? target.oldLine : target.newLine;
         if (typeof lineNumber !== 'number' || lineNumber <= 0) return;
@@ -1026,7 +1014,8 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         if (paint.virtualizer && paint.instance instanceof VirtualizedFileDiff) {
             const position = paint.instance.getLinePosition(lineNumber, side);
             if (!position) return;
-            paint.virtualizer.scrollTo({ top: paint.virtualizer.getOffsetInScrollContainer(paint.node) + position.top });
+            const top = paint.virtualizer.getOffsetInScrollContainer(paint.node) + position.top;
+            paint.virtualizer.scrollTo({ top });
             // A virtualized target may mount on the next paint. Keep that landing pending.
             if (!el) return;
         } else {
@@ -1034,17 +1023,51 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
             el.scrollIntoView({ block: 'center' });
         }
         lastScrolledLineIdRef.current = { key: targetKey, filePath: props.filePath };
+    };
+
+    const revealScrollTarget = React.useCallback((paint: PierrePaint) => {
+        const scrollId = props.scrollToLineId ?? null;
+        if (!scrollId) {
+            lastScrolledLineIdRef.current = null;
+            return;
+        }
+        const targetKey = scrollTargetKey;
+        if (!targetKey) return;
+        const landed = () => lastScrolledLineIdRef.current?.key === targetKey && lastScrolledLineIdRef.current.filePath === props.filePath;
+        if (!codeLines) return;
+        const target = codeLines.find((l) => l.id === scrollId) ?? null;
+        if (!target || target.renderIsHeaderLine) return;
+        if (landed()) return;
+        // Pierre paints inside its virtualizer's render pass and restores that pass's scroll anchor afterwards,
+        // so a landing made during the paint is undone (a Keep re-renders the rows and moves the target at once).
+        // Land once the pass has finished.
+        queueMicrotask(() => {
+            if (landed()) return;
+            landScrollTarget(paint, target, targetKey);
+        });
     }, [codeLines, props.filePath, props.scrollToLineId, scrollTargetKey]);
+
+    const paintReviewedLines = React.useCallback((paint: PierrePaint) => {
+        const root = paint.node.shadowRoot ?? paint.node;
+        for (const node of root.querySelectorAll<HTMLElement>('[data-line], [data-column-number]')) {
+            const position = readPierreDomLine(node);
+            const line = position?.newLine ? codeLinesByAdditionLine?.get(position.newLine)
+                : position?.oldLine ? codeLinesByDeletionLine?.get(position.oldLine) : undefined;
+            const changed = line?.kind === 'add' || line?.kind === 'remove';
+            node.toggleAttribute('data-happier-reviewed', changed && props.reviewedLineIds?.has(line.id) === true);
+        }
+    }, [codeLinesByAdditionLine, codeLinesByDeletionLine, props.reviewedLineIds]);
 
     const onPaint = React.useCallback((paint: PierrePaint) => {
         paintRef.current = paint;
+        paintReviewedLines(paint);
         revealScrollTarget(paint);
         refreshFind(paint);
         stopIntelligenceRef.current();
         stopIntelligenceRef.current = props.intelligence
             ? bindPierreIntelligence(paint.node.shadowRoot ?? paint.node, intelligenceLines, props.intelligence, rangeSelectionEnabled)
             : () => {};
-    }, [refreshFind, revealScrollTarget, props.intelligence, intelligenceLines, rangeSelectionEnabled]);
+    }, [paintReviewedLines, refreshFind, revealScrollTarget, props.intelligence, intelligenceLines, rangeSelectionEnabled]);
 
     React.useEffect(() => {
         if (poolFailed || initialPresentationForceFallback) {

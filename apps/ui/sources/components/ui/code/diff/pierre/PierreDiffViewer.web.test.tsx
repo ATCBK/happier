@@ -304,6 +304,74 @@ describe('PierreDiffViewer (web)', () => {
         instance.cleanUp();
         virtualizer.cleanUp();
     });
+    it('lands a reveal requested during a virtualizer render after that pass restores its scroll anchor', async () => {
+        fileDiffSpy.mockClear();
+        const { VirtualizedFileDiff, Virtualizer } = await import('@pierre/diffs');
+        const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
+        const patch = '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-before\n+after\n';
+        const target = buildCodeLinesFromUnifiedDiff({ unifiedDiff: patch, hideFilePrelude: true }).find(line => line.kind === 'add')!;
+        const virtualizer = new Virtualizer();
+        const instance = new VirtualizedFileDiff<React.ReactNode, undefined>({}, virtualizer);
+        // Geometry, reveal and scrolling are the external renderer's DOM boundary.
+        vi.spyOn(instance, 'revealLine').mockReturnValue(false);
+        vi.spyOn(instance, 'getLinePosition').mockReturnValue({ top: 400, height: 20 });
+        vi.spyOn(virtualizer, 'getOffsetInScrollContainer').mockReturnValue(120);
+        let scrollTop = 0;
+        vi.spyOn(virtualizer, 'scrollTo').mockImplementation(({ top }) => { scrollTop = top; });
+        const context = (await import('@pierre/diffs/react')).VirtualizerContext;
+        const screen = await renderScreen(<context.Provider value={virtualizer}>
+            <PierreDiffViewer mode="unified" unifiedDiff={patch} scrollToLineId={target.id} /></context.Provider>);
+        const host = document.createElement('div');
+        host.attachShadow({ mode: 'open' }).innerHTML = '<code data-unified><div data-line-type="change-addition" data-line="1">after</div></code>';
+        // A Keep re-renders the rows and moves the target in the same pass: the virtualizer captures its
+        // scroll anchor, paints (onPostRender) and then restores that anchor before the pass ends.
+        await renderer.act(async () => {
+            const anchor = scrollTop;
+            screen.findAllByType('FileDiff')[0].props.options.onPostRender(host, instance);
+            scrollTop = anchor;
+        });
+        expect(scrollTop).toBe(520);
+        instance.cleanUp();
+        virtualizer.cleanUp();
+    });
+    it('leaves the reader in control after a landed change is repainted', async () => {
+        fileDiffSpy.mockClear();
+        const { VirtualizedFileDiff, Virtualizer } = await import('@pierre/diffs');
+        const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
+        const patch = '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-before\n+after\n';
+        const target = buildCodeLinesFromUnifiedDiff({ unifiedDiff: patch, hideFilePrelude: true }).find(line => line.kind === 'add')!;
+        const virtualizer = new Virtualizer();
+        const instance = new VirtualizedFileDiff<React.ReactNode, undefined>({}, virtualizer);
+        // Geometry, reveal and scrolling are the external renderer's DOM boundary.
+        const scroller = document.createElement('div');
+        Object.defineProperty(scroller, 'scrollHeight', { value: 950 });
+        Object.defineProperty(scroller, 'clientHeight', { value: 241 });
+        vi.spyOn(instance, 'revealLine').mockReturnValue(false);
+        vi.spyOn(instance, 'getLinePosition').mockReturnValue({ top: 400, height: 20 });
+        vi.spyOn(virtualizer, 'getOffsetInScrollContainer').mockReturnValue(120);
+        vi.spyOn(virtualizer, 'getScrollContainerElement').mockReturnValue(scroller);
+        vi.spyOn(virtualizer, 'scrollTo').mockImplementation(({ top }) => { scroller.scrollTop = top; });
+        const context = (await import('@pierre/diffs/react')).VirtualizerContext;
+        const screen = await renderScreen(<context.Provider value={virtualizer}>
+            <PierreDiffViewer mode="unified" unifiedDiff={patch} scrollToLineId={target.id} /></context.Provider>);
+        const host = document.createElement('div');
+        host.attachShadow({ mode: 'open' }).innerHTML = '<code data-unified><div data-line-type="change-addition" data-line="1">after</div></code>';
+        scroller.append(host);
+        document.body.append(scroller);
+        const paint = () => renderer.act(async () => { screen.findAllByType('FileDiff')[0].props.options.onPostRender(host, instance); });
+        await paint();
+        expect(scroller.scrollTop).toBe(520);
+        // Paint-only review updates preserve geometry (real-renderer coverage lives beside this suite).
+        // A later repaint must not treat the retained reveal as a command to undo a reader's scroll.
+        host.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -400 }));
+        scroller.scrollTop = 300;
+        await paint();
+        expect(scroller.scrollTop).toBe(300);
+        await screen.unmount();
+        scroller.remove();
+        instance.cleanUp();
+        virtualizer.cleanUp();
+    });
     it('maps a reversed cross-side range through the same row selection as the Happier renderer', async () => {
         fileDiffSpy.mockClear();
         const onPressLineRange = vi.fn();
