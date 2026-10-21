@@ -47,7 +47,7 @@ import { signExternalActionMachineRpcRequestV1 } from '@happier-dev/protocol/act
 import { fetchAccountProfile } from './accountProfile';
 import { fetchAccountEncryptionCurrentness, AccountEncryptionCurrentnessUnavailableError } from './client/connectedServiceCredentialApi';
 import { readAccountEncryptionModeOnce } from './client/accountEncryptionMode';
-import { acquireRequesterAccountEncryptionCurrentness } from './client/accountEncryptionCurrentnessObservation';
+import { acquireRequesterAccountEncryptionCurrentness, waitForObservation } from './client/accountEncryptionCurrentnessObservation';
 import { resolveConnectedServicesServerApiTimeoutMs } from './client/connectedServicesServerApiTimeout';
 import { logger } from '@/ui/logger';
 import { configuration } from '@/configuration';
@@ -4731,8 +4731,9 @@ export class ApiMachineClient {
     }
 
     private async getAccountId(signal?: AbortSignal): Promise<string | null> {
+        signal?.throwIfAborted();
         if (this.accountIdPromise) {
-            return await this.accountIdPromise.catch((error) => {
+            const pending = this.accountIdPromise.catch((error) => {
                 if (isAuthenticationError(error)) {
                     if (this.connectionSupervisor) {
                         return null;
@@ -4741,6 +4742,9 @@ export class ApiMachineClient {
                 }
                 return null;
             });
+            // A joining admission owns its wait, not the acquisition another
+            // caller started (which can also be awaiting Account currentness).
+            return await (signal ? waitForObservation(pending, signal) : pending);
         }
 
         const request = () => fetchChangesAccountId({ token: this.token,
@@ -4774,9 +4778,7 @@ export class ApiMachineClient {
         });
 
         this.accountIdPromise = p;
-        try {
-            return await p;
-        } catch (error) {
+        const result = p.catch((error) => {
             this.accountIdPromise = null;
             if (isAuthenticationError(error)) {
                 if (supervisor) {
@@ -4785,7 +4787,10 @@ export class ApiMachineClient {
                 throw error;
             }
             return null;
-        }
+        });
+        // Only acquisition failure clears the shared promise; cancellation of
+        // this reader must not invalidate another reader's pending acquisition.
+        return await (signal ? waitForObservation(result, signal) : result);
     }
 
     private notifyMachineMetadataChanged(): void {

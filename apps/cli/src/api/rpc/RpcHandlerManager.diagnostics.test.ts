@@ -293,6 +293,8 @@ describe('RPC completion diagnostics', () => {
         expect(logger.mock.calls).toEqual([['[RPC] Request completed', {
             method: 'demo', requestId: 'rpc_12345678-1234-4123-8123-123456789abc', durationMs: 0,
             outcomeCode: RPC_ERROR_CODES.FORBIDDEN, callerClass: 'unadmitted', admissionPredicate: 'machine_installation',
+            failedPhase: 'authorize_request', cancelled: false,
+            phaseDurationsMs: { request_admission: 0, authorize_request: 0 },
         }]]);
         expect(JSON.stringify(logger.mock.calls)).not.toContain('private-');
     });

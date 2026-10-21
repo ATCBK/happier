@@ -52,6 +52,7 @@ import { readProjectServiceMoveChildEffectV1 } from '@happier-dev/protocol/works
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { isRoleActionIdV1 } from '@happier-dev/protocol/prompts/roles/roleActionIdsV1';
 import { isWorkspaceSyncTargetInstalledContent, openWorkspaceSyncTargetContent } from './workspaceSyncTargetContent';
+import { waitForObservation } from '@/api/client/accountEncryptionCurrentnessObservation';
 
 type OwnedHandlerRegistrationContext = {
     ownerId: string;
@@ -172,7 +173,14 @@ export class RpcHandlerManager {
         this.scopePrefix = config.scopePrefix;
         this.localMachineId = config.localMachineId ?? null;
         this.rpcContent = this.createEncryptionContent(config);
-        this.authorizeRequest = config.authorizeRequest;
+        const authorizeRequest = config.authorizeRequest;
+        this.authorizeRequest = authorizeRequest ? async request => {
+            request.signal?.throwIfAborted();
+            const pending = Promise.resolve(authorizeRequest(request));
+            // Admission cannot retain a retired request even when a shared read
+            // or external transport settles later. Accepted work omits this signal.
+            return await (request.signal ? waitForObservation(pending, request.signal) : pending);
+        } : undefined;
         this.resolveSessionDecisionContext = config.resolveSessionDecisionContext;
         this.prepareRequesterAccountContext = config.prepareRequesterAccountContext;
         this.resolveExternalActionEncryption = config.resolveExternalActionEncryption;
@@ -751,6 +759,9 @@ export class RpcHandlerManager {
                 // Preserve that lifecycle result before interpreting an access refusal.
                 controller.signal.throwIfAborted();
                 if (!authorization.ok) {
+                    const failedPhase = phase;
+                    nextPhase('response');
+                    diagnostic.failure = { failedPhase, cancelled: false, phaseDurationsMs: { ...phaseDurationsMs } };
                     diagnostic.admissionDenied = true;
                     if (authorization.admissionPredicate) this.reportAdmissionDenial(diagnostic, authorization.admissionPredicate);
                     return await respond(request, {

@@ -23,6 +23,7 @@ import { resolveProviderConnectionForMachine } from '@/providers/registry';
 import { createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { DaemonProviderTeamCredentialResourceTestCandidateResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { socketRpcCodec } from '@happier-dev/sync-client';
 import { RpcHandlerManager } from './RpcHandlerManager';
@@ -77,7 +78,8 @@ function createTransport(manager: RpcHandlerManager, replies: unknown[] = []) {
         replies.push(reply);
         return reply;
     } }) };
-    return { in: (room: string) => ({ timeout: () => ({ fetchSockets: async () =>
+    return { sockets: { sockets: new Map(), adapter: { rooms: new Map() } },
+        in: (room: string) => ({ timeout: () => ({ fetchSockets: async () =>
         room.startsWith(`rpc:${accountId}:${machineId}:`) ? [target] : [] }) }) } as unknown as Server;
 }
 
@@ -352,9 +354,10 @@ describe('server-origin Machine reads across the E2EE RPC seam', () => {
                 },
             });
             const replies: unknown[] = [];
-            const readEligibility = createTeamCredentialPoolSourceEligibilityReader(createServerRpcForwarder({
+            const forward = createServerRpcForwarder({
                 io: createTransport(daemon.manager, replies),
-            }));
+            });
+            const readEligibility = createTeamCredentialPoolSourceEligibilityReader(forward);
             const result = await readEligibility({ custodianAccountId: accountId, machineIds: [machineId],
                 teamId: input.teamId, resourceId: input.resourceId, resourceRevision: 1, source,
                 scope: 'source_any', signal: new AbortController().signal });
@@ -402,10 +405,15 @@ describe('server-origin Machine reads across the E2EE RPC seam', () => {
             expect([...result.eligibleMachineIds]).toEqual([machineId]);
             if (projection.status !== 'success') throw new Error('Expected source model projection');
             expect(projection.groups.some(group => group.authorization.authorized && group.rows.length > 0)).toBe(true);
-            await expect(runtime.resolveTeamCredentialResourceTestCandidate({ machineId,
-                teamId: input.teamId, resourceId: input.resourceId, expectedResourceRevision: 1,
-                source, refreshPolicy: 'current_only',
-            })).resolves.toMatchObject({ status: 'success' });
+            const candidate = await forward({ userId: accountId,
+                method: `${machineId}:${RPC_METHODS.DAEMON_PROVIDERS_TEAM_CREDENTIAL_RESOURCE_TEST_CANDIDATE}`,
+                params: { machineId, teamId: input.teamId, resourceId: input.resourceId, expectedResourceRevision: 1,
+                    source, refreshPolicy: 'current_only' },
+            });
+            expect(candidate.ok).toBe(true);
+            if (!candidate.ok) throw new Error('Expected the registered candidate RPC to complete');
+            expect(DaemonProviderTeamCredentialResourceTestCandidateResponseV1Schema.parse(candidate.result))
+                .toMatchObject({ status: 'success' });
             await expect(runtime.resolveTeamCredentialRequestPolicySupport({ machineId, source,
                 refreshPolicy: 'current_only',
             })).resolves.toMatchObject({ status: 'success' });
