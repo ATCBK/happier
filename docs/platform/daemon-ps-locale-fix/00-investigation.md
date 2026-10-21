@@ -50,3 +50,32 @@ grep 全 `apps/cli/src` 的 ps 调用共 3 处：
 
 - RED：`expected undefined to be 'en_US.UTF-8'`（env 缺失，即缺陷本体）
 - GREEN：2/2 passed
+
+## 第二通路补全（2026-10-21 部署后实测发现）
+
+首轮修复部署（dev 7a73a75b9 / master 0d5bb0ef8，daemon 重启后）RPC
+`/session-runners/status` 仍报 `versionState: stale` 且 `runtimeId` 仍为
+`m-im-!m-9m-gm^[m-.` 转义——存在第三条 ps 通路：
+
+- **`daemon/processSnapshotCache.ts` → ps-list 库**：daemon 启动 reattach 扫描
+  （`reattachFromMarkers` → `findAllHappyProcesses` → `listProcessSnapshot` → `psList()`）
+  是 `tracked.processCommand` 的捕获源；ps-list 内部 `execFile('ps', ...)` 用环境继承
+  （无 env 注入口），daemon 无 LANG → C locale 乱码直接进入 tracked 表。
+- 活体复证（本机）：`env -u LANG -u LC_ALL ps axo pid,comm,args` → 同一命令行
+  `M-iM-!M-9M-gM^[M-.`；`env LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8` → `项目` 原样。
+
+### 补全修复
+
+`processSnapshotCache.ts` 默认 `psListImpl` 换为 `psListWithPosixUtf8Locale()`：
+posix 下在 ps-list 调用窗口临时置 `process.env.LANG/LC_ALL=en_US.UTF-8`，完成后恢复
+原值（含未设置态）；win32 直通。单飞+TTL 缓存保证窗口极短；doctor 两处显式 env 传参
+不受影响。**daemon 的全部 ps 子进程（execFileSync×2 + ps-list×1）自此统一 UTF-8。**
+
+### 补全测试
+
+`processSnapshotCache.posixLocale.test.ts`（mock ps-list，经公共边界
+`listProcessSnapshot`）：断言扫描窗口内 ps-list 看到 UTF-8 locale、未设置/已设置的
+ambient 值均被正确恢复。
+
+- RED：`expected [ { lang: undefined … } ] to deeply equal [ { lang: 'en_US.UTF-8' … } ]`
+- GREEN：2/2 passed（连同原 doctor 套件 4/4）
