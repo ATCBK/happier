@@ -8,6 +8,7 @@ import { useMountedActionExecution } from '@/components/approvals/useMountedActi
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { Icon } from '@/components/ui/icons/Icon';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { Switch } from '@/components/ui/forms/Switch';
 import { Item } from '@/components/ui/lists/Item';
@@ -39,6 +40,7 @@ import { usePublicProfileOwnerRead } from './usePublicProfileOwnerRead';
 export const PublicProfileSettingsScreen = React.memo(
   function PublicProfileSettingsScreen() {
     const router = useRouter();
+    const { theme } = useUnistyles();
     const scope = useAccountSettingsScope();
     const execution = useMountedActionExecution(scope);
     const feature = useFeatureDecision('account.publicProfiles', {
@@ -47,9 +49,7 @@ export const PublicProfileSettingsScreen = React.memo(
     const friendsEnabled = useFriendsEnabled();
     const profile = useProfile();
     const activeServer = useActiveServerSnapshot();
-    const homeName =
-      resolveHomeDisplayName(getServerProfileById(activeServer.serverId)) ??
-      t('settingsAccount.thisHome');
+    const homeName = resolveHomeDisplayName(getServerProfileById(activeServer.serverId));
     const { state, reload } = usePublicProfileOwnerRead(execution);
     const [pending, setPending] = React.useState<PublicProfileOperation | null>(
       null,
@@ -94,6 +94,7 @@ export const PublicProfileSettingsScreen = React.memo(
     const header = (
       <SettingsPageHeader
         testID="settings-public-profile-header"
+        title={t('publicIdentity.profile.title')}
         description={
           live && pageUrl
             ? t('publicIdentity.profile.purposePublished', {
@@ -140,9 +141,7 @@ export const PublicProfileSettingsScreen = React.memo(
             testID="settings-public-profile-unavailable"
             kind="unavailable"
             title={t('publicIdentity.profile.unavailableTitle')}
-            reason={t('publicIdentity.profile.unavailableBody', {
-              home: homeName,
-            })}
+            reason={homeName ? t('publicIdentity.profile.unavailableBody', { home: homeName }) : t('publicIdentity.profile.unavailableBodyThisHome')}
             replacesContent
           />
         </ItemList>
@@ -180,15 +179,15 @@ export const PublicProfileSettingsScreen = React.memo(
                 ? t('publicIdentity.profile.invitationBody')
                 : t('publicIdentity.profile.usernameFirst')
             }
-            {...(handle
-              ? {}
-              : {
-                  primaryAction: {
-                    testID: 'settings-public-profile-choose-username',
-                    label: t('publicIdentity.profile.chooseUsername'),
-                    onPress: () => router.push(SETTINGS_ROUTES.account),
-                  },
-                })}
+            primaryAction={handle ? {
+              testID: 'settings-public-profile-preview',
+              label: t('publicIdentity.profile.previewMyProfile'),
+              onPress: () => router.push(SETTINGS_ROUTES.accountPublicProfileEdit),
+            } : {
+              testID: 'settings-public-profile-choose-username',
+              label: t('publicIdentity.profile.chooseUsername'),
+              onPress: () => router.push(SETTINGS_ROUTES.account),
+            }}
           />
         </ItemList>
       );
@@ -307,13 +306,14 @@ export const PublicProfileSettingsScreen = React.memo(
           ) : null}
           {record.policy ? (
             <Item
-              testID="settings-public-profile-items"
-              title={t('publicIdentity.profile.itemsPublic', {
+              testID="settings-public-profile-edit"
+              icon={<Icon name="eye" size={20} color={theme.colors.text.secondary} />}
+              title={t('publicIdentity.profile.editOnPage')}
+              subtitle={t('publicIdentity.profile.itemsPublic', {
                 shown,
                 total: PUBLIC_PROFILE_FIELDS_V1.length,
               })}
-              showChevron={false}
-              mode="info"
+              onPress={() => router.push(SETTINGS_ROUTES.accountPublicProfileEdit)}
             />
           ) : null}
           <Item

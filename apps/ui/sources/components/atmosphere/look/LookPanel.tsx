@@ -4,6 +4,7 @@ import { StyleSheet } from 'react-native-unistyles';
 import { t } from '@/text';
 import { GlassAppearanceControls } from '@/components/settings/appearance/GlassAppearanceControls';
 import { useAtmospherePictureCatalog } from '../useAtmospherePictureCatalog';
+import type { AtmospherePicture } from '@happier-dev/brand/atmosphere';
 import type { AtmosphereEditor } from './atmosphereEditor';
 import { PictureControls, PlanetControls, SourceControl } from './LookControls';
 import { Item } from '@/components/ui/lists/Item';
@@ -42,6 +43,25 @@ export const LookPanel = React.memo(function LookPanel(
           rightElement={<Switch value={same} onValueChange={setSame} />}
         />
       ) : null}
+      <LookBackdropControls editor={editor} pictures={pictures} />
+      <GlassAppearanceControls presentation="panel" />
+    </View>
+  );
+});
+
+/**
+ * The backdrop half of Look: the source, then the planet's or the picture's controls. Home's panel adds
+ * the global glass beneath; a public profile's Look shows only these, so its edits never reach glass.
+ */
+export function LookBackdropControls(
+  props: Readonly<{
+    editor: AtmosphereEditor;
+    pictures: readonly AtmospherePicture[];
+  }>,
+) {
+  const { editor, pictures } = props;
+  return (
+    <>
       <SourceControl editor={editor} presentation="panel" pictures={pictures} />
       {editor.value.source === 'planet' ? (
         <PlanetControls editor={editor} presentation="panel" />
@@ -52,10 +72,9 @@ export const LookPanel = React.memo(function LookPanel(
           pictures={pictures}
         />
       ) : null}
-      <GlassAppearanceControls presentation="panel" />
-    </View>
+    </>
   );
-});
+}
 
 const styles = StyleSheet.create(() => ({
   panel: { paddingBottom: 4 },

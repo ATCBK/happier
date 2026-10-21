@@ -12,32 +12,48 @@ import { UsageRecapComposer } from './UsageRecapComposer';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SelectionTiles } from '@/components/ui/forms/SelectionTiles';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
+import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { storage } from '@/sync/domains/state/storageStore';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { DEFAULT_PUBLIC_PROFILE_POLICY_V1 } from '@happier-dev/protocol/account/publicProfile';
+import { DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1 } from '@happier-dev/protocol/account/publicProfilePublication';
+
+// The platform clipboard and the router are the effect boundaries; Action admission stays real.
+const clipboard = vi.hoisted(() => vi.fn<(text: string) => Promise<boolean>>());
+vi.mock('expo-clipboard', () => ({ setStringAsync: clipboard }));
+const routerPush = vi.hoisted(() => vi.fn());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ router: { push: routerPush } }).module);
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
-afterEach(async () => { standardCleanup(); retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined; vi.restoreAllMocks(); });
+afterEach(async () => { standardCleanup(); clipboard.mockReset(); routerPush.mockReset(); retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined; vi.restoreAllMocks(); });
 const accounting: UsageAnalyticsQueryResponse = { v: 1, totals: { eventCount: 1,
   tokens: { input: 10, output: 2, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 12 },
   cost: { reportedUsd: 3, estimatedUsd: 0, currency: 'USD' } } };
 
-async function mount(route: Parameters<typeof serveAccountHomes>[0]['route'], query = normalizeUsageQuery({ agents: ['claude', 'codex'] }), beforeRender?: () => void) {
+async function mount(route: Parameters<typeof serveAccountHomes>[0]['route'], query = normalizeUsageQuery({ agents: ['claude', 'codex'] }), beforeRender?: () => void,
+  options: Readonly<{ publicProfiles?: boolean; onClose?: () => void }> = {}) {
   await import('@/sync/ops/actions/defaultActionExecutor');
+  const features = createRootLayoutFeaturesResponse();
+  if (options.publicProfiles) features.features.account = { ...features.features.account, publicProfiles: { enabled: true } };
   home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://recap-compose.test', accountId: 'a' }],
     route: request => request.path === '/v1/account/encryption/currentness'
       ? Response.json({ mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 })
+      : request.path === '/v1/features' || request.path === '/v1/features/authenticated' ? Response.json(features)
       : route(request) });
   const server = home.homes.a!;
   publishAppliedActiveServerSnapshot({ serverId: server.id, serverUrl: server.serverUrl, generation: 0 });
+  const { getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+  await getServerFeaturesSnapshot({ serverId: server.id, force: true });
   let updateQuery!: (next: UsageQuery) => void;
   function Host() {
     const [shownQuery, setQuery] = React.useState(query);
     updateQuery = setQuery;
-    return <UsageRecapComposer query={shownQuery} serverId={server.id} onClose={() => {}} />;
+    return <UsageRecapComposer query={shownQuery} serverId={server.id} onClose={options.onClose ?? (() => {})} />;
   }
   beforeRender?.();
   const screen = await renderScreen(<Host />);
@@ -125,9 +141,11 @@ describe('recap composer through authorized query and composition', () => {
   });
   it('exposes a rejected preparation as a recoverable terminal failure', async () => {
     // Invalid clock evidence rejects query preparation before the Action resolves; keep its internal path real.
+    const realNow = Date.now.bind(Date);
     const clock = vi.spyOn(Date, 'now');
     const { screen } = await mount(request => request.path === '/v2/usage/query' ? Response.json(accounting) : undefined,
-      undefined, () => { clock.mockReturnValue(Number.NaN); });
+      // Only the recap's own period preparation sees the invalid clock; feature decisions keep a real one.
+      undefined, () => { clock.mockImplementation(() => new Error().stack?.includes('featureDecision') ? realNow() : Number.NaN); });
     clock.mockRestore();
     await vi.waitFor(() => expect(screen.findAllByType(SurfaceStateCard).some(node => node.props.kind === 'error')).toBe(true));
     const failure = screen.findAllByType(SurfaceStateCard).find(node => node.props.kind === 'error')!;
@@ -135,5 +153,115 @@ describe('recap composer through authorized query and composition', () => {
     await vi.waitFor(() => expect({ ready: screen.findByTestId('usage-recap-composer.card') !== null,
       failure: screen.findAllByType(SurfaceStateCard).map(node => node.props.diagnosticCode) }).toMatchObject({ ready: true }));
     expect(screen.findByTestId('usage-recap-composer.save')!.props.accessibilityState.disabled).toBe(false);
+  });
+});
+
+const PAGE = 'https://recap-compose.test/@ada';
+function ownerRead(state: 'published' | 'draft') {
+  return { kind: 'ready', context: { handle: 'ada', identity: { name: 'Ada' },
+    service: { displayName: 'Recap Home', publicBaseUrl: 'https://recap-compose.test' }, urls: {
+      page: PAGE, json: `${PAGE}/json`, badgeBase: `${PAGE}/badge`, card: `${PAGE}/card.svg`, og: `${PAGE}/og.png`,
+      report: 'mailto:operator@recap-compose.test',
+    } }, record: { state, policy: DEFAULT_PUBLIC_PROFILE_POLICY_V1, metadata: {}, projectSelections: [],
+    query: normalizeUsageQuery({ period: { relative: '90days' } }), snapshot: null, layout: { v: 1, items: [] },
+    appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1, updatedAtMs: 1, publishedAtMs: state === 'published' ? 1 : null, restriction: null } };
+}
+/** The Home's real embed formatter is the server's; this boundary answers with a recognisable snippet per selection. */
+function publicHome(published: boolean, requests: string[]) {
+  return (request: Parameters<Parameters<typeof serveAccountHomes>[0]['route']>[0]) => {
+    requests.push(`${request.method} ${request.path}${request.url.search}`);
+    if (request.path === '/v2/usage/query') return Response.json(accounting);
+    if (request.path === '/v1/account/public-profile' && request.method === 'GET') return Response.json(ownerRead(published ? 'published' : 'draft'));
+    if (request.path !== '/v1/account/public-profile/embed') return undefined;
+    const q = request.url.searchParams;
+    if (!published) return Response.json({ kind: 'unavailable', reason: 'not_published' });
+    if (q.get('metric') === 'merged-prs') return Response.json({ kind: 'unavailable', reason: 'field_hidden' });
+    const image = q.get('kind') === 'badge' ? `${PAGE}/badge/${q.get('metric')}.svg` : `${PAGE}/card.svg`;
+    return Response.json({ kind: 'ready', url: `${image}?theme=${q.get('theme')}`,
+      snippet: `${q.get('syntax')}|${q.get('kind')}|${q.get('metric') ?? '-'}|${q.get('theme')}`, accessibleLabel: '@ada · Recap Home' });
+  };
+}
+const outputTabs = (screen: Awaited<ReturnType<typeof mount>>['screen']) =>
+  screen.findAllByType(SegmentedTabBar).find(node => node.props.testIDPrefix === 'usage-recap-output');
+const choice = (screen: Awaited<ReturnType<typeof mount>>['screen'], prefix: string) =>
+  screen.findAllByType(SegmentedTabBar).find(node => node.props.testIDPrefix === prefix)!;
+const textOf = (node: { props: { children?: unknown } } | null) => [node?.props.children].flat().join('');
+
+describe('recap composer public outputs', () => {
+  it('offers Image, Profile link, Badge and Card only where public profiles are enabled', async () => {
+    const { screen } = await mount(request => request.path === '/v2/usage/query' ? Response.json(accounting) : undefined);
+    await vi.waitFor(() => expect(screen.findByTestId('usage-recap-composer.card')).not.toBeNull());
+    expect(outputTabs(screen)).toBeUndefined();
+    standardCleanup(); retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined;
+    const enabled = await mount(publicHome(true, []), undefined, undefined, { publicProfiles: true });
+    await vi.waitFor(() => expect(outputTabs(enabled.screen)?.props.tabs.map((tab: { id: string }) => tab.id))
+      .toEqual(['image', 'profile_link', 'badge', 'card']));
+    expect(outputTabs(enabled.screen)!.props.activeTabId).toBe('image');
+  });
+
+  it('mounts only the selected preview, formats the chosen badge through the embed Action and copies exactly that text', async () => {
+    const requests: string[] = [];
+    const { screen } = await mount(publicHome(true, requests), undefined, undefined, { publicProfiles: true });
+    await vi.waitFor(() => expect(screen.findByTestId('usage-recap-composer.card')).not.toBeNull());
+    await act(async () => { screen.findAllByType(SelectionTiles)[0]!.props.onChange('sigil'); });
+    await vi.waitFor(() => expect(screen.findByTestId('usage-recap-composer.save')!.props.accessibilityState.disabled).toBe(false));
+    await act(async () => { outputTabs(screen)!.props.onSelectTab('badge'); });
+    const composedBefore = requests.filter(line => line.includes('/v2/usage/query')).length;
+    expect(screen.findByTestId('usage-recap-composer.card')).toBeNull();
+    await vi.waitFor(() => expect(textOf(screen.findByTestId('usage-recap-share.snippet'))).toBe('markdown|badge|tokens|auto'));
+    // Light and dark README previews draw the Home's own badge images, never a local look-alike.
+    expect(screen.findByTestId('usage-recap-share.preview-light')!.props.source).toMatchObject({ uri: `${PAGE}/badge/tokens.svg?theme=light` });
+    expect(screen.findByTestId('usage-recap-share.preview-dark')!.props.source).toMatchObject({ uri: `${PAGE}/badge/tokens.svg?theme=dark` });
+    await act(async () => { choice(screen, 'usage-recap-share-syntax').props.onSelectTab('html'); });
+    await act(async () => { choice(screen, 'usage-recap-share-theme').props.onSelectTab('dark'); });
+    await vi.waitFor(() => expect(textOf(screen.findByTestId('usage-recap-share.snippet'))).toBe('html|badge|tokens|dark'));
+    clipboard.mockResolvedValueOnce(true);
+    await act(async () => { screen.findByTestId('usage-recap-share.copy')!.props.onPress(); });
+    await vi.waitFor(() => expect(textOf(screen.findByTestId('usage-recap-share.note'))).toBe('publicIdentity.share.copied'));
+    expect(clipboard).toHaveBeenLastCalledWith('html|badge|tokens|dark');
+    // A hidden metric explains its prerequisite instead of offering a badge that shows nothing.
+    await act(async () => { screen.findAllByType(DropdownMenu).find(node => node.props.testID === 'usage-recap-share.metric')!.props.onSelect('merged-prs'); });
+    await vi.waitFor(() => expect(screen.findAllByType(SurfaceStateCard).some(node =>
+      node.props.action?.label === 'publicIdentity.share.previewProfile')).toBe(true));
+    expect(screen.findByTestId('usage-recap-share.copy')!.props.accessibilityState.disabled).toBe(true);
+    expect(requests.filter(line => line.includes('/v2/usage/query')).length).toBe(composedBefore);
+    // Back on Image, the person's earlier selection is still theirs.
+    await act(async () => { outputTabs(screen)!.props.onSelectTab('image'); });
+    await vi.waitFor(() => expect(screen.findByTestId('usage-recap-composer.card')).not.toBeNull());
+    expect(screen.findAllByType(SelectionTiles)[0]!.props.value).toBe('sigil');
+  });
+
+  it('never claims a refused copy and keeps the link selectable to copy by hand', async () => {
+    const { screen } = await mount(publicHome(true, []), undefined, undefined, { publicProfiles: true });
+    await vi.waitFor(() => expect(outputTabs(screen)).toBeDefined());
+    await act(async () => { outputTabs(screen)!.props.onSelectTab('profile_link'); });
+    await vi.waitFor(() => expect(textOf(screen.findByTestId('usage-recap-share.link'))).toBe(PAGE));
+    expect(screen.findByTestId('usage-recap-share.link')!.props.selectable).toBe(true);
+    clipboard.mockRejectedValueOnce(new Error('Clipboard unavailable'));
+    await act(async () => { screen.findByTestId('usage-recap-share.copy')!.props.onPress(); });
+    await vi.waitFor(() => expect(textOf(screen.findByTestId('usage-recap-share.note'))).toBe('publicIdentity.share.copyFailed'));
+    expect(clipboard).toHaveBeenLastCalledWith(PAGE);
+    clipboard.mockResolvedValueOnce(true);
+    await act(async () => { screen.findByTestId('usage-recap-share.copy')!.props.onPress(); });
+    await vi.waitFor(() => expect(textOf(screen.findByTestId('usage-recap-share.note'))).toBe('publicIdentity.share.copied'));
+  });
+
+  it('explains an unpublished profile and leads to its preview without publishing anything', async () => {
+    const requests: string[] = [];
+    const onClose = vi.fn();
+    const { screen } = await mount(publicHome(false, requests), undefined, undefined, { publicProfiles: true, onClose });
+    await vi.waitFor(() => expect(outputTabs(screen)).toBeDefined());
+    for (const tab of ['profile_link', 'badge', 'card'] as const) {
+      await act(async () => { outputTabs(screen)!.props.onSelectTab(tab); });
+      await vi.waitFor(() => expect(screen.findAllByType(SurfaceStateCard).find(node =>
+        node.props.action?.label === 'publicIdentity.share.previewProfile')?.props.title).toBe(`publicIdentity.share.unpublished_${tab}`));
+      expect(screen.findByTestId('usage-recap-share.copy')).toBeNull();
+    }
+    const prerequisite = screen.findAllByType(SurfaceStateCard).find(node => node.props.action?.label === 'publicIdentity.share.previewProfile')!;
+    await act(async () => { prerequisite.props.action.onPress(); });
+    expect(onClose).toHaveBeenCalled();
+    expect(routerPush).toHaveBeenCalledWith('/settings/account/public-profile');
+    // Nothing was written to the public profile: no publish, update or refresh.
+    expect(requests.filter(line => line.includes('/v1/account/public-profile') && !line.startsWith('GET'))).toEqual([]);
   });
 });

@@ -15,23 +15,29 @@ export type PublicProfileOwnerReadState =
     }>
   | Readonly<{ kind: 'failed' }>;
 
-type AccountExecution = ReturnType<typeof useMountedActionExecution>;
+type AccountExecution = Pick<
+  ReturnType<typeof useMountedActionExecution>,
+  'executeValue' | 'ready'
+>;
 
 /**
- * The owner's applied edition through `account.public_profile.get`. A refresh keeps the last read
- * on screen; a failed refresh keeps it too, because the page it describes did not change.
+ * The owner's applied edition through `account.public_profile.get`: read once when the Account's
+ * mounted Action owner becomes ready, and again only on request. A refresh keeps the last read on
+ * screen; a failed refresh keeps it too, because the page it describes did not change.
  */
 export function usePublicProfileOwnerRead(
   execution: AccountExecution,
 ): Readonly<{
   state: PublicProfileOwnerReadState;
   reload: () => Promise<void>;
-  apply: (read: PublicProfileOwnerReadV1) => void;
 }> {
   const [state, setState] = React.useState<PublicProfileOwnerReadState>({
     kind: 'loading',
   });
-  const { executeValue, ready } = execution;
+  // The mounted owner hands out a new callback on every render; reads follow the latest one
+  // without restarting, so a re-render never issues another request.
+  const executeValue = React.useRef(execution.executeValue);
+  executeValue.current = execution.executeValue;
   const reload = React.useCallback(async () => {
     setState((current) =>
       current.kind === 'ready'
@@ -40,7 +46,7 @@ export function usePublicProfileOwnerRead(
     );
     try {
       const read = PublicProfileOwnerReadV1Schema.parse(
-        await executeValue('account.public_profile.get', {}),
+        await executeValue.current('account.public_profile.get', {}),
       );
       setState({ kind: 'ready', read, refreshing: false });
     } catch {
@@ -50,14 +56,10 @@ export function usePublicProfileOwnerRead(
           : { kind: 'failed' },
       );
     }
-  }, [executeValue]);
-  const apply = React.useCallback(
-    (read: PublicProfileOwnerReadV1) =>
-      setState({ kind: 'ready', read, refreshing: false }),
-    [],
-  );
+  }, []);
+  const { ready } = execution;
   React.useEffect(() => {
     if (ready) void reload();
   }, [ready, reload]);
-  return { state, reload, apply };
+  return { state, reload };
 }

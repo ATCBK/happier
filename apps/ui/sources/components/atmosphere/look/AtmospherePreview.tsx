@@ -8,7 +8,7 @@ import {
   homePlanetSceneOptions,
 } from '../homePlanetPlacement';
 import { pictureBackdropProps } from '../pictureBackdrop';
-import { useAtmosphere } from '../useAtmosphere';
+import { useAtmosphere, type AtmosphereTarget } from '../useAtmosphere';
 import { useAtmospherePictureCatalog } from '../useAtmospherePictureCatalog';
 import { atmospherePageRgb } from '../atmospherePage';
 import { effectivePictureLook } from './atmosphereEdits';
@@ -17,16 +17,24 @@ import { effectivePictureLook } from './atmosphereEdits';
 const PREVIEW_BAND_SHARE = 0.62;
 /** Without a measured headline, the picture's horizon sits mid-band (Home measures its own). */
 const PREVIEW_HORIZON_AT = 0.5;
+/** A profile header band keeps its horizon a little lower, above the identity (lab `pphero`). */
+const BAND_HORIZON_AT = 0.6;
 
 /**
- * The user's current Home atmosphere, drawn small behind a window preview (Settings → Glass and
- * backdrop, the glass material tiles): the page, then the planet or the picture exactly as Home
- * resolves it on this device. Decorative and static.
+ * An atmosphere drawn static and decorative: by default the user's current Home behind a window
+ * preview (Settings → Glass and backdrop, the glass material tiles). A public profile passes its own
+ * draft and draws the whole box as its header band. The page, then the planet or the picture, exactly
+ * as that target resolves on this device.
  */
-export const AtmospherePreview = React.memo(function AtmospherePreview() {
+export const AtmospherePreview = React.memo(function AtmospherePreview(props: Readonly<{
+  target?: AtmosphereTarget;
+  /** `band`: a Horizon picture fills the whole box (a header band), not the top of a window. */
+  frame?: 'window' | 'band';
+}>) {
   const { theme } = useUnistyles();
   const mode = theme.dark ? 'dark' : 'light';
-  const atmosphere = useAtmosphere('home');
+  const atmosphere = useAtmosphere(props.target ?? 'home');
+  const bandFrame = props.frame === 'band';
   const pictures = useAtmospherePictureCatalog();
   const [size, setSize] = React.useState<Readonly<{
     width: number;
@@ -75,7 +83,7 @@ export const AtmospherePreview = React.memo(function AtmospherePreview() {
       const wallpaper = atmosphere.picture.layout === 'wallpaper';
       const band = {
         width: size.width,
-        height: wallpaper
+        height: wallpaper || bandFrame
           ? size.height
           : Math.round(size.height * PREVIEW_BAND_SHARE),
       };
@@ -85,7 +93,7 @@ export const AtmospherePreview = React.memo(function AtmospherePreview() {
         theme: mode,
         page,
         layout: atmosphere.picture.layout,
-        horizonAt: PREVIEW_HORIZON_AT,
+        horizonAt: bandFrame ? BAND_HORIZON_AT : PREVIEW_HORIZON_AT,
       });
       art = (
         <BackdropCanvas

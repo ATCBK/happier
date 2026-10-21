@@ -42,22 +42,25 @@ function LookContent(props: Readonly<{ target: LookTarget }>) {
 /**
  * The Look panel, opened from an anchor: a glass popover on desktop and the shared sheet on a phone.
  * Its content mounts only while open, so a closed chip holds no atmosphere or picture subscriptions.
+ * A Look in another context (a public profile's draft) passes its own panel as children.
  */
 export function LookPopover(
   props: Readonly<{
-    target: LookTarget;
     open: boolean;
     anchorRef: React.RefObject<View | null>;
     onRequestClose: () => void;
     interactionBoundaryRef?: React.RefObject<unknown>;
-  }>,
+    /** Another anchored editor in the same panel (a public profile's Public data) names itself. */
+    accessibilityLabel?: string;
+  } & ({ target: LookTarget; children?: undefined } | { target?: undefined; children: React.ReactNode })>,
 ) {
   if (!props.open) return null;
+  const content = props.target ? <LookContent target={props.target} /> : props.children;
   return (
     <Popover
       open
       phonePresentation="sheet"
-      accessibilityLabel={t('settingsAppearance.glassControls.look')}
+      accessibilityLabel={props.accessibilityLabel ?? t('settingsAppearance.glassControls.look')}
       anchorRef={props.anchorRef}
       autoFocusOnOpen
       placement="bottom"
@@ -76,7 +79,7 @@ export function LookPopover(
     >
       {({ maxHeight, maxWidth, presentation }) =>
         presentation === 'sheet' ? (
-          <LookContent target={props.target} />
+          content
         ) : (
           <View testID="look-popover">
             <FloatingOverlay
@@ -88,7 +91,7 @@ export function LookPopover(
                 width: Math.min(maxWidth, LOOK_POPOVER_WIDTH_PX),
               }}
             >
-              <LookContent target={props.target} />
+              {content}
             </FloatingOverlay>
           </View>
         )

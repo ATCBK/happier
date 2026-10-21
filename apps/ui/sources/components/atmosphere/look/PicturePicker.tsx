@@ -52,6 +52,47 @@ function AddThumbnail() {
 }
 
 /**
+ * Adding or removing a device picture: an admitted `settings.invoke` bound to the editor's captured
+ * owner (Home, a project, or a public-profile draft). Settings selects an added picture for that owner.
+ */
+export function useAtmospherePictureAcquisition(pictureActions: AtmospherePictureActions | undefined) {
+  const scope = useAccountSettingsScope();
+  const execution = useMountedActionExecution(pictureActions?.target.serverId ?? scope, {
+    executorOptions: pictureActions?.executorOptions,
+    retainInvocation: true,
+  });
+  const add = React.useCallback(async () => {
+    try {
+      const result = await execution.execute('settings.invoke', {
+        anchor: 'appearance.atmospherePictureAdd',
+        ...(pictureActions ? { target: pictureActions.target } : {}),
+        input: { kind: 'atmosphere_picture_add', source: { kind: 'picked' } },
+      });
+      if (!result.ok && result.errorCode !== 'approval_rejected' && result.errorCode !== 'approval_canceled' && execution.isCurrent()) {
+        await Modal.alertAsync(t('common.error'), t('common.unavailable'));
+      }
+    } catch (error) {
+      if (!execution.isCurrent()) return;
+      await Modal.alertAsync(
+        t('common.error'),
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }, [execution.execute, execution.isCurrent, pictureActions]);
+  const remove = React.useCallback(async (localId: string) => {
+    const result = await execution.execute('settings.invoke', {
+      anchor: 'appearance.atmospherePictureRemove',
+      ...(pictureActions ? { target: pictureActions.target } : {}),
+      input: { kind: 'atmosphere_picture_remove', localId },
+    });
+    if (!result.ok && result.errorCode !== 'approval_rejected' && result.errorCode !== 'approval_canceled' && execution.isCurrent()) {
+      await Modal.alertAsync(t('common.error'), t('common.unavailable'));
+    }
+  }, [execution.execute, execution.isCurrent, pictureActions]);
+  return { add, remove };
+}
+
+/**
  * The built-in pictures (and plugin pictures) as thumbnails, this device's own pictures after them,
  * then "Your picture…". Choosing one selects it; the line below credits the chosen picture or, for
  * your own, says it stays on this device and offers to remove it.
@@ -68,11 +109,7 @@ export const PicturePicker = React.memo(function PicturePicker(
   }>,
 ) {
   const { onSelect } = props;
-  const scope = useAccountSettingsScope();
-  const execution = useMountedActionExecution(props.pictureActions?.target.serverId ?? scope, {
-    executorOptions: props.pictureActions?.executorOptions,
-    retainInvocation: true,
-  });
+  const { add, remove } = useAtmospherePictureAcquisition(props.pictureActions);
   const userPictures = useUserPictures();
   const options = React.useMemo(
     (): Array<SelectionTile<string>> => [
@@ -101,34 +138,6 @@ export const PicturePicker = React.memo(function PicturePicker(
       : props.selected.kind === 'builtin'
         ? props.selected.id
         : `${USER_PREFIX}${props.selected.localId}`;
-  const add = React.useCallback(async () => {
-    try {
-      const result = await execution.execute('settings.invoke', {
-        anchor: 'appearance.atmospherePictureAdd',
-        ...(props.pictureActions ? { target: props.pictureActions.target } : {}),
-        input: { kind: 'atmosphere_picture_add', source: { kind: 'picked' } },
-      });
-      if (!result.ok && result.errorCode !== 'approval_rejected' && result.errorCode !== 'approval_canceled' && execution.isCurrent()) {
-        await Modal.alertAsync(t('common.error'), t('common.unavailable'));
-      }
-    } catch (error) {
-      if (!execution.isCurrent()) return;
-      await Modal.alertAsync(
-        t('common.error'),
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-  }, [execution.execute, execution.isCurrent, props.pictureActions]);
-  const remove = React.useCallback(async (localId: string) => {
-    const result = await execution.execute('settings.invoke', {
-      anchor: 'appearance.atmospherePictureRemove',
-      ...(props.pictureActions ? { target: props.pictureActions.target } : {}),
-      input: { kind: 'atmosphere_picture_remove', localId },
-    });
-    if (!result.ok && result.errorCode !== 'approval_rejected' && result.errorCode !== 'approval_canceled' && execution.isCurrent()) {
-      await Modal.alertAsync(t('common.error'), t('common.unavailable'));
-    }
-  }, [execution.execute, execution.isCurrent, props.pictureActions]);
   const onChange = React.useCallback(
     (id: string | null) => {
       if (id === null) return;

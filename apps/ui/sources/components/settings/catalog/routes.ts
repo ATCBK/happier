@@ -5,6 +5,7 @@ export const SETTINGS_ROUTES = {
     homeAdministration: '/settings/home',
     accountSecurity: '/settings/account/security',
     accountPublicProfile: '/settings/account/public-profile',
+    accountPublicProfileEdit: '/settings/account/public-profile/edit',
     apiTokens: '/settings/account/api-tokens',
     secrets: '/settings/secrets',
     usage: '/settings/usage',

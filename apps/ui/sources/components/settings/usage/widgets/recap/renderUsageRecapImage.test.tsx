@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { composeUsageRecap, UsageAnalyticsQueryResponseSchema, UsageRecapComposeInputSchema } from '@happier-dev/protocol';
+import { composeUsageRecap, UsageAnalyticsQueryResponseSchema, UsageRecapPrivateComposeInputSchema } from '@happier-dev/protocol';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { resolveUsagePageAggregation } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
@@ -27,7 +27,7 @@ const accounting = UsageAnalyticsQueryResponseSchema.parse({ v: 1,
     cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } },
 });
 const composed = composeUsageRecap({
-  input: UsageRecapComposeInputSchema.parse({ query, style: 'sigil', format: 'story', selectedFields: ['tokens'] }),
+  input: UsageRecapPrivateComposeInputSchema.parse({ query, style: 'sigil', format: 'story', selectedFields: ['tokens'] }),
   snapshot: resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value: accounting, status: 'available', asOfMs: 900 }] }).results[0]!,
 });
 if (composed.kind !== 'composed') throw new Error('The canonical recap producer must admit the image fixture');

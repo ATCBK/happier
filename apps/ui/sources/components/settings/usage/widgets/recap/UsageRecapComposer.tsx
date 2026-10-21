@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ScrollView, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierSkeletonBlock } from '@happier-dev/plugin-ui/presentation';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
@@ -18,8 +18,8 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
-import { Text } from '@/components/ui/text/Text';
-import { Typography } from '@/constants/Typography';
+import { Icon } from '@/components/ui/icons/Icon';
+import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import {
   getUsagePeriodDefinition,
@@ -27,6 +27,8 @@ import {
   type UsagePeriod,
 } from '@/sync/api/account/usagePeriods';
 import { useDeviceType } from '@/utils/platform/responsive';
+import { RECAP_STAGE_INSET_PX, RecapComposerFrame } from './RecapComposerFrame';
+import { UsageRecapPublicOutput, type UsageRecapPublicOutputKind } from './UsageRecapPublicOutput';
 import { t } from '@/text';
 import {
   captureUsageViewPng,
@@ -76,18 +78,19 @@ type ComposeState =
   | Readonly<{ kind: 'failed'; code: string }>;
 
 /**
- * One sheet behind every Share (lab s2card C/Cp): a live preview at true proportions, seven styles
- * as real-card tiles, format, period and per-field switches. The facts come from `usage.recap.compose`
- * (the same Action agents use); the image is captured on this device and only leaves through Copy,
- * Save or Share that the person presses.
+ * One sheet behind every Share (lab s2card C/Cp, C1). Where the service offers public profiles it
+ * leads with what to share: the private Image, or the published page's Profile link, Badge or Card
+ * (`UsageRecapPublicOutput`). Only the chosen output is mounted.
  */
 export function UsageRecapComposer(
   props: UsageRecapComposerProps & CustomModalInjectedProps,
 ): React.ReactElement {
   const { theme } = useUnistyles();
   const phone = useDeviceType() === 'phone';
-  const reducedMotion = useReducedMotionPreference();
-  const tone = theme.dark ? 'dark' : 'light';
+  // Profile link, Badge and Card exist only where this service offers public profiles.
+  const publicProfiles = useFeatureDecision('account.publicProfiles', { scopeKind: 'runtime' })?.state === 'enabled';
+  const [output, setOutput] = React.useState<RecapOutput>('image');
+  // The image choices live here so they survive a visit to another output.
   const [style, setStyle] = React.useState<UsageRecapStyle>('daybreak');
   const [format, setFormat] = React.useState<UsageRecapFormat>(
     phone ? 'story' : 'square',
@@ -99,6 +102,76 @@ export function UsageRecapComposer(
   );
   const [fields, setFields] =
     React.useState<readonly UsageRecapField[]>(DEFAULT_FIELDS);
+  const shown = publicProfiles ? output : 'image';
+  return (
+    <View style={styles.root} testID="usage-recap-composer">
+      {publicProfiles ? (
+        <View style={styles.outputs}>
+          <SegmentedTabBar
+            testIDPrefix="usage-recap-output"
+            compact
+            segmentSizing="content"
+            iconPlacement="leading"
+            activeTabId={output}
+            onSelectTab={setOutput}
+            accessibilityLabel={t('publicIdentity.share.outputLabel')}
+            tabs={OUTPUTS.map(({ id, icon }) => ({
+              id,
+              label: t(`publicIdentity.share.output_${id}`),
+              icon: <Icon name={icon} size={14} color={theme.colors.text.secondary} />,
+            }))}
+          />
+        </View>
+      ) : null}
+      {/* Only the chosen output is mounted: the others read nothing and draw nothing. */}
+      {shown === 'image' ? (
+        <UsageRecapImageOutput
+          query={props.query}
+          serverId={props.serverId}
+          selection={{ style, format, period, fields }}
+          setStyle={setStyle}
+          setFormat={setFormat}
+          setPeriod={setPeriod}
+          setFields={setFields}
+        />
+      ) : (
+        <UsageRecapPublicOutput kind={shown} serverId={props.serverId} onClose={props.onClose} />
+      )}
+    </View>
+  );
+}
+
+type RecapOutput = 'image' | UsageRecapPublicOutputKind;
+const OUTPUTS = [
+  { id: 'image', icon: 'image' },
+  { id: 'profile_link', icon: 'link' },
+  { id: 'badge', icon: 'code' },
+  { id: 'card', icon: 'credit-card' },
+] as const satisfies ReadonlyArray<Readonly<{ id: RecapOutput; icon: string }>>;
+
+/**
+ * The private image: a live preview at true proportions, seven styles as real-card tiles, format,
+ * period and per-field switches. The facts come from `usage.recap.compose` (the same Action agents
+ * use); the image is captured on this device and only leaves through Copy, Save or Share that the
+ * person presses.
+ */
+function UsageRecapImageOutput(
+  props: Readonly<{
+    query: UsageQuery;
+    serverId: string;
+    selection: Readonly<{ style: UsageRecapStyle; format: UsageRecapFormat; period: UsagePeriod; fields: readonly UsageRecapField[] }>;
+    setStyle: (style: UsageRecapStyle) => void;
+    setFormat: (format: UsageRecapFormat) => void;
+    setPeriod: (period: UsagePeriod) => void;
+    setFields: React.Dispatch<React.SetStateAction<readonly UsageRecapField[]>>;
+  }>,
+): React.ReactElement {
+  const { theme } = useUnistyles();
+  const phone = useDeviceType() === 'phone';
+  const reducedMotion = useReducedMotionPreference();
+  const tone = theme.dark ? 'dark' : 'light';
+  const { style, format, period, fields } = props.selection;
+  const { setStyle, setFormat, setPeriod, setFields } = props;
   const [state, setState] = React.useState<ComposeState>({ kind: 'composing' });
   const [composeAttempt, retryCompose] = React.useReducer((attempt: number) => attempt + 1, 0);
   const [delivery, setDelivery] = React.useState<
@@ -200,7 +273,7 @@ export function UsageRecapComposer(
   const size = USAGE_STAT_CARD_SIZES[model?.format ?? format];
   // The card takes the stage it is given (lab s2card C: the left two-thirds), at true proportions.
   const [stageWidth, setStageWidth] = React.useState<number | null>(null);
-  const previewWidth = phone ? 300 : Math.max(240, (stageWidth ?? 520) - STAGE_INSET_PX * 2);
+  const previewWidth = phone ? 300 : Math.max(240, (stageWidth ?? 520) - RECAP_STAGE_INSET_PX * 2);
   const scale = Math.min(
     previewWidth / size.width,
     (phone ? 420 : 520) / size.height,
@@ -267,7 +340,7 @@ export function UsageRecapComposer(
           )
         : current.filter((candidate) => candidate !== field),
     );
-  }, []);
+  }, [setFields]);
 
   const styleOptions = React.useMemo(
     () =>
@@ -301,11 +374,7 @@ export function UsageRecapComposer(
     />
   );
   const preview = (
-    <View
-      style={[styles.stage, phone ? styles.stagePhone : null]}
-      onLayout={phone ? undefined : (event) => setStageWidth(Math.round(event.nativeEvent.layout.width))}
-      testID="usage-recap-composer.stage"
-    >
+    <>
       {formats}
       <View style={[styles.stageCard, { minHeight: size.height * scale }]}>
       {state.kind === 'composing' && !model ? (
@@ -364,11 +433,11 @@ export function UsageRecapComposer(
         </View>
       ) : null}
       </View>
-    </View>
+    </>
   );
 
   const controls = (
-    <View style={styles.controls}>
+    <>
       {/* The style tiles and the period control are their own surfaces: no sheet around them, which
           clipped the last tile row's caption and pressed the tiles against its edge. */}
       <ItemGroup title={t('usage.board.recap.styleLabel')} surface="none">
@@ -425,15 +494,11 @@ export function UsageRecapComposer(
           );
         })}
       </ItemGroup>
-    </View>
+    </>
   );
 
-  const footer = (
-    <View style={styles.footer}>
-      <Text style={styles.note} numberOfLines={2}>
-        {notice ?? t('usage.board.recap.madeLocally')}
-      </Text>
-      <View style={styles.actions}>
+  const actions = (
+    <>
         <RoundButton
           size="small"
           display="secondary"
@@ -467,39 +532,21 @@ export function UsageRecapComposer(
           }}
           testID="usage-recap-composer.share"
         />
-      </View>
-    </View>
+    </>
   );
 
-  // A phone keeps its actions in view: the preview and the controls scroll above them.
-  if (phone) {
-    return (
-      <View style={[styles.root, styles.rootPhone]} testID="usage-recap-composer">
-        <ScrollView style={styles.phoneScroll} contentContainerStyle={styles.phoneContent}>
-          {preview}
-          {controls}
-        </ScrollView>
-        {footer}
-      </View>
-    );
-  }
   return (
-    <View style={styles.root} testID="usage-recap-composer">
-      <View style={[styles.body, styles.bodyWide]}>
-        {preview}
-        <View style={styles.side}>
-          <ScrollView style={styles.controlsScroll} contentContainerStyle={styles.controlsContent}>
-            {controls}
-          </ScrollView>
-          {footer}
-        </View>
-      </View>
-    </View>
+    <RecapComposerFrame
+      stage={preview}
+      stageTestID="usage-recap-composer.stage"
+      onStageWidth={setStageWidth}
+      controls={controls}
+      note={notice ?? t('usage.board.recap.madeLocally')}
+      actions={actions}
+    />
   );
 }
 
-/** The stage's breathing room around the card on every side. */
-const STAGE_INSET_PX = 32;
 
 /** A style tile draws the real card at static props, scaled (visual picker rule). */
 const StylePreview = React.memo(function StylePreview(
@@ -538,75 +585,19 @@ const styles = StyleSheet.create((theme) => ({
   // The card is held to the window (scrollHost 'body'): the controls scroll and the actions stay put.
   root: {
     flex: 1,
-    gap: 0,
     minWidth: 0,
     minHeight: 0,
   },
-  rootPhone: {
-    flex: 1,
+  // The outputs lead the sheet: what you are sharing comes before how it looks.
+  outputs: {
+    alignItems: 'flex-start',
+    paddingBottom: theme.space.s16,
   },
-  body: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
-    gap: theme.space.s24,
-    minHeight: 0,
-  },
-  // Controls keep one readable column beside the stage (lab s2card C: about a third).
-  side: {
-    width: 340,
-    flexShrink: 0,
-    minHeight: 0,
-  },
-  bodyWide: { flex: 1 },
-  phoneScroll: { flex: 1, minHeight: 0 },
-  phoneContent: { gap: theme.space.s16, paddingBottom: theme.space.s8 },
-  stage: {
-    flexGrow: 1,
-    flexBasis: 0,
-    minWidth: 0,
-    alignItems: 'center',
-    gap: theme.space.s20,
-    paddingVertical: theme.space.s20,
-    paddingHorizontal: STAGE_INSET_PX,
-    borderRadius: theme.borderRadius.lg,
-    backgroundColor: theme.colors.surface.inset,
-  },
-  stagePhone: { flexGrow: 0, flexBasis: 'auto' },
   // The card hangs under the formats: the stage stretches with the controls column beside it, and a
   // centred card would drift out of view as that column grows.
   stageCard: { alignItems: 'center', justifyContent: 'flex-start', paddingTop: theme.space.s8 },
   card: {
     borderRadius: 18,
-  },
-  controlsScroll: {
-    flex: 1,
-  },
-  controlsContent: {
-    paddingBottom: theme.space.s8,
-  },
-  controls: {
-    gap: theme.space.s4,
-    minWidth: 280,
-  },
-  // Inset like the sheet's own header, so Share never meets the card's edge.
-  footer: {
-    gap: theme.space.s12,
-    paddingTop: theme.space.s16,
-    paddingHorizontal: theme.space.s16,
-    paddingBottom: theme.space.s16,
-    marginTop: theme.space.s8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.colors.border.default,
-  },
-  note: {
-    ...Typography.default(),
-    flexShrink: 1,
-    color: theme.colors.text.secondary,
-  },
-  actions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.space.s8,
   },
   actionsGrow: { flexGrow: 1 },
 }));

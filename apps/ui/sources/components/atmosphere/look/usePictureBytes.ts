@@ -34,29 +34,44 @@ export function useBuiltinThumbnail(picture: BuiltinPicture | null): Bytes | nul
   return picture && bytes?.id === picture.id ? bytes.bytes : null;
 }
 
-/** A stored picture's full bytes (a user picture on this device), or null when it is not here. */
-export function useStoredPictureBytes(localId: string | null): Bytes | null {
+/** A stored picture on this device: still being read, here with its full bytes, or not on this device. */
+export type StoredPicture =
+  | Readonly<{ status: 'loading' }>
+  | Readonly<{ status: 'present'; bytes: Bytes }>
+  | Readonly<{ status: 'missing' }>;
+
+const LOADING: StoredPicture = { status: 'loading' };
+const MISSING: StoredPicture = { status: 'missing' };
+
+export function useStoredPicture(localId: string | null): StoredPicture {
   const revision = useStoreRevision();
-  const [bytes, setBytes] = React.useState<Readonly<{
+  const [read, setRead] = React.useState<Readonly<{
     localId: string;
-    bytes: Bytes | null;
+    picture: StoredPicture;
   }> | null>(null);
   React.useEffect(() => {
     if (localId === null) return;
     let disposed = false;
     void pictureStore.get(localId).then(
       (record) => {
-        if (!disposed) setBytes({ localId, bytes: record?.data ?? null });
+        if (!disposed)
+          setRead({ localId, picture: record ? { status: 'present', bytes: record.data } : MISSING });
       },
       () => {
-        if (!disposed) setBytes({ localId, bytes: null });
+        if (!disposed) setRead({ localId, picture: MISSING });
       },
     );
     return () => {
       disposed = true;
     };
   }, [localId, revision]);
-  return bytes?.localId === localId ? bytes.bytes : null;
+  return localId !== null && read?.localId === localId ? read.picture : LOADING;
+}
+
+/** A stored picture's full bytes (a user picture on this device), or null when it is not here. */
+export function useStoredPictureBytes(localId: string | null): Bytes | null {
+  const picture = useStoredPicture(localId);
+  return picture.status === 'present' ? picture.bytes : null;
 }
 
 /** The user pictures kept on this device, oldest first. */

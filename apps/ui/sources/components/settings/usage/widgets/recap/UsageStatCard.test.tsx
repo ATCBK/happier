@@ -2,7 +2,7 @@ import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { composeUsageRecap } from '@happier-dev/protocol';
 import { UsageAnalyticsQueryResponseSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
-import { UsageRecapComposeInputSchema } from '@happier-dev/protocol/usage/usageRecap';
+import { UsageRecapPrivateComposeInputSchema } from '@happier-dev/protocol/usage/usageRecap';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { resolveUsagePageAggregation } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
@@ -25,7 +25,7 @@ const accounting = UsageAnalyticsQueryResponseSchema.parse({ v: 1,
     activity: { calendarDays: [{ date: '2026-09-01', eventCount: 4 }, { date: '2026-09-02', eventCount: 0 }], weekdayHourBuckets: [] },
 });
 const composed = composeUsageRecap({
-    input: UsageRecapComposeInputSchema.parse({ query, style: 'daybreak', format: 'square', selectedFields: ['tokens', 'activeDays', 'agentMix', 'rhythm'] }),
+    input: UsageRecapPrivateComposeInputSchema.parse({ query, style: 'daybreak', format: 'square', selectedFields: ['tokens', 'activeDays', 'agentMix', 'rhythm'] }),
     snapshot: resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value: accounting, status: 'available' }] }).results[0]!,
 });
 if (composed.kind !== 'composed') throw new Error('The canonical recap producer must admit the renderer fixture');
@@ -35,7 +35,7 @@ const FORMATS = ['square', 'story', 'link-preview'] as const;
 describe('private stat card renderer', () => {
     it('names the public Agent with Names off and exposes formatted amounts rather than share fractions', async () => {
         const agent = { ...accounting.breakdowns!.agent![0]!, key: 'claude', label: 'Claude' };
-        const result = composeUsageRecap({ input: UsageRecapComposeInputSchema.parse({ query, selectedFields: ['agentMix'] }),
+        const result = composeUsageRecap({ input: UsageRecapPrivateComposeInputSchema.parse({ query, selectedFields: ['agentMix'] }),
             snapshot: { ...resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value: accounting, status: 'available' }] }).results[0]!,
                 accounting: { ...accounting, breakdowns: { agent: [agent, { ...agent, key: 'codex', label: 'Codex', tokens: { ...tokens, total: 1 } }] } } } });
         if (result.kind !== 'composed') throw new Error('Expected composed Agent mix');
@@ -80,7 +80,7 @@ describe('private stat card renderer', () => {
             ],
         });
         // Use the transported accounting slice: pricing and source reconciliation have already run.
-        const result = composeUsageRecap({ input: UsageRecapComposeInputSchema.parse({ query, format, selectedFields: ['dollars'] }),
+        const result = composeUsageRecap({ input: UsageRecapPrivateComposeInputSchema.parse({ query, format, selectedFields: ['dollars'] }),
             snapshot: { ...resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value, status: 'available' }] }).results[0]!, accounting: value } });
         if (result.kind !== 'composed') throw new Error('Expected admitted money facts');
         const model = buildUsageStatCardModel(result);
@@ -106,7 +106,7 @@ describe('private stat card renderer', () => {
         const value = { ...accounting, series: [{ bucketStartMs: Date.UTC(2026, 6, 1), bucketEndMs: Date.UTC(2026, 8, 30),
             eventCount: 2, tokens: { ...tokens, total: 12345 }, cost: accounting.totals.cost }] };
         const snapshot = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value, status: 'available' }] }).results[0]!;
-        const result = composeUsageRecap({ input: UsageRecapComposeInputSchema.parse({ query, selectedFields: [field] }), snapshot });
+        const result = composeUsageRecap({ input: UsageRecapPrivateComposeInputSchema.parse({ query, selectedFields: [field] }), snapshot });
         if (result.kind !== 'composed') throw new Error('Expected admitted selected facts');
         const screen = await renderScreen(<UsageStatCard model={buildUsageStatCardModel(result)} tone="dark" testID="selected" />);
         try {

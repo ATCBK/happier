@@ -20,6 +20,8 @@ export const SETTINGS_ROUTE_CHROME_DEFINITIONS: readonly SettingsRouteChromeDefi
     { name: 'index', titleKey: 'settings.title', headerBackTitleKey: 'common.home' },
     { name: 'account', titleKey: 'settings.account' },
     { name: 'account/security', titleKey: 'settingsAccount.security', headerBackTitleKey: 'settings.account' },
+    { name: 'account/public-profile/index', titleKey: 'publicIdentity.profile.title', headerBackTitleKey: 'settings.account' },
+    { name: 'account/public-profile/edit', titleKey: 'publicIdentity.editor.title', headerBackTitleKey: 'publicIdentity.profile.title' },
     // API tokens are one collection (the rail + a token's detail) under its own nested stack.
     { name: 'account/api-tokens', titleKey: 'settingsApiTokens.title' },
     { name: 'index', navigator: 'account/api-tokens', titleKey: 'settingsApiTokens.title' },
