@@ -23,7 +23,6 @@ import {
     type SessionServerStartDraftTarget,
     type SessionServerStartDraftComposerOutcome,
 } from '@/components/sessions/new/serverStartDraftComposer';
-import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
@@ -34,76 +33,8 @@ import {
 } from './createPluginSurfaceHostApi';
 import type { PluginSurfaceContributedActionDescriptorResolver } from './pluginSurfaceActionDispatch';
 import { ReviewStartInputSchema } from '@happier-dev/protocol/reviews/reviewStart';
-
-/**
- * The controller lifetime consumes the same exact daemon facts as target-scoped
- * Action selection. A response refresh reconstructs those JSON objects, so this
- * selector-owned projection retains their semantic identity without pulling
- * unrelated plugin catalog entries into a mounted target's lifetime.
- */
-export function projectPluginActionInputSelectionFacts(input: Readonly<{
-    pluginProjectionById?: Readonly<Record<string, PluginProjectionEntry>> | null;
-    /** Exact mounted projection used only to resolve Action presentation text. */
-    pluginUiProjection?: PluginUiProjectionModel | null;
-    targetedContributions?: PluginUiTargetedContributionsV1 | null;
-    targetPluginId?: string | null;
-}>): Readonly<{
-    targetedContributions: PluginUiTargetedContributionsV1 | null;
-    hasPluginProjection: boolean;
-    pluginProjectionById: Readonly<Record<string, PluginProjectionEntry>>;
-    pluginUiProjection: PluginUiProjectionModel | null;
-}> {
-    const targetPluginId = typeof input.targetPluginId === 'string' && input.targetPluginId.length > 0
-        ? input.targetPluginId
-        : null;
-    const targetedContributions = targetPluginId
-        && input.targetedContributions?.target.pluginId === targetPluginId
-        ? input.targetedContributions
-        : null;
-    const selectedPluginIds = new Set<string>();
-    for (const point of targetedContributions?.points ?? []) {
-        for (const protocol of point.protocols) {
-            for (const contribution of protocol.contributions) {
-                for (const operation of contribution.operations) {
-                    selectedPluginIds.add(operation.action.pluginId);
-                }
-            }
-        }
-    }
-    const pluginProjectionById: Record<string, PluginProjectionEntry> = {};
-    for (const pluginId of [...selectedPluginIds].sort()) {
-        const plugin = input.pluginProjectionById?.[pluginId];
-        if (plugin) pluginProjectionById[pluginId] = plugin;
-    }
-    return Object.freeze({
-        targetedContributions,
-        hasPluginProjection: input.pluginProjectionById !== undefined && input.pluginProjectionById !== null,
-        pluginProjectionById: Object.freeze(pluginProjectionById),
-        pluginUiProjection: input.pluginUiProjection ?? null,
-    });
-}
-
-/** A bounded semantic dependency for the controller that owns this selector. */
-export function serializePluginActionInputSelectionFacts(input: Omit<Parameters<
-    typeof projectPluginActionInputSelectionFacts
->[0], 'pluginUiProjection'> & Readonly<{
-    translationsByPluginId?: PluginUiProjectionModel['translationsByPluginId'] | null;
-}>): string {
-    const facts = projectPluginActionInputSelectionFacts(input);
-    return stableJsonStringify({
-        ...facts,
-        // This carrier is used only for Action presentation text. Producer
-        // presence, unrelated surfaces and aggregate delivery metadata are not
-        // an Action-selection lifetime. Exact Action and target facts above
-        // still retire a changed selection. Only admitted Action contributors
-        // can supply that text; walking every plugin's bundles makes unrelated
-        // catalog delivery proportional to the entire catalog on every mount.
-        pluginUiProjection: Object.fromEntries(Object.keys(facts.pluginProjectionById).flatMap(pluginId => {
-            const translations = input.translationsByPluginId?.[pluginId];
-            return translations ? [[pluginId, translations.bundles]] : [];
-        })),
-    });
-}
+import { projectPluginActionInputSelectionFacts } from './pluginActionInputSelectionFacts';
+export { projectPluginActionInputSelectionFacts, serializePluginActionInputSelectionFacts } from './pluginActionInputSelectionFacts';
 
 function errorPayload(
     code: PluginUiHostApiErrorCodeV1,

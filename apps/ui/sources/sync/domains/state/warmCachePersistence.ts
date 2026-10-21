@@ -17,6 +17,7 @@ import { PluginUiTargetedContributionsV1Schema, type PluginUiTargetedContributio
 import { z } from 'zod/mini';
 import * as zMini from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import { MachinePublishedAgentInventoryV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import { SkillFoundListResultV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { DaemonMcpServersDetectResponseSchema } from '@happier-dev/protocol/mcp/servers/daemonRpcV1';
@@ -27,6 +28,9 @@ import { SESSION_CONTENT_AVAILABILITIES } from '@/sync/domains/session/encrypted
 import { MachineLockedReasonSchema } from './storageTypes';
 import { isServerProfilePersistenceSuspendedForDemo } from '@/sync/domains/server/serverProfiles';
 import { subscribeHomeCredentialMutations } from '@/auth/storage/tokenStorage';
+import { normalizePluginUiProjection, resolvePluginUiProjectionPlatform, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
+import { preparePluginUiProjectionOrigins } from '@/sync/domains/plugins/ui/projectionOrigins';
+import type { PluginUiPlatformV1 } from '@happier-dev/protocol/plugins/ui';
 
 /**
  * The same predicate the rest of this corridor uses (`state/persistence.ts`,
@@ -445,10 +449,17 @@ export type MachineDisplayCacheEntryV1 = z.infer<typeof MachineDisplayCacheEntry
  * together; a fresh offline process can therefore never hold one without the
  * other.
  */
+/** Process-only presentation published with the retained bytes; symbols never serialize. */
+export const PLUGIN_UI_PROJECTION_PRESENTATION = Symbol('pluginUiProjectionPresentation');
 export type PluginUiProjectionCacheEntryV1 = {
     machineId: string;
     projection: PluginProjectionV2;
     targetedContributionsByPluginId?: Record<string, PluginUiTargetedContributionsV1>;
+    [PLUGIN_UI_PROJECTION_PRESENTATION]?: Readonly<{
+        projection: PluginProjectionV2;
+        platform: PluginUiPlatformV1;
+        model: PluginUiProjectionModel | null;
+    }>;
 };
 
 export const PluginUiProjectionCacheEntryV1Schema: z.ZodMiniType<PluginUiProjectionCacheEntryV1> = z.object({
@@ -828,12 +839,50 @@ export function loadPluginUiProjectionWarmCacheEntries(
     return normalizeEmptyWarmCacheRecord(loaded);
 }
 
+function publishPluginUiProjectionPresentations(
+    entries: Record<string, PluginUiProjectionCacheEntryV1>,
+    previous?: Record<string, PluginUiProjectionCacheEntryV1> | null,
+): Record<string, PluginUiProjectionCacheEntryV1> {
+    const platform = resolvePluginUiProjectionPlatform();
+    let changed = false;
+    const published = Object.fromEntries(Object.entries(entries).map(([key, entry]) => {
+        const existing = entry[PLUGIN_UI_PROJECTION_PRESENTATION];
+        if (existing?.projection === entry.projection && existing.platform === platform) return [key, entry];
+        changed = true;
+        const prior = previous?.[key]?.[PLUGIN_UI_PROJECTION_PRESENTATION];
+        // Retained bytes keep the same wire shape, while this owner's ready
+        // presentation cannot retain mutable aliases supplied to save/hydrate.
+        const projection = projectNativeJsonValueForTransport(entry.projection) as PluginProjectionV2;
+        const normalized = preparePluginUiProjectionOrigins(normalizePluginUiProjection(projection, platform,
+            prior?.platform === platform ? prior.model ?? undefined : undefined));
+        const model = Object.values(normalized).some(value => value !== null && typeof value === 'object' && Object.keys(value).length > 0)
+            ? normalized : null;
+        return [key, { ...entry, projection, [PLUGIN_UI_PROJECTION_PRESENTATION]: Object.freeze({ projection, platform, model }) }];
+    }));
+    return changed ? published : entries;
+}
+
+/** Exact-scope hydration runs before the credential/Sync owner publishes consumers. */
+export function preparePluginUiProjectionWarmCacheEntries(serverId: string, accountId: string): void {
+    const key = buildScopedKey(PLUGIN_UI_PROJECTION_WARM_CACHE_PREFIX, serverId, accountId);
+    const entries = loadPluginUiProjectionWarmCacheEntries(serverId, accountId);
+    const published = publishPluginUiProjectionPresentations(entries);
+    const cached = key ? warmCacheSavedValueByKey.get(key) : undefined;
+    if (key && cached && published !== entries) warmCacheSavedValueByKey.set(key, { raw: cached.raw, value: published });
+}
+
 export function savePluginUiProjectionWarmCacheEntries(
     serverId: string | null | undefined,
     accountId: string | null | undefined,
     entries: Record<string, PluginUiProjectionCacheEntryV1>,
 ): void {
-    saveScopedRecord(buildScopedKey(PLUGIN_UI_PROJECTION_WARM_CACHE_PREFIX, serverId, accountId), entries, serializePluginUiProjectionCache);
+    const key = buildScopedKey(PLUGIN_UI_PROJECTION_WARM_CACHE_PREFIX, serverId, accountId);
+    if (!key || isEmbedWindowContext() || isServerProfilePersistenceSuspendedForDemo()) return;
+    // A pending/unavailable keystore has not admitted retained custody. Do not
+    // derive a presentation that the existing persistence owner cannot publish.
+    if (!getWarmCacheStorage() && !warmCacheStorageUnopenable) return;
+    const previous = peekScopedRecord<Record<string, PluginUiProjectionCacheEntryV1>>(key);
+    saveScopedRecord(key, publishPluginUiProjectionPresentations(entries, previous), serializePluginUiProjectionCache);
 }
 
 type PendingMachineDisplayWarmCacheSave = Readonly<{

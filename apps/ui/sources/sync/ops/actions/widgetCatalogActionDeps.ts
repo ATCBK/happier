@@ -6,7 +6,7 @@ import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plu
 import { selectWidgetCandidates, selectBuiltinWidgetCandidates, describeWidgetDefinitionSummaryV1, describeAuthoredWidgetDefinitionV1, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { createSessionPluginPolicyEvaluationContext } from '@/components/sessions/model/usePluginUiSessionPolicyEvaluationContext';
 import { loadDaemonMergedProjectionInputs } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
-import { EMPTY_PLUGIN_UI_PROJECTION, resolvePluginUiProjectionState, resolvePluginUiProjectionPlatform, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
+import { resolvePluginUiProjectionPlatform, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { getSessionStatus } from '@/utils/sessions/sessionUtils';
@@ -16,7 +16,6 @@ import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAc
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import { storage } from '@/sync/domains/state/storage';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { readConnectedAccountDescriptorProjection } from '@/sync/domains/connectedServices/connectedAccountDescriptorProjection';
 import type { ConnectedAccountUiProjectionEntryV1 } from '@happier-dev/protocol';
 import type { LazyActionAccountContext } from './actionAccountContext';
 import { admitWidgetActionSurfaceV1 } from '@happier-dev/protocol/widgets';
@@ -76,13 +75,14 @@ export async function readWidgetActionRuntimeV1(
         if (!runtime.session.access?.capabilities.readTranscript) return unavailable('widget_read_denied');
         const target = readMachineControlTargetForSession({ ...selectedSession, accountId: runtime.scope.accountId });
         if (!target) return { candidates: selectBuiltinWidgetCandidates(), projection: null, machineId: null, isCurrent: accountIsCurrent };
-        const projection = (await loadDaemonMergedProjectionInputs({ machineId: target.machineId, serverId: surface.serverId, accountLifetime: account.accountLifetime }))?.pluginProjectionV2;
+        const inputs = await loadDaemonMergedProjectionInputs({ machineId: target.machineId, serverId: surface.serverId, accountLifetime: account.accountLifetime });
+        const projection = inputs?.pluginProjectionV2;
         account.assertCurrent();
         signal?.throwIfAborted();
         const currentTarget = readMachineControlTargetForSession({ ...selectedSession, accountId: runtime.scope.accountId });
         if (!runtime.isCurrent()) return unavailable('widget_target_unavailable');
         if (currentTarget?.machineId !== target.machineId || !projection) return { candidates: selectBuiltinWidgetCandidates(), projection: null, machineId: null, isCurrent: accountIsCurrent };
-        const model = resolvePluginUiProjectionState(EMPTY_PLUGIN_UI_PROJECTION, projection);
+        const model = inputs!.pluginUiProjection;
         const [settings, serverFeaturesSnapshot] = await Promise.all([account.readSettings(), getServerFeaturesSnapshot({ serverId: surface.serverId })]);
         account.assertCurrent();
         signal?.throwIfAborted();
@@ -93,8 +93,8 @@ export async function readWidgetActionRuntimeV1(
             facts: { pluginEnabled: true, sessionAgentId: readSessionPresentationAgentId(runtime.session),
                 sessionState: getSessionStatus(runtime.session).state, machineId: target.machineId, projectId: null, browserExists: false },
         });
-        const connectedAccounts = readConnectedAccountDescriptorProjection(projection);
-        const connectedAccountDescriptors = connectedAccounts.kind === 'ready' ? connectedAccounts.descriptors : [];
+        const connectedAccounts = inputs!.connectedAccountProjection;
+        const connectedAccountDescriptors = connectedAccounts?.kind === 'ready' ? connectedAccounts.descriptors : [];
         return { candidates: selectWidgetCandidates(model, policy).map(candidate => ({ ...candidate, connectedAccountDescriptors })),
             projection: model, machineId: target.machineId, connectedAccountDescriptors,
             isCurrent: () => {

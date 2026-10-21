@@ -34,6 +34,7 @@ import { resolvePluginUiTranslationText } from './i18n';
 
 import {
     loadPluginUiProjectionWarmCacheEntries,
+    preparePluginUiProjectionWarmCacheEntries,
     savePluginUiProjectionWarmCacheEntries,
 } from '@/sync/domains/state/warmCachePersistence';
 
@@ -51,7 +52,7 @@ const ACCOUNT_B = { serverId: 'server-a', accountId: 'account-b' } as const;
 const MACHINE_ID = 'machine-1';
 const TARGET_KEY = pluginUiProjectionAdmissionTargetKey({ serverId: 'server-1', machineId: MACHINE_ID });
 
-it('normalizes an unchanged retained admission once and observes replacement, platform and retirement', async () => {
+it('publishes retained presentation before reads and observes replacement, platform and retirement', async () => {
     await prepareWarmCacheEncryptionKey();
     store.clear();
     forgetPluginUiProjectionAdmissionSnapshots(ACCOUNT_A);
@@ -59,13 +60,14 @@ it('normalizes an unchanged retained admission once and observes replacement, pl
         projection: projectionAtGeneration('retained-perf-a', 77) });
     const normalize = vi.spyOn(projectionNormalizer, 'normalizePluginUiProjection');
     try {
-        const input = { scope: ACCOUNT_A, targetKey: TARGET_KEY, machineId: MACHINE_ID, platform: 'web' as const };
+        const input = { scope: ACCOUNT_A, targetKey: TARGET_KEY, machineId: MACHINE_ID, platform: projectionNormalizer.resolvePluginUiProjectionPlatform() };
+        preparePluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId);
         const first = readPluginUiProjectionAdmissionSnapshot(input);
         expect(first).not.toBeNull();
         const repeated = Array.from({ length: 100 }, () => readPluginUiProjectionAdmissionSnapshot(input));
-        expect(normalize).toHaveBeenCalledTimes(1);
+        expect(normalize).not.toHaveBeenCalled();
         expect(repeated.every(value => value === first)).toBe(true);
-        expect(readPluginUiProjectionAdmissionSnapshot({ ...input, platform: 'ios' })).not.toBe(first);
+        expect(readPluginUiProjectionAdmissionSnapshot({ ...input, platform: input.platform === 'ios' ? 'web' : 'ios' })).toBeNull();
         expect(readPluginUiProjectionAdmissionSnapshot({ ...input, scope: ACCOUNT_B })).toBeNull();
         savePluginUiProjectionAdmissionSnapshot({ ...input, projection: projectionAtGeneration('retained-perf-b', 78) });
         expect(readPluginUiProjectionAdmissionSnapshot(input)).not.toBe(first);
@@ -193,9 +195,10 @@ describe('plugin UI projection admission custody', () => {
         vi.resetModules();
         const fresh = await import('./projectionWarmCache');
         await (await import('@/sync/domains/state/warmCacheEncryptionKey')).prepareWarmCacheEncryptionKey();
+        (await import('@/sync/domains/state/warmCachePersistence')).preparePluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId);
         for (const machineId of machines) {
             const targetKey = fresh.pluginUiProjectionAdmissionTargetKey({ serverId: ACCOUNT_A.serverId, machineId });
-            const restored = fresh.readPluginUiProjectionAdmissionSnapshot({ scope: ACCOUNT_A, targetKey, machineId, platform: 'web' });
+            const restored = fresh.readPluginUiProjectionAdmissionSnapshot({ scope: ACCOUNT_A, targetKey, machineId });
             expect(resolvePluginUiTranslationText({ projection: restored, pluginId: 'acme.browser', key: 'title', locale: 'fr' })).toBe('Français');
             expect(resolvePluginUiTranslationText({ projection: restored, pluginId: 'acme.browser', key: 'title', locale: 'de' })).toBe('Deutsch');
             expect(resolvePluginUiTranslationText({ projection: restored, pluginId: 'acme.browser', key: 'fallback', locale: 'fr' })).toBe('Fallback');

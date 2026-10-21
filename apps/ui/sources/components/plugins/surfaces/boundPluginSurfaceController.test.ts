@@ -8,6 +8,8 @@ import {
 import { createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1, createWidgetActionInputResolverV1, readBuiltinWidgetDescriptorV1 } from '@happier-dev/protocol/widgets';
 import type { HomeHubArtifactTransportV1 } from '@happier-dev/protocol/home';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
+import { createPluginActionInputSelectionFactsPublication, serializePluginActionInputSelectionFacts } from './pluginActionInputSelectionFacts';
 import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoardArtifactBoundary';
 import { EMPTY_PLUGIN_UI_PROJECTION, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/contributions/ui';
@@ -19,7 +21,7 @@ import {
 import { Linking } from 'react-native';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { createMachineFixture, renderHook } from '@/dev/testkit';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
@@ -110,6 +112,7 @@ function resolveUnavailableClientTargetAction(
 }
 
 const FACTS = {
+    actionInputSelectionFactsKey: serializePluginActionInputSelectionFacts({ targetPluginId: 'acme.browser' }),
     pluginId: 'acme.browser',
     contributionId: 'panel',
     surfaceId: 'surfacePlacement:acme.browser:panel',
@@ -994,27 +997,19 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
 
     it('keeps one controller for equivalent daemon target snapshots and retires it for semantic projection or target-generation replacement', async () => {
         let projectionTraversals = 0;
-        let unrelatedTranslationTraversals = 0;
-        let selectedTranslationTraversals = 0;
+        const selectedBundleInput = { en: { 'action.title': 'Configure browser' } };
+        const selectedBundles = projectNativeJsonValueForTransport(selectedBundleInput) as typeof selectedBundleInput;
+        const unrelatedBundleInput = { en: Object.fromEntries(
+            Array.from({ length: 1024 }, (_, index) => [`unrelated.${index}`, 'Unrelated catalog text '.repeat(8)]),
+        ) };
+        const unrelatedBundles = projectNativeJsonValueForTransport(unrelatedBundleInput) as typeof unrelatedBundleInput;
         const pluginUiProjection: PluginUiProjectionModel = Object.freeze({
             ...EMPTY_PLUGIN_UI_PROJECTION,
             translationsByPluginId: Object.freeze({
                 'acme.browser': { id: 'translations:acme.browser', pluginId: 'acme.browser',
-                    contributionKind: 'translations' as const, locales: ['en'], bundles: new Proxy({ en: { 'action.title': 'Configure browser' } }, {
-                        ownKeys(target) {
-                            selectedTranslationTraversals += 1;
-                            return Reflect.ownKeys(target);
-                        },
-                    }) },
+                    contributionKind: 'translations' as const, locales: ['en'], bundles: selectedBundles },
                 'acme.unrelated': { id: 'translations:acme.unrelated', pluginId: 'acme.unrelated',
-                    contributionKind: 'translations' as const, locales: ['en'], bundles: new Proxy({ en: Object.fromEntries(
-                        Array.from({ length: 1024 }, (_, index) => [`unrelated.${index}`, 'Unrelated catalog text '.repeat(8)]),
-                    ) }, {
-                        ownKeys(target) {
-                            unrelatedTranslationTraversals += 1;
-                            return Reflect.ownKeys(target);
-                        },
-                    }) },
+                    contributionKind: 'translations' as const, locales: ['en'], bundles: unrelatedBundles },
             }),
             // Observe real materialization of an immutable public input, not
             // the serializer implementation or an incidental invocation count.
@@ -1025,6 +1020,23 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
                 },
             }),
         });
+        const sourcePublication = createPluginActionInputSelectionFactsPublication();
+        const publishFacts = (facts: Readonly<{
+            targetedContributions: PluginUiTargetedContributionsV1;
+            pluginProjectionById: Readonly<Record<string, PluginProjectionEntry>>;
+            pluginUiProjection: PluginUiProjectionModel;
+        }>) => ({ ...facts, actionInputSelectionFactsKey: sourcePublication.publish({
+            targetPluginId: FACTS.pluginId,
+            targetedContributions: facts.targetedContributions,
+            pluginProjectionById: facts.pluginProjectionById,
+            translationsByPluginId: facts.pluginUiProjection.translationsByPluginId,
+        }) });
+        // Observe the real serializer's traversal of Protocol-owned immutable
+        // input. The spy delegates unchanged; no parser/selector is mocked.
+        const objectKeys = vi.spyOn(Object, 'keys');
+        onTestFinished(() => objectKeys.mockRestore());
+        const selectedTranslationTraversals = () => objectKeys.mock.calls.filter(([value]) => value === selectedBundles).length;
+        const unrelatedTranslationTraversals = () => objectKeys.mock.calls.filter(([value]) => value === unrelatedBundles).length;
         const daemonFactsFor = (input: Readonly<{
             targetGeneration: string;
             actionTitle: string;
@@ -1109,7 +1121,11 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
                     editableSettingsGroups: [],
                 },
             } satisfies Readonly<Record<string, PluginProjectionEntry>>;
-            return { targetedContributions, pluginProjectionById, pluginUiProjection };
+            return publishFacts({
+                targetedContributions: projectNativeJsonValueForTransport(targetedContributions) as typeof targetedContributions,
+                pluginProjectionById: projectNativeJsonValueForTransport(pluginProjectionById) as typeof pluginProjectionById,
+                pluginUiProjection,
+            });
         };
         const initialDaemonFacts = daemonFactsFor({
             targetGeneration: 'browser-generation-a',
@@ -1130,8 +1146,8 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         expect(initialTraversals).toBe(0);
         // A mounted selector cannot consume another plugin's translations.
         // Catalog growth must not grow its render-time serialization work.
-        expect(unrelatedTranslationTraversals).toBe(0);
-        expect(selectedTranslationTraversals).toBe(1);
+        expect(unrelatedTranslationTraversals()).toBe(0);
+        expect(selectedTranslationTraversals()).toBe(1);
         const unchanged = await hook.rerender(initialDaemonFacts);
         // Settled parent refreshes must not repeatedly walk an unchanged
         // projection, and must preserve its mounted interaction lifetime.
@@ -1141,15 +1157,30 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         expect(firstRetirement).not.toHaveBeenCalled();
 
         for (let index = 0; index < 12; index += 1) {
-            const refreshed = await hook.rerender({
+            const refreshed = await hook.rerender(publishFacts({
                 ...initialDaemonFacts,
                 pluginUiProjection: { ...pluginUiProjection, generation: index },
-            });
+            }));
             expect(refreshed).toBe(first);
         }
         // Producer delivery changes retain the same consumed immutable inputs.
-        expect(selectedTranslationTraversals).toBe(1);
-        expect(unrelatedTranslationTraversals).toBe(0);
+        expect(selectedTranslationTraversals()).toBe(1);
+        expect(unrelatedTranslationTraversals()).toBe(0);
+
+        for (let index = 0; index < 100; index += 1) {
+            const refreshed = await hook.rerender(publishFacts({
+                ...initialDaemonFacts,
+                pluginProjectionById: {
+                    ...initialDaemonFacts.pluginProjectionById,
+                    'acme.unrelated': { ...initialDaemonFacts.pluginProjectionById['acme.unrelated'], title: `Unrelated ${index}` },
+                },
+            }));
+            expect(refreshed).toBe(first);
+        }
+        // A publication for an unrelated contributor does not change this
+        // selector's immutable target, Action declarations or text bundles.
+        expect(selectedTranslationTraversals()).toBe(1);
+        expect(unrelatedTranslationTraversals()).toBe(0);
 
         const equivalentDaemonFacts = daemonFactsFor({
             targetGeneration: 'browser-generation-a',
@@ -1179,51 +1210,51 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         expect(first.isCurrent()).toBe(true);
         expect(firstRetirement).not.toHaveBeenCalled();
 
-        const projectionReplacementFacts = {
+        const projectionReplacementFacts = publishFacts({
             ...unrelatedDaemonFacts,
             pluginProjectionById: daemonFactsFor({
                 targetGeneration: 'browser-generation-a',
                 actionTitle: 'Configure revised browser',
                 unrelatedTitle: 'Unrelated revised',
             }).pluginProjectionById,
-        };
+        });
         const projectionReplacement = await hook.rerender(projectionReplacementFacts);
         expect(projectionReplacement).not.toBe(first);
         expect(first.isCurrent()).toBe(false);
         expect(firstRetirement).toHaveBeenCalledTimes(1);
 
-        const targetReplacementFacts = {
+        const targetReplacementFacts = publishFacts({
             ...projectionReplacementFacts,
             targetedContributions: daemonFactsFor({
                 targetGeneration: 'browser-generation-b',
                 actionTitle: 'Configure revised browser',
                 unrelatedTitle: 'Unrelated revised',
             }).targetedContributions,
-        };
+        });
         const targetReplacement = await hook.rerender(targetReplacementFacts);
         expect(targetReplacement).not.toBe(projectionReplacement);
         expect(projectionReplacement.isCurrent()).toBe(false);
         expect(targetReplacement.isCurrent()).toBe(true);
 
-        const uiProjectionReplacement = await hook.rerender({
+        const uiProjectionReplacement = await hook.rerender(publishFacts({
             ...targetReplacementFacts,
             pluginUiProjection: Object.freeze({
                 ...pluginUiProjection,
                 unknownEntriesById: Object.freeze({ 'future-entry': Object.freeze({ title: 'New projection fact' }) }),
             }),
-        });
+        }));
         // Unknown future entries are not Action-input presentation facts and
         // must not retire the surface. Its consumed translation bundle is.
         expect(uiProjectionReplacement).toBe(targetReplacement);
         expect(targetReplacement.isCurrent()).toBe(true);
         expect(uiProjectionReplacement.isCurrent()).toBe(true);
-        const translatedProjection = await hook.rerender({
+        const translatedProjection = await hook.rerender(publishFacts({
             ...targetReplacementFacts,
             pluginUiProjection: { ...pluginUiProjection, translationsByPluginId: {
                 'acme.browser': { id: 'translations:acme.browser', pluginId: 'acme.browser',
                     contributionKind: 'translations', locales: ['en'], bundles: { en: { 'action.title': 'Configure revised browser' } } },
             } },
-        });
+        }));
         expect(translatedProjection).not.toBe(targetReplacement);
         expect(targetReplacement.isCurrent()).toBe(false);
         await hook.unmount();

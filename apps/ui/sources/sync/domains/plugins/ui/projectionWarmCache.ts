@@ -14,21 +14,19 @@ import type {
     DaemonContributionRegistryProjection,
 } from '@/sync/api/daemon/daemonContributionRegistryProjectionProtocol';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import {
     loadPluginUiProjectionWarmCacheEntries,
     savePluginUiProjectionWarmCacheEntries,
+    PLUGIN_UI_PROJECTION_PRESENTATION,
+    preparePluginUiProjectionWarmCacheEntries,
     type PluginUiProjectionCacheEntryV1,
 } from '@/sync/domains/state/warmCachePersistence';
 
 import {
-    normalizePluginUiProjection,
     resolvePluginUiProjectionPlatform,
     type PluginUiProjectionModel,
 } from './projection';
-
-// The persistence owner replaces an entry when its admitted bytes change.
-// Retain only its platform-specific presentation, never execution authority.
-const restoredAdmissionModels = new WeakMap<PluginUiProjectionCacheEntryV1, Map<PluginUiPlatformV1, PluginUiProjectionModel | null>>();
 
 /**
  * The Account-qualified last-confirmed plugin UI admission snapshot.
@@ -67,19 +65,6 @@ function hasAnyOwnKey(value: Readonly<Record<string, unknown>> | undefined | nul
     if (!value) return false;
     for (const key in value) {
         if (Object.prototype.hasOwnProperty.call(value, key)) return true;
-    }
-    return false;
-}
-
-/**
- * Shape-agnostic on purpose: the projection model gains families over time and
- * a hand-listed set of maps here would silently stop noticing new ones.
- */
-function hasAnyProjectionEntries(model: PluginUiProjectionModel): boolean {
-    for (const value of Object.values(model)) {
-        if (value && typeof value === 'object' && hasAnyOwnKey(value as Record<string, unknown>)) {
-            return true;
-        }
     }
     return false;
 }
@@ -153,6 +138,12 @@ export function savePluginUiProjectionAdmissionSnapshot(input: Readonly<{
             ([, admission]) => admitsExactTarget(retained, admission.target),
         ))
         : undefined;
+    if (previousEntry?.machineId === input.machineId
+        && sameStrictJsonValue(previousEntry.projection, retained)
+        && Object.keys(targetedContributionsByPluginId ?? {}).length === Object.keys(previousEntry.targetedContributionsByPluginId ?? {}).length) {
+        preparePluginUiProjectionWarmCacheEntries(input.scope.serverId, input.scope.accountId);
+        return;
+    }
     savePluginUiProjectionWarmCacheEntries(input.scope.serverId, input.scope.accountId, {
         ...previous,
         [input.targetKey]: {
@@ -255,16 +246,8 @@ export function readPluginUiProjectionAdmissionSnapshot(input: Readonly<{
     )[input.targetKey];
     if (!entry || entry.machineId !== input.machineId) return null;
     const platform = input.platform ?? resolvePluginUiProjectionPlatform();
-    let models = restoredAdmissionModels.get(entry);
-    if (models?.has(platform)) return models.get(platform) ?? null;
-    const model = normalizePluginUiProjection(entry.projection, platform);
-    const admitted = hasAnyProjectionEntries(model) ? model : null;
-    if (!models) {
-        models = new Map();
-        restoredAdmissionModels.set(entry, models);
-    }
-    models.set(platform, admitted);
-    return admitted;
+    const published = entry[PLUGIN_UI_PROJECTION_PRESENTATION];
+    return published?.projection === entry.projection && published.platform === platform ? published.model : null;
 }
 
 /**
