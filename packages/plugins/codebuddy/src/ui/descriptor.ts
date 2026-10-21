@@ -34,7 +34,7 @@ export const CODEBUDDY_UI_DESCRIPTOR = Object.freeze({
     localControl: true,
     toolRendering: { hideUnknownToolsByDefault: false },
     picker: {
-      iconName: 'code-slash-outline',
+      iconName: 'code',
       cliGlyph: 'CB',
       cliGlyphScale: 1.0,
       profileCompatibilityGlyphScale: 1.0,
