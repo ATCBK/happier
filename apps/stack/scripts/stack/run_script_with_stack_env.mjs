@@ -14,9 +14,9 @@ import {
 import { ensureDir } from '../utils/fs/ops.mjs';
 import { readLastLines } from '../utils/fs/tail.mjs';
 import { isTcpPortFree, pickNextFreeTcpPort } from '../utils/net/ports.mjs';
-import { getComponentDir, resolveStackEnvPath } from '../utils/paths/paths.mjs';
+import { getComponentDir, getRepoDir, resolveStackEnvPath } from '../utils/paths/paths.mjs';
 import { resolveLocalhostHost } from '../utils/paths/localhost_host.mjs';
-import { killProcessTree, run } from '../utils/proc/proc.mjs';
+import { killProcessTree, run, runCaptureResult } from '../utils/proc/proc.mjs';
 import {
   DEFAULT_CLI_DIST_BUILD_LOCK_TIMEOUT_MS,
   observeCliDistBuildLock,
@@ -51,8 +51,11 @@ import { collectReservedStackPorts, getDefaultPortStart } from './port_reservati
 import { withStackEnv } from './stack_environment.mjs';
 import { resolveStackRuntimeLaunchContext } from '../runtime/launch/resolveStackRuntimeLaunchContext.mjs';
 import { prepareSourceRuntimeReload } from '../runtime/launch/prepareSourceRuntimeReload.mjs';
-import { projectBorrowedExpoWebappEnv, resolveSourceQaUiMode } from '../runtime/shared/borrowed_expo.mjs';
+import { isBorrowedExpoConsumer, projectBorrowedExpoWebappEnv, resolveSourceQaUiMode } from '../runtime/shared/borrowed_expo.mjs';
 import { resolveRuntimeRemoteServiceObservation } from '../utils/tui/runtime_placement_summary.mjs';
+import { loadDevTargetsConfig, resolveDevTargetExecutionPolicy } from '../utils/dev_targets/config.mjs';
+import { resolveControlledRuntimePlacement, resolveDevTargetServicePlans } from '../utils/dev_targets/service_placement.mjs';
+import { ensureDevTargetSyncProject, flushDevTargetSync, runDevTargetControlProcess } from '../utils/dev_targets/sync_project.mjs';
 
 const DEFAULT_BACKGROUND_READY_TIMEOUT_MS = 600_000;
 
@@ -703,7 +706,44 @@ async function assertOccupiedRecoveryAuxiliaryPortOwnedByStack({
   );
 }
 
-export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPath, args, extraEnv = {}, background = false }) {
+async function preflightRestartDevTargets({ rootDir, stackName, baseDir, scriptPath, args, env, runtimeMode },
+  { runCaptureResult: capture, runProcess }) {
+  if (args.includes('--no-dev-targets')) return;
+  const sourceDir = getRepoDir(rootDir, env);
+  if (scriptPath === 'run.mjs') {
+    if (runtimeMode?.mode !== 'source') {
+      // Source preparation may have finished hours ago. Probe the same current
+      // placement/sync owner as run.mjs, even for an already-prepared reload.
+      await resolveControlledRuntimePlacement({ stackName, stackBaseDir: baseDir, sourceDir, env },
+        { runCaptureResult: capture });
+    }
+    return;
+  }
+  const { flags, kv } = parseArgs(args);
+  const connection = resolveDevServerConnection({ flags, kv, env,
+    resolvedLocalUrls: { internalServerUrl: '', publicServerUrl: '' } });
+  const { config } = await loadDevTargetsConfig({ stackName, env, allowMissing: true });
+  const policy = resolveDevTargetExecutionPolicy(config, { serverRequested: connection.startServer });
+  const borrowedExpo = isBorrowedExpoConsumer({ consumerStackName: stackName,
+    producerStackName: env.HAPPIER_STACK_EXPO_SOURCE_STACK });
+  const plans = resolveDevTargetServicePlans({ targets: config.targets, policy,
+    requested: { server: connection.startServer,
+      daemon: resolveStackDaemonStartRequested({ env, noDaemon: flags.has('--no-daemon') }),
+      expo: !borrowedExpo && (!flags.has('--no-ui') || isMobileRequestedForDevScript({ args, env })) } });
+  const requiredTargets = plans.targets.filter(plan => Object.values(plan.services).some(Boolean)).map(plan => plan.target);
+  if (!requiredTargets.length) return;
+  const sync = await ensureDevTargetSyncProject({ stackBaseDir: baseDir, sourceDir,
+    targets: config.targets, requiredTargets, ownerId: process.pid,
+    allowIndependentBorrow: true, borrowOnly: true, env }, { runProcess });
+  // This borrows the producer's project: no session/config creation or repair.
+  // Use the existing native flush admission, not a new readiness/retry policy.
+  for (const target of requiredTargets) {
+    await flushDevTargetSync({ target, env: sync.env }, { runProcess });
+  }
+}
+
+export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPath, args, extraEnv = {}, background = false },
+  { runCaptureResult: capture = runCaptureResult, runProcess = runDevTargetControlProcess } = {}) {
   const isStartLikeScript = scriptPath === 'dev.mjs' || scriptPath === 'run.mjs';
   const isStartLikeJsonDryRun = isStartLikeScript && args.includes('--json');
   await withStackEnv({
@@ -806,7 +846,8 @@ export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPat
         // Restart semantics (stack mode):
         // - Non-watch source starts preflight before stopping the old stack.
         // - Watch starts admit valid prior source outputs first; the dev owner refreshes source in the background.
-        // - Stop stack-owned processes after the selected source admission or preflight (runner, daemon, Expo, etc.)
+        // - Recheck current placement/sync readiness after preparation, before retiring the incumbent.
+        // - Stop only stack-owned processes (runner, daemon, Expo, etc.)
         // - Never kill arbitrary port listeners
         // - Preserve previous runtime ports in memory so a true restart can reuse them
         if (wantsRestart && !wantsJson) {
@@ -825,6 +866,10 @@ export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPat
             env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD = '1';
           }
           if (isTrueRestart) {
+            // A failed preflight must escape before either retirement path or
+            // replacement publication can touch the incumbent lifecycle.
+            await preflightRestartDevTargets({ rootDir, stackName, baseDir, scriptPath, args, env,
+              runtimeMode: runtimeLaunchContext.runtimeMode }, { runCaptureResult: capture, runProcess });
             try {
               const stopResult = await stopObservedStackForRestart({
                 rootDir,

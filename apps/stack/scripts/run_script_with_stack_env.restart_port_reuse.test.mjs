@@ -1,10 +1,116 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createTempFixture } from './testkit/core/temp_fixture.mjs';
+import { withPatchedProcessEnv } from './testkit/core/env_scope.mjs';
+import { resolveDevTargetMutagenRuntime } from './utils/dev_targets/mutagen_runtime.mjs';
+import { pickNextFreeTcpPort } from './utils/net/ports.mjs';
 
 import * as stackEnvRunner from './stack/run_script_with_stack_env.mjs';
+
+for (const scriptPath of ['run.mjs', 'dev.mjs']) {
+  test(`${scriptPath} restart refuses unavailable placement/sync before replacing incumbent state`, async t => {
+    const fixture = await createTempFixture(t, { prefix: 'hstack-restart-preflight-' });
+    const storageDir = fixture.path('stacks');
+    const rootDir = fixture.path('repo');
+    const stackName = 'restart-preflight';
+    const baseDir = join(storageDir, stackName);
+    const runtimeStatePath = join(baseDir, 'stack.runtime.json');
+    const markerPath = fixture.path('replacement-started');
+    withPatchedProcessEnv(t, { HAPPIER_STACK_STORAGE_DIR: storageDir,
+      HAPPIER_STACK_REPO_DIR: rootDir });
+    const env = {
+      HAPPIER_STACK_REPO_DIR: rootDir,
+      HAPPIER_STACK_STORAGE_DIR: storageDir,
+      HAPPIER_STACK_RUNTIME_BUILD_AUTHORITY_STACK: 'producer',
+      HAPPIER_STACK_RUNTIME_MODE: 'source-snapshot',
+      HAPPIER_STACK_SERVER_COMPONENT: 'happier-server-light',
+      HAPPIER_STACK_DAEMON: '0',
+    };
+    const config = { version: 3,
+      targets: [{ name: 'remote', platform: 'posix', ssh: 'fixture.invalid',
+        repoDir: '/mirror', cliHomeDir: '/state' }],
+      runtimePlacement: { server: { mode: 'prefer-target', target: 'remote', fallback: 'local' },
+        daemon: { mode: 'local' } }, commandExecution: { mode: 'local' },
+    };
+    for (const path of [baseDir, join(storageDir, 'producer'), join(rootDir, 'scripts'),
+      ...['cli', 'server', 'ui'].map(app => join(rootDir, 'apps', app))]) await mkdir(path, { recursive: true });
+    await writeFile(join(rootDir, 'package.json'), '{"private":true}\n');
+    for (const app of ['cli', 'server', 'ui']) {
+      await writeFile(join(rootDir, 'apps', app, 'package.json'), '{"private":true}\n');
+    }
+    await writeFile(join(baseDir, 'env'), Object.entries(env).map(([key, value]) => `${key}=${value}`).join('\n'));
+    for (const name of [stackName, 'producer']) {
+      await writeFile(join(storageDir, name, 'dev-targets.json'), JSON.stringify(config));
+    }
+    // This is an inert runner fixture, not a stack/server. No fixture process
+    // needs signaling: a successful dispatch writes the marker and exits itself.
+    await writeFile(join(rootDir, 'scripts', scriptPath),
+      `import {writeFile} from 'node:fs/promises'; await writeFile(${JSON.stringify(markerPath)}, 'started');`);
+    const sync = resolveDevTargetMutagenRuntime({ stackBaseDir: baseDir, sourceDir: rootDir, env });
+    await mkdir(dirname(sync.projectFile), { recursive: true });
+    await writeFile(sync.projectFile, '# disposable existing producer project\n');
+    // A recorded port selects the real restart path without creating any live
+    // process to stop. Invalid owner identity deliberately forbids signals.
+    const incumbent = { version: 1, stackName, ownerPid: null,
+      startedAt: '2026-10-21T10:00:00.000Z', ports: { server: await pickNextFreeTcpPort(49191) },
+      sentinel: 'incumbent', processes: {} };
+    await writeFile(runtimeStatePath, JSON.stringify(incumbent));
+    const probes = [];
+    const observe = async kind => {
+      probes.push(kind);
+      assert.deepEqual(JSON.parse(await readFile(runtimeStatePath, 'utf8')), incumbent,
+        'readiness must observe the incumbent before any stop/publication');
+    };
+    await assert.rejects(stackEnvRunner.runStackScriptWithStackEnv({
+      rootDir, stackName, scriptPath,
+      args: ['--restart', '--no-daemon', '--no-ui', '--no-browser'],
+      // Prepared source admission is not fresh placement/sync readiness.
+      extraEnv: { HAPPIER_STACK_PREPARED_SOURCE_RELOAD: '1' },
+    }, {
+      // Only external command boundaries are simulated; configuration,
+      // placement selection, sync admission and outer restart wiring are real.
+      runCaptureResult: async () => {
+        await observe('placement');
+        return { ok: false, exitCode: 1, err: 'fixture sync conflict' };
+      },
+      runProcess: async ({ args }) => {
+        await observe(`sync:${args[1]}`);
+        if (args[1] === 'flush') return { code: 1, out: '', err: 'fixture sync conflict' };
+        return { code: 0, out: JSON.stringify([{ name: args[2], paused: false,
+          status: 'watching', successfulCycles: 1,
+          alpha: { connected: true, scanned: true }, beta: { connected: true, scanned: true } }]) };
+      },
+    }), scriptPath === 'run.mjs' ? /fixture sync conflict/ : /Mutagen initial flush failed/);
+    assert.equal(probes.length > 0, true);
+    await assert.rejects(readFile(markerPath), { code: 'ENOENT' });
+    assert.deepEqual(JSON.parse(await readFile(runtimeStatePath, 'utf8')), incumbent);
+
+    // The same restart proceeds after the external readiness boundary recovers;
+    // the correction must not simply disable replacement launches.
+    probes.length = 0;
+    await stackEnvRunner.runStackScriptWithStackEnv({
+      rootDir, stackName, scriptPath,
+      args: ['--restart', '--no-daemon', '--no-ui', '--no-browser'],
+      extraEnv: { HAPPIER_STACK_PREPARED_SOURCE_RELOAD: '1' },
+    }, {
+      runCaptureResult: async () => {
+        await observe('placement');
+        return { ok: true, out: 'HSTACK_QA_HOST={"platform":"linux","arch":"x64","remote":true}\n', err: '' };
+      },
+      runProcess: async ({ args }) => {
+        await observe(`sync:${args[1]}`);
+        return { code: 0, out: JSON.stringify([{ name: args[2], paused: false,
+          status: 'watching', successfulCycles: 1,
+          alpha: { connected: true, scanned: true }, beta: { connected: true, scanned: true } }]) };
+      },
+    });
+    assert.equal(await readFile(markerPath, 'utf8'), 'started');
+    assert.deepEqual(probes, scriptPath === 'run.mjs' ? ['placement'] : ['sync:list', 'sync:list', 'sync:flush']);
+  });
+}
 
 test('outer start publication records requested UI truth before the child runner starts', () => {
   const base = {
