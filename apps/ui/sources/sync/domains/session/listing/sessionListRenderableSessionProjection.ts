@@ -2,7 +2,7 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import type { Metadata } from '@happier-dev/session-core/state';
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import { isSessionAccessOwner, isSessionAccessRecipient } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
-import { classifySessionTupleApplyCurrentness } from '@/sync/store/domains/sessionTupleApplyCurrentness';
+import { classifySessionTupleApplyCurrentness } from '@/sync/domains/session/sessionTupleApplyCurrentness';
 import { readSessionDisplayTitleField } from '@/sync/state/selectors';
 import { reconcileSessionLifecycleProjection } from '../sessionLifecycleProjection';
 

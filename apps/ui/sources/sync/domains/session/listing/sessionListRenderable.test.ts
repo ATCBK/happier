@@ -76,6 +76,42 @@ function buildRenderable(
 }
 
 describe('derivePendingRequestFlagsFromAgentState', () => {
+    it('admits cleared pending flags on a privacy layout contraction with reset versions', () => {
+        const previous = buildRenderable({
+            id: 's_contracted', metadataLayoutVersion: 0, metadataVersion: 9, agentStateVersion: 8,
+            hasPendingPermissionRequests: true, pendingRequestObservedAt: 500,
+        });
+        const incoming = { ...previous, metadataLayoutVersion: 1, metadataVersion: 1, agentStateVersion: 1,
+            hasPendingPermissionRequests: false, pendingRequestObservedAt: null };
+        expect(preserveSessionListRenderableStaleFields(previous, incoming)).toMatchObject({
+            metadataLayoutVersion: 1, agentStateVersion: 1, hasPendingPermissionRequests: false,
+            pendingRequestObservedAt: null,
+        });
+    });
+
+    it('admits a newer request version even when its observation timestamp is older', () => {
+        const previous = buildRenderable({
+            id: 's_newer', agentStateVersion: 2, hasPendingPermissionRequests: true, pendingRequestObservedAt: 500,
+        });
+        expect(preserveSessionListRenderableStaleFields(previous, {
+            ...previous, agentStateVersion: 3, hasPendingPermissionRequests: false, pendingRequestObservedAt: 100,
+        })).toMatchObject({ agentStateVersion: 3, hasPendingPermissionRequests: false, pendingRequestObservedAt: 100 });
+    });
+
+    it('keeps settled pending flags when an older request version has a later unrelated update time', () => {
+        const settled = buildRenderable({
+            id: 's_settled', active: true, agentStateVersion: 3, updatedAt: 300,
+            hasPendingPermissionRequests: false, hasPendingUserActionRequests: false, pendingRequestObservedAt: null,
+        });
+        const result = preserveSessionListRenderableStaleFields(settled, {
+            ...settled, agentStateVersion: 2, updatedAt: 400,
+            hasPendingPermissionRequests: true, hasPendingUserActionRequests: true, pendingRequestObservedAt: 100,
+        });
+        expect(result).toMatchObject({
+            agentStateVersion: 3, hasPendingPermissionRequests: false, hasPendingUserActionRequests: false,
+            pendingRequestObservedAt: null,
+        });
+    });
     it('reads forward shared Bot metadata without admitting owner facts or malformed known markers', () => {
         const session = {
             metadataLayoutVersion: 1,

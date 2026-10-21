@@ -16,6 +16,9 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { fetchAndApplySessionById } from '@/sync/engine/sessions/sessionById';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 import { normalizeSessionAccessProjection } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
+import { SessionEncryption } from '@/sync/encryption/sessionEncryption';
+import { EncryptionCache } from '@/sync/encryption/encryptionCache';
+import { SecretBoxEncryption, type Decryptor, type Encryptor } from '@/sync/encryption/encryptor';
 import { flushActivityUpdates, handleSocketUpdate, handleUpdateContainer } from './socket';
 
 const socketPostDecryptSideEffectMocks = vi.hoisted(() => ({
@@ -108,6 +111,137 @@ function buildBaseParams(overrides: Partial<HandleUpdateContainerBaseParams> = {
 }
 
 describe('socket update handling: plaintext update-session', () => {
+    it('rejects prior-layout public pending counts after a cached privacy contraction', async () => {
+        vi.useFakeTimers();
+        const serverId = String(getActiveServerSnapshot().serverId ?? '').trim();
+        const session = { ...buildSession('s_cached_privacy_contraction'), serverId, encryptionMode: 'e2ee' as const,
+            metadataLayoutVersion: 1, metadata: null, agentStateVersion: 1, archivedAt: null,
+            hasPendingPermissionRequests: false, hasPendingUserActionRequests: false, pendingRequestObservedAt: null };
+        replaceActiveSessionListRows([session]);
+        await handleUpdateContainer({ ...buildBaseParams(), sourceServerId: serverId, updateData: {
+            id: 'prior-layout-public-pending', seq: 8, createdAt: 200,
+            body: { t: 'update-session', id: session.id,
+                agentState: { version: 8, value: 'prior-layout-ciphertext' },
+                pendingPermissionRequestCount: 1, pendingUserActionRequestCount: 0, pendingRequestObservedAt: 100 },
+        } });
+        await vi.advanceTimersByTimeAsync(100);
+        expect(storage.getState().sessionListRowsByServerId[serverId][session.id]).toMatchObject({
+            metadataLayoutVersion: 1, agentStateVersion: 1, hasPendingPermissionRequests: false,
+            pendingRequestObservedAt: null,
+        });
+    });
+
+    it('rejects delayed prior-layout private Agent state after a privacy contraction resets versions', async () => {
+        vi.useFakeTimers();
+        const sessionId = 's_delayed_privacy_contraction';
+        const initial = { ...buildSession(sessionId), encryptionMode: 'e2ee' as const,
+            metadataLayoutVersion: 0, agentStateVersion: 7,
+            pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0, pendingRequestObservedAt: null };
+        storage.getState().applySessions([initial]);
+        markSessionSurfaceVisible(sessionId);
+        const decryptStarted = createDeferred<void>();
+        const releaseDecrypt = createDeferred<void>();
+        const crypto = new SecretBoxEncryption(new Uint8Array(32));
+        // Delay only the platform crypto boundary; Session parsing and admission remain real.
+        const delayedCrypto: Encryptor & Decryptor = {
+            encrypt: data => crypto.encrypt(data),
+            decrypt: async (data, options) => {
+                decryptStarted.resolve();
+                await releaseDecrypt.promise;
+                return crypto.decrypt(data, options);
+            },
+        };
+        const sessionEncryption = new SessionEncryption(sessionId, delayedCrypto, new EncryptionCache());
+        const params = buildBaseParams({ encryption: {
+            getSessionEncryption: () => sessionEncryption, getMachineEncryption: () => null,
+            removeSessionEncryption: () => {},
+        } as unknown as HandleUpdateContainerBaseParams['encryption'],
+        applySessions: rows => storage.getState().applySessions(rows) });
+        const oldCiphertext = await sessionEncryption.encryptAgentState({ requests: {
+            privateRequest: { tool: 'Bash', arguments: { secret: 'private-agent-state' }, createdAt: 100 },
+        } });
+        let older: Promise<void> | undefined;
+        try {
+            older = handleUpdateContainer({ ...params, updateData: {
+                id: 'prior-layout-agent-state', seq: 8, createdAt: 200,
+                body: { t: 'update-session', id: sessionId,
+                    agentState: { version: 8, value: oldCiphertext }, pendingPermissionRequestCount: 1,
+                    pendingUserActionRequestCount: 0, pendingRequestObservedAt: 100 },
+            } });
+            await decryptStarted.promise;
+            storage.getState().applySessions([{ ...initial, metadataLayoutVersion: 1,
+                metadata: null, metadataVersion: 1, ownerMetadataView: null,
+                accessLevel: 'view', agentState: null, agentStateVersion: 1 }]);
+            expect(storage.getState().sessions[sessionId]).toMatchObject({ metadataLayoutVersion: 1, agentStateVersion: 1 });
+            releaseDecrypt.resolve();
+            await older;
+            await vi.advanceTimersByTimeAsync(100);
+            expect(storage.getState().sessions[sessionId]).toMatchObject({
+                metadataLayoutVersion: 1, agentStateVersion: 1, agentState: null,
+                pendingPermissionRequestCount: 0, pendingRequestObservedAt: null,
+            });
+            expect(JSON.stringify(storage.getState().sessions[sessionId])).not.toContain('private-agent-state');
+        } finally {
+            releaseDecrypt.resolve();
+            await older;
+        }
+    });
+
+    it.each(['cache-only', 'missing-key', 'hidden'] as const)('keeps public request freshness through %s updates without promoting detail state', async (mode) => {
+        vi.useFakeTimers();
+        const serverId = String(getActiveServerSnapshot().serverId ?? '').trim();
+        const session = { ...buildSession(`s_public_request_${mode}`), serverId, encryptionMode: mode === 'hidden' ? 'plain' as const : 'e2ee' as const,
+            pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0, pendingRequestObservedAt: null };
+        if (mode === 'cache-only') replaceActiveSessionListRows([{ ...session, archivedAt: null,
+            hasPendingPermissionRequests: false, hasPendingUserActionRequests: false }]);
+        else storage.getState().applySessions([session]);
+        const params = buildBaseParams({ applySessions: rows => storage.getState().applySessions(rows) });
+        for (const [version, count, observedAt, createdAt] of [[3, 0, null, 300], [2, 1, 100, 400]] as const) {
+            await handleUpdateContainer({ ...params, sourceServerId: serverId, updateData: {
+                id: `public-request-${version}`, seq: version + 1, createdAt,
+                body: { t: 'update-session', id: session.id, agentState: { version, value: mode === 'hidden'
+                    ? JSON.stringify({ requests: count === 0 ? {} : { r1: { tool: 'Bash', arguments: {}, createdAt: 100 } } })
+                    : 'unavailable-ciphertext' },
+                    pendingPermissionRequestCount: count, pendingUserActionRequestCount: 0,
+                    pendingRequestObservedAt: observedAt },
+            } });
+            if (mode !== 'hidden' || version === 2) await vi.advanceTimersByTimeAsync(100);
+        }
+        expect(storage.getState().sessionListRowsByServerId[serverId][session.id]).toMatchObject({
+            agentStateVersion: 3, hasPendingPermissionRequests: false, hasPendingUserActionRequests: false,
+            pendingRequestObservedAt: null,
+        });
+        if (mode !== 'cache-only') expect(storage.getState().sessions[session.id]).toMatchObject({
+            agentStateVersion: 1, pendingPermissionRequestCount: 0, pendingRequestObservedAt: null,
+        });
+    });
+
+    it('keeps a settled request cohort when an older request state arrives after approval', async () => {
+        vi.useFakeTimers();
+        const sessionId = 's_settled_request';
+        storage.getState().applySessions([buildSession(sessionId)]);
+        markSessionSurfaceVisible(sessionId);
+        const params = buildBaseParams({ applySessions: rows => storage.getState().applySessions(rows) });
+        for (const [version, count, observedAt, createdAt] of [[3, 0, null, 300], [2, 1, 100, 400]] as const) {
+            await handleUpdateContainer({
+                ...params,
+                updateData: {
+                    id: `request-version-${version}`, seq: version + 1, createdAt,
+                    body: { t: 'update-session', id: sessionId,
+                        agentState: { version, value: JSON.stringify({ requests: count === 0 ? {} : {
+                            r1: { tool: 'Bash', arguments: {}, createdAt: 100 },
+                        } }) },
+                        pendingPermissionRequestCount: count, pendingUserActionRequestCount: 0,
+                        pendingRequestObservedAt: observedAt },
+                },
+            });
+            await vi.advanceTimersByTimeAsync(100);
+        }
+        expect(storage.getState().sessions[sessionId]).toMatchObject({
+            agentStateVersion: 3, agentState: { requests: {} },
+            pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0, pendingRequestObservedAt: null,
+        });
+    });
     beforeEach(() => {
         storage.setState(initialStorageState, true);
         resetSessionSurfaceVisibilityForTests();

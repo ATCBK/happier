@@ -747,6 +747,13 @@ export function useSessionListRenderableWithServerScope(
   const normalizedSessionId = normalizeSessionId(sessionId);
   const normalizedServerId = normalizeTrimmedString(serverId);
   const activeServerId = normalizeTrimmedString(useActiveServerSnapshot().serverId);
+  const effectiveServerId = normalizedServerId || activeServerId;
+  const projectionScopeKey = React.useMemo(() => {
+    if (!normalizedSessionId) return null;
+    return effectiveServerId
+      ? sessionAddressKey({ serverId: effectiveServerId, sessionId: normalizedSessionId })
+      : JSON.stringify(['legacy_unscoped_session', normalizedSessionId]);
+  }, [effectiveServerId, normalizedSessionId]);
 
   const row = getStorage()(useShallow((state) => {
     if (!normalizedSessionId) {
@@ -758,7 +765,7 @@ export function useSessionListRenderableWithServerScope(
       if (scoped && typeof scoped === 'object') {
         return projectSessionListRowRenderable(
           scoped[normalizedSessionId],
-          sessionAddressKey({ serverId: normalizedServerId, sessionId: normalizedSessionId }),
+          projectionScopeKey,
         );
       }
 
@@ -767,9 +774,7 @@ export function useSessionListRenderableWithServerScope(
 
     return projectSessionListRowRenderable(
       readSessionListRowForServerId(state.sessionListRowsByServerId, activeServerId, normalizedSessionId),
-      activeServerId
-        ? sessionAddressKey({ serverId: activeServerId, sessionId: normalizedSessionId })
-        : JSON.stringify(['legacy_unscoped_session', normalizedSessionId]),
+      projectionScopeKey,
     );
   }));
   const targetServerId = normalizedServerId ?? activeServerId;

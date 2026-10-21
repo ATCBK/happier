@@ -30,7 +30,7 @@ import {
   readSessionMetadataLayoutVersion,
   tryParsePlainSessionAgentState,
 } from './parsePlainSessionPayload';
-import { classifySessionTupleApplyCurrentness } from '@/sync/store/domains/sessionTupleApplyCurrentness';
+import { classifySessionTupleApplyCurrentness } from '@/sync/domains/session/sessionTupleApplyCurrentness';
 import {
   hasExplicitCurrentOrResponsibilitySessionProjection,
   looksLikeCurrentV2SessionNotFound404,
@@ -417,7 +417,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
     && isUnknownRecord(body)
     ? parseCurrentSessionProjectionForHydration(body.session)
     : null;
-  const parsed = negotiatedCurrentProjection?.success
+  let parsed = negotiatedCurrentProjection?.success
     ? { session: negotiatedCurrentProjection.data }
     : parseCompatSessionByIdResponse(body);
   if (!parsed?.session) {
@@ -438,12 +438,10 @@ export async function fetchAndApplySessionById(params: Readonly<{
       return { ok: false, session: null, errorCode: 'invalid_response' };
     }
     body = { session: fallbackRow };
+    parsed = parseCompatSessionByIdResponse(body);
   }
 
-  const reparsed = negotiatedCurrentProjection?.success
-    ? { session: negotiatedCurrentProjection.data }
-    : parseCompatSessionByIdResponse(body);
-  if (!reparsed?.session) {
+  if (!parsed?.session) {
     const status = responseStatus;
     return { ok: false, session: null, errorCode: 'invalid_response', httpStatus: responseOk ? undefined : status };
   }
@@ -451,13 +449,13 @@ export async function fetchAndApplySessionById(params: Readonly<{
   const currentProjection = params.accessProjectionVersion === 1
     ? negotiatedCurrentProjection?.success
       ? negotiatedCurrentProjection
-      : parseCurrentSessionProjectionForHydration(reparsed.session)
+      : parseCurrentSessionProjectionForHydration(parsed.session)
     : null;
   if (currentProjection && !currentProjection.success) {
     return { ok: false, session: null, errorCode: 'invalid_response' };
   }
 
-  const row = currentProjection?.success ? currentProjection.data : reparsed.session;
+  const row = currentProjection?.success ? currentProjection.data : parsed.session;
   const access = normalizeSessionAccessProjection(row, { allowLegacy: true });
   if (String(row.id ?? '').trim() !== sessionId) {
     return { ok: false, session: null, errorCode: 'invalid_response' };

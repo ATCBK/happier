@@ -22,6 +22,28 @@ function buildSession(sessionId: string, seq: number): SessionApplyCoalescerSess
 }
 
 describe('createSessionApplyCoalescer', () => {
+    it('keeps a newer queued request cohort and metadata when an older snapshot arrives', () => {
+        const applyBatch = vi.fn<(sessions: SessionApplyCoalescerSession[]) => void>();
+        const coalescer = createSessionApplyCoalescer({
+            getConfig: () => ({ enabled: true, windowMs: 16, maxBatchSize: 10 }), applyBatch,
+        });
+        const settled = {
+            ...buildSession('s1', 3), metadataVersion: 3, metadata: { path: '/current', host: 'host' },
+            agentStateVersion: 3, agentState: { requests: {} },
+            pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0, pendingRequestObservedAt: null,
+        };
+        coalescer.enqueue([settled], { deferLeadingBatch: true });
+        coalescer.enqueue([{
+            ...settled, metadataVersion: 2, metadata: { path: '/stale', host: 'host' }, agentStateVersion: 2,
+            agentState: { requests: { r1: { tool: 'Bash', arguments: {}, createdAt: 100 } } },
+            pendingPermissionRequestCount: 1, pendingRequestObservedAt: 100,
+        }]);
+        coalescer.flushAll();
+        expect(applyBatch.mock.calls[0]?.[0][0]).toMatchObject({
+            metadataVersion: 3, metadata: { path: '/current' }, agentStateVersion: 3, agentState: { requests: {} },
+            pendingPermissionRequestCount: 0, pendingRequestObservedAt: null,
+        });
+    });
     beforeEach(() => {
         vi.useFakeTimers();
     });

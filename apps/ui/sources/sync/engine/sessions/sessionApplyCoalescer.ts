@@ -1,3 +1,5 @@
+import { reconcileSessionTupleProjection } from '@/sync/domains/session/sessionTupleApplyCurrentness';
+import { reconcileSessionLifecycleProjection } from '@/sync/domains/session/sessionLifecycleProjection';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 
@@ -89,7 +91,11 @@ export function createSessionApplyCoalescer(params: Readonly<{
     function upsertQueued(sessions: readonly SessionApplyCoalescerSession[], options?: SessionApplyOptions): void {
         const shouldContinue = options?.shouldContinue ?? (() => true);
         for (const session of sessions) {
-            queuedSessions.set(session.id, { session, shouldContinue });
+            const previous = queuedSessions.get(session.id);
+            const nextSession = previous?.shouldContinue()
+                ? reconcileSessionLifecycleProjection(previous.session, reconcileSessionTupleProjection(previous.session, session))
+                : session;
+            queuedSessions.set(session.id, { session: nextSession, shouldContinue });
         }
     }
 

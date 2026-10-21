@@ -117,7 +117,7 @@ import {
 } from './sessions.repositoryTreeExpansion';
 import { resolveWorkspaceTargetForSessionFromState } from '@/sync/domains/session/resolveWorkspaceTargetForSessionFromState';
 import { preserveSessionRuntimeLocalMetadata } from '@/sync/domains/session/preserveSessionRuntimeLocalMetadata';
-import { readSessionOwnerMetadataView, SESSION_OWNER_METADATA_PROJECTION } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import { createKeyedTimeoutScheduler } from '@/utils/time/keyedTimeoutScheduler';
 import {
@@ -126,7 +126,7 @@ import {
     SESSION_RESUMING_PRESENTATION_TIMEOUT_MS,
 } from '@/sync/domains/session/attention/runtimePresentation';
 import { reconcileLatestUsageContextSnapshotModel } from "@happier-dev/session-core/reducer";
-import { classifySessionTupleApplyCurrentness } from './sessionTupleApplyCurrentness';
+import { reconcileSessionTupleProjection } from '@/sync/domains/session/sessionTupleApplyCurrentness';
 import {
     buildMachineDisplaysByIdFromMachineList,
     buildSessionListIndexWithServerScope,
@@ -146,7 +146,7 @@ import {
 export {
     classifySessionTupleApplyCurrentness,
     type SessionTupleApplyCurrentness,
-} from './sessionTupleApplyCurrentness';
+} from '@/sync/domains/session/sessionTupleApplyCurrentness';
 
 /**
  * Does a Home-addressed Session deletion also retire the shared per-id carrier?
@@ -551,17 +551,11 @@ function createActionDraftId(nowMs: number): string {
 
 type IncomingSessionApply = Omit<Session, 'presence'> & { presence?: 'online' | number };
 
-function isIncomingOrderingTimestampOlder(incoming: unknown, previous: unknown): boolean {
-    const incomingNumber = normalizeSessionOrderingNumber(incoming);
-    const previousNumber = normalizeSessionOrderingNumber(previous);
-    return incomingNumber !== null && previousNumber !== null && incomingNumber < previousNumber;
-}
-
 function resolveOrderedSessionApply(
     previousSession: Session | undefined,
     incomingSession: IncomingSessionApply,
 ): IncomingSessionApply {
-    let nextSession: IncomingSessionApply = reconcileSessionLifecycleProjection(previousSession, incomingSession);
+    let nextSession: IncomingSessionApply = reconcileSessionLifecycleProjection(previousSession, reconcileSessionTupleProjection(previousSession, incomingSession));
     if (!previousSession) return nextSession;
     const applyPatch = (patch: Partial<IncomingSessionApply>): void => {
         nextSession = { ...nextSession, ...patch };
@@ -577,40 +571,12 @@ function resolveOrderedSessionApply(
     if (isSameHome && !Object.prototype.hasOwnProperty.call(incomingSession, 'presence')) {
         applyPatch({ presence: previousSession.presence });
     }
-    const tupleCurrentness = classifySessionTupleApplyCurrentness(previousSession, incomingSession);
-
-    if (!tupleCurrentness.metadataCurrent) {
-        applyPatch({
-            metadataLayoutVersion: previousSession.metadataLayoutVersion,
-            metadataProjection: previousSession.metadataProjection,
-            metadata: previousSession.metadata,
-            metadataVersion: previousSession.metadataVersion,
-            ownerMetadataView: previousSession.ownerMetadataView,
-            [SESSION_OWNER_METADATA_PROJECTION]: previousSession[SESSION_OWNER_METADATA_PROJECTION],
-            composerOptionsInput: previousSession.composerOptionsInput,
-        });
-    }
-    if (!tupleCurrentness.agentStateCurrent) {
-        applyPatch({
-            agentState: previousSession.agentState,
-            agentStateVersion: previousSession.agentStateVersion,
-        });
-    }
-
     // Additive-optional presentation projection: an omitted value carries no
     // information (older producer or partial writer), so it preserves the last
     // known server decision instead of asserting a solo Session. An explicit
     // boolean, including `false`, always replaces it.
     if (incomingSession.hasOtherNamedCollaborator === undefined && previousSession.hasOtherNamedCollaborator !== undefined) {
         applyPatch({ hasOtherNamedCollaborator: previousSession.hasOtherNamedCollaborator });
-    }
-
-    if (isIncomingOrderingTimestampOlder(incomingSession.pendingRequestObservedAt, previousSession.pendingRequestObservedAt)) {
-        applyPatch({
-            pendingPermissionRequestCount: previousSession.pendingPermissionRequestCount,
-            pendingUserActionRequestCount: previousSession.pendingUserActionRequestCount,
-            pendingRequestObservedAt: previousSession.pendingRequestObservedAt,
-        });
     }
 
     return nextSession;

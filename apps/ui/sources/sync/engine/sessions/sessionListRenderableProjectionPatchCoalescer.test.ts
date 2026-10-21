@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { applySessionListRenderablePatch } from '@/sync/domains/session/listing/sessionListRenderable';
 import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 
 import { createSessionListRenderableProjectionPatchCoalescer } from './sessionListRenderableProjectionPatchCoalescer';
@@ -23,6 +24,29 @@ function renderable(id: string): SessionListRenderableSession {
 }
 
 describe('createSessionListRenderableProjectionPatchCoalescer', () => {
+    it('keeps an admitted request settlement when older public patches share its queued batch', () => {
+        vi.useFakeTimers();
+        const address = { serverId: 'server-a', sessionId: 'session-1' };
+        let current: SessionListRenderableSession = { ...renderable(address.sessionId), hasPendingPermissionRequests: true,
+            hasPendingUserActionRequests: false, pendingRequestObservedAt: 100 };
+        type Patch = Partial<Omit<SessionListRenderableSession, 'id'>>;
+        const coalescer = createSessionListRenderableProjectionPatchCoalescer<Patch>({
+            getConfig: () => ({ enabled: true, windowMs: 100, maxBatchSize: 10 }),
+            readRenderable: () => current,
+            buildPatch: ({ payload }) => payload,
+            applyPatches: patches => {
+                for (const { patch } of patches) current = applySessionListRenderablePatch(current, patch);
+            },
+        });
+        coalescer.enqueue(address, { agentStateVersion: 3, hasPendingPermissionRequests: false,
+            pendingRequestObservedAt: null }, { deferLeadingPatch: true });
+        coalescer.enqueue(address, { agentStateVersion: 2, hasPendingPermissionRequests: true,
+            pendingRequestObservedAt: 100 });
+        coalescer.flushAll();
+        expect(current).toMatchObject({ agentStateVersion: 3, hasPendingPermissionRequests: false,
+            pendingRequestObservedAt: null });
+    });
+
     afterEach(() => {
         vi.useRealTimers();
     });
@@ -68,15 +92,15 @@ describe('createSessionListRenderableProjectionPatchCoalescer', () => {
                 renderables.set(key, { ...previous, ...patch, id: previous.id });
             }
         });
-        const coalescer = createSessionListRenderableProjectionPatchCoalescer<number>({
+        const coalescer = createSessionListRenderableProjectionPatchCoalescer<boolean>({
             getConfig: () => ({ enabled: true, windowMs: 100, maxBatchSize: 10 }),
             readRenderable: (target) => renderables.get(sessionAddressKey(target)),
-            buildPatch: ({ payload }) => ({ updatedAt: payload }),
+            buildPatch: ({ payload }) => ({ thinking: payload }),
             applyPatches,
         });
 
-        coalescer.enqueue(address, 2, { deferLeadingPatch: true });
-        coalescer.enqueue(address, 1);
+        coalescer.enqueue(address, true, { deferLeadingPatch: true });
+        coalescer.enqueue(address, false);
         vi.advanceTimersByTime(100);
 
         expect(applyPatches).not.toHaveBeenCalled();
@@ -105,8 +129,8 @@ describe('createSessionListRenderableProjectionPatchCoalescer', () => {
         vi.advanceTimersByTime(100);
 
         expect(applied).toEqual([
-            { address: homeA, patch: { updatedAt: 2 } },
-            { address: homeB, patch: { updatedAt: 3 } },
+            { address: homeA, patch: expect.objectContaining({ updatedAt: 2 }) },
+            { address: homeB, patch: expect.objectContaining({ updatedAt: 3 }) },
         ]);
     });
 });

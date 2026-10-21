@@ -19,7 +19,7 @@ import { isSessionAgentStateVisible } from './readSessionLayout1OwnerProjection'
 import { storage } from '@/sync/domains/state/storage';
 import { readExternalSessionStorageState } from './sessionHttpCompat';
 import { shouldRetireSessionCarrierForServer } from '@/sync/store/domains/sessions';
-import { classifySessionTupleApplyCurrentness } from '@/sync/store/domains/sessionTupleApplyCurrentness';
+import { classifySessionTupleApplyCurrentness } from '@/sync/domains/session/sessionTupleApplyCurrentness';
 import { retireSessionListQueryAddress } from '@/sync/domains/session/listing/sessionListQueryInvalidation';
 import { readRollbackEligibleTurnStarts } from '@/sync/domains/session/rollback/rollbackEligibleTurnStarts';
 import {
@@ -626,7 +626,7 @@ export async function buildUpdatedSessionFromSocketUpdate(params: {
     );
     const tupleCurrentness = classifySessionTupleApplyCurrentness(session, {
         ...session,
-        metadataLayoutVersion: updateBody.metadataLayoutVersion ?? session.metadataLayoutVersion,
+        metadataLayoutVersion: updateBody.metadataLayoutVersion,
         metadataVersion: updateBody.metadata?.version ?? session.metadataVersion,
         agentStateVersion: updateBody.agentState?.version ?? session.agentStateVersion,
     });
@@ -796,7 +796,7 @@ export async function buildUpdatedSessionListRenderablePatchFromSocketUpdate(par
     );
     const tupleCurrentness = classifySessionTupleApplyCurrentness(renderable, {
         ...renderable,
-        metadataLayoutVersion: updateBody.metadataLayoutVersion ?? renderable.metadataLayoutVersion,
+        metadataLayoutVersion: updateBody.metadataLayoutVersion,
         metadataVersion: updateBody.metadata?.version ?? renderable.metadataVersion,
         agentStateVersion: updateBody.agentState?.version ?? renderable.agentStateVersion,
     });
@@ -996,7 +996,10 @@ export async function buildUpdatedSessionListRenderablePatchFromSocketUpdate(par
         metadataVersion: updateBody.metadata && hydrateMetadata && !retainOwnerProjection
             ? updateBody.metadata.version
             : renderable.metadataVersion,
-        agentStateVersion: updateBody.agentState && hydrateAgentState ? updateBody.agentState.version : renderable.agentStateVersion,
+        agentStateVersion: updateBody.agentState && (hydrateAgentState
+            || typeof updateBody.pendingPermissionRequestCount === 'number'
+            || typeof updateBody.pendingUserActionRequestCount === 'number')
+            ? updateBody.agentState.version : renderable.agentStateVersion,
         metadata: mergedRenderableMetadata,
         agentActivityHeadline,
         archivedAt:

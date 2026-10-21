@@ -47,6 +47,46 @@ afterEach(() => {
 });
 
 describe('useSessionListRenderableWithServerScope row projection', () => {
+    it('does not encode an unchanged mounted row address on unrelated store publications', async () => {
+        const previous = storage.getState();
+        const sessionId = 'same:session';
+        const home = 'home:one';
+        const otherHome = 'home';
+        const row = buildActiveRenderable({ id: sessionId, active: false, thinking: false });
+        const otherRow = { ...row, seq: row.seq + 100 };
+        storage.setState({ sessionListRowsByServerId: {
+            [home]: { [sessionId]: row },
+            [otherHome]: { [sessionId]: otherRow },
+        } });
+        const hook = await renderHook(
+            ({ serverId }: { serverId: string }) => useSessionListRenderableWithServerScope(serverId, sessionId),
+            { initialProps: { serverId: home } },
+        );
+        try {
+            const first = hook.getCurrent();
+            const encode = vi.spyOn(JSON, 'stringify');
+            let encodes: number;
+            try {
+                for (let index = 0; index < 20; index++) {
+                    await act(async () => { storage.setState(state => ({ isDataReady: !state.isDataReady })); });
+                    expect(hook.getCurrent()).toBe(first);
+                }
+                await hook.rerender({ serverId: home });
+                expect(hook.getCurrent()).toBe(first);
+                encodes = encode.mock.calls.filter(([value]) => Array.isArray(value)
+                    && value[0] === home && value[1] === sessionId).length;
+            } finally { encode.mockRestore(); }
+            expect(encodes).toBe(0);
+            await hook.rerender({ serverId: otherHome });
+            expect(hook.getCurrent()?.seq).toBe(otherRow.seq);
+            await hook.rerender({ serverId: home });
+            expect(hook.getCurrent()).toBe(first);
+        } finally {
+            await hook.unmount();
+            storage.setState(previous);
+        }
+    });
+
     it('projects shared archive progress locally without changing unrelated Home rows or attention flags', async () => {
         const previous = storage.getState();
         const address = { serverId: 'archive-projection-home', sessionId: 'archive-projection-session' };

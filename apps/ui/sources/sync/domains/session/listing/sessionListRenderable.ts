@@ -1,4 +1,5 @@
-import { normalizeSessionOrderingNumber, reconcileSessionLifecycleProjection } from '../sessionLifecycleProjection';
+import { reconcileSessionRequestProjection } from '../sessionTupleApplyCurrentness';
+import { reconcileSessionLifecycleProjection } from '../sessionLifecycleProjection';
 import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { readSessionDirectoryKind } from '@happier-dev/protocol/sessions/metadata/directory';
 import type { SessionBotV1 } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
@@ -760,16 +761,9 @@ function preserveSessionListRenderablePendingFlags(
     next: SessionListRenderableSession,
 ): SessionListRenderableSession {
     if (!previous) return next;
-    const previousObservedAt = normalizeSessionOrderingNumber(previous.pendingRequestObservedAt);
-    const nextObservedAt = normalizeSessionOrderingNumber(next.pendingRequestObservedAt);
-    const hasPreviousFlags = typeof previous.hasPendingPermissionRequests === 'boolean'
-        || typeof previous.hasPendingUserActionRequests === 'boolean';
-    const hasOlderObservation = hasPreviousFlags
-        && previousObservedAt !== null
-        && nextObservedAt !== null
-        && nextObservedAt < previousObservedAt;
+    next = reconcileSessionRequestProjection(previous, next);
     const preserveMissingFlags = shouldPreserveSessionListRenderablePendingFlags(next, previous);
-    if (!hasOlderObservation && !preserveMissingFlags) return next;
+    if (!preserveMissingFlags) return next;
     return {
         ...next,
         agentStateVersion: preserveMissingFlags ? previous.agentStateVersion : next.agentStateVersion,

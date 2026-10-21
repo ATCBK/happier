@@ -1,6 +1,6 @@
 import {
     applySessionListRenderablePatch,
-    isSessionListRenderablePatchNoop,
+    areSessionListRenderablesEqual,
     type SessionListRenderableSession,
 } from '@/sync/domains/session/listing/sessionListRenderable';
 import {
@@ -91,7 +91,7 @@ export function createSessionListRenderableProjectionPatchCoalescer<Payload>(par
             if (!renderable) continue;
 
             let simulatedRenderable = renderable;
-            let finalPatch: Partial<Omit<SessionListRenderableSession, 'id'>> | null = null;
+            let hasPatch = false;
             for (const entry of entries) {
                 if (!entry.shouldContinue()) continue;
                 const patch = params.buildPatch({
@@ -99,15 +99,13 @@ export function createSessionListRenderableProjectionPatchCoalescer<Payload>(par
                     renderable: simulatedRenderable,
                     payload: entry.payload,
                 });
-                finalPatch = {
-                    ...(finalPatch ?? {}),
-                    ...patch,
-                };
+                hasPatch = true;
                 simulatedRenderable = applySessionListRenderablePatch(simulatedRenderable, patch);
             }
 
-            if (finalPatch && !isSessionListRenderablePatchNoop(renderable, finalPatch)) {
-                patches.push({ address, patch: finalPatch });
+            if (hasPatch && !areSessionListRenderablesEqual(renderable, simulatedRenderable)) {
+                const { id: _id, ...patch } = simulatedRenderable;
+                patches.push({ address, patch });
             }
         }
 
