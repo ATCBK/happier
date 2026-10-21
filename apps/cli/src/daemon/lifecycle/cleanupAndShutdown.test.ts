@@ -9,6 +9,11 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import type { DaemonState } from '@/api/types';
 import type { PluginProtocolClientHandle } from '@happier-dev/plugin-sdk/exec/protocol-clients';
+import { startPublicProfileRefresh } from '../account/publicProfileRefresh';
+import { createNativePublicProfileRefreshFixture } from '../account/publicProfileRefresh.testkit';
+import { createDaemonServerWorkBudget, createDaemonServerWorkScheduler } from '../serverWork';
+import { cleanupAndShutdown as cleanupNativeAccount } from './cleanupAndShutdown';
+import { disposeLanguageServerHost } from '@/lsp/languageServerHost';
 
 const envScope = createEnvKeyScope([
     'HAPPIER_HOME_DIR',
@@ -20,6 +25,46 @@ describe('cleanupAndShutdown', () => {
         envScope.restore();
         vi.restoreAllMocks();
         vi.resetModules();
+    });
+
+    it('aborts and drains public-profile work before retiring the Account transport', async () => {
+        await disposeLanguageServerHost();
+        const account = await createNativePublicProfileRefreshFixture();
+        const pending = account.holdNextRead();
+        const lifetime = new AbortController();
+        const transportRetired: boolean[] = [];
+        const handle = startPublicProfileRefresh({
+            scheduler: createDaemonServerWorkScheduler({ budget: createDaemonServerWorkBudget({ maxConcurrentWrites: 1 }) }),
+            signal: lifetime.signal, isCurrent: account.isCurrent, actions: account.actions,
+        });
+        await pending.accepted;
+        const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+        let drained = false;
+        const cleanup = cleanupNativeAccount({
+            source: 'happier-cli', processEnv: {}, resolvePositiveIntEnv: (_raw, fallback) => fallback,
+            restartOnStaleVersionAndHeartbeat: null, connectedServiceRefreshLoopHandle: null,
+            connectedServiceQuotasLoopHandle: null, publicProfileRefreshHandle: handle,
+            apiMachine: null, machineConnectionStateCleanup: null,
+            closeDaemonMutationCustody: async () => { transportRetired.push(drained); },
+            automationWorker: null, memoryWorker: null, voiceInferenceWorker: null, trackedSessionCount: 0,
+            stopDirectPeerServer: async () => {}, stopTailscaleTransferServeLifecycle: async () => {},
+            stopControlServer: async () => {}, stopKeepAwake: async () => {}, daemonLockHandle: null,
+            releaseDaemonLock: async () => {},
+        });
+        try {
+            await vi.waitFor(() => expect(account.getRequestSignal()?.aborted).toBe(true));
+            expect(transportRetired).toEqual([]);
+            drained = true;
+            pending.release();
+            await cleanup;
+            expect(transportRetired).toEqual([true]);
+        } finally {
+            pending.release();
+            await handle.stop();
+            await cleanup;
+            await account.dispose();
+            exitSpy.mockRestore();
+        }
     });
 
     it('retires a pending native language-server query before draining admitted work', async () => {
