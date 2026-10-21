@@ -19,6 +19,13 @@ import {
     openAutomationTriggerDefinitionStoredEnvelopeV1,
     sealAutomationTriggerDefinitionStoredEnvelopeV1,
     createAccountScopedCryptoMaterialSnapshotV1,
+    createActionExecutor,
+    createWorkflowActionExecutor,
+    createWorkflowDefinitionActions,
+    SessionTriggerListResultV1Schema,
+    WorkflowTriggerWriteResultV1Schema,
+    AutomationDefinitionListResponseSchema,
+    WorkflowDefinitionV1Schema,
 } from "@happier-dev/protocol";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createAutomationsDomain } from "../../../../ui/sources/sync/store/domains/automations";
@@ -205,6 +212,90 @@ describe("automationCrudService (integration)", () => {
             () => db.machine.deleteMany(),
             () => db.account.deleteMany(),
         ]);
+    });
+
+    it("stores and reads a Session-B Habit targeting A through the Action, HTTP and SQLite owners", async () => {
+        const account = await db.account.create({ data: { encryptionMode: "plain" } });
+        const machineId = await seedExecutionMachine(account.id);
+        const sessionA = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain" } });
+        const sessionB = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain" } });
+        const destination = { kind: "existing_session", sessionId: sessionA.id, machineId } as const;
+        const project = { machineId, directory: "/authored-a" };
+        const definition = WorkflowDefinitionV1Schema.parse({ version: 1, inputs: [], defaults: { conversation: destination },
+            blocks: [{ kind: "step", id: "first", name: "Habit B", document: { text: "Reply HABIT B", references: [], attachments: [] },
+                execution: { engine: { agentTarget: { kind: "agent", identity: { pluginId: "acme.external-agent", localId: "agent" } } },
+                    conversation: destination }, result: { kind: "text" } }] });
+        await withAuthenticatedTestApp(registerAutomationV3Routes, async (app) => {
+            const headers = { "x-test-user-id": account.id };
+            const unexpected = async (): Promise<never> => { throw new Error("Unexpected Artifact or saved Workflow access"); };
+            const definitions = createWorkflowDefinitionActions({ artifactStore: { read: unexpected, list: unexpected,
+                create: unexpected, update: unexpected, delete: unexpected }, encodeListCursor: (row) => row.artifactId, assertDefinitionWriteAllowed: unexpected });
+            const triggers = createWorkflowTriggerActions({
+                automations: {
+                    create: async (input, beforeWrite) => {
+                        await beforeWrite?.();
+                        const response = await app.inject({ method: "POST", url: "/v3/automations", headers, payload: input });
+                        expect(response.statusCode, response.body).toBe(200);
+                        return AutomationDefinitionDetailSchema.parse(response.json());
+                    },
+                    get: async (id) => {
+                        const response = await app.inject({ method: "GET", url: `/v3/automations/${id}`, headers });
+                        expect(response.statusCode).toBe(200);
+                        return AutomationDefinitionDetailSchema.parse(response.json());
+                    },
+                    list: async (input) => {
+                        const query = new URLSearchParams(Object.entries(input).flatMap(([key, value]) => value == null ? [] : [[key, String(value)]]));
+                        const response = await app.inject({ method: "GET", url: `/v3/automations?${query}`, headers });
+                        expect(response.statusCode).toBe(200);
+                        return AutomationDefinitionListResponseSchema.parse(response.json());
+                    },
+                    reconcile: async (id, input, _current, beforeWrite) => {
+                        await beforeWrite?.();
+                        const response = await app.inject({ method: "PUT", url: `/v3/automations/${id}`, headers, payload: input });
+                        expect(response.statusCode, response.body).toBe(200);
+                        return AutomationDefinitionDetailSchema.parse(response.json());
+                    },
+                    delete: unexpected,
+                },
+                newId: () => randomUUID(), resolveWorkflow: unexpected,
+                openContext: async (row) => row.executionRecipe?.v === 2 && row.executionRecipe.workflow.t === "plain" ? row.executionRecipe.workflow.v : null,
+                sealContext: async ({ templateVersion, context }) => AutomationStoredWorkflowDefinitionRecipeV2Schema.parse({
+                    v: 2, templateVersion, workflow: { t: "plain", v: context }, triggerEvidence: null }),
+                resolveSession: async (id) => {
+                    const row = await db.session.findFirst({ where: { id, accountId: account.id } });
+                    if (!row) throw Object.assign(new Error("target_unavailable"), { code: "target_unavailable" });
+                    return { project, nativeGoalOwner: false };
+                },
+            });
+            const boundary = createActionExecutor({ workflowAction: createWorkflowActionExecutor({ isWorkflowFeatureEnabled: () => true,
+                definitions, triggers, runs: { execute: unexpected } }) });
+            const caller = { surface: "ui", authority: "present_user" } as const;
+            const request = { sessionId: sessionB.id, project, target: { kind: "inline", definition }, trigger: {
+                kind: "schedule", enabled: false, schedule: { kind: "cron", scheduleExpr: "0 9 * * *", everyMs: null, timezone: "UTC" } } } as const;
+            const added = await boundary.execute("session.trigger.add", request, caller);
+            expect(added).toMatchObject({ ok: true });
+            if (!added.ok) throw new Error(added.errorCode);
+            const receipt = WorkflowTriggerWriteResultV1Schema.parse(added.result);
+            expect(await db.automation.findUnique({ where: { id: receipt.set.automationId }, include: { assignments: true } }))
+                .toMatchObject({ scopeSessionId: sessionB.id, assignments: [{ machineId }] });
+            const listed = await boundary.execute("session.trigger.list", { sessionId: sessionB.id }, caller);
+            expect(listed).toMatchObject({ ok: true });
+            if (!listed.ok) throw new Error(listed.errorCode);
+            expect(SessionTriggerListResultV1Schema.parse(listed.result).sets).toEqual([receipt.set]);
+            expect(receipt.set).toMatchObject({ project, destinations: { targetSessionIds: [sessionA.id] },
+                context: { inlineDefinition: { defaults: { conversation: destination }, blocks: [{ execution: { conversation: destination } }] } } });
+            const updated = await boundary.execute("session.trigger.update", { sessionId: sessionB.id, triggerId: receipt.triggerId,
+                expectedRevision: receipt.set.revision, patch: { trigger: { kind: "sessionLifecycle", sourceSessionId: sessionB.id,
+                    events: ["parentTurnCompleted"], policy: { kind: "everyMatch" } } } }, caller);
+            expect(updated).toMatchObject({ ok: true, result: { set: { project, destinations: { targetSessionIds: [sessionA.id] },
+                triggers: [{ kind: "sessionLifecycle", sourceSessionId: sessionB.id }] } } });
+            // Mis-wiring the scope to A while the lifecycle producer still names B is rejected before storage.
+            expect(await boundary.execute("session.trigger.add", { ...request, sessionId: sessionA.id,
+                trigger: { kind: "sessionLifecycle", enabled: false, sourceSessionId: sessionB.id,
+                    events: ["parentTurnCompleted"], policy: { kind: "everyMatch" } } }, caller))
+                .toMatchObject({ ok: false, errorCode: "invalid_input", details: { code: "session_trigger_source_mismatch" } });
+            expect(await db.automation.count({ where: { accountId: account.id } })).toBe(1);
+        });
     });
 
     it("admits retained predecessor ciphertext only for the Account's E2EE Session", async () => {

@@ -162,7 +162,7 @@ export type SessionInitialTriggerV1 = z.infer<typeof SessionInitialTriggerV1Sche
 export const SessionTriggerListRequestV1Schema = lazyZodSchema(() => z.strictObject({ sessionId: SessionId }));
 export const SessionTriggerAddRequestV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: SessionId, target: TriggerTargetV1Schema,
-  /** Managed scope-end rules execute on the canonical resource controller, not their source guest. */
+  /** Ordinary triggers may repeat the authorized Session project; managed scope-end rules use their controller. */
   project: zMini.optional(WorkflowProjectTargetV1Schema),
   ...zMini.partial(SessionContextFields).shape, trigger: SessionTriggerDefinitionInputV1Schema,
 }).check(z.superRefine((value, ctx) => {

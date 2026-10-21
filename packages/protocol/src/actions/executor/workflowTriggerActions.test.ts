@@ -4,7 +4,7 @@ import type { AutomationDefinitionDetail, AutomationTriggerDetail, AutomationV3R
 import { WorkflowDefinitionV1Schema } from '../../workflows/workflowV1.js';
 import { resolveWorkflowDefinitionRefV1 } from '../../workflows/workflowDefinitionResolverV1.js';
 import { createWorkflowTriggerActions, type WorkflowTriggerActionsDependencies } from './workflowTriggerActions.js';
-import { SessionTriggerAddRequestV1Schema, WorkflowTriggerWriteResultV1Schema, WorkflowTriggerRemoveResultV1Schema } from '../../workflows/triggers/workflowTriggerActionsV1.js';
+import { SessionTriggerAddRequestV1Schema, SessionTriggerListResultV1Schema, WorkflowTriggerWriteResultV1Schema, WorkflowTriggerRemoveResultV1Schema } from '../../workflows/triggers/workflowTriggerActionsV1.js';
 import { normalizeUsageQuery } from '../../inputs/usageQuery.js';
 import { resolveUsagePageAggregation } from '../../usage/resolveUsagePageAggregation.js';
 import { ActionsSettingsV1Schema } from '../actionSettings.js';
@@ -162,6 +162,70 @@ function fixture() {
 }
 
 describe('workflow trigger Automation composition', () => {
+  it.each(['happier.agent.opencode', 'acme.external-agent'])('keeps Session-B Habit scope independent of its authored A destination and project (%s)', async (pluginId) => {
+    const f = fixture();
+    const scopeProject = project;
+    const destination = { kind: 'existing_session', sessionId: 'session-a', machineId: project.machineId } as const;
+    // R94 habit-b-add-input.json: explicit project, both A conversation locations,
+    // omitted block input (canonicalized to []), model/binding, disabled UTC clock.
+    const request = SessionTriggerAddRequestV1Schema.parse({ sessionId: 'session-b', project,
+      target: { kind: 'inline', definition: { version: 1, inputs: [], defaults: { conversation: destination },
+        blocks: [{ kind: 'step', id: 'first', name: 'Habit B',
+          document: { text: 'Reply exactly HABIT B.', references: [], attachments: [] },
+          execution: { engine: { agentTarget: { kind: 'agent', identity: { pluginId, localId: 'agent' } },
+            modelSelection: { v: 1, ref: { agentTargetKey: `agent:${pluginId}/agent`, providerConnectionId: null, modelId: 'model' }, updatedAt: 1 }, effort: 'low' },
+            connectedServices: { v: 2, bindingsByServiceId: { 'happier.agent.codex/openai-codex': {
+              source: 'connected', selection: 'profile', profileId: 'profile-one' } } },
+            conversation: destination, permissionMode: 'default' }, result: { kind: 'text' } }],
+        finalOutput: { kind: 'result', producer: { blockId: 'first', scope: { kind: 'current' } }, path: [] } } },
+      trigger: { kind: 'schedule', enabled: false, schedule: { kind: 'cron', scheduleExpr: '0 9 * * *', everyMs: null, timezone: 'UTC' } },
+    });
+    const actions = createWorkflowTriggerActions({ ...f.deps,
+      resolveSession: async () => ({ project: scopeProject, nativeGoalOwner: false }) });
+    const boundary = f.executor(actions);
+    const caller = { surface: 'ui', authority: 'present_user' } as const;
+    const added = await boundary.execute('session.trigger.add', request, caller);
+    expect(added).toMatchObject({ ok: true });
+    if (!added.ok) throw new Error(added.errorCode);
+    const receipt = WorkflowTriggerWriteResultV1Schema.parse(added.result);
+    expect(f.rows.get(receipt.set.automationId)).toMatchObject({ scopeSessionId: 'session-b',
+      assignments: [{ machineId: project.machineId }], executionRecipe: { workflow: { t: 'plain', v: {
+        workspace: { directory: project.directory }, inlineDefinition: request.target.kind === 'inline' ? request.target.definition : null,
+      } } } });
+    const listed = await boundary.execute('session.trigger.list', { sessionId: 'session-b' }, caller);
+    expect(listed).toMatchObject({ ok: true });
+    if (!listed.ok) throw new Error(listed.errorCode);
+    const read = SessionTriggerListResultV1Schema.parse(listed.result);
+    expect(read.sets).toEqual([receipt.set]);
+    expect(read.sets[0]).toMatchObject({ scopeSessionId: 'session-b', project,
+      destinations: { targetSessionIds: ['session-a'] },
+      context: { inlineDefinition: { defaults: { conversation: destination }, blocks: [{ execution: { conversation: destination } }] } } });
+    // A later edit must not silently move execution onto B.
+    const updated = await boundary.execute('session.trigger.update', { sessionId: 'session-b', triggerId: receipt.triggerId,
+      expectedRevision: receipt.set.revision, patch: { enabled: false } }, caller);
+    expect(updated).toMatchObject({ ok: true, result: { set: { project, destinations: { targetSessionIds: ['session-a'] },
+      triggers: [{ kind: 'schedule', enabled: false }] } } });
+    // Mis-bound scope authorization is not rescued by the valid destination/project.
+    const misbound = f.executor(createWorkflowTriggerActions({ ...f.deps,
+      resolveSession: async () => { throw Object.assign(new Error('target_unavailable'), { code: 'target_unavailable' }); } }));
+    expect(await misbound.execute('session.trigger.add', request, caller)).toMatchObject({ ok: false, errorCode: 'target_unavailable' });
+    expect(f.rows.size).toBe(1);
+  });
+
+  it('keeps a specific typed refusal for a lifecycle source outside the Session scope', async () => {
+    const f = fixture();
+    const boundary = f.executor(createWorkflowTriggerActions({ ...f.deps,
+      resolveSession: async () => ({ project, nativeGoalOwner: false }) }));
+    expect(await boundary.execute('session.trigger.add', { sessionId: 'session-b', target: { kind: 'inline', definition },
+      trigger: { kind: 'sessionLifecycle', enabled: true, sourceSessionId: 'session-a',
+        events: ['parentTurnCompleted'], policy: { kind: 'everyMatch' } } }, { surface: 'ui', authority: 'present_user' }))
+      .toMatchObject({ ok: false, errorCode: 'invalid_input', details: { code: 'session_trigger_source_mismatch' } });
+    expect(await boundary.execute('session.trigger.add', { sessionId: 'session-b', project: { ...project, directory: '/elsewhere' },
+      target: { kind: 'inline', definition }, trigger }, { surface: 'ui', authority: 'present_user' }))
+      .toMatchObject({ ok: false, errorCode: 'invalid_input', details: { code: 'session_trigger_project_mismatch' } });
+    expect(f.rows.size).toBe(0);
+  });
+
   const manualPolicy = ActionsSettingsV1Schema.parse({ v: 1, actions: {},
     approvalWaivedSurfaces: { 'workflow.trigger.run_now': ['ui'] } });
   it('admits a retained manual occurrence through the Automation transport without converting or rewriting its trigger set', async () => {
@@ -1033,7 +1097,8 @@ describe('workflow trigger Automation composition', () => {
     }
     const unauthorizedPlacement = { sessionId: 'session-one', target: { kind: 'inline' as const, definition }, trigger,
       project: { machineId: 'elsewhere', directory: '/elsewhere' } };
-    await expect(actions.sessionAdd(unauthorizedPlacement)).rejects.toBeDefined();
+    await expect(actions.sessionAdd(unauthorizedPlacement)).rejects.toMatchObject({ code: 'invalid_input',
+      details: { code: 'session_trigger_project_mismatch' } });
     expect(rows.size).toBe(0);
   });
   it('reads and removes scoped triggers without requiring a reachable native goal control', async () => {

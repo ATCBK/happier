@@ -915,7 +915,10 @@ export const WorkflowActionFailureV1Schema = lazyZodSchema(() => z.discriminated
   z.strictObject({
     ok: z.literal(false), errorCode: z.literal('invalid_input'), error: z.string().check(z.trim(), z.minLength(1)),
     details: z.optional(z.strictObject({
-      code: z.optional(z.literal('invalid_input')), blockId: zMini.optional(WorkflowBlockIdSchema),
+      code: z.optional(z.enum(['invalid_input', 'invalid_trigger_target',
+        'session_trigger_scope_required', 'session_trigger_kind_unsupported', 'session_trigger_source_mismatch', 'session_trigger_project_mismatch',
+        'trigger_definition_envelope_not_allowed', 'legacy_conversion_review_invalid',
+        'workflow_trigger_target_mismatch', 'inline_trigger_team_not_allowed'])), blockId: zMini.optional(WorkflowBlockIdSchema),
       issues: z.optional(z.array(z.union([WorkflowValidationIssueV1Schema, z.strictObject({
         code: z.enum(['unknown_block_id', 'invalid_target']), path: z.tuple([z.literal('ops'), z.number().check(z.int(), z.nonnegative())]),
       })]))),
