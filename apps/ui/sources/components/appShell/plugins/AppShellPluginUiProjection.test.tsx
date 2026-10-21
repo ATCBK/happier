@@ -3052,7 +3052,7 @@ describe('AppShellPluginUiProjectionProvider', () => {
         await screen.unmount();
     });
 
-    it.each(['opened', 'pending'] as const)('retains an admitted source read through a same-key %s daemon content publication', async (publication) => {
+    it.each(['opened', 'pending', 'hydrated-pending'] as const)('retains an admitted source read through a same-key %s daemon content publication', async (publication) => {
         const projectionOps = await import('@/sync/ops/machineContributionRegistryProjection');
         // Observe the caller signal without substituting the shared read owner.
         const readObserver = vi.spyOn(projectionOps, 'machinePluginUiTargetedContributionsRead');
@@ -3074,9 +3074,18 @@ describe('AppShellPluginUiProjectionProvider', () => {
         const daemonState = MachinePublishedDaemonStateV1Schema.parse({ status: 'running', pid: 17,
             runtimeId: 'pending-source-runtime', contributionRegistryProjectionRevision: 1 });
         const machine = createLiveMachine(machineId);
+        const { Encryption } = await import('@/sync/encryption/encryption');
+        const { encodeBase64 } = await import('@/encryption/base64');
+        const secret = new Uint8Array(32).fill(17);
+        const encryption = publication === 'hydrated-pending' ? await Encryption.create(secret) : null;
+        encryption?.configureNativeCryptoWorker({ routing: { mode: 'off' } });
+        const dataKey = new Uint8Array(32).fill(23);
+        const dataEncryptionKey = encryption
+            ? encodeBase64(await encryption.encryptEncryptionKey(dataKey), 'base64') : MACHINE_PLAIN_DATA_KEY_MARKER;
+        if (encryption) await encryption.initializeMachines(new Map([[machineId, dataKey]]));
         persistentStorage.getState().applyMachines([{ ...machine, daemonState, daemonStateVersion: 2,
-            storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-            keyBasis: { dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+            storageMode: encryption ? 'e2ee' : 'plain', dataEncryptionKey,
+            keyBasis: { dataEncryptionKey,
                 metadataVersion: machine.metadataVersion, daemonStateVersion: 2 },
         }], true, { sourceServerId: storageState.activeServer.serverId });
         const raw = pluginUiProjectionWithAppTab({ generation: 7, pluginId, origin: executionOrigin });
@@ -3131,15 +3140,34 @@ describe('AppShellPluginUiProjectionProvider', () => {
         await act(async () => {
             const current = persistentStorage.getState().machines[machineId]!;
             if (!current.keyBasis) throw new Error('The admitted fixture lost its published basis');
-            const { buildUpdatedMachineFromSocketUpdate } = await import('@/sync/engine/machines/syncMachines');
-            const updated = publication === 'pending' ? await buildUpdatedMachineFromSocketUpdate({
+            const { buildUpdatedMachineFromSocketUpdate, fetchAndApplyMachines } = await import('@/sync/engine/machines/syncMachines');
+            const updated = publication !== 'opened' ? await buildUpdatedMachineFromSocketUpdate({
                 existingMachine: current, machineUpdate: { machineId }, updateSeq: 2,
                 updateCreatedAt: current.updatedAt + 1,
                 keyBasis: { ...current.keyBasis, daemonStateVersion: 3 },
-                getMachineEncryption: () => null,
+                getMachineEncryption: id => encryption?.getMachineEncryption(id) ?? null,
             }) : { ...current, keyBasis: { ...current.keyBasis, daemonStateVersion: 3 }, daemonStateVersion: 3 };
             if (!updated) throw new Error('The current socket publication was discarded');
             persistentStorage.getState().applyMachines([updated], false, { sourceServerId: storageState.activeServer.serverId });
+            if (encryption) {
+                const machineEncryption = encryption.getMachineEncryption(machineId)!;
+                const row = { ...current,
+                    metadata: await machineEncryption.encryptMetadata(current.metadata!),
+                    daemonState: await machineEncryption.encryptDaemonState(daemonState),
+                };
+                await fetchAndApplyMachines({
+                    credentials: { token: `header.${Buffer.from(JSON.stringify({ sub: APP_SCOPE_FIXTURE.accountId })).toString('base64url')}.signature`,
+                        secret: encodeBase64(secret, 'base64url') },
+                    sourceServerId: storageState.activeServer.serverId, expectedAccountMode: 'e2ee',
+                    encryption, machineDataKeys: new Map(), request: async () => Response.json([row]),
+                    getExistingMachine: id => persistentStorage.getState().machines[id],
+                    getMachineSnapshot: () => persistentStorage.getState().machines,
+                    applyMachines: (machines, replace) => persistentStorage.getState().applyMachines(machines, replace,
+                        { sourceServerId: storageState.activeServer.serverId }),
+                    applyMachineDisplayEntries: (machines, options) => persistentStorage.getState().replaceMachineDisplays(machines,
+                        { ...options, sourceServerId: storageState.activeServer.serverId }),
+                });
+            }
         });
         await flushHookEffects();
         // Fresh execution remains closed, but an un-opened same-key hint is
@@ -3148,14 +3176,14 @@ describe('AppShellPluginUiProjectionProvider', () => {
         expect((await import('@/sync/ops/machineContributionRegistryProjectionRevision'))
             .getMachineContributionRegistryProjectionRevision({ machineId, serverId: storageState.activeServer.serverId })).toBe(revision);
         expect(read().execution.selection.canExecute).toBe(publication === 'opened');
-        if (publication === 'pending') expect(read().execution.isExecutionOriginCurrent()).toBe(false);
+        if (publication !== 'opened') expect(read().execution.isExecutionOriginCurrent()).toBe(false);
         expect.soft(signals[0]!.aborted, JSON.stringify({ callerCancellationStack, cancellations,
             selection: read().execution.selection.state.kind, targetedPhase: read().targeted.phase })).toBe(false);
         expect.soft(read().execution.selectedSupply?.occurrenceId).toBe(admitted?.occurrenceId);
         // Consume the selected producer through the same bound-controller
         // front door: content pending must refuse execution, not erase caller
         // provenance and misclassify it as an unmounted caller.
-        if (publication === 'pending') {
+        if (publication !== 'opened') {
             const supply = read().execution.selectedSupply;
             const mountedProjection = readCurrentAppShellPluginUiProjection();
             const controller = createBoundPluginSurfaceController({ facts: {

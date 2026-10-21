@@ -204,6 +204,15 @@ function createReadablePlainMachineView(machine: FetchedMachineRow): Machine {
     };
 }
 
+/** Same-key pending content retains presentation, never fresh execution authority. */
+function canRetainOpenedMachineContent(machine: Pick<Machine, 'keyBasis' | 'dataEncryptionKey'>, incumbent: Machine | null | undefined): boolean {
+    const key = machine.keyBasis ? machine.keyBasis.dataEncryptionKey : machine.dataEncryptionKey ?? null;
+    const incumbentKey = incumbent?.keyBasis ? incumbent.keyBasis.dataEncryptionKey : incumbent?.dataEncryptionKey ?? null;
+    return incumbent?.availability?.kind === 'available'
+        && incumbentKey === key
+        && (incumbent.dataEncryptionKey ?? null) === (machine.dataEncryptionKey ?? null);
+}
+
 const warnedMachineDataEncryptionKeyFailuresByEncryption = new WeakMap<SyncEncryption, Set<string>>();
 
 function warnMachineDataEncryptionKeyDecryptFailureOnce(encryption: SyncEncryption, machineId: string): void {
@@ -282,8 +291,7 @@ export async function buildUpdatedMachineFromSocketUpdate(params: {
         if (updatedMachine.metadata && updatedMachine.availability?.kind !== 'locked') {
             // Availability retains opened presentation; the inventory owner's
             // current-content check separately admits fresh execution.
-            const retainedAdmission = existingMachine?.availability?.kind === 'available'
-                && existingMachine.keyBasis?.dataEncryptionKey === updatedMachine.keyBasis?.dataEncryptionKey;
+            const retainedAdmission = canRetainOpenedMachineContent(updatedMachine, existingMachine);
             updatedMachine.availability = hasCurrentMachineContent(updatedMachine) || retainedAdmission
                 ? { kind: 'available' } : undefined;
         }
@@ -610,10 +618,12 @@ export async function fetchAndApplyMachines(params: {
                 ...(presence.active !== captured?.active || presence.activeAt !== captured?.activeAt
                     ? { active: presence.active, activeAt: presence.activeAt } : {}),
             };
-            // Retain opened display fields while a newer hinted peer is pending,
-            // but never promote that partial row into execution readiness.
+            // A newer hint cannot withdraw already admitted same-key content.
+            // Unopened rows still wait for current content, and fresh execution
+            // is independently qualified by the inventory's current-content read.
             return hydratingPublishedRows && merged.metadata && merged.availability?.kind === 'available'
-                && !hasCurrentMachineContent(merged) ? { ...merged, availability: undefined } : merged;
+                && !hasCurrentMachineContent(merged) && !canRetainOpenedMachineContent(merged, presence)
+                ? { ...merged, availability: undefined } : merged;
         });
         applyMachines(current, replace && current.length === incoming.length,
             current.flatMap(machine => {
@@ -837,10 +847,13 @@ export async function fetchAndApplyMachines(params: {
             ...readMachineIdentityFields(machine),
             ...readMachinePublishedContext(machine),
             storageMode: 'e2ee',
-            // Retain display content while hydrating, but only current admitted
-            // versions carry execution readiness before the whole list settles.
-            ...(canReuseContent && !needsMachineWarmHydration(machine)
-                && existingMachine?.storageMode === 'e2ee' && existingMachine.availability?.kind === 'available'
+            // Warming newer content must not withdraw the opened same-key
+            // presentation; fresh execution still requires current versions.
+            ...(canReuseContent && existingMachine?.storageMode === 'e2ee'
+                && canRetainOpenedMachineContent(machine, existingMachine)
+                // Without published version hints, retained old versions look
+                // current to fresh readers. Preserve legacy hydration admission.
+                && (machine.keyBasis != null || !needsMachineWarmHydration(machine))
                 ? { availability: existingMachine.availability } : {}),
         });
     };

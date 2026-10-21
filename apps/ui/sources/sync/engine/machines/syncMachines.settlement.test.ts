@@ -44,6 +44,64 @@ function createInventory() {
 }
 
 describe('Machine-list settlement through sync and the real store', () => {
+    it('withholds legacy E2EE admission after an envelope replacement until its content opens', async () => {
+        const inventory = createInventory();
+        const profile = { id: inventory.serverId, serverIdentityId: inventory.serverId, name: 'Test Home',
+            serverUrl: 'https://census.example.test', createdAt: 1, updatedAt: 1, lastUsedAt: 1 };
+        const liveRows = () => readLiveMachineInventoryRows({ profile, serverIdentityId: inventory.serverId,
+            activeServerId: inventory.serverId, activeMachines: Object.values(storage.getState().machines),
+            machineListByServerId: storage.getState().machineListByServerId,
+            machineListStatusByServerId: storage.getState().machineListStatusByServerId });
+        const secret = new Uint8Array(32).fill(17);
+        const encryption = await Encryption.create(secret);
+        encryption.configureNativeCryptoWorker({ routing: { mode: 'off' } });
+        const oldKey = new Uint8Array(32).fill(23);
+        const oldEnvelope = encodeBase64(await encryption.encryptEncryptionKey(oldKey), 'base64');
+        const incumbent = createMachineFixture({ id: 'legacy-opened', activeAt: Date.now(), storageMode: 'e2ee',
+            metadataVersion: 1, daemonStateVersion: 0, dataEncryptionKey: oldEnvelope });
+        await encryption.initializeMachines(new Map([[incumbent.id, oldKey]]));
+        storage.getState().applyMachines([incumbent], true, { sourceServerId: inventory.serverId });
+        storage.getState().markMachineListSettled(inventory.serverId);
+        expect(incumbent.keyBasis).toBeUndefined();
+        expect([...liveRows()].map(machine => machine.id)).toEqual([incumbent.id]);
+
+        const writer = await Encryption.create(secret);
+        writer.configureNativeCryptoWorker({ routing: { mode: 'off' } });
+        const nextKey = new Uint8Array(32).fill(29);
+        const nextEnvelope = encodeBase64(await writer.encryptEncryptionKey(nextKey), 'base64');
+        await writer.initializeMachines(new Map([[incumbent.id, nextKey]]));
+        const nextMetadata = { ...incumbent.metadata!, host: 'opened-new-content.example.test' };
+        const row: FetchedMachineRow = { ...incumbent, seq: incumbent.seq + 1, updatedAt: incumbent.updatedAt + 1,
+            metadata: await writer.getMachineEncryption(incumbent.id)!.encryptMetadata(nextMetadata),
+            metadataVersion: 2, daemonState: null, dataEncryptionKey: nextEnvelope };
+        expect(row.keyBasis).toBeUndefined();
+        const entered = createDeferred<void>(), release = createDeferred<void>();
+        const decrypt = platformCrypto.decryptAsyncAES;
+        // Hold the platform content decode, not the list, crypto admission, store, or inventory owner.
+        vi.spyOn(platformCrypto, 'decryptAsyncAES').mockImplementationOnce(async (...args) => {
+            entered.resolve(); await release.promise; return decrypt(...args);
+        });
+        const pending = fetchAndApplyMachines({ ...inventory.callbacks,
+            credentials: { ...credentials, secret: encodeBase64(secret, 'base64url') }, expectedAccountMode: 'e2ee',
+            encryption, machineDataKeys: new Map([[incumbent.id, { envelope: oldEnvelope, dataKey: oldKey }]]),
+            request: async () => Response.json([row]),
+            applyMachineDisplayEntries: (machines, options) => storage.getState().replaceMachineDisplays(machines,
+                { sourceServerId: inventory.serverId, ...options }),
+        });
+        try {
+            await entered.promise;
+            const warm = storage.getState().machines[incumbent.id]!;
+            expect(warm).toMatchObject({ seq: row.seq, dataEncryptionKey: nextEnvelope, metadataVersion: 1 });
+            expect.soft(warm.availability?.kind).not.toBe('available');
+            expect.soft(liveRows().size).toBe(0);
+            release.resolve();
+            await pending;
+            expect(storage.getState().machines[incumbent.id]).toMatchObject({ metadata: nextMetadata,
+                metadataVersion: 2, availability: { kind: 'available' } });
+            expect([...liveRows()].map(machine => machine.id)).toEqual([incumbent.id]);
+        } finally { release.resolve(); await pending; }
+    });
+
     it('retains already opened eligibility when list hydration catches up behind a newer same-key hint', async () => {
         const inventory = createInventory();
         const row = { ...createPlainMachineRowFixture({ id: 'opening', accountId: 'account-1' }),
