@@ -230,8 +230,9 @@ export async function resolveAccountPluginActivationSources(input: AccountPlugin
         loadResult: { loadedPlugins: external, diagnosticsByPluginId: {} } }), projectLoadedPluginContributes({ provenance: 'first_party',
         loadResult: { loadedPlugins: bundled, diagnosticsByPluginId: {} } }));
     const activationTargets = collectActivationTargets(contributes, 'account');
-    // Resources have only a daemon registration host. Their declarations remain
-    // in the selected manifest, but cannot demand an Account activation target.
-    return { contributes: { ...contributes, resources: [], activationTargets }, sourcesByPluginId, isCurrent, revalidate,
+    // Agents and Resources have only a Machine/daemon execution host. Keep
+    // their declarations in the selected manifest without synthesizing an
+    // executable Agent runtime or demanding an Account Resource registration.
+    return { contributes: { ...contributes, agents: [], resources: [], activationTargets }, sourcesByPluginId, isCurrent, revalidate,
         readSelection: pluginId => selected.get(pluginId)?.selection ?? null };
 }

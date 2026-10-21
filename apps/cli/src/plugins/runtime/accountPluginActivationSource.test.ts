@@ -28,26 +28,31 @@ import * as persistence from '@/persistence';
 import { manifest as authoredAccountManifest } from '../../../../../packages/plugin-sdk/fixtures/account-actions/src/index';
 
 describe('Account activation source assembly', () => {
-    it('keeps daemon-only Resources out of Account execution while retaining their package custody', async () => {
+    it('keeps Machine Agents and daemon-only Resources out of Account execution while retaining their package custody', async () => {
         const home = await mkdtemp(join(tmpdir(), 'account-resource-realm-'));
         const app = fastify();
         const { pluginId } = await registerAuthoredAccountActionRelease(app, 'owner');
-        const channels = getResolvedContributionRegistry().pluginDeclarations?.find(entry => entry.pluginId === 'happier.channels');
-        if (!channels) throw new Error('Expected canonical Channels declaration');
-        const peerId = channels.pluginId;
-        const packageName = channels.sourceSpec.locator;
-        const pluginRootPath = join(home, 'daemon-resources');
-        await mkdir(pluginRootPath);
-        await writeFile(join(pluginRootPath, 'package.json'), JSON.stringify({ name: packageName }));
-        const declaration = { ...channels, pluginRootPath,
-            sourceSpec: { kind: 'bundled' as const, locator: packageName, trustPolicy: 'prompt' as const, installPolicy: 'copy' as const } };
+        const declarations = await Promise.all(['happier.channels', 'happier.agent.qwen'].map(async peerId => {
+            const bundled = getResolvedContributionRegistry().pluginDeclarations?.find(entry => entry.pluginId === peerId);
+            if (!bundled) throw new Error(`Expected canonical declaration: ${peerId}`);
+            const packageName = bundled.sourceSpec.locator;
+            const pluginRootPath = join(home, peerId);
+            await mkdir(pluginRootPath);
+            await writeFile(join(pluginRootPath, 'package.json'), JSON.stringify({ name: packageName }));
+            return { ...bundled, pluginRootPath,
+                sourceSpec: { ...bundled.sourceSpec, kind: 'bundled' as const, locator: packageName,
+                    resolvedVersion: bundled.manifest.version, trustPolicy: 'prompt' as const, installPolicy: 'copy' as const } };
+        }));
         app.addHook('onSend', async (request, _reply, payload) => {
             if (request.url !== PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list']
                 || typeof payload !== 'string') return payload;
             const page = JSON.parse(payload);
-            page.pluginIds.push(peerId);
-            page.intentReads.push({ pluginId: peerId, response: { availabilityCursor: 1,
-                hostingCapability: { enabled: false }, intent: null, release: null, uiArtifacts: [], packageAssets: [] } });
+            for (const { pluginId: peerId } of declarations) {
+                page.pluginIds.push(peerId);
+                page.intentReads.push({ pluginId: peerId, response: { availabilityCursor: 1,
+                    hostingCapability: { enabled: false }, intent: null, release: null, uiArtifacts: [], packageAssets: [] } });
+            }
+            page.pluginIds.sort();
             return JSON.stringify(page);
         });
         await app.ready();
@@ -56,7 +61,7 @@ describe('Account activation source assembly', () => {
         try {
             runtime = await resolveExecutablePluginRuntimeRegistry({ happyHomeDir: home,
                 contributes: createResolvedContributionRegistry(projectLoadedPluginContributes({ provenance: 'first_party',
-                    loadResult: { loadedPlugins: [declaration], diagnosticsByPluginId: {} } })),
+                    loadResult: { loadedPlugins: declarations, diagnosticsByPluginId: {} } })),
                 accountExecution: { credentials: { token: 'fixture', encryption: null },
                     serverUrl: 'http://account-resource-realm.test', isCurrent: () => true } });
             const lease = { registry: runtime, source: 'ephemeral' as const, durableRevision: -1, release: async () => {} };
@@ -66,9 +71,15 @@ describe('Account activation source assembly', () => {
                 .toMatchObject({ ok: true, result: { actionSpecs: expect.arrayContaining([
                     expect.objectContaining({ id: `${pluginId}/actions/echo`, executionPlacement: 'account' }),
                 ]) } });
-            expect(runtime.readAccountExecutionSelection?.(peerId))
-                .toMatchObject({ kind: 'available', sourceCustody: { kind: 'bundled_first_party' } });
-            expect(runtime.contributes.resources.some(resource => resource.pluginId === peerId)).toBe(false);
+            for (const { pluginId: peerId } of declarations) {
+                expect(runtime.readAccountExecutionSelection?.(peerId))
+                    .toMatchObject({ kind: 'available', sourceCustody: { kind: 'bundled_first_party',
+                        packagedRuntime: { kind: 'source_declaration' } } });
+            }
+            expect(runtime.readAccountExecutionSelection?.('happier.agent.qwen'))
+                .toMatchObject({ kind: 'available', manifest: { contributes: { agents: [expect.objectContaining({ id: 'qwen' })] } } });
+            expect(runtime.contributes.resources).toEqual([]);
+            expect(runtime.agentRuntimesByAgentId.size).toBe(0);
         } finally { await runtime?.dispose(); restore(); await app.close(); await rm(home, { recursive: true, force: true }); }
     });
 
