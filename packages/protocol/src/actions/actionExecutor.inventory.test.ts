@@ -1481,6 +1481,18 @@ describe('createActionExecutor (inventory/discovery)', () => {
     }],
   ] as const;
 
+  it.each([
+    ['session.spawn_new', 'configuration', {}, ['draftInput', 'agentTarget']],
+    ['execution.run.start', 'configOptions', {}, ['draftInput', 'backendTargetKey']],
+    ['execution.run.start', 'configOptions', { backendTargetKey: 'private-invalid-target' }, ['draftInput', 'backendTargetKey']],
+  ] as const)('identifies the missing or invalid inventory selection for %s', async (actionId, fieldPath, draftInput, path) => {
+    const executor = createActionExecutor(createDeps());
+    const result = await executor.execute('action.options.resolve', { actionId, fieldPath, draftInput }, { surface: 'agent' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'invalid_parameters',
+      details: { issues: [{ code: 'invalid_selection', path }] } });
+    expect(JSON.stringify(result)).not.toContain('private-invalid-target');
+  });
+
   it.each(hostStampedServerInventoryCases)(
     'rejects caller-supplied server identity before inventory dispatch for %s',
     async (actionId, dependencyName, actionInput) => {
@@ -2600,13 +2612,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
   });
 
   it('fails closed when a V2 session spawn target cannot be resolved, even if retired flat selection fields are supplied', async () => {
-    const resolveSessionSpawnAgentInventorySelection = vi.fn(() => null);
-    const deps = {
-      ...createDeps(),
-      resolveSessionSpawnAgentInventorySelection,
-    } as ActionExecutorDeps & {
-      resolveSessionSpawnAgentInventorySelection: ReturnType<typeof vi.fn>;
-    };
+    const deps = createDeps();
     const executor = createActionExecutor(deps);
 
     const res = await executor.execute('action.options.resolve', {
@@ -2627,14 +2633,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
-    });
-    expect(deps.resolveSessionSpawnAgentInventorySelection).toHaveBeenCalledWith({
-      agentTarget: {
-        kind: 'agent',
-        identity: { pluginId: 'happier.agent.unavailable', localId: 'unavailable' },
-      },
-      machineId: 'm1',
-      serverId: 'local',
+      details: { issues: [{ code: 'invalid_selection', path: ['draftInput', 'agentTarget'] }] },
     });
     expect(deps.agentsModelsList).not.toHaveBeenCalled();
   });

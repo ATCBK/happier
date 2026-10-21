@@ -10,6 +10,7 @@ import { resolveSessionCreationAgentTarget } from '@/session/creation/resolveSes
 import { DaemonProviderModelProjectionResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
 import { AgentModelsProbeObservationSchema, AgentSessionModesProbeObservationSchema,
   AgentConfigOptionsProbeObservationSchema } from '@happier-dev/protocol/capabilities';
+import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import type { DaemonProviderModelProjectionResponseV1 } from '@happier-dev/protocol/rpc/providers';
 import { connectedServiceProfileKey, legacyCustomAcpCompat } from '@happier-dev/agents';
@@ -18,7 +19,7 @@ import { resolveAccountSettingsHttpBaseUrl } from '@/settings/accountSettings/re
 import { readSettings, type StoredCredentials } from '@/persistence';
 import type { ProbedAgentModelsResult } from '@/capabilities/probes/agentModelsProbe';
 import type { ProbedAgentModesResult } from '@/capabilities/probes/agentModesProbe';
-import type { ProbedAgentConfigOptionsResult } from '@/capabilities/probes/agentConfigOptionsProbe';
+import type { ProbedAgentConfigOption, ProbedAgentConfigOptionsResult } from '@/capabilities/probes/agentConfigOptionsProbe';
 import { resolveAvailableAccountSettings } from '@/settings/accountSettings/resolveAvailableAccountSettings';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { AcpCatalogUnavailableError, requireReadyAcpCatalog } from '@/agent/acp/catalog/configured/resolveBackend';
@@ -145,10 +146,10 @@ function modeInventoryItemsFromProbeResult(result: ProbedAgentModesResult): read
     .filter((entry): entry is ModeInventoryItem => entry !== null);
 }
 
-function configOptionDefinitionsFromProbeResult(
-  result: ProbedAgentConfigOptionsResult,
+function configOptionDefinitions(
+  options: readonly ProbedAgentConfigOption[],
 ): readonly ConfigOptionDefinitionItem[] {
-  return result.configOptions
+  return options
     .map((entry): ConfigOptionDefinitionItem | null => {
       const id = normalizeStringValue(entry.id);
       if (!id) return null;
@@ -353,7 +354,7 @@ async function probeActionConfigOptionsBestEffort(params: Readonly<{
     agentId: params.agentId,
     backendTarget: params.backendTarget,
   });
-  if (!legacyCustomAcpCompat.isAgentLookupId(probeAgentId)) return null;
+  if (!probeAgentId) return null;
   if (!machineTargetCanUseLocalProbe({
     requestedMachineId: (params.args as { machineId?: unknown }).machineId,
     rawSession: params.rawSession,
@@ -687,7 +688,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
         ? modelInventoryItemsFromSessionModels(availableModels)
         : [{ id: 'default', label: 'Default' }];
 
-      const probeResult = usesMachineProbe ? await (async (): Promise<ProbedAgentModelsResult | null> => {
+      const probeResult = usesMachineProbe ? await (async (): Promise<ProbedAgentModelsResult | ActionExecuteFailure | null> => {
         // Configured targets have no public runtime id. Match the native
         // observation using the same probe identity as the local catalog path.
         const probeAgentId = resolveProbeAgentId({ agentId: normalizedAgentId, backendTarget });
@@ -707,7 +708,14 @@ export function createCliActionInventoryDeps(params: Readonly<{
             ...(args.signal ?? context?.signal ? { signal: args.signal ?? context?.signal } : {}),
             ...(transportTimeoutMs === undefined ? {} : { timeoutMs: transportTimeoutMs }),
           });
-          if (!response || typeof response !== 'object' || !('ok' in response) || response.ok !== true || !('result' in response)) return unavailable;
+          if (!response || typeof response !== 'object' || !('ok' in response)) return unavailable;
+          if (response.ok === false) {
+            const error = 'error' in response ? response.error : null;
+            const errorCode = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+              ? error.code.trim() || 'agent_inventory_probe_failed' : 'agent_inventory_probe_failed';
+            return { ok: false, errorCode, error: errorCode };
+          }
+          if (response.ok !== true || !('result' in response)) return unavailable;
           const observation = AgentModelsProbeObservationSchema.safeParse(response.result);
           if (!observation.success || observation.data.agentId && observation.data.agentId !== probeAgentId
             || args.probe?.runtimeDescriptorV1 && observation.data.runtimeDescriptorV1Accepted !== true) return unavailable;
@@ -727,6 +735,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
         savedSecretOperationContext: params.savedSecretOperationContext,
         probeDeps: params.probeDeps,
       });
+      if (probeResult && 'ok' in probeResult) return probeResult;
       await captured?.assertCurrent();
       const probedItems = probeResult
         ? modelInventoryItemsFromProbeResult(probeResult)
@@ -800,8 +809,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
       const backendTarget = readBackendTargetFromKey(backendTargetKey);
       const captured = backendTarget?.sourceKind === 'configured' || backendTarget?.configuredBackendId
         ? await readAcpInventorySnapshot() : null;
-      const probeResult = await probeActionConfigOptionsBestEffort({
-        args,
+      const probeContext = {
         agentId: normalizedAgentId,
         backendTarget,
         rawSession: await readCurrentSessionWorkspace(),
@@ -810,13 +818,20 @@ export function createCliActionInventoryDeps(params: Readonly<{
         acpCatalogSnapshot: captured?.catalog,
         savedSecretOperationContext: params.savedSecretOperationContext,
         probeDeps: params.probeDeps,
-      });
+      };
+      const probeResult = await probeActionConfigOptionsBestEffort({ ...probeContext, args });
+      // Model-scoped controls belong to the selected model's existing native
+      // catalog, not the session-wide config probe. Do not combine choices
+      // across models or expose their current selections in this public read.
+      const modelResult = args.modelId
+        ? await probeActionModelsBestEffort({ ...probeContext, args }) : null;
+      const modelOptions = modelResult?.availableModels.find(model => model.id === args.modelId)?.modelOptions ?? [];
       await captured?.assertCurrent();
-      const items = probeResult ? configOptionDefinitionsFromProbeResult(probeResult) : [];
+      const items = configOptionDefinitions([...modelOptions, ...(probeResult?.configOptions ?? [])]);
       return {
         ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
         items: limitItems(dedupeById(items), (args as { limit?: unknown }).limit),
-        source: probeResult?.source ?? 'unavailable',
+        source: (modelOptions.length ? modelResult?.source : probeResult?.source) ?? 'unavailable',
         ...(args.probe && probeResult ? { probeObservation: AgentConfigOptionsProbeObservationSchema.parse(probeResult) } : {}),
       };
     },

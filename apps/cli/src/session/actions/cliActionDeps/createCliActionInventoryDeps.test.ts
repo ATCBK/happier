@@ -49,6 +49,16 @@ describe('createCliActionInventoryDeps', () => {
     probeAgentConfigOptionsBestEffort,
   });
 
+  it('preserves a machine preflight refusal in the public models Action', async () => {
+    const inventory = createCliActionInventoryDeps({ token: 'fixture-token', sessionId: '', mode: 'plain', ctx: null,
+      callMachineAction: async () => ({ ok: false,
+        error: { code: 'connected-service-preflight-failed', message: 'Selected credential could not be prepared.' } }),
+    });
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...inventory });
+    expect(await executor.execute('agents.models.list', { agentId: 'codex', machineId: 'worker', probe: { cwd: '/repo' } },
+      { surface: 'cli', authority: 'present_user' })).toMatchObject({ ok: false, errorCode: 'connected-service-preflight-failed' });
+  });
+
   it('offers distinguishable canonical machine names through daemon input discovery without changing target identities', async () => {
     const codec = createMachineContentCodec({ encryptionMode: 'plain' });
     const machines = [

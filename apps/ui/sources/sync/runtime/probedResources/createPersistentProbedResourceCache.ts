@@ -9,6 +9,7 @@ type PersistedState<T> = Readonly<{ version: number; entries: Record<string, Per
 
 export type ProbedResourceFailure = Readonly<{
     reason?: 'error' | 'not-supported' | 'outcomeUnknown';
+    errorCode?: string;
     requestDisposition?: RpcRequestDisposition;
 }>;
 

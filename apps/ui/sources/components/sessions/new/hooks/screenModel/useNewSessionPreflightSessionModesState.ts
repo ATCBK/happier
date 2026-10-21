@@ -202,7 +202,7 @@ export function useNewSessionPreflightSessionModesState(params: Readonly<{
         }
 
         const cacheEntry = readDynamicSessionModeProbeCache(preflightModesKey);
-        setFailure({ reason: cacheEntry?.reason, requestDisposition: cacheEntry?.requestDisposition });
+        setFailure({ reason: cacheEntry?.reason, errorCode: cacheEntry?.errorCode, requestDisposition: cacheEntry?.requestDisposition });
         const cached = cacheEntry?.kind === 'success' ? cacheEntry.value : null;
         const scopeStable = lastScopeKeyRef.current !== null && probeScopeKey !== null && lastScopeKeyRef.current === probeScopeKey;
         lastScopeKeyRef.current = probeScopeKey;
@@ -258,6 +258,7 @@ export function useNewSessionPreflightSessionModesState(params: Readonly<{
 
                 if (!res.supported) return { failure: {
                     reason: res.reason,
+                    ...(res.errorCode ? { errorCode: res.errorCode } : {}),
                     ...(res.requestDisposition ? { requestDisposition: res.requestDisposition } : {}),
                 } };
                 if (!res.response.ok) return null;

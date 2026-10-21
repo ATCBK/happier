@@ -83,7 +83,8 @@ async function installAccountCatalogDaemonTransport(params: Readonly<{
     });
     return { matched: true, result: result.ok
       ? { ok: true, result: StrictJsonValueSchema.parse(result.result) }
-      : { ok: false, errorCode: result.errorCode, error: result.error } };
+      : { ok: false, errorCode: result.errorCode, error: result.error,
+        ...(result.details === undefined ? {} : { details: result.details }) } };
   });
   return { executor, getSessionReads: () => sessionReads, close: async () => { restore(); await app.close(); } };
 }
@@ -292,6 +293,61 @@ describe('createHappierMcpServer real host admission', () => {
       restoreHttp();
       await app.close();
     }
+  });
+
+  it('retains content-free discovery and execution repair details over native MCP', async () => {
+    const sessionId = 'c666666666666666666666667';
+    const daemon = await installAccountCatalogDaemonTransport({ sessionId, readMetadata: () => createTestMetadata() });
+    const runtime = createHappierMcpServer(hostClient(sessionId));
+    try {
+      await withMcpClient(runtime, async client => {
+        const cases = [
+          { name: 'action_spec_get', arguments: { id: 'definitely.invalid.action' }, path: ['id'], code: 'unknown_action' },
+          { name: 'action_options_resolve', arguments: { actionId: 'definitely.invalid.action', fieldPath: 'bogus' }, path: ['actionId'], code: 'unknown_action' },
+          { name: 'action_options_resolve', arguments: { actionId: 'session.spawn_new', fieldPath: 'bogus' }, path: ['fieldPath'], code: 'unknown_field' },
+          { name: 'action_options_resolve', arguments: { actionId: 'session.spawn_new', fieldPath: 'configuration', draftInput: {} },
+            path: ['draftInput', 'agentTarget'], code: 'invalid_selection' },
+          { name: 'action_execute', arguments: { actionId: 'agents.config_options.list', input: {
+            backendTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-6-luna', machineId: 'machine', serverId: 'private-home-value', limit: 50,
+          } }, path: ['serverId'], code: 'invalid_type' },
+          { name: 'action_execute', arguments: { actionId: 'agents.config_options.list', input: {
+            backendTargetKey: 'agent:happier.agent.codex/codex', modelId: 123,
+          } }, path: ['modelId'], code: 'invalid_type' },
+        ];
+        for (const testCase of cases) {
+          const reply = CallToolResultSchema.parse(await client.callTool({ name: testCase.name, arguments: testCase.arguments }));
+          expect(reply.isError).toBe(true);
+          const content = reply.content.find(item => item.type === 'text');
+          if (content?.type !== 'text') throw new Error('Missing refusal payload');
+          const payload = JSON.parse(content.text);
+          expect(payload, testCase.name).toMatchObject({ errorCode: 'invalid_parameters',
+            details: { issues: expect.arrayContaining([expect.objectContaining({ code: testCase.code, path: testCase.path })]) } });
+          expect(content.text).not.toContain('private-home-value');
+        }
+      });
+    } finally { await daemon.close(); }
+  });
+
+  it('discovers the callable Workflow validator named by start guidance over native MCP', async () => {
+    const sessionId = 'c666666666666666666666668';
+    const daemon = await installAccountCatalogDaemonTransport({ sessionId, readMetadata: () => createTestMetadata() });
+    const runtime = createHappierMcpServer(hostClient(sessionId));
+    try {
+      await withMcpClient(runtime, async client => {
+        const readSpec = async (id: string) => {
+          const reply = CallToolResultSchema.parse(await client.callTool({ name: 'action_spec_get', arguments: { id } }));
+          expect(reply.isError, id).not.toBe(true);
+          const content = reply.content.find(item => item.type === 'text');
+          if (content?.type !== 'text') throw new Error('Missing discovery payload');
+          return PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].parse(JSON.parse(content.text)).actionSpec;
+        };
+        const start = ActionDiscoveryDefinitionV1Schema.parse(await readSpec('workflow.run.start'));
+        const validatorId = start.description?.match(/Validate the definition with ([\w.]+)/u)?.[1];
+        if (!validatorId) throw new Error('Start must identify its definition validator');
+        const validator = ActionDiscoveryDefinitionV1Schema.parse(await readSpec(validatorId));
+        expect(validator.id).toBe('workflow.validate');
+      });
+    } finally { await daemon.close(); }
   });
 
   it('discovers complete widget and Board inputs over MCP and reads output schemas explicitly', async () => {

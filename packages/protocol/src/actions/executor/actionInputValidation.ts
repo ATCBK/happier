@@ -29,6 +29,10 @@ function projectIssue(issue: core.$ZodIssue): ActionInputIssue[] {
 
 /** Never echo rejected values, unknown-key lists, or custom issue prose. */
 export function actionInputValidationFailure(error: core.$ZodError): ActionExecuteFailure {
-  return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters',
-    details: { issues: error.issues.flatMap(projectIssue) } };
+  return actionInputIssueFailure(...error.issues.flatMap(projectIssue));
+}
+
+/** Semantic checks use the same content-free repair envelope as schema validation. */
+export function actionInputIssueFailure(...issues: readonly ActionInputIssue[]): ActionExecuteFailure {
+  return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters', details: { issues } };
 }

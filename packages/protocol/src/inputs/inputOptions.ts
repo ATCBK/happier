@@ -1,6 +1,7 @@
 import type { ActionExecutorDeps, ActionExecutorContext } from '../actions/executor/types.js';
 import { resolveReviewEngineInventoryTarget } from '../actions/executor/reviewEngineInventoryTarget.js';
-import type { ActionExecuteResult } from '../actions/actionExecutionResult.js';
+import type { ActionExecuteFailure, ActionExecuteResult } from '../actions/actionExecutionResult.js';
+import { actionInputIssueFailure } from '../actions/executor/actionInputValidation.js';
 import type { ActionId } from '../actions/actionIds.js';
 import type { PublicActionResultById } from '../actions/actionSpecs.js';
 import { AgentInventoryProbeInputSchema } from '../actions/actionSpecs.js';
@@ -12,7 +13,7 @@ import { SessionDirectoryIntentV1Schema } from '../sessions/creation/sessionDire
 import { readCapabilitySelectionCarrierV1, SessionCapabilitySelectionAuthoringV1Schema, setSessionCapabilitySelectionItemV1 } from '../reach/sessionCapabilitySelectionV1.js';
 import { SpawnCapabilitiesPreviewOutputV1Schema } from '../actions/specs/sessionCapabilities.js';
 import { resolveReviewNarratorPolicy, ReviewEngineCapabilitiesSchema } from '../reviews/reviewEngines.js';
-import { resolveActionBackendTargetSelection, resolveExecutionBackendTargetSelectionForValue, type ActionBackendTargetSelection } from '../actions/resolveActionBackendTargetSelection.js';
+import { resolveActionBackendTargetSelection, resolveExecutionBackendTargetSelectionForValue } from '../actions/resolveActionBackendTargetSelection.js';
 import { readRecord, readRecordListProperty, readNonEmptyString, isRecord, hasOwn } from './inputRecords.js';
 import { projectInputOptionsDependencies } from './inputOptionsDependencies.js';
 import { inputTypeOptionsSourceId, parseInputTypeOptionsSourceId } from './inputTypes.js';
@@ -100,20 +101,6 @@ export function readReviewNarratorOptions(value: unknown) {
   });
 }
 
-function resolveAgentInventorySelection(
-  input: Record<string, unknown>,
-  agentScope: 'required' | 'optional',
-): ActionBackendTargetSelection | null {
-  const resolvedSelection = resolveActionBackendTargetSelection({
-    agentId: typeof input.agentId === 'string' ? input.agentId : undefined,
-    backendTargetKey: typeof input.backendTargetKey === 'string' ? input.backendTargetKey : undefined,
-  });
-  if (!resolvedSelection.ok) return null;
-  const selection = resolvedSelection.selection;
-  if (!selection.agentId && !selection.backendTargetKey && agentScope === 'required') return null;
-  return selection;
-}
-
 /**
  * The agent an inventory read is scoped to.
  *
@@ -129,12 +116,14 @@ export async function buildAgentInventorySelectionArgs(params: Readonly<{
   actionId: ActionId | null;
   input: Record<string, unknown>;
   agentScope?: 'required' | 'optional';
-}>): Promise<Readonly<{ agentId?: string; backendTargetKey?: string }> | null> {
+}>): Promise<Readonly<{ agentId?: string; backendTargetKey?: string }> | ActionExecuteFailure> {
   const { deps, actionId, input } = params;
   const agentScope = params.agentScope ?? 'required';
+  const invalidSelection = (field: string) => actionInputIssueFailure({ code: 'invalid_selection',
+    path: [...(actionId ? ['draftInput'] : []), field] });
   if (actionId === 'session.spawn_new') {
     const agentTarget = AgentExecutionTargetV1Schema.safeParse(input.agentTarget);
-    if (!agentTarget.success) return agentScope === 'optional' ? {} : null;
+    if (!agentTarget.success) return agentScope === 'optional' ? {} : invalidSelection('agentTarget');
     const machineId = readDynamicOptionMachineId(input, actionId);
     const serverId = readNonEmptyString(readRecord(input.executionTarget).serverId);
     return await deps.resolveSessionSpawnAgentInventorySelection?.({
@@ -142,11 +131,16 @@ export async function buildAgentInventorySelectionArgs(params: Readonly<{
       ...(machineId ? { machineId } : {}),
       ...(serverId ? { serverId } : {}),
     })
-      ?? (agentScope === 'optional' ? {} : null);
+      ?? (agentScope === 'optional' ? {} : invalidSelection('agentTarget'));
   }
 
-  const selection = resolveAgentInventorySelection(input, agentScope);
-  if (!selection) return null;
+  const resolved = resolveActionBackendTargetSelection({
+    agentId: typeof input.agentId === 'string' ? input.agentId : undefined,
+    backendTargetKey: typeof input.backendTargetKey === 'string' ? input.backendTargetKey : undefined,
+  });
+  if (!resolved.ok) return invalidSelection(resolved.path);
+  const selection = resolved.selection;
+  if (!selection.agentId && !selection.backendTargetKey && agentScope === 'required') return invalidSelection('backendTargetKey');
   return {
     ...(selection.agentId ? { agentId: selection.agentId } : {}),
     ...(selection.backendTargetKey ? { backendTargetKey: selection.backendTargetKey } : {}),
@@ -592,7 +586,7 @@ export async function resolveInputOptions(params: Readonly<{
 
   if (optionsSourceId === 'agents.models.available') {
     const selectionArgs = await buildAgentInventorySelectionArgs({ deps, actionId, input });
-    if (!selectionArgs) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+    if ('ok' in selectionArgs) return selectionArgs;
     // Configured model inventory is selected by definition, as on direct reads.
     // The installed routing id stays private to the host's probe adapter.
     const modelInventorySelection = actionId === 'session.spawn_new' && readRecord(input.agentTarget).definitionId !== undefined
@@ -633,7 +627,7 @@ export async function resolveInputOptions(params: Readonly<{
       return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:agents.session_modes.list' };
     }
     const selectionArgs = await buildAgentInventorySelectionArgs({ deps, actionId, input });
-    if (!selectionArgs) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+    if ('ok' in selectionArgs) return selectionArgs;
     const result = await deps.agentsSessionModesList({
       ...selectionArgs,
       ...(machineId === undefined ? {} : { machineId }),
@@ -650,7 +644,7 @@ export async function resolveInputOptions(params: Readonly<{
       return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:agents.config_options.list' };
     }
     const selectionArgs = await buildAgentInventorySelectionArgs({ deps, actionId, input });
-    if (!selectionArgs) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+    if ('ok' in selectionArgs) return selectionArgs;
     const result = await deps.agentsConfigOptionsList({
       ...selectionArgs,
       ...(machineId === undefined ? {} : { machineId }),
@@ -708,7 +702,7 @@ export async function resolveInputOptions(params: Readonly<{
       input,
       agentScope: 'optional',
     });
-    if (!selectionArgs) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+    if ('ok' in selectionArgs) return selectionArgs;
     const result = await deps.spawnProfilesList({
       ...selectionArgs,
       ...(typeof input.limit === 'number' ? { limit: input.limit } : {}),
@@ -723,7 +717,7 @@ export async function resolveInputOptions(params: Readonly<{
       return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:sessions.spawn.connected_services.list' };
     }
     const selectionArgs = await buildAgentInventorySelectionArgs({ deps, actionId, input });
-    if (!selectionArgs) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+    if ('ok' in selectionArgs) return selectionArgs;
     const machineId = readDynamicOptionMachineId(input, actionId);
     const result = await deps.spawnConnectedServicesList({
       ...selectionArgs,
@@ -738,8 +732,9 @@ export async function resolveInputOptions(params: Readonly<{
 
   if (optionsSourceId === 'sessions.spawn.capabilities.preview') {
     const selectionArgs = await buildAgentInventorySelectionArgs({ deps, actionId, input });
+    if ('ok' in selectionArgs) return selectionArgs;
     const selection = SessionCapabilitySelectionAuthoringV1Schema.safeParse(input.capabilitySelection === undefined ? {} : input.capabilitySelection);
-    if (!selectionArgs?.agentId || !machineId || !selection.success) {
+    if (!selectionArgs.agentId || !machineId || !selection.success) {
       return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
     }
     // Preview owns Profile seed admission and the Machine projection. Options
@@ -767,7 +762,7 @@ export async function resolveInputOptions(params: Readonly<{
       return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:sessions.spawn.mcp_servers.preview' };
     }
     const selectionArgs = await buildAgentInventorySelectionArgs({ deps, actionId, input });
-    if (!selectionArgs) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+    if ('ok' in selectionArgs) return selectionArgs;
     const result = await deps.spawnMcpServersPreview({
       ...selectionArgs,
       ...(machineId === undefined ? {} : { machineId }),

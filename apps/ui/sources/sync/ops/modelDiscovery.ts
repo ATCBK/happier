@@ -64,6 +64,7 @@ async function discoverMachineModelsWithTransport(params: MachineModelDiscoveryP
             if (signal.aborted) return readDynamicModelProbeCache(params.cacheKey, params.successMaxAgeMs);
             if (!response.supported) failure = {
                 reason: response.reason,
+                ...(response.errorCode ? { errorCode: response.errorCode } : {}),
                 ...(response.requestDisposition ? { requestDisposition: response.requestDisposition } : {}),
             };
             if (response.supported && response.response.ok) {

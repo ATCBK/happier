@@ -159,9 +159,9 @@ async function probeAgentInventory(
         }),
         details: { reason: res.reason, ...(res.requestDisposition ? { requestDisposition: res.requestDisposition } : {}) },
     } };
-    const failed = (): Readonly<{ ok: false; failure: ActionExecuteFailure }> => ({ ok: false,
-        failure: { ok: false, errorCode: 'agent_inventory_probe_failed', error: 'agent_inventory_probe_failed' } });
-    if (!res.response.ok) return failed();
+    const failed = (errorCode = 'agent_inventory_probe_failed'): Readonly<{ ok: false; failure: ActionExecuteFailure }> => ({ ok: false,
+        failure: { ok: false, errorCode, error: errorCode } });
+    if (!res.response.ok) return failed(res.response.error.code?.trim() || undefined);
     const result = res.response.result;
     if (!result || typeof result !== 'object' || Array.isArray(result)) return failed();
     if (probe) {
@@ -199,6 +199,7 @@ export async function invokeAgentInventoryProbeAction(params: Readonly<{
             const details = result.details && typeof result.details === 'object' && !Array.isArray(result.details)
                 ? result.details as Record<string, unknown> : null;
             return { supported: false,
+                errorCode: result.errorCode,
                 reason: result.errorCode === 'action_outcome_unknown' ? 'outcomeUnknown'
                     : details?.reason === 'not-supported' ? 'not-supported' : 'error',
                 ...(details?.requestDisposition === 'outcomeUnknown' || details?.requestDisposition === 'notSent'

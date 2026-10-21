@@ -151,7 +151,7 @@ export function useNewSessionPreflightConfigOptionsState(params: Readonly<{
         }
 
         const cacheEntry = readDynamicConfigOptionsProbeCache(cacheKey);
-        setFailure({ reason: cacheEntry?.reason, requestDisposition: cacheEntry?.requestDisposition });
+        setFailure({ reason: cacheEntry?.reason, errorCode: cacheEntry?.errorCode, requestDisposition: cacheEntry?.requestDisposition });
         const cached = cacheEntry?.kind === 'success' ? cacheEntry.value : null;
         const scopeStable = lastScopeKeyRef.current !== null && probeScopeKey !== null && lastScopeKeyRef.current === probeScopeKey;
         lastScopeKeyRef.current = probeScopeKey;
@@ -210,6 +210,7 @@ export function useNewSessionPreflightConfigOptionsState(params: Readonly<{
 
                 if (!response.supported) return { failure: {
                     reason: response.reason,
+                    ...(response.errorCode ? { errorCode: response.errorCode } : {}),
                     ...(response.requestDisposition ? { requestDisposition: response.requestDisposition } : {}),
                 } };
                 if (!response.response.ok) return null;

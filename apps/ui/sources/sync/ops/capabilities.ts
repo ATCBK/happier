@@ -116,7 +116,7 @@ export async function machineCapabilitiesDetect(
 
 export type MachineCapabilitiesInvokeResult =
     | { supported: true; response: CapabilitiesInvokeResponse }
-    | { supported: false; reason: 'not-supported' | 'error' | 'outcomeUnknown'; requestDisposition?: RpcRequestDisposition };
+    | { supported: false; reason: 'not-supported' | 'error' | 'outcomeUnknown'; errorCode?: string; requestDisposition?: RpcRequestDisposition };
 
 export async function machineCapabilitiesInvoke(
     machineId: string,

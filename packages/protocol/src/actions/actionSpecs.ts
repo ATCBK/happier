@@ -2387,7 +2387,8 @@ const AgentsModelsListInputSchema = lazyZodSchema(() => z.strictObject({
   agentId: z.optional(z.string().check(z.minLength(1))),
   backendTargetKey: z.optional(z.union([BackendTargetKeySchema, BackendTargetKeyV2Schema])),
   machineId: z.optional(z.string().check(z.minLength(1))),
-  serverId: z.optional(z.string().check(z.minLength(1))),
+  // Home routing is bound by the authenticated host, never authored inventory input.
+  serverId: z.optional(z.never()),
   limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(200))),
   probe: z.optional(AgentInventoryProbeInputSchema),
 }).check(z.superRefine((value, ctx) => {
@@ -2416,7 +2417,7 @@ const AgentSpawnOptionsListInputBaseSchema = lazyZodSchema(() => z.object({
 }));
 
 const AgentSpawnOptionsListInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AgentSpawnOptionsListInputBaseSchema, {
-  serverId: z.optional(z.string().check(z.minLength(1))),
+  serverId: z.optional(z.never()),
   probe: z.optional(AgentInventoryProbeInputSchema),
 })).check(z.superRefine((value, ctx) => {
   if (!value.agentId && !value.backendTargetKey) {
@@ -2452,7 +2453,7 @@ const SpawnProfilesListInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniOb
 
 const AgentsConfigOptionsListInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AgentSpawnOptionsListInputBaseSchema, {
   modelId: z.optional(z.string().check(z.minLength(1))),
-  serverId: z.optional(z.string().check(z.minLength(1))),
+  serverId: z.optional(z.never()),
   probe: z.optional(AgentInventoryProbeInputSchema),
 })).check(z.superRefine((value, ctx) => {
   if (!value.agentId && !value.backendTargetKey) {
@@ -2467,7 +2468,7 @@ const AgentsConfigOptionsListInputSchema = lazyZodSchema(() => (<T extends z.Zod
 
 const SpawnConnectedServicesListInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(AgentSpawnOptionsListInputBaseSchema, {
   includeUnavailable: z.optional(z.boolean()),
-  serverId: z.optional(z.string().check(z.minLength(1))),
+  serverId: z.optional(z.never()),
 })).check(z.superRefine((value, ctx) => {
   if (!value.agentId && !value.backendTargetKey) {
     ctx.addIssue({
@@ -4942,7 +4943,7 @@ const WORKFLOW_TRIGGER_VOICE_ARGS_EXAMPLES: Readonly<Partial<Record<WorkflowActi
 };
 
 const WORKFLOW_ACTION_DESCRIPTIONS: Readonly<Partial<Record<WorkflowActionIdV1, string>>> = {
-  'workflow.run.start': 'Start an ordinary workflow from a built-in/plugin catalog, a saved definition, or an inline definition. A Session caller supplies the origin Session and its Machine/workspace through authenticated Action context. inputs contains only declared workflow input values; machineId and directory inside inputs do not select a run target. executionTarget selects the leaf execution kind, not the Machine/workspace. For an inline definition, put model and effort on defaults.engine or a step execution.engine, for example {agentTarget,modelSelection,effort:"low"}; do not place reasoning_effort in sessionConfigOptionOverrides. Validate the definition with workflow.definition.validate before starting. Retain runId when a response is uncertain. Run again uses source.replay.runId to reopen the accepted graph, runtime and participants; Another round adds source.replay.intent="another_round" and the owner reads authorized prior outcomes into its declared previousRoundContext input. Another round retains all accepted inputs and participants; unavailable context or targets requires repair before starting. It uses the ordinary start approval; contained Actions keep their own approval and authority.',
+  'workflow.run.start': `Start an ordinary workflow from a built-in/plugin catalog, a saved definition, or an inline definition. A Session caller supplies the origin Session and its Machine/workspace through authenticated Action context. inputs contains only declared workflow input values; machineId and directory inside inputs do not select a run target. executionTarget selects the leaf execution kind, not the Machine/workspace. For an inline definition, put model and effort on defaults.engine or a step execution.engine, for example {agentTarget,modelSelection,effort:"low"}; do not place reasoning_effort in sessionConfigOptionOverrides. Validate the definition with ${'workflow.validate' satisfies WorkflowActionIdV1} before starting. Retain runId when a response is uncertain. Run again uses source.replay.runId to reopen the accepted graph, runtime and participants; Another round adds source.replay.intent="another_round" and the owner reads authorized prior outcomes into its declared previousRoundContext input. Another round retains all accepted inputs and participants; unavailable context or targets requires repair before starting. It uses the ordinary start approval; contained Actions keep their own approval and authority.`,
   'workflow.trigger.remove': 'Remove one trigger by automationId and triggerId; the last child removal leaves a Manual set. Omit triggerId to delete the whole Account trigger set, including an empty Manual set. Past Runs are kept.',
   'workflow.definition.list': 'List saved workflows in this Home Account and available plugin workflows. Returns definitions with metadata, content availability and trigger summaries, plus pluginWorkflows when available. Follow nextCursor to read later pages; use workflow.definition.get to read a saved definition.',
   'workflow.definition.get': 'Read one saved workflow definition, its metadata, revision and destinations using a definitionId from workflow.definition.list.',
@@ -8556,7 +8557,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     id: 'agents.models.list', approval: {result: 'required'},
     title: 'List agent models',
     sideEffectClass: 'read',
-    description: 'List available models for an agent backend.',
+    description: 'List available models for an agent backend. Omit serverId; the authenticated host binds the Home.',
     safety: 'safe',
     placements: ['voice_panel'],
     bindings: { voiceClientToolName: 'listAgentModels', mcpToolName: 'agents_models_list' },
@@ -8577,7 +8578,6 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
         { path: 'agentId', title: 'Runtime agent id', widget: 'text' },
         { path: 'backendTargetKey', title: 'Backend target key', widget: 'text' },
         { path: 'machineId', title: 'Machine id (optional)', widget: 'text' },
-        { path: 'serverId', title: 'Server id (optional)', widget: 'text' },
         { path: 'limit', title: 'Max results', widget: 'text' },
       ],
     },
@@ -8592,7 +8592,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     id: 'agents.config_options.list', approval: {result: 'required'},
     title: 'List agent config options',
     sideEffectClass: 'read',
-    description: 'List configurable option definitions for an agent backend without exposing current values.',
+    description: 'List configurable option definitions for an agent backend without exposing current values. Supply modelId to include that model’s declared options and allowed values alongside session-wide options. Omit serverId; the authenticated host binds the Home.',
     safety: 'safe',
     placements: ['voice_panel'],
     bindings: { voiceClientToolName: 'listAgentConfigOptions', mcpToolName: 'agents_config_options_list' },
@@ -8614,7 +8614,6 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
         { path: 'backendTargetKey', title: 'Backend target key', widget: 'text' },
         { path: 'modelId', title: 'Model id', widget: 'text' },
         { path: 'machineId', title: 'Machine id (optional)', widget: 'text' },
-        { path: 'serverId', title: 'Server id (optional)', widget: 'text' },
         { path: 'limit', title: 'Max results', widget: 'text' },
       ],
     },
@@ -8625,7 +8624,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     id: 'agents.session_modes.list', approval: {result: 'required'},
     title: 'List agent session modes',
     sideEffectClass: 'read',
-    description: 'List session modes available for an agent backend.',
+    description: 'List session modes available for an agent backend. Omit serverId; the authenticated host binds the Home.',
     safety: 'safe',
     placements: ['voice_panel'],
     bindings: { voiceClientToolName: 'listAgentSessionModes', mcpToolName: 'agents_session_modes_list' },
@@ -8646,7 +8645,6 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
         { path: 'agentId', title: 'Runtime agent id', widget: 'text' },
         { path: 'backendTargetKey', title: 'Backend target key', widget: 'text' },
         { path: 'machineId', title: 'Machine id (optional)', widget: 'text' },
-        { path: 'serverId', title: 'Server id (optional)', widget: 'text' },
         { path: 'limit', title: 'Max results', widget: 'text' },
       ],
     },
@@ -8688,7 +8686,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     id: 'sessions.spawn.connected_services.list', approval: {result: 'required'},
     title: 'List spawn connected services',
     sideEffectClass: 'read',
-    description: 'List connected-service references available for new sessions without exposing credentials.',
+    description: 'List connected-service references available for new sessions without exposing credentials. Omit serverId; the authenticated host binds the Home.',
     safety: 'safe',
     placements: ['voice_panel'],
     prompting: { voiceHotPath: true },
@@ -8710,7 +8708,6 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
         { path: 'agentId', title: 'Runtime agent id', widget: 'text' },
         { path: 'backendTargetKey', title: 'Backend target key', widget: 'text' },
         { path: 'machineId', title: 'Machine id (optional)', widget: 'text' },
-        { path: 'serverId', title: 'Server id (optional)', widget: 'text' },
         { path: 'includeUnavailable', title: 'Include unavailable', widget: 'boolean' },
       ],
     },

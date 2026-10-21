@@ -153,7 +153,7 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
             }
             setModelDiscoveryFailed(entry?.kind === 'error' || (entry?.kind === 'success' && entry.errorUpdatedAt !== undefined));
             setSpawnFailure(entry?.spawnFailure ?? null);
-            setFailure({ reason: entry?.reason, requestDisposition: entry?.requestDisposition });
+            setFailure({ reason: entry?.reason, errorCode: entry?.errorCode, requestDisposition: entry?.requestDisposition });
         };
         if (cacheEntry?.kind === 'success') {
             applyEntry(cacheEntry);

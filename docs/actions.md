@@ -316,6 +316,14 @@ use the same projection as ordinary Action admission. Diagnostics omit rejected
 values, unknown-key lists and custom validation prose; the existing Action
 failure envelope carries these details through Agent and MCP tools.
 
+Discovery uses the same content-free issue envelope for an unknown Action id
+(`unknown_action` at `id` or `actionId`) and an unknown input hint
+(`unknown_field` at `fieldPath`). Identifiers are located by path rather than
+echoed. Native callers can repair the named operand without receiving rejected
+values or private input content. Missing or contradictory inventory selections
+use `invalid_selection` at the relevant `draftInput` field. The shared selection
+owner preserves that refusal through both option resolution and direct reads.
+
 In 0.3 development, `mcp.servers.duplicate` accepts only `{ serverId }` and returns
 `{ serverId: <new id> }`. The Protocol MCP Action owner reads the current Account
 catalog, allocates the copy's identity and unique name, and commits its configuration
@@ -4379,6 +4387,17 @@ inventory does not require an empty snapshot: omit `configuration` when no
 override is needed. The configuration schema sections expose this typed shape
 after the existing strict JSON normalization.
 
+Supply the selected native `modelId` to `agents.config_options.list` to include
+that model's declared `modelOptions` alongside session-wide controls. A model's
+declaration takes precedence for the same option id; choices from other models
+are not combined. Session lookup reads the model from `modelSelection` or the
+stamped configuration, and Run lookup reads `draftInput.modelId`. Public option
+definitions contain allowed values, never current selections. These inventory
+Actions bind their Home from authenticated host context: omit `serverId` in
+`agents.models.list`, `agents.config_options.list`, `agents.session_modes.list`
+and `sessions.spawn.connected_services.list`. A supplied `serverId` is refused
+at that field; select the Home through the invoking transport instead.
+
 For execution Run model/config/Connected option lookup, set
 `draftInput.backendTargetKey` to the selected backend choice's string `value`;
 the start input's `backendTarget` object alone does not select an inventory.
@@ -4386,7 +4405,7 @@ Execution Run `configOptions` maps option ids directly to scalar values.
 Inline Workflow definitions put model selection and effort on `defaults.engine`
 or a step's `execution.engine`; use `effort`, rather than a
 `reasoning_effort` entry in `sessionConfigOptionOverrides`. Run
-`workflow.definition.validate` before starting an authored definition. These
+`workflow.validate` before starting an authored definition. These
 contracts share discovery and admission owners with UI, CLI and external plugins.
 
 The read uses the daemon's retained Provider services through its existing

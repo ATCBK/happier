@@ -2,7 +2,7 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { isProjectWorkspaceSyncPreparationActionV1 } from './projectActionIdsV1.js';
 import type { RuntimeActionExecuteArgs } from './executor/types.js';
 import { DaemonLocalServiceLauncherStartRequestV1Schema, LocalServiceStartApprovalReviewV1Schema } from '../local/services/launcher/v1.js';
-import { actionInputValidationFailure } from './executor/actionInputValidation.js';
+import { actionInputIssueFailure, actionInputValidationFailure } from './executor/actionInputValidation.js';
 import { CodeIntelligenceActionInputSchema, CodeIntelligenceFileActionInputSchema, CodeIntelligenceRestartActionInputSchema, CodeIntelligenceRenamePreviewInputSchema, CodeIntelligenceFileRenamePreviewInputSchema, CodeIntelligenceEditApplyInputSchema, CodeIntelligenceCodeActionApplyInputSchema } from './codeIntelligenceActionFamily.js';
 import { DaemonLspQueryResponseSchema, DaemonLspRestartResponseSchema, DaemonLspApplyResponseSchema, type DaemonLspApplyRequest, type DaemonLspQueryRequest } from '../machines/languageIntelligence.js';
 import { queryCodeIntelligenceFallback } from '../machines/codeIntelligenceFallback.js';
@@ -7386,7 +7386,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           } catch {
             const contributedDefinition = getContributedActionDefinition(requestedId, ctx);
             if (!contributedDefinition) {
-              return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+              return actionInputIssueFailure({ code: 'unknown_action', path: ['id'] });
             }
             const credentialFailure = credentialScopeFailure(requestedId, ctx, undefined, true);
             if (credentialFailure) return credentialFailure;
@@ -7490,7 +7490,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             } catch {
               contributedDefinition = getContributedActionDefinition(actionIdRaw, ctx);
               if (!contributedDefinition) {
-                return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+                return actionInputIssueFailure({ code: 'unknown_action', path: ['actionId'] });
               }
             }
             if (contributedDefinition) {
@@ -7532,7 +7532,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             }
             const field = findActionInputFieldHint(requestedSpec, fieldPath);
             if (!field) {
-              return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+              return actionInputIssueFailure({ code: 'unknown_field', path: ['fieldPath'] });
             }
 
             const typedOptions = await resolveTypedFieldOptions(field, requestedSpec.id);
@@ -9067,16 +9067,6 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return completeActionResult(res);
         }
 
-        if (
-          (actionId === 'agents.models.list'
-            || actionId === 'agents.config_options.list'
-            || actionId === 'agents.session_modes.list'
-            || actionId === 'sessions.spawn.connected_services.list')
-          && hasOwn(data, 'serverId')
-        ) {
-          return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
-        }
-
         if (actionId === 'machines.agents.list') {
           if (!deps.machinesAgentsList) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
           const args = MachinesAgentsListInputSchema.parse(parsed.data);
@@ -9282,7 +9272,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:agents.config_options.list' };
           }
           const selectionArgs = await buildAgentInventorySelectionArgs({ deps, actionId: null, input: data });
-          if (!selectionArgs) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+          if ('ok' in selectionArgs) return selectionArgs;
           const res = await deps.agentsConfigOptionsList({
             ...selectionArgs,
             ...((data.machineId) ? { machineId: String(data.machineId) } : {}),
@@ -9300,7 +9290,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:agents.session_modes.list' };
           }
           const selectionArgs = await buildAgentInventorySelectionArgs({ deps, actionId: null, input: data });
-          if (!selectionArgs) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+          if ('ok' in selectionArgs) return selectionArgs;
           const res = await deps.agentsSessionModesList({
             ...selectionArgs,
             ...((data.machineId) ? { machineId: String(data.machineId) } : {}),
@@ -9322,7 +9312,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             input: data,
             agentScope: 'optional',
           });
-          if (!selectionArgs) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+          if ('ok' in selectionArgs) return selectionArgs;
           const res = await deps.spawnProfilesList({
             ...selectionArgs,
             ...(typeof data.limit === 'number' ? { limit: data.limit } : {}),
@@ -9335,7 +9325,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:sessions.spawn.connected_services.list' };
           }
           const selectionArgs = await buildAgentInventorySelectionArgs({ deps, actionId: null, input: data });
-          if (!selectionArgs) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+          if ('ok' in selectionArgs) return selectionArgs;
           const res = await deps.spawnConnectedServicesList({
             ...selectionArgs,
             ...((data.machineId) ? { machineId: String(data.machineId) } : {}),
@@ -9369,7 +9359,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:sessions.spawn.mcp_servers.preview' };
           }
           const selectionArgs = await buildAgentInventorySelectionArgs({ deps, actionId: null, input: data });
-          if (!selectionArgs) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+          if ('ok' in selectionArgs) return selectionArgs;
           const directory = typeof data.directory === 'string' && data.directory.trim().length > 0
             ? data.directory.trim()
             : typeof data.path === 'string' && data.path.trim().length > 0
