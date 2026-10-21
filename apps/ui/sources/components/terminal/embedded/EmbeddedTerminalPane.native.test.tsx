@@ -168,10 +168,6 @@ vi.mock('@/components/ui/text/Text', () => ({
     Text: (props: Readonly<{ children?: React.ReactNode }>) => React.createElement('Text', props, props.children),
 }));
 
-vi.mock('@/components/ui/code/editor/codeEditorFontMetrics', () => ({
-    resolveCodeEditorFontMetrics: () => ({ fontSize: 14, lineHeight: 18 }),
-}));
-
 import { EmbeddedTerminalPane } from './EmbeddedTerminalPane.native';
 import type { EmbeddedTerminalPaneController } from './types';
 
