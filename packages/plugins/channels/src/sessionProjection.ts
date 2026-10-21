@@ -706,13 +706,14 @@ export async function projectConversationSessionTranscriptPage(input: Readonly<{
     }
     transcript = read;
   } catch (error) {
-    if (!input.signal.aborted && isTranscriptCursorRejected(error)) {
+    if (input.signal.aborted) return { kind: 'unavailable', reason: 'cancelled' };
+    if (isTranscriptCursorRejected(error)) {
       return await pauseForHistoryGap('cursorRejected');
     }
-    return {
-      kind: 'unavailable',
-      reason: input.signal.aborted ? 'cancelled' : 'transcriptUnavailable',
-    };
+    // The supervisor owns availability recovery and redacted failure logging.
+    // Hiding this exception in an ignored result can park the preserved
+    // frontier forever when no later Session invalidation arrives.
+    throw error;
   }
   if (input.signal.aborted) return { kind: 'unavailable', reason: 'cancelled' };
   if (transcript.sessionId !== binding.target.sessionId

@@ -30,6 +30,9 @@ still wait when the Session's publication or turn evidence is incomplete.
 Happier rechecks held publication pages automatically, so an eligible reply can
 go out when publication recovers without another Session message. Recovery uses
 the same delivery custody, preserving the rule against resending delivered replies.
+Failed transcript reads also leave the saved frontier unchanged and return to
+the supervisor's existing recovery cycle; diagnostic logs retain typed failure
+codes without transcript content.
 
 ## The two halves
 
@@ -249,7 +252,9 @@ calling the provider, it retains the message for that same backoff and checks
 the authority again on the next attempt. A confirmed route mismatch or invalid
 authority suppresses delivery; previously suppressed messages stay suppressed.
 If a send was already attempted and its outcome cannot be established, it stays
-unknown and does not resend automatically.
+unknown and does not resend automatically. In the development source, this also
+applies when the reconciliation handler is unavailable before its lookup starts:
+that failure does not establish whether the earlier send reached the recipient.
 
 When a connection starts, Happier does not swallow everything said in that
 conversation before you arrived. It offers a **history baseline** for you to

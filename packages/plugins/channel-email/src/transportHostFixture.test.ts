@@ -1,11 +1,13 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import { getConversationAttachmentIdRepresentationsV1, readConversationAttachmentIdV1 } from '@happier-dev/channels-protocol/v1';
+import { ConversationProvidersContributionPointV1, getConversationAttachmentIdRepresentationsV1, readConversationAttachmentIdV1 } from '@happier-dev/channels-protocol/v1';
 import { simpleParser } from 'mailparser';
 import { assertEmailTransportContributionV1 } from '@happier-dev/email-transports-protocol/testing/v1';
 import { definePlugin, type JsonValue, type PluginInvocationContext, type PluginServices, type TargetedContributionPointRef, type TargetedContributionSnapshot } from '@happier-dev/plugin-sdk';
 import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
 import { createPluginTestkit, type PluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { createPluginActionHandlerNotStartedError } from '@happier-dev/plugin-sdk/host/registration';
+import { defineProtocolJsonValue } from '@happier-dev/plugin-sdk/protocol';
 import { emailPlugin } from './plugin.js';
 import { EMAIL_CHANNEL_ACTION_IDS as ids } from './constants.js';
 import { channelsOperationOnlyTargetedContributionsFixture } from '../../channels/src/testkit/operationOnlyTargetedContributionsFixture.js';
@@ -13,13 +15,16 @@ import { CHANNELS_PLUGIN } from '../../channels/src/manifest.js';
 import { CHANNEL_STATE_COLLECTION } from '../../channels/src/collections.js';
 import { MemoryCollection } from '../../channels/src/testkit/memoryCollection.js';
 import { createCurrentConversationConnectionFixture } from '../../channels/src/testkit/currentConnectionFixture.js';
+import { createConversationOutwardDeliveryCollectionStore, type ConversationOutwardDeliveryObligation } from '../../channels/src/outwardDelivery.js';
+import { deliverConversationOutwardDeliveryThroughProviderAction, reconcileConversationOutwardDeliveryAttemptThroughProviderAction } from '../../channels/src/outwardDeliveryProviderActions.js';
 import { EmailTransportsContributionProtocolV1 as protocol, EmailTransportFetchRawInputV1Schema,
   EmailTransportSubmitRawInputV1Schema, EmailTransportFindSentInputV1Schema,
   type EmailTransportSubmitRawInputV1 } from './transports.js';
 import { ConversationAttachmentFetchResultV1Schema, ConversationPollResultV1Schema,
   MAX_CONVERSATION_ENDPOINT_DISPLAY_LABEL_CODE_POINTS,
   ConversationPrincipalResolveResultV1Schema,
-  ConversationTransportFactReportInputV1Schema, type ConversationTransportFactReportInputV1 } from '@happier-dev/channels-protocol/v1';
+  ConversationTransportFactReportInputV1Schema, type ConversationTransportFactReportInputV1,
+  type ConversationResolvedEndpointV1 } from '@happier-dev/channels-protocol/v1';
 
 const mailbox = 'wilson@example.com';
 const incoming = Buffer.from(['From: Alice <alice@example.com>', 'Message-ID: <incoming@example.com>',
@@ -70,7 +75,20 @@ async function fixture(options: { findSent?: boolean } = {}) {
   } }) } } } });
   assertEmailTransportContributionV1(transportPlugin.manifest);
   const transport = await createPluginTestkit({ manifest: transportPlugin.manifest, module: transportPlugin });
-  const state = new MemoryCollection();
+  const state = new MemoryCollection<Record<string, JsonValue>>();
+  // Account transport loss after SMTP acceptance leaves the durable attempt open.
+  let loseSettlement = false;
+  const deliveries = new MemoryCollection();
+  const putDelivery = deliveries.put.bind(deliveries);
+  deliveries.put = async (value, options) => {
+    const payload = value.payload;
+    if (loseSettlement && payload !== null && typeof payload === 'object' && 'state' in payload && payload.state === 'delivered') {
+      loseSettlement = false;
+      throw new Error('Account storage disconnected before settlement');
+    }
+    return putDelivery(value, options);
+  };
+  let reconciliationHandlerMissing = false;
   const materializationRef = { pluginId: emailPlugin.manifest.id, machineId: 'fixture-machine', materializationId: 'fixture-email' };
   await state.put(createCurrentConversationConnectionFixture({ connectionId: connection.connectionId, authority: {
     providerPluginId: emailPlugin.manifest.id, providerContributionSelection: { contributionId: 'email-provider' },
@@ -121,7 +139,48 @@ async function fixture(options: { findSent?: boolean } = {}) {
         register: (id, run) => api.actions.register(id, (input: Parameters<typeof run>[0], context) => run(input, withCatalog(context))),
       } });
     } } });
-  const channelsPlugin = definePlugin({ id: 'happier.channels', version: '0.0.0', actions: {
+  let channels: PluginTestkit;
+  const channelsPlugin = definePlugin({ id: 'happier.channels', version: '0.0.0',
+    contributionPoints: { providers: ConversationProvidersContributionPointV1 }, actions: {
+    custody: { title: 'Exercise Email custody recovery', surfaces: ['cli'], dangerLevel: 'writesRemote',
+      confirmation: { title: 'Exercise fixture custody?' },
+      async run(input, context) {
+        if (input === null || typeof input !== 'object' || Array.isArray(input)
+          || !('item' in input) || typeof input.item !== 'string') throw new Error('Expected fixture item');
+        const obligation: ConversationOutwardDeliveryObligation = {
+          connectionId: connection.connectionId, bindingId: 'fixture-binding',
+          routeAuthority: { connectionAuthorityEpoch: 1, bindingRevision: 1, bindingAuthorityEpoch: 1 },
+          source: { kind: 'sessionProjection', sessionId: 'fixture-session', semanticItemId: input.item },
+          endpoint: thread, content: { text: 'Reply' }, deliveryKey: `fixture-reply:${input.item}`,
+          replyContext: { replyToMessageId: '<incoming@example.com>' }, mentionPolicy: 'suppress', linkPreviewPolicy: 'suppress',
+        };
+        const store = createConversationOutwardDeliveryCollectionStore({ stateCollection: state,
+          deliveriesCollection: deliveries as unknown as Parameters<typeof createConversationOutwardDeliveryCollectionStore>[0]['deliveriesCollection'],
+          signal: context.signal, now: () => invokedAtMs });
+        // Only the host transport boundary is faulted; catalog, registration,
+        // Email core, raw transport, custody parsing and CAS all stay real.
+        const actions = new Proxy({ ...context.services.actions }, { get(target, property, receiver) {
+          if (property !== 'executeAdmittedTargetedOperationWithExecutionOrigin') return Reflect.get(target, property, receiver);
+          return (...args: Parameters<typeof target.executeAdmittedTargetedOperationWithExecutionOrigin>) => {
+            if (reconciliationHandlerMissing && args[0].identity.role === 'deliveryReconcile') {
+              throw createPluginActionHandlerNotStartedError({ code: 'plugin_action_handler_missing', message: 'Recovery handler unavailable' });
+            }
+            return target.executeAdmittedTargetedOperationWithExecutionOrigin(...args);
+          };
+        } });
+        const common = { stateCollection: state, targetedContributions: channelsOperationOnlyTargetedContributionsFixture(channels),
+          actions, store, signal: context.signal, now: () => invokedAtMs };
+        if ('recover' in input && input.recover === true) {
+          const lookup = await store.lookup(obligation);
+          if (lookup.kind !== 'rejoined') throw new Error('Expected retained custody');
+          return defineProtocolJsonValue().parse(await reconcileConversationOutwardDeliveryAttemptThroughProviderAction({
+            ...common, record: lookup.record, recoveryAttemptId: `recovery:${invokedAtMs}`, staleAfterMs: 0,
+          }));
+        }
+        return defineProtocolJsonValue().parse(await deliverConversationOutwardDeliveryThroughProviderAction({
+          ...common, obligation, attemptId: `attempt:${invokedAtMs}`,
+        }));
+      } },
     invoke: { title: 'Invoke email provider', surfaces: ['cli'], dangerLevel: 'writesRemote',
       confirmation: { title: 'Invoke fixture provider?' },
       run: (input, context) => {
@@ -132,12 +191,16 @@ async function fixture(options: { findSent?: boolean } = {}) {
         return context.services.actions.execute({ pluginId: emailPlugin.manifest.id, localId: request.action }, request.input ?? null);
       } },
   } });
-  const channels = await createPluginTestkit({ manifest: channelsPlugin.manifest, module: channelsPlugin, actionTargets: [email] });
+  channels = await createPluginTestkit({ manifest: channelsPlugin.manifest, module: channelsPlugin, actionTargets: [email],
+    targetedContributionContributors: [email] });
   return { sent, submissions, facts, receivedAtMs, setInvocationTime(value: number) { invokedAtMs = value; },
     setAmbiguous(value: boolean) { ambiguous = value; }, replaceFetched(raw: Uint8Array) { lookupOverride = raw; },
     setMessages(values: readonly (readonly [string, Uint8Array])[]) { for (const [ref, raw] of values) messages.set(ref, raw); refs = values.map(([ref]) => ref); },
     addMessage(ref: string, raw: Uint8Array) { messages.set(ref, raw); },
     setNotFound() { forceNotFound = true; },
+    loseNextSettlement() { loseSettlement = true; },
+    setReconciliationHandlerMissing(value: boolean) { reconciliationHandlerMissing = value; },
+    custody: (item: string, recover = false) => channels.invokeAction('custody', { item, recover }),
     retainCatalog() { retainedCatalog = email.readTargetedContributionFixture(emailPlugin.contributionPoints.transports); return retainedCatalog; },
     releaseCatalog() { retainedCatalog = undefined; },
     retireTransport: () => transport.dispose(),
@@ -149,11 +212,42 @@ const config = { mailbox, transport: { pluginId: 'acme.email.fixture', contribut
   trustStrategy: { kind: 'authenticationResults', authservId: 'mx.example.com' }, allowedDomains: ['example.com'] };
 const connection = { v: 1, connectionId: 'email-fixture', providerConnectionKey: `email:${mailbox}`,
   providerConfigVersion: 1, providerConfig: config, credentialRef: null };
-const thread = { kind: 'thread', audience: 'direct', id: '<root@example.com>', parentId: mailbox };
+const thread = { kind: 'thread', audience: 'direct', id: '<root@example.com>', parentId: mailbox } satisfies ConversationResolvedEndpointV1;
 const delivery = { ...connection, endpoint: thread, content: { text: 'Reply' }, deliveryKey: 'fixture-reply',
   replyContext: { replyToMessageId: '<incoming@example.com>' }, mentionPolicy: 'suppress', linkPreviewPolicy: 'providerDefault' };
 
 describe('email core with an external contributed raw transport', () => {
+  it('never resubmits accepted Email custody when a restart cannot start the Sent reconciliation handler, while a new answer still sends', async () => {
+    const f = await fixture();
+    try {
+      f.setInvocationTime(1_792_000_000_000);
+      f.loseNextSettlement();
+      const initial = await f.custody('answer-1');
+      expect(f.submissions).toHaveLength(1);
+      expect(initial).toEqual(expect.objectContaining({ kind: 'settlementPending' }));
+      const firstMessageId = f.submissions[0]!.messageId;
+      f.setInvocationTime(1_792_000_100_000);
+      f.setReconciliationHandlerMissing(true);
+      const recovery = await f.custody('answer-1', true);
+      // Recovering the host transport cannot turn an unobserved Sent lookup
+      // into evidence that the original SMTP submission never happened.
+      f.setReconciliationHandlerMissing(false);
+      f.setInvocationTime(1_792_001_000_000);
+      await f.custody('answer-1');
+      expect(f.submissions.map(request => request.messageId)).toEqual([firstMessageId]);
+      expect(recovery).toMatchObject({ kind: 'settled', custody: { state: 'outcomeUnknown' } });
+      await expect(f.custody('answer-2')).resolves.toMatchObject({ kind: 'settled', custody: { state: 'delivered' } });
+      expect(f.submissions).toHaveLength(2);
+      expect(f.submissions[1]!.messageId).not.toBe(firstMessageId);
+      // An available Sent lookup still settles an accepted-but-unsettled send.
+      f.loseNextSettlement();
+      await expect(f.custody('answer-3')).resolves.toMatchObject({ kind: 'settlementPending' });
+      await expect(f.custody('answer-3', true)).resolves.toMatchObject({ kind: 'settled', custody: { state: 'delivered' } });
+      await f.custody('answer-3');
+      expect(f.submissions).toHaveLength(3);
+    } finally { await f.dispose(); }
+  });
+
   it('keeps retained seed1 attachment evidence stable across the portable attachment codec extraction', async () => {
     // Original retained harness 3-wilson.eml, read-only from nl3 on 2026-10-21.
     // Store with LF; reconstruct its original RFC5322 CRLF bytes at the boundary.

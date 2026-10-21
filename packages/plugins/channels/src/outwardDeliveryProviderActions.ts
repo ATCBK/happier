@@ -262,8 +262,9 @@ function createConversationOutwardDeliveryProviderActionBoundary(input: Readonly
           const result = ConversationDeliveryResultV1Schema.safeParse(execution.result);
           return result.success ? result.data : { kind: 'outcomeUnknown' };
         } catch (error) {
-          // Only this admitted transport proves a no-handler miss is retry-safe.
-          return isPluginActionHandlerInvocationNotStartedAdvisory(error)
+          // A missing delivery handler proves no send started. A missing
+          // reconciliation handler says nothing about the earlier send.
+          return input.operation === 'deliver' && isPluginActionHandlerInvocationNotStartedAdvisory(error)
             ? { kind: 'notDelivered', retry: 'safe' } : { kind: 'outcomeUnknown' };
         }
       };

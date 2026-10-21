@@ -3099,6 +3099,61 @@ describe('Channels outward-delivery supervisor', () => {
     expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('secret');
   });
 
+  it('recovers a failed transcript read through projection and custody without a new invalidation or duplicate reply', async () => {
+    const state = new MemoryCollection();
+    const deliveries = new MemoryCollection();
+    await seedProjectionState(state);
+    const binding = state.rows.get('binding-1');
+    if (binding === undefined || !isChannelStateJsonRecord(binding.value.payload)) throw new Error('Expected binding');
+    await state.put({ ...binding.value, payload: { ...binding.value.payload,
+      target: { ...sessionTarget, policy: { ...sessionTarget.policy, deliveryMode: 'repliesOnly' } },
+    } }, { expectedRevision: binding.revision });
+    const logger = { warn: vi.fn() };
+    let available = false;
+    const execute = vi.fn(async (action: string, input: Readonly<{ cursor?: string | null }>) => {
+      if (action === 'session.permission.remote.pending.list') return emptyPendingPermissionPage();
+      if (action !== 'session.transcript.get') throw new Error(`Unexpected Action ${action}`);
+      if (!available) throw new PluginError({ code: 'service_unavailable', retryable: true, message: 'secret transcript read detail' });
+      return {
+        ok: true, projection: 'externalShareableV1', sessionId: 'session-1',
+        scannedThroughSeq: 5, nextCursor: '5', hasMore: false,
+        items: input.cursor === '5' ? [] : [{
+          kind: 'assistantText', sessionId: 'session-1', seq: 5, itemId: 'recovered-final',
+          turnId: 'turn-1', final: 'completed', text: 'Recovered answer',
+          consumedInputs: [{ localId: 'input-1', origin: {
+            v: 1, producer: 'pluginSession', actor: 'machine',
+            sourceAuthority: { mediatorPluginId: 'happier.channels', sourceRef: 'channels:binding:binding-1' },
+          } }],
+        }],
+      };
+    });
+    const deliver = vi.fn(async () => ({ result: { kind: 'delivered', providerMessageIds: ['recovered-receipt'] },
+      executionOrigin: providerTransportOrigin }));
+    const context = backgroundContext({ state, deliveries, execute,
+      executeAdmittedTargetedOperationWithExecutionOrigin: deliver, logger });
+
+    const failed = await runConversationOutwardDeliveryCycle({ context, now: () => 100 });
+    expect(failed.nextWakeAt).toBe(1_100);
+    expect(logger.warn).toHaveBeenCalledWith('[Channels] outward delivery supervisor work failed', {
+      boundary: 'transcript-projection', bindingId: 'binding-1', code: 'service_unavailable', retryable: true,
+    });
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('secret');
+    expect(deliveries.rows.size).toBe(0);
+    expect(state.rows.get('projection-frontier:binding-1')?.value.payload).toMatchObject({ lastScannedSeq: 0 });
+
+    available = true;
+    await runConversationOutwardDeliveryCycle({ context, now: () => 1_100 });
+    expect([...deliveries.rows.values()].map(row => row.value.payload)).toEqual([
+      expect.objectContaining({ state: 'delivered', providerMessageIds: ['recovered-receipt'] }),
+    ]);
+    expect(state.rows.get('projection-frontier:binding-1')?.value.payload).toMatchObject({
+      transcriptCursor: '5', lastScannedSeq: 5,
+    });
+    await runConversationOutwardDeliveryCycle({ context, now: () => 1_101 });
+    expect(deliveries.rows.size).toBe(1);
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
   it('C3 RED logs binding discovery and transcript projection failures, then stays silent for abort', async () => {
     const state = new MemoryCollection();
     const deliveries = new MemoryCollection();
