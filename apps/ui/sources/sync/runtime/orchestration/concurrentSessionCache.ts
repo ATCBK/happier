@@ -1,6 +1,6 @@
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { attachManagedSessionHumanPresenceSocket } from '@/sync/domains/session/humanPresence/attachManagedSessionHumanPresenceSocket';
-import { publishHomeAccountChange } from './homeAccountChange';
+import { invalidateHomeAccountReadJoins, publishHomeAccountChange } from './homeAccountChange';
 import { PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes';
 import { EphemeralUpdateSchema, UpdateContainerSchema } from '@happier-dev/protocol/updates';
 import { notifyExecutionRunActivityFromUpdate, notifyExecutionRunActivityReconnect } from '@/sync/runtime/executionRuns/executionRunActivityBus';
@@ -25,6 +25,7 @@ import { resolveUiClientEncryptionRequirementForScope } from '@/sync/domains/set
 import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { clearMachineRequestReachabilityForMachine } from '@/sync/domains/machines/reachability/machineReachability';
 import {
     getEffectiveServerSelectionFromRawSettings,
     type RawServerSelectionSettings,
@@ -157,6 +158,7 @@ type ManagedConcurrentServer = {
     id: string;
     serverUrl: string;
     serverName: string;
+    readonly homeConnectionDescriptor?: HomeConnectionDescriptorV1;
     credentials: AuthCredentials;
     socket: ConcurrentServerSocket | null;
     socketTransport: ManagedConnectionTransport | null;
@@ -1276,6 +1278,9 @@ async function disposeManagedServer(entry: ManagedConcurrentServer): Promise<voi
     const irohLease = entry.irohLease;
     entry.irohLease = null;
     if (managedServers.get(entry.id) === entry) {
+        // A replacement HTTP carrier can be online before its socket connects.
+        // New page demand must not join work bound to this retired entry.
+        invalidateHomeAccountReadJoins(entry.id);
         managedServers.delete(entry.id);
     }
     invalidateCachedTransferRoutesForServer({ serverId: entry.id });
@@ -1303,6 +1308,7 @@ function createManagedServer(
         id: target.id,
         serverUrl: normalizedServerUrl,
         serverName: target.serverName,
+        homeConnectionDescriptor: target.homeConnectionDescriptor,
         credentials,
         socket: null,
         socketTransport: null,
@@ -1505,6 +1511,10 @@ async function connectManagedServer(
             socket.on('ephemeral', (raw: unknown) => {
                 if (!isManagedServerActive(entry)) return;
                 const usage = EphemeralUpdateSchema.safeParse(raw);
+                if (usage.success && usage.data.type === 'machine-activity'
+                    && usage.data.active === true && usage.data.reconnected === true && ingressAccountId) {
+                    clearMachineRequestReachabilityForMachine({ serverId: entry.id, accountId: ingressAccountId }, usage.data.id);
+                }
                 if (usage.success && (usage.data.type === 'usage' || usage.data.type === 'usage-sources-invalidated')) {
                     publishHomeAccountChange(entry.id, [PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1]);
                     return;

@@ -293,7 +293,7 @@ describe('apiSocket reconnect semantics', () => {
         expect(onReconnected).toHaveBeenCalledTimes(1);
     });
 
-    it.each(['socket-drop', 'home-outage', 'first-connection'] as const)('recovers a demanded retired inventory watch through the focused Home connection (%s)', async recovery => {
+    it.each(['socket-drop', 'home-outage', 'first-connection', 'daemon-restart'] as const)('recovers a demanded retired inventory watch through the focused Home connection (%s)', async recovery => {
         const token = `e30.${Buffer.from(JSON.stringify({ sub: 'self' })).toString('base64')}.signature`;
         const { socket, trigger } = await boot({ token });
         if (recovery !== 'first-connection') await connect(socket);
@@ -313,9 +313,17 @@ describe('apiSocket reconnect semantics', () => {
         });
         try {
             await vi.waitFor(() => expect(watches).toBe(1));
-            if (recovery === 'socket-drop') trigger('disconnect', 'transport close');
-            if (recovery !== 'first-connection') emitReachability('offline');
-            await connect(socket);
+            if (recovery === 'daemon-restart') {
+                trigger('ephemeral', { type: 'machine-activity', id: key.machineId, active: true, activeAt: 1 });
+                trigger('ephemeral', { type: 'machine-activity', id: 'another-machine', active: true, activeAt: 2, reconnected: true });
+                await Promise.resolve();
+                expect(watches).toBe(1);
+                trigger('ephemeral', { type: 'machine-activity', id: key.machineId, active: true, activeAt: 3, reconnected: true });
+            } else {
+                if (recovery === 'socket-drop') trigger('disconnect', 'transport close');
+                if (recovery !== 'first-connection') emitReachability('offline');
+                await connect(socket);
+            }
             await vi.waitFor(() => expect(inventory.getLocalServiceInventoryState(key).generatedAt).toBe(2));
         } finally { dispose(); inventory.resetLocalServiceInventoryStoreForTests(); }
     });

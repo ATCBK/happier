@@ -510,7 +510,7 @@ describe('Service Runs on through the placement and relocation Actions', () => {
     } finally { await h.screen.unmount(); }
   });
 
-  it.each(['devbox', 'hz-build-1'])('keeps canonical Start progress over failed binding reads on %s and refreshes on settlement', async machineId => {
+  it.each(['devbox', 'hz-build-1'])('keeps canonical Start progress while active, then exposes failed binding observation on %s', async machineId => {
     const h = await setup({ running: false, actualFails: true, liveFeeds: true, sharedObservation: true, waitEnabled: false });
     const workspace = { serverId: h.serverId, machineId: 'devbox', workspaceId: 'checkout', rootPath: '/src/happier' };
     let operation = ActionOperationSnapshotV1Schema.parse({ version: 1, operationId: 'external-start', revision: 1,
@@ -543,10 +543,10 @@ describe('Service Runs on through the placement and relocation Actions', () => {
         result: { status: 'succeeded', currentTarget } });
       await act(async () => publishActionOperationObservation({ serverId: h.serverId, machineId, observation: 'available', snapshots: [operation] }));
       await flushHookEffects();
-      expect(h.screen.findByTestId('service-row-status-unavailable')).toBeNull();
+      await vi.waitFor(() => expect(h.screen.findByTestId('service-row-status-unavailable'), h.screen.getTextContent()).toBeTruthy());
       expect(h.screen.findByTestId('service-row-start')).toBeNull();
       expect(h.screen.getTextContent()).not.toContain('localServices.row.startingOn');
-      expect(h.screen.getTextContent()).toContain(`localServices.row.onMachine:{"machine":"${machineId === 'devbox' ? 'Source workstation' : 'Worker workstation'}"}`);
+      expect(h.screen.getTextContent()).not.toContain('common.loading');
       h.setActualFails(false);
       await act(async () => { h.setRowMachine(machineId); h.setRunning(true);
         publishLocalServiceInventorySnapshot({ serverId: h.serverId, machineId }, {
@@ -587,8 +587,9 @@ describe('Service Runs on through the placement and relocation Actions', () => {
         result: { status: 'moved', currentTarget } });
       await act(async () => publishActionOperationObservation({ serverId: h.serverId, machineId: 'devbox', observation: 'available', snapshots: [operation] }));
       await flushHookEffects();
-      expect(h.screen.findByTestId('service-row-status-unavailable')).toBeNull();
+      await vi.waitFor(() => expect(h.screen.findByTestId('service-row-status-unavailable'), h.screen.getTextContent()).toBeTruthy());
       expect(h.screen.findByTestId('service-row-start')).toBeNull();
+      expect(h.screen.getTextContent()).not.toContain('common.loading');
       h.setActualFails(false);
       await act(async () => { h.setRowMachine(machineId); h.setRunning(true);
         publishLocalServiceInventorySnapshot({ serverId: h.serverId, machineId }, {

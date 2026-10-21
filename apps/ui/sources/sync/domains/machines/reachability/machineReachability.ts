@@ -19,6 +19,7 @@ type MachineRequestObservationInput = MachineReachabilityScope & Readonly<{
 
 const observations = new Map<string, MachineRequestReachabilityObservation>();
 const listeners = new Set<() => void>();
+const recoveryListeners = new Set<(scope: MachineReachabilityScope, machineId: string) => void>();
 let revision = 0;
 
 function observationKey(scope: MachineReachabilityScope | null | undefined, machineId: string | null | undefined, route?: MachineRequestObservationInput['route']): string | null {
@@ -68,6 +69,12 @@ export function subscribeMachineRequestReachability(listener: () => void): () =>
     return () => listeners.delete(listener);
 }
 
+/** Authenticated daemon reconnects wake retired reads even when no failed request was cached. */
+export function subscribeMachineRequestRecovery(listener: (scope: MachineReachabilityScope, machineId: string) => void): () => void {
+    recoveryListeners.add(listener);
+    return () => { recoveryListeners.delete(listener); };
+}
+
 export function readMachineRequestReachabilityRevision(): number {
     return revision;
 }
@@ -96,9 +103,11 @@ export function clearMachineRequestReachabilityForMachine(scope: MachineReachabi
     const changed = observations.delete(key);
     const directKey = observationKey(scope, machineId, 'loopback_direct');
     const directChanged = directKey ? observations.delete(directKey) : false;
-    if (!changed && !directChanged) return;
-    revision += 1;
-    for (const listener of listeners) listener();
+    if (changed || directChanged) {
+        revision += 1;
+        for (const listener of listeners) listener();
+    }
+    for (const listener of recoveryListeners) listener(scope, machineId);
 }
 
 export function clearMachineRequestReachabilityForScope(scope: MachineReachabilityScope): void {

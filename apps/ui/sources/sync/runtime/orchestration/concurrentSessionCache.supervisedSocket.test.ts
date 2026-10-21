@@ -28,6 +28,37 @@ function machineUpdate() { h.socket().trigger('update', { body: { t: 'update-mac
 function offline() { h.pool.reportServerUnreachable(h.homeB.serverUrl, new Error('Home unreachable'), h.homeB.token); }
 
 describe('concurrent session cache supervised sockets', () => {
+    it('recovers a retired Service watch when a daemon reconnects without reconnecting its Home', async () => {
+        await h.start(); await h.ready();
+        const inventory = await import('@/sync/domains/local/services/inventory/sharedStore');
+        const reachability = await import('@/sync/domains/machines/reachability/machineReachability');
+        const key = { serverId: h.homeB.id, machineId: 'service-machine' };
+        const snapshot = { v: 1 as const, machineId: key.machineId, generatedAt: 1,
+            refreshState: 'idle' as const, entries: [], diagnostics: [] };
+        let watches = 0;
+        disposers.push(() => inventory.resetLocalServiceInventoryStoreForTests());
+        disposers.push(() => reachability.clearMachineRequestReachabilityForTest());
+        disposers.push(inventory.subscribeLocalServiceInventoryStore(key, () => {}, {
+            snapshotClient: async () => ({ ok: true, snapshot }),
+            watchClient: async () => {
+                if (++watches === 1) return { ok: false, reason: 'request_failed' };
+                if (watches === 2) return { ok: true, changed: true, snapshot: { ...snapshot, generatedAt: 2 } };
+                return new Promise(() => {});
+            },
+        }));
+        await vi.waitFor(() => expect(inventory.getLocalServiceInventoryState(key).refreshState).toBe('error'));
+        const scope = { serverId: key.serverId, accountId: 'account-b' };
+        reachability.recordMachineRequestFailed({ ...scope, machineId: key.machineId });
+        const socket = h.socket();
+        socket.trigger('ephemeral', { type: 'machine-activity', id: key.machineId, active: true, activeAt: 1 });
+        socket.trigger('ephemeral', { type: 'machine-activity', id: 'another-machine', active: true, activeAt: 2, reconnected: true });
+        await Promise.resolve();
+        expect(watches).toBe(1);
+        socket.trigger('ephemeral', { type: 'machine-activity', id: key.machineId, active: true, activeAt: 3, reconnected: true });
+        await vi.waitFor(() => expect(inventory.getLocalServiceInventoryState(key).generatedAt).toBe(2));
+        expect(reachability.readMachineRequestReachabilityObservation(scope, key.machineId)).toBeNull();
+        expect(socket.socket.connected).toBe(true);
+    });
     it('retains the same managed Home and its rows while canonical identity discovery rereads its credentials', async () => {
         h.setSessions(h.homeB, [h.session({ id: 'retained-across-discovery' })]);
         await h.start(); await h.ready();

@@ -402,7 +402,7 @@ export function ServiceRowView(props: Readonly<{
     const declaration = row.target.declaration;
     const relocation = useProjectServicePlacementObservation(declaration?.selection.kind === 'manifest' ? declaration.selection.name : '',
         undefined, { declarationWorkspaceRefId: declaration?.workspaceRefId, absent: row.status === 'stopped',
-            bindingPending: row.reasonCode === 'project_service_binding_pending' || row.reasonCode === 'project_service_binding_unavailable',
+            bindingPending: row.reasonCode === 'project_service_binding_pending',
             machineId: row.target.machineId,
             managedServiceId: row.target.sourceClass?.kind === 'managed_service' ? row.target.sourceClass.managedServiceId : undefined });
     const recoverable = relocation.stoppedBeforeStart;

@@ -15,6 +15,7 @@ import { publishLocalServiceInventorySnapshot, resetLocalServiceInventoryStoreFo
 import { useLocalServiceLiveFeeds } from './useLocalServiceLiveFeeds';
 import { buildLocalServiceRows } from '@/sync/domains/local/services/serviceRow';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { clearMachineRequestReachabilityForMachine } from '@/sync/domains/machines/reachability/machineReachability';
 
 const remote = vi.hoisted(() => vi.fn());
 const alert = vi.hoisted(() => vi.fn());
@@ -29,7 +30,7 @@ afterEach(async () => { await home?.dispose(); home = undefined; resetLocalServi
   storage.getState().clearProjectAccountRowsScope(); remote.mockReset(); alert.mockReset(); });
 
 describe('Project Services source feed plus actual native binding', () => {
-  it.each(['watch', 'home-reconnect', 'home-reconnect-invalid'] as const)('updates a mounted stopped declaration after an external Start (%s)', async recovery => {
+  it.each(['watch', 'home-reconnect', 'home-reconnect-invalid', 'daemon-restart'] as const)('updates a mounted stopped declaration after an external Start (%s)', async recovery => {
     home = await createPlainArtifactHomeFixture('https://project-services-external-start.test', { handleRequest: async path =>
       path === '/v1/machines?includeRevoked=true' ? new Response(JSON.stringify([
         { id: 'source', revokedAt: null, replacedByMachineId: null },
@@ -68,16 +69,23 @@ describe('Project Services source feed plus actual native binding', () => {
       await vi.waitFor(() => expect(watches).toHaveLength(1));
       if (recovery !== 'watch') {
         // Non-timeout transport failure or invalid reply, without navigating the Services page.
-        await act(async () => { watches[0]!(recovery === 'home-reconnect'
+        await act(async () => { watches[0]!(recovery !== 'home-reconnect-invalid'
           ? new RpcError('Transport unavailable', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) : { invalid: true }); });
         await flushHookEffects();
         expect.soft(hook.getCurrent().inventoryState.refreshState).toBe('error');
         expect.soft(readRows()[0]).toMatchObject({ id: declaration.id, status: 'unavailable', primaryAction: null });
         expect(watches).toHaveLength(1);
         await act(async () => { publishHomeAccountChange('another-home', undefined, { source: 'connected' }); });
+        await act(async () => {
+          clearMachineRequestReachabilityForMachine({ ...scope, serverId: 'another-home' }, source.machineId);
+          clearMachineRequestReachabilityForMachine(scope, 'another-machine');
+        });
         await flushHookEffects();
         expect(watches).toHaveLength(1);
-        await act(async () => { publishHomeAccountChange(serverId, undefined, { source: 'connected' }); });
+        await act(async () => {
+          if (recovery === 'daemon-restart') clearMachineRequestReachabilityForMachine(scope, source.machineId);
+          else publishHomeAccountChange(serverId, undefined, { source: 'connected' });
+        });
         await vi.waitFor(() => expect(watches).toHaveLength(2));
       }
       running = true;
@@ -357,8 +365,11 @@ describe('Project Services source feed plus actual native binding', () => {
       snapshot: { v: 1 as const, machineId: input.machineId, updatedAt: running ? 1 : 2,
         targets: input.projection === 'managed_bindings' ? input.machineId === 'worker' && running ? [actual] : [] : [declaration] } };
     };
+    const watchReplies = new Map<string, (value: unknown) => void>();
     remote.mockImplementation(async ({ method, machineId }: { method: string; machineId: string }) => {
-      if (method.endsWith('.watch')) return new Promise(() => {});
+      if (method.endsWith('.watch')) return new Promise((resolve, reject) => {
+        watchReplies.set(machineId, value => value instanceof Error ? reject(value) : resolve(value));
+      });
       return { protocolVersion: 1, snapshot: { v: 1, machineId, generatedAt: 1, refreshState: 'idle', entries: [], diagnostics: [] } };
     });
     const hook = await renderHook(() => useLocalServiceLiveFeeds({ machineId: 'source', serverId,
@@ -369,6 +380,11 @@ describe('Project Services source feed plus actual native binding', () => {
       launchTargets: [...hook.getCurrent().launcherState!.targetsById.values()],
       rowIdsByTargetId: hook.getCurrent().launcherState?.rowIdsByTargetId, sessionId: null, scope: 'workspace' });
     expect(readRows()[0]).toMatchObject({ id: declaration.id, target: actual });
+    await vi.waitFor(() => expect(watchReplies.has('worker')).toBe(true));
+    await act(async () => { watchReplies.get('worker')!(new RpcError('Daemon disconnected', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE)); });
+    await vi.waitFor(() => expect(readRows()[0]).toMatchObject({ id: declaration.id, status: 'unavailable', primaryAction: null }));
+    await act(async () => { clearMachineRequestReachabilityForMachine(scope, 'worker'); });
+    await vi.waitFor(() => expect(readRows()[0]).toMatchObject({ id: declaration.id, status: 'running', target: actual }));
     running = false;
     await act(async () => { publishLocalServiceInventorySnapshot({ serverId, machineId: 'worker' }, {
       v: 1, machineId: 'worker', generatedAt: 2, refreshState: 'idle', entries: [], diagnostics: [] }); });

@@ -4,6 +4,7 @@ import { apiSocket } from '@/sync/api/session/apiSocket';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { subscribeMachineRequestRecovery } from '@/sync/domains/machines/reachability/machineReachability';
 import {
     type LocalServiceInventorySnapshotClientInput,
     type LocalServiceInventorySnapshotClientResult,
@@ -113,7 +114,10 @@ const store = createSharedSubscriptionStore<
         const detachConcurrent = subscribeHomeAccountChange(event => {
             if (event.source === 'connected' && matchesHome(event.serverId)) recover();
         });
-        return () => { detachFocused(); detachConcurrent(); };
+        const detachMachine = subscribeMachineRequestRecovery((scope, machineId) => {
+            if (machineId === input.machineId && matchesHome(scope.serverId)) recover();
+        });
+        return () => { detachFocused(); detachConcurrent(); detachMachine(); };
     },
     applySnapshot: applyLocalServiceInventorySnapshot,
     defaultWatchClient,
