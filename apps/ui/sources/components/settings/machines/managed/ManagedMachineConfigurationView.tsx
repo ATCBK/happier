@@ -36,6 +36,7 @@ import { useManagedProvisioners } from './useManagedProvisioners';
 import { useManagedMachineAccountSettings } from './useManagedMachineAccountSettings';
 import { MANAGED_PROVISIONER_MARK_SIZE, useManagedProvisionerPresentation } from './useManagedProvisionerPresentation';
 import { useManagedProvisionerOptionsInput } from './useManagedProvisionerOptionsInput';
+import { useSettledSelectors } from './useSettledSelectors';
 import { ActionInputFields } from '@/components/sessions/actions/ActionInputFields';
 import { buildSessionActionFieldOptionsResolver } from '@/components/sessions/actions/sessionActionFieldOptions';
 import { useInputFieldOptions } from '@/components/sessions/actions/useInputFieldOptions';
@@ -176,6 +177,9 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
         ? managedConfiguratorOptionsSelectors(draft, optionsInput.schema, optionHints) : null,
         [draft?.optionsSelectors, draft?.selected, draft?.preset, optionsInput, optionHints]);
     const selectorKey = JSON.stringify(selectors);
+    // The fields show the live draft; the provider is asked once the person pauses editing.
+    const readSelectors = useSettledSelectors(selectors, selectorKey);
+    const readSelectorKey = JSON.stringify(readSelectors);
     // The fields show what the read is asked with: the person's values over the provider's declared defaults.
     const fieldInput = React.useMemo<Record<string, unknown>>(() => {
         const base = draft?.optionsSelectors ? { ...draft.optionsSelectors }
@@ -315,8 +319,8 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
         const input = { homeId: catalog.homeId, controller, contribution: catalogProvisioner.contribution, ...(credentials.length ? { credentials } : {}) };
         void Promise.all([
             catalog.client.read('machines.provisioners.check', input, { signal: abort.signal, onApprovalPending }),
-            optionsInput.kind === 'ready' && selectors !== null
-                ? catalog.client.read('machines.provisioners.options', { ...input, selectors }, { signal: abort.signal, onApprovalPending })
+            optionsInput.kind === 'ready' && readSelectors !== null
+                ? catalog.client.read('machines.provisioners.options', { ...input, selectors: readSelectors }, { signal: abort.signal, onApprovalPending })
                 : Promise.resolve(null),
         ]).then(([check, options]) => {
             if (abort.signal.aborted || !binding.isCurrent()) return;
@@ -333,7 +337,7 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
         }).catch(() => { if (!abort.signal.aborted) { setError('unavailable'); setDraft(current => current ? { ...current, optionStatus: 'unavailable' } : current); } });
         return () => abort.abort();
     }, [catalogCurrent, presetQuery.sameScope, catalog.binding, catalog.homeId, catalog.client, catalogProvisioner, catalogController, controller?.machineId, controller?.installationId,
-        draft?.credentials, draft?.provisioner, credentialsReady, optionsInput, selectorKey, readRevision]);
+        draft?.credentials, draft?.provisioner, credentialsReady, optionsInput, readSelectorKey, readRevision]);
 
     const effectiveDraft = React.useMemo(() => presetQuery.sameScope && draft && accountSettings.settings
         ? { ...draft, categoryPreferences: accountSettings.settings.machineRetentionDefaultsV1 } : null, [presetQuery.sameScope, draft, accountSettings.settings]);
