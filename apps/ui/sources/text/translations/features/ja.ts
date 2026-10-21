@@ -15807,3 +15807,5 @@ export {
     Domain_workspaceSyncDiagnosticTranslations as workspaceSyncDiagnosticTranslations,
     Domain_workspaceTabTranslations as workspaceTabTranslations,
 };
+        hideControls: "コントロールを隠す",
+        showControls: "コントロールを表示",

@@ -182,3 +182,7 @@ export const fileViewerTranslationsEnglish = {
     },
   },
 } satisfies Pick<Record<string, FileViewerTranslations>, 'en'>;
+    hideControls: string;
+    showControls: string;
+      hideControls: 'Hide controls',
+      showControls: 'Show controls',

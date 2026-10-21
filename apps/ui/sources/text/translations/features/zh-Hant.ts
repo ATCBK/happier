@@ -15781,3 +15781,5 @@ export {
     Domain_workspaceSyncDiagnosticTranslations as workspaceSyncDiagnosticTranslations,
     Domain_workspaceTabTranslations as workspaceTabTranslations,
 };
+        hideControls: "隱藏控制項",
+        showControls: "顯示控制項",

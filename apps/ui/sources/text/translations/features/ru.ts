@@ -15871,3 +15871,5 @@ export {
     Domain_workspaceSyncDiagnosticTranslations as workspaceSyncDiagnosticTranslations,
     Domain_workspaceTabTranslations as workspaceTabTranslations,
 };
+        hideControls: "Скрыть элементы управления",
+        showControls: "Показать элементы управления",

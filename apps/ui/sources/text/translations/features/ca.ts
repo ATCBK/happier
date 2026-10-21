@@ -15862,3 +15862,5 @@ export {
     Domain_workspaceSyncDiagnosticTranslations as workspaceSyncDiagnosticTranslations,
     Domain_workspaceTabTranslations as workspaceTabTranslations,
 };
+        hideControls: "Amaga els controls",
+        showControls: "Mostra els controls",

@@ -9,12 +9,13 @@ import { MediaPicture } from '../MediaPicture';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { ModalProvider } from '@/modal';
 
+const windowSize = vi.hoisted(() => ({ width: 1024, height: 900 }));
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
     const { createCapturingFlatListMock } = await import('@/dev/testkit/mocks/virtualizedList');
     return createReactNativeNativeMock({ platformOS: 'ios' }, {
         ...createCapturingFlatListMock({ renderItems: true }).module,
-        useWindowDimensions: () => ({ width: 1024, height: 900, scale: 1, fontScale: 1 }),
+        useWindowDimensions: () => ({ width: windowSize.width, height: windowSize.height, scale: 1, fontScale: 1 }),
         AccessibilityInfo: { isReduceMotionEnabled: async () => true },
     });
 });
@@ -28,6 +29,38 @@ vi.mock('expo-router', async () => {
 });
 
 describe('canonical media stage opener', () => {
+    it('pages a phone gallery through its controls when the current item is a document', async () => {
+        const { openMediaStage } = await import('./useMediaStage');
+        windowSize.width = 390; windowSize.height = 844;
+        const screen = await renderScreen(<InjectedAuthProvider credentials={null}><ModalProvider><></></ModalProvider></InjectedAuthProvider>);
+        try {
+            const items: MediaStageItem[] = [
+                { kind: 'image', title: 'Hero.png', source: { enabled: true, source: { kind: 'uri', uri: 'blob:hero' } } },
+                { kind: 'pdf', title: 'Guide.pdf', source: { enabled: true, source: { kind: 'uri', uri: 'blob:guide' } } },
+            ];
+            await act(async () => { openMediaStage(items, 1); });
+            expect(screen.findByTestId('media-stage-pdf')).toBeTruthy();
+            expect(screen.findByTestId('media-stage-next')!.props.disabled).toBe(true);
+            await act(async () => screen.findByTestId('media-stage-previous')!.props.onPress());
+            expect(screen.findByTestId('media-stage-pdf')).toBeFalsy();
+            expect(screen.findByTestId('media-stage-image')!.props.source).toEqual({ uri: 'blob:hero' });
+            expect(screen.findByTestId('media-stage-previous')!.props.disabled).toBe(true);
+        } finally { windowSize.width = 1024; windowSize.height = 900; await screen.unmount(); }
+    });
+    it('lets a pointer hide the controls and bring them back while they are hidden', async () => {
+        const { openMediaStage } = await import('./useMediaStage');
+        const screen = await renderScreen(<InjectedAuthProvider credentials={null}><ModalProvider><></></ModalProvider></InjectedAuthProvider>);
+        try {
+            await act(async () => { openMediaStage([{ kind: 'image', title: 'Hero.png', source: { enabled: true, source: { kind: 'uri', uri: 'blob:hero-immersive' } } }]); });
+            await act(async () => screen.findByTestId('media-stage-image')!.props.onLoad({ source: { width: 1284, height: 902 } }));
+            expect(screen.findByTestId('media-stage-immersive-exit')).toBeFalsy();
+            await act(async () => screen.findByTestId('media-stage-immersive')!.props.onPress());
+            const exit = screen.findByTestId('media-stage-immersive-exit');
+            expect(exit).toBeTruthy();
+            await act(async () => exit!.props.onPress());
+            expect(screen.findByTestId('media-stage-immersive-exit')).toBeFalsy();
+        } finally { await screen.unmount(); }
+    });
     it('closes on an accessibility escape through the existing modal owner', async () => {
         const { openMediaStage } = await import('./useMediaStage');
         const screen = await renderScreen(<InjectedAuthProvider credentials={null}><ModalProvider><></></ModalProvider></InjectedAuthProvider>);

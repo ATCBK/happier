@@ -15886,3 +15886,5 @@ export {
     Domain_workspaceSyncDiagnosticTranslations as workspaceSyncDiagnosticTranslations,
     Domain_workspaceTabTranslations as workspaceTabTranslations,
 };
+        hideControls: "Masquer les commandes",
+        showControls: "Afficher les commandes",

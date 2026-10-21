@@ -9,7 +9,7 @@ import Animated, {
   withTiming,
   type SharedValue,
 } from 'react-native-reanimated';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { ScopedTheme, StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
 import { IconButton } from '@/components/ui/buttons/IconButton';
@@ -733,7 +733,9 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
     priority: ESCAPE_LAYER_PRIORITIES.modal,
     allowEditableTarget: true,
     onEscape: () => {
-      close();
+      // Esc first brings the controls back, then closes (the keyboard path out of immersive).
+      if (immersive) setImmersive(false);
+      else close();
       return true;
     },
   });
@@ -798,6 +800,10 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
   const save = React.useCallback(() => handoff(), [handoff]);
   const openInDefaultApp = React.useCallback(() => handoff('open'), [handoff]);
   const toggleImmersive = React.useCallback(() => setImmersive(value => !value), []);
+  const canPrevious = gallery.index > 0;
+  const canNext = gallery.index < gallery.items.length - 1;
+  // A pointer click zooms, so pointer people reach immersive through this control (lab MS1i).
+  const immersiveControl = !phone && isPicture(item);
 
   const topInset = phone ? insets.top + theme.space.s6 : theme.space.s12;
 
@@ -891,7 +897,7 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
               </Text>
             ) : null}
           </View>
-          {zoomPercent !== null || item.openFile || savable ? (
+          {zoomPercent !== null || item.openFile || savable || immersiveControl ? (
             <StageCapsule>
               {zoomPercent !== null && !phone ? (
                 <>
@@ -941,6 +947,16 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
                   testID="media-stage-open-file"
                 />
               ) : null}
+              {immersiveControl ? (
+                <IconButton
+                  variant="plain"
+                  iconName="arrows-out"
+                  accessibilityLabel={t('files.viewer.hideControls')}
+                  tooltip={t('files.viewer.hideControls')}
+                  onPress={toggleImmersive}
+                  testID="media-stage-immersive"
+                />
+              ) : null}
             </StageCapsule>
           ) : (
             <View style={stageStyles.capsulePlaceholder} />
@@ -973,6 +989,17 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
             pointerEvents="box-none"
           >
             <StageCapsule>
+              {multiple ? (
+                // Documents keep their own touch (PDF scroll, video scrub), so paging is a control here too.
+                <IconButton
+                  variant="plain"
+                  iconName="caret-left"
+                  accessibilityLabel={t('common.previous')}
+                  disabled={!canPrevious}
+                  onPress={() => goTo(gallery.index - 1)}
+                  testID="media-stage-previous"
+                />
+              ) : null}
               {counter ? (
                 <Text
                   variant="body"
@@ -984,6 +1011,16 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
                 >
                   {counter}
                 </Text>
+              ) : null}
+              {multiple ? (
+                <IconButton
+                  variant="plain"
+                  iconName="caret-right"
+                  accessibilityLabel={t('common.next')}
+                  disabled={!canNext}
+                  onPress={() => goTo(gallery.index + 1)}
+                  testID="media-stage-next"
+                />
               ) : null}
               {item.openFile ? (
                 <Pressable
@@ -1005,6 +1042,42 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
           </View>
         ) : null}
       </Animated.View>
+
+      {immersive && immersiveControl && phase === 'open' ? (
+        <StageImmersiveExit top={topInset} right={theme.space.s12} onPress={toggleImmersive} />
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * While immersive the chrome is gone and a click still zooms, so the way back sits where the control
+ * was: invisible until the pointer reaches that corner or it takes keyboard focus. Touch taps the picture.
+ */
+function StageImmersiveExit(props: Readonly<{ top: number; right: number; onPress: () => void }>) {
+  const [shown, setShown] = React.useState(false);
+  const show = React.useCallback(() => setShown(true), []);
+  const hide = React.useCallback(() => setShown(false), []);
+  return (
+    <View
+      style={[stageStyles.immersiveExit, { top: props.top, right: props.right }, shown ? null : stageStyles.concealed]}
+      {...(Platform.OS === 'web' ? { onPointerEnter: show, onPointerLeave: hide } : {})}
+      onFocus={show}
+      onBlur={hide}
+    >
+      {/* The immersive backdrop is near-black in every theme, so its one control wears the dark material. */}
+      <ScopedTheme name="dark">
+      <StageCapsule>
+        <IconButton
+          variant="plain"
+          iconName="arrows-in"
+          accessibilityLabel={t('files.viewer.showControls')}
+          tooltip={t('files.viewer.showControls')}
+          onPress={props.onPress}
+          testID="media-stage-immersive-exit"
+        />
+      </StageCapsule>
+      </ScopedTheme>
     </View>
   );
 }
@@ -1084,6 +1157,14 @@ const stageStyles = StyleSheet.create((theme) => ({
   thumbImage: {
     width: '100%',
     height: '100%',
+  },
+  immersiveExit: {
+    position: 'absolute',
+    height: TOP_BAR_HEIGHT,
+    justifyContent: 'center',
+  },
+  concealed: {
+    opacity: 0,
   },
   phoneCounter: {
     paddingHorizontal: theme.space.s12,

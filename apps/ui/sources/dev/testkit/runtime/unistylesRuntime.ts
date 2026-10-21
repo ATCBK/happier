@@ -59,6 +59,8 @@ export async function createUnistylesRuntime(overrides?: TestUnistylesRuntimeOve
         useUnistyles: () => ({ theme, rt }),
         StyleSheet: styleSheetModule,
         UnistylesRuntime: runtimeModule,
+        // A themed subtree renders its children against the one test theme.
+        ScopedTheme: ({ children }: Readonly<{ children?: unknown }>) => children ?? null,
     };
 }
 
