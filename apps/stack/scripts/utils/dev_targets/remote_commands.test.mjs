@@ -2074,6 +2074,21 @@ test('remote Stack preserves an explicit allocator arena setting without supplyi
   }
 });
 
+test('source export forwards the explicit source-map option to POSIX and Windows without forwarding unrelated environment', () => {
+  for (const target of [posix, windows]) for (const enabled of ['1', '0']) {
+    const command = buildRemoteStackCommand(target, {
+      services: { server: true, expo: false, daemon: false },
+      stackName: 'remote-qa', runtimeMode: 'source-snapshot', sourceUi: 'export',
+      serverUrl: 'http://127.0.0.1:43005', publicServerUrl: 'http://127.0.0.1:53005', remoteServerPort: 43005,
+      env: { HAPPIER_UI_EXPORT_SOURCE_MAPS: enabled, UNRELATED_SECRET: 'must-not-forward' },
+      remoteServerRuntimeConfig: resolveRemoteServerRuntimeConfig({ serverComponentName: 'happier-server-light', env: { HAPPIER_DB_PROVIDER: 'sqlite' } }),
+    });
+    const rendered = target.platform === 'windows' ? Buffer.from(command.split(' ').at(-1), 'base64').toString('utf16le') : command;
+    assert.ok(rendered.includes(`HAPPIER_UI_EXPORT_SOURCE_MAPS=${enabled}`), `${target.platform} dropped source-map option ${enabled}`);
+    assert.doesNotMatch(rendered, /UNRELATED_SECRET|must-not-forward/);
+  }
+});
+
 test('remote source server and daemon receive the canonical server runtime webapp origin', () => {
   const controllerOrigin = 'http://happier-agent-qa-embed.localhost:19364';
   const options = {

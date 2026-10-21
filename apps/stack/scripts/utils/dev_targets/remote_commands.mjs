@@ -14,6 +14,7 @@ import { collectWorkspacePackageJsonPaths } from '../proc/workspace_package_mani
 import { readNativeTestSourceInputs } from '../fs/workspaceBuildInputs.mjs';
 import { resolveWorkspaceTypeScriptCompilerArgs } from '../../../../../packages/cli-common/workspaceChildBuildEnv.mjs';
 import { resolveCliPublicationBuildSteps } from '../../../../cli/scripts/buildPublication.mjs';
+import { sourceWebExportDiagnosticEnv } from '../../build/sourceWebExportArgs.mjs';
 export { resolveHeavyweightPressureRetryMilliseconds } from './heavyweight_pressure_cadence.mjs';
 
 // Both dispatchers evaluate this policy. The native artifact is generated once,
@@ -1683,6 +1684,7 @@ function resolveRemoteStackStartInvocation(target, {
   const stackServerComponent = serverRuntimeConfig?.serverComponentName ?? 'happier-server-light';
   const stackDbProvider = serverRuntimeConfig?.dbProvider ?? 'sqlite';
   const serviceEnvironment = { ...(serverRuntimeConfig?.environment ?? {}) };
+  if (runtimeMode === 'source-snapshot' && normalizedServices.server) Object.assign(serviceEnvironment, sourceWebExportDiagnosticEnv(env));
   // Co-located services already share the server's projected setting. A daemon
   // placed separately consumes the controller's opt-in, including its withdrawal.
   if (normalizedServices.daemon) serviceEnvironment.HAPPIER_WEB_LATENCY_TRACE ??= env.HAPPIER_WEB_LATENCY_TRACE === '1' ? '1' : '';

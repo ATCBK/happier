@@ -8,6 +8,7 @@ import { isAuthFlowEnabled, resolveStackDaemonStartRequested } from '../auth/dae
 import { findExistingStackCredentialPath } from '../auth/credentials_paths.mjs';
 import { getStackRuntimePendingRemoteTargets } from '../stack/runtime_state.mjs';
 import { normalizeStackRuntimeOwnerStartedAt } from '../stack/runtime_owner_incarnation.mjs';
+import { sourceWebExportDiagnosticEnv } from '../../build/sourceWebExportArgs.mjs';
 import { coercePort } from '../server/port.mjs';
 import { parseSourcePreparationPhaseLine, SOURCE_START_SUPERSEDED_MARKER, supersededError } from '../../runtime/shared/pending_source_start.mjs';
 
@@ -89,6 +90,7 @@ export async function prepareStackDevTargetSourceReload({ stackName, stackBaseDi
         commandArgs: ['node', './apps/stack/scripts/runtime/launch/prepareSourceRuntimeReload.mjs', '--worker',
           JSON.stringify({ stackName, stackBaseDir: paths.stackBaseDir, repoDir: plan.target.repoDir, args: hostArgs, sourceStartRequestId })],
         environment: { ...serverConfig.environment, HAPPIER_DB_PROVIDER: serverConfig.dbProvider,
+          ...(plan.services.server ? sourceWebExportDiagnosticEnv(env) : {}),
           HAPPIER_STACK_SERVER_COMPONENT: serverConfig.serverComponentName,
           HAPPIER_STACK_REPO_DIR: plan.target.repoDir, HAPPIER_STACK_STACK: stackName,
           HAPPIER_STACK_CLI_HOME_DIR: paths.cliHomeDir, HAPPIER_HOME_DIR: paths.cliHomeDir,

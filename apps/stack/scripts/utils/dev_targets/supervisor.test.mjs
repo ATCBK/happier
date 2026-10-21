@@ -962,6 +962,34 @@ test('remote source preparation refusal leaves the observed incumbent process an
   assert.equal(retained?.startedAt, initial.startedAt);
 });
 
+test('remote source reload preparation forwards source maps to the actual UI builder without unrelated secrets', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-export-map-forward-' });
+  const target = { name: 'nl3', platform: 'posix', ssh: 'boundary-ssh', repoDir: '/remote/repo', cliHomeDir: join(root, 'remote') };
+  const producerStackBaseDir = join(root, 'producer');
+  const env = { ...process.env, HAPPIER_STACK_STORAGE_DIR: join(root, 'storage'), HAPPIER_STACK_SERVER_COMPONENT: 'happier-server-light', HAPPIER_DB_PROVIDER: 'sqlite', HAPPIER_UI_EXPORT_SOURCE_MAPS: '1', UNRELATED_SECRET: 'not-a-forwarded-setting' };
+  const mutagen = resolveDevTargetMutagenRuntime({ stackBaseDir: producerStackBaseDir, sourceDir: repoDir, env });
+  await mkdir(dirname(mutagen.projectFile), { recursive: true });
+  await writeFile(mutagen.projectFile, renderMutagenProject({ sourceDir: repoDir, targets: [target], ownerId: 'producer' }));
+  let remoteCommand;
+  const prepared = await prepareStackDevTargetSourceReload({ stackName: 'agent-qa', stackBaseDir: join(root, 'consumer'), repoDir,
+    placement: { authority: { producerStackBaseDir }, config: { targets: [target] }, targetPlans: [{ target, services: { server: true, daemon: false, expo: false } }] },
+    args: ['--ui=export', '--no-daemon'], env, signal: new AbortController().signal, serverRequested: true, sourceStartRequestId: 'map-forward',
+  }, { runProcess: async () => readySyncResult(target), executorDependencies: {
+    runCaptureResult: async () => ({ ok: true, out: readySyncResult(target).out, err: '', exitCode: 0 }),
+    // SSH is the external boundary. The worker preserves the real readiness/control exchange.
+    spawnProcess: input => {
+      remoteCommand = input.args.at(-1);
+      return spawnProc(input.label, process.execPath, ['-e', 'console.log("HSTACK_SOURCE_RELOAD_PREPARED"); process.stdin.on("data", () => process.exit(0))'], input.env,
+        { onLine: input.onLine, stdio: ['pipe', 'pipe', 'pipe'], ownedProcessGroup: true, silent: true });
+    },
+  } });
+  try {
+    assert.ok(remoteCommand.replace(/["']/g, '').includes('HAPPIER_UI_EXPORT_SOURCE_MAPS=1'), 'reload worker dropped source maps before Expo/reuse fingerprinting');
+    assert.doesNotMatch(remoteCommand, /UNRELATED_SECRET|not-a-forwarded-setting/);
+    await prepared.activate();
+  } finally { await prepared.close(); }
+});
+
 test('source snapshot supervisor builds on each mirror without native transfer or dependency preparation and projects observed identities', { timeout: 10_000 }, async (t) => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-source-snapshot-supervisor-' });
   const targets = ['server', 'daemon'].map(name => ({ name, platform: 'posix', ssh: `${name}-ssh`, repoDir: join(root, name, 'repo'), cliHomeDir: join(root, name, 'home') }));
