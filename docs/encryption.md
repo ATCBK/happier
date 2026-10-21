@@ -2523,6 +2523,12 @@ or retired RPC material remains a refusal, including for server-origin reads.
   Home/credential and demand; each borrower keeps its key/access/currentness
   checks. Fresh maintenance, custody and mutation-confirmation witnesses do not
   borrow an earlier ordinary read.
+  Projection and Action-schema readers admit each borrower through the canonical
+  Machine RPC owner before joining a server acquisition or reusing a retained
+  declaration. Joins require the exact captured credentials, material, carrier,
+  Machine context and question revision; a predecessor's successful admission
+  cannot admit a replacement borrower. Each borrower can retire independently;
+  only the final departure cancels the shared physical read.
 - In 0.3 development, the normal Machine census can publish pending display shells
   before fresh keys open. Activity-ordered hydration uses the existing concurrency
   owner and releases the JavaScript thread between cohorts. After publishing
@@ -3269,6 +3275,13 @@ owner distinguishes these parts in its demand key, shares only pending parsed
 transport observations, and leaves access, mode/key admission and publication with
 each caller. Draft collection recovery and its readiness/outbox ordering remain
 unchanged. Unavailable context fails closed without publishing a locked Session shell.
+
+Session recipient-envelope preparation uses that same context-only exact reader
+and its admitted opened Session key; it does not fetch unused turns or open the
+same transferable envelope a second time. The singular reader retains its
+Action-authenticated and opaque-transport GET paths where a batch is not admitted.
+Missing or unavailable legacy material remains unavailable, and captured Account
+currentness, credentials and Session-generation retirement still fence the result.
 
 ## On-wire formats (mode-aware fields)
 
@@ -4290,6 +4303,13 @@ invalid`), which only grows — the one final first-page recheck may reveal work
 behind the cursor. That recheck now runs after every traversal, including an initially
 empty first page with no writes, because an empty page proves only what the Home saw at
 that instant.
+
+In 0.3 development, equivalent overlapping Team/Group membership-page GETs share
+only their parsed acquisition through the common pending-read owner. Each caller
+still admits its own Home/Account lifetime and expected recipient. Membership,
+recipient and opaque cursor identity remain distinct; PATCHes never join, and
+issued or settled writes separate later reads even when the write outcome is unknown.
+No completed page is retained by this sharing owner.
 
 This makes preparation process-local but resumable: an app exit or interruption loses
 only in-memory progress. A later pass derives the remaining work again from canonical
