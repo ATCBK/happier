@@ -1782,7 +1782,7 @@ const computerUseTranslations = { de: {
             offlineTitle: ({ machine }) => `${machine} antwortet nicht`,
             offlineBody: 'Verbinde sie wieder, um zuzusehen. Zusehen startet sie nicht.',
             screenUnavailableTitle: ({ machine }) => `Der Bildschirm von ${machine} ist nicht zu sehen`,
-            screenUnavailableBody: 'Der Rechner ist online, aber sein Desktop antwortet nicht. Happier braucht eine angemeldete Desktop-Sitzung, um ihn zu zeigen.',
+            screenUnavailableBody: 'Der Rechner ist online, aber sein Desktop antwortet nicht. Happier braucht eine angemeldete Desktop‑Sitzung, um ihn zu zeigen.',
             openingTitle: ({ target, machine }) => `${target} wird auf ${machine} geöffnet…`,
             openingBody: 'Es erscheint hier, sobald das erste Bild ankommt.',
         },

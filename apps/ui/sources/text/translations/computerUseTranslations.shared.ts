@@ -358,7 +358,7 @@ export const computerUseTranslationsEnglish = { en: {
             offlineTitle: ({ machine }) => `${machine} isn’t answering`,
             offlineBody: 'Reconnect to watch it. Watching doesn’t start it.',
             screenUnavailableTitle: ({ machine }) => `Can’t see ${machine}’s screen`,
-            screenUnavailableBody: 'It’s online, but its desktop didn’t answer. Happier needs a signed-in desktop session to show it.',
+            screenUnavailableBody: 'It’s online, but its desktop didn’t answer. Happier needs a signed‑in desktop session to show it.',
             openingTitle: ({ target, machine }) => `Opening ${target} on ${machine}…`,
             openingBody: 'It appears here as soon as the first picture arrives.',
         },
