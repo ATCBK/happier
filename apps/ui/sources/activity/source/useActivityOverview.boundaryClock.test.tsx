@@ -103,26 +103,26 @@ describe('mounted Activity overview boundary clock', () => {
         vi.useRealTimers();
     });
 
-    it('retires an idle pre-viewer action request from the navigation dot when its budget elapses', async () => {
+    it('keeps an idle pre-viewer action request on the navigation dot while its runtime is live, however long it waits', async () => {
         const dot = await renderNavigationDot();
         expect(dot.read()).toBe(true);
         await crossTheFreshnessBoundary();
-        expect(dot.read()).toBe(false);
+        expect(dot.read()).toBe(true);
     });
 
-    it('retires the same request from the full Inbox attention projection without any store change', async () => {
+    it('keeps the same request in the full Inbox attention projection while its runtime is live', async () => {
         const overview = await renderOverview();
         expect(overview.hasAttention()).toBe(true);
         await crossTheFreshnessBoundary();
-        expect(overview.hasAttention()).toBe(false);
+        expect(overview.hasAttention()).toBe(true);
     });
 
-    it('retires pre-viewer permission attention at the same canonical freshness boundary', async () => {
+    it('keeps pre-viewer permission attention while its runtime is live, however long it waits', async () => {
         seedLegacySession('permission');
         const dot = await renderNavigationDot();
         expect(dot.read()).toBe(true);
         await crossTheFreshnessBoundary();
-        expect(dot.read()).toBe(false);
+        expect(dot.read()).toBe(true);
     });
 
     it('keeps an action request while the turn is still projected in progress', async () => {
@@ -133,7 +133,7 @@ describe('mounted Activity overview boundary clock', () => {
         expect(dot.read()).toBe(true);
     });
 
-    it('uses the same message-backed pending request for the overview and its exact clock boundary', async () => {
+    it('uses the same message-backed pending request for the overview and the navigation dot, with no expiry clock', async () => {
         seedLegacySession('message_user_action');
         const dot = await renderNavigationDot();
         expect(transcriptReads).toBe(0);
@@ -141,12 +141,9 @@ describe('mounted Activity overview boundary clock', () => {
         expect(overview.hasAttention()).toBe(true);
         expect(dot.read()).toBe(true);
         // The real row projector carries the transcript's request into the message-free summary.
-        await act(async () => { await vi.advanceTimersByTimeAsync(STALE_SIGNAL_MS - 1_000); });
-        expect(overview.hasAttention()).toBe(false);
-        expect(dot.read()).toBe(false);
-        await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-        expect(overview.hasAttention()).toBe(false);
-        expect(dot.read()).toBe(false);
+        await crossTheFreshnessBoundary();
+        expect(overview.hasAttention()).toBe(true);
+        expect(dot.read()).toBe(true);
     });
 
     it('counts a matching hydrated message-backed row without scanning its transcript', () => {

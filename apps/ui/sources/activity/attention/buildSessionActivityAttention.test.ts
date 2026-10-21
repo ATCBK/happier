@@ -267,7 +267,7 @@ describe('buildSessionActivityAttention', () => {
         expect(attention.priority).toBeGreaterThan(0);
     });
 
-    it('does not retain permission attention after its request evidence expires', () => {
+    it('keeps permission attention while the runtime is live, however long the request has waited', () => {
         const attention = buildSessionActivityAttention({
             session: createSessionFixture({
                 encryptionMode: 'plain',
@@ -276,6 +276,10 @@ describe('buildSessionActivityAttention', () => {
                 presence: 'online',
                 pendingPermissionRequestCount: 1,
                 pendingRequestObservedAt: 1_000,
+                agentState: {
+                    controlledByUser: null,
+                    requests: { permission_1: { tool: 'Bash', kind: 'permission', arguments: { command: 'deploy' }, createdAt: 1_000 } },
+                },
                 seq: 3,
                 lastViewedSessionSeq: 3,
                 metadata: createMetadata(),
@@ -283,10 +287,10 @@ describe('buildSessionActivityAttention', () => {
             nowMs: 121_001,
         });
 
-        expect(attention.awareness.operational.primary).toBe('none');
-        expect(attention.attentionState).toBe('quiet');
-        expect(attention.hasAttention).toBe(false);
-        expect(attention.reasons.hasPendingPermissionRequests).toBe(false);
+        expect(attention.awareness.operational.primary).toBe('permission_required');
+        expect(attention.attentionState).toBe('permission_required');
+        expect(attention.hasAttention).toBe(true);
+        expect(attention.reasons.hasPendingPermissionRequests).toBe(true);
     });
 
     it('does not surface inactive permission counts as permission-required attention', () => {

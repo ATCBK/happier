@@ -223,7 +223,7 @@ describe('createLocalActivityBadgeSnapshotSelector', () => {
         expect(selector({ ...state }).localBadgeState.count).toBe(1);
     });
 
-    it('retires a stale pending request without a source update', () => {
+    it('keeps a long-waiting pending request while its runtime is live', () => {
         vi.useFakeTimers();
         vi.setSystemTime(new Date(1_000));
         const selector = createSelector();
@@ -233,7 +233,7 @@ describe('createLocalActivityBadgeSnapshotSelector', () => {
         }) } });
         expect(selector(state).localBadgeState.count).toBe(1);
         vi.setSystemTime(new Date(1_000_000));
-        expect(selector({ ...state }).localBadgeState.count).toBe(0);
+        expect(selector({ ...state }).localBadgeState.count).toBe(1);
     });
 
     it('does not readmit fixed device settings when badge source records change', () => {

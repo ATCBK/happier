@@ -36,6 +36,9 @@ vi.mock('react-native', async () => {
     return createReactNativeWebMock({ Platform: { get OS() { return boundary.desktop ? 'web' : 'ios'; } } });
 });
 vi.mock('expo-notifications', () => ({
+    // No Guard warning is presented in these flows; the wake reconciliation still reads the OS tray.
+    getPresentedNotificationsAsync: async () => [],
+    dismissNotificationAsync: async () => undefined,
     scheduleNotificationAsync: async (request: Parameters<typeof import('expo-notifications')['scheduleNotificationAsync']>[0]) => {
         const { content } = request;
         if (typeof content.title !== 'string' || typeof content.body !== 'string') throw new Error('Expected local notification copy');

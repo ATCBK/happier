@@ -331,7 +331,7 @@ describe('ActivityBadgeRuntime', () => {
         await act(async () => { screen.tree.unmount(); });
     });
 
-    it('wakes a mounted badge when a pending request expires without a session update', async () => {
+    it('keeps a mounted badge on a long-waiting pending request while its runtime is live', async () => {
         vi.useFakeTimers();
         vi.setSystemTime(new Date(1_000));
         setActivitySessions([{ id: 'session-1', seq: 0, active: true, presence: 'online',
@@ -341,7 +341,7 @@ describe('ActivityBadgeRuntime', () => {
         await flushHookEffects();
         expect(applyExpoNativeBadgeState).toHaveBeenLastCalledWith({ count: 1, showNonNumericDot: false });
         await act(async () => { await vi.advanceTimersByTimeAsync(1_000_000); });
-        expect(applyExpoNativeBadgeState).toHaveBeenLastCalledWith({ count: 0, showNonNumericDot: false });
+        expect(applyExpoNativeBadgeState).toHaveBeenLastCalledWith({ count: 1, showNonNumericDot: false });
         await act(async () => { screen.tree.unmount(); });
     });
 
