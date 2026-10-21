@@ -4819,7 +4819,7 @@ diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/c
 new file mode 100644
 --- /dev/null
 +++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/spans/ReferenceChipSpan.kt
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,93 @@
 +package com.swmansion.enriched.markdown.spans
 +
 +import android.content.Context
@@ -4863,8 +4863,15 @@ new file mode 100644
 +
 +  fun registerTextView(textView: TextView) { view = WeakReference(textView) }
 +  private fun metric(name: String, paint: Paint) = anatomy.getDouble(name).toFloat() * density * paint.textSize / baseFontSize
-+  private fun label(paint: Paint) = TextUtils.ellipsize(reference.getString("label"), TextPaint(paint).apply { typeface = this@ReferenceChipSpan.typeface }, metric("maxLabelWidth", paint), TextUtils.TruncateAt.END).toString()
-+  private fun width(paint: Paint): Float = Paint(paint).apply { typeface = this@ReferenceChipSpan.typeface }.measureText(label(paint)) + metric("paddingLeft", paint) + metric("paddingRight", paint) + metric("glyphSize", paint) + metric("gap", paint)
++  private fun availableWidth(): Float = view.get()?.takeIf { it.width > 0 }?.let {
++    max(0, it.width - it.compoundPaddingLeft - it.compoundPaddingRight).toFloat()
++  } ?: Float.POSITIVE_INFINITY
++  private fun chromeWidth(paint: Paint) = metric("paddingLeft", paint) + metric("paddingRight", paint) + metric("glyphSize", paint) + metric("gap", paint)
++  private fun label(paint: Paint): String {
++    val budget = max(0f, minOf(metric("maxLabelWidth", paint), availableWidth() - chromeWidth(paint)))
++    return TextUtils.ellipsize(reference.getString("label"), TextPaint(paint).apply { typeface = this@ReferenceChipSpan.typeface }, budget, TextUtils.TruncateAt.END).toString()
++  }
++  private fun width(paint: Paint): Float = minOf(availableWidth(), Paint(paint).apply { typeface = this@ReferenceChipSpan.typeface }.measureText(label(paint)) + chromeWidth(paint))
 +
 +  override fun getSize(paint: Paint, text: CharSequence, start: Int, end: Int, fm: Paint.FontMetricsInt?): Int {
 +    val metrics = paint.fontMetricsInt
@@ -4883,6 +4890,8 @@ new file mode 100644
 +    val height = max(metric("height", ink), ink.fontMetrics.descent - ink.fontMetrics.ascent)
 +    val center = y + (ink.fontMetrics.ascent + ink.fontMetrics.descent) / 2
 +    val box = RectF(x, center - height / 2, x + width(ink), center + height / 2)
++    canvas.save()
++    canvas.clipRect(box)
 +    ink.color = reference.getLong("background").toInt()
 +    canvas.drawRoundRect(box, metric("radius", ink), metric("radius", ink), ink)
 +    val size = metric("glyphSize", ink)
@@ -4901,6 +4910,7 @@ new file mode 100644
 +    }
 +    ink.color = reference.getLong("foreground").toInt()
 +    canvas.drawText(label(ink), glyph.right + metric("gap", ink), y.toFloat(), ink)
++    canvas.restore()
 +  }
 +}
 diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/utils/text/conversion/MarkdownExtractor.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/utils/text/conversion/MarkdownExtractor.kt
@@ -4934,3 +4944,19 @@ diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/c
      // Check for thematic breaks first (uses " \n" as placeholder)
      val thematicBreakSpans = spannable.getSpans(segmentStart, segmentEnd, ThematicBreakSpan::class.java)
      if (thematicBreakSpans.isNotEmpty()) {
+diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/accessibility/AccessibleMarkdownTextView.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/accessibility/AccessibleMarkdownTextView.kt
+--- a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/accessibility/AccessibleMarkdownTextView.kt
++++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/accessibility/AccessibleMarkdownTextView.kt
+@@ -18 +18,12 @@ abstract class AccessibleMarkdownTextView
+     val accessibilityHelper = MarkdownAccessibilityHelper(this)
++
++    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
++      super.onSizeChanged(w, h, oldw, oldh)
++      // Both Markdown hosts must remeasure replacement spans against their new line width.
++      if (w != oldw) {
++        val content = text as? android.text.Spanned ?: return
++        if (content.getSpans(0, content.length, com.swmansion.enriched.markdown.spans.ReferenceChipSpan::class.java).isNotEmpty()) {
++          text = android.text.SpannableString(content)
++        }
++      }
++    }
