@@ -975,6 +975,11 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         setReadyEditorHandle(editorHandleRef.current);
         bindCodeIntelligenceEditor.current();
     }, [editorHandleRef, onEditorReady]);
+    // View → Edit swaps in one frame once the engine reports ready (P4 §3.5): until then the editor mounts unseen beneath
+    // the read view, so a cold engine load never shows a half-made editor. A remounted engine reports ready again.
+    const codeEditorMounted = displayMode === 'file' && isEditorSelected && fileViewer.kind !== 'markdown';
+    React.useEffect(() => { if (!codeEditorMounted) setReadyEditorHandle(null); }, [codeEditorMounted]);
+    const codeEditorWarming = codeEditorMounted && readyEditorHandle === null;
     const codeGeometryText = fileContent?.isBinary ? editorSeedText : fileContent?.content ?? editorSeedText;
     const codeGeometry = React.useMemo(() => resolveFileCodeGeometry({ text: codeGeometryText, reviewCommentsEnabled, reviewCommentModeActive }), [codeGeometryText, reviewCommentsEnabled, reviewCommentModeActive]);
     // The tab strip shows this tab's unsaved dot; the editor state is the only owner of that fact.
@@ -1533,6 +1538,18 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                     </>
     );
 
+    // The read bodies (code view, Markdown preview) are one selection source for Ask (lab AS1).
+    const readBody = (
+        <View ref={readBodyRef} collapsable={false} style={{ flex: 1, minHeight: 0 }}>
+            {renderFindPanel(null)}
+            {Platform.OS === 'web' && heldText !== null && (displayMode === 'file' || displayMode === 'markdown') ? (
+                <FileReadAskControls rootRef={readBodyRef} mode={displayMode === 'markdown' ? 'markdown' : 'code'}
+                    scopeId={props.scopeId} scope={scope} filePath={filePath} text={heldText}
+                    sessionId={sessionId || null} active={isActive && !reviewCommentModeActive}
+                    onCommentRange={reviewCommentsEnabled && displayMode === 'file' ? onCommentSelectedRange : undefined} />
+            ) : null}
+        </View>
+    );
     return (
         <View ref={findFocusRoot} style={[styles.container, { backgroundColor: paintColor(theme.colors.surface.base, 'transparent') }]}>
             <View
@@ -1679,6 +1696,10 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                     />
                 ) : displayMode === 'file' && isEditorSelected ? (
                     <>
+                    {codeEditorWarming ? readBody : null}
+                    <View testID={codeEditorWarming ? 'file-details-editor-warming' : undefined} pointerEvents={codeEditorWarming ? 'none' : 'auto'}
+                        aria-hidden={codeEditorWarming || undefined}
+                        style={codeEditorWarming ? { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, opacity: 0 } : { flex: 1, minHeight: 0 }}>
                     <FileEditorPanel
                         {...codeGeometry}
                         onReady={onCodeEditorReady}
@@ -1709,6 +1730,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                     ) : null}
                     {/* Blame in Edit: the gutter markers open the same run card (a portal popover at the run's line). */}
                     {blameRegion.card}
+                    </View>
                     </>
                 ) : showsViewerBody ? (
                     <FileViewerBody
@@ -1733,18 +1755,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                         ask={{ scopeId: props.scopeId, sessionId: sessionId || null, active: isActive }}>
                         {(surface) => renderFindPanel(surface)}
                     </FileChangesSection>
-                ) : (
-                    // The read bodies (code view, Markdown preview) are one selection source for Ask (lab AS1).
-                    <View ref={readBodyRef} collapsable={false} style={{ flex: 1, minHeight: 0 }}>
-                        {renderFindPanel(null)}
-                        {Platform.OS === 'web' && heldText !== null && (displayMode === 'file' || displayMode === 'markdown') ? (
-                            <FileReadAskControls rootRef={readBodyRef} mode={displayMode === 'markdown' ? 'markdown' : 'code'}
-                                scopeId={props.scopeId} scope={scope} filePath={filePath} text={heldText}
-                                sessionId={sessionId || null} active={isActive && !reviewCommentModeActive}
-                                onCommentRange={reviewCommentsEnabled && displayMode === 'file' ? onCommentSelectedRange : undefined} />
-                        ) : null}
-                    </View>
-                )}
+                ) : readBody}
 
                 {displayMode === 'file' && isEditorSelected && editorState.comparison ? (
                     // Compare covers the editor without unmounting it, so the engine keeps its buffer, caret and undo.
