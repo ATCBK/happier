@@ -613,7 +613,7 @@ it.each(variants)('captures SHARE source owners ($dark / $width)', async variant
             </div>
         </AppPaneProvider></InjectedAuthProvider>);
         await vi.waitFor(() => expect(collaboration.findByTestId('session-collaboration-access-card')).not.toBeNull());
-        await vi.waitFor(() => expect(collaboration.findByTestId('session-collaboration-invite-action')).not.toBeNull());
+        await vi.waitFor(() => expect(collaboration.findByTestId('session-conversations-empty')).not.toBeNull());
         await settle(collaboration);
         await emit({ id: 'session-collaboration', body: hostTree(collaboration.tree.toJSON()) });
         const card = collaboration.findByTestId('session-collaboration-access-card');
