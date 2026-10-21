@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createVitest } from 'vitest/node';
 import { createTestTempDirectory } from './process/temporaryDirectories.mjs';
-import { assertTestHomePath } from './testHomeEnvironment.mjs';
+import { assertTestHomePath, resolveTestHomeEnvironment } from './testHomeEnvironment.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const configs = [
@@ -54,6 +54,27 @@ test('package harnesses isolate even a configuration import before worker setup'
     for (const key of Object.keys(process.env)) if (!(key in before)) delete process.env[key];
     Object.assign(process.env, before);
     sentinel.cleanup();
+  }
+});
+
+test('an isolated Home keeps the browsers the runner installed for Playwright', () => {
+  const before = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH };
+  try {
+    delete process.env.PLAYWRIGHT_BROWSERS_PATH;
+    process.env.HOME = join(repoRoot, 'runner-user');
+    process.env.USERPROFILE = process.env.HOME;
+    const first = resolveTestHomeEnvironment(join(repoRoot, 'temporary'));
+    assert.match(first.PLAYWRIGHT_BROWSERS_PATH, /ms-playwright$/u);
+    assert.ok(first.PLAYWRIGHT_BROWSERS_PATH.includes('runner-user') || process.platform === 'win32');
+    assert.ok(!first.PLAYWRIGHT_BROWSERS_PATH.includes('temporary'));
+    // A worker resolving again from the isolated Home keeps the same location.
+    process.env.PLAYWRIGHT_BROWSERS_PATH = first.PLAYWRIGHT_BROWSERS_PATH;
+    process.env.HOME = first.HOME;
+    assert.equal(resolveTestHomeEnvironment(join(repoRoot, 'temporary-2')).PLAYWRIGHT_BROWSERS_PATH, first.PLAYWRIGHT_BROWSERS_PATH);
+  } finally {
+    for (const [key, value] of Object.entries(before)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
   }
 });
 

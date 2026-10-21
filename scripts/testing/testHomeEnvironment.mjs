@@ -11,8 +11,24 @@ export function createTestHomeEnvironment() {
   return { env, cleanup: temporary.cleanup };
 }
 
+// Playwright finds its installed browsers relative to HOME, which isolation replaces. Keep the
+// location the runner installed into (`playwright install`); an inherited isolated Home already
+// carries it from the first resolution.
+function resolvePlaywrightBrowsersPath() {
+  const inherited = process.env.PLAYWRIGHT_BROWSERS_PATH;
+  if (inherited) return inherited;
+  const userHome = process.env.HOME || process.env.USERPROFILE;
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || (userHome && join(userHome, 'AppData', 'Local'));
+    return localAppData ? join(localAppData, 'ms-playwright') : undefined;
+  }
+  return userHome ? join(userHome, process.platform === 'darwin' ? 'Library/Caches' : '.cache', 'ms-playwright') : undefined;
+}
+
 export function resolveTestHomeEnvironment(root) {
+  const playwrightBrowsersPath = resolvePlaywrightBrowsersPath();
   const env = {
+    ...(playwrightBrowsersPath ? { PLAYWRIGHT_BROWSERS_PATH: playwrightBrowsersPath } : {}),
     HAPPIER_TEST_HOME_ROOT: root,
     HOME: join(root, 'user'),
     USERPROFILE: join(root, 'user'),
