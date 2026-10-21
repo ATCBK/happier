@@ -56,7 +56,7 @@ async function readDistExportingTypeScriptWorkspacePackages() {
 test('root owns the native TypeScript 7 compiler and the TypeScript 5 API package separately', async () => {
   const pkg = await readJson('package.json');
 
-  assert.equal(pkg?.devDependencies?.['@typescript/native'], 'npm:typescript@7.0.2');
+  assert.equal(pkg?.devDependencies?.['@typescript/native'], 'npm:typescript@7.1.0-beta');
   assert.equal(pkg?.devDependencies?.typescript, '5.9.3');
 });
 

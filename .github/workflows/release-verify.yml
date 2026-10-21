@@ -235,6 +235,9 @@ permissions:
   contents: read
   actions: read
 
+env:
+  HAPPIER_TYPESCRIPT_COMPILER: microsoft
+
 concurrency:
   group: release-verify-${{ inputs.channel }}-${{ github.ref }}
   cancel-in-progress: false

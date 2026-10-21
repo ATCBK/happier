@@ -618,6 +618,7 @@ jobs:
           free -h
       - name: Check non-UI compiler projects from the shared preparation
         env:
+          HAPPIER_TYPESCRIPT_COMPILER: microsoft
           HAPPIER_TYPESCRIPT_CLI_MEASURE_RSS: "1"
           HAPPIER_TYPECHECK_REPORT_DIR: ${{ runner.temp }}/gate-compiler-host-reports
         # Divide the compiler owners across the two existing compiler/build jobs.

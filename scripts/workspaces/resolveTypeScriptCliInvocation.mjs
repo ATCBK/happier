@@ -9,7 +9,7 @@ import { isWorkspaceBuildStartup } from '../../apps/stack/scripts/utils/proc/wor
 const NATIVE_TYPESCRIPT_PACKAGE_JSON = '@typescript/native/package.json';
 const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 
-function checkOnlyCompilerOptions(args, workspaceDir) {
+function typecheckCompilerOptions(args, workspaceDir) {
   // Build graphs and watch/editor tooling retain Microsoft authority. Use the
   // retained API only to read options (including extends), never to check code.
   if (args.some(arg => ['-b', '--build', '-w', '--watch', '--help', '-h', '--version', '-v', '--showconfig'].includes(arg.toLowerCase()))) return;
@@ -26,11 +26,12 @@ function checkOnlyCompilerOptions(args, workspaceDir) {
     if (!parsed) return;
     options = parsed.options;
   }
-  return options.noEmit === true ? options : undefined;
+  return options.noEmit === true || options.emitDeclarationOnly === true ? options : undefined;
 }
 
-// Native 7.0.2 incremental snapshots use xxh3.HashString128(text).Bytes()
-// encoded as hexadecimal (typescript-go 2bd066d, incremental/snapshot.go).
+// Native 7.1.0-beta incremental snapshots use xxh3.HashString128(text).Bytes()
+// encoded as hexadecimal. The real-compiler input-version test covers this
+// adapter, including Unicode and BOM handling, when the compiler pin changes.
 // File text is UTF-8 decoded with its leading BOM removed. Keep this compiler
 // adapter here; source bundle records still use their existing SHA-256 digests.
 export async function matchesNativeTypeScriptInputVersion(contents, version) {
@@ -61,14 +62,18 @@ export function resolveTypeScriptCliInvocation(params) {
   const readFileSyncImpl = params.readFileSyncImpl ?? readFileSync;
   const env = params.env ?? process.env;
   const compilerOverride = env.HAPPIER_TYPESCRIPT_COMPILER || 'auto';
-  if (!['auto', 'microsoft'].includes(compilerOverride)) {
-    throw new Error('HAPPIER_TYPESCRIPT_COMPILER must be auto or microsoft');
+  if (!['auto', 'microsoft', 'tsrs'].includes(compilerOverride)) {
+    throw new Error('HAPPIER_TYPESCRIPT_COMPILER must be auto, microsoft or tsrs');
   }
   // Callers that have not supplied their compiler arguments cannot prove a
-  // check-only invocation (notably build and authoring-validation owners).
-  const options = Array.isArray(params.args) && compilerOverride === 'auto' && !env.CI && params.invocationKind !== 'build'
-    && (params.platform ?? process.platform) === 'linux' && ['x64', 'arm64'].includes(params.arch ?? process.arch)
-    ? checkOnlyCompilerOptions(params.args ?? [], params.workspaceDir ?? process.cwd()) : undefined;
+  // typecheck invocation (notably build and authoring-validation owners).
+  const platform = params.platform ?? process.platform;
+  const arch = params.arch ?? process.arch;
+  const supported = (platform === 'linux' && ['x64', 'arm64'].includes(arch))
+    || (platform === 'darwin' && arch === 'arm64');
+  const options = Array.isArray(params.args) && compilerOverride !== 'microsoft' && params.invocationKind !== 'build'
+    && (supported || compilerOverride === 'tsrs')
+    ? typecheckCompilerOptions(params.args, params.workspaceDir ?? process.cwd()) : undefined;
   const packageName = options ? 'tsrs/package.json' : NATIVE_TYPESCRIPT_PACKAGE_JSON;
   const binaryName = options ? 'tsrs' : 'tsc';
   const packageJsonPath = requireResolve(packageName);
@@ -79,8 +84,8 @@ export function resolveTypeScriptCliInvocation(params) {
   }
 
   const compilerPath = resolve(dirname(packageJsonPath), tscBin);
-  // Microsoft owns existing reference/declaration caches. Rust's canonical
-  // snapshot signature must never be read from or written to those paths.
+  // Rust snapshots and internal declarations never share Microsoft's caches.
+  const cacheSuffix = options ? '.tsrs' : '';
   const buildInfoPath = options && ts.getTsBuildInfoEmitOutputFilePath(options);
   const cacheArgs = buildInfoPath ? { argsSuffix: ['--tsBuildInfoFile', `${resolve(params.workspaceDir ?? process.cwd(), buildInfoPath)}.tsrs`] } : {};
   // Match the native local admission owner's ordinary CI exemption. Placed
@@ -98,6 +103,7 @@ export function resolveTypeScriptCliInvocation(params) {
         `--machine=${env.HAPPIER_DEV_TARGET_EXECUTION === '1' ? 'worker' : 'local'}`,
         '--exec-admitted', '--', processExecPath, compilerPath],
       compilerPath,
+      cacheSuffix,
       ...cacheArgs,
     };
   }
@@ -105,6 +111,7 @@ export function resolveTypeScriptCliInvocation(params) {
     command: processExecPath,
     argsPrefix: [compilerPath],
     compilerPath,
+    cacheSuffix,
     ...cacheArgs,
   };
 }

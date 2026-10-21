@@ -65,6 +65,9 @@ permissions:
   contents: read
   pull-requests: read
 
+env:
+  HAPPIER_TYPESCRIPT_COMPILER: microsoft
+
 jobs:
   source_plan:
     name: Bind source and select shared validation

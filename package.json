@@ -290,7 +290,7 @@
   },
   "devDependencies": {
     "@sentry/cli": "^3.2.2",
-    "@typescript/native": "npm:typescript@7.0.2",
+    "@typescript/native": "npm:typescript@7.1.0-beta",
     "tsrs": "0.18.0-ts7.1.0-dev.20260929",
     "freeport-async": "^2.0.0",
     "hash-wasm": "4.12.0",

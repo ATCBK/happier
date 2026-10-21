@@ -10,6 +10,43 @@ import { prepareUiTypecheckProjects } from '../../apps/ui/scripts/deriveTypechec
 import { deriveCliTypecheckProjects, prepareCliTypecheckProjects } from '../../apps/cli/scripts/deriveTypecheckProjects.mjs';
 import { installUiTypecheckFixtureDependencies } from '../testing/lib/typecheckProjectFixture.mjs';
 
+test('compiler switches isolate internal declarations and keep references on the selected graph', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-typecheck-compiler-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, 'entry.ts'), 'export const entry = 1;');
+  await writeFile(join(root, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: { noEmit: true, types: [] }, files: ['entry.ts'],
+  }));
+  const sourceNames = ['foundation', 'core', 'source'];
+  const testNames = ['test'];
+  for (const [index, name] of [...sourceNames, ...testNames].entries()) {
+    await writeFile(join(root, `tsconfig.${name}.json`), JSON.stringify({
+      extends: './tsconfig.json', files: [],
+      compilerOptions: { composite: true, noEmit: false, emitDeclarationOnly: true,
+        outDir: `node_modules/.cache/tsc/${name}.declarations`,
+        tsBuildInfoFile: `node_modules/.cache/tsc/${name}.tsbuildinfo` },
+      references: index ? [{ path: `./tsconfig.${sourceNames[Math.min(index - 1, 2)]}.json` }] : [],
+    }));
+  }
+  const previousCompiler = process.env.HAPPIER_TYPESCRIPT_COMPILER;
+  t.after(() => {
+    if (previousCompiler === undefined) delete process.env.HAPPIER_TYPESCRIPT_COMPILER;
+    else process.env.HAPPIER_TYPESCRIPT_COMPILER = previousCompiler;
+  });
+  process.env.HAPPIER_TYPESCRIPT_COMPILER = 'microsoft';
+  const microsoft = await deriveTypecheckProjects(root, { sourceNames, testNames });
+  process.env.HAPPIER_TYPESCRIPT_COMPILER = 'tsrs';
+  const rust = await deriveTypecheckProjects(root, { sourceNames, testNames });
+  assert.notEqual(rust[0].configPath, microsoft[0].configPath);
+  for (const [index, { configPath }] of rust.entries()) {
+    const parsed = readTypecheckProject(configPath);
+    assert.equal(parsed.parsed.options.outDir,
+      `${readTypecheckProject(microsoft[index].configPath).parsed.options.outDir}.tsrs`);
+    assert.deepEqual(parsed.config.references?.map(reference => reference.path) ?? [],
+      index ? [rust[Math.min(index - 1, 2)].configPath] : []);
+  }
+});
+
 test('app compiler programs resolve current SDK declarations over installed author-example copies', async t => {
   const root = await mkdtemp(join(tmpdir(), 'happier-compiler-author-example-'));
   t.after(() => rm(root, { recursive: true, force: true }));

@@ -16,7 +16,7 @@ import { createTempFixture } from '../../apps/stack/scripts/testkit/core/temp_fi
 import { writeFakeBin } from '../../apps/stack/scripts/testkit/core/fake_bin_harness.mjs';
 import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
 
-test('selects tsrs only for Linux check-only work, preserving Microsoft emit, CI and platform authority', () => {
+test('selects tsrs for supported typechecks including declaration partitions and CI, preserving Microsoft builds and tooling', () => {
   const select = (args, options = {}) => resolveTypeScriptCliInvocation({
     args, platform: 'linux', arch: 'x64', env: {},
     requireResolve: specifier => `/repo/node_modules/${specifier}`,
@@ -27,11 +27,18 @@ test('selects tsrs only for Linux check-only work, preserving Microsoft emit, CI
     assert.match(select(['--noEmit'], { arch }).compilerPath, /\/tsrs\/bin\/tsrs$/);
   }
   for (const [args, options] of [
+    [['--emitDeclarationOnly'], {}],
+    [['--noEmit'], { platform: 'darwin', arch: 'arm64' }],
+    [['--noEmit'], { env: { CI: 'true' } }],
+    [['--emitDeclarationOnly'], { env: { HAPPIER_TYPESCRIPT_COMPILER: 'tsrs' } }],
+  ]) assert.match(select(args, options).compilerPath, /\/tsrs\/bin\/tsrs$/);
+  for (const [args, options] of [
     [[], {}], [['--noEmit', 'false'], {}], [['--declaration'], {}],
-    [['--emitDeclarationOnly'], {}], [['--build'], {}], [['--build', '--noEmit'], {}],
-    [['--noEmit'], { platform: 'darwin' }], [['--noEmit'], { platform: 'win32' }],
-    [['--noEmit'], { arch: 'ia32' }], [['--noEmit'], { env: { CI: 'true' } }],
+    [['--build'], {}], [['--build', '--noEmit'], {}], [['--watch', '--noEmit'], {}],
+    [['--noEmit'], { platform: 'darwin', arch: 'x64' }], [['--noEmit'], { platform: 'win32' }],
+    [['--noEmit'], { arch: 'ia32' }],
     [['--noEmit'], { invocationKind: 'build' }],
+    [['--emitDeclarationOnly'], { invocationKind: 'build', env: { HAPPIER_TYPESCRIPT_COMPILER: 'tsrs' } }],
     [['--noEmit'], { env: { HAPPIER_TYPESCRIPT_COMPILER: 'microsoft' } }],
   ]) assert.match(select(args, options).compilerPath, /\/@typescript\/native\/bin\/tsc$/);
   assert.throws(() => select(['--noEmit'], { env: { HAPPIER_TYPESCRIPT_COMPILER: 'typo' } }), /HAPPIER_TYPESCRIPT_COMPILER/);
@@ -56,7 +63,7 @@ test('inherits project noEmit and isolates tsrs incremental state without changi
   assert.match(select(args).compilerPath, /\/tsrs\//);
   assert.deepEqual(select(args).argsSuffix, ['--tsBuildInfoFile', fixture.path('cache/check.tsbuildinfo.tsrs')]);
   assert.equal(select(args, { HAPPIER_TYPESCRIPT_COMPILER: 'microsoft' }).argsSuffix, undefined);
-  assert.match(select([...args, '--noEmit', 'false', '--emitDeclarationOnly']).compilerPath, /\/@typescript\/native\//);
+  assert.match(select([...args, '--noEmit', 'false', '--emitDeclarationOnly']).compilerPath, /\/tsrs\//);
   assert.deepEqual(select([...args, '--tsBuildInfoFile', 'custom.tsbuildinfo']).argsSuffix,
     ['--tsBuildInfoFile', fixture.path('custom.tsbuildinfo.tsrs')]);
   await writeFile(fixture.path('tsconfig.json'), JSON.stringify({ compilerOptions: { noEmit: true, incremental: true }, files: [] }));
