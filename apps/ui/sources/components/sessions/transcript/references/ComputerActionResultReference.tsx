@@ -7,6 +7,9 @@ import type { ToolCall } from '@happier-dev/session-core/messages';
 import { openComputerTargetPickerForSession } from '@/components/computer/openComputerTargetPickerForSession';
 import { useOpenSessionComputerScreen } from '@/components/computer/useOpenSessionComputerScreen';
 import { noteSessionComputerMachine } from '@/sync/domains/computer/sessionComputerMachines';
+import { getStorage } from '@/sync/domains/state/storage';
+import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
+import { readMachineName } from '@/utils/sessions/machineDisplayNames';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
@@ -191,12 +194,16 @@ function MountedComputerActionReference(props: Readonly<{
     const serverId = props.serverId ?? accountLifetime?.scope.serverId ?? null;
     const identity = useBrowserSessionAgentIdentity({ sessionId, serverId });
     const [shared, setShared] = React.useState<ComputerApprovalDisplayV1 | null>(null);
+    const store = getStorage();
+    const readName = React.useCallback(() => readMachineName(resolveServerScopedMachine(store.getState(), serverId, reference.machineId)),
+        [reference.machineId, serverId, store]);
+    const cachedMachineName = React.useSyncExternalStore(store.subscribe, readName, readName);
+    const machineName = reference.kind === 'choose' ? reference.machineName : cachedMachineName;
     // The row is where this device learns the Session uses this machine for computer use.
     React.useEffect(() => {
-        noteSessionComputerMachine({ sessionId, machineId: reference.machineId, machineName: reference.kind === 'choose' ? reference.machineName : null });
-    }, [reference, sessionId]);
+        noteSessionComputerMachine({ sessionId, machineId: reference.machineId, machineName });
+    }, [machineName, reference.machineId, sessionId]);
     const testID = `transcript-computer-action-${reference.actionId}`;
-    const machineName = reference.kind === 'choose' ? reference.machineName : reference.machineId;
     const choose = React.useCallback(() => {
         openComputerTargetPickerForSession({
             sessionId,
@@ -220,7 +227,7 @@ function MountedComputerActionReference(props: Readonly<{
                 <Text style={stylesheet.askTitle}>
                     {sharedTitle
                         ? t('computerUse.request.shared', { target: sharedTitle })
-                        : t('computerUse.request.title', { agent: identity.name, machine: machineName })}
+                        : t('computerUse.request.title', { agent: identity.name, machine: machineName ?? t('computerUse.presentation.tabFallback') })}
                 </Text>
                 {sharedTitle ? null : <Text style={stylesheet.askBody}>{t('computerUse.request.body')}</Text>}
                 <View style={stylesheet.askActions}>
