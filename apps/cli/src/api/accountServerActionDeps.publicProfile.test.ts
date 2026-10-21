@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fastify from 'fastify';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
-import { PublicProfileOwnerReadV1Schema, DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1 } from '@happier-dev/protocol/account/publicProfilePublication';
-import { DEFAULT_PUBLIC_PROFILE_POLICY_V1 } from '@happier-dev/protocol/account/publicProfile';
+import { PublicProfileOwnerReadV1Schema, PublicProfilePublishBodyV1Schema, DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1 } from '@happier-dev/protocol/account/publicProfilePublication';
+import { DEFAULT_PUBLIC_PROFILE_POLICY_V1, PublicProfilePolicyV1Schema } from '@happier-dev/protocol/account/publicProfile';
+import { UsageAnalyticsQueryResponseSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
@@ -19,6 +20,56 @@ beforeEach(() => {
 afterEach(async () => { restore(); await app.close(); });
 
 describe('public-profile CLI captured Account binding', () => {
+  it('computes and dispatches a public snapshot through the real CLI query and prepared HTTP owners', async () => {
+    const startMs = Date.parse('2026-10-20T00:00:00Z');
+    const endMs = startMs + 86_400_000;
+    const policy = PublicProfilePolicyV1Schema.parse({ indexable: false, fields: Object.fromEntries(
+      Object.keys(DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields).map(field => [field, field === 'tokens'])) });
+    const owner = PublicProfileOwnerReadV1Schema.parse({ kind: 'absent', context: { handle: 'ada', identity: {},
+      service: { displayName: 'Home', publicBaseUrl: 'http://profile-home.test' }, urls: {
+        page: 'http://profile-home.test/@ada', json: 'http://profile-home.test/@ada/json',
+        badgeBase: 'http://profile-home.test/@ada/badge', card: 'http://profile-home.test/@ada/card.svg',
+        og: 'http://profile-home.test/@ada/og.png', report: 'mailto:operator@profile-home.test',
+      } } });
+    const tokens = { input: 8, output: 2, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 10 };
+    const cost = { reportedUsd: 98765, estimatedUsd: 87654, currency: 'USD' };
+    const accounting = UsageAnalyticsQueryResponseSchema.parse({ v: 1, totals: { eventCount: 1, tokens, cost },
+      contributions: [{ id: 'private-request', observedAtMs: startMs + 1, sessionId: 'private-session', turnId: 'private-turn',
+        agentId: 'codex', modelId: null, machineId: null, projectKey: 'private-project', workspaceId: null,
+        source: 'runtime', eventCount: 1, sourceContext: { path: 'runtime', execution: 'happier' }, tokens, cost }],
+      coverage: { status: 'partial', reasons: ['incomplete_history'], sources: [{ source: 'runtime', path: 'runtime', status: 'available',
+        eventCount: 1, asOfMs: endMs, historyComplete: false }], missingDimensions: [], ranked: [], range: { startMs, endMs, complete: false } },
+    });
+    app.get('/v1/account/public-profile', async () => owner);
+    app.post('/v2/usage/query', async request => {
+      expect(request.body).toMatchObject({ population: 'public_eligible_personal' });
+      return accounting;
+    });
+    const published: unknown[] = [];
+    app.post('/v1/account/public-profile/publish', async request => {
+      const body = PublicProfilePublishBodyV1Schema.parse(request.body);
+      published.push(body);
+      return { kind: 'updated', record: null };
+    });
+    const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'account.public_profile.publish': ['cli'] } });
+    const executor = createActionExecutor({ ...createAccountServerActionDeps({ token: 'captured', serverId: 'home',
+      serverHttpBaseUrl: 'http://profile-home.test', isCredentialCurrent: async () => true }),
+      isActionApprovalRequired: (id, context, input) => isApprovalRequiredByActionsSettings(id, actionsSettings, context, undefined, undefined, input),
+    } as ActionExecutorDeps);
+    const candidate = { policy, metadataSelection: {}, query: normalizeUsageQuery({ period: { startMs, endMs },
+      includeSessionEvidence: false, includeTranscriptEvidence: false, includeWorkEvidence: false, includeQuotaHistory: false }),
+      layout: { v: 1, items: [] }, appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1 };
+    const context = { surface: 'cli' as const, authority: 'present_user' as const, serverId: 'home' };
+    await expect(executor.execute('account.public_profile.preview', candidate, context)).resolves.toMatchObject({ ok: true,
+      result: { kind: 'ready', view: { snapshot: { facts: { tokens: 10 } } } } });
+    expect(published).toEqual([]);
+    await expect(executor.execute('account.public_profile.publish', { ...candidate, intent: 'publish' }, context))
+      .resolves.toMatchObject({ ok: true, result: { kind: 'updated' } });
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({ query: { population: 'public_eligible_personal' }, snapshot: { facts: { tokens: 10 } } });
+    expect(JSON.stringify(published)).not.toMatch(/private-request|private-session|private-turn|private-project|98765|87654/);
+  });
+
   it.each(['restrict', 'restore'] as const)('requires consent for operator %s and never turns a waiver into Home privilege', async operation => {
     const actionId = ActionIdSchema.parse(`home.public_profiles.${operation}`);
     const received: unknown[] = [];

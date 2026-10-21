@@ -16,6 +16,7 @@ import { ACCOUNT_EMAIL_CHANGE_REQUEST_PATH_V1, ACCOUNT_PASSWORD_CHANGE_PATH_V1, 
 import { ACCOUNT_SESSIONS_SIGN_OUT_EVERYWHERE_HTTP_PATH_V1, AccountSessionsSignOutEverywhereActionInputV1Schema, AccountSessionsSignOutEverywhereServerOutputV1Schema } from '@happier-dev/protocol/auth/accountSessions';
 import { bindHomeDomainActionHttpRequestV1, bindPublicProfilePreparedHttpRequestV1, homeDomainActionOutputSchemaV1, readHomeDomainActionErrorV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { bindPublicProfileActionPorts } from '@happier-dev/protocol/actions/executor/publicProfileActions';
+import { buildPublicProfileSnapshot } from '@happier-dev/protocol/account/publicProfileSnapshot';
 import { readScmHostingRepository } from '@/scm/hostingProviders/readRepository';
 import { readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 import { bindSessionAccessActionHttpRequestV1 } from '@happier-dev/protocol/actions/sessionAccessActionFamily';
@@ -1515,7 +1516,7 @@ export function createAccountServerActionDeps(input: Readonly<{
     },
   };
   return { ...deps, publicProfileActions: bindPublicProfileActionPorts({
-    homeDomainAction: deps.homeDomainAction!, usage: deps.usageActions,
+    homeDomainAction: deps.homeDomainAction!, usage: deps.usageActions, buildSnapshot: buildPublicProfileSnapshot,
     assertCurrent: async context => {
       context.signal?.throwIfAborted();
       const mismatch = await accountServerTargetMismatch(context);
