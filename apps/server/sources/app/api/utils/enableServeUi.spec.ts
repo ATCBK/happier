@@ -10,12 +10,13 @@ import { createServer } from 'node:net';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 
 import { applyEnvValues, restoreEnv, snapshotEnv } from "../testkit/env";
-import { createDbTransactionMock } from '../testkit/dbMocks';
+import { createDbTransactionMock, inTxPostgresControlStatementMock } from '../testkit/dbMocks';
 import { enableServeUi } from './enableServeUi';
 
 vi.mock('@/storage/prisma', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/storage/prisma')>();
   const tables = {
+    ...inTxPostgresControlStatementMock,
     homeSettings: { findUnique: async () => null },
     homeGovernancePolicy: { findUnique: async () => null },
   };

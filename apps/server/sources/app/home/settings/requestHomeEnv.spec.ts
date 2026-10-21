@@ -19,6 +19,10 @@ vi.mock('@/storage/db', () => {
 
 import { enableAuthentication } from '@/app/api/utils/enableAuthentication';
 import { encryptString, initEncrypt } from '@/modules/encrypt';
+import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
+import { readRequestHomeEnv, readRequestHomeFlag } from './requestHomeEnv';
+
+const flag = SERVER_CONFIG.HAPPIER_AUTH_DECORATOR_DIAGNOSTIC_LOGS;
 
 describe('request Home configuration demand', () => {
     beforeAll(async () => {
@@ -28,6 +32,8 @@ describe('request Home configuration demand', () => {
     });
     afterAll(() => vi.unstubAllEnvs());
     beforeEach(() => {
+        vi.stubEnv('HAPPIER_AUTH_DECORATOR_DIAGNOSTIC_LOGS', undefined);
+        vi.stubEnv('HAPPY_AUTH_DECORATOR_DIAGNOSTIC_LOGS', undefined);
         boundary.settings.mockReset();
         boundary.policy.mockReset().mockResolvedValue(null);
         boundary.settings.mockResolvedValue({
@@ -56,5 +62,64 @@ describe('request Home configuration demand', () => {
             opens.mockRestore();
             await app.close();
         }
+    });
+
+    it('shares the captured rows with concurrent flag readers and later full consumers, then refreshes on the next request', async () => {
+        const request = {};
+        const opens = vi.spyOn(privacyKit.KeyTree.prototype, 'symmetricDecryptString');
+        try {
+            expect(await Promise.all([readRequestHomeFlag(request, flag), readRequestHomeFlag(request, flag)]))
+                .toEqual([true, true]);
+            expect(opens).not.toHaveBeenCalled();
+            boundary.settings.mockResolvedValue({ revision: 2, values: { [flag.key]: false }, encryptedSecrets: null });
+            const env = await readRequestHomeEnv(request);
+            expect(env[flag.key]).toBe('true');
+            expect(env.HAPPIER_AUTH_EMAIL_SMTP_PASSWORD).toBe('fixture-home-password');
+            expect(await readRequestHomeEnv(request)).toBe(env);
+            expect(await readRequestHomeFlag(request, flag)).toBe(true);
+            expect(boundary.settings).toHaveBeenCalledTimes(1);
+            expect(boundary.policy).toHaveBeenCalledTimes(1);
+            expect(opens).toHaveBeenCalledTimes(1);
+
+            expect(await readRequestHomeFlag({}, flag)).toBe(false);
+            expect(boundary.settings).toHaveBeenCalledTimes(2);
+            expect(boundary.policy).toHaveBeenCalledTimes(2);
+            expect(opens).toHaveBeenCalledTimes(1);
+        } finally {
+            opens.mockRestore();
+        }
+    });
+
+    it.each([
+        { key: '0', alias: '1', expected: false },
+        { key: undefined, alias: '0', expected: false },
+        { key: '  ', alias: '1', expected: true },
+        { key: 'malformed', alias: '1', expected: false },
+    ])('retains canonical deployment/alias precedence for $key / $alias', async ({ key, alias, expected }) => {
+        vi.stubEnv('HAPPIER_AUTH_DECORATOR_DIAGNOSTIC_LOGS', key);
+        vi.stubEnv('HAPPY_AUTH_DECORATOR_DIAGNOSTIC_LOGS', alias);
+        expect(await readRequestHomeFlag({}, flag)).toBe(expected);
+    });
+
+    it.each(['settings', 'policy'] as const)('refuses a failed %s capture even for a deployment-set flag, then retries the same request', async table => {
+        vi.stubEnv('HAPPIER_AUTH_DECORATOR_DIAGNOSTIC_LOGS', '0');
+        const failure = new Error('fixture database unavailable');
+        boundary[table].mockRejectedValueOnce(failure);
+        const request = {};
+        await expect(readRequestHomeFlag(request, flag)).rejects.toBe(failure);
+        await expect(readRequestHomeFlag(request, flag)).resolves.toBe(false);
+        expect(boundary.settings).toHaveBeenCalledTimes(2);
+        expect(boundary.policy).toHaveBeenCalledTimes(2);
+    });
+
+    it('preserves later inferred full-env composition and its request identity', async () => {
+        const request = {};
+        await readRequestHomeFlag(request, flag);
+        const env = await readRequestHomeEnv(request, { inferred: { HAPPIER_PUBLIC_SERVER_URL: 'https://inferred.example.test' } });
+        expect(env.HAPPIER_PUBLIC_SERVER_URL).toBe('https://inferred.example.test');
+        expect(env.HAPPIER_AUTH_EMAIL_SMTP_PASSWORD).toBe('fixture-home-password');
+        expect(await readRequestHomeEnv(request)).toBe(env);
+        expect(boundary.settings).toHaveBeenCalledTimes(1);
+        expect(boundary.policy).toHaveBeenCalledTimes(1);
     });
 });

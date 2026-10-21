@@ -3,8 +3,7 @@ import type { UiConfig } from "@/app/api/uiConfig";
 import { extname, isAbsolute, relative, resolve } from "node:path";
 import { readFile, stat } from "node:fs/promises";
 import { warn } from "@/utils/logging/log";
-import { readRequestHomeEnv } from '@/app/home/settings/requestHomeEnv';
-import { readServerConfig } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { readRequestHomeFlag } from '@/app/home/settings/requestHomeEnv';
 import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
 import { createReadStream, existsSync } from "node:fs";
 import { isServerApiPathname } from "./serverApiPath";
@@ -190,7 +189,7 @@ export function enableServeUi(app: AnyFastifyInstance, ui: UiConfig) {
         } catch (err) {
             warn({ err, indexPath }, 'UI index.html not found (check UI build dir configuration)');
             const isProduction = process.env.NODE_ENV === "production";
-            const revealPathInFallback = !isProduction || readServerConfig(await readRequestHomeEnv(request), SERVER_CONFIG.HAPPIER_SERVER_UI_DEBUG_PATH);
+            const revealPathInFallback = !isProduction || await readRequestHomeFlag(request, SERVER_CONFIG.HAPPIER_SERVER_UI_DEBUG_PATH);
             const escapedIndexPath = String(indexPath)
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')

@@ -1,4 +1,4 @@
-import { readServerConfigRaw, serializeServerConfigValue, readStoredServerConfigValue, type ServerConfigEnv } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { readServerConfig, readServerConfigRaw, serializeServerConfigValue, readStoredServerConfigValue, type ServerConfigEnv, type ServerConfigReadValue } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 import { type ServerConfigApply, type ServerConfigEditable, type ServerConfigEntry, type ServerConfigRegistry, type ServerConfigValue } from '@happier-dev/protocol/serverConfig/serverConfigEntry';
 import { type HomeSettingDeclarationV1 } from '@happier-dev/protocol/home/governance';
 
@@ -39,6 +39,22 @@ function readPersistedValue(entry: ServerConfigEntry, persisted: PersistedHomeSe
     if (raw === null || raw === undefined) return undefined;
     const validated = readStoredServerConfigValue(entry, raw);
     return validated.ok ? validated.value : undefined;
+}
+
+function readLivePersistedValue(entry: ServerConfigEntry, env: ServerConfigEnv, persisted: PersistedHomeSettingValues): ServerConfigValue | undefined {
+    if (entry.apply !== 'live' || readServerConfigRaw(env, entry)) return undefined;
+    return readPersistedValue(entry, persisted);
+}
+
+/** The same live precedence as env composition, without copying or enumerating the environment. */
+export function readHomeConfigFlag<E extends ServerConfigEntry & { type: 'boolean'; sensitivity: 'plain' }>(
+    env: ServerConfigEnv,
+    persisted: PersistedHomeSettingValues,
+    entry: E,
+): ServerConfigReadValue<E> {
+    const value = readLivePersistedValue(entry, env, persisted);
+    // The shared stored-value codec validated the value against this exact boolean entry.
+    return value === undefined ? readServerConfig(env, entry) : value as ServerConfigReadValue<E>;
 }
 
 export function resolveHomeSetting(
@@ -86,8 +102,8 @@ export function buildHomeConfigEnv(
     }
     for (const key of Object.keys(persisted)) {
         const entry = hasOwn(registry, key) ? registry[key] : undefined;
-        if (!entry || entry.apply !== 'live' || readServerConfigRaw(env, entry)) continue;
-        const value = readPersistedValue(entry, persisted);
+        if (!entry) continue;
+        const value = readLivePersistedValue(entry, env, persisted);
         if (value === undefined) continue;
         filled.set(entry.key, { text: serializeServerConfigValue(entry, value), source: 'home' });
     }

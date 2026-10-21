@@ -144,16 +144,28 @@ export function buildHomeConfigEnvFromRecord(
         : overlay;
 }
 
+export type HomeConfigSnapshot = Readonly<{
+    base: ServerConfigEnv;
+    record: HomeSettingsRecord;
+    policyValues: PersistedPolicyValues;
+}>;
+
+/** Capture both rows coherently without opening secrets or constructing their full env overlay. */
+export async function readHomeConfigSnapshot(base: ServerConfigEnv = process.env): Promise<HomeConfigSnapshot> {
+    const [record, policyValues] = await inReadSnapshot(tx => Promise.all([
+        readHomeSettingsInTx(tx), readHomeAuthenticationPolicyValues(tx),
+    ]));
+    return { base, record, policyValues };
+}
+
 /**
  * The request/job overlay (§3.1 "Request/job-scoped configuration"): settings and policy reads, then the
  * `apply: 'live'` Home values over `base` for every key the deployment leaves unset. Restart keys keep
  * the values this process started with. No process cache: every replica reads the same row.
  */
 export async function readHomeConfigEnv(base: ServerConfigEnv = process.env): Promise<ServerConfigEnv> {
-    const [record, policyValues] = await inReadSnapshot(tx => Promise.all([
-        readHomeSettingsInTx(tx), readHomeAuthenticationPolicyValues(tx),
-    ]));
-    return buildHomeConfigEnvFromRecord(base, record, SERVER_CONFIG_REGISTRY, policyValues);
+    const snapshot = await readHomeConfigSnapshot(base);
+    return buildHomeConfigEnvFromRecord(snapshot.base, snapshot.record, SERVER_CONFIG_REGISTRY, snapshot.policyValues);
 }
 
 /**

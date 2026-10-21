@@ -1,7 +1,8 @@
-import type { ServerConfigEnv } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { readServerConfig, type ServerConfigEnv, type ServerConfigReadValue } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import type { ServerConfigEntry } from '@happier-dev/protocol/serverConfig/serverConfigEntry';
 
-import { readHomeConfigEnv } from "./homeSettings";
-import { composeHomeConfigEnv, readHomeConfigEnvOrigin } from './homeConfigOverlay';
+import { buildHomeConfigEnvFromRecord, readHomeConfigSnapshot, type HomeConfigSnapshot } from "./homeSettings";
+import { readHomeConfigFlag, composeHomeConfigEnv, readHomeConfigEnvOrigin } from './homeConfigOverlay';
 
 /**
  * The request-scoped configuration overlay (plan `2026-09-26-home-owner-console` §3.1
@@ -16,18 +17,49 @@ import { composeHomeConfigEnv, readHomeConfigEnvOrigin } from './homeConfigOverl
  * A plain helper rather than a Fastify decorator, so the route modules registered by tests on bare
  * Fastify instances reach the same owner without extra composition.
  */
-const overlays = new WeakMap<object, Promise<ServerConfigEnv>>();
+type RequestHomeConfig = {
+    snapshot: Promise<HomeConfigSnapshot>;
+    overlay?: Promise<ServerConfigEnv>;
+};
+
+const captures = new WeakMap<object, RequestHomeConfig>();
+
+function captureRequestHomeConfig(request: object): RequestHomeConfig {
+    const existing = captures.get(request);
+    if (existing) return existing;
+    // Deployment env is process-start fixed; retain its identity for startup deployment-lock provenance.
+    const capture: RequestHomeConfig = { snapshot: readHomeConfigSnapshot(process.env) };
+    captures.set(request, capture);
+    // A failed capture refuses this read but does not poison a later retry.
+    capture.snapshot.catch(() => {
+        if (captures.get(request) === capture) captures.delete(request);
+    });
+    return capture;
+}
+
+/** Read a plain boolean flag through the same precedence/alias owner, without opening secrets. */
+export async function readRequestHomeFlag<E extends ServerConfigEntry & { type: 'boolean'; sensitivity: 'plain' }>(
+    request: object,
+    entry: E,
+): Promise<ServerConfigReadValue<E>> {
+    const capture = captureRequestHomeConfig(request);
+    if (capture.overlay) return readServerConfig(await capture.overlay, entry);
+    const snapshot = await capture.snapshot;
+    const values = Object.prototype.hasOwnProperty.call(snapshot.policyValues, entry.key)
+        ? snapshot.policyValues : snapshot.record.values;
+    return readHomeConfigFlag(snapshot.base, { [entry.key]: values[entry.key] }, entry);
+}
 
 export function readRequestHomeEnv(
     request: object,
     options?: Readonly<{ inferred: Readonly<Record<string, string>> }>,
 ): Promise<ServerConfigEnv> {
-    let overlay = overlays.get(request);
+    const capture = captureRequestHomeConfig(request);
+    let overlay = capture.overlay;
     if (!overlay) {
-        overlay = readHomeConfigEnv(process.env);
-        overlays.set(request, overlay);
-        // A failed read is not memoized: the next reader retries instead of replaying the failure.
-        overlay.catch(() => overlays.delete(request));
+        overlay = capture.snapshot.then(snapshot => buildHomeConfigEnvFromRecord(
+            snapshot.base, snapshot.record, undefined, snapshot.policyValues,
+        ));
     }
     if (options) {
         // Reach can finish inference after authentication first read this snapshot. Recompose
@@ -37,8 +69,10 @@ export function readRequestHomeEnv(
             if (!origin) throw new Error('Request Home environment has no configuration origin');
             return composeHomeConfigEnv({ ...origin, inferred: options.inferred }, { snapshot: true });
         });
-        overlays.set(request, overlay);
-        overlay.catch(() => overlays.delete(request));
     }
+    capture.overlay = overlay;
+    overlay.catch(() => {
+        if (captures.get(request) === capture && capture.overlay === overlay) captures.delete(request);
+    });
     return overlay;
 }

@@ -4,12 +4,11 @@ import { z } from "zod/mini";
 import type { Fastify } from "../types";
 import { log } from "@/utils/logging/log";
 import { timeWebLatencyPhase } from '@/utils/webLatencyTrace';
-import { readRequestHomeEnv } from '@/app/home/settings/requestHomeEnv';
+import { readRequestHomeFlag } from '@/app/home/settings/requestHomeEnv';
 import { captureAccountStoredContentCompatibilityForHttpRequest } from "@/app/clientCompatibility/accountStoredContentCompatibility";
 import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
 import { ACCOUNT_DIRECTORY_ERROR_CODES_V1 } from '@happier-dev/protocol/auth/accountDirectory';
 import { parseAccountApiTokenBearerV1 } from '@happier-dev/protocol/auth/accountApiTokens';
-import { readServerConfig } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
 import { type AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/auth/authToken';
 import { redactHttpRequestUrlForLog } from "@/utils/logging/redactHttpRequestUrlForLog";
@@ -127,7 +126,7 @@ export function enableAuthentication(app: Fastify) {
             || effectActionId !== null
             || encodedTarget !== null;
         // Never log bearer tokens or header contents.
-        const logDiagnostics = readServerConfig(await timeWebLatencyPhase('auth.home_env', () => readRequestHomeEnv(request)), SERVER_CONFIG.HAPPIER_AUTH_DECORATOR_DIAGNOSTIC_LOGS);
+        const logDiagnostics = await timeWebLatencyPhase('auth.home_env', () => readRequestHomeFlag(request, SERVER_CONFIG.HAPPIER_AUTH_DECORATOR_DIAGNOSTIC_LOGS));
         if (logDiagnostics) {
             log(
                 { module: 'auth-decorator' },

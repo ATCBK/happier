@@ -3,10 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
 
 import { SERVER_CONFIG_REGISTRY } from '@/config/serverConfigRegistry';
+import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
 import { resolveDefaultAuthOffboardingEnabled } from '@/app/auth/authPolicy';
 import { normalizePublicReleaseRingId, PUBLIC_RELEASE_RING_IDS } from '@happier-dev/release-runtime/releaseRings';
 
-import { buildHomeConfigEnv, projectHomeSettings, resolveHomeSetting } from './homeConfigOverlay';
+import { buildHomeConfigEnv, projectHomeSettings, readHomeConfigFlag, resolveHomeSetting } from './homeConfigOverlay';
 import { readHomeConfigValueSource } from './homeConfigProvenance';
 import { buildStartupHomeEnv } from './startupHomeEnv';
 
@@ -42,6 +43,14 @@ describe('resolveHomeSetting (explicit deployment env → persisted Home setting
 });
 
 describe('buildHomeConfigEnv', () => {
+    it('reads a live plain flag without materializing unrelated environment entries', () => {
+        const env = {
+            get UNRELATED_SECRET(): string { throw new Error('Unrelated environment entry was materialized'); },
+        };
+        expect(readHomeConfigFlag(env, { HAPPIER_AUTH_DECORATOR_DIAGNOSTIC_LOGS: true },
+            SERVER_CONFIG.HAPPIER_AUTH_DECORATOR_DIAGNOSTIC_LOGS)).toBe(true);
+    });
+
     it('fills only keys the deployment env leaves unset, so unchanged env readers see persisted values', () => {
         const env = { MAIL_PORT: '25', UNRELATED: 'kept' };
         const overlay = buildHomeConfigEnv(env, { MAIL_PORT: 2525, MAIL_HOST: 'smtp.home', DATA_DIR: '/elsewhere', NOT_DECLARED: 'x' }, REGISTRY);
