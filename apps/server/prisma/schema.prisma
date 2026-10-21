@@ -2199,7 +2199,7 @@ model SessionFollowEdge {
     @@unique([destinationSessionId, sourceDiscussionId, relation], map: "SessionFollowEdge_discussion_source_relation_key")
     @@index([sourceSessionId])
     @@index([sourceDiscussionId])
-    @@index([sourceExecutionRunSessionId, sourceExecutionRunId])
+    @@index([sourceExecutionRunSessionId, sourceExecutionRunId], map: "SessionFollowEdge_executionRunSource_idx")
     @@index([sourceWorkflowRunId])
 }
 
@@ -2601,7 +2601,7 @@ model ManagedMachine {
     updatedAt DateTime @updatedAt
 
     @@unique([homeId, admittedActionRequestId])
-    @@index([homeId, custodianAccountId, archivedAt, createdAt])
+    @@index([homeId, custodianAccountId, archivedAt, createdAt], map: "ManagedMachine_home_custodian_archived_idx")
     @@index([controllerMachineId, controllerInstallationId])
 }
 

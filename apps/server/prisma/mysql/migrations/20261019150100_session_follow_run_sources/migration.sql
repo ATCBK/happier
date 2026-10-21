@@ -5,7 +5,7 @@ ALTER TABLE `SessionFollowEdge`
     ADD COLUMN `sourceWorkflowRunId` VARCHAR(191) NULL,
     ADD COLUMN `deliveredExecutionRunTerminalEventId` VARCHAR(191) NULL,
     ADD COLUMN `deliveredWorkflowRunRevision` INTEGER NULL,
-    ADD INDEX `SessionFollowEdge_sourceExecutionRunSessionId_sourceExecutionRunId_idx` (`sourceExecutionRunSessionId`, `sourceExecutionRunId`),
+    ADD INDEX `SessionFollowEdge_executionRunSource_idx` (`sourceExecutionRunSessionId`, `sourceExecutionRunId`),
     ADD INDEX `SessionFollowEdge_sourceWorkflowRunId_idx` (`sourceWorkflowRunId`),
     ADD CONSTRAINT `SessionFollowEdge_sourceExecutionRunSessionId_fkey` FOREIGN KEY (`sourceExecutionRunSessionId`) REFERENCES `Session` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
     ADD CONSTRAINT `SessionFollowEdge_sourceWorkflowRunId_fkey` FOREIGN KEY (`sourceWorkflowRunId`) REFERENCES `AutomationRun` (`id`) ON DELETE CASCADE ON UPDATE CASCADE;

@@ -53,7 +53,7 @@ CREATE TABLE `ManagedMachinePreset` (
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX `ManagedMachine_enrolledMachineId_key` ON `ManagedMachine`(`enrolledMachineId`);
 CREATE UNIQUE INDEX `ManagedMachine_homeId_admittedActionRequestId_key` ON `ManagedMachine`(`homeId`, `admittedActionRequestId`);
-CREATE INDEX `ManagedMachine_homeId_custodianAccountId_archivedAt_createdAt_idx` ON `ManagedMachine`(`homeId`, `custodianAccountId`, `archivedAt`, `createdAt`);
+CREATE INDEX `ManagedMachine_home_custodian_archived_idx` ON `ManagedMachine`(`homeId`, `custodianAccountId`, `archivedAt`, `createdAt`);
 CREATE INDEX `ManagedMachine_controllerMachineId_controllerInstallationId_idx` ON `ManagedMachine`(`controllerMachineId`, `controllerInstallationId`);
 CREATE INDEX `ManagedMachinePreset_homeId_custodianAccountId_idx` ON `ManagedMachinePreset`(`homeId`, `custodianAccountId`);
 CREATE INDEX `ManagedMachinePreset_homeId_teamId_idx` ON `ManagedMachinePreset`(`homeId`, `teamId`);
