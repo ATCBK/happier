@@ -39,6 +39,8 @@ export const loadRemoteHostCatalogProjectionV1: RemoteHostCatalogProjectionLoade
   const project = (row: RemoteHostCatalogRowReadResponseV1) => loadRemoteHostCatalogV1({
     mode: input.mode, material: input.material, signal: input.signal, readRow: async () => row,
   });
+  // Return publication promises outside the domain catch so caller admission
+  // refusals preserve their type instead of becoming generic catalog failures.
   const publish = async (catalog: RemoteHostCatalogSnapshotV1) => {
     assertCurrent();
     await input.onReady?.(catalog);
@@ -68,21 +70,21 @@ export const loadRemoteHostCatalogProjectionV1: RemoteHostCatalogProjectionLoade
     assertCurrent();
     const initial = await project(row);
     assertCurrent();
-    if (input.hasPendingCleanup?.()) return await publish(initial.status === 'ready' ? { ...initial, cleanup: 'pending' } : initial);
+    if (input.hasPendingCleanup?.()) return publish(initial.status === 'ready' ? { ...initial, cleanup: 'pending' } : initial);
     // A present row, including a partial row, and a tombstone never use source data.
-    if (row.status !== 'absent') return await (row.status === 'present' || row.status === 'deleted' ? finishCleanup(initial) : publish(initial));
-    if (initial.status !== 'ready') return await publish(initial);
+    if (row.status !== 'absent') return row.status === 'present' || row.status === 'deleted' ? finishCleanup(initial) : publish(initial);
+    if (initial.status !== 'ready') return publish(initial);
     const source = await input.readSource();
     assertCurrent();
-    if (!Object.prototype.hasOwnProperty.call(source.raw, 'remoteHostsV1')) return await publish(initial);
+    if (!Object.prototype.hasOwnProperty.call(source.raw, 'remoteHostsV1')) return publish(initial);
     const retained = readRetainedRemoteHostCatalogV1(source.raw.remoteHostsV1);
-    if (retained.status !== 'ready') return await publish({ status: 'unavailable', reason: 'remote_host_source_incomplete' });
+    if (retained.status !== 'ready') return publish({ status: 'unavailable', reason: 'remote_host_source_incomplete' });
     const prepared = await input.prepareSource(source, retained.hosts);
     try {
       assertCurrent();
       const record = RemoteHostCatalogRecordV1Schema.parse(prepared.record);
       if (record.hosts.length !== retained.hosts.length || record.hosts.some((host, index) => !sameHostSource(retained.hosts[index]!, host))) {
-        return await publish({ status: 'unavailable', reason: 'remote_host_source_changed' });
+        return publish({ status: 'unavailable', reason: 'remote_host_source_changed' });
       }
       const packet = { mutation: RemoteHostCatalogRowMutationV1Schema.parse({ expectedRevision: 'absent', sourceSettingsVersion: source.version,
         content: sealRemoteHostCatalogContentV1({ mode: input.mode, material: input.material, record }),
@@ -99,22 +101,25 @@ export const loadRemoteHostCatalogProjectionV1: RemoteHostCatalogProjectionLoade
         assertCurrent();
         if (observed.status !== 'ready' || typeof observed.revision !== 'number'
           || JSON.stringify(observed.hosts) !== JSON.stringify(record.hosts)) {
-          return await publish({ status: 'unavailable', reason: 'outcome_unknown' });
+          return publish({ status: 'unavailable', reason: 'outcome_unknown' });
         }
-        return await finishCleanup(observed, source);
+        return finishCleanup(observed, source);
       }
       assertCurrent();
-      if (mutation.status === 'updated') return await finishCleanup({ status: 'ready', hosts: record.hosts,
+      if (mutation.status === 'updated') return finishCleanup({ status: 'ready', hosts: record.hosts,
         diagnostics: [], revision: mutation.revision }, source);
       if (mutation.status === 'conflict') {
         const observed = await project(await input.readRow());
         assertCurrent();
-        return await (observed.status === 'ready' && typeof observed.revision === 'number'
-          ? finishCleanup(observed) : publish({ status: 'unavailable', reason: 'remote_host_catalog_changed' }));
+        return observed.status === 'ready' && typeof observed.revision === 'number'
+          ? finishCleanup(observed) : publish({ status: 'unavailable', reason: 'remote_host_catalog_changed' });
       }
-      return await publish({ status: 'unavailable', reason: mutation.status });
+      return publish({ status: 'unavailable', reason: mutation.status });
     } finally { prepared.dispose(); }
   } catch {
-    return { status: 'unavailable', reason: input.signal?.aborted ? 'cancelled' : 'remote_host_catalog_unavailable' };
+    const unavailable: RemoteHostCatalogSnapshotV1 = {
+      status: 'unavailable', reason: input.signal?.aborted ? 'cancelled' : 'remote_host_catalog_unavailable',
+    };
+    return input.onReady ? publish(unavailable) : unavailable;
   }
 };
