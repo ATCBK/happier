@@ -4,7 +4,7 @@ import { isMachineReplaced } from '@happier-dev/protocol/machines/identity/canon
 
 import { MachineAdministrationTargetSelector } from '@/components/settings/machines/MachineAdministrationTargetSelector';
 import { useThisComputerMachineId } from '@/components/machines/add/useMachineAddPaths';
-import { isMachineAdministrationCandidateSelectable, resolveMachineAdministrationTargetState } from '@/sync/domains/machines/administration/targetSelection';
+import { isMachineAdministrationCandidateExplicitlySelectable, isMachineAdministrationCandidateSelectable, resolveMachineAdministrationTargetState } from '@/sync/domains/machines/administration/targetSelection';
 import {
   useMachineAdministrationTargetPickerRows,
   resolveFreshMachineAdministrationExecutionTarget,
@@ -15,6 +15,7 @@ import {
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { useMachineListForServer, useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { useIsMachineListSettled, useMachineListStatusForServer } from '@/sync/store/hooks';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { t } from '@/text';
 import { readMachineRequestReachabilityObservation } from '@/sync/domains/machines/reachability/machineReachability';
@@ -26,6 +27,11 @@ export type ManagedControllerScope = Readonly<{
   machine: Machine | undefined;
   /** Whether any machine in this Home can manage machines at all. */
   hasCandidates: boolean;
+  /**
+   * Whether this Home's machine list has been read: an empty `hasCandidates` before that is not
+   * "no machine can manage", and `unavailable` is a list that could not be read (retry re-reads it).
+   */
+  machineList: 'settled' | 'loading' | 'unavailable';
   /** The canonical machine-scope chip, for the page header (or the section that owns the scope). */
   chip: React.ReactElement | null;
   /** The same chosen controller, revalidated by the Administration execution owner. */
@@ -56,6 +62,8 @@ export function useManagedControllerScope(
   }>,
 ): ManagedControllerScope {
   const machines = useMachineListForServer(input.serverId);
+  const listSettled = useIsMachineListSettled(input.serverId);
+  const listStatus = useMachineListStatusForServer(input.serverId);
   const activeAccountScope = useActiveServerAccountScope();
   const { binding } = useServerCredentialAccountScopeBinding(input.serverId);
   const rows = useMachineAdministrationTargetPickerRows();
@@ -157,7 +165,7 @@ export function useManagedControllerScope(
         selectTarget: (target) => {
           if (!scopedRows.some(row => row.candidate.target.machineId === target.machineId
             && row.candidate.target.serverIdentityId === target.serverIdentityId
-            && isMachineAdministrationCandidateSelectable(row.candidate))) return;
+            && isMachineAdministrationCandidateExplicitlySelectable(row.candidate, 'lastKnown'))) return;
           const machine = eligible.find(
             (candidate) => candidate.id === target.machineId,
           );
@@ -180,6 +188,7 @@ export function useManagedControllerScope(
         presentation="chip"
         selection={selection}
         groupTitle={t('managedMachines.config.managedFrom')}
+        selectionPolicy="lastKnown"
         disabled={input.disabled}
         testIDPrefix={input.testIDPrefix}
       />
@@ -188,6 +197,7 @@ export function useManagedControllerScope(
     controller,
     machine: machines?.find((machine) => machine.id === controller?.machineId),
     hasCandidates: eligible.length > 0,
+    machineList: listSettled ? 'settled' : listStatus === 'error' || listStatus === 'signedOut' ? 'unavailable' : 'loading',
     chip,
     selection,
   };

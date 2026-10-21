@@ -21,6 +21,7 @@ import { useActionApprovalContinuation } from '@/components/approvals/useActionA
 import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { t } from '@/text';
+import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { useManagedProvisioners } from './useManagedProvisioners';
 import { useManagedProvisionerPresentation } from './useManagedProvisionerPresentation';
 import { MachineProvisionerSections } from './MachineProvisionerSections';
@@ -186,12 +187,17 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
         <Item testID="managed-picker.scope" title={t('managedMachines.config.managedFrom')} mode="info" showChevron={false} rightElement={chip}
             accessoryLayout="stacked" />
     </ItemGroup> : null;
+    const retryMachineList = () => { void getSyncSingleton().refreshMachines({ serverId: props.serverId }).catch(() => {}); };
     const setUpThisComputer = props.onSetUpThisComputer ?? (() => router.push('/settings/machines/add?path=thisComputer' as never));
     return <View testID="managed-picker">
         {approval.approvalId ? <AttentionBanner testID="managed-picker.approval" title={t('approvals.title')} description={t('approvals.status.open')}
             action={{ label: t('approvals.details'), onPress: () => router.push(`/inbox/approvals/${encodeURIComponent(approval.approvalId!)}?serverId=${encodeURIComponent(props.serverId)}` as never) }} /> : null}
         {!scope.hasCandidates && catalog.error ? <SurfaceStateCard testID="managed-picker.unavailable" kind="error"
             title={t('managedMachines.providers.unavailable')} diagnosticCode={catalog.error} action={{ label: t('common.retry'), onPress: catalog.refresh }} />
+            : !scope.hasCandidates && scope.machineList === 'loading' ? <SurfaceStateCard testID="managed-picker.machines-loading" kind="loading" size="line"
+            title={t('managedMachines.providers.loading')} />
+            : !scope.hasCandidates && scope.machineList === 'unavailable' ? <SurfaceStateCard testID="managed-picker.machines-unavailable" kind="error"
+            title={t('managedMachines.providers.unavailable')} action={{ label: t('common.retry'), onPress: retryMachineList }} />
             : !scope.hasCandidates ? <SurfaceStateCard testID="managed-picker.no-controller" kind="empty"
             title={t('managedMachines.add.noControllerTitle')} reason={t('managedMachines.add.noControllerReason')}
             action={{ label: t('managedMachines.add.setUpThisComputer'), onPress: setUpThisComputer }} />

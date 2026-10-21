@@ -19,11 +19,12 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { resolveHomeDisplayNameForServerIdentity } from '@/components/settings/server/homeDisplayName';
 import { isAddressOnlyName } from '@/sync/domains/server/serverProfiles';
 import {
-    isMachineAdministrationCandidateSelectable,
+    isMachineAdministrationCandidateExplicitlySelectable,
     machineAdministrationTargetsEqual,
     readMachineAdministrationCandidateName,
     resolveMachineAdministrationTargetState,
     type MachineAdministrationCandidateV1,
+    type MachineAdministrationExplicitSelectionPolicy,
     type MachineAdministrationTargetStateV1,
 } from '@/sync/domains/machines/administration/targetSelection';
 import type { MachineAdministrationTargetSelectionV1 } from '@/sync/domains/machines/administration/useTargetSelection';
@@ -70,6 +71,12 @@ export type MachineAdministrationTargetSelectorProps = Readonly<{
         title: string;
         subtitle?: string;
     }>;
+    /**
+     * Which candidates the picker offers as choices. `live` (default) admits only a live online machine;
+     * `lastKnown` also admits a machine whose presence is last known, for a draft choice whose execution is
+     * revalidated later, so a failed list read never leaves the picker with nothing to choose.
+     */
+    selectionPolicy?: MachineAdministrationExplicitSelectionPolicy;
     missingTargetTitle?: string;
     /** A subtitle for a missing target (`null` or omitted: none; opaque ids are never shown). */
     missingTargetSubtitle?: string | null;
@@ -227,7 +234,10 @@ function buildPickerGroups(
     return [...groups.values()];
 }
 
-function resolvePickerAvailability(machine: MachineAdministrationPickerMachine): Readonly<{
+function resolvePickerAvailability(
+    machine: MachineAdministrationPickerMachine,
+    policy: MachineAdministrationExplicitSelectionPolicy = 'live',
+): Readonly<{
     detail: string;
     selectable: boolean;
 }> {
@@ -239,7 +249,7 @@ function resolvePickerAvailability(machine: MachineAdministrationPickerMachine):
         // a different obstruction; repeating Offline here loses the row's useful identity detail.
         detail: machine.candidate.availability === 'online' || machine.candidate.availability === 'offline'
             ? '' : presentation.detail ?? presentation.title,
-        selectable: isMachineAdministrationCandidateSelectable(machine.candidate),
+        selectable: isMachineAdministrationCandidateExplicitlySelectable(machine.candidate, policy),
     };
 }
 
@@ -340,7 +350,7 @@ export function MachineAdministrationTargetSelector(props: MachineAdministration
                     })}
                     resolveMachineAvailability={(machine) => {
                         const availability = props.resolveCandidateAvailability?.(machine.candidate)
-                            ?? resolvePickerAvailability(machine);
+                            ?? resolvePickerAvailability(machine, props.selectionPolicy);
                         return props.disabled ? { ...availability, selectable: false } : availability;
                     }}
                     resolveMachinePresentation={props.resolveCandidatePresentation
@@ -388,7 +398,7 @@ export function useMachineAdministrationTargetFilter(
         ? props.selection.state.kind
         : undefined;
     const changeTarget = useTargetChange(props.selection.changeIntent);
-    const { selection, resolveCandidateAvailability, resolveCandidatePresentation } = props;
+    const { selection, resolveCandidateAvailability, resolveCandidatePresentation, selectionPolicy } = props;
     const selectedServerId = selectedRow?.serverId ?? null;
     const canOpen = groups.length > 0 && props.disabled !== true;
     const renderPopoverContent = React.useCallback(({ close, maxHeight }: Readonly<{ close: () => void; maxHeight: number }>) => (
@@ -398,6 +408,7 @@ export function useMachineAdministrationTargetFilter(
             selectedServerId={selectedServerId}
             resolveCandidateAvailability={resolveCandidateAvailability}
             resolveCandidatePresentation={resolveCandidatePresentation}
+            selectionPolicy={selectionPolicy}
             testIDPrefix={testIDPrefix}
             maxHeight={maxHeight}
             onSelect={(machine) => changeTarget(() => {
@@ -405,7 +416,7 @@ export function useMachineAdministrationTargetFilter(
                 close();
             })}
         />
-    ), [changeTarget, groups, resolveCandidateAvailability, resolveCandidatePresentation, selectedServerId, selection, testIDPrefix]);
+    ), [changeTarget, groups, resolveCandidateAvailability, resolveCandidatePresentation, selectedServerId, selection, selectionPolicy, testIDPrefix]);
     return {
         id: props.filterId ?? 'machine',
         label: groupTitle,
@@ -441,11 +452,12 @@ function MachineTargetChipList(props: Readonly<{
     selectedServerId: string | null;
     resolveCandidateAvailability: MachineAdministrationTargetSelectorProps['resolveCandidateAvailability'];
     resolveCandidatePresentation: MachineAdministrationTargetSelectorProps['resolveCandidatePresentation'];
+    selectionPolicy: MachineAdministrationTargetSelectorProps['selectionPolicy'];
     testIDPrefix: string;
     maxHeight: number;
     onSelect: (machine: MachineAdministrationPickerMachine) => void;
 }>) {
-    const { resolveCandidateAvailability, resolveCandidatePresentation } = props;
+    const { resolveCandidateAvailability, resolveCandidatePresentation, selectionPolicy } = props;
     const selectedTarget = props.selection.selectedTarget;
     const selectedMachine = React.useMemo(() => {
         if (!selectedTarget) return null;
@@ -457,9 +469,9 @@ function MachineTargetChipList(props: Readonly<{
     }, [props.groups, selectedTarget]);
     const resolveMachineAvailability = React.useCallback(
         (machine: MachineAdministrationPickerMachine): MachineSelectionAvailability => (
-            resolveCandidateAvailability?.(machine.candidate) ?? resolvePickerAvailability(machine)
+            resolveCandidateAvailability?.(machine.candidate) ?? resolvePickerAvailability(machine, selectionPolicy)
         ),
-        [resolveCandidateAvailability],
+        [resolveCandidateAvailability, selectionPolicy],
     );
     const resolveMachinePresentation = React.useMemo(() => (resolveCandidatePresentation
         ? (machine: MachineAdministrationPickerMachine) => resolveCandidatePresentation(machine.candidate)

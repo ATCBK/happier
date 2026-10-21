@@ -76,6 +76,25 @@ describe('mounted managed configurator', () => {
         expect(screen.getTextContent()).toContain(status.fallback);
         await screen.unmount();
     });
+    it('reads as loading, not as a verdict, while a named controller waits for the machine list to sync', async () => {
+        const serverId = await harness.addHome({ name: 'Compute', serverUrl: 'https://unsynced-list.example',
+            serverIdentityId: 'srv_unsynced_list', accountId: 'owner', currentAccount: true });
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { ManagedMachineConfigurationView } = await import('./ManagedMachineConfigurationView');
+        const screen = await renderScreen(<ManagedMachineConfigurationView serverId={serverId}
+            provisioner={buildQualifiedPluginContributionKey(provisioner.contribution)} initialController={defaultController} />);
+        await flushHookEffects();
+        const catalogState = () => screen.tree.findAll(node => node.props.testID === 'managed-config.catalog').map(node => node.props.kind);
+        expect(catalogState()).toContain('loading');
+        expect(catalogState()).not.toContain('empty');
+        // Once the Home's list has really synced without the named controller, the empty verdict is true.
+        await act(async () => {
+            storage.setState({ machineListByServerId: { [serverId]: [] }, machineListStatusByServerId: { [serverId]: 'idle' } });
+        });
+        await flushHookEffects();
+        expect(catalogState()).toContain('empty');
+        await screen.unmount();
+    });
     it('refuses a schema-less options Action without probing native options or losing the configurator', async () => {
         const serverId = await harness.addHome({ name: 'Compute', serverUrl: 'https://missing-options-schema.example',
             serverIdentityId: 'srv_missing_options_schema', accountId: 'owner', currentAccount: true });

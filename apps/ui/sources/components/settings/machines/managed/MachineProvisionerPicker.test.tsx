@@ -102,6 +102,22 @@ describe('provisioner picker demand', () => {
     expect(scope.getCurrent().controller?.machineId).toBe('z');
     await scope.unmount();
   });
+  it('lets the person switch controller while the Home\u2019s machine list is being re-read after a failure', async () => {
+    const serverId = await harness.addHome({ name: 'Build', serverUrl: 'https://build.example', serverIdentityId: 'srv_build', accountId: 'owner', currentAccount: true });
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { useManagedControllerScope } = await import('./useManagedControllerScope');
+    const online = (id: string) => createMachineFixture({ id, installationId: `${id}-installation`, activeAt: Date.now(), metadata: null });
+    await act(async () => storage.setState({ machineListByServerId: { srv_build: [online('a'), online('z')] }, machineListStatusByServerId: { srv_build: 'error' } }));
+    const onSelect = vi.fn();
+    const scope = await renderHook(() => useManagedControllerScope({ serverId, testIDPrefix: 'scope-probe', onSelect,
+      preferred: { machineId: 'a', installationId: 'a-installation' } }));
+    const rows = scope.getCurrent().selection?.pickerRows ?? [];
+    const target = rows.find(row => row.candidate.target.machineId === 'z')?.candidate.target;
+    expect(target).toBeDefined();
+    await act(async () => scope.getCurrent().selection?.selectTarget(target!));
+    expect(onSelect).toHaveBeenCalledWith({ machineId: 'z', installationId: 'z-installation' });
+    await scope.unmount();
+  });
   it('leaves automatic scope unselected when only offline or retired controllers exist', async () => {
     const serverId = await harness.addHome({ name: 'Build', serverUrl: 'https://build.example', serverIdentityId: 'srv_build', accountId: 'owner', currentAccount: true });
     const { storage } = await import('@/sync/domains/state/storage');
@@ -676,6 +692,20 @@ describe('provisioner picker demand', () => {
     );
     expect(onSetUpThisComputer).toHaveBeenCalledTimes(1);
     await empty.unmount();
+  });
+  it('waits for the Home\u2019s machine list instead of saying no machine can create machines', async () => {
+    const homeId = await harness.addHome({ name: 'Build', serverUrl: 'https://unsynced-picker.example', serverIdentityId: 'srv_unsynced_picker', accountId: 'owner', currentAccount: true });
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { MachineProvisionerPicker } = await import('./MachineProvisionerPicker');
+    const screen = await renderPicker(<MachineProvisionerPicker serverId={homeId} />);
+    expect(screen.findByTestId('managed-picker.no-controller')).toBeNull();
+    expect(screen.findByTestId('managed-picker.machines-loading')).not.toBeNull();
+    await act(async () => storage.setState({ machineListByServerId: { [homeId]: [] }, machineListStatusByServerId: { [homeId]: 'idle' } }));
+    expect(screen.findByTestId('managed-picker.no-controller')).not.toBeNull();
+    await act(async () => storage.setState({ machineListStatusByServerId: { [homeId]: 'error' }, machineListByServerId: { [homeId]: null } }));
+    expect(screen.findByTestId('managed-picker.no-controller')).toBeNull();
+    expect(screen.findByTestId('managed-picker.machines-unavailable')).not.toBeNull();
+    await screen.unmount();
   });
   it('uses the scope a page put in its own header, drawing no second chip and keeping the controller state', async () => {
     const serverId = await harness.addHome({

@@ -13,6 +13,7 @@ import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugi
 import { readInputPath } from '@happier-dev/protocol/inputs';
 import { isMachineRetainedWakeEligibleV1, resolveMachineRetentionPolicyV1, supportedMachineRetentionEffectsV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
 import { useMachineListForServer } from '@/sync/domains/state/storage';
+import { useIsMachineListSettled } from '@/sync/store/hooks';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
@@ -88,6 +89,7 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     const router = useRouter();
     const compact = useViewportClass() === 'compact';
     const machines = useMachineListForServer(props.serverId) ?? [];
+    const machineListSettled = useIsMachineListSettled(props.serverId);
     const [draft, setDraft] = React.useState<ManagedConfiguratorDraft | null>(null);
     const [preset, setPreset] = React.useState<ManagedMachinePresetV1 | null>(null);
     const loadedPreset = React.useRef<ManagedMachinePresetV1 | null>(null);
@@ -109,6 +111,9 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     const catalogController = requestedController && machines.some(machine => machine.id === requestedController.machineId
         && machine.installationId === requestedController.installationId) ? requestedController : undefined;
     const catalog = useManagedProvisioners(props.serverId, onApprovalPending, catalogController);
+    // A page that names its controller (deep link, reload, handoff) before the Home's machine list has synced
+    // has not been refused anything: it waits for the list that will either contain the controller or not.
+    const controllerAwaitsMachineList = !!requestedController && !catalogController && !machineListSettled;
     const accountSettings = useManagedMachineAccountSettings(catalog.binding, catalog.resolution);
     const [teamId, setTeamId] = React.useState('');
     const [limit, setLimit] = React.useState<number | undefined>();
@@ -523,12 +528,13 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
             action={{ label: t('managedMachines.actions.tryAgain'), onPress: retry }} />;
     // Before the provisioner is known the page keeps its own header (and with it the one way back), so the
     // state reads as this page's state rather than a loose section under the host's floating Back.
+    const loadingCatalog = catalog.loading || controllerAwaitsMachineList;
     if (!presetQuery.sameScope || !provisioner) return <ItemList pageColumn="wide">
         <PageHeader title={props.presetOnly ? t('machinePresets.title') : t('managedMachines.picker.newMachine')} actions={scope.chip} />
         {creationDisabledNotice}
         <ItemGroup surface="none">
-            <SurfaceStateCard kind={catalog.loading ? 'loading' : catalog.error ? 'error' : 'empty'} size="line"
-                title={t(catalog.loading ? 'managedMachines.providers.loading' : 'managedMachines.providers.unavailable')}
+            <SurfaceStateCard kind={loadingCatalog ? 'loading' : catalog.error ? 'error' : 'empty'} size="line"
+                title={t(loadingCatalog ? 'managedMachines.providers.loading' : 'managedMachines.providers.unavailable')}
                 diagnosticCode={catalog.error} testID="managed-config.catalog" />
         </ItemGroup>
     </ItemList>;
