@@ -112,13 +112,12 @@ test('documents the deliberate trusted advanced Plugin UI tier without leaking i
   const source = normalizedSource(pluginUiIndexDocPath);
 
   for (const requiredSource of [
-    'ergonomic, curated author tier',
     'Trusted React Native and React Native Web authors',
-    '`@happier-dev/plugin-ui/presentation`',
+    '`@happier-dev/plugin-ui/components`',
     '`@happier-dev/plugin-ui/environment`',
     'shared React Native/React Native Web primitives and behavior',
     'environment facts, hooks, and its standalone fact provider',
-    '`/presentation` does not re-export environment contracts',
+    '`/components` does not re-export environment contracts',
     'Do not construct a host provider, access internal mount state, import app or host internals, or import protocol types from an admitted surface.',
   ]) {
     assert.match(source, new RegExp(requiredSource.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'), 'u'));
