@@ -15,6 +15,7 @@ import { readSessionTranscriptSurfaceItemReferencesV1, type SessionTranscriptSur
 import type { SessionMessageRole } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
 import { readPublicSessionVisualMessages } from './publicSessionVisuals';
 import type { UiSurfaceNetworkRequestV1 } from '@happier-dev/protocol/plugins/contributions/ui/hostedHtmlCapabilitiesV1';
+import { projectInlineReferenceLabelsV1 } from '@happier-dev/protocol/sessions/messages/sessionInputReferenceProjectionV1';
 
 export type PublicSessionVisualResult = { status: 'ready'; item: SessionSurfaceItemV1; networkOff: boolean }
     | { status: 'unavailable' | 'invalid_content' | 'network_error' };
@@ -237,7 +238,7 @@ function renderSessionMessages(root: HTMLElement, messages: readonly PublicSessi
             const element = document.createElement('section');
             element.setAttribute('data-message-id', message.id);
             const text = document.createElement('pre');
-            text.textContent = message.text;
+            text.textContent = projectInlineReferenceLabelsV1(message.text);
             element.append(text);
             const body = document.createElement('div');
             body.setAttribute('aria-live', 'polite');

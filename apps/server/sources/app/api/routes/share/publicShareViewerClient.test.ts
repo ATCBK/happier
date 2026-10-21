@@ -56,6 +56,17 @@ function attachedElements(elements: readonly ElementBoundary[]): ElementBoundary
 }
 
 describe("isolated public viewer browser boundary", () => {
+    it('renders reference labels without exposing tokens in shared Session text', () => {
+        const { root, elements } = createBrowserBoundary();
+        const text = 'Read [Auth](happier-ref:session:s1)';
+        renderPublicShareViewer(root as unknown as HTMLElement, {
+            status: 'ready', title: 'Shared Session', text,
+            messages: [{ id: 'message', publishedSessionId: 'session', seq: 1, localId: null, createdAt: 1,
+                text, raw: { text }, reference: null }], nextBeforeSeq: null, messagesAccessToken: null,
+        });
+        expect(elements.find(element => element.attributes['data-message-id'] === 'message')?.childNodes[0]?.textContent).toBe('Read Auth');
+    });
+
     it('renders an HTML Artifact with its stored egress and no authenticated host bridge', async () => {
         const payload = { ...plain, content: { ...plain.content,
             header: encodePlainArtifactStoredContent({ kind: 'html', title: 'Saved HTML', mime: ARTIFACT_HTML_BUNDLE_MIME_V1 }),

@@ -635,9 +635,8 @@ const RETRIEVAL_BUDGET_SHARE = 2;
  * bound in this unit rather than in the mention domain's code points. Were it
  * enforced in code points, a single astral character would cost two reserved
  * units while spending one counted one, and a block inside its own bound could
- * cost up to twice this reservation. `sessionInputReferenceProjectionV1.test.ts` asserts the
- * rendered block against this constant so the two packages cannot drift apart
- * silently.
+ * cost up to twice this reservation. The shared reference projection reports
+ * its bounded portion using String.prototype.length in this same unit.
  */
 export { HAPPIER_REPLAY_SEED_DISPATCH_RESERVED_CHARS } from '@happier-dev/protocol/sessions/replay-seed-budget';
 

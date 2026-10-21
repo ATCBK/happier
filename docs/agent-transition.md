@@ -391,8 +391,8 @@ around it counts code points, so this is the one place the two meet: bounded in 
 Session titled with emoji could render a block inside its own bound that still cost up to twice what
 was reserved, and the refit below — designed to be a no-op — would delete transcript the seed was
 entitled to. UTF-16 length dominates code-point length, so the stricter unit satisfies both
-contracts; `sessionInputReferenceProjectionV1.test.ts` asserts the bounded reference projection against the constant so the two
-packages cannot drift apart silently.
+contracts. The shared reference projection reports its bounded portion with
+`String.prototype.length`, keeping it in the reservation's unit.
 
 That refit can still genuinely bite, and after the unit was settled that is the ONLY way it does: the
 seed is built against the budget of whichever ingress sealed it and fitted against the dispatching
