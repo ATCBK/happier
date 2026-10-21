@@ -1915,7 +1915,7 @@ export async function runHostSessionRuntime(
     signal?.throwIfAborted();
     if (!referenceActionExecutor) {
       const { createCliActionExecutorFromCredentials } = await import('@/session/actions/createCliActionExecutorFromCredentials');
-      referenceActionExecutor = createCliActionExecutorFromCredentials({ credentials,
+      referenceActionExecutor ??= createCliActionExecutorFromCredentials({ credentials,
         serverId: sessionOpenContext.home.serverId, serverApiUrl: sessionOpenContext.home.serverUrl,
         readCredentials: async () => isSessionOpenAccountCurrent() ? credentials : null,
         ...(config.runtimeActionSettingsProvider ? { actionsSettingsProvider: config.runtimeActionSettingsProvider } : {}) });
