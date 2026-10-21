@@ -5824,6 +5824,28 @@ export const de: TranslationStructure = {
         targetSession: 'Ziel-Session',
         noTarget: 'Keine Session gewählt',
         clearTarget: 'Ziel löschen',
+        errors: {
+            sendFailed: "Deine Nachricht konnte nicht an die Sitzung gesendet werden.",
+            sttFailed: "Das Gesagte konnte nicht transkribiert werden. Versuche es erneut.",
+            sttTimeout: "Die Spracherkennung hat das Zeitlimit überschritten. Prüfe deine Verbindung und versuche es erneut.",
+            sttAuthFailed: "Die Spracherkennung hat den API-Schlüssel abgelehnt. Prüfe den Schlüssel und seine Einschränkungen unter Einstellungen → Sprachassistent.",
+            sttRateLimited: "Die Spracherkennung ist ratenbegrenzt. Warte kurz und versuche es erneut.",
+            missingSttBaseUrl: "Lege unter Einstellungen → Sprachassistent eine Server-URL für die Spracherkennung fest.",
+            missingSttApiKey: "Füge unter Einstellungen → Sprachassistent einen API-Schlüssel für die Spracherkennung hinzu.",
+            recordingStartFailed: "Das Mikrofon konnte nicht gestartet werden. Prüfe, ob eine andere App es verwendet.",
+            recordingStopFailed: "Die Aufnahme konnte nicht abgeschlossen werden. Versuche es erneut.",
+            deviceSttUnavailable: "Spracherkennung ist auf diesem Gerät nicht verfügbar. Wähle unter Einstellungen → Sprachassistent einen anderen Spracherkennungsanbieter.",
+            speechPermissionDenied: "Der Zugriff auf Mikrofon oder Spracherkennung wurde verweigert. Erlaube ihn in den Geräteeinstellungen.",
+            deviceSttStartFailed: "Die Spracherkennung konnte nicht gestartet werden. Versuche es erneut.",
+            localNeuralSttUnavailable: "Spracherkennung auf dem Gerät ist in diesem Build nicht verfügbar. Wähle unter Einstellungen → Sprachassistent einen anderen Spracherkennungsanbieter.",
+            localNeuralPackNotInstalled: "Lade das Sprachmodell unter Einstellungen → Sprachassistent herunter.",
+            localNeuralSttStartFailed: "Die Spracherkennung auf dem Gerät konnte nicht gestartet werden. Versuche es erneut.",
+            localNeuralAudioCaptureFailed: "Das Mikrofon wurde unerwartet beendet. Versuche es erneut.",
+            ttsFailed: "Die gesprochene Antwort konnte nicht abgespielt werden. Prüfe die Sprachausgabe unter Einstellungen → Sprachassistent.",
+            voiceAgentRequiresFeature: ({ feature }: { feature: string }) => `Der Agent-Modus erfordert, dass „${feature}“ unter Einstellungen → Features aktiviert ist.`,
+            voiceAgentUnavailable: "Der Sprachagent ist auf diesem Server nicht verfügbar.",
+            generic: "Bei der Sprachfunktion ist ein Problem aufgetreten.",
+        },
         a11y: {
             teleport: 'Voice-Agent teleportieren',
             toggleActivity: 'Sprachaktivität ein-/ausblenden',
@@ -8883,6 +8905,8 @@ settingsSession: {
                 discardSubtitle: "Lösche den unvollständigen Download, um Speicher freizugeben.",
                 discardConfirmTitle: "Unvollständigen Download verwerfen?",
                 discardConfirmBody: ({ size }: { size: string }) => `Dadurch werden die bisher heruntergeladenen ${size} gelöscht. Du kannst das Modell später erneut herunterladen.`,
+                insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+                    `Nicht genug freier Speicher. Dieser Download braucht ${required}, frei sind nur ${available}.`,
             },
             localNeuralStt: {
                 modelPack: {
@@ -8903,12 +8927,6 @@ settingsSession: {
                     installed: 'Installiert',
                     installedWithBuild: ({ build }: { build: string }) => `Installiert • ${build}`,
                     notInstalled: 'Nicht installiert',
-                },
-                language: {
-                    title: 'Sprache',
-                    subtitle: 'Optionales BCP-47-Sprach-Tag.',
-                    promptTitle: 'Sprache',
-                    promptBody: 'Gib ein BCP-47-Sprach-Tag ein (z. B. en, en-US).',
                 },
                 alerts: {
                     downloadFailedTitle: 'Download fehlgeschlagen',
@@ -8939,6 +8957,8 @@ settingsSession: {
                     enableTitle: 'Freihändig aktivieren',
                     silenceTitle: 'Stille-Timeout (ms)',
                     minSpeechTitle: 'Mindestlänge der Sprache (ms)',
+                    pushToTalkTitle: 'Push-to-Talk',
+                    pushToTalkSubtitle: 'Dieser Anbieter transkribiert eine fertige Aufnahme – tippe erneut auf das Mikrofon, um zu senden. Für die freihändige Nutzung wähle Geräte- oder lokale neuronale Spracherkennung.',
                 },
                 customBackendIdSubtitle: 'Gib eine eigene Backend-ID ein.',
                 searchBackendsPlaceholder: 'Backends suchen',
@@ -9137,7 +9157,7 @@ settingsSession: {
             sttProvider: 'STT-Provider',
             neuralStt: {
                 title: 'STT auf dem Gerät',
-                webNotAvailableSubtitle: 'Im Web nicht verfügbar. Nutze Gerät, OpenAI-kompatibel oder Gemini-STT.',
+                webFallbackSubtitle: 'Läuft nur in der mobilen App. Im Browser nutzt die Sprachsteuerung stattdessen die Spracherkennung des Browsers.',
             },
             sttBaseUrl: 'STT-Basis-URL',
             sttBaseUrlTitle: 'Spracherkennung',

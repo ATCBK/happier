@@ -2094,7 +2094,7 @@ describe('socket update handling: plaintext update-session', () => {
         expect((params.applySessions as unknown as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
     });
 
-    it('target-hydrates live full-content session turn projections after terminal turn updates', async () => {
+    it.each(['terminal', 'earlier-turn-anchors'] as const)('target-hydrates live full-content session turn projections after %s updates', async kind => {
         const sessionId = 's_live_turn_projection';
         const sourceServerId = 'server-live-turns';
         markSessionVisible(sessionId, sourceServerId);
@@ -2118,9 +2118,10 @@ describe('socket update handling: plaintext update-session', () => {
                 body: {
                     t: 'update-session',
                     id: sessionId,
-                    latestTurnId: 'turn-1',
-                    latestTurnStatus: 'completed',
+                    latestTurnId: kind === 'terminal' ? 'turn-1' : 'turn-2',
+                    latestTurnStatus: kind === 'terminal' ? 'completed' : 'in_progress',
                     latestTurnStatusObservedAt: 1_235,
+                    ...(kind === 'earlier-turn-anchors' ? { rollbackEligibleTurnStarts: [17] } : {}),
                 },
             },
         });

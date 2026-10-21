@@ -5823,6 +5823,28 @@ deps: {
           targetSession: 'Sessio objectiu',
           noTarget: 'Cap sessio seleccionada',
           clearTarget: 'Neteja objectiu',
+          errors: {
+              sendFailed: "No s'ha pogut enviar el teu missatge a la sessió.",
+              sttFailed: "No s'ha pogut transcriure el que has dit. Torna-ho a provar.",
+              sttTimeout: "El reconeixement de veu ha esgotat el temps. Comprova la connexió i torna-ho a provar.",
+              sttAuthFailed: "El reconeixement de veu ha rebutjat la clau API. Revisa la clau i les seves restriccions a Configuració → Veu.",
+              sttRateLimited: "El reconeixement de veu té un límit de sol·licituds. Espera un moment i torna-ho a provar.",
+              missingSttBaseUrl: "Configura l'URL del servidor de reconeixement de veu a Configuració → Veu.",
+              missingSttApiKey: "Afegeix una clau API de reconeixement de veu a Configuració → Veu.",
+              recordingStartFailed: "No s'ha pogut iniciar el micròfon. Comprova que cap altra app no l'estigui fent servir.",
+              recordingStopFailed: "No s'ha pogut acabar l'enregistrament. Torna-ho a provar.",
+              deviceSttUnavailable: "El reconeixement de veu no està disponible en aquest dispositiu. Tria un altre proveïdor de reconeixement de veu a Configuració → Veu.",
+              speechPermissionDenied: "S'ha denegat l'accés al micròfon o al reconeixement de veu. Permet-lo a la configuració del dispositiu.",
+              deviceSttStartFailed: "No s'ha pogut iniciar el reconeixement de veu. Torna-ho a provar.",
+              localNeuralSttUnavailable: "El reconeixement de veu al dispositiu no està disponible en aquesta versió. Tria un altre proveïdor de reconeixement de veu a Configuració → Veu.",
+              localNeuralPackNotInstalled: "Baixa el model de veu a Configuració → Veu.",
+              localNeuralSttStartFailed: "No s'ha pogut iniciar el reconeixement de veu al dispositiu. Torna-ho a provar.",
+              localNeuralAudioCaptureFailed: "El micròfon s'ha aturat inesperadament. Torna-ho a provar.",
+              ttsFailed: "No s'ha pogut reproduir la resposta parlada. Revisa la síntesi de veu a Configuració → Veu.",
+              voiceAgentRequiresFeature: ({ feature }: { feature: string }) => `El mode agent necessita activar «${feature}» a Configuració → Funcions.`,
+              voiceAgentUnavailable: "L'agent de veu no està disponible en aquest servidor.",
+              generic: "La veu ha tingut un problema.",
+          },
 	          a11y: {
 	              teleport: 'Teletransporta l’agent de veu',
 	              toggleActivity: 'Mostra/amaga l’activitat de veu',
@@ -8815,6 +8837,8 @@ settingsSession: {
                 discardSubtitle: "Elimina la descàrrega inacabada per alliberar espai.",
                 discardConfirmTitle: "Vols descartar la descàrrega inacabada?",
                 discardConfirmBody: ({ size }: { size: string }) => `S'eliminaran els ${size} descarregats fins ara. Podràs tornar a descarregar el model més endavant.`,
+                insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+                    `No hi ha prou espai lliure. Aquesta baixada necessita ${required}, però només hi ha ${available} lliures.`,
             },
             localNeuralStt: {
                 modelPack: {
@@ -8835,12 +8859,6 @@ settingsSession: {
                     installed: 'Instal·lat',
                     installedWithBuild: ({ build }: { build: string }) => `Instal·lat • ${build}`,
                     notInstalled: 'No instal·lat',
-                },
-                language: {
-                    title: 'Idioma',
-                    subtitle: 'Etiqueta d’idioma BCP-47 opcional.',
-                    promptTitle: 'Idioma',
-                    promptBody: 'Introdueix una etiqueta d’idioma BCP-47 (p. ex. en, en-US).',
                 },
                 alerts: {
                     downloadFailedTitle: 'La descàrrega ha fallat',
@@ -8871,6 +8889,8 @@ settingsSession: {
                     enableTitle: 'Activa mans lliures',
                     silenceTitle: 'Temps de silenci (ms)',
                     minSpeechTitle: 'Parla mínima (ms)',
+                    pushToTalkTitle: 'Prem per parlar',
+                    pushToTalkSubtitle: 'Aquest proveïdor transcriu una gravació acabada; toca el micròfon de nou per enviar. Tria el reconeixement de veu del dispositiu o el neuronal local per al mode mans lliures.',
                 },
                 customBackendIdSubtitle: 'Introdueix un ID de backend personalitzat.',
                 searchBackendsPlaceholder: 'Cerca backends',
@@ -9070,7 +9090,7 @@ settingsSession: {
             sttProvider: 'Proveïdor STT',
             neuralStt: {
                 title: 'STT al dispositiu',
-                webNotAvailableSubtitle: 'No està disponible a la web. Fes servir Dispositiu, compatible amb OpenAI o STT de Gemini.',
+                webFallbackSubtitle: 'Només funciona a l’app mòbil. Al navegador, la veu fa servir el reconeixement de veu del navegador.',
             },
             sttBaseUrl: 'URL base STT',
             sttBaseUrlTitle: 'URL base STT',

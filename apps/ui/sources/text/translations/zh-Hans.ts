@@ -5979,6 +5979,28 @@ export const zhHans: TranslationStructure = {
     targetSession: "目标会话",
     noTarget: "未选择会话",
     clearTarget: "清除目标",
+    errors: {
+        sendFailed: "无法将你的消息发送到会话。",
+        sttFailed: "无法转写你说的内容。请重试。",
+        sttTimeout: "语音识别超时。请检查网络连接后重试。",
+        sttAuthFailed: "语音识别拒绝了 API 密钥。请在 设置 → 语音 中检查密钥及其限制。",
+        sttRateLimited: "语音识别已达到速率限制。请稍等片刻后重试。",
+        missingSttBaseUrl: "请在 设置 → 语音 中设置语音识别服务器 URL。",
+        missingSttApiKey: "请在 设置 → 语音 中添加语音识别 API 密钥。",
+        recordingStartFailed: "无法启动麦克风。请确认没有其他应用正在使用它。",
+        recordingStopFailed: "无法完成录音。请重试。",
+        deviceSttUnavailable: "此设备不支持语音识别。请在 设置 → 语音 中选择其他语音识别提供方。",
+        speechPermissionDenied: "麦克风或语音识别权限被拒绝。请在设备设置中允许。",
+        deviceSttStartFailed: "无法启动语音识别。请重试。",
+        localNeuralSttUnavailable: "此版本不支持设备端语音识别。请在 设置 → 语音 中选择其他语音识别提供方。",
+        localNeuralPackNotInstalled: "请在 设置 → 语音 中下载语音模型。",
+        localNeuralSttStartFailed: "无法启动设备端语音识别。请重试。",
+        localNeuralAudioCaptureFailed: "麦克风意外停止。请重试。",
+        ttsFailed: "无法播放语音回复。请在 设置 → 语音 中检查语音合成。",
+        voiceAgentRequiresFeature: ({ feature }: { feature: string }) => `智能体模式需要在 设置 → 功能 中开启“${feature}”。`,
+        voiceAgentUnavailable: "此服务器不支持语音智能体。",
+        generic: "语音出现问题。",
+    },
     a11y: {
       teleport: "传送语音代理",
       toggleActivity: "切换语音活动",
@@ -9061,6 +9083,8 @@ settingsSession: {
         discardSubtitle: "删除未完成的下载以释放空间。",
         discardConfirmTitle: "放弃未完成的下载？",
         discardConfirmBody: ({ size }: { size: string }) => `这将删除目前已下载的 ${size}。之后可以重新下载模型。`,
+        insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+            `可用空间不足。此下载需要 ${required}，但仅剩 ${available} 可用。`,
       },
       localNeuralStt: {
         modelPack: {
@@ -9082,12 +9106,6 @@ settingsSession: {
           installedWithBuild: ({ build }: { build: string }) =>
             `已安装 • ${build}`,
           notInstalled: "未安装",
-        },
-        language: {
-          title: "语言",
-          subtitle: "可选的 BCP-47 语言标签。",
-          promptTitle: "语言",
-          promptBody: "输入 BCP-47 语言标签（例如：en, en-US）。",
         },
         alerts: {
           downloadFailedTitle: "下载失败",
@@ -9118,6 +9136,8 @@ settingsSession: {
           enableTitle: "启用免提",
           silenceTitle: "静默超时（毫秒）",
           minSpeechTitle: "最短语音（毫秒）",
+          pushToTalkTitle: "按键说话",
+          pushToTalkSubtitle: "此提供商会转写完成的录音，再次点按麦克风即可发送。如需免提，请选择设备或本地神经语音识别。",
         },
         customBackendIdSubtitle: "输入自定义后端 ID。",
         searchBackendsPlaceholder: "搜索后端",
@@ -9334,8 +9354,7 @@ settingsSession: {
       sttProvider: "STT 提供方",
       neuralStt: {
         title: "设备端 STT",
-        webNotAvailableSubtitle:
-          "Web 不可用。请使用设备、OpenAI 兼容或 Gemini STT。",
+        webFallbackSubtitle: "仅在移动应用中可用。在浏览器中，语音将改用浏览器的语音识别。",
       },
       ttsBaseUrl: "TTS 基础 URL",
       ttsBaseUrlTitle: "TTS 基础 URL",

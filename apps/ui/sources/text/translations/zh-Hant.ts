@@ -982,6 +982,28 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
     },
 
     voiceSurface: {
+        errors: {
+            sendFailed: "無法將你的訊息傳送到工作階段。",
+            sttFailed: "無法轉寫你說的內容。請再試一次。",
+            sttTimeout: "語音辨識逾時。請檢查網路連線後再試一次。",
+            sttAuthFailed: "語音辨識拒絕了 API 金鑰。請在 設定 → 語音 中檢查金鑰及其限制。",
+            sttRateLimited: "語音辨識已達到速率限制。請稍候再試。",
+            missingSttBaseUrl: "請在 設定 → 語音 中設定語音辨識伺服器 URL。",
+            missingSttApiKey: "請在 設定 → 語音 中新增語音辨識 API 金鑰。",
+            recordingStartFailed: "無法啟動麥克風。請確認沒有其他 App 正在使用。",
+            recordingStopFailed: "無法完成錄音。請再試一次。",
+            deviceSttUnavailable: "此裝置不支援語音辨識。請在 設定 → 語音 中選擇其他語音辨識提供者。",
+            speechPermissionDenied: "麥克風或語音辨識權限遭拒。請在裝置設定中允許。",
+            deviceSttStartFailed: "無法啟動語音辨識。請再試一次。",
+            localNeuralSttUnavailable: "此版本不支援裝置端語音辨識。請在 設定 → 語音 中選擇其他語音辨識提供者。",
+            localNeuralPackNotInstalled: "請在 設定 → 語音 中下載語音模型。",
+            localNeuralSttStartFailed: "無法啟動裝置端語音辨識。請再試一次。",
+            localNeuralAudioCaptureFailed: "麥克風意外停止。請再試一次。",
+            ttsFailed: "無法播放語音回覆。請在 設定 → 語音 中檢查語音合成。",
+            voiceAgentRequiresFeature: ({ feature }: { feature: string }) => `代理模式需要在 設定 → 功能 中開啟「${feature}」。`,
+            voiceAgentUnavailable: "此伺服器不支援語音代理。",
+            generic: "語音發生問題。",
+        },
 	        a11y: {
 	            teleport: '傳送語音代理',
 	            toggleActivity: '切換語音活動',
@@ -7674,6 +7696,8 @@ settingsSession: {
                 discardSubtitle: "刪除未完成的下載以釋放空間。",
                 discardConfirmTitle: "要放棄未完成的下載嗎？",
                 discardConfirmBody: ({ size }: { size: string }) => `這會刪除目前已下載的 ${size}。之後可以重新下載模型。`,
+                insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+                    `可用空間不足。此下載需要 ${required}，但僅剩 ${available} 可用。`,
             },
             localNeuralStt: {
                 modelPack: {
@@ -7695,12 +7719,6 @@ settingsSession: {
                     installedWithBuild: ({ build }: { build: string }) => `已安裝 • ${build}`,
                     notInstalled: '未安裝',
                 },
-                language: {
-                    title: '語言',
-                    subtitle: '選填 BCP-47 語言標籤。',
-                    promptTitle: '語言',
-                    promptBody: '輸入 BCP-47 語言標籤（例如：en, en-US）。',
-                },
                 alerts: {
                     downloadFailedTitle: '下載失敗',
                     downloadFailedBody: ({ message }: { message: string }) => `無法下載此模型包。\n\n${message}`,
@@ -7719,6 +7737,15 @@ settingsSession: {
             },
             conversationMode: '對話模式',
             conversationModeSubtitle: '直接寫入工作階段，或使用中介並顯式提交',
+            conversation: {
+                handsFree: {
+                    pushToTalkTitle: '按鍵說話',
+                    pushToTalkSubtitle: '此提供商會轉寫完成的錄音，再次點按麥克風即可傳送。如需免持操作，請選擇裝置或本機神經語音辨識。',
+                },
+            },
+            neuralStt: {
+                webFallbackSubtitle: '僅在行動應用程式中可用。在瀏覽器中，語音將改用瀏覽器的語音辨識。',
+            },
             mediatorBackend: '中介後端',
             mediatorBackendSubtitle: 'Daemon（使用 Happier 後端）或 OpenAI 相容 HTTP',
             mediatorBackendDaemon: '守護程序',

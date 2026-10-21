@@ -5811,6 +5811,28 @@ export const fr: TranslationStructure = {
         targetSession: 'Session cible',
         noTarget: 'Aucune session sélectionnée',
         clearTarget: 'Effacer la cible',
+        errors: {
+            sendFailed: "Impossible d'envoyer ton message à la session.",
+            sttFailed: "Impossible de transcrire ce que tu as dit. Réessaie.",
+            sttTimeout: "La reconnaissance vocale a expiré. Vérifie ta connexion et réessaie.",
+            sttAuthFailed: "La reconnaissance vocale a refusé la clé API. Vérifie la clé et ses restrictions dans Réglages → Voix.",
+            sttRateLimited: "La reconnaissance vocale est limitée en débit. Patiente un instant et réessaie.",
+            missingSttBaseUrl: "Définis l'URL du serveur de reconnaissance vocale dans Réglages → Voix.",
+            missingSttApiKey: "Ajoute une clé API de reconnaissance vocale dans Réglages → Voix.",
+            recordingStartFailed: "Impossible de démarrer le micro. Vérifie qu'aucune autre app ne l'utilise.",
+            recordingStopFailed: "Impossible de terminer l'enregistrement. Réessaie.",
+            deviceSttUnavailable: "La reconnaissance vocale n'est pas disponible sur cet appareil. Choisis un autre provider de reconnaissance vocale dans Réglages → Voix.",
+            speechPermissionDenied: "L'accès au micro ou à la reconnaissance vocale a été refusé. Autorise-le dans les réglages de ton appareil.",
+            deviceSttStartFailed: "Impossible de démarrer la reconnaissance vocale. Réessaie.",
+            localNeuralSttUnavailable: "La reconnaissance vocale sur l'appareil n'est pas disponible dans cette version. Choisis un autre provider de reconnaissance vocale dans Réglages → Voix.",
+            localNeuralPackNotInstalled: "Télécharge le modèle vocal dans Réglages → Voix.",
+            localNeuralSttStartFailed: "Impossible de démarrer la reconnaissance vocale sur l'appareil. Réessaie.",
+            localNeuralAudioCaptureFailed: "Le micro s'est arrêté de façon inattendue. Réessaie.",
+            ttsFailed: "Impossible de lire la réponse vocale. Vérifie la synthèse vocale dans Réglages → Voix.",
+            voiceAgentRequiresFeature: ({ feature }: { feature: string }) => `Le mode agent nécessite d'activer « ${feature} » dans Réglages → Fonctionnalités.`,
+            voiceAgentUnavailable: "L'agent vocal n'est pas disponible sur ce serveur.",
+            generic: "La voix a rencontré un problème.",
+        },
         a11y: {
             teleport: 'Téléporter l’agent vocal',
             toggleActivity: 'Afficher/masquer l’activité vocale',
@@ -8870,6 +8892,8 @@ settingsSession: {
                 discardSubtitle: "Supprime le téléchargement inachevé pour libérer de l'espace.",
                 discardConfirmTitle: "Abandonner le téléchargement inachevé ?",
                 discardConfirmBody: ({ size }: { size: string }) => `Les ${size} déjà téléchargés seront supprimés. Tu pourras retélécharger le modèle plus tard.`,
+                insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+                    `Pas assez d'espace libre. Ce téléchargement nécessite ${required}, mais seulement ${available} sont disponibles.`,
             },
             localNeuralStt: {
                 modelPack: {
@@ -8890,12 +8914,6 @@ settingsSession: {
                     installed: 'Installé',
                     installedWithBuild: ({ build }: { build: string }) => `Installé • ${build}`,
                     notInstalled: 'Non installé',
-                },
-                language: {
-                    title: 'Langue',
-                    subtitle: 'Tag de langue BCP-47 optionnel.',
-                    promptTitle: 'Langue',
-                    promptBody: 'Saisis un tag de langue BCP-47 (ex. : en, en-US).',
                 },
                 alerts: {
                     downloadFailedTitle: 'Échec du téléchargement',
@@ -8926,6 +8944,8 @@ settingsSession: {
                     enableTitle: 'Activer le mains libres',
                     silenceTitle: 'Délai de silence (ms)',
                     minSpeechTitle: 'Parole minimale (ms)',
+                    pushToTalkTitle: 'Appuyer pour parler',
+                    pushToTalkSubtitle: 'Ce fournisseur transcrit un enregistrement terminé : touche à nouveau le micro pour envoyer. Pour le mode mains libres, choisis la reconnaissance vocale de l’appareil ou neuronale locale.',
                 },
                 customBackendIdSubtitle: 'Saisis un id de backend personnalisé.',
                 searchBackendsPlaceholder: 'Rechercher des backends',
@@ -9124,7 +9144,7 @@ settingsSession: {
             sttProvider: 'Provider STT',
             neuralStt: {
                 title: 'STT sur l’appareil',
-                webNotAvailableSubtitle: 'Indisponible sur le web. Utilise le STT de l’appareil, compatible OpenAI, ou Gemini.',
+                webFallbackSubtitle: 'Fonctionne uniquement dans l’app mobile. Dans le navigateur, la voix utilise la reconnaissance vocale du navigateur.',
             },
             sttBaseUrl: 'URL de base STT',
             sttBaseUrlTitle: 'Reconnaissance vocale',

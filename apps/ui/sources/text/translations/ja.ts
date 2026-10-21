@@ -6444,6 +6444,28 @@ localTailscale: {
     targetSession: "ターゲットセッション",
     noTarget: "セッションが選択されていません",
     clearTarget: "ターゲットをクリア",
+    errors: {
+        sendFailed: "セッションにメッセージを送信できませんでした。",
+        sttFailed: "発話を文字起こしできませんでした。もう一度お試しください。",
+        sttTimeout: "音声認識がタイムアウトしました。接続を確認して、もう一度お試しください。",
+        sttAuthFailed: "音声認識で API キーが拒否されました。設定 → 音声 でキーと制限を確認してください。",
+        sttRateLimited: "音声認識のレート制限に達しました。しばらく待ってから、もう一度お試しください。",
+        missingSttBaseUrl: "設定 → 音声 で音声認識サーバーの URL を設定してください。",
+        missingSttApiKey: "設定 → 音声 で音声認識の API キーを追加してください。",
+        recordingStartFailed: "マイクを起動できませんでした。他のアプリが使用していないか確認してください。",
+        recordingStopFailed: "録音を完了できませんでした。もう一度お試しください。",
+        deviceSttUnavailable: "このデバイスでは音声認識を利用できません。設定 → 音声 で別の音声認識プロバイダーを選択してください。",
+        speechPermissionDenied: "マイクまたは音声認識へのアクセスが拒否されました。デバイスの設定で許可してください。",
+        deviceSttStartFailed: "音声認識を開始できませんでした。もう一度お試しください。",
+        localNeuralSttUnavailable: "このビルドではオンデバイス音声認識を利用できません。設定 → 音声 で別の音声認識プロバイダーを選択してください。",
+        localNeuralPackNotInstalled: "設定 → 音声 で音声モデルをダウンロードしてください。",
+        localNeuralSttStartFailed: "オンデバイス音声認識を開始できませんでした。もう一度お試しください。",
+        localNeuralAudioCaptureFailed: "マイクが予期せず停止しました。もう一度お試しください。",
+        ttsFailed: "音声の返答を再生できませんでした。設定 → 音声 で読み上げ設定を確認してください。",
+        voiceAgentRequiresFeature: ({ feature }: { feature: string }) => `エージェントモードを使うには、設定 → 機能 で「${feature}」をオンにしてください。`,
+        voiceAgentUnavailable: "このサーバーでは音声エージェントを利用できません。",
+        generic: "音声で問題が発生しました。",
+    },
     a11y: {
       teleport: "音声エージェントをテレポート",
       toggleActivity: "音声アクティビティを切り替え",
@@ -9594,6 +9616,8 @@ settingsSession: {
         discardSubtitle: "未完了のダウンロードを削除して空き容量を増やします。",
         discardConfirmTitle: "未完了のダウンロードを破棄しますか？",
         discardConfirmBody: ({ size }: { size: string }) => `これまでにダウンロードした ${size} を削除します。モデルは後でもう一度ダウンロードできます。`,
+        insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+            `空き容量が足りません。このダウンロードには ${required} が必要ですが、空きは ${available} しかありません。`,
       },
       localNeuralStt: {
         modelPack: {
@@ -9618,12 +9642,6 @@ settingsSession: {
           installedWithBuild: ({ build }: { build: string }) =>
             `インストール済み • ${build}`,
           notInstalled: "未インストール",
-        },
-        language: {
-          title: "言語",
-          subtitle: "BCP-47 言語タグ（任意）",
-          promptTitle: "言語",
-          promptBody: "BCP-47 の言語タグを入力してください（例: en, en-US）。",
         },
         alerts: {
           downloadFailedTitle: "ダウンロードに失敗しました",
@@ -9657,6 +9675,8 @@ settingsSession: {
           enableTitle: "ハンズフリーを有効化",
           silenceTitle: "無音タイムアウト（ms）",
           minSpeechTitle: "最小発話（ms）",
+          pushToTalkTitle: "プッシュ・トゥ・トーク",
+          pushToTalkSubtitle: "このプロバイダーは録音完了後に文字起こしします。送信するにはもう一度マイクをタップしてください。ハンズフリーにはデバイスまたはローカルニューラル音声認識を選択してください。",
         },
         customBackendIdSubtitle: "カスタム backend ID を入力します。",
         searchBackendsPlaceholder: "backend を検索",
@@ -9912,8 +9932,7 @@ settingsSession: {
       sttProvider: "STTプロバイダー",
       neuralStt: {
         title: "端末内 STT",
-        webNotAvailableSubtitle:
-          "Web では利用できません。デバイス、OpenAI互換、または Gemini STT を使用してください。",
+        webFallbackSubtitle: "モバイルアプリでのみ動作します。ブラウザーではブラウザーの音声認識を使用します。",
       },
       ttsBaseUrl: "TTS ベースURL",
       ttsBaseUrlTitle: "TTS ベースURL",

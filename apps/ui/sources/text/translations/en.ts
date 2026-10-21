@@ -5845,6 +5845,28 @@ export const en = {
         targetSession: 'Target session',
         noTarget: 'No session selected',
         clearTarget: 'Clear target',
+        errors: {
+            sendFailed: "Couldn't send your message to the session.",
+            sttFailed: "Couldn't transcribe what you said. Try again.",
+            sttTimeout: "Speech-to-text timed out. Check your connection and try again.",
+            sttAuthFailed: "Speech-to-text rejected the API key. Check the key and its restrictions in Settings → Voice.",
+            sttRateLimited: "Speech-to-text is rate limited. Wait a moment and try again.",
+            missingSttBaseUrl: "Set a speech-to-text server URL in Settings → Voice.",
+            missingSttApiKey: "Add a speech-to-text API key in Settings → Voice.",
+            recordingStartFailed: "Couldn't start the microphone. Check that no other app is using it.",
+            recordingStopFailed: "Couldn't finish the recording. Try again.",
+            deviceSttUnavailable: "Speech recognition isn't available on this device. Pick another speech-to-text provider in Settings → Voice.",
+            speechPermissionDenied: "Microphone or speech recognition access was denied. Allow it in your device settings.",
+            deviceSttStartFailed: "Couldn't start speech recognition. Try again.",
+            localNeuralSttUnavailable: "On-device speech recognition isn't available in this build. Pick another speech-to-text provider in Settings → Voice.",
+            localNeuralPackNotInstalled: "Download the speech model in Settings → Voice.",
+            localNeuralSttStartFailed: "Couldn't start on-device speech recognition. Try again.",
+            localNeuralAudioCaptureFailed: "The microphone stopped unexpectedly. Try again.",
+            ttsFailed: "Couldn't play the spoken reply. Check text-to-speech in Settings → Voice.",
+            voiceAgentRequiresFeature: ({ feature }: { feature: string }) => `Agent mode needs “${feature}” turned on in Settings → Features.`,
+            voiceAgentUnavailable: "The voice agent isn't available on this server.",
+            generic: "Voice ran into a problem.",
+        },
         a11y: {
             teleport: 'Teleport voice agent',
             toggleActivity: 'Toggle voice activity',
@@ -8915,6 +8937,8 @@ settingsSession: {
                 discardSubtitle: "Delete the unfinished download to free up space.",
                 discardConfirmTitle: "Discard unfinished download?",
                 discardConfirmBody: ({ size }: { size: string }) => `This deletes the ${size} downloaded so far. You can download the model again later.`,
+                insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+                    `Not enough free space. This download needs ${required}, but only ${available} is free.`,
             },
             localNeuralStt: {
                 modelPack: {
@@ -8935,12 +8959,6 @@ settingsSession: {
                     installed: 'Installed',
                     installedWithBuild: ({ build }: { build: string }) => `Installed • ${build}`,
                     notInstalled: 'Not installed',
-                },
-                language: {
-                    title: 'Language',
-                    subtitle: 'Optional BCP-47 language tag.',
-                    promptTitle: 'Language',
-                    promptBody: 'Enter a BCP-47 language tag (e.g. en, en-US).',
                 },
                 alerts: {
                     downloadFailedTitle: 'Download failed',
@@ -8971,6 +8989,8 @@ settingsSession: {
                     enableTitle: 'Enable hands-free',
                     silenceTitle: 'Silence timeout (ms)',
                     minSpeechTitle: 'Minimum speech (ms)',
+                    pushToTalkTitle: 'Push-to-talk',
+                    pushToTalkSubtitle: 'This provider transcribes a finished recording, so tap the mic again to send. Choose Device or Local neural speech recognition for hands-free.',
                 },
                 customBackendIdSubtitle: 'Enter a custom backend id.',
                 searchBackendsPlaceholder: 'Search backends',
@@ -9169,7 +9189,7 @@ settingsSession: {
             sttProvider: 'STT Provider',
             neuralStt: {
                 title: 'On-device STT',
-                webNotAvailableSubtitle: 'Not available on web. Use Device, OpenAI-compatible, or Gemini STT.',
+                webFallbackSubtitle: 'Runs in the mobile app only. In the browser, voice uses the browser’s speech recognition instead.',
             },
             sttBaseUrl: 'STT Base URL',
             sttBaseUrlTitle: 'Speech to text',

@@ -16,10 +16,10 @@ function collectText(node: ReactTestInstance | string): string {
   return typeof node === 'string' ? node : node.children.map(collectText).join(' ');
 }
 
-async function renderSettings() {
+async function renderSettings(voiceId: string | null = null) {
   const { LocalNeuralTtsSettings } = await import('./LocalNeuralTtsSettings.native');
   const screen = await renderScreen(React.createElement(LocalNeuralTtsSettings, {
-    cfgKokoro: { model: 'kokoro', assetId: null, voiceId: null, speed: null },
+    cfgKokoro: { model: 'kokoro', assetId: null, voiceId, speed: null },
     setKokoro: vi.fn(), networkTimeoutMs: 1000, popoverBoundaryRef: null,
   }));
   const row = (title: string) => screen.findAll(n => n.props.title === title && 'detail' in n.props)[0]!;
@@ -92,5 +92,21 @@ describe('LocalNeuralTtsSettings through device boundaries', () => {
   it('keeps removal inert when no files are present', async () => {
     const { row } = await renderSettings();
     expect(row(removeTitle()).props.onPress).toBeUndefined();
+  });
+
+  it('shows the voice the installed pack will actually speak with when the synced voice is web-only', async () => {
+    const manifest = {
+      ...modelPackManifest(packId, 'tts', 'a'.repeat(64)),
+      defaultVoiceId: 'af_maple',
+      voices: [
+        { id: 'af_sol', title: 'Sol', sid: 1 },
+        { id: 'af_maple', title: 'Maple', sid: 0 },
+      ],
+    };
+    device.files.set(`${voiceFilesRoot}/modelPacks/${packId}/pack.json`, new TextEncoder().encode(JSON.stringify({ manifest })));
+    const { row } = await renderSettings('af_heart');
+    const voiceTitle = t('settingsVoice.local.kokoro.voice.title');
+    await vi.waitFor(() => expect(collectText(row(voiceTitle))).toContain('af_maple'));
+    expect(collectText(row(voiceTitle))).not.toContain('af_heart');
   });
 });

@@ -6197,6 +6197,28 @@ export const pl: TranslationStructure = {
     targetSession: "Sesja docelowa",
     noTarget: "Nie wybrano sesji",
     clearTarget: "Wyczysc cel",
+    errors: {
+        sendFailed: "Nie udało się wysłać wiadomości do sesji.",
+        sttFailed: "Nie udało się przetranskrybować tego, co powiedziałeś. Spróbuj ponownie.",
+        sttTimeout: "Przekroczono czas rozpoznawania mowy. Sprawdź połączenie i spróbuj ponownie.",
+        sttAuthFailed: "Rozpoznawanie mowy odrzuciło klucz API. Sprawdź klucz i jego ograniczenia w Ustawienia → Głos.",
+        sttRateLimited: "Rozpoznawanie mowy osiągnęło limit zapytań. Odczekaj chwilę i spróbuj ponownie.",
+        missingSttBaseUrl: "Ustaw adres URL serwera rozpoznawania mowy w Ustawienia → Głos.",
+        missingSttApiKey: "Dodaj klucz API rozpoznawania mowy w Ustawienia → Głos.",
+        recordingStartFailed: "Nie udało się uruchomić mikrofonu. Sprawdź, czy nie używa go inna aplikacja.",
+        recordingStopFailed: "Nie udało się zakończyć nagrywania. Spróbuj ponownie.",
+        deviceSttUnavailable: "Rozpoznawanie mowy nie jest dostępne na tym urządzeniu. Wybierz innego dostawcę rozpoznawania mowy w Ustawienia → Głos.",
+        speechPermissionDenied: "Odmówiono dostępu do mikrofonu lub rozpoznawania mowy. Zezwól na niego w ustawieniach urządzenia.",
+        deviceSttStartFailed: "Nie udało się uruchomić rozpoznawania mowy. Spróbuj ponownie.",
+        localNeuralSttUnavailable: "Rozpoznawanie mowy na urządzeniu nie jest dostępne w tej wersji. Wybierz innego dostawcę rozpoznawania mowy w Ustawienia → Głos.",
+        localNeuralPackNotInstalled: "Pobierz model mowy w Ustawienia → Głos.",
+        localNeuralSttStartFailed: "Nie udało się uruchomić rozpoznawania mowy na urządzeniu. Spróbuj ponownie.",
+        localNeuralAudioCaptureFailed: "Mikrofon nieoczekiwanie przestał działać. Spróbuj ponownie.",
+        ttsFailed: "Nie udało się odtworzyć odpowiedzi głosowej. Sprawdź syntezę mowy w Ustawienia → Głos.",
+        voiceAgentRequiresFeature: ({ feature }: { feature: string }) => `Tryb agenta wymaga włączenia „${feature}” w Ustawienia → Funkcje.`,
+        voiceAgentUnavailable: "Agent głosowy nie jest dostępny na tym serwerze.",
+        generic: "Wystąpił problem z głosem.",
+    },
     a11y: {
       teleport: "Przenieś agenta głosowego",
       toggleActivity: "Przełącz aktywność głosową",
@@ -9364,6 +9386,8 @@ settingsSession: {
         discardSubtitle: "Usuń niedokończone pobieranie, aby zwolnić miejsce.",
         discardConfirmTitle: "Odrzucić niedokończone pobieranie?",
         discardConfirmBody: ({ size }: { size: string }) => `Spowoduje to usunięcie pobranych dotąd ${size}. Model możesz pobrać ponownie później.`,
+        insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+            `Za mało wolnego miejsca. To pobieranie wymaga ${required}, a wolne jest tylko ${available}.`,
       },
       localNeuralStt: {
         modelPack: {
@@ -9387,12 +9411,6 @@ settingsSession: {
           installedWithBuild: ({ build }: { build: string }) =>
             `Zainstalowano • ${build}`,
           notInstalled: "Nie zainstalowano",
-        },
-        language: {
-          title: "Język",
-          subtitle: "Opcjonalny znacznik języka BCP-47.",
-          promptTitle: "Język",
-          promptBody: "Wpisz znacznik języka BCP-47 (np. en, en-US).",
         },
         alerts: {
           downloadFailedTitle: "Pobieranie nie powiodło się",
@@ -9426,6 +9444,8 @@ settingsSession: {
           enableTitle: "Włącz tryb hands-free",
           silenceTitle: "Limit ciszy (ms)",
           minSpeechTitle: "Minimalna mowa (ms)",
+          pushToTalkTitle: "Naciśnij, aby mówić",
+          pushToTalkSubtitle: "Ten dostawca transkrybuje gotowe nagranie — dotknij mikrofonu ponownie, aby wysłać. Aby używać trybu bez rąk, wybierz rozpoznawanie mowy urządzenia lub lokalne neuronowe.",
         },
         customBackendIdSubtitle: "Wpisz niestandardowy identyfikator backendu.",
         searchBackendsPlaceholder: "Szukaj backendów",
@@ -9683,8 +9703,7 @@ settingsSession: {
       sttProvider: "Dostawca STT",
       neuralStt: {
         title: "STT na urządzeniu",
-        webNotAvailableSubtitle:
-          "Niedostępne w web. Użyj STT urządzenia, endpointu zgodnego z OpenAI lub Gemini STT.",
+        webFallbackSubtitle: "Działa tylko w aplikacji mobilnej. W przeglądarce głos korzysta z rozpoznawania mowy przeglądarki.",
       },
       ttsBaseUrl: "Bazowy URL TTS",
       ttsBaseUrlTitle: "Bazowy URL TTS",

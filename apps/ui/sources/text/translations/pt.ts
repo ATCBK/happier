@@ -6294,6 +6294,28 @@ export const pt: TranslationStructure = {
     targetSession: "Sessão alvo",
     noTarget: "Nenhuma sessão selecionada",
     clearTarget: "Limpar alvo",
+    errors: {
+        sendFailed: "Não foi possível enviar sua mensagem para a sessão.",
+        sttFailed: "Não foi possível transcrever o que você disse. Tente novamente.",
+        sttTimeout: "O reconhecimento de voz excedeu o tempo limite. Verifique sua conexão e tente novamente.",
+        sttAuthFailed: "O reconhecimento de voz rejeitou a chave de API. Verifique a chave e suas restrições em Configurações → Voz.",
+        sttRateLimited: "O reconhecimento de voz atingiu o limite de solicitações. Aguarde um momento e tente novamente.",
+        missingSttBaseUrl: "Defina a URL do servidor de reconhecimento de voz em Configurações → Voz.",
+        missingSttApiKey: "Adicione uma chave de API de reconhecimento de voz em Configurações → Voz.",
+        recordingStartFailed: "Não foi possível iniciar o microfone. Verifique se nenhum outro app está usando.",
+        recordingStopFailed: "Não foi possível concluir a gravação. Tente novamente.",
+        deviceSttUnavailable: "O reconhecimento de voz não está disponível neste dispositivo. Escolha outro provedor de reconhecimento de voz em Configurações → Voz.",
+        speechPermissionDenied: "O acesso ao microfone ou ao reconhecimento de voz foi negado. Permita nas configurações do dispositivo.",
+        deviceSttStartFailed: "Não foi possível iniciar o reconhecimento de voz. Tente novamente.",
+        localNeuralSttUnavailable: "O reconhecimento de voz no dispositivo não está disponível nesta versão. Escolha outro provedor de reconhecimento de voz em Configurações → Voz.",
+        localNeuralPackNotInstalled: "Baixe o modelo de voz em Configurações → Voz.",
+        localNeuralSttStartFailed: "Não foi possível iniciar o reconhecimento de voz no dispositivo. Tente novamente.",
+        localNeuralAudioCaptureFailed: "O microfone parou inesperadamente. Tente novamente.",
+        ttsFailed: "Não foi possível reproduzir a resposta falada. Verifique a síntese de voz em Configurações → Voz.",
+        voiceAgentRequiresFeature: ({ feature }: { feature: string }) => `O modo agente precisa que “${feature}” esteja ativado em Configurações → Recursos.`,
+        voiceAgentUnavailable: "O agente de voz não está disponível neste servidor.",
+        generic: "A voz encontrou um problema.",
+    },
     a11y: {
       teleport: "Teletransportar agente de voz",
       toggleActivity: "Alternar atividade de voz",
@@ -9475,6 +9497,8 @@ settingsSession: {
         discardSubtitle: "Exclua o download incompleto para liberar espaço.",
         discardConfirmTitle: "Descartar o download incompleto?",
         discardConfirmBody: ({ size }: { size: string }) => `Isso exclui os ${size} baixados até agora. Você pode baixar o modelo novamente mais tarde.`,
+        insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+            `Não há espaço livre suficiente. Este download precisa de ${required}, mas só há ${available} livres.`,
       },
       localNeuralStt: {
         modelPack: {
@@ -9498,12 +9522,6 @@ settingsSession: {
           installedWithBuild: ({ build }: { build: string }) =>
             `Instalado • ${build}`,
           notInstalled: "Não instalado",
-        },
-        language: {
-          title: "Idioma",
-          subtitle: "Tag de idioma BCP-47 opcional.",
-          promptTitle: "Idioma",
-          promptBody: "Digite uma tag de idioma BCP-47 (ex.: en, en-US).",
         },
         alerts: {
           downloadFailedTitle: "Falha no download",
@@ -9538,6 +9556,8 @@ settingsSession: {
           enableTitle: "Ativar mãos livres",
           silenceTitle: "Tempo de silêncio (ms)",
           minSpeechTitle: "Fala mínima (ms)",
+          pushToTalkTitle: "Pressione para falar",
+          pushToTalkSubtitle: "Este provedor transcreve uma gravação concluída; toque no microfone novamente para enviar. Para mãos livres, escolha o reconhecimento de voz do dispositivo ou o neural local.",
         },
         customBackendIdSubtitle: "Digite um id de backend personalizado.",
         searchBackendsPlaceholder: "Buscar backends",
@@ -9795,8 +9815,7 @@ settingsSession: {
       sttProvider: "Provedor STT",
       neuralStt: {
         title: "STT no dispositivo",
-        webNotAvailableSubtitle:
-          "Indisponível na web. Use STT do dispositivo, compatível com OpenAI ou Gemini STT.",
+        webFallbackSubtitle: "Funciona apenas no app móvel. No navegador, a voz usa o reconhecimento de fala do navegador.",
       },
       ttsBaseUrl: "Base URL TTS",
       ttsBaseUrlTitle: "Base URL TTS",

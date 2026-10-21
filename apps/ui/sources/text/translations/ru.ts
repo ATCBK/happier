@@ -6711,6 +6711,28 @@ export const ru: TranslationStructure = {
           targetSession: "Целевая сессия",
           noTarget: "Сессия не выбрана",
           clearTarget: "Очистить цель",
+          errors: {
+              sendFailed: "Не удалось отправить сообщение в сессию.",
+              sttFailed: "Не удалось распознать сказанное. Попробуйте ещё раз.",
+              sttTimeout: "Время распознавания речи истекло. Проверьте подключение и попробуйте ещё раз.",
+              sttAuthFailed: "Сервис распознавания речи отклонил API-ключ. Проверьте ключ и его ограничения в разделе Настройки → Голос.",
+              sttRateLimited: "Превышен лимит запросов распознавания речи. Подождите немного и попробуйте ещё раз.",
+              missingSttBaseUrl: "Укажите URL сервера распознавания речи в разделе Настройки → Голос.",
+              missingSttApiKey: "Добавьте API-ключ распознавания речи в разделе Настройки → Голос.",
+              recordingStartFailed: "Не удалось включить микрофон. Убедитесь, что его не использует другое приложение.",
+              recordingStopFailed: "Не удалось завершить запись. Попробуйте ещё раз.",
+              deviceSttUnavailable: "Распознавание речи недоступно на этом устройстве. Выберите другого провайдера распознавания речи в разделе Настройки → Голос.",
+              speechPermissionDenied: "Доступ к микрофону или распознаванию речи запрещён. Разрешите его в настройках устройства.",
+              deviceSttStartFailed: "Не удалось запустить распознавание речи. Попробуйте ещё раз.",
+              localNeuralSttUnavailable: "Распознавание речи на устройстве недоступно в этой сборке. Выберите другого провайдера распознавания речи в разделе Настройки → Голос.",
+              localNeuralPackNotInstalled: "Скачайте речевую модель в разделе Настройки → Голос.",
+              localNeuralSttStartFailed: "Не удалось запустить распознавание речи на устройстве. Попробуйте ещё раз.",
+              localNeuralAudioCaptureFailed: "Микрофон неожиданно отключился. Попробуйте ещё раз.",
+              ttsFailed: "Не удалось воспроизвести голосовой ответ. Проверьте синтез речи в разделе Настройки → Голос.",
+              voiceAgentRequiresFeature: ({ feature }: { feature: string }) => `Для режима агента включите «${feature}» в разделе Настройки → Функции.`,
+              voiceAgentUnavailable: "Голосовой агент недоступен на этом сервере.",
+              generic: "В работе голоса возникла проблема.",
+          },
           a11y: {
             teleport: "Телепортировать голосового агента",
             toggleActivity: "Переключить голосовую активность",
@@ -9338,6 +9360,8 @@ settingsSession: {
         discardSubtitle: "Удалите незавершённую загрузку, чтобы освободить место.",
         discardConfirmTitle: "Удалить незавершённую загрузку?",
         discardConfirmBody: ({ size }: { size: string }) => `Будут удалены уже загруженные ${size}. Модель можно будет загрузить снова позже.`,
+        insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+            `Недостаточно свободного места. Для загрузки нужно ${required}, а свободно только ${available}.`,
       },
       localNeuralStt: {
         modelPack: {
@@ -9361,12 +9385,6 @@ settingsSession: {
           installedWithBuild: ({ build }: { build: string }) =>
             `Установлено • ${build}`,
           notInstalled: "Не установлено",
-        },
-        language: {
-          title: "Язык",
-          subtitle: "Необязательный языковой тег BCP-47.",
-          promptTitle: "Язык",
-          promptBody: "Введите языковой тег BCP-47 (например: en, en-US).",
         },
         alerts: {
           downloadFailedTitle: "Ошибка загрузки",
@@ -9401,6 +9419,8 @@ settingsSession: {
           enableTitle: "Включить hands-free",
           silenceTitle: "Таймаут тишины (мс)",
           minSpeechTitle: "Минимальная речь (мс)",
+          pushToTalkTitle: "Нажмите, чтобы говорить",
+          pushToTalkSubtitle: "Этот провайдер распознаёт готовую запись — нажмите микрофон ещё раз, чтобы отправить. Для режима без рук выберите распознавание речи устройства или локальное нейронное.",
         },
         customBackendIdSubtitle: "Введите пользовательский id бэкенда.",
         searchBackendsPlaceholder: "Поиск бэкендов",
@@ -9656,8 +9676,7 @@ settingsSession: {
       sttProvider: "Провайдер STT",
       neuralStt: {
         title: "STT на устройстве",
-        webNotAvailableSubtitle:
-          "Недоступно в вебе. Используйте STT устройства, OpenAI-совместимый или Gemini STT.",
+        webFallbackSubtitle: "Работает только в мобильном приложении. В браузере используется распознавание речи браузера.",
       },
       ttsBaseUrl: "Базовый URL TTS",
       ttsBaseUrlTitle: "Текст в речь",
