@@ -266,17 +266,23 @@ async function withPostgresStatementBudget(tx: Tx, timeoutMs: number, startedAtM
         : match[2] === "min" ? 60_000 : match[2] === "s" ? 1_000 : 1;
     const configuredMs = Number(match[1]) * multiplier;
     let appliedTimeoutMs: number | undefined;
-    const refresh = async () => {
+    const readStatementTimeoutMs = () => {
         const remainingMs = Math.floor(timeoutMs - (Date.now() - startedAtMs));
         if (remainingMs < 1) throw new TransactionAttemptDeadlineExceededError();
-        const statementTimeoutMs = configuredMs === 0 ? remainingMs : Math.min(configuredMs, remainingMs);
+        return configuredMs === 0 ? remainingMs : Math.min(configuredMs, remainingMs);
+    };
+    const refresh = async () => {
+        const statementTimeoutMs = readStatementTimeoutMs();
         if (statementTimeoutMs === appliedTimeoutMs) return;
         // PostgreSQL SET accepts no bound parameter. This integer comes only
         // from the validated existing SQL and transaction budgets.
         await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = ${statementTimeoutMs}`);
         appliedTimeoutMs = statementTimeoutMs;
     };
-    await refresh();
+    // Still refuse expiry before entering domain work. Apply the LOCAL setting
+    // only at the first awaited SQL below: an eager SET can be superseded by
+    // that query's remaining-budget refresh without protecting any statement.
+    readStatementTimeoutMs();
 
     // A transaction has one SQL connection, including inside Promise.all.
     // Keep each SET adjacent to its operation: queued operations must measure

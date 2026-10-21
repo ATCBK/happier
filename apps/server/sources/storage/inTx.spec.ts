@@ -222,6 +222,54 @@ describe("inTx", () => {
         expect(transaction.mock.calls[0]![1]).toEqual(expect.objectContaining({ isolationLevel: "ReadCommitted" }));
     });
 
+    it.each([0, 60])("sets the SQL budget only when the first lazy query executes, retaining the stricter existing timeout (callback work: %s ms)", async callbackWorkMs => {
+        applyEnvValues({ HAPPIER_DB_PROVIDER: "postgres" });
+        let clock = 1_000;
+        vi.spyOn(Date, "now").mockImplementation(() => clock);
+        const budgets: number[] = [];
+        let appliedBudget: number | undefined;
+        let queryBudget: number | undefined;
+        transaction.mockImplementation(async fn => fn({
+            ...transactionBoundary(),
+            async $queryRaw() { clock += 2; return [{ statement_timeout: "50ms" }]; },
+            async $executeRawUnsafe(query: string) {
+                appliedBudget = Number(query.split(" = ")[1]);
+                budgets.push(appliedBudget);
+                clock += 2;
+                return 0;
+            },
+            $queryRawUnsafe() {
+                // The persistent Prisma boundary is lazy: no SQL before await.
+                return { then(resolve: (rows: unknown[]) => unknown, reject?: (reason: unknown) => unknown) {
+                    return Promise.resolve().then(() => { queryBudget = appliedBudget; return [{ value: 1 }]; }).then(resolve, reject);
+                } };
+            },
+        }));
+        await expect(inTx(async tx => {
+            // Before callback SQL, no eager timeout-setting round trip is needed.
+            expect(budgets).toEqual([]);
+            clock += callbackWorkMs;
+            return await tx.$queryRawUnsafe("SELECT 1 AS value");
+        }, { timeoutMs: 100, readOnly: true })).resolves.toEqual([{ value: 1 }]);
+        const expectedBudget = Math.min(50, 98 - callbackWorkMs);
+        expect(budgets).toEqual([expectedBudget]);
+        expect(queryBudget).toBe(expectedBudget);
+    });
+
+    it("refuses an attempt that expires during budget discovery before invoking its callback", async () => {
+        applyEnvValues({ HAPPIER_DB_PROVIDER: "postgres", HAPPIER_DB_TX_MAX_RETRIES: "0" });
+        let clock = 1_000;
+        vi.spyOn(Date, "now").mockImplementation(() => clock);
+        transaction.mockImplementation(async fn => fn({
+            ...transactionBoundary(),
+            async $queryRaw() { clock += 100; return [{ statement_timeout: "0" }]; },
+        }));
+        const callback = vi.fn(async () => "must not run");
+        await expect(inTx(callback, { timeoutMs: 100 }))
+            .rejects.toBeInstanceOf(inTxModule.TransactionConflictExhaustedError);
+        expect(callback).not.toHaveBeenCalled();
+    });
+
     it.each([false, true])("orders an optional prepared fence before the first callback read (prepare: %s)", async prepared => {
         applyEnvValues({ HAPPIER_DB_PROVIDER: "postgres" });
         vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -235,7 +283,11 @@ describe("inTx", () => {
                     return [{ statement_timeout: "0" }];
                 },
                 async $executeRawUnsafe(query: string) { statements.push(query); return 0; },
-                async $queryRawUnsafe(query: string) { statements.push(query); return []; },
+                $queryRawUnsafe(query: string) {
+                    return { then(resolve: (rows: unknown[]) => unknown, reject?: (reason: unknown) => unknown) {
+                        return Promise.resolve().then(() => { statements.push(query); return []; }).then(resolve, reject);
+                    } };
+                },
             });
         });
         await expect(inTx(async tx => {
@@ -289,7 +341,7 @@ describe("inTx", () => {
         expect(callback).not.toHaveBeenCalled();
     });
 
-    it.each([undefined, 10_000])("replays its expired PostgreSQL attempt while the request budget remains (deadline: %s)", async deadlineAtMs => {
+    it.each([undefined, 10_000])("replays its expired PostgreSQL attempt while the request budget remains for queued SQL (deadline: %s)", async deadlineAtMs => {
         applyEnvValues({ HAPPIER_DB_PROVIDER: "postgres", HAPPIER_DB_TX_MAX_RETRIES: "1" });
         const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
         let attempts = 0;
@@ -311,8 +363,10 @@ describe("inTx", () => {
         await expect(inTx(async tx => {
             const attempt = ++attempts;
             afterTx(tx, () => published.push(attempt));
-            await tx.$queryRawUnsafe("slow admission read");
-            await tx.$queryRawUnsafe("admission write");
+            await Promise.all([
+                tx.$queryRawUnsafe("slow admission read"),
+                tx.$queryRawUnsafe("admission write"),
+            ]);
             return "committed";
         }, { timeoutMs: 1_000, ...(deadlineAtMs === undefined ? {} : { deadlineAtMs }) })).resolves.toBe("committed");
         expect(attempts).toBe(2);
