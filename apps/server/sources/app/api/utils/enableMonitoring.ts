@@ -15,7 +15,6 @@ import {
     sendDatabaseReadinessResponse,
 } from "@/app/monitoring/readiness";
 import { isShutdown } from "@/utils/process/shutdown";
-import { redactHttpRequestUrlForLog } from "@/utils/logging/redactHttpRequestUrlForLog";
 import { randomUUID } from 'node:crypto';
 import { recordWebLatencyPhase, withWebLatencyTrace } from '@/utils/webLatencyTrace';
 
@@ -36,10 +35,9 @@ export function enableMonitoring(app: Fastify, options: EnableMonitoringOptions 
     app.addHook('onResponse', async (request, reply) => {
         const duration = (Date.now() - (request.startTime || Date.now())) / 1000;
         const method = request.method;
-        // Use routeOptions.url for the route template, fallback to parsed URL path
-        const route = request.routeOptions?.url
-            || redactHttpRequestUrlForLog(request.url)
-            || 'unknown';
+        // Labels retain their values for the process lifetime. Unmatched paths
+        // share one label rather than retaining caller-controlled URL identities.
+        const route = request.routeOptions?.url || 'unmatched';
         const status = reply.statusCode.toString();
         recordWebLatencyPhase(`http.${method}.${request.routeOptions?.url ?? 'unmatched'}`, duration * 1000);
 

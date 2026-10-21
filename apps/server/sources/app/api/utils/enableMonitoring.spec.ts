@@ -37,6 +37,44 @@ describe("enableMonitoring", () => {
         vi.useRealTimers();
     });
 
+    it("does not retain a separate metric series for every unmatched request path", async () => {
+        register.resetMetrics();
+        const app = createMonitoringApp();
+        enableMonitoring(app);
+        app.get("/known/:id", async () => ({ ok: true }));
+        await app.ready();
+
+        try {
+            for (let index = 0; index < 1000; index += 1) {
+                const response = await app.inject({ method: "GET", url: `/missing/${index}` });
+                expect(response.statusCode).toBe(404);
+            }
+            await app.inject({ method: "GET", url: "/known/one" });
+            await app.inject({ method: "GET", url: "/known/two" });
+            expect((await app.inject({ method: "POST", url: "/known/one" })).statusCode).toBe(404);
+
+            for (const metric of ["http_requests_total", "http_request_duration_seconds"]) {
+                const samples = await readMetricSamples(metric);
+                const unmatchedRoutes = new Set(samples
+                    .filter((sample) => sample.labels.status === "404")
+                    .map((sample) => sample.labels.route));
+                expect(unmatchedRoutes.size).toBe(1);
+                expect(samples.some((sample) => sample.labels.route === "/known/:id")).toBe(true);
+
+                const recorded = await register.getSingleMetric(metric)!.get();
+                const counts = recorded.values.filter((sample) => sample.metricName === undefined
+                    || sample.metricName === `${metric}_count`);
+                expect(counts).toEqual(expect.arrayContaining([
+                    expect.objectContaining({ labels: { method: "GET", route: [...unmatchedRoutes][0], status: "404" }, value: 1000 }),
+                    expect.objectContaining({ labels: { method: "POST", route: [...unmatchedRoutes][0], status: "404" }, value: 1 }),
+                    expect.objectContaining({ labels: { method: "GET", route: "/known/:id", status: "200" }, value: 2 }),
+                ]));
+            }
+        } finally {
+            await app.close();
+        }
+    });
+
     it("records hot endpoint metrics only for auth and changes route families", async () => {
         register.resetMetrics();
         const app = createMonitoringApp();
