@@ -662,13 +662,13 @@ function SourceExecutionProbe(props: Readonly<{ pluginId: string }>) {
 }
 
 function PendingSourceExecutionProbe(props: Readonly<{ pluginId: string }>) {
-    const { pluginUiProjection } = useAppShellPluginUiProjection();
+    const { pluginUiProjection, accountLifetime } = useAppShellPluginUiProjection();
     const execution = usePluginSurfaceExecutionOrigin({ pluginId: props.pluginId, projection: pluginUiProjection,
         entry: Object.values(pluginUiProjection?.surfacePlacementsById ?? {})
             .find(entry => entry.pluginId === props.pluginId), enabled: true });
     // These are the real mount inputs from PluginSurfaceHost: withdrawing the
     // selected supplier retires the read even when its plugin did not reload.
-    const targeted = useMountedTargetedContributions({ machineId: execution.selectedSupply?.machineId,
+    const targeted = useMountedTargetedContributions({ accountLifetime, machineId: execution.selectedSupply?.machineId,
         serverId: execution.selectedSupply?.serverId, pluginId: props.pluginId,
         mountedOccurrenceId: execution.selectedSupply?.occurrenceId,
         enabled: Boolean(execution.selectedSupply?.occurrenceId) });
@@ -1049,6 +1049,7 @@ describe('AppShellPluginUiProjectionProvider', () => {
         // A choice report changes the union's selected stamp, but not its
         // candidate supplies. It must settle without feeding a fresh facts
         // object back through the same selector on every parent publication.
+        const beforeChoiceReads = reads();
         await act(async () => {
             persistentStorage.setState(state => ({ settings: { ...state.settings,
                 machineAdministrationTargetsLocalV1: clearPluginMachineExecutionOriginPreference(
@@ -1057,9 +1058,9 @@ describe('AppShellPluginUiProjectionProvider', () => {
         });
         await flushHookEffects({ cycles: 5 });
         const afterChoice = reads();
-        expect(afterChoice - settled).toBeLessThanOrEqual(2);
+        expect(afterChoice - beforeChoiceReads).toBeLessThanOrEqual(2);
         const latest = selection.mock.calls.filter(([input]) => input.pluginId === pluginId).at(-1)![0];
-        const beforeChoice = selection.mock.calls.filter(([input]) => input.pluginId === pluginId)[settled - 1]![0];
+        const beforeChoice = selection.mock.calls.filter(([input]) => input.pluginId === pluginId)[beforeChoiceReads - 1]![0];
         expect(latest.sourceCandidates).toBe(beforeChoice.sourceCandidates);
         expect(latest.machineRejections).toBe(beforeChoice.machineRejections);
         expect(latest.declaredDefaultOrigins).toBe(beforeChoice.declaredDefaultOrigins);
@@ -2996,16 +2997,13 @@ describe('AppShellPluginUiProjectionProvider', () => {
     });
 
     it('binds the union of strict machine projections to app pages and Settings before selection across heartbeats', async () => {
-        const bootstrapStarted = performance.now();
         const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
         await loadSyncSingletonForTests();
-        console.info('R-C strict Machine union bootstrap', { stage: 'sync-ready', elapsedMs: performance.now() - bootstrapStarted });
         const { AppShellPluginUiProjectionProvider } = await import('./AppShellPluginUiProjection');
         const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
         const { PluginAppPageScreen } = await import('./PluginAppPageScreen');
         const { PluginSettingsPageScreen } = await import('@/components/settings/plugins/PluginSettingsPageScreen');
         const { PluginSettingsPageHost } = await import('@/components/plugins/surfaces');
-        console.info('R-C strict Machine union bootstrap', { stage: 'imports-ready', elapsedMs: performance.now() - bootstrapStarted });
         const renderApp = () => (
             <AppPaneProvider>
                 <AppShellPluginUiProjectionProvider>
@@ -3064,7 +3062,6 @@ describe('AppShellPluginUiProjectionProvider', () => {
         }));
         const screen = await renderScreen(renderApp());
         await flushHookEffects({ cycles: 6 });
-        console.info('R-C strict Machine union bootstrap', { stage: 'mounted', elapsedMs: performance.now() - bootstrapStarted });
 
         const assertScreenRoutes = () => {
             const appPageScreens = screen.tree.findAllByType(PluginAppPageScreen);

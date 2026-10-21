@@ -108,34 +108,44 @@ export function usePluginSurfaceExecutionOrigin(params: Readonly<{
         )) : null;
     const sourceNotReady = offlineCandidate?.validation.kind === 'rejected'
         && offlineCandidate.validation.reason === 'source_not_ready';
-    const canRetainSupply = params.enabled && accountLifetime?.isCurrent() === true
-        && previous?.accountLifetime === accountLifetime && previous.entryId === params.entry?.id
+    const hasPreviousPresentation = params.enabled && accountLifetime?.isCurrent() === true
+        && previous?.accountLifetime === accountLifetime && previous.entryId === params.entry?.id;
+    const matchesPreviousSupply = (supply: NonNullable<typeof selectedSupplyFromSelection>) => (
+        supply.executionOrigin !== null && previous?.supply.executionOrigin != null
+        && arePluginMachineExecutionOriginsEqual(supply.executionOrigin, previous.supply.executionOrigin)
+        && supply.occurrenceId === previous.supply.occurrenceId
+        && supply.generation === previous.supply.generation
+        && supply.pluginVersion === previous.supply.pluginVersion
+        && supply.serverId === previous.supply.serverId
+    );
+    const canRetainSupply = hasPreviousPresentation
         && (!selection.selectedOrigin || arePluginMachineExecutionOriginsEqual(selection.selectedOrigin, previous.supply.executionOrigin!))
         && offlineCandidate?.validation.kind === 'rejected'
         && (offlineCandidate.validation.reason === 'offline' || offlineCandidate.validation.reason === 'stale'
             || offlineCandidate.validation.reason === 'home_unreachable' || offlineCandidate.validation.reason === 'daemon_unavailable'
             || offlineCandidate.validation.reason === 'daemon_invalid_response' || sourceNotReady);
     const retainedSupply = canRetainSupply ? readPluginUiContributionSupplies(params.entry).find(supply => (
-        supply.executionOrigin && previous?.supply.executionOrigin
-        && arePluginMachineExecutionOriginsEqual(supply.executionOrigin, previous.supply.executionOrigin)
-        && supply.occurrenceId === previous.supply.occurrenceId
-        && supply.generation === previous.supply.generation
-        && supply.pluginVersion === previous.supply.pluginVersion
-        && supply.serverId === previous.supply.serverId
+        matchesPreviousSupply(supply)
         // A registry refresh withdraws authority, not this mounted identity.
         // Otherwise its targeted replacement is immediately canceled and
         // restarted when the same occurrence is admitted. A definitive
         // source-not-ready answer is not an establishing refresh.
-        && (!sourceNotReady || supply.phase === 'establishing')
+        && (supply.unavailableReasonCode !== 'plugin_source_not_ready' || supply.phase === 'establishing')
     )) ?? null : null;
     const selectedSupply = selectedSupplyFromSelection ?? retainedSupply;
+    // Fresh invocation authority can withdraw before the descriptive selection
+    // publication catches up. Do not erase the same establishing presentation
+    // in that intermediate turn; the unavailable/refusal guard above still
+    // decides whether it survives the completed selection publication.
+    const awaitingSelectionPublication = hasPreviousPresentation && selection.state.kind === 'selected'
+        && selectedSupplyFromSelection?.phase === 'establishing' && matchesPreviousSupply(selectedSupplyFromSelection);
     React.useLayoutEffect(() => {
         if (selection.canExecute && selectedSupplyFromSelection && params.entry && accountLifetime?.isCurrent()) {
             lastSelectedSupply.current = { accountLifetime, entryId: params.entry.id, supply: selectedSupplyFromSelection };
-        } else if (!retainedSupply) {
+        } else if (!retainedSupply && !awaitingSelectionPublication) {
             lastSelectedSupply.current = null;
         }
-    }, [accountLifetime, params.entry, retainedSupply, selectedSupplyFromSelection, selection.canExecute]);
+    }, [accountLifetime, awaitingSelectionPublication, params.entry, retainedSupply, selectedSupplyFromSelection, selection.canExecute]);
     const isExecutionOriginCurrent = React.useCallback((options?: Readonly<{ recordUse?: boolean }>) => {
         const fresh = selection.resolveExecutionOrigin({ recordUse: options?.recordUse === true });
         if (!fresh || !selectedSupply?.executionOrigin || !selectedSupply.occurrenceId

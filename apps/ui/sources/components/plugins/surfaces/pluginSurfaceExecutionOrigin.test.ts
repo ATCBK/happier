@@ -236,6 +236,7 @@ describe('plugin surface execution requirement', () => {
                     entry: initialProjection.surfacePlacementsById[entryId], includeMachineCandidates: false, enabled: true });
                 const occurrenceId = origin.selectedSupply?.occurrenceId;
                 const targeted = useMountedTargetedContributions({ machineId, serverId: connection.home.id, pluginId,
+                    accountLifetime: lifetime,
                     mountedOccurrenceId: occurrenceId, enabled: Boolean(occurrenceId) });
                 return { origin, targeted };
             }, { wrapper: Wrapper });
@@ -307,6 +308,10 @@ describe('plugin surface execution requirement', () => {
             await act(async () => { expect(mounted.selection.resolveExecutionOrigin()?.origin).toEqual(executionOrigin); });
             expect(readPluginMachineExecutionLastUsedTarget(storage.getState().settings.machineAdministrationTargetsLocalV1, pluginId))
                 .toEqual({ serverIdentityId: executionOrigin.serverIdentityId, machineId });
+            // The composer replaced and restored the committed source above,
+            // and this invocation deliberately wrote the last-use input. Take
+            // the settled baseline after those changes, not before them.
+            mounted = hook.getCurrent();
             // Route chrome can rerender while a picker opens. An equivalent
             // page snapshot is not a new plugin selection or resolving state.
             pageEntryForRender = { ...pageEntryForRender! };

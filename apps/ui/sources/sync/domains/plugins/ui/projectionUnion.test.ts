@@ -131,6 +131,8 @@ it('retains current Account Actions through installed composition without replac
 });
 
 it('retains an external archive renderer only from its exact reported installation and artifact slot', () => {
+    const mergeInstalledPluginUiProjections = projectionUnion.createInstalledPluginUiProjectionPublication().publish;
+    const publishUnion = projectionUnion.createPluginUiProjectionUnionPublication().publish;
     const pluginId = 'com.acme.external';
     const digest = `sha256:${'a'.repeat(64)}`;
     const graph = PluginUiArtifactsManifestEntryV2Schema.parse({
@@ -178,7 +180,8 @@ it('retains an external archive renderer only from its exact reported installati
         runtime: { state: 'loadable', diagnostics: [], decision: { state: 'load', reason: 'compatible', diagnostics: [] },
             cacheKey: digest, cacheIdentity: { artifactDigest: digest }, loadPolicy: { source: 'installedArtifact' } },
     }), occurrenceId: 'external:1', executionOrigin: origin };
-    const runtimeFor = (entry: typeof bundle) => normalizePluginUiProjection(PluginProjectionV2Schema.parse({
+    const runtimeFor = (entry: typeof bundle) => {
+        const projection = normalizePluginUiProjection(PluginProjectionV2Schema.parse({
         v: 2, generation: 1, installedPackagesById: {}, agentsById: {}, actionsById: {}, toolsById: {},
         commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [],
         familiesById: { pluginUi: { family: 'pluginUi', entriesById: {
@@ -186,7 +189,10 @@ it('retains an external archive renderer only from its exact reported installati
                 ...declaration, occurrenceId: 'external:1', executionOrigin: origin,
             }])), [entry.id]: entry,
         } } },
-    }));
+        }));
+        return publishUnion([{ machineId: materialization.machineId, serverId: 'server-1', serverIdentityId: 'srv_test',
+            phase: 'current', interactionEnabled: true, projection }], new Map([[pluginId, origin]])).pluginUiProjection!;
+    };
     const runtime = runtimeFor(bundle);
     const reports = { [pluginId]: materialization };
     const merged = mergeInstalledPluginUiProjections(models, runtime, reports);
@@ -212,6 +218,7 @@ it('retains an external archive renderer only from its exact reported installati
 
 it('uses a development override only for the explicitly selected source and otherwise retains the host bundle', () => {
     const mergeInstalledPluginUiProjections = projectionUnion.createInstalledPluginUiProjectionPublication().publish;
+    const unionPluginUiProjections = projectionUnion.createPluginUiProjectionUnionPublication().publish;
     const pluginId = 'happier.fixture';
     const entry = placementEntry({ pluginId, localId: 'page', container: 'appPage' });
     const origin = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_test', sourceRef: {

@@ -2,6 +2,7 @@ import type {
     DaemonContributionRegistryProjection,
 } from '@/sync/api/daemon/daemonContributionRegistryProjectionProtocol';
 import type { PluginContributionClientPlatform } from '@happier-dev/protocol';
+import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugins/availability/v1';
 import { PluginProjectedWorkItemsEntryV1Schema, type PluginProjectedWorkItemsEntryV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { MachineAdministrationTargetV1 } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
 import type { PluginDeclaredUiEntriesV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
@@ -17,7 +18,7 @@ import { VoiceProviderContributionSchema, type VoiceProviderContribution } from 
 import { PluginProjectedDragSourceEntryV1Schema, PluginProjectedDropTargetEntryV1Schema, type PluginProjectedDragSourceEntryV1, type PluginProjectedDropTargetEntryV1, type PluginProjectionInstalledPackageV2, type PluginProjectedActionV2, type PluginProjectedResourceV2, type PluginProjectedComposerAttachmentEntryV1, type PluginProjectedComposerControlEntryV1, type PluginProjectedComposerRegionEntryV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import type { PluginJsonSchemaValidator } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
-import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { projectNativeJsonValueForTransport, sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import {
     createPluginSessionInfoSectionRendererIdV1,
     isPluginUiSurfaceBindingPotentiallySupportedOnPlatformV1,
@@ -36,6 +37,26 @@ import {
 } from '@happier-dev/protocol/plugins/ui';
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
+
+/** Observation time remains an Availability fact, not an input to UI declarations. */
+export function samePluginUiMaterializationFacts(left: PluginMachineMaterializationV1 | undefined, right: PluginMachineMaterializationV1 | undefined): boolean {
+    if (left === right) return true;
+    if (!left || !right) return false;
+    const { observedAt: _leftObservedAt, ...leftFacts } = left;
+    const { observedAt: _rightObservedAt, ...rightFacts } = right;
+    return sameStrictJsonValue(leftFacts, rightFacts);
+}
+
+export function arePluginUiMaterializationsEquivalent(
+    left: Readonly<Record<string, PluginMachineMaterializationV1>> | undefined,
+    right: Readonly<Record<string, PluginMachineMaterializationV1>> | undefined,
+): boolean {
+    if (left === right) return true;
+    const keys = Object.keys(left ?? {});
+    return keys.length === Object.keys(right ?? {}).length
+        && keys.every(key => Object.hasOwn(right ?? {}, key) && samePluginUiMaterializationFacts(left?.[key], right?.[key]));
+}
+
 /** Declaration facts for cold presentation; never an occurrence or execution grant. */
 export type PluginUiDeclaredExecution = Readonly<{
     daemonActions: boolean;
@@ -995,7 +1016,7 @@ export function normalizePluginUiProjection(
 
     const family = projection.familiesById.pluginUi;
     if (!family) {
-        return Object.freeze({
+        return reconcileProjectionValue(previous, Object.freeze({
             ...EMPTY_PLUGIN_UI_PROJECTION,
             generation: projection.generation,
             diagnostics,
@@ -1014,7 +1035,7 @@ export function normalizePluginUiProjection(
             dragSourcesById: Object.freeze(dragSourcesById),
             workItemsById: Object.freeze(workItemsById),
             dropTargetsById: Object.freeze(dropTargetsById),
-        });
+        }));
     }
 
     const translationsByPluginId: Record<string, PluginUiTranslationsProjection> = {};
@@ -1144,7 +1165,7 @@ export function normalizePluginUiProjection(
         }
     }
 
-    return reconcileProjectionValue(previous, Object.freeze({
+    const reconciled = reconcileProjectionValue(previous, Object.freeze({
         generation: projection.generation,
         diagnostics,
         installedPackagesById,
@@ -1175,5 +1196,17 @@ export function normalizePluginUiProjection(
         dropTargetsById: Object.freeze(dropTargetsById),
         unknownEntriesById: Object.freeze(unknownEntriesById),
     }));
+    // Reconciliation can combine old and new locale subtrees. Publish the
+    // resulting bundle through Protocol's immutable JSON owner once, rather
+    // than making each mounted selector copy the same shallow-frozen graph.
+    let ownedTranslations: Record<string, PluginUiTranslationsProjection> | undefined;
+    for (const [pluginId, entry] of Object.entries(reconciled.translationsByPluginId)) {
+        if (entry.bundles === undefined) continue;
+        const bundles = projectNativeJsonValueForTransport(entry.bundles);
+        if (bundles === entry.bundles) continue;
+        ownedTranslations ??= { ...reconciled.translationsByPluginId };
+        ownedTranslations[pluginId] = Object.freeze({ ...entry, bundles });
+    }
+    return ownedTranslations ? Object.freeze({ ...reconciled, translationsByPluginId: Object.freeze(ownedTranslations) }) : reconciled;
 }
 

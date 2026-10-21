@@ -74,6 +74,7 @@ describe('Account Action targeted-contribution services', () => {
             const accountOrigin = { ...lifetime.scope, custodyId: selected.custodyId, sourceCustody: selected.sourceCustody };
             const { useMountedTargetedContributions } = await import('./mountedTargetedContributions');
             const mounted = await renderHook(() => useMountedTargetedContributions({
+                accountLifetime: lifetime,
                 machineId: null, serverId: lifetime.scope.serverId, pluginId: target.manifest.id,
                 mountedOccurrenceId: selected.custodyId, enabled: true,
                 accountExecutionOrigin: accountOrigin,

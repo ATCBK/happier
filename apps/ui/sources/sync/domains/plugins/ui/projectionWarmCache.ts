@@ -238,6 +238,8 @@ export function readPluginUiProjectionAdmissionSnapshot(input: Readonly<{
      * gate as a live describe instead of restoring rows this client cannot mount.
      */
     platform?: PluginUiPlatformV1;
+    /** When joining a live mounted read, retain only its already confirmed source. */
+    target?: PluginUiTargetedContributionsV1['target'];
 }>): PluginUiProjectionModel | null {
     if (!input.scope) return null;
     const entry = loadPluginUiProjectionWarmCacheEntries(
@@ -245,6 +247,13 @@ export function readPluginUiProjectionAdmissionSnapshot(input: Readonly<{
         input.scope.accountId,
     )[input.targetKey];
     if (!entry || entry.machineId !== input.machineId) return null;
+    if (input.target) {
+        const retained = entry.targetedContributionsByPluginId?.[input.target.pluginId];
+        if (!retained || !isRetainableTargetAdmission(retained)
+            || retained.target.pluginId !== input.target.pluginId
+            || retained.target.occurrenceId !== input.target.occurrenceId
+            || !sameStrictJsonValue(retained.target.sourceCustody, input.target.sourceCustody)) return null;
+    }
     const platform = input.platform ?? resolvePluginUiProjectionPlatform();
     const published = entry[PLUGIN_UI_PROJECTION_PRESENTATION];
     return published?.projection === entry.projection && published.platform === platform ? published.model : null;

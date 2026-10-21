@@ -431,6 +431,61 @@ describe('Plugin Account Availability reader', () => {
         expect(reader.readInstalledPlugins()).not.toBe(installed);
         expect(reader.readMaterializations()).toMatchObject({ kind: 'available', availabilityCursor: 43 });
     });
+    it('retains identical all-plugin observations while publishing changed cursors, facts, and lifecycle', () => {
+        const store = createPluginAccountAvailabilityReaderStore();
+        const reader = store.bind(scope);
+        const pluginId = 'com.acme.fixture';
+        const response = intentRead();
+        const initial = snapshot({ intentReads: [{ pluginId, response }] });
+        expect(reader.getObservationSnapshot()).toBeNull();
+        store.replace({ scope, snapshot: initial });
+        const all = reader.getObservationSnapshot();
+        const plugin = reader.getObservationSnapshot(pluginId);
+        expect(all).not.toBeNull();
+        store.replace({ scope, snapshot: initial });
+        expect(reader.getObservationSnapshot()).toBe(all);
+        store.replace({ scope, snapshot: { ...initial, availabilityCursor: 43 } });
+        expect(reader.getObservationSnapshot(pluginId)).toBe(plugin);
+        const cursorOnly = reader.getObservationSnapshot();
+        expect(cursorOnly).not.toBe(all);
+        expect(reader.readMaterializations()).toMatchObject({ kind: 'available', availabilityCursor: 43 });
+        expect(reader.readCurrentAccountExecution(pluginId)).toMatchObject({ kind: 'available' });
+        store.replace({ scope, snapshot: { ...initial, availabilityCursor: 43 } });
+        expect(reader.getObservationSnapshot()).toBe(cursorOnly);
+        store.replace({ scope, snapshot: { ...initial, availabilityCursor: 44 } });
+        const cursorChanged = reader.getObservationSnapshot();
+        expect(cursorChanged).not.toBe(cursorOnly);
+        store.replace({ scope, snapshot: { ...initial, availabilityCursor: 44, intentReads: [{ pluginId,
+            response: { ...response, intent: { ...response.intent!, enabled: false } },
+        }] } });
+        const disabled = reader.getObservationSnapshot();
+        expect(disabled).not.toBe(cursorChanged);
+        expect(reader.getObservationSnapshot(pluginId)).not.toBe(plugin);
+        expect(reader.readCurrentAccountExecution(pluginId)).toMatchObject({ kind: 'unavailable' });
+        store.retire([pluginId]);
+        expect(reader.getObservationSnapshot()).not.toBe(disabled);
+        expect(reader.readCurrentAccountExecution(pluginId)).toMatchObject({ kind: 'unavailable' });
+        store.clear();
+        expect(reader.getObservationSnapshot()).toBeNull();
+        store.replace({ scope, snapshot: initial });
+        const restored = reader.getObservationSnapshot();
+        expect(restored).not.toBe(all);
+        const machineOnlyPluginId = 'com.acme.machine-only';
+        store.replace({ scope, snapshot: { ...initial, materializations: [...initial.materializations,
+            { ...initial.materializations[0]!, pluginId: machineOnlyPluginId },
+        ] } });
+        const added = reader.getObservationSnapshot();
+        expect(added).not.toBe(restored);
+        store.replace({ scope, snapshot: initial });
+        expect(reader.getObservationSnapshot()).not.toBe(added);
+        expect(reader.getObservationSnapshot(machineOnlyPluginId)).toBe(reader.getObservationSnapshot('com.acme.absent'));
+        store.replace({ scope, snapshot: snapshot({ materializations: [], snapshots: [] }) });
+        expect(reader.getObservationSnapshot()).not.toBe(restored);
+        expect(reader.getObservationSnapshot(pluginId)).not.toBe(plugin);
+        expect(reader.readMaterializations()).toMatchObject({ kind: 'available', materializations: [] });
+        store.replace({ scope: { ...scope, accountId: 'another-account' }, snapshot: initial });
+        expect(reader.getObservationSnapshot()).toBeNull();
+    });
     it('retains unchanged installation models across fresh readers while publishing current admission facts', () => {
         const store = createPluginAccountAvailabilityReaderStore();
         const response = intentRead();

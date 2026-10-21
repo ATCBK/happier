@@ -8,6 +8,16 @@ import type { PluginUiTargetedSurfaceMountCoreV1 } from '@happier-dev/protocol/d
 import type { PluginUiAccountExecutableOrigin } from '../reactNative/executableModuleHost';
 import { readPluginAccountAvailability } from '@/sync/domains/plugins/availability/projection';
 import { readMountedAccountTargetedContributions } from './mountedAccountTargetedContributions';
+import { projectNativeJsonValueForTransport, sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import {
+    readCachedDaemonMergedProjectionCacheEntry,
+    subscribeDaemonMergedProjectionSummary,
+    type DaemonMergedProjectionInputs,
+} from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
+import { createInstalledPluginUiProjectionPublication } from '@/sync/domains/plugins/ui/projectionUnion';
+import { createPluginActionInputSelectionFactsPublication, readPluginActionInputSelectionPresenceSnapshot, type PluginActionInputSelectionSnapshot } from './pluginActionInputSelectionFacts';
 
 import {
     preparePluginJsonSchema,
@@ -22,12 +32,10 @@ import {
     subscribeMachineContributionRegistryProjectionInvalidation,
     type MachinePluginUiTargetedContributionsReadResult,
 } from '@/sync/ops/machineContributionRegistryProjection';
-import {
-    captureActiveServerAccountScopeLifetime,
-    type ActiveServerAccountScopeLifetime,
-} from '@/sync/domains/scope/activeServerAccountScope';
+import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import {
     pluginUiProjectionAdmissionTargetKey,
+    readPluginUiProjectionAdmissionSnapshot,
     savePluginUiProjectionTargetedAdmissionSnapshot,
 } from '@/sync/domains/plugins/ui/projectionWarmCache';
 
@@ -52,6 +60,8 @@ type PreparedTargetedSurfaceMount<TMount> = TMount extends MountedPluginUiTarget
         inputValidation: PreparedPluginJsonSchema;
         /** The sole Protocol rehydrator restores this target-owned normalizer. */
         inputNormalizer: NonNullable<ReturnType<typeof rehydrateCanonicalProtocolComposableSchema>>;
+        /** Joined with current catalog/text by this target's source publication. */
+        actionInputSelectionFactsKey?: PluginActionInputSelectionSnapshot;
     }
 > : never;
 
@@ -97,6 +107,11 @@ export type MountedTargetedContributionsState = Readonly<{
     phase: 'idle' | 'loading' | 'ready' | 'failed';
     targetedContributions: PluginUiTargetedContributionsV1 | null;
     preparedTargetedSurfaceMounts: readonly PreparedDaemonPluginUiTargetedSurfaceMountV1[] | null;
+    /** Exact ready Machine inputs paired atomically with this source publication. */
+    projectionInputs: DaemonMergedProjectionInputs | null;
+    /** Already normalized/composed before the mounted host reads it. */
+    pluginUiProjection: PluginUiProjectionModel | null;
+    actionInputSelectionFactsKey: PluginActionInputSelectionSnapshot;
     failure: MountedTargetedContributionsFailure | null;
 }>;
 
@@ -104,6 +119,9 @@ const IDLE_STATE: MountedTargetedContributionsState = Object.freeze({
     phase: 'idle',
     targetedContributions: null,
     preparedTargetedSurfaceMounts: null,
+    projectionInputs: null,
+    pluginUiProjection: null,
+    actionInputSelectionFactsKey: readPluginActionInputSelectionPresenceSnapshot({ hasPluginProjection: false, hasTargetedContributions: false }),
     failure: null,
 });
 
@@ -131,6 +149,8 @@ function normalizeKeyPart(value: string | null | undefined): string {
  * which the caller compares with the occurrence it mounted.
  */
 export function useMountedTargetedContributions(params: Readonly<{
+    /** The exact lifetime already acquired by the mounted Host/controller. */
+    accountLifetime: ActiveServerAccountScopeLifetime | null;
     machineId: string | null | undefined;
     serverId: string | null | undefined;
     pluginId: string | null | undefined;
@@ -147,11 +167,10 @@ export function useMountedTargetedContributions(params: Readonly<{
     const accountOriginKey = JSON.stringify(params.accountExecutionOrigin ?? null);
     const accountOrigin = React.useMemo(() => params.accountExecutionOrigin, [accountOriginKey]);
     const active = params.enabled && Boolean(machineId || accountOrigin) && Boolean(pluginId);
-    const accountLifetime = active ? captureActiveServerAccountScopeLifetime() : null;
+    const accountLifetime = active ? params.accountLifetime : null;
     const accountAvailability = React.useMemo(() => accountOrigin && accountLifetime
         ? readPluginAccountAvailability(accountLifetime.scope) : null, [accountOrigin, accountLifetime]);
     const [accountRevision, refreshAccount] = React.useReducer((revision: number) => revision + 1, 0);
-    React.useEffect(() => accountAvailability?.subscribe(refreshAccount), [accountAvailability]);
     const projectionScope = React.useMemo(() => (
         active && machineId ? { machineId, serverId: serverId || null } : null
     ), [active, machineId, serverId]);
@@ -177,6 +196,75 @@ export function useMountedTargetedContributions(params: Readonly<{
         accountLifetime: null,
         state: IDLE_STATE,
     }));
+    const installedPublication = React.useMemo(
+        () => createInstalledPluginUiProjectionPublication(),
+        [accountLifetime, targetKey],
+    );
+    const targetPublication = React.useMemo<{
+        current: PluginUiTargetedContributionsV1 | null;
+        retainedPresentation: PluginUiProjectionModel | null;
+    }>(
+        () => ({ current: null, retainedPresentation: null }), [accountLifetime, targetKey],
+    );
+    const selectionPublication = React.useMemo(() => createPluginActionInputSelectionFactsPublication(), [accountLifetime, targetKey]);
+    const childPublications = React.useMemo<{
+        entries: Array<{ mount: PreparedDaemonPluginUiTargetedSurfaceMountV1; selection: ReturnType<typeof createPluginActionInputSelectionFactsPublication> }>;
+        snapshot: readonly PreparedDaemonPluginUiTargetedSurfaceMountV1[] | null;
+    }>(() => ({ entries: [], snapshot: null }), [accountLifetime, targetKey]);
+    const readCurrentSources = React.useCallback((): Pick<MountedTargetedContributionsState, 'projectionInputs' | 'pluginUiProjection' | 'actionInputSelectionFactsKey' | 'preparedTargetedSurfaceMounts'> => {
+        if (!accountLifetime?.isCurrent()) return { projectionInputs: null, pluginUiProjection: null, actionInputSelectionFactsKey: IDLE_STATE.actionInputSelectionFactsKey,
+            preparedTargetedSurfaceMounts: null };
+        const entry = projectionScope ? readCachedDaemonMergedProjectionCacheEntry(projectionScope) : null;
+        const projectionInputs = entry?.accountCurrentness?.isCurrent()
+            && areServerAccountScopesEqual(entry.accountScope ?? null, accountLifetime.scope)
+            && (entry.kind === 'ready' || entry.kind === 'error')
+            ? entry.inputs ?? null : null;
+        if (projectionInputs || entry?.kind === 'unsupported') targetPublication.retainedPresentation = null;
+        // Retained text is only presentation. The absent live input map still
+        // refuses selectors/Actions; no retained schema gains authority.
+        const runtime = projectionInputs?.pluginUiProjection ?? targetPublication.retainedPresentation;
+        const account = accountOrigin ? accountAvailability?.readAccountUiProjection() ?? null : null;
+        const pluginUiProjection = accountOrigin ? installedPublication.publish(account ? [account] : [], runtime) : runtime;
+        let childrenChanged = false;
+        for (const child of childPublications.entries) {
+            const actionInputSelectionFactsKey = child.selection.publish({ pluginProjectionById: projectionInputs?.pluginProjectionById,
+                translationsByPluginId: pluginUiProjection?.translationsByPluginId,
+                targetedContributions: child.mount.contributorTargetedContributions, targetPluginId: child.mount.contributor?.pluginId });
+            if (child.mount.actionInputSelectionFactsKey !== actionInputSelectionFactsKey) {
+                child.mount = Object.freeze({ ...child.mount, actionInputSelectionFactsKey });
+                childrenChanged = true;
+            }
+        }
+        if (childrenChanged) childPublications.snapshot = Object.freeze(childPublications.entries.map(child => child.mount));
+        return {
+            projectionInputs,
+            pluginUiProjection,
+            preparedTargetedSurfaceMounts: childPublications.snapshot,
+            actionInputSelectionFactsKey: selectionPublication.publish({ pluginProjectionById: projectionInputs?.pluginProjectionById,
+                translationsByPluginId: pluginUiProjection?.translationsByPluginId,
+                targetedContributions: targetPublication.current, targetPluginId: pluginId }),
+        };
+    }, [accountAvailability, accountLifetime, accountOrigin, childPublications, installedPublication, pluginId, projectionScope, selectionPublication, targetPublication]);
+
+    React.useEffect(() => {
+        if (!active || !accountLifetime) return;
+        // Source notifications derive first, then publish one ready pair. React
+        // state updaters and render/getSnapshot only read the prepared result.
+        const updateSources = () => {
+            const next = readCurrentSources();
+            setLoaded(previous => previous.requestKey !== targetKey || previous.accountLifetime !== accountLifetime
+                || (previous.state.projectionInputs === next.projectionInputs && previous.state.pluginUiProjection === next.pluginUiProjection
+                    && previous.state.actionInputSelectionFactsKey === next.actionInputSelectionFactsKey
+                    && previous.state.preparedTargetedSurfaceMounts === next.preparedTargetedSurfaceMounts)
+                ? previous : { ...previous, state: { ...previous.state, ...next } });
+        };
+        const unsubscribeProjection = projectionScope
+            ? subscribeDaemonMergedProjectionSummary(projectionScope, updateSources) : () => {};
+        const unsubscribeAccount = accountAvailability?.subscribe(() => { updateSources(); refreshAccount(); });
+        const retirement = accountLifetime.onRetire(updateSources);
+        updateSources();
+        return () => { unsubscribeProjection(); unsubscribeAccount?.(); retirement.dispose(); };
+    }, [accountAvailability, accountLifetime, active, projectionScope, readCurrentSources, targetKey]);
 
     React.useEffect(() => {
         if (!active || !accountLifetime) return;
@@ -195,6 +283,9 @@ export function useMountedTargetedContributions(params: Readonly<{
                     preparedTargetedSurfaceMounts: sameTarget
                         ? previous.state.preparedTargetedSurfaceMounts
                         : null,
+                    projectionInputs: sameTarget ? previous.state.projectionInputs : null,
+                    pluginUiProjection: sameTarget ? previous.state.pluginUiProjection : null,
+                    actionInputSelectionFactsKey: sameTarget ? previous.state.actionInputSelectionFactsKey : IDLE_STATE.actionInputSelectionFactsKey,
                     failure: null,
                 },
             };
@@ -228,6 +319,20 @@ export function useMountedTargetedContributions(params: Readonly<{
                     });
                 return;
             }
+            if (!accountOrigin) {
+                if (!targetPublication.current) {
+                    // Capture before this fresh read writes target admission:
+                    // that write cannot relabel older text as a new source.
+                    targetPublication.retainedPresentation = readPluginUiProjectionAdmissionSnapshot({
+                        scope: accountLifetime.scope,
+                        targetKey: pluginUiProjectionAdmissionTargetKey({ machineId, serverId: serverId || null }),
+                        machineId,
+                        target: result.targetedContributions.target,
+                    });
+                } else if (!sameStrictJsonValue(targetPublication.current.target, result.targetedContributions.target)) {
+                    targetPublication.retainedPresentation = null;
+                }
+            }
             // Recorded for the next fresh process: an offline mount may show
             // the last confirmed admission read-only.
             if (!accountOrigin) savePluginUiProjectionTargetedAdmissionSnapshot({
@@ -248,6 +353,18 @@ export function useMountedTargetedContributions(params: Readonly<{
                 }
             }
             const preparedTargetedSurfaceMounts = prepareTargetedSurfaceMounts(result.targetedSurfaceMounts);
+            const previousChildren = childPublications.entries;
+            childPublications.entries = preparedTargetedSurfaceMounts.map(mount => ({ mount,
+                selection: previousChildren.find(child => child.mount.contributor?.pluginId === mount.contributor?.pluginId
+                    && child.mount.contributor?.contributionId === mount.contributor?.contributionId
+                    && child.mount.contributor?.occurrenceId === mount.contributor?.occurrenceId
+                    && child.mount.role === mount.role)?.selection ?? createPluginActionInputSelectionFactsPublication() }));
+            childPublications.snapshot = preparedTargetedSurfaceMounts;
+            const ownedTarget = projectNativeJsonValueForTransport(result.targetedContributions) as PluginUiTargetedContributionsV1;
+            const targetedContributions = sameStrictJsonValue(targetPublication.current, ownedTarget)
+                ? targetPublication.current : ownedTarget;
+            targetPublication.current = targetedContributions;
+            const sources = readCurrentSources();
             setLoaded((previous) => previous.requestKey !== targetKey
                 || previous.accountLifetime !== accountLifetime
                 ? previous
@@ -255,8 +372,8 @@ export function useMountedTargetedContributions(params: Readonly<{
                     ...previous,
                     state: {
                         phase: 'ready',
-                        targetedContributions: result.targetedContributions,
-                        preparedTargetedSurfaceMounts,
+                        targetedContributions,
+                        ...sources,
                         failure: null,
                     },
                 });
@@ -271,14 +388,17 @@ export function useMountedTargetedContributions(params: Readonly<{
         accountOrigin,
         accountRevision,
         active,
+        childPublications,
         machineId,
         mountedOccurrenceId,
         params.refreshKey,
         pluginId,
         projectionRevision,
         projectionScope,
+        readCurrentSources,
         serverId,
         targetKey,
+        targetPublication,
     ]);
 
     if (!active) return IDLE_STATE;

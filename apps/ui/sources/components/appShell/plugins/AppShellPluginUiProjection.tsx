@@ -36,6 +36,7 @@ import {
     type PluginUiExecutionOriginCandidateFacts,
 } from '@/sync/domains/plugins/ui/projectionUnion';
 import {
+    readPluginAccountAvailability,
     useActivePluginAccountAvailabilityReader,
     useActivePluginAccountAvailabilityReleaseClassifier,
 } from '@/sync/domains/plugins/availability/projection';
@@ -514,6 +515,11 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
     }, [accountLifetime, commitConnectedAccountProjection, connectedAccountResolution]);
     const appliedProjectionRef = React.useRef<PluginUiProjectionModel>(EMPTY_PLUGIN_UI_PROJECTION);
     const pluginRuntimeUpdateTailRef = React.useRef<Promise<void>>(Promise.resolve());
+    // Activation consumes live admission methods, not the diagnostic observer's
+    // cursor/telemetry revision. Actual executable facts and explicit Retry
+    // remain dependencies below; every operation still reads current authority.
+    const clientExecutableAvailabilityReader = accountLifetime
+        ? readPluginAccountAvailability(accountLifetime.scope) : availabilityReader;
     const clientExecutableActivationBasis = React.useMemo(() => Object.freeze({
         projection: pluginUiProjection,
         platform: clientExecutablePlatform,
@@ -522,11 +528,11 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
         voicePluginUiProjection,
         voiceRuntimeGenerationRevision,
         voiceServerId,
-        availabilityReader,
+        availabilityReader: clientExecutableAvailabilityReader,
         accountLifetime,
     }), [
         accountLifetime,
-        availabilityReader,
+        clientExecutableAvailabilityReader,
         clientExecutablePlatform,
         pluginUiProjection,
         voiceInteractionEnabled,

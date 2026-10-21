@@ -2420,17 +2420,19 @@ describe('canonical React Native context subscriptions (UI-D03)', () => {
 
     it('publishes one owned host context to renderer and public watchers while reacquiring new mutable input', async () => {
         const translations = { title: 'Original' };
+        const theme = { ...canonicalSurface.theme, colors: { ...canonicalSurface.theme.colors } };
         const raw = createPluginSurfaceContextFixture({
             mount: canonicalRightPaneMount,
             target: { kind: 'session', sessionId: 'session-1', agentId: undefined },
             translations,
+            theme,
         });
         const adapter = createCanonicalPluginReactNativeHostApiAdapter({
             surface: raw,
             prepareSurfaceContext: preparePluginSurfaceContext,
             requestSurface: surface,
             requestIdPrefix: 'rn-owned-context',
-            installedMethods: [],
+            installedMethods: ['context', 'watchContext'],
             handleRequest: async () => null,
         });
         const initial = adapter.getSurfaceContext();
@@ -2438,7 +2440,14 @@ describe('canonical React Native context subscriptions (UI-D03)', () => {
         expect(initial.translations).not.toBe(translations);
         expect(Object.isFrozen(initial.translations)).toBe(true);
         expect(Object.isFrozen(translations)).toBe(false);
+        expect(Object.isFrozen(initial.theme.colors)).toBe(true);
+        expect(Object.isFrozen(theme.colors)).toBe(false);
         expect(Object.hasOwn(initial.target, 'agentId')).toBe(true);
+        const omittedOptional = preparePluginSurfaceContext({ ...raw,
+            target: { kind: 'session', sessionId: 'session-1' },
+        }, preparePluginSurfaceContext(raw));
+        expect(Object.hasOwn(omittedOptional.surface.target, 'agentId')).toBe(false);
+        expect(omittedOptional.semanticKey).not.toBe(preparePluginSurfaceContext(raw).semanticKey);
         await expect(adapter.api.context()).resolves.toBe(initial);
         const events: SurfaceContext[] = [];
         const watch = await adapter.api.watchContext(context => events.push(context));
@@ -2457,13 +2466,27 @@ describe('canonical React Native context subscriptions (UI-D03)', () => {
         expect(changed.target).toBe(initial.target);
         expect(events).toEqual([changed]);
         expect(rendererChanges).toBe(1);
+        const initialCanvas = initial.theme.colors.canvas;
+        theme.colors.canvas = initialCanvas === '#010203' ? '#030201' : '#010203';
+        adapter.pushSurfaceContext(raw);
+        const nestedChange = adapter.getSurfaceContext();
+        expect(nestedChange.theme.colors.canvas).toBe(theme.colors.canvas);
+        expect(initial.theme.colors.canvas).toBe(initialCanvas);
+        expect(nestedChange.translations).toBe(changed.translations);
+        expect(events).toEqual([changed, nestedChange]);
+        expect(rendererChanges).toBe(2);
         expect(() => adapter.pushSurfaceContext({ ...raw, textScale: -1 })).toThrow();
-        expect(adapter.getSurfaceContext()).toBe(changed);
+        expect(adapter.getSurfaceContext()).toBe(nestedChange);
+        expect(() => createCanonicalPluginReactNativeHostApiAdapter({
+            surface: { ...raw, textScale: -1 }, prepareSurfaceContext: preparePluginSurfaceContext,
+            requestSurface: surface, requestIdPrefix: 'rn-invalid-initial-context',
+            installedMethods: [], handleRequest: async () => null,
+        })).toThrow();
         detach();
         watch.dispose();
         adapter.dispose();
         adapter.pushSurfaceContext({ ...raw, locale: 'de' });
-        expect(rendererChanges).toBe(1);
+        expect(rendererChanges).toBe(2);
         await expect(adapter.api.context()).rejects.toMatchObject({ code: 'stale_surface' });
     });
 

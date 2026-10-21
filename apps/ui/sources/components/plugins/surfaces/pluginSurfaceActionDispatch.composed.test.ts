@@ -110,7 +110,7 @@ import { answerDiscussionThreadForTests, createAccountTokenForTests, createHomeG
 import { createPluginSurfaceContextFixture } from '@/dev/testkit/fixtures/pluginSurfaceContextFixture';
 import { externalAuthoringPlugin, readExternalDoc, commentOnExternalDoc, proposeExternalDocEdit,
     requestExternalDocAcceptance, requestExternalDocDecline } from '../../../../../../packages/plugin-ui/fixtures/external-authoring/src/index';
-import { manifest as authoredAccountManifest, activate as activateAuthoredAccount } from '../../../../../../packages/plugin-sdk/fixtures/account-actions/src/index';
+import { manifest as authoredAccountManifest, activate as activateAuthoredAccount } from '../../../../../../packages/plugin-sdk/fixtures/account-actions/src/accountRuntime';
 import { readPluginAccountAvailability, replacePluginAccountAvailabilityProjection, clearPluginAccountAvailabilityProjection } from '@/sync/domains/plugins/availability/projection';
 
 // The dispatcher and serializer stay real. The server-scoped RPC is the
@@ -550,6 +550,32 @@ function resolveDaemonTargetAction(
 }
 
 describe('Account Action placement through the executable dispatcher', () => {
+    it('refuses an admitted Account Action until its exact executable registration commits, and again after withdrawal', async () => {
+        const accountLifetime = clientAccountLifetime();
+        let effects = 0;
+        const activation = createClientActionActivation({ accountPlacement: true, accountLifetime,
+            accountHandler: async () => { effects += 1; return { read: true }; } });
+        const dispatch = () => dispatchPluginSurfaceAction({
+            action: { pluginId: activation.action.pluginId, localId: activation.action.id },
+            input: {}, clientAction: {}, pluginUiProjection: activation.projection,
+            resolveContributedAction: resolveExactClientAction(activation.action),
+        });
+        await activation.composition.unload();
+        try {
+            expect(await dispatch()).toMatchObject({ ok: false, code: 'unavailable',
+                reason: 'plugin_surface_client_action_unavailable' });
+            expect(effects).toBe(0);
+            expect((await activation.composition.reconcile([activation.activation])).map(attempt => attempt.result))
+                .toEqual([{ ok: true }]);
+            expect(await dispatch()).toEqual({ ok: true, result: { read: true } });
+            expect(effects).toBe(1);
+            await activation.composition.unload();
+            expect(await dispatch()).toMatchObject({ ok: false, code: 'unavailable',
+                reason: 'plugin_surface_client_action_unavailable' });
+            expect(effects).toBe(1);
+        } finally { await activation.composition.unload(); accountLifetime.retire(); }
+    });
+
     it('does not adopt a replacement contributor for an admitted source occurrence', async () => {
         const accountLifetime = clientAccountLifetime();
         let effects = 0;

@@ -3,9 +3,16 @@ import { describe, expect, it, vi } from 'vitest';
 import {
     PluginAvailabilityActionHttpPathsV1,
     PluginAvailabilityIntentReadActionOutputV1Schema,
+    PluginMachineMaterializationV1Schema,
     PLUGIN_ACCOUNT_AVAILABILITY_INTENT_PAGE_SIZE,
 } from '@happier-dev/protocol/plugins/availability';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { createPluginAccountAvailabilityReaderStore } from '@/sync/domains/plugins/availability/reader';
+import * as uiProjection from '@/sync/domains/plugins/ui/projection';
+import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
+import { createAppShellPluginUiProjectionPublication } from '@/components/appShell/plugins/appShellPluginUiProjectionPublication';
+import { composePluginMachineExecutionOriginV1 } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
+import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionOrigins';
 
 import {
     createActivePluginAccountAvailabilityProjectionHydrator,
@@ -98,6 +105,103 @@ function intentList(cursor: number, ids: readonly string[], readCursor = cursor)
 }
 
 describe('active Plugin Account Availability projection hydrator', () => {
+    it('retains acquired installation UI through observation-only RPC refreshes while publishing changed facts', async () => {
+        const pageId = `surfacePlacement:${pluginId}:page`;
+        const release = releaseFacts();
+        const initialMaterialization = PluginMachineMaterializationV1Schema.parse({
+            ...materializationSnapshot(1, [pluginId]).snapshots[0]!.materializations[0]!,
+            archiveDigestSha256: release.archiveDigestSha256,
+            declaredManifest: release.normalizedManifest,
+            declaredUiEntries: { [pageId]: {
+                id: pageId, pluginId, contributionKind: 'surfacePlacement', descriptorId: 'page',
+                binding: normalizePluginUiDestinationBindingV1({ pluginId, destinationId: 'page', rendererId: 'renderer', container: 'appPage', target: { kind: 'app' } }),
+                target: { kind: 'app' }, renderer: { kind: 'declarative', contributionId: 'renderer' },
+                display: { title: 'Page' }, availability: { state: 'available', reason: 'available', diagnostics: [] },
+            } },
+        });
+        let materialization = initialMaterialization;
+        const hydrator = createActivePluginAccountAvailabilityProjectionHydrator({
+            captureLifetime: () => ({ scope, isCurrent: () => true, onRetire: () => ({ dispose: () => {} }) }),
+            getServerSnapshot: () => ({ serverId: scope.serverId, generation: 4 }),
+            captureRequestAuthority: async () => ({ request: async path => jsonResponse(
+                path === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.materializations.read']
+                    ? { availabilityCursor: 1, snapshots: [{ serverIdentityId: materialization.serverIdentityId,
+                        machineId: materialization.machineId, materializations: [materialization] }], releases: [release] }
+                    : intentList(1, [pluginId]),
+            ) }),
+        });
+        const store = createPluginAccountAvailabilityReaderStore();
+        const reader = store.bind(scope);
+        const owner = createAppShellPluginUiProjectionPublication();
+        const sources = { accountLifetime: null, hostBundledUiEnabled: false, activeServerId: scope.serverId,
+            serverProfilesGeneration: 0, activeInventoryLoaded: true,
+            onlineMachineIds: ['machine-a'], selectableMachineIds: ['machine-a'] };
+        const refresh = async () => {
+            const acquired = await hydrator.refresh();
+            if (!acquired) throw new Error('Expected current RPC acquisition');
+            store.replace(acquired);
+            // The React Availability owner publishes a new facade when its observation changes.
+            owner.publishSources({ ...sources, availabilityReader: Object.freeze({ ...reader }) });
+            const installed = reader.readInstalledPlugins();
+            if (installed.kind !== 'available') throw new Error('Expected installed declarations');
+            return installed.plugins[0]!.installations[0]!;
+        };
+        const first = await refresh();
+        const origin = composePluginMachineExecutionOriginV1(first.materialization);
+        owner.publishMachineCurrentness('machine-a', null, { accountLifetime: null, machineId: 'machine-a', serverId: scope.serverId,
+            pluginUiProjection: { ...first.uiModel, generation: 1,
+                installedPackagesById: { [pluginId]: { ...first.uiModel.installedPackagesById[pluginId]!,
+                    occurrenceId: 'runtime-occurrence', executionOrigin: origin } },
+                surfacePlacementsById: { [pageId]: { ...first.uiModel.surfacePlacementsById[pageId]!,
+                    occurrenceId: 'runtime-occurrence', executionOrigin: origin } } }, pluginBrowserProjection: null,
+            phase: 'current', interactionEnabled: true, platform: 'web' });
+        owner.publishExecutionOrigin(pluginId, null, origin, [origin]);
+        const initialUnion = owner.getSnapshot().projectionUnion;
+        expect(readPluginUiContributionOrigin(initialUnion.pluginUiProjection?.surfacePlacementsById[pageId])?.interactionEnabled).toBe(true);
+        const normalize = vi.spyOn(uiProjection, 'normalizePluginInstalledUiDeclarations');
+        try {
+            for (const observedAt of [2, 3]) {
+                materialization = { ...initialMaterialization, observedAt };
+                const next = await refresh();
+                expect(next.materialization.observedAt).toBe(observedAt);
+                expect(next.uiModel).toBe(first.uiModel);
+                expect(owner.getSnapshot().executionOriginMaterializations[0]?.observedAt).toBe(observedAt);
+                expect(owner.getSnapshot().projectionUnion).toBe(initialUnion);
+            }
+            expect(normalize).not.toHaveBeenCalled();
+
+            materialization = { ...initialMaterialization, enabled: false };
+            const disabled = await refresh();
+            expect(disabled.uiModel.installedPackagesById[pluginId]?.enabled).toBe(false);
+            expect(disabled.uiModel).not.toBe(first.uiModel);
+            expect(readPluginUiContributionOrigin(owner.getSnapshot().projectionUnion.pluginUiProjection?.surfacePlacementsById[pageId])?.interactionEnabled).toBe(false);
+            materialization = { ...initialMaterialization, trustState: 'revoked' };
+            expect((await refresh()).materialization.trustState).toBe('revoked');
+            expect(readPluginUiContributionOrigin(owner.getSnapshot().projectionUnion.pluginUiProjection?.surfacePlacementsById[pageId])?.interactionEnabled).toBe(false);
+            materialization = { ...initialMaterialization, materializationId: 'replacement-installation' };
+            expect((await refresh()).materialization.materializationId).toBe('replacement-installation');
+            expect(owner.getSnapshot().unionMembers[0]?.materializationsByPluginId?.[pluginId]?.materializationId)
+                .toBe('replacement-installation');
+            materialization = { ...initialMaterialization, declaredUiEntries: { [pageId]: {
+                ...initialMaterialization.declaredUiEntries![pageId]!, display: { title: 'Changed page' },
+            } } };
+            expect((await refresh()).uiModel.surfacePlacementsById[pageId]?.display.title).toBe('Changed page');
+            expect(owner.getSnapshot().projectionUnion).not.toBe(initialUnion);
+            for (const changedFacts of [
+                { declaredManifest: { ...initialMaterialization.declaredManifest!, displayName: 'Changed manifest' } },
+                { uiArtifacts: [{ contributionId: 'hosted', artifactId: 'hosted', tier: 'hostedWeb' as const,
+                    platform: 'web' as const, artifactDigest: `sha256:${'c'.repeat(64)}`, hostUiApiRange: '^1.0.0' }] },
+            ] satisfies readonly Partial<typeof initialMaterialization>[]) {
+                materialization = initialMaterialization;
+                const baseline = await refresh();
+                materialization = { ...initialMaterialization, ...changedFacts };
+                const changed = await refresh();
+                expect(changed.uiModel).not.toBe(baseline.uiModel);
+                expect(changed.materialization).toMatchObject(changedFacts);
+            }
+        } finally { normalize.mockRestore(); owner.dispose(); }
+    });
+
     it('publishes incomplete installation evidence and immutable facts without needing selection intent', async () => {
         const release = releaseFacts();
         const hydrator = createActivePluginAccountAvailabilityProjectionHydrator({

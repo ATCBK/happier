@@ -216,7 +216,9 @@ export function retainPluginUiProjectionValue(previous: unknown, next: unknown):
     const retain = (old: unknown, value: unknown): unknown => {
         if (old === value) return old;
         if (!old || typeof old !== 'object' || !value || typeof value !== 'object') {
-            return retainPluginUiProjectionNode(old, value, retain);
+            // Without two object graphs there is nothing to reconcile. In
+            // particular, first publication must not walk an entire new graph.
+            return value;
         }
         let values = retainedPairs.get(old);
         if (values?.has(value)) return values.get(value);

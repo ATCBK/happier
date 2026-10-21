@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { publishDaemonMergedProjectionInputs } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { readFile } from 'node:fs/promises';
 
@@ -731,7 +732,10 @@ describe('CurrentUiContextProvider + PluginSurfaceHost composition', () => {
             contributorTargetedContributions: { target: { pluginId: placement.pluginId, occurrenceId: PLUGIN_OCCURRENCE_ID,
                 sourceCustody: { kind: 'managed', immutableGenerationId: 'external-composer-generation', installSource: 'archive' } }, points: [] },
         });
-        const projectionInputs = { pluginProjectionById: {}, pluginProjectionV2: PluginProjectionV2Schema.parse({ v: 2, generation: projectionGeneration, familiesById: {} }), composerSurfaceCatalog: [catalogEntry] };
+        const projectionInputs = publishDaemonMergedProjectionInputs({
+            projection: PluginProjectionV2Schema.parse({ v: 2, generation: projectionGeneration, familiesById: {} }),
+            composerSurfaceCatalog: [catalogEntry],
+        });
         let presentation: ComposerScopePluginPresentation | null = null;
         let reader: CurrentUiContextReader | null = null;
         const isScopeCurrent = () => true;

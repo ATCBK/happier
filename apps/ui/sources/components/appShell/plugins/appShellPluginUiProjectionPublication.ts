@@ -2,7 +2,8 @@ import { arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionOriginR
 import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugins/availability/v1';
 
 import type { PluginAccountAvailabilityReader, PluginAccountInstalledPluginsAdmission } from '@/sync/domains/plugins/availability/reader';
-import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
+import { arePluginUiMaterializationsEquivalent, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
+import { selectPluginDestinationSurfacePlacements } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
 import {
     arePluginUiProjectionUnionMembersEquivalent,
     createInstalledPluginUiProjectionPublication,
@@ -101,6 +102,8 @@ export type AppShellPluginUiProjectionSnapshot = Readonly<{
     unionMembers: readonly PluginUiProjectionUnionMember[];
     projectionUnion: PluginUiProjectionUnion;
     pluginUiProjection: PluginUiProjectionModel | null;
+    destinationSurfacePlacements: ReturnType<typeof selectPluginDestinationSurfacePlacements>;
+    settingsPages: readonly PluginUiProjectionModel['settingsPagesById'][string][];
     candidateFactsByPluginId: ReadonlyMap<string, PluginUiExecutionOriginCandidateFacts>;
     connectedAccountResolution: ConnectedAccountDescriptorProjectionResolution;
 }>;
@@ -112,6 +115,8 @@ const NO_TARGETS: readonly AppShellPluginProjectionTarget[] = Object.freeze([]);
 const NO_MEMBERS: readonly PluginUiProjectionUnionMember[] = Object.freeze([]);
 const NO_CURRENTNESS: ReadonlyMap<string, PluginUiProjectionCurrentness> = new Map();
 const NO_FACTS: ReadonlyMap<string, PluginUiExecutionOriginCandidateFacts> = new Map();
+const NO_DESTINATION_PLACEMENTS: ReturnType<typeof selectPluginDestinationSurfacePlacements> = Object.freeze([]);
+const NO_SETTINGS_PAGES: readonly PluginUiProjectionModel['settingsPagesById'][string][] = Object.freeze([]);
 const EMPTY_UNION: PluginUiProjectionUnion = Object.freeze({ pluginUiProjection: null, phase: 'unavailable',
     interactionEnabled: false, hasEstablishingMembers: false, machineId: null, serverId: null });
 export const EMPTY_APP_SHELL_PLUGIN_UI_PROJECTION_SNAPSHOT: AppShellPluginUiProjectionSnapshot = Object.freeze({ accountLifetime: null,
@@ -120,6 +125,7 @@ export const EMPTY_APP_SHELL_PLUGIN_UI_PROJECTION_SNAPSHOT: AppShellPluginUiProj
     executionOriginPluginIds: NO_IDS, projectionTargets: NO_TARGETS,
     currentnessForActiveAccountByMachineId: NO_CURRENTNESS, unionMembers: NO_MEMBERS,
     projectionUnion: EMPTY_UNION, pluginUiProjection: null, candidateFactsByPluginId: NO_FACTS,
+    destinationSurfacePlacements: NO_DESTINATION_PLACEMENTS, settingsPages: NO_SETTINGS_PAGES,
     connectedAccountResolution: Object.freeze({ kind: 'loading', descriptors: Object.freeze([]), conflicts: Object.freeze([]) }) });
 const EMPTY_SNAPSHOT = EMPTY_APP_SHELL_PLUGIN_UI_PROJECTION_SNAPSHOT;
 
@@ -201,8 +207,7 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
                 const old = installedByMachineId.get(machineId);
                 if (old && old.serverIdentityId === next.serverIdentityId && old.hasUnprovenDeclarations === next.hasUnprovenDeclarations
                     && old.models.length === next.models.length && old.models.every((model, index) => model === next.models[index])
-                    && Object.keys(old.materializationsByPluginId).length === Object.keys(next.materializationsByPluginId).length
-                    && Object.entries(old.materializationsByPluginId).every(([id, fact]) => fact === next.materializationsByPluginId[id])) {
+                    && arePluginUiMaterializationsEquivalent(old.materializationsByPluginId, next.materializationsByPluginId)) {
                     machines.set(machineId, old);
                 }
             }
@@ -281,6 +286,12 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
         const pluginUiProjection = accountMerge.publish(accountUiProjection ? [accountUiProjection] : NO_MODELS,
             projectionUnion.pluginUiProjection, undefined, explicit);
         const candidateFactsByPluginId = candidates.publish(pluginUiProjection, members, pluginIds);
+        const destinationSurfacePlacements = previous.pluginUiProjection?.surfacePlacementsById === pluginUiProjection?.surfacePlacementsById
+            ? previous.destinationSurfacePlacements
+            : pluginUiProjection ? selectPluginDestinationSurfacePlacements(pluginUiProjection) : NO_DESTINATION_PLACEMENTS;
+        const settingsPages = previous.pluginUiProjection?.settingsPagesById === pluginUiProjection?.settingsPagesById
+            ? previous.settingsPages
+            : pluginUiProjection ? Object.freeze(Object.values(pluginUiProjection.settingsPagesById)) : NO_SETTINGS_PAGES;
         const descriptorInputs: ConnectedAccountDescriptorMachineProjection[] = [];
         for (const machineId of sources.selectableMachineIds) {
             const current = currentness.get(machineId);
@@ -306,7 +317,8 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
         const connectedAccountResolution = connectedAccounts.publish(descriptorInputs);
         const next: AppShellPluginUiProjectionSnapshot = Object.freeze({ accountLifetime, activeServerId: sources.activeServerId, accountUiProjection,
             executionOriginMaterializations: materializations, executionOriginPluginIds: pluginIds, projectionTargets: targets,
-            currentnessForActiveAccountByMachineId, unionMembers: members, projectionUnion, pluginUiProjection, candidateFactsByPluginId, connectedAccountResolution });
+            currentnessForActiveAccountByMachineId, unionMembers: members, projectionUnion, pluginUiProjection,
+            destinationSurfacePlacements, settingsPages, candidateFactsByPluginId, connectedAccountResolution });
         if ((Object.keys(next) as (keyof AppShellPluginUiProjectionSnapshot)[]).every(key => next[key] === previous[key])) return;
         snapshot = next;
         notify();

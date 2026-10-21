@@ -25,7 +25,7 @@ import type { PluginActionContributionV2, PluginCollectionContractRefV1 } from '
 import type { PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { PluginDeclaredUiEntriesV1Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { projectPluginPortableUiDeclarationsV1 } from '@happier-dev/protocol/plugins/contributions/ui';
-import { normalizePluginInstalledUiDeclarations, type PluginUiActionProjection, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
+import { samePluginUiMaterializationFacts, normalizePluginInstalledUiDeclarations, type PluginUiActionProjection, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { preparePluginUiProjectionOrigins } from '@/sync/domains/plugins/ui/projectionOrigins';
 import { projectPluginRegistrySourceDeclarationV1 } from '@happier-dev/protocol/registries';
 import { projectPluginSkillDeclarationV1 } from '@happier-dev/protocol/plugins/contributions/skills';
@@ -618,18 +618,21 @@ function freezeAvailabilitySnapshotValue<T extends object>(value: T): T {
 
 function cloneMaterialization(
     materialization: PluginMachineMaterializationV1,
+    previous?: PluginMachineMaterializationV1,
 ): PluginMachineMaterializationV1 {
     return freezeAvailabilitySnapshotValue({
         ...materialization,
         ...(materialization.declaredManifest ? {
-            declaredManifest: freezeDeepDeclaration(PluginPortableReleaseManifestV1Schema.parse(materialization.declaredManifest)),
+            declaredManifest: retainUnchangedAvailabilityValue(previous?.declaredManifest,
+                freezeDeepDeclaration(PluginPortableReleaseManifestV1Schema.parse(materialization.declaredManifest))),
         } : {}),
         ...(materialization.declaredUiEntries ? {
-            declaredUiEntries: freezeDeepDeclaration(PluginDeclaredUiEntriesV1Schema.parse(materialization.declaredUiEntries)),
+            declaredUiEntries: retainUnchangedAvailabilityValue(previous?.declaredUiEntries,
+                freezeDeepDeclaration(PluginDeclaredUiEntriesV1Schema.parse(materialization.declaredUiEntries))),
         } : {}),
-        uiArtifacts: freezeAvailabilitySnapshotValue(materialization.uiArtifacts.map((artifact) => (
+        uiArtifacts: retainUnchangedAvailabilityValue(previous?.uiArtifacts, freezeAvailabilitySnapshotValue(materialization.uiArtifacts.map((artifact) => (
             freezeAvailabilitySnapshotValue({ ...artifact })
-        ))),
+        )))),
     });
 }
 
@@ -689,7 +692,10 @@ function cloneSelectionIntent(
 
 function snapshotPluginAccountAvailabilitySnapshot(
     snapshot: PluginAccountAvailabilitySnapshot,
+    previous?: PluginAccountAvailabilitySnapshot,
 ): PluginAccountAvailabilitySnapshot {
+    const previousMaterializations = new Map(previous?.materializations.map(row => [materializationLookupKey(row), row] as const));
+    const clone = (row: PluginMachineMaterializationV1) => cloneMaterialization(row, previousMaterializations.get(materializationLookupKey(row)));
     return freezeAvailabilitySnapshotValue({
         availabilityCursor: snapshot.availabilityCursor,
         inventoryComplete: snapshot.inventoryComplete !== false,
@@ -700,12 +706,12 @@ function snapshotPluginAccountAvailabilitySnapshot(
                 response: snapshotIntentReadResponse(projection.response),
             })
         ))),
-        materializations: freezeAvailabilitySnapshotValue(snapshot.materializations.map(cloneMaterialization)),
+        materializations: freezeAvailabilitySnapshotValue(snapshot.materializations.map(clone)),
         snapshots: freezeAvailabilitySnapshotValue(snapshot.snapshots.map((machineSnapshot) => (
             freezeAvailabilitySnapshotValue({
                 ...machineSnapshot,
                 materializations: freezeAvailabilitySnapshotValue(
-                    machineSnapshot.materializations.map(cloneMaterialization),
+                    machineSnapshot.materializations.map(clone),
                 ),
             })
         ))),
@@ -821,7 +827,7 @@ function readInstalledPluginsAdmission(
         const declaration = release?.normalizedManifest ?? materialization.declaredManifest ?? null;
         const installations = byPluginId.get(materialization.pluginId) ?? [];
         const incumbent = previousInstallations.get(materializationLookupKey(materialization));
-        let uiModel = incumbent?.materialization === materialization && incumbent.declaration === declaration
+        let uiModel = incumbent && samePluginUiMaterializationFacts(incumbent.materialization, materialization) && incumbent.declaration === declaration
             && incumbent.release === release ? incumbent.uiModel : undefined;
         if (!uiModel) {
             const declaredUiEntries = materialization.declaredUiEntries
@@ -1255,7 +1261,7 @@ function prepareBundledUiDeclarations(bundles: readonly PluginHostBundledUiDecla
         const entriesById = freezeDeepDeclaration(PluginDeclaredUiEntriesV1Schema.parse(bundle.entriesById));
         const declaredArtifactGraphs = Object.values(entriesById).flatMap(entry => {
             const graph = PluginUiArtifactsManifestEntryV2Schema.safeParse(entry.artifactGraph);
-            return entry.contributionId && graph.success
+            return typeof entry.contributionId === 'string' && graph.success
                 ? [Object.freeze({ contributionId: entry.contributionId, graph: freezeDeepDeclaration(graph.data) })] : [];
         });
         const artifactGraphsByContributionId = new Map([...indexAvailabilityRows(declaredArtifactGraphs, entry => entry.contributionId)]
@@ -1633,7 +1639,6 @@ type AvailabilityObservation = Readonly<{
     value: Readonly<{
         scope: ServerAccountScope;
         inventoryComplete: boolean;
-        stale: boolean;
         retired: boolean;
         intentReads: readonly PluginAccountAvailabilityIntentReadProjection[];
         materializations: readonly PluginMachineMaterializationV1[];
@@ -1649,28 +1654,31 @@ type AvailabilityObservations = Readonly<{
     byPluginId: ReadonlyMap<string, AvailabilityObservation>;
 }>;
 
-function deriveAvailabilityObservations(state: AvailabilityProjectionState, previous?: AvailabilityObservations): AvailabilityObservations {
+function deriveAvailabilityObservations(state: AvailabilityProjectionState, previous?: AvailabilityObservations,
+    previousCursor?: number): AvailabilityObservations {
     const { snapshot } = state;
     const intents = state.intentReadsByPluginId;
     const materializations = indexAvailabilityRows(snapshot.materializations, row => row.pluginId);
     const releases = indexAvailabilityRows(snapshot.releases ?? [], row => row.ref.pluginId);
-    const stale = new Set(state.stalePluginIds);
     const retired = new Set(state.retiredPluginIds);
     const observe = (value: AvailabilityObservation['value'], prior?: AvailabilityObservation): AvailabilityObservation =>
         prior && sameStrictJsonValue(prior.value, value) ? prior : Object.freeze({ value, token: Object.freeze({}) });
     const empty = observe(Object.freeze({ scope: state.scope, inventoryComplete: snapshot.inventoryComplete !== false,
-        stale: false, retired: false, intentReads: Object.freeze([]), materializations: Object.freeze([]),
+        retired: false, intentReads: Object.freeze([]), materializations: Object.freeze([]),
         releases: Object.freeze([]), snapshots: snapshot.snapshots }), previous?.empty);
     const byPluginId = new Map<string, AvailabilityObservation>();
-    for (const pluginId of new Set([...intents.keys(), ...materializations.keys(), ...releases.keys(), ...stale, ...retired])) {
+    for (const pluginId of new Set([...intents.keys(), ...materializations.keys(), ...releases.keys(), ...retired])) {
         byPluginId.set(pluginId, observe(Object.freeze({ ...empty.value,
-            stale: stale.has(pluginId), retired: retired.has(pluginId),
+            retired: retired.has(pluginId),
             intentReads: Object.freeze(intents.get(pluginId) ?? []),
             materializations: Object.freeze(materializations.get(pluginId) ?? []),
             releases: Object.freeze(releases.get(pluginId) ?? []),
         }), previous?.byPluginId.get(pluginId) ?? previous?.empty));
     }
-    return Object.freeze({ all: Object.freeze({}), empty, byPluginId });
+    const unchanged = previousCursor === snapshot.availabilityCursor
+        && previous?.empty === empty && previous.byPluginId.size === byPluginId.size
+        && [...byPluginId].every(([pluginId, observation]) => previous.byPluginId.get(pluginId) === observation);
+    return Object.freeze({ all: unchanged ? previous.all : Object.freeze({}), empty, byPluginId });
 }
 
 function deriveAccountUiProjection(input: Readonly<{
@@ -1926,7 +1934,8 @@ export function createPluginAccountAvailabilityReaderStore(input: Readonly<{
             accountUi: deriveAccountUiProjection({ scope: nextState.scope, hostBundledUi }, nextState,
                 sameScope ? derived?.accountUi : undefined),
         });
-        const nextObservations = deriveAvailabilityObservations(nextState, sameScope ? observations : undefined);
+        const nextObservations = deriveAvailabilityObservations(nextState, sameScope ? observations : undefined,
+            state?.snapshot.availabilityCursor);
         state = nextState;
         derived = nextDerived;
         observations = nextObservations;
@@ -1943,7 +1952,7 @@ export function createPluginAccountAvailabilityReaderStore(input: Readonly<{
         replace: (input) => {
             const previous = state;
             const canMerge = previous !== null && areServerAccountScopesEqual(previous.scope, input.scope);
-            const incoming = snapshotPluginAccountAvailabilitySnapshot(input.snapshot);
+            const incoming = snapshotPluginAccountAvailabilitySnapshot(input.snapshot, canMerge ? previous.snapshot : undefined);
             const replacedMachineKeys = new Set(incoming.snapshots.map((entry) => `${entry.serverIdentityId}\0${entry.machineId}`));
             const retainedSnapshots = canMerge && incoming.inventoryComplete === false
                 ? previous.snapshot.snapshots.filter((entry) => !replacedMachineKeys.has(`${entry.serverIdentityId}\0${entry.machineId}`))

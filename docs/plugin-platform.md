@@ -1802,9 +1802,7 @@ image order, keyed by id, rather than persisted in tokens or attachment records.
 Mounted `setDecorations(key, decorations)` ranges are revision-bound presentation over the same
 text: highlight, muted, warning, success, code or link treatment, with optional
 accessible labels. Web draws them through editor decorations; native draws
-them through text spans. The current native `AgentInput` also retains a legacy
-above-input feedback row; removing that duplicate presentation is still an
-integration obligation. The input-lock notice remains a separate state.
+them through text spans. The input-lock notice remains a separate state.
 A decoration supplies neither
 reference identity nor submission authority. See the [public composer guide](../apps/docs/content/docs/plugins/guides/composer.mdx)
 for the mounted API and attachment insertion example.

@@ -403,6 +403,19 @@ it.each([
             resourceSelections: [], scopedGrants: [], serviceAvailability: [], operatingSystemAuthorization: [] } });
     const pluginProjectionV2 = { v: 2 as const, generation: 1, installedPackagesById: {}, agentsById: {},
         actionsById: { 'acme.provider-source/list': provider }, toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [], familiesById: {} };
+    const { publishDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters');
+    const { createInstalledPluginUiProjectionPublication } = await import('@/sync/domains/plugins/ui/projectionUnion');
+    const { createPluginActionInputSelectionFactsPublication } = await import('@/components/plugins/surfaces/pluginActionInputSelectionFacts');
+    const inputs = publishDaemonMergedProjectionInputs({ projection: pluginProjectionV2 });
+    const pluginUiProjection = createInstalledPluginUiProjectionPublication().publish(
+        [readPluginAccountAvailability(lifetime.scope).readAccountUiProjection()!], inputs.pluginUiProjection,
+    );
+    const actionInputSelectionFactsKey = createPluginActionInputSelectionFactsPublication().publish({
+        pluginProjectionById: inputs.pluginProjectionById,
+        translationsByPluginId: pluginUiProjection?.translationsByPluginId,
+        targetedContributions: request.mount.mount.contributorTargetedContributions,
+        targetPluginId: request.mount.mount.contributor.pluginId,
+    });
     const invocations: ReturnType<typeof DaemonPluginStructuredMessageActionExecuteRequestSchema.parse>[] = [];
     packaged.machineRpc.mockImplementation(rpc => {
         if (rpc.method === RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ) return { ok: true, inputSchema: { type: 'object', additionalProperties: false } };
@@ -415,7 +428,9 @@ it.each([
     let transportCurrent = true;
     const screen = await renderWithAppProviders(<AppShellPluginUiProjectionProvider>
         <PluginSurfaceHost targetedMount={{ request, physicalTarget: { kind: 'app' }, parentLifetime: lifetime,
-            pluginProjectionV2, daemonProjectionReady: withMachine, isExecutionOriginCurrent: () => transportCurrent }}
+            pluginProjectionV2, pluginProjectionById: inputs.pluginProjectionById, pluginUiProjection, actionInputSelectionFactsKey,
+            runtimeComposerAttachmentsById: inputs.pluginUiProjection.composerAttachmentsById,
+            daemonProjectionReady: withMachine, isExecutionOriginCurrent: () => transportCurrent }}
             machineId={withMachine ? machineId : null} serverId={lifetime.scope.serverId} platform="web" projectionInteractionEnabled />
     </AppShellPluginUiProjectionProvider>);
     try {

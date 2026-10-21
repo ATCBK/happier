@@ -1303,6 +1303,7 @@ describe('usePluginUiProjectionCurrentness', () => {
                 entry: currentness.pluginUiProjection?.surfacePlacementsById[entryId], enabled: true,
                 includeMachineCandidates: false });
             const targeted = useMountedTargetedContributions({ machineId: selected.selectedSupply?.machineId,
+                accountLifetime: lifetime,
                 serverId: selected.selectedSupply?.serverId, pluginId,
                 mountedOccurrenceId: selected.selectedSupply?.occurrenceId,
                 enabled: Boolean(selected.selectedSupply?.occurrenceId) });
