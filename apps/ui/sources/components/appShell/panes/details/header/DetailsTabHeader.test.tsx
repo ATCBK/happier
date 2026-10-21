@@ -122,6 +122,22 @@ describe('DetailsTabHeader', () => {
         );
         expect(iconsInBand(withControls)).toBe(false);
         await withControls.unmount();
+        // Band controls wider than the room they would leave the name (a view segment, a pill, Find) take the
+        // row beneath, so the name is never squeezed to a letter a line (File page editing on a phone).
+        const { act } = await import('react-test-renderer');
+        const layout = (width: number) => ({ nativeEvent: { layout: { x: 0, y: 0, width, height: 40 } } });
+        const wide = await renderScreen(
+            <SurfaceStateSizeProvider size="phone">
+                <DetailsTabHeader testID="hdr" title="README.md" actions={<Text testID="people">Preview | Source · Unsaved · Find</Text>}
+                    menuActions={[{ id: 'rename', title: 'Rename', onSelect: () => {} }]} />
+            </SurfaceStateSizeProvider>,
+        );
+        await act(async () => {
+            wide.findHostByTestId('hdr.root')!.props.onLayout(layout(390));
+            wide.findHostByTestId('hdr.icons')!.props.onLayout(layout(260));
+        });
+        expect(iconsInBand(wide)).toBe(false);
+        await wide.unmount();
     });
 
     it('moves the view controls beneath the band when they would collide with its actions', async () => {

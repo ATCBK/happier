@@ -237,7 +237,10 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
     ) : null;
     // A phone keeps quiet toggles beside `⋯` when they are all the header carries: a row beneath the
     // band holding only a toggle or two reads as an afterthought and costs the content a band of height.
-    const phoneIconsInBand = phone && Boolean(iconActions) && !props.controls && buttonList.length === 0;
+    // Only while they leave the name at least as much room as they take (the band's own fit rule): wider band
+    // controls (a view segment, a status pill, Find) take the row beneath instead of squeezing the name.
+    const phoneIconsFit = band.actions === 0 || rowRoom - menuSlot - band.actions >= band.actions;
+    const phoneIconsInBand = phone && Boolean(iconActions) && !props.controls && buttonList.length === 0 && phoneIconsFit;
     const bandActions = phone
         ? (phoneIconsInBand ? <View style={styles.bandActions}>{iconActions}{menu}</View> : (menu ?? undefined))
         : wideActions || menu || paneControls ? (
