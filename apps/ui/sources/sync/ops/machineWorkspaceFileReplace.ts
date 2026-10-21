@@ -5,8 +5,9 @@ import { DaemonWorkspaceFileReplacePreviewRequestSchema, DaemonWorkspaceFileRepl
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { classifyWorkspaceFileRpcError, type WorkspaceFileRpcErrorCode } from './machineWorkspaceFileRpcError';
-import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import { acknowledgeWorkspaceFileWrites } from '@/sync/domains/workspaces/files/workspaceFileAcknowledgements';
+import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { ActionApprovalRequestCreatedResultSchema, type ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 type Options = Readonly<{ serverId?: string | null; accountId?: string | null; signal?: AbortSignal }>;
 type TransportFailure = Readonly<{ ok: false; errorCode: WorkspaceFileRpcErrorCode }>;
@@ -27,25 +28,27 @@ export async function machineWorkspaceFileReplacePreview(machineId: string, inpu
     }
 }
 
-export async function machineWorkspaceFileReplaceApply(machineId: string, input: DaemonWorkspaceFileReplaceApplyRequest, options?: Options): Promise<DaemonWorkspaceFileReplaceApplyResponse | TransportFailure> {
+export async function machineWorkspaceFileReplaceApply(machineId: string, input: DaemonWorkspaceFileReplaceApplyRequest, options?: Options): Promise<DaemonWorkspaceFileReplaceApplyResponse | TransportFailure | ActionExecuteFailure> {
     const payload = DaemonWorkspaceFileReplaceApplyRequestSchema.parse(input);
-    const account = createServerAccountScope(options?.serverId, options?.accountId);
+    const active = captureActiveServerAccountScopeLifetime();
+    const serverId = options?.serverId ?? active?.scope.serverId;
+    if (!serverId) return { ok: false, errorCode: 'action_home_not_found', error: 'action_home_not_found' };
+    // The user signal belongs to cooperative Machine cancellation. Account
+    // retirement alone owns the captured carrier and terminal-receipt lifetime.
+    const account = await captureLazyActionAccountContext(serverId);
     try {
-        const response = await machineRpcWithServerScope<unknown, DaemonWorkspaceFileReplaceApplyRequest>({
-            machineId, method: RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_APPLY, payload,
-            serverId: options?.serverId ?? null, accountId: options?.accountId ?? null, operationTimeoutMs: null,
-            waitForResultOnCancel: true,
-            ...(options?.signal ? { signal: options.signal } : {}),
+        const { executeDefaultActionInCapturedAccount } = await import('./actions/defaultActionExecutor');
+        const execution = await executeDefaultActionInCapturedAccount(account, 'workspace.files.replace', { machineId, ...payload }, {
+            surface: 'ui', authority: 'present_user', expectedAccountId: options?.accountId ?? account.accountId,
+            externalActionTarget: { kind: 'machine', machineId }, signal: options?.signal,
         });
-        const parsed = DaemonWorkspaceFileReplaceApplyResponseSchema.safeParse(response);
-        if (parsed.success && parsed.data.ok && account) {
-            acknowledgeWorkspaceFileWrites({ ...account, machineId, rootPath: payload.rootPath },
-                parsed.data.results.filter(result => result.status === 'replaced' || result.status === 'restored')
-                    .map(result => ({ path: result.path, hash: result.hash ?? null })));
-        }
+        if (!execution.ok) return execution;
+        const approval = ActionApprovalRequestCreatedResultSchema.safeParse(execution.result);
+        if (approval.success) return { ok: false, errorCode: 'approval_required', error: 'approval_required', details: approval.data };
+        const parsed = DaemonWorkspaceFileReplaceApplyResponseSchema.safeParse(execution.result);
         return parsed.success ? parsed.data : { ok: false, errorCode: 'transport_failed' };
     } catch (error) {
         if (options?.signal?.aborted) throw error;
         return { ok: false, errorCode: classifyWorkspaceFileRpcError(error) };
-    }
+    } finally { account.dispose(); }
 }

@@ -3,6 +3,46 @@ import type { LanguageIntelligenceSyncResult } from '@happier-dev/protocol/machi
 import { createCodeIntelligenceDocument, type CodeIntelligenceServerPort } from './codeIntelligenceDocument';
 
 describe('language document custody', () => {
+    it.each(['throw', 'unavailable'] as const)('resumes diagnostic delivery after a healthy watch disconnects (%s) and the next query succeeds', async (failure) => {
+        let disconnect!: () => void;
+        let watches = 0;
+        const received: number[] = [];
+        const unavailable: string[] = [];
+        const holder = createCodeIntelligenceDocument({ rootPath: '/repo', path: 'a.ts', languageId: 'typescript',
+            getText: () => 'answer()', getUnsaved: () => false, isCurrent: () => true, onSync() {},
+            onWatch: answer => { received.push(answer.revision); }, onUnavailable: reason => { unavailable.push(reason); },
+            port: {
+                sync: async () => ({ status: 'ok', generation: 'g1', version: 1, servers: [] }),
+                query: async () => ({ status: 'ok', kind: 'hover', sections: [] }),
+                watch: (_request, signal) => {
+                    watches++;
+                    if (watches === 1) return Promise.resolve({ status: 'ok', revision: 1, servers: [], diagnostics: {} });
+                    if (watches === 2) return new Promise((resolve, reject) => {
+                        disconnect = () => failure === 'throw' ? reject(new Error('Disconnected'))
+                            : resolve({ status: 'unavailable', reason: 'offline' });
+                    });
+                    // Connectivity can recover while the first re-park is still failing.
+                    // The successful query must restore delivery even without another edit.
+                    if (watches === 3) return Promise.reject(new Error('Reconnect still pending'));
+                    if (watches === 4) return Promise.resolve({ status: 'ok', revision: 3, servers: [], diagnostics: {
+                        'a.ts': { ts: { state: 'ready', version: 1, generation: 'g1', items: [{ serverId: 'ts', path: 'a.ts',
+                            severity: 'error', message: 'Fresh after recovery', range: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } } }] } },
+                    } });
+                    return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+                },
+                restart: async () => ({ status: 'ok' }),
+            },
+        });
+        try {
+            await holder.query('hover', { line: 0, character: 2 }, new AbortController().signal);
+            await vi.waitFor(() => expect(received).toEqual([1]));
+            disconnect();
+            await vi.waitFor(() => expect(unavailable).toEqual([failure === 'throw' ? 'transport_failed' : 'offline']));
+            expect(await holder.query('hover', { line: 0, character: 2 }, new AbortController().signal)).toMatchObject({ status: 'ok' });
+            await vi.waitFor(() => expect(received).toEqual([1, 3]));
+        } finally { holder.dispose(); }
+    });
+
     it('restores watch delivery at open acknowledgement if the startup watch ended early', async () => {
         let finishOpen!: (answer: LanguageIntelligenceSyncResult) => void;
         let watches = 0;

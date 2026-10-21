@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { computeFileReplacement } from '@happier-dev/protocol/machines/workspaceFilesReplace';
+import { buildWorkspaceFileRestoreOperation, computeFileReplacement } from '@happier-dev/protocol/machines/workspaceFilesReplace';
 import type {
   DaemonWorkspaceFileReplaceApplyRequest,
   DaemonWorkspaceFileReplacePreviewResponse,
@@ -61,6 +61,7 @@ export type WorkspaceReplaceFileStatus =
   | 'undoChanged';
 export type WorkspaceReplaceFileResult = Readonly<{
   path: string;
+  renameTo?: string;
   status: WorkspaceReplaceFileStatus;
   matchCount?: number;
   /** `unsaved` for a file the editor holds a draft of; otherwise the Machine's reason. */
@@ -275,6 +276,7 @@ export function summarizeReplaceResults(
 
 type Preview = Readonly<{
   key: string;
+  targetKey: string;
   matcher: WorkspaceReplaceMatcher;
   files: readonly WorkspaceReplacePreviewFile[];
   notText: number;
@@ -315,6 +317,12 @@ export type WorkspaceReplaceModel = Readonly<{
   applyError: WorkspaceReplaceErrorCode | null;
   canApply: boolean;
   canUndo: boolean;
+  /** The one retained operation's Undo, including when another folder is currently selected. */
+  undoOnClose: Readonly<{
+    machineId: string;
+    results: readonly WorkspaceReplaceFileResult[];
+    run: () => Promise<WorkspaceReplaceUndoOutcome | null>;
+  }> | null;
   toggleFile: (path: string) => void;
   toggleMatch: (path: string, key: string) => void;
   loadMore: () => void;
@@ -348,8 +356,8 @@ function previewError(
 }
 
 /**
- * The review's state owner. `matcher` null means the review is off (no Replace field, or no replacement
- * yet); the last preview is dropped then so a reopened review never shows another query's results.
+ * The review's state owner. `matcher` null means Replace mode is off. A result retains its original
+ * target and Account so leaving the folder cannot retarget or discard its Undo.
  */
 export function useWorkspaceReplace(
   input: Readonly<{
@@ -361,6 +369,10 @@ export function useWorkspaceReplace(
 ): WorkspaceReplaceModel {
   const { scope, accountLifetime, matcher } = input;
   const accountId = accountLifetime?.scope.accountId ?? null;
+  const targetKey =
+    scope && accountId
+      ? JSON.stringify([scope.serverId, scope.machineId, scope.rootPath, accountId])
+      : null;
   const key =
     scope && accountLifetime && matcher && matcher.query.length > 0
       ? JSON.stringify([
@@ -374,7 +386,8 @@ export function useWorkspaceReplace(
           matcher.regex,
         ])
       : null;
-  const [preview, setPreview] = React.useState<Preview | null>(null);
+  const [retainedPreview, setPreview] = React.useState<Preview | null>(null);
+  const preview = retainedPreview?.targetKey === targetKey ? retainedPreview : null;
   const [loadedKey, setLoadedKey] = React.useState<string | null>(null);
   const [error, setError] = React.useState<{
     key: string;
@@ -384,13 +397,20 @@ export function useWorkspaceReplace(
   const [loadingMore, setLoadingMore] = React.useState(false);
   const [excluded, setExcluded] =
     React.useState<WorkspaceReplaceExclusions>(NO_EXCLUSIONS);
-  const [results, setResults] = React.useState<
-    readonly WorkspaceReplaceFileResult[] | null
-  >(null);
+  const [resultState, setResultState] = React.useState<Readonly<{
+    key: string;
+    scope: WorkspaceScopeBase;
+    options: Readonly<{ serverId: string; accountId: string }>;
+    results: readonly WorkspaceReplaceFileResult[];
+  }> | null>(null);
+  const results = resultState?.key === key ? resultState.results : null;
   const [applying, setApplying] = React.useState(false);
   const [undoing, setUndoing] = React.useState(false);
-  const [applyError, setApplyError] =
-    React.useState<WorkspaceReplaceErrorCode | null>(null);
+  const [applyFailure, setApplyFailure] = React.useState<Readonly<{
+    key: string;
+    code: WorkspaceReplaceErrorCode;
+  }> | null>(null);
+  const applyError = applyFailure?.key === key ? applyFailure.code : null;
   const applyController = React.useRef<AbortController | null>(null);
   const options = React.useMemo(
     () => (scope && accountId ? { serverId: scope.serverId, accountId } : null),
@@ -398,19 +418,14 @@ export function useWorkspaceReplace(
   );
 
   React.useEffect(() => {
-    if (!key || !scope || !matcher || !options) {
+    if (!key || !targetKey || !scope || !matcher || !options) {
       setPreview(null);
       setLoadedKey(null);
       setError(null);
-      setResults(null);
-      setApplyError(null);
       return;
     }
     const controller = new AbortController();
     let current = true;
-    // A new review drops the previous result; the review it came from is gone.
-    setResults(null);
-    setApplyError(null);
     void machineWorkspaceFileReplacePreview(
       scope.machineId,
       {
@@ -434,6 +449,7 @@ export function useWorkspaceReplace(
         setError(null);
         setPreview({
           key,
+          targetKey,
           matcher,
           files: response.files,
           notText: response.skipped.notText,
@@ -557,6 +573,7 @@ export function useWorkspaceReplace(
   const canApply =
     !stale &&
     !loading &&
+    !currentError &&
     !applying &&
     results === null &&
     preview !== null &&
@@ -567,7 +584,7 @@ export function useWorkspaceReplace(
     const controller = new AbortController();
     applyController.current = controller;
     setApplying(true);
-    setApplyError(null);
+    setApplyFailure(null);
     try {
       const response = await machineWorkspaceFileReplaceApply(
         scope.machineId,
@@ -583,19 +600,20 @@ export function useWorkspaceReplace(
       );
       if (!response.ok) {
         // The request may have reached the Machine: never claim nothing happened, never replay.
-        setApplyError(
-          'errorCode' in response
+        setApplyFailure({
+          key: preview.key,
+          code: 'errorCode' in response
             ? 'outcome_unknown'
             : response.code === 'invalid_pattern'
               ? 'invalid_pattern'
               : response.code === 'root_not_allowed'
                 ? 'root_not_allowed'
                 : 'failed',
-        );
+        });
         return;
       }
       const cancelled = new Set(response.cancelled ?? []);
-      setResults([
+      setResultState({ key: preview.key, scope, options, results: [
         ...response.results.map((result): WorkspaceReplaceFileResult => ({
           ...result,
         })),
@@ -614,9 +632,9 @@ export function useWorkspaceReplace(
           status: 'skipped',
           reason: 'unsaved',
         })),
-      ]);
+      ] });
     } catch {
-      setApplyError('outcome_unknown');
+      setApplyFailure({ key: preview.key, code: 'outcome_unknown' });
     } finally {
       applyController.current = null;
       setApplying(false);
@@ -628,16 +646,21 @@ export function useWorkspaceReplace(
 
   const undoable = React.useMemo(
     () =>
-      (results ?? []).filter(
-        (result) =>
-          result.status === 'replaced' && result.hash && result.edits?.length,
+      (resultState?.results ?? []).filter(
+        (result): result is WorkspaceReplaceFileResult & { status: 'replaced' } =>
+          result.status === 'replaced' && Boolean(result.hash && result.edits && (result.edits.length || result.renameTo)),
       ),
-    [results],
+    [resultState],
   );
-  const canUndo = undoable.length > 0 && !undoing && !applying;
-  const undo = React.useCallback(
+  const resultAccountIsCurrent = resultState !== null
+    && accountLifetime?.isCurrent() === true
+    && accountLifetime.scope.accountId === resultState.options.accountId
+    && accountLifetime.scope.serverId === resultState.options.serverId;
+  const canRestore = undoable.length > 0 && !undoing && !applying && resultAccountIsCurrent;
+  const canUndo = results !== null && canRestore;
+  const restore = React.useCallback(
     async (path?: string): Promise<WorkspaceReplaceUndoOutcome | null> => {
-      if (!canUndo || !scope || !options) return null;
+      if (!canRestore || !resultState || !accountLifetime?.isCurrent()) return null;
       const targets = undoable.filter(
         (result) => path === undefined || result.path === path,
       );
@@ -645,23 +668,16 @@ export function useWorkspaceReplace(
       setUndoing(true);
       try {
         const response = await machineWorkspaceFileReplaceApply(
-          scope.machineId,
+          resultState.scope.machineId,
           {
-            rootPath: scope.rootPath,
-            operation: {
-              kind: 'restore',
-              files: targets.map((result) => ({
-                path: result.path,
-                expectedHash: result.hash!,
-                edits: [...result.edits!],
-              })),
-            },
+            rootPath: resultState.scope.rootPath,
+            operation: buildWorkspaceFileRestoreOperation(targets),
           },
-          options,
+          resultState.options,
         );
         if (!response.ok) {
           const error = 'errorCode' in response ? 'outcome_unknown' : 'failed';
-          setApplyError(error);
+          setApplyFailure({ key: resultState.key, code: error });
           return { restored: 0, changed: 0, error };
         }
         const outcome = new Map(
@@ -680,9 +696,11 @@ export function useWorkspaceReplace(
           changed: changedCount,
           error: failedCount > 0 ? 'failed' : null,
         };
-        setResults(
-          (previous) =>
-            previous?.map((result) => {
+        setResultState((previous) => {
+          if (previous !== resultState) return previous;
+          return {
+            ...previous,
+            results: previous.results.map((result): WorkspaceReplaceFileResult => {
               const restored = outcome.get(result.path);
               if (!restored) return result;
               if (restored.status === 'restored')
@@ -698,22 +716,32 @@ export function useWorkspaceReplace(
                   matchCount: result.matchCount,
                 };
               return { ...result, reason: restored.reason ?? result.reason };
-            }) ?? previous,
-        );
+            }),
+          };
+        });
         return counted;
       } catch {
-        setApplyError('outcome_unknown');
+        setApplyFailure({ key: resultState.key, code: 'outcome_unknown' });
         return { restored: 0, changed: 0, error: 'outcome_unknown' };
       } finally {
         setUndoing(false);
       }
     },
-    [canUndo, options, scope, undoable],
+    [accountLifetime, canRestore, resultState, undoable],
   );
+  const undo = React.useCallback(
+    (path?: string) => canUndo ? restore(path) : Promise.resolve(null),
+    [canUndo, restore],
+  );
+  const undoOnClose = React.useMemo(() => canRestore && resultState ? {
+    machineId: resultState.scope.machineId,
+    results: undoable,
+    run: () => restore(),
+  } : null, [canRestore, restore, resultState, undoable]);
 
   const resetResults = React.useCallback(() => {
-    setResults(null);
-    setApplyError(null);
+    setResultState(null);
+    setApplyFailure(null);
     setExcluded(NO_EXCLUSIONS);
     setRetryVersion((value) => value + 1);
   }, []);
@@ -740,6 +768,7 @@ export function useWorkspaceReplace(
     applyError,
     canApply,
     canUndo,
+    undoOnClose,
     toggleFile,
     toggleMatch,
     loadMore,
@@ -749,6 +778,6 @@ export function useWorkspaceReplace(
     resetResults,
     retry,
   }),
-    [apply, applyError, applying, canApply, canUndo, cancelApply, currentError, excluded, files, loadMore, loading, loadingMore, preview, resetResults, results, retry, stale, toggleFile, toggleMatch, totals, undo, undoing, unsavedFiles],
+    [apply, applyError, applying, canApply, canUndo, cancelApply, currentError, excluded, files, loadMore, loading, loadingMore, preview, resetResults, results, retry, stale, toggleFile, toggleMatch, totals, undo, undoOnClose, undoing, unsavedFiles],
   );
 }

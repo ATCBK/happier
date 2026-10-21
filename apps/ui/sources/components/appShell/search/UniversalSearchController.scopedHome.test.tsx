@@ -1067,6 +1067,64 @@ describe('UniversalSearchController exact Home scope', () => {
         expect(selectionListProps()?.inputValue).toBe('routeKey');
     });
 
+    it('previews deletion only after the user arms Replace, allowing an empty replacement', async () => {
+        fixture.singleHome = true;
+        fixture.workspaceRefs = [{ id: 'ws-replace', serverId: HOME_B, machineId: 'machine-b', rootPath: '/repo', label: 'Replace project', createdAtMs: 1 }];
+        fixture.memoryMachine = { serverId: HOME_B, machine: { id: 'machine-b', active: true } };
+        fixture.daemonRpc.mockImplementation(async call => call.method === RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW
+            ? { ok: true, files: [], skipped: { notText: 0 }, hasMore: false, coverage: 'complete' }
+            : { ok: true, files: [], hasMore: false, coverage: 'complete' });
+        const { UniversalSearchController } = await import('./UniversalSearchController');
+        const screen = await renderScreen(<UniversalSearchController commands={[]} initialQuery="routeKey" initialSource="fileContent"
+            initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: 'machine-b', rootPath: '/repo' }}
+            presentation="modal" onRequestClose={vi.fn()} />);
+        await act(async () => { storage.setState({ machines: {
+            'machine-b': createMachineFixture({ id: 'machine-b', active: true, activeAt: Date.now() }),
+        } }); });
+        const previews = () => fixture.daemonRpc.mock.calls.filter(([call]) => call.method === RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW);
+        expect(previews()).toHaveLength(0);
+        await screen.pressByTestIdAsync('universal-search:replace-toggle');
+        await vi.waitFor(() => expect(previews().map(([call]) => call.payload)).toEqual([
+            expect.objectContaining({ query: 'routeKey', replacement: '' }),
+        ]));
+        await screen.pressByTestIdAsync('universal-search:replace-hide');
+        await act(async () => { selectionListProps()?.onChangeInputValue?.('other'); });
+        expect(previews()).toHaveLength(1);
+    });
+
+    it('keeps the reviewed matcher while an invalid regex loads, then shows its error', async () => {
+        fixture.singleHome = true;
+        fixture.workspaceRefs = [{ id: 'ws-replace', serverId: HOME_B, machineId: 'machine-b', rootPath: '/repo', label: 'Replace project', createdAtMs: 1 }];
+        fixture.memoryMachine = { serverId: HOME_B, machine: { id: 'machine-b', active: true } };
+        const invalid = createDeferred<unknown>();
+        fixture.daemonRpc.mockImplementation(async call => {
+            if (call.method !== RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW)
+                return { ok: true, files: [], hasMore: false, coverage: 'complete' };
+            const payload = call.payload as { query: string };
+            if (payload.query === '(') return invalid.promise;
+            return { ok: true, files: [{ path: 'src/a.ts', hash: 'a'.repeat(64), matchCount: 1,
+                matches: [{ line: 1, column16: 1, length16: 8, text: 'routeKey()', replacedText: 'nextKey()', before: [], after: [] }] }],
+                skipped: { notText: 0 }, hasMore: false, coverage: 'complete' };
+        });
+        const { UniversalSearchController } = await import('./UniversalSearchController');
+        const screen = await renderScreen(<UniversalSearchController commands={[]} initialQuery="routeKey" initialSource="fileContent" initialReplace
+            initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: 'machine-b', rootPath: '/repo' }}
+            presentation="modal" onRequestClose={vi.fn()} />);
+        await act(async () => { storage.setState({ machines: {
+            'machine-b': createMachineFixture({ id: 'machine-b', active: true, activeAt: Date.now() }),
+        } }); });
+        await act(async () => { screen.changeTextByTestId('universal-search:replace-input', 'nextKey'); });
+        await screen.pressByTestIdAsync('universal-search:regex');
+        await vi.waitFor(() => expect(screen.findByTestId('replace-apply')?.props.disabled).toBe(false));
+        try {
+            await act(async () => { selectionListProps()?.onChangeInputValue?.('('); });
+            expect(screen.findByTestId('replace-apply')?.props.disabled).toBe(true);
+            expect(screen.getTextContent()).toContain('nextKey');
+            await act(async () => { invalid.resolve({ ok: false, code: 'invalid_pattern' }); await flushHookEffects(); });
+            expect(screen.getTextContent()).toContain(t('universalSearch.replace.invalidPattern'));
+        } finally { invalid.resolve({ ok: false, code: 'invalid_pattern' }); }
+    });
+
     it('opens the Files scope and reserves @ for Symbols, with Backspace returning through Files to everything', async () => {
         fixture.singleHome = true;
         fixture.workspaceRefs = [{ id: 'ws-files', serverId: HOME_B, machineId: 'machine-b', rootPath: '/repo/happier', label: 'happier', createdAtMs: 1 }];

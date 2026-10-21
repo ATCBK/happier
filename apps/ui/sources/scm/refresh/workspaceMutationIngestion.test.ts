@@ -26,6 +26,25 @@ function toolCallMessage(toolName: string, toolInput: unknown): NormalizedMessag
 }
 
 describe('createWorkspaceMutationIngestion', () => {
+    it('uses the existing unknown-path refresh for a committed result without an Action root', () => {
+        const invalidateKnownMutation = vi.fn();
+        const invalidateUnknownMutation = vi.fn();
+        let flush: (() => void) | undefined;
+        const ingestion = createWorkspaceMutationIngestion({
+            debounceMs: 100, minUnknownOnlyIntervalMs: 1500, now: () => 1000,
+            setTimer: fn => { flush = fn; return 1; }, clearTimer() {},
+            invalidateKnownMutation, invalidateUnknownMutation,
+        });
+        ingestion.ingest('session', [{
+            id: 'result', localId: null, createdAt: 20, role: 'agent', isSidechain: false,
+            content: [{ type: 'tool-result', tool_use_id: 'apply', is_error: false, uuid: 'uuid', parentUUID: null,
+                content: { structuredContent: { ok: true, results: [{ path: 'other-root.ts', status: 'replaced' }] } } }],
+        }], 'home');
+        flush?.();
+        expect(invalidateKnownMutation).not.toHaveBeenCalled();
+        expect(invalidateUnknownMutation).toHaveBeenCalledWith('session', 'home');
+    });
+
     it('routes known mutations to invalidateKnownMutation and unknown-only to invalidateUnknownMutation', () => {
         const invalidateKnownMutation = vi.fn();
         const invalidateUnknownMutation = vi.fn();

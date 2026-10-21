@@ -23,17 +23,15 @@ export function useReplaceUndoOnClose(
   React.useEffect(
     () => () => {
       const { model: closing, machineLabel: machine } = latest.current;
-      if (!closing.canUndo || !closing.results) return;
-      const undoable = closing.results.filter(
-        (result) =>
-          result.status === 'replaced' && result.hash && result.edits?.length,
-      );
+      const offer = closing.undoOnClose;
+      if (!offer) return;
+      const undoable = offer.results;
       if (!undoable.length) return;
       const matches = undoable.reduce(
         (sum, result) => sum + (result.matchCount ?? 0),
         0,
       );
-      const undo = closing.undo;
+      const undo = offer.run;
       publishPresentationNotice({
         key: NOTICE_KEY,
         severity: 'info',

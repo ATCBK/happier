@@ -293,7 +293,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     }, [props.onRequestClose]);
     const [matchCase, setMatchCase] = React.useState(false);
     const [regex, setRegex] = React.useState(false);
-    // Replace across files (lab RP1): the field's visibility is view state; the review starts once it has text.
+    // Opening Replace explicitly arms the review, including deletion with an empty replacement.
     const [replaceOpen, setReplaceOpen] = React.useState(() => props.initialReplace === true && props.initialSource === 'fileContent');
     const [replacement, setReplacement] = React.useState('');
     const replaceToggledOpen = React.useRef(false);
@@ -802,7 +802,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
             },
         };
     }, [activeSession?.id, matchCase, regex, selectedCredentialBinding, source, workspaceRef?.id, workspaceResolverKey, workspaceScope, workspaceScopeReachable, workspaceSearchAvailable, workspaceUnavailableHint, machineLabel]);
-    const replaceMatcher = React.useMemo<WorkspaceReplaceMatcher | null>(() => source === 'fileContent' && replaceOpen && replacement.length > 0
+    const replaceMatcher = React.useMemo<WorkspaceReplaceMatcher | null>(() => source === 'fileContent' && replaceOpen
         && query.length > 0 && !terminalJump ? { query, replacement, matchCase, regex } : null, [matchCase, query, regex, replaceOpen, replacement, source, terminalJump]);
     // Files with an unsaved editor draft are never written by replace; they are listed and skipped.
     const unsavedPaths = React.useMemo(() => unsavedWorkspaceFilePaths({ accountId: scope.accountId, details: paneDetails }), [paneDetails, scope.accountId]);
@@ -811,7 +811,9 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         accountLifetime: selectedCredentialIsCurrent ? selectedCredentialBinding : null,
         matcher: replaceMatcher, unsavedPaths,
     });
-    useReplaceUndoOnClose(replaceModel, machineLabel);
+    useReplaceUndoOnClose(replaceModel, replaceModel.undoOnClose
+        ? machineNameById.get(replaceModel.undoOnClose.machineId) ?? t('universalSearch.thisMachine')
+        : machineLabel);
     const reviewActive = replaceMatcher !== null;
     const commits = React.useMemo<UniversalSearchSource>(() => {
         // An offline folder is said once, under Text in files (lab ST "Machine offline"); this group steps aside.

@@ -53,6 +53,7 @@ export function createCodeIntelligenceDocument(input: Readonly<{
         servers = result.servers;
         needsSnapshot = false;
         if (current()) input.onSync(result);
+        void watch();
     }
     async function watch(): Promise<void> {
         if (watching || !current()) return;
@@ -124,7 +125,12 @@ export function createCodeIntelligenceDocument(input: Readonly<{
             if (!acknowledged) return lastResult ?? await opening;
             const text = input.getText(); const unsaved = input.getUnsaved();
             const edit = diffToSingleEdit(acknowledged.text, text);
-            if (!edit && acknowledged.unsaved === unsaved && !needsSnapshot) return lastResult;
+            if (!edit && acknowledged.unsaved === unsaved && !needsSnapshot) {
+                // A later user operation resumes a disconnected delivery channel;
+                // the parked watch owns its cadence, without a retry timer.
+                void watch();
+                return lastResult;
+            }
             const version = acknowledged.version + 1;
             if (needsSnapshot) return snapshot(version, text, unsaved);
             const result = await input.port.sync({ rootPath: input.rootPath, op: edit ? {
@@ -169,8 +175,11 @@ export function createCodeIntelligenceDocument(input: Readonly<{
                     const retryServers = servers;
                     const retried = await input.port.query({ ...request, version: acknowledged?.version, generation: restored.generation }, signal);
                     if (!current() || signal.aborted) return null;
-                    return sessionMoved(retryServers) ? { status: 'error', errorCode: 'stale_query' } : retried;
+                    if (sessionMoved(retryServers)) return { status: 'error', errorCode: 'stale_query' };
+                    if (retried.status === 'ok') void watch();
+                    return retried;
                 }
+                if (result.status === 'ok') void watch();
                 return result;
             } finally { cancellation.dispose(); }
         },

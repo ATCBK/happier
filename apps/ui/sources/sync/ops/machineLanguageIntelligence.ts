@@ -5,6 +5,7 @@ import {
     DaemonLspQueryRequestSchema, DaemonLspQueryResponseSchema,
     DaemonLspWatchRequestSchema, DaemonLspWatchResponseSchema,
     DaemonLspRestartRequestSchema, DaemonLspRestartResponseSchema,
+    DaemonLspApplyRequestSchema, DaemonLspApplyResponseSchema, type DaemonLspApplyRequest, type DaemonLspApplyResponse,
     type LanguageIntelligenceSyncInput, type LanguageIntelligenceSyncResult,
     type LanguageIntelligenceQueryInput, type LanguageIntelligenceQueryResult,
     type LanguageIntelligenceWatchInput, type LanguageIntelligenceWatchResult,
@@ -13,6 +14,8 @@ import {
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { classifyWorkspaceFileRpcError } from './machineWorkspaceFileRpcError';
+import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { acknowledgeWorkspaceFileWrites } from '@/sync/domains/workspaces/files/workspaceFileAcknowledgements';
 
 export type MachineLanguageIntelligenceOptions = Readonly<{ serverId?: string | null; accountId?: string | null; signal?: AbortSignal }>;
 type Unavailable = Extract<LanguageIntelligenceQueryResult, { status: 'unavailable' }>;
@@ -46,6 +49,41 @@ export function machineLanguageIntelligenceWatch(machineId: string, input: Langu
 }
 export function machineLanguageIntelligenceRestart(machineId: string, input: LanguageIntelligenceRestartInput, options?: MachineLanguageIntelligenceOptions): Promise<LanguageIntelligenceRestartResult> {
     return callLanguageIntelligence(machineId, RPC_METHODS.DAEMON_LSP_RESTART, input, DaemonLspRestartRequestSchema, DaemonLspRestartResponseSchema, options);
+}
+export async function machineLanguageIntelligenceApply(machineId: string, input: DaemonLspApplyRequest, options?: MachineLanguageIntelligenceOptions): Promise<DaemonLspApplyResponse> {
+    const payload = DaemonLspApplyRequestSchema.parse(input);
+    const method = payload.operation.kind === 'rename' ? RPC_METHODS.DAEMON_LSP_RENAME_APPLY
+        : payload.operation.kind === 'fileRename' ? RPC_METHODS.DAEMON_LSP_FILE_RENAME_APPLY : RPC_METHODS.DAEMON_LSP_CODE_ACTION_APPLY;
+    try {
+        const raw = await machineRpcWithServerScope<unknown, DaemonLspApplyRequest>({ machineId, method, payload,
+            serverId: options?.serverId ?? null, accountId: options?.accountId ?? null, operationTimeoutMs: null,
+            waitForResultOnCancel: true, ...(options?.signal ? { signal: options.signal } : {}),
+        });
+        const parsed = DaemonLspApplyResponseSchema.safeParse(raw);
+        if (!parsed.success) return { status: 'unavailable', reason: 'invalid_response' };
+        const result = parsed.data, account = createServerAccountScope(options?.serverId, options?.accountId);
+        if ('ok' in result && result.ok && account) acknowledgeWorkspaceFileWrites({ ...account, machineId, rootPath: payload.rootPath },
+            result.results.filter(file => file.status === 'replaced').flatMap(file => file.renameTo
+                ? [{ path: file.path, hash: null }, { path: file.renameTo, hash: file.hash ?? null }]
+                : [{ path: file.path, hash: file.hash ?? null }]));
+        return result;
+    } catch (error) {
+        if (options?.signal?.aborted) throw error;
+        return { status: 'unavailable', reason: classifyWorkspaceFileRpcError(error) === 'method_unavailable' ? 'update_required' : 'transport_failed' };
+    }
+}
+
+/** File-page commands and tree rename re-enter the same present-user Action owner. */
+export async function machineLanguageIntelligenceApplyAction(machineId: string, input: DaemonLspApplyRequest, options?: MachineLanguageIntelligenceOptions): Promise<DaemonLspApplyResponse> {
+    const { createDefaultActionExecutor } = await import('./actions/defaultActionExecutor');
+    const actionId = input.operation.kind === 'rename' ? 'code.rename.apply' : input.operation.kind === 'fileRename' ? 'code.file.rename.apply' : 'code.codeAction.apply';
+    const actionInput = input.operation.kind === 'codeAction' ? { machineId, ...input }
+        : { machineId, rootPath: input.rootPath, path: input.path, ...(input.languageId ? { languageId: input.languageId } : {}), files: input.operation.files };
+    const response = await createDefaultActionExecutor().execute(actionId, actionInput, {
+        surface: 'ui', authority: 'present_user', ...(options?.serverId ? { serverId: options.serverId } : {}),
+        ...(options?.accountId ? { expectedAccountId: options.accountId } : {}), ...(options?.signal ? { signal: options.signal } : {}),
+    });
+    return response.ok ? DaemonLspApplyResponseSchema.parse(response.result) : { status: 'unavailable', reason: 'session_unavailable' };
 }
 /** Present-user restart always re-enters the canonical Action admission owner. */
 export async function machineLanguageIntelligenceRestartAction(machineId: string, input: LanguageIntelligenceRestartInput, options?: MachineLanguageIntelligenceOptions): Promise<LanguageIntelligenceRestartResult> {

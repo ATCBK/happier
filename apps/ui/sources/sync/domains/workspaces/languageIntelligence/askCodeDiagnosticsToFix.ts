@@ -8,7 +8,7 @@ export type AskCodeDiagnosticsToFixInput = Readonly<{
     targetContext?: Parameters<typeof askAboutRanges>[0]['targetContext'];
     /** The initiating Account, File-page holder and diagnostic text still belong to this operation. */
     isCurrent(): boolean;
-    readFile(path: string): Promise<Readonly<{ savedText: string; unsaved: boolean }>>;
+    readFile(path: string): Promise<Readonly<{ savedText: string | null; unsaved: boolean }> | null>;
     saveFileEdits(path: string): Promise<boolean>;
 }>;
 export async function askCodeDiagnosticsToFix(input: AskCodeDiagnosticsToFixInput): ReturnType<typeof askAboutRanges> {
@@ -23,11 +23,11 @@ export async function askCodeDiagnosticsToFix(input: AskCodeDiagnosticsToFixInpu
     const files: AskAboutFileRanges[] = [];
     for (const [filePath, items] of groups) {
         let file = await input.readFile(filePath);
-        if (!input.isCurrent()) return { created: 0, drafts: [] };
+        if (!input.isCurrent() || !file || file.savedText === null) return { created: 0, drafts: [] };
         if (file.unsaved) {
             if (!await input.saveFileEdits(filePath) || !input.isCurrent()) return { created: 0, drafts: [] };
             file = await input.readFile(filePath);
-            if (!input.isCurrent() || file.unsaved) return { created: 0, drafts: [] };
+            if (!input.isCurrent() || !file || file.savedText === null || file.unsaved) return { created: 0, drafts: [] };
         }
         files.push({ filePath, savedText: file.savedText, ranges: items.map((item) => ({
             startLine: item.range.start.line + 1,

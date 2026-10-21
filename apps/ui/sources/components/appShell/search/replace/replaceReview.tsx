@@ -480,7 +480,7 @@ function reviewSections(
       },
     ];
   }
-  if (model.error && !preview) {
+  if (model.error) {
     const label =
       model.error === 'invalid_pattern'
         ? t('universalSearch.replace.invalidPattern')
@@ -896,9 +896,14 @@ function resultSections(
 export function buildReplaceReviewSections(
   context: ReplaceReviewContext,
 ): SelectionListSectionDescriptor[] {
+  // Retained rows and their diff always describe the matcher that produced them, even while the
+  // current query is incomplete or invalid. Current-request errors use the existing error state.
+  const reviewed = context.model.preview
+    ? { ...context, matcher: context.model.preview.matcher }
+    : context;
   return context.model.results
-    ? resultSections(context, context.model.results)
-    : reviewSections(context);
+    ? resultSections(reviewed, context.model.results)
+    : reviewSections(reviewed);
 }
 
 /** The result row that replaces the list header after Apply (lab RP1 D): what happened, and Undo all. */

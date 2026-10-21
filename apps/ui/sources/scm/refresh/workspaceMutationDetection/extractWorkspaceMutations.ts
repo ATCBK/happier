@@ -1,6 +1,10 @@
 import type { NormalizedMessage } from "@happier-dev/session-core/raw";
 import { deriveCanonicalPatchFileDiffs } from '@happier-dev/protocol/tools/v2';
 import { resolveToolMutationClassification } from '@/sync/domains/tools/toolMutationClassification';
+import { LanguageIntelligenceCodeActionOperationSchema } from '@happier-dev/protocol/machines/languageIntelligence';
+import { DaemonWorkspaceFileReplaceApplyResponseSchema, WorkspaceFileEditSetFileSchema } from '@happier-dev/protocol/machines/workspaceFiles';
+import { isRecord, readHappierActionCallId, readHappierActionCallInput, readHappierActionToolResultCandidates } from '@/components/sessions/transcript/references/happierActionToolResult';
+import { resolveMachineAbsolutePath } from '@/sync/domains/fileSystem/resolveMachineAbsolutePath';
 
 export type WorkspaceMutationExtractionResult = Readonly<{
     paths: ReadonlySet<string>;
@@ -190,11 +194,53 @@ function collectPathsFromDiffFiles(input: unknown): string[] {
     return out;
 }
 
+function readGuardedWriterMutations(result: unknown, input?: unknown): readonly Readonly<{ path: string; renameTo?: string }>[] {
+    for (const candidate of readHappierActionToolResultCandidates(result, input)) {
+        const parsed = DaemonWorkspaceFileReplaceApplyResponseSchema.safeParse(candidate);
+        if (!parsed.success) continue;
+        return parsed.data.ok ? parsed.data.results.filter(receipt => receipt.status === 'replaced' || receipt.status === 'restored') : [];
+    }
+    return [];
+}
+
 /** Shared per-call path owner for SCM invalidation and transient file-write projections. */
-export function readToolCallMutationPaths(toolPart: Readonly<{ name: string; input: unknown }>): ToolCallMutationPaths {
+export function readToolCallMutationPaths(toolPart: Readonly<{ name: string; input: unknown; result?: unknown; state?: string }>): ToolCallMutationPaths {
     const paths = new Set<string>();
     let hasUnknownMutations = false;
     const { name, input: toolInput } = toolPart;
+    const actionId = readHappierActionCallId(name, toolInput);
+    if (actionId === 'code.rename.apply' || actionId === 'code.file.rename.apply' || actionId === 'code.codeAction.apply') {
+        const mutations = new Map<string, ToolCallFileMutation>();
+        const operands = readHappierActionCallInput(name, toolInput);
+        const rootPath = isRecord(operands) && typeof operands.rootPath === 'string' ? operands.rootPath : null;
+        const add = (path: string, renameTo?: string) => {
+            if (!rootPath) return;
+            path = resolveMachineAbsolutePath({ rootPath, requestPath: path, pathKind: 'workspace_entry' });
+            if (renameTo) renameTo = resolveMachineAbsolutePath({ rootPath, requestPath: renameTo, pathKind: 'workspace_entry' });
+            const mutation = { kind: renameTo ? 'rename' : 'modify' } as const;
+            paths.add(path); mutations.set(path, mutation);
+            if (renameTo) { paths.add(renameTo); mutations.set(renameTo, mutation); }
+        };
+        // Terminal evidence comes from the guarded writer, not the reviewed intent. A
+        // server command may also write files absent from that intent, or partly fail.
+        if (toolPart.state === 'completed' || toolPart.state === 'error' || toolPart.result !== undefined) {
+            for (const receipt of readGuardedWriterMutations(toolPart.result, toolInput)) add(receipt.path, receipt.renameTo);
+        } else {
+            if (actionId === 'code.codeAction.apply') {
+                const parsed = LanguageIntelligenceCodeActionOperationSchema.safeParse(isRecord(operands) ? operands.operation : undefined);
+                if (parsed.success) {
+                    for (const file of parsed.data.action.files) add(file.path, file.renameTo);
+                    hasUnknownMutations = parsed.data.action.hasCommand;
+                }
+            } else {
+                if (isRecord(operands) && Array.isArray(operands.files)) for (const entry of operands.files) {
+                    const parsed = WorkspaceFileEditSetFileSchema.safeParse(entry);
+                    if (parsed.success) add(parsed.data.path, parsed.data.renameTo);
+                }
+            }
+        }
+        return { paths, hasUnknownMutations, mutations };
+    }
     const toolKind = resolveMutationToolKindFromToolCall(name, toolInput);
     const normalizedName = resolveNormalizedMutationToolNameFromToolCall(name, toolInput);
     const mutations = new Map<string, ToolCallFileMutation>();
@@ -268,6 +314,9 @@ export function extractWorkspaceMutationsFromNormalizedMessages(input: Readonly<
                 for (const path of extracted.paths) paths.add(path);
                 hasUnknownMutations ||= extracted.hasUnknownMutations;
             } else if (part.type === 'tool-result') {
+                // A result-only socket batch has no Action root. It proves a write,
+                // not that its relative paths belong to this Session's workspace.
+                hasUnknownMutations ||= readGuardedWriterMutations(part.content).length > 0;
                 for (const path of collectPathsFromChangeList(part.content, 'changedFiles')) paths.add(path);
             }
         }

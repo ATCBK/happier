@@ -1,20 +1,26 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { WorkspaceFilesReplaceActionInputSchema } from '@happier-dev/protocol/actions/actionSpecs';
 
-import { act, renderHook } from '@/dev/testkit';
+import { act, renderHook, standardCleanup } from '@/dev/testkit';
 import {
   readPresentationNotice,
   retirePresentationNotice,
 } from '@/components/sessions/presentation/presentationNotices';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
-import {
-  useWorkspaceReplace,
-  type WorkspaceReplacePreviewFile,
-} from '@/sync/domains/workspaces/files/workspaceFileReplace';
+import type { WorkspaceReplacePreviewFile } from '@/sync/domains/workspaces/files/workspaceFileReplace';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 
 import { useReplaceUndoOnClose } from './useReplaceUndoOnClose';
 
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+installDisconnectedServerSocketBoundary();
+const { useWorkspaceReplace } = await import('@/sync/domains/workspaces/files/workspaceFileReplace');
+
 const rpc = vi.hoisted(() => ({ call: vi.fn() }));
-// The Machine network transport is the only mocked boundary; the replace owner and the notice owner stay real.
+// Machine RPC and admitted Action HTTP are transport boundaries; the state and notice owners stay real.
 vi.mock(
   '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc',
   () => ({
@@ -53,8 +59,8 @@ const edits = [
     originalText: 'retryWithPolicy',
   },
 ];
-const scope = { serverId: 'home', machineId: 'mac', rootPath: '/repo' };
-const account: ServerAccountScopeLifetime = {
+let scope = { serverId: 'home', machineId: 'mac', rootPath: '/repo' };
+let account: ServerAccountScopeLifetime = {
   scope: { serverId: 'home', accountId: 'acct' },
   isCurrent: () => true,
   onRetire: () => ({ dispose: () => {} }),
@@ -73,9 +79,59 @@ function useSurface() {
 }
 
 describe('useReplaceUndoOnClose', () => {
-  beforeEach(() => {
-    rpc.call.mockReset();
+  beforeEach(async () => {
+    await homes.reset(); rpc.call.mockReset();
+    scope = { ...scope, serverId: await homes.addHome({ name: 'Replace Home', serverUrl: 'https://replace-notice.test',
+      serverIdentityId: 'home', accountId: 'acct', currentAccount: true, active: false }) };
+    account = { ...account, scope: { serverId: scope.serverId, accountId: 'acct' } };
+    const boundary = await createExternalActionAccountHttpBoundary({ serverUrl: 'https://replace-notice.test',
+      serverIdentityId: 'home', accountId: 'acct', machineId: 'mac', actionId: 'workspace.files.replace', tokenEpoch: 0,
+      execute: async (request, context) => {
+        const { machineId, ...payload } = WorkspaceFilesReplaceActionInputSchema.parse(request);
+        return rpc.call({ method: 'workspace.files.replace', machineId, payload, serverId: scope.serverId,
+          accountId: 'acct', signal: context.signal });
+      },
+    });
+    homes.answer(scope.serverId, '/v1/machines', { body: [boundary.machine] });
+    for (const path of ['/v1/actions/workspace.files.replace/execution-authorization', '/v1/actions/workspace.files.replace']) {
+      homes.answer(scope.serverId, path, { select: async (_body, request) => {
+        const response = await boundary.handle(new URL(request.url), request.init);
+        if (!response) throw new Error('Unhandled replacement Action request');
+        return { status: response.status, body: await response.json() };
+      } });
+    }
     retirePresentationNotice();
+  });
+  afterEach(async () => { standardCleanup(); await homes.reset(); });
+
+  it('keeps the originating Undo when a late reply arrives after selecting another folder and closing', async () => {
+    let completeApply: (value: unknown) => void = () => {};
+    rpc.call.mockResolvedValueOnce({ ok: true, files: [file], skipped: { notText: 0 }, hasMore: false, coverage: 'complete' })
+      .mockImplementationOnce(() => new Promise(resolve => { completeApply = resolve; }))
+      .mockResolvedValueOnce({ ok: true, files: [file], skipped: { notText: 0 }, hasMore: false, coverage: 'complete' })
+      .mockResolvedValueOnce({ ok: true, results: [{ path: file.path, status: 'restored', hash: hash('a') }] });
+    const hook = await renderHook((currentScope: typeof scope) => {
+      const model = useWorkspaceReplace({ scope: currentScope, accountLifetime: account, matcher, unsavedPaths });
+      useReplaceUndoOnClose(model, 'NLDW3');
+      return model;
+    }, { initialProps: scope });
+    let applying: Promise<void> = Promise.resolve();
+    await act(async () => { applying = hook.getCurrent().apply(); });
+    await hook.rerender({ ...scope, rootPath: '/other' });
+    await act(async () => {
+      completeApply({ ok: true, results: [{ path: file.path, status: 'replaced', hash: hash('d'), matchCount: 1, edits }] });
+      await applying;
+    });
+    expect(hook.getCurrent().results).toBeNull();
+    await hook.unmount();
+    const notice = readPresentationNotice();
+    expect(notice?.undo).toBeDefined();
+    await act(async () => {
+      notice!.undo!.run();
+      await waitForHomeGovernance(() => expect(readPresentationNotice()?.undo).toBeUndefined());
+    });
+    expect(rpc.call.mock.lastCall?.[0]).toMatchObject({ machineId: 'mac', serverId: scope.serverId, accountId: 'acct',
+      payload: { rootPath: '/repo', operation: { kind: 'restore', files: [{ path: file.path, expectedHash: hash('d'), edits }] } } });
   });
 
   it('hands Undo to a sticky notice only when the surface closes while Undo is still possible', async () => {
@@ -117,8 +173,7 @@ describe('useReplaceUndoOnClose', () => {
     });
     await act(async () => {
       notice!.undo!.run();
-      await Promise.resolve();
-      await Promise.resolve();
+      await waitForHomeGovernance(() => expect(readPresentationNotice()?.undo).toBeUndefined());
     });
     expect(rpc.call.mock.calls[2]![0]).toMatchObject({
       payload: {

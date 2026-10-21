@@ -5,6 +5,33 @@ import { askCodeDiagnosticsToFix } from './askCodeDiagnosticsToFix';
 import { EMPTY_CODE_DIAGNOSTICS, mergeCodeDiagnostics } from './codeDiagnostics';
 
 describe('Ask to fix diagnostic ranges', () => {
+    it('creates no partial batch when any diagnostic file no longer has saved text', async () => {
+        const projection = mergeCodeDiagnostics(EMPTY_CODE_DIAGNOSTICS, { status: 'ok', revision: 1,
+            servers: [{ serverId: 'ts', label: 'TS', state: 'ready', loading: false, generation: 'g' }],
+            diagnostics: Object.fromEntries(['a.ts', 'b.ts'].map(path => [path, { ts: {
+                state: 'ready', version: 1, generation: 'g', items: [{ serverId: 'ts', path, severity: 'error', message: 'Unknown name',
+                    range: { start: { line: 0, character: 0 }, end: { line: 0, character: 7 } } }],
+            } }])),
+        }, { documentVersions: new Map(), serverGenerations: new Map([['ts', 'g']]) });
+        const previous = storage.getState().reviewCommentsDraftsByWorkspaceCacheKey;
+        storage.setState({ reviewCommentsDraftsByWorkspaceCacheKey: {} });
+        const focusComposer = vi.fn();
+        const dispose = registerComposerPresentationTarget({ kind: 'session', sessionId: 'missing-holder-session' }, {
+            readRevision: () => 0, replace: () => 0, focusComposer,
+        });
+        try {
+            const result = await askCodeDiagnosticsToFix({ projection,
+                workspaceScope: { serverId: 'ask-save-home', machineId: 'machine', rootPath: '/repo' },
+                sessionTarget: { sessionId: 'missing-holder-session' }, isCurrent: () => true,
+                readFile: async path => path === 'a.ts' ? { savedText: 'missing();', unsaved: false } : null,
+                saveFileEdits: async () => false,
+            });
+            expect(result).toEqual({ created: 0, drafts: [] });
+            expect(storage.getState().reviewCommentsDraftsByWorkspaceCacheKey).toEqual({});
+            expect(focusComposer).not.toHaveBeenCalled();
+        } finally { dispose(); storage.setState({ reviewCommentsDraftsByWorkspaceCacheKey: previous }); }
+    });
+
     it('saves buffer-only problems before creating saved-text drafts and focuses once', async () => {
         const projection = mergeCodeDiagnostics(EMPTY_CODE_DIAGNOSTICS, { status: 'ok', revision: 1,
             servers: [{ serverId: 'ts', label: 'TS', state: 'ready', loading: false, generation: 'g' }],

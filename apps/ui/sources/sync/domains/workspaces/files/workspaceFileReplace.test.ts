@@ -1,10 +1,22 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseUnifiedDiffHunks } from '@happier-dev/protocol/diff/hunks';
+import { WorkspaceFilesReplaceActionInputSchema } from '@happier-dev/protocol/actions/actionSpecs';
 
-import { act, flushHookEffects, renderHook } from '@/dev/testkit';
+import { act, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { subscribeAcknowledgedWorkspaceFileWrites } from './workspaceFileAcknowledgements';
-import {
+import type {
+  WorkspaceReplaceMatcher,
+  WorkspaceReplacePreviewFile,
+} from './workspaceFileReplace';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
+
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+installDisconnectedServerSocketBoundary();
+const {
   buildReplaceApplyFiles,
   buildReplacePreviewUnifiedDiff,
   previewReplacedLine,
@@ -12,12 +24,10 @@ import {
   replaceMatchKey,
   summarizeReplaceResults,
   useWorkspaceReplace,
-  type WorkspaceReplaceMatcher,
-  type WorkspaceReplacePreviewFile,
-} from './workspaceFileReplace';
+} = await import('./workspaceFileReplace');
 
 const rpc = vi.hoisted(() => ({ call: vi.fn() }));
-// The Machine network transport is the only mocked boundary; schemas, the op and the pure replace function stay real.
+// Machine RPC and admitted Action HTTP are transport boundaries; internal logic stays real.
 vi.mock(
   '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc',
   () => ({
@@ -91,9 +101,9 @@ const doc: WorkspaceReplacePreviewFile = {
   ],
 };
 
-function lifetime(): ServerAccountScopeLifetime {
+function lifetime(serverId = 'home'): ServerAccountScopeLifetime {
   return {
-    scope: { serverId: 'home', accountId: 'acct' },
+    scope: { serverId, accountId: 'acct' },
     isCurrent: () => true,
     onRetire: () => ({ dispose: () => {} }),
   };
@@ -197,10 +207,68 @@ describe('replace review model', () => {
 });
 
 describe('useWorkspaceReplace', () => {
-    beforeEach(() => { rpc.call.mockReset(); });
-    const scope = { serverId: 'home', machineId: 'mac', rootPath: '/repo' };
+    beforeEach(async () => {
+        await homes.reset(); rpc.call.mockReset();
+        scope = { ...scope, serverId: await homes.addHome({ name: 'Replace Home', serverUrl: 'https://replace-review.test',
+            serverIdentityId: 'home', accountId: 'acct', currentAccount: true, active: false }) };
+        account = lifetime(scope.serverId);
+        const boundary = await createExternalActionAccountHttpBoundary({ serverUrl: 'https://replace-review.test',
+            serverIdentityId: 'home', accountId: 'acct', machineId: 'mac', actionId: 'workspace.files.replace', tokenEpoch: 0,
+            execute: async (request, context) => {
+                const { machineId, ...payload } = WorkspaceFilesReplaceActionInputSchema.parse(request);
+                return rpc.call({ method: 'workspace.files.replace', machineId, payload, serverId: scope.serverId,
+                    accountId: 'acct', signal: context.signal });
+            },
+        });
+        homes.answer(scope.serverId, '/v1/machines', { body: [boundary.machine] });
+        for (const path of ['/v1/actions/workspace.files.replace/execution-authorization', '/v1/actions/workspace.files.replace']) {
+            homes.answer(scope.serverId, path, { select: async (_body, request) => {
+                const response = await boundary.handle(new URL(request.url), request.init);
+                if (!response) throw new Error('Unhandled replacement Action request');
+                return { status: response.status, body: await response.json() };
+            } });
+        }
+    });
+    afterEach(async () => { standardCleanup(); await homes.reset(); });
+    let scope = { serverId: 'home', machineId: 'mac', rootPath: '/repo' };
     const previewOk = { ok: true, files: [modal, doc], skipped: { notText: 1 }, hasMore: false, coverage: 'complete' };
-    const account = lifetime();
+    let account = lifetime();
+
+    it.each(['folder', 'machine', 'account'] as const)('retains late Apply custody across a %s switch and restores only the original target', async (changed) => {
+        let completeApply: (value: unknown) => void = () => {};
+        const edits = [{ startUtf16: 4, deleteLength: 19, insertText: 'useSettingsModalKey', originalText: 'useSettingsRouteKey' }];
+        rpc.call.mockResolvedValueOnce(previewOk)
+            .mockImplementationOnce(() => new Promise(resolve => { completeApply = resolve; }))
+            .mockResolvedValueOnce(previewOk)
+            .mockResolvedValueOnce(previewOk)
+            .mockResolvedValueOnce({ ok: true, results: [{ path: doc.path, status: 'restored', hash: hash('b') }] });
+        const hook = await renderHook((props: { scope: typeof scope; account: ServerAccountScopeLifetime }) => useWorkspaceReplace({
+            scope: props.scope, accountLifetime: props.account, matcher, unsavedPaths: [],
+        }), { initialProps: { scope, account } });
+        let applying: Promise<void> = Promise.resolve();
+        await act(async () => { applying = hook.getCurrent().apply(); });
+        const otherScope = changed === 'folder' ? { ...scope, rootPath: '/other' }
+            : changed === 'machine' ? { ...scope, machineId: 'other' } : scope;
+        const otherAccount = changed === 'account' ? { ...lifetime(), scope: { serverId: scope.serverId, accountId: 'other' } } : account;
+        await hook.rerender({ scope: otherScope, account: otherAccount });
+        await act(async () => {
+            completeApply({ ok: true, results: [{ path: doc.path, status: 'replaced', hash: hash('e'), matchCount: 1, edits }] });
+            await applying;
+        });
+        expect(hook.getCurrent().results).toBeNull();
+        expect(hook.getCurrent().canUndo).toBe(false);
+        if (changed === 'account') expect(hook.getCurrent().undoOnClose).toBeNull();
+        else expect(hook.getCurrent().undoOnClose?.machineId).toBe('mac');
+        await act(async () => { expect(await hook.getCurrent().undo()).toBeNull(); });
+        expect(rpc.call).toHaveBeenCalledTimes(3);
+        await hook.rerender({ scope, account });
+        expect(hook.getCurrent().results?.[0]?.status).toBe('replaced');
+        expect(hook.getCurrent().canUndo).toBe(true);
+        await act(async () => { await hook.getCurrent().undo(); });
+        expect(rpc.call.mock.lastCall?.[0]).toMatchObject({ machineId: 'mac', serverId: scope.serverId, accountId: 'acct',
+            payload: { rootPath: '/repo', operation: { kind: 'restore', files: [{ path: doc.path, expectedHash: hash('e'), edits }] } } });
+        expect(hook.getCurrent().results?.[0]?.status).toBe('restored');
+    });
 
     it('re-previews on every replacement change and holds apply until the preview matches what is typed', async () => {
         let resolveSecond: (value: unknown) => void = () => {};
@@ -238,7 +306,7 @@ describe('useWorkspaceReplace', () => {
         expect(hook.getCurrent().unsavedFiles.map((file) => file.path)).toEqual([doc.path]);
         expect(hook.getCurrent().totals).toMatchObject({ selectedFiles: 1, selectedMatches: 3 });
         await act(async () => { await hook.getCurrent().apply(); });
-        expect(rpc.call.mock.calls[1]![0]).toMatchObject({ method: 'daemon.workspaceFiles.replace.apply.v1', payload: { rootPath: '/repo',
+        expect(rpc.call.mock.calls[1]![0]).toMatchObject({ payload: { rootPath: '/repo',
             operation: { kind: 'replace', matcher, files: [{ path: modal.path, expectedHash: hash('a') }] } } });
         expect(hook.getCurrent().results?.map((entry) => [entry.path, entry.status])).toEqual([[modal.path, 'replaced'], [doc.path, 'skipped']]);
         expect(hook.getCurrent().canUndo).toBe(true);

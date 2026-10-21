@@ -3,8 +3,17 @@ import { describe, expect, it } from 'vitest';
 import type { NormalizedMessage } from "@happier-dev/session-core/raw";
 
 import { extractWorkspaceMutationsFromNormalizedMessages, readToolCallMutationPaths } from './extractWorkspaceMutations';
+import { isToolPotentiallyMutableForScm } from '@/sync/domains/tools/toolMutationClassification';
 
 describe('readToolCallMutationPaths', () => {
+    it('keeps code reads, previews and restart out of workspace mutation classification', () => {
+        for (const name of ['code_hover_get', 'code_definition_get', 'code_references_list', 'code_symbols_list',
+            'code_diagnostics_list', 'code_restart', 'code_rename_preview', 'code_file_rename_preview', 'code_code_actions_list']) {
+            expect(isToolPotentiallyMutableForScm(`mcp__happier__${name}`), name).toBe(false);
+            expect([...readToolCallMutationPaths({ name: `mcp__happier__${name}`, input: { path: 'read.ts' } }).paths]).toEqual([]);
+        }
+        expect(isToolPotentiallyMutableForScm('mcp__happier__code_rename_apply')).toBe(true);
+    });
     it('shares canonical provider normalization and retains per-path mutation kinds', () => {
         const result = readToolCallMutationPaths({ name: 'NativePatch', input: {
             _happier: { canonicalToolName: 'Patch' },
@@ -66,6 +75,36 @@ function toolCallMessageWithCanonicalToolName(
 }
 
 describe('extractWorkspaceMutationsFromNormalizedMessages', () => {
+    it('refreshes for committed rootless writer receipts without attributing their relative paths to the Session workspace', () => {
+        const result = extractWorkspaceMutationsFromNormalizedMessages({ messages: [{
+            id: 'semantic-result', localId: null, createdAt: 20, role: 'agent', isSidechain: false,
+            content: [{ type: 'tool-result', tool_use_id: 'semantic', content: { structuredContent: {
+                ok: true, results: [
+                    { path: 'one.ts', renameTo: 'two.ts', status: 'replaced' },
+                    { path: 'importer.ts', status: 'replaced' }, { path: 'failed.ts', status: 'failed' },
+                    { path: 'undo.ts', renameTo: 'original.ts', status: 'restored' },
+                    { path: 'partial.ts', renameTo: 'moved.ts', status: 'replaced', hash: 'a'.repeat(64), edits: [], reason: 'importer failed' },
+                ],
+            } }, is_error: false, uuid: 'result-uuid', parentUUID: null }],
+        }] });
+        expect([...result.paths]).toEqual([]);
+        expect(result.hasUnknownMutations).toBe(true);
+    });
+
+    it('does not infer committed writes from a preview or an unrecognized ok/results receipt', () => {
+        for (const receipt of [
+            { ok: true, results: [{ path: 'not-written.ts', status: 'changed' }] },
+            { ok: true, results: [{ path: 'not-written.ts', status: 'replaced', unexpected: true }] },
+            { status: 'ok', kind: 'rename', files: [{ path: 'not-written.ts' }] },
+        ]) {
+            const result = extractWorkspaceMutationsFromNormalizedMessages({ messages: [{
+                id: 'result', localId: null, createdAt: 20, role: 'agent', isSidechain: false,
+                content: [{ type: 'tool-result', tool_use_id: 'semantic', content: receipt, is_error: false,
+                    uuid: 'result-uuid', parentUUID: null }],
+            }] });
+            expect([...result.paths]).toEqual([]);
+        }
+    });
     it('extracts filePath from file-edit tool calls', () => {
         const result = extractWorkspaceMutationsFromNormalizedMessages({
             messages: [toolCallMessage('file-edit', { filePath: 'apps/ui/src/app.ts' })],

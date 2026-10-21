@@ -177,6 +177,37 @@ describe('live file-write hooks', () => {
 });
 
 describe('useWorkspaceFileWriteSettlements', () => {
+    it('forwards generic semantic Action MCP receipts through the real transcript reducer and existing settlement projection', async () => {
+        storage.setState({ sessionMessages: { 'session-1': transcript([]) } });
+        const settled = vi.fn<(paths: readonly string[]) => void>();
+        const hook = await renderHook(() => {
+            useWorkspaceFileWriteSettlements(scope, settled);
+            return useWorkspaceLiveFileWrites(scope);
+        });
+        await act(async () => {
+            await storage.getState().applyMessages('session-1', [{
+                id: 'semantic-call', localId: null, createdAt: 10, role: 'agent', isSidechain: false,
+                content: [{ type: 'tool-call', id: 'code-action', name: 'mcp__happier__action_execute',
+                    input: { actionId: 'code.rename.apply', input: { machineId: 'machine-1', rootPath: '/repo', path: 'one.ts',
+                        files: [{ path: 'one.ts', renameTo: 'two.ts', expectedHash: 'a'.repeat(64), edits: [] }] } },
+                    description: null, uuid: 'semantic-uuid', parentUUID: null }],
+            }]);
+        });
+        expect([...hook.getCurrent().keys()]).toEqual(['one.ts', 'two.ts']);
+        await act(async () => {
+            await storage.getState().applyMessages('session-1', [{
+                id: 'semantic-result', localId: null, createdAt: 20, role: 'agent', isSidechain: false,
+                content: [{ type: 'tool-result', tool_use_id: 'code-action',
+                    content: { structuredContent: { ok: true, results: [
+                        { path: 'one.ts', renameTo: 'two.ts', status: 'replaced' },
+                        { path: 'importer.ts', status: 'replaced' }, { path: 'skipped.ts', status: 'skipped' },
+                    ] } }, is_error: false, uuid: 'semantic-result-uuid', parentUUID: null }],
+            }]);
+        });
+        expect(hook.getCurrent().size).toBe(0);
+        expect(settled.mock.calls).toEqual([[['one.ts', 'two.ts', 'importer.ts']]]);
+    });
+
     it('seeds history, then settles running-to-completed and first-seen error once, even while idle', async () => {
         storage.setState({ sessionMessages: { 'session-1': transcript([call('history', 'old.ts', 'completed'), call('running', 'new.ts')]) } });
         const settled = vi.fn<(paths: readonly string[]) => void>();
