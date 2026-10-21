@@ -1900,6 +1900,9 @@ confirmed lease; a successful renewal replaces the expiry. Definitive refusal,
 revocation, worker cancellation or expiry ends observation. The heartbeat's one
 cadence timer also observes expiry while a renewal request is pending, so a lost
 or late response cannot extend the lease or resurrect an expired claim.
+Authorization and control reads remain serialized independently of renewal;
+a slow read cannot withhold the next heartbeat, and its eventual refusal still
+aborts the claimed execution.
 
 In 0.3 development, Automation-origin Workflow claims materialize the accepted
 snapshot only on first admission. Subsequent claims carry the Run-owned snapshot
