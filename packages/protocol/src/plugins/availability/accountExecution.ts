@@ -2,7 +2,7 @@ import { createCanonicalJsonSigningInput } from '../../crypto/canonicalJson.js';
 import { computeCanonicalDomainSeparatedHexDigest } from '../../crypto/canonicalDigest.js';
 import type { PluginUiArtifactDigestV1 } from '../ui/artifactIntegrity.js';
 import type { PluginSourceCustodyV1 } from '../runtime/sourceCustody.js';
-import { PluginPortableReleaseManifestV1Schema, type PluginPortableReleaseManifestV1 } from './compatibilityProjectionV1.js';
+import type { PluginPortableReleaseManifestV1 } from './compatibilityProjectionV1.js';
 import { normalizePluginReleaseFactsV1, type PluginAccountAvailabilityIntentReadResponseV1, type PluginReleaseFactsV1 } from './v1.js';
 
 /** Cross-host correspondence of the canonical manifest parser's output,
@@ -82,6 +82,8 @@ export function resolvePluginAccountExecutionSelectionV1(input: Readonly<{
     return { kind: 'unavailable', code: 'plugin_account_execution_unavailable' };
   }
   return Object.freeze({ kind: 'available',
-    manifest: PluginPortableReleaseManifestV1Schema.parse(input.bundled.manifest),
+    // Acquisition already parsed this typed declaration. Currentness checks run
+    // per host method; rewalking/cloning its contribution graph stalls the UI.
+    manifest: input.bundled.manifest,
     sourceCustody: input.bundled.sourceCustody, custodyId: input.bundled.custodyId, release: null });
 }

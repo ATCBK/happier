@@ -75,7 +75,12 @@ describe('Plugin Account availability v1', () => {
       intent: { pluginId: bundled.manifest.id, desiredVersion: null, enabled: true, offlineUiHosting: 'disabled', writableCollections: [], revision: '1' },
       release: null, uiArtifacts: [], packageAssets: [],
     });
-    expect(availability.resolvePluginAccountExecutionSelectionV1({ pluginId: bundled.manifest.id, intentRead: read, bundled })).toMatchObject({ kind: 'available', custodyId: 'host-fixture' });
+    const selected = availability.resolvePluginAccountExecutionSelectionV1({ pluginId: bundled.manifest.id, intentRead: read, bundled });
+    expect(selected).toMatchObject({ kind: 'available', custodyId: 'host-fixture' });
+    if (selected.kind !== 'available') throw new Error('Expected bundled selection');
+    // Currentness reads retain the acquisition parser's declaration. Re-parsing
+    // here clones the contribution graph on every rendered host-method check.
+    expect(selected.manifest).toBe(bundled.manifest);
     expect(availability.resolvePluginAccountExecutionSelectionV1({ pluginId: bundled.manifest.id, intentRead: {
       ...read, intent: { ...read.intent!, enabled: false },
     }, bundled })).toEqual({ kind: 'unavailable', code: 'plugin_disabled' });
