@@ -10,10 +10,50 @@ import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccount
 import { captureLazyActionAccountContext } from './actionAccountContext';
 import { createWidgetAreaActionDepsV1 } from './widgetAreaActionDeps';
 import { createWidgetCatalogActionDepsV1 } from './widgetCatalogActionDeps';
+import { createWidgetInputActionDepsV1 } from './widgetInputActionDeps';
 import { createActionExecutor } from '@happier-dev/protocol';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 // Match the application entry before Account restoration; real owner initialization belongs to collection.
 import '@/sync/syncEngine';
+
+it('reuses one admitted placement for a copy configuration and reads fresh on the next resolution', async () => {
+    let boundary = createLayoutArtifactHttpBoundary<WidgetAreaLayoutV1>('actor', {
+        artifactId: 'unused', kind: WIDGET_SURFACE_ARTIFACT_KIND_V1,
+        defaultLayout: { v: 1, surface: { serverId: 'home', accountId: 'actor', owner: { kind: 'project', projectId: 'project' } }, items: [] },
+        parseLayout: value => WidgetAreaLayoutV1Schema.parse(value),
+    });
+    const reads: string[] = [];
+    const connection = await restoreServerAccountForTest({ serverUrl: 'http://copy-placement-read.test', accountId: 'actor',
+        request: (url, init) => {
+            const path = new URL(String(url)).pathname;
+            if (path === `/v1/artifacts/${boundary.artifactId}` && init?.method !== 'POST') reads.push(path);
+            return boundary.request(url, init);
+        } });
+    const surface = { serverId: connection.home.id, accountId: 'actor', owner: { kind: 'project' as const, projectId: 'project' } };
+    boundary = createLayoutArtifactHttpBoundary<WidgetAreaLayoutV1>('actor', {
+        artifactId: buildWidgetSurfaceArtifactIdV1(surface), kind: WIDGET_SURFACE_ARTIFACT_KIND_V1,
+        defaultLayout: { v: 1, surface, items: [] }, parseLayout: value => WidgetAreaLayoutV1Schema.parse(value),
+        buildHeader: value => buildWidgetSurfaceArtifactHeaderV1(value),
+    });
+    boundary.seed({ v: 1, surface, items: [] });
+    const checkout = WorkspaceRefV1WriteSchema.parse({ id: 'checkout', serverId: surface.serverId, machineId: 'machine',
+        rootPath: '/repo', projectKey: surface.owner.projectId, createdAtMs: 1 });
+    boundary.setWorkspaceRefs([checkout]);
+    const account = await captureLazyActionAccountContext(connection.home.id);
+    try {
+        const area = createWidgetAreaActionDepsV1(account);
+        const deps = createActionExecutorBoundaryFixture({ ...area, widgetAccountScope: () => account });
+        const inputs = createWidgetInputActionDepsV1(account, deps).widgetInputs!;
+        const request = { ref: { surface, instanceId: 'copy' }, instance: { v: 1 as const, id: 'copy',
+            definition: { kind: 'builtin' as const, id: 'project_about' }, bindings: { checkout: { kind: 'value' as const, value: checkout } } },
+            context: { surface: 'ui' as const, authority: 'present_user' as const }, admission: 'configuration' as const };
+        expect(await inputs.resolve(request)).toMatchObject({ status: 'ready' });
+        expect(reads).toHaveLength(1);
+        boundary.setCallerAccess(null);
+        expect(await inputs.resolve(request)).toMatchObject({ status: 'unavailable' });
+        expect(reads).toHaveLength(2);
+    } finally { account.dispose(); await connection.dispose(); }
+});
 
 it('admits local and portable Home identities through the widget Action owner without admitting another Home', async () => {
     const connection = await restoreServerAccountForTest({ serverUrl: 'http://widget-identity.test',

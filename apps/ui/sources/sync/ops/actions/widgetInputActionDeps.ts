@@ -22,6 +22,7 @@ import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountS
 import { readWidgetActionRuntimeV1, readWidgetActionCandidatesV1 } from './widgetCatalogActionDeps';
 import type { LazyActionAccountContext } from './actionAccountContext';
 import { admitWidgetActionSurfaceV1 } from '@happier-dev/protocol/widgets';
+import { readWidgetActionSurfaceAdmissionV1 } from '@happier-dev/protocol/widgets/widgetActionScopeV1';
 import { readWidgetInputTargetV1, validateWidgetWorkspaceInputV1 } from '@happier-dev/protocol/widgets/widgetInputAdmissionV1';
 import { readSessionWidgetProvidedContext } from '@/components/widgets/surface/sessionWidgetContext';
 import { MachineTargetV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
@@ -73,25 +74,31 @@ export function createWidgetInputActionDepsV1(account: LazyActionAccountContext 
     const executor = createActionExecutor({ ...deps, widgetConnectedAccountOptions });
     type Request = Parameters<WidgetActionInputResolverV1['resolve']>[0];
     const descriptors = new WeakMap<Request, WidgetCandidate>();
-    const groupBindings = new WeakMap<Request, Promise<WidgetInputBindingsV1 | undefined>>();
-    const readGroupBindings = (request: Request) => {
-        if (request.groupBindings !== undefined) return Promise.resolve(request.groupBindings);
-        let pending = groupBindings.get(request);
+    // The resolver creates a new Request for each resolution. Group context and
+    // descriptor admission consume that same placement, never another invocation's
+    // authority or a read captured before the person's approval.
+    const surfaceAdmissions = new WeakMap<Request, ReturnType<typeof readWidgetActionSurfaceAdmissionV1>>();
+    const readSurfaceAdmission = (request: Request) => {
+        let pending = surfaceAdmissions.get(request);
         if (!pending) {
-            pending = (async () => {
-                account.assertCurrent();
-                if (!isCurrent() || await admitWidgetActionSurfaceV1(deps, request.ref.surface, { ...request.context, signal: request.signal })) return undefined;
-                const port = readWidgetActionSurfacePortV1(deps, request.ref.surface);
-                if (!port) return undefined;
-                const read = WidgetSurfaceReadV1Schema.safeParse(await port.read(request.ref.surface, request.context, request.signal));
-                account.assertCurrent();
-                request.signal?.throwIfAborted();
-                return isCurrent() && read.success && sameStrictJsonValue(read.data.surface, request.ref.surface)
-                    ? findWidgetLayoutParentV1(read.data.items ?? [], request.ref.instanceId)?.context : undefined;
-            })();
-            groupBindings.set(request, pending);
+            pending = readWidgetActionSurfaceAdmissionV1(deps, request.ref.surface, { ...request.context, signal: request.signal });
+            surfaceAdmissions.set(request, pending);
         }
         return pending;
+    };
+    const readGroupBindings = async (request: Request): Promise<WidgetInputBindingsV1 | undefined> => {
+        if (request.groupBindings !== undefined) return request.groupBindings;
+        account.assertCurrent();
+        if (!isCurrent()) return undefined;
+        const admitted = await readSurfaceAdmission(request);
+        if (!admitted.ok) return undefined;
+        const port = readWidgetActionSurfacePortV1(deps, request.ref.surface);
+        if (!port) return undefined;
+        const read = WidgetSurfaceReadV1Schema.safeParse(admitted.read ?? await port.read(request.ref.surface, request.context, request.signal));
+        account.assertCurrent();
+        request.signal?.throwIfAborted();
+        return isCurrent() && read.success && sameStrictJsonValue(read.data.surface, request.ref.surface)
+            ? findWidgetLayoutParentV1(read.data.items ?? [], request.ref.instanceId)?.context : undefined;
     };
     const readContext = (request: Request): Readonly<Record<string, readonly JsonValue[]>> => {
         account.assertCurrent();
@@ -133,7 +140,10 @@ export function createWidgetInputActionDepsV1(account: LazyActionAccountContext 
     };
     const readDescriptor = async (request: Request) => {
             account.assertCurrent();
-            if (!isCurrent() || await admitWidgetActionSurfaceV1(deps, request.ref.surface, { ...request.context, signal: request.signal })) return null;
+            if (!isCurrent() || !(await readSurfaceAdmission(request)).ok) return null;
+            account.assertCurrent();
+            request.signal?.throwIfAborted();
+            if (!isCurrent()) return null;
             if (request.instance.definition.kind === 'builtin') {
                 const candidate = readWidgetDescriptor(null, request.instance.definition);
                 if (candidate) descriptors.set(request, candidate);
@@ -231,8 +241,8 @@ export function createWidgetInputActionDepsV1(account: LazyActionAccountContext 
                     ? { status: 'valid' } : { status: 'denied', reasonCode: 'widget_target_scope_mismatch' };
             }
             if (request.instance.bindings[field.path]?.kind === 'viewer' || field.connectedAccountOptions) {
-                const authority = await admitWidgetActionSurfaceV1(deps, request.ref.surface, { ...request.context, signal: request.signal });
-                if (authority) return { status: 'denied', reasonCode: authority.errorCode };
+                const authority = await readSurfaceAdmission(request);
+                if (!authority.ok) return { status: 'denied', reasonCode: authority.errorCode };
                 const selection = QualifiedConnectedAccountRefSchema.safeParse(value);
                 if (!selection.success) return { status: 'invalid', reasonCode: 'widgets_viewer_selection_invalid' };
                 const descriptor = descriptors.get(request);
