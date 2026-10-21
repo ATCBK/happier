@@ -877,7 +877,7 @@ export function createCliActionDeps(params: Readonly<{
   /** Current Session publisher supplied by the admitted host; never a human HTTP fallback. */
   postAgentDiscussionMessage?: Parameters<typeof createDiscussionActionDeps>[0]['postAgentMessage'];
   /** Exact live RPC owner for this bound Session; absent on Account/daemon action hosts. */
-  invokeBoundSessionRpc?: (method: string, input: unknown, signal?: AbortSignal) => Promise<unknown>;
+  invokeBoundSessionRpc?: (method: string, input: unknown, signal?: AbortSignal, origin?: SessionActionRpcOriginV1) => Promise<unknown>;
   /** One-use transport already resolved by this Goal RPC's admission owner. */
   initialSessionGoalTransport?: Extract<Awaited<ReturnType<typeof resolveSessionTransportContext>>, { ok: true }>;
   rawSession?: Readonly<{
@@ -2771,6 +2771,16 @@ export function createCliActionDeps(params: Readonly<{
     }
   };
 
+  const readSessionActionRpcOrigin = (method: string, context: ActionExecutorContext): SessionActionRpcOriginV1 => {
+    const questionMethod = method === SESSION_RPC_METHODS.SESSION_NEEDS_YOU_RAISE
+      || method === 'session.user_action.answer';
+    const origin = questionMethod && context.readSessionActionRpcOrigin
+      ? context.readSessionActionRpcOrigin()
+      : resolveSessionRoleRpcOrigin(context);
+    if (!origin) throw new RpcError('role_rpc_origin_unavailable', 'role_rpc_origin_unavailable');
+    return origin;
+  };
+
   const callSessionActionRpc = async (
     transport: ResolvedSessionTransport,
     method: string,
@@ -2802,12 +2812,7 @@ export function createCliActionDeps(params: Readonly<{
         content: resolveSessionRpcContent(transport), executionAuthorization: authorization,
         ...(context.signal ? { signal: context.signal } : {}) });
     }
-    const questionMethod = method === SESSION_RPC_METHODS.SESSION_NEEDS_YOU_RAISE
-      || method === 'session.user_action.answer';
-    const origin = questionMethod && context.readSessionActionRpcOrigin
-      ? context.readSessionActionRpcOrigin()
-      : resolveSessionRoleRpcOrigin(context);
-    if (!origin) throw new RpcError('role_rpc_origin_unavailable', 'role_rpc_origin_unavailable');
+    const origin = readSessionActionRpcOrigin(method, context);
     return await params.sessionActionRpcTransport({ sessionId: transport.sessionId, method, input,
       content: resolveSessionRpcContent(transport), origin,
       ...(context.signal ? { signal: context.signal } : {}),
@@ -6293,6 +6298,9 @@ export function createCliActionDeps(params: Readonly<{
       }
       try {
         const created = await createSpawnedSession({
+          ...(context?.operationAcceptance?.actionId === 'session.spawn_new'
+            && context.operationAcceptance.previousSessionCreationFailure
+            ? { previousSessionCreationFailure: context.operationAcceptance.previousSessionCreationFailure } : {}),
           ...(creationAuthorization ? { creationAuthorization } : {}),
           ...(callerInputConstraints ? { callerInputConstraints } : {}),
           credentials: params.credentials,

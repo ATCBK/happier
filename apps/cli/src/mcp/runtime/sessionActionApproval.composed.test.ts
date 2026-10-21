@@ -12,6 +12,8 @@ import { createScopedRuntimeActionSettingsProvider } from '@/settings/scopedRunt
 import { createHappierMcpServer } from '@/mcp/createHappierMcpServer';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { createSwapAwareRpcHandlerRegistrar } from '@/agent/runtime/session/loop/createSwapAwareRpcHandlerRegistrar';
+import { BasePermissionHandler } from '@/agent/permissions/BasePermissionHandler';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 
 // Daemon IPC is outside the Session process; the MCP/executor/approval owners stay real.
 vi.mock('@/daemon/controlClient', async importOriginal => ({
@@ -19,6 +21,66 @@ vi.mock('@/daemon/controlClient', async importOriginal => ({
   requestDaemonPluginActionExecution: async () => ({ matched: false }),
 }));
 afterEach(() => vi.restoreAllMocks());
+
+class WorkerQuestionHandler extends BasePermissionHandler {
+  protected getLogPrefix() { return '[C7 worker question]'; }
+}
+
+it.each(['bound', 'foreign-owner', 'missing-witness'] as const)(
+  'routes an Agent MCP question to its manager only with the bound Session origin: %s', async binding => {
+    const sessionId = 'c7-worker';
+    // The canonical fixture substitutes Session persistence/Home facts, not
+    // MCP, Action admission, RPC origin, question routing or request custody.
+    const session = createMutableApiSessionClientFixture({
+      sessionId: binding === 'foreign-owner' ? 'another-worker' : sessionId,
+      serverBinding: { serverId: 'c7-home', serverUrl: 'https://c7-home.test' },
+      agentState: { requests: {}, completedRequests: {} },
+      overrides: { readQuestionSessionSnapshot: async id => ({
+        sessionId: id, accountId: 'c7-account', managerSessionId: id === sessionId ? 'c7-manager' : null,
+        available: true, answersWorkerQuestions: true,
+      }) },
+    });
+    new WorkerQuestionHandler(session);
+    const runtime = createHappierMcpServer({ ...session, sessionId,
+      getWorkDepth: () => 0, getHostTurnWorkDepth: () => 0,
+      getActiveTurnPermissionWitness: () => binding === 'missing-witness' ? null : {
+        turnId: 'c7-native-turn', inputId: 'c7-input',
+        causalPermissionAuthority: { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'default' as const },
+      },
+    }, { authorityScope: 'session', sessionCredentials: { token: 'c7-session-token', encryption: null },
+      actionsSettingsProvider: createScopedRuntimeActionSettingsProvider(normalizeActionsSettingsV1({ v: 1 })),
+    });
+    const client = new Client({ name: 'c7-question', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await runtime.mcp.connect(serverTransport);
+      await client.connect(clientTransport);
+      const response = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute', arguments: {
+        actionId: 'session.needs_you.raise', input: {
+          mode: 'continue', assumption: 'Proceed with this harmless QA check', lasting: false, type: 'decision',
+          questions: [{ id: 'c7-decision', prompt: 'Should this worker record manager attribution?', type: 'text' }],
+        },
+      } }));
+      const requests = Object.values(session.getAgentStateSnapshot()?.requests ?? {});
+      if (binding === 'bound') {
+        expect(response, JSON.stringify(response)).not.toHaveProperty('isError', true);
+        expect(requests).toEqual([expect.objectContaining({ kind: 'user_action', source: 'session.needs_you.raise',
+          turnId: 'c7-native-turn', currentHandler: { kind: 'session', sessionId: 'c7-manager' },
+          questionV1: { mode: 'continue', lasting: false, type: 'decision', assumption: 'Proceed with this harmless QA check' },
+          responseTarget: { kind: 'session_question_answer', sessionId, sourceTurnId: 'c7-native-turn', sourceInputId: 'c7-input' },
+        })]);
+      } else {
+        expect(response).toMatchObject({ isError: true, content: [{ type: 'text', text: expect.stringContaining(
+          binding === 'foreign-owner' ? 'question_author_forbidden' : 'target_unavailable',
+        ) }] });
+        expect(requests).toEqual([]);
+      }
+    } finally {
+      await client.close();
+      await runtime.mcp.close();
+    }
+  },
+);
 
 it.each(['approve', 'deny', 'cancel', 'foreign', 'pending-deny'] as const)('settles MCP terminal controls through the bound Session approval and transport: %s', async decision => {
   const sessionId = 'actionwait-session';

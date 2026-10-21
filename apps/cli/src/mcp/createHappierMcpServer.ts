@@ -381,10 +381,13 @@ export function createHappierMcpServer(
           publishSessionMessageReply: (input, options) => client.publishSessionMessageReply!(input, options),
         },
       } : {}),
-      invokeBoundSessionRpc: async (method, input, signal) => await sessionScopedRpc(
+      invokeBoundSessionRpc: async (method, input, signal, origin) => await sessionScopedRpc(
         method,
         input,
-        signal ? { signal } : undefined,
+        signal || origin ? {
+          ...(signal ? { signal } : {}),
+          ...(origin ? { rpcContext: { callerAuthority: 'account_automation' as const, sessionActionOrigin: origin } } : {}),
+        } : undefined,
       ),
       ...(client.enqueueSessionEventCommitted ? {
         postSessionUpdate: (report: SessionUpdatePostInputV1) => client.enqueueSessionEventCommitted!({ type: 'worker-report', ...report }),
