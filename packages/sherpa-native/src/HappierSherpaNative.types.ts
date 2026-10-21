@@ -112,6 +112,8 @@ export type SherpaNativeModule = {
    * must detect rather than silently promote over a live engine.
    */
   releaseAssetsDir?(params: { assetsDir: string }): Promise<{ cancelledJobs: number; releasedEngines: number }>;
+  /** Optional while JavaScript can run against an older native binary. */
+  excludeFromBackup?(params: { path: string }): Promise<void>;
   createVadDetector(params: {
     detectorId: string;
     minSpeechMs: number;

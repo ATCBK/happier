@@ -15,13 +15,15 @@ export type MemFs = {
     delete(): void;
     open(...args: Parameters<ExpoFsFile['open']>): ReturnType<ExpoFsFile['open']>;
     write(...args: Parameters<ExpoFsFile['write']>): ReturnType<ExpoFsFile['write']>;
-  }; Paths: { document: string } };
+  }; Paths: { document: string; availableDiskSpace?: number } };
   files: Map<string, Uint8Array>;
   root: string;
+  backupExcludedDirectories: Set<string>;
 };
 
 export function createMemFs(): MemFs {
   const files = new Map<string, Uint8Array>();
+  const backupExcludedDirectories = new Set<string>();
   const root = 'file:///docs/happier/voice/modelPacks';
 
   const normalize = (uri: string): string => uri.replace(/\/+$/, '');
@@ -69,10 +71,19 @@ export function createMemFs(): MemFs {
       for (const key of Array.from(files.keys())) {
         if (key === this.uri || key.startsWith(prefix)) files.delete(key);
       }
+      for (const path of backupExcludedDirectories) {
+        if (path === this.uri || path.startsWith(prefix)) backupExcludedDirectories.delete(path);
+      }
     }
     move(destination: { uri: string }) {
       const prefix = `${this.uri}/`;
       const destUri = normalize(destination.uri);
+      for (const path of [...backupExcludedDirectories]) {
+        if (path === this.uri || path.startsWith(prefix)) {
+          backupExcludedDirectories.delete(path);
+          backupExcludedDirectories.add(`${destUri}${path.slice(this.uri.length)}`);
+        }
+      }
       for (const key of Array.from(files.keys())) {
         if (key.startsWith(prefix)) {
           const suffix = key.slice(this.uri.length);
@@ -202,7 +213,7 @@ export function createMemFs(): MemFs {
   }
 
   const fs = { Directory, File, Paths: { document: 'file:///docs/' } };
-  return { fs, files, root };
+  return { fs, files, root, backupExcludedDirectories };
 }
 
 /** Native network/file boundary fixture; production artifact bytes never use fetch. */

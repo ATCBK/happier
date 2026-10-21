@@ -1,4 +1,4 @@
-import { parseModelPackManifest, type ModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
+import { parseModelPackManifest, type ModelPackKind, type ModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
 import { getOptionalHappierSherpaNativeModule } from '@happier-dev/sherpa-native';
 import { hashModelPackManifest, installModelPackWithHost, type ModelPackCoreProgress, type ModelPackPromotionPriorInstallV1 } from '@happier-dev/voice-modelpacks';
 
@@ -11,6 +11,9 @@ import {
   getExpoModelPackPartialBytes,
   reconcileExpoModelPackPromotion,
   removeExpoModelPackWithHost,
+  findRunningExpoModelPackInstall,
+  runExpoModelPackInstall,
+  type ExpoModelPackOperationLease,
 } from './installer/host.native';
 import { fetchRemoteManifest } from './installer/network';
 import { assertManifestPathsSafe, getMetaFile, getPackRootDir, normalizePackId } from './installer/paths';
@@ -52,10 +55,24 @@ function getInvalidatePackRuntime(overrides: InstallerOverrides): InvalidatePack
   });
 }
 
+function getExcludeFromBackup(overrides: InstallerOverrides): (directoryUri: string) => Promise<void> {
+  return overrides.excludeFromBackup ?? (async (directoryUri) => {
+    const sherpa = getOptionalHappierSherpaNativeModule();
+    if (!sherpa) return;
+    if (!sherpa.excludeFromBackup) {
+      console.warn('model_pack_backup_exclusion_unsupported');
+      return;
+    }
+    await sherpa.excludeFromBackup({ path: uriToFilePath(directoryUri) });
+  });
+}
+
 async function installViaHost(opts: {
   fs: InstallerFs;
   download?: InstallerOverrides['download'];
   invalidatePackRuntime: InvalidatePackRuntime;
+  excludeFromBackup: (directoryUri: string) => Promise<void>;
+  operationLease?: ExpoModelPackOperationLease;
   packId: string;
   manifest: ModelPackManifest;
   signal: AbortSignal;
@@ -67,6 +84,8 @@ async function installViaHost(opts: {
     fs: opts.fs,
     download: opts.download,
     invalidatePackRuntime: opts.invalidatePackRuntime,
+    excludeFromBackup: opts.excludeFromBackup,
+    operationLease: opts.operationLease,
   });
   const result = await installModelPackWithHost({
     host,
@@ -81,6 +100,29 @@ async function installViaHost(opts: {
 }
 
 export async function ensureModelPackInstalled(
+  opts: Parameters<typeof installPackWithLease>[0],
+  overrides: InstallerOverrides = {},
+): Promise<{ packDirUri: string; manifest: ModelPackManifest }> {
+  if (opts.mode === 'require_installed' && opts.updatePolicy !== 'manual_update_if_available') {
+    return installPackWithLease(opts, overrides);
+  }
+  const fs = await getFs(overrides);
+  const packId = normalizePackId(opts.packId);
+  return runExpoModelPackInstall({ fs, packId, signal: opts.signal, onProgress: opts.onProgress,
+    identity: JSON.stringify([opts.mode, opts.updatePolicy ?? 'none', opts.manifestUrl?.trim() ?? null, opts.kind ?? null, opts.timeoutMs]),
+    run: ({ lease, signal, onProgress }) => installPackWithLease({ ...opts, signal, onProgress }, { ...overrides, fs }, lease),
+  });
+}
+
+/** A settings observer can reconnect to the installer-owned work after its previous screen unmounted. */
+export async function findRunningModelPackInstall(
+  opts: { packId: string },
+  overrides: InstallerOverrides = {},
+) {
+  return findRunningExpoModelPackInstall(await getFs(overrides), normalizePackId(opts.packId));
+}
+
+async function installPackWithLease(
   opts: {
     packId: string | null;
     mode: InstallMode;
@@ -89,8 +131,10 @@ export async function ensureModelPackInstalled(
     signal: AbortSignal;
     onProgress?: (p: ModelPackCoreProgress) => void;
     updatePolicy?: UpdatePolicy;
+    kind?: ModelPackKind;
   },
   overrides: InstallerOverrides = {},
+  operationLease?: ExpoModelPackOperationLease,
 ): Promise<{ packDirUri: string; manifest: ModelPackManifest }> {
   const fs = await getFs(overrides);
   const fetchImpl = getFetch(overrides);
@@ -98,13 +142,14 @@ export async function ensureModelPackInstalled(
   const id = normalizePackId(opts.packId);
   // X-M1: roll forward/back any swap this pack left interrupted by a crash before
   // inspecting/serving it, so a transiently-missing live dir is never observed.
-  await reconcileExpoModelPackPromotion({ fs, packId: id, invalidatePackRuntime });
+  await reconcileExpoModelPackPromotion({ fs, packId: id, invalidatePackRuntime, operationLease });
   const rootDir = getPackRootDir(fs, id);
 
   const meta = getMetaFile(fs, rootDir);
   if (meta.exists) {
     const installedManifest = await readInstalledManifest(meta);
     if (installedManifest) {
+      assertManifestFor(installedManifest, id, opts.kind);
       if (opts.updatePolicy !== 'manual_update_if_available') {
         return { packDirUri: rootDir.uri, manifest: installedManifest };
       }
@@ -119,7 +164,7 @@ export async function ensureModelPackInstalled(
         timeoutMs: opts.timeoutMs,
         signal: opts.signal,
       });
-      if (remote.packId !== id) throw new Error('model_pack_manifest_packid_mismatch');
+      assertManifestFor(remote, id, opts.kind);
       assertManifestPathsSafe(remote);
       if (hashModelPackManifest(remote) === hashModelPackManifest(installedManifest)) {
         return { packDirUri: rootDir.uri, manifest: installedManifest };
@@ -132,6 +177,8 @@ export async function ensureModelPackInstalled(
         download: overrides.download,
         fs,
         invalidatePackRuntime,
+        excludeFromBackup: getExcludeFromBackup(overrides),
+        operationLease,
         packId: id,
         manifest: remote,
         priorManifest: installedManifest,
@@ -157,15 +204,15 @@ export async function ensureModelPackInstalled(
     timeoutMs: opts.timeoutMs,
     signal: opts.signal,
   });
-  if (manifest.packId !== id) {
-    throw new Error('model_pack_manifest_packid_mismatch');
-  }
+  assertManifestFor(manifest, id, opts.kind);
   assertManifestPathsSafe(manifest);
 
   return await installViaHost({
     download: overrides.download,
     fs,
     invalidatePackRuntime,
+    excludeFromBackup: getExcludeFromBackup(overrides),
+    operationLease,
     packId: id,
     manifest,
     signal: opts.signal,
@@ -185,12 +232,18 @@ async function readInstalledManifest(meta: Pick<ExpoFsFile, 'text'>): Promise<Mo
   }
 }
 
+function assertManifestFor(manifest: ModelPackManifest, packId: string, kind?: ModelPackKind): void {
+  if (manifest.packId !== packId) throw new Error('model_pack_manifest_packid_mismatch');
+  if (kind && manifest.kind !== kind) throw new Error('model_pack_manifest_kind_mismatch');
+}
+
 export async function checkModelPackUpdateAvailable(
   opts: {
     packId: string | null;
     manifestUrl: string | null;
     timeoutMs: number | null;
     signal: AbortSignal;
+    kind?: ModelPackKind;
   },
   overrides: InstallerOverrides = {},
 ): Promise<{ installed: boolean; updateAvailable: boolean; installedManifest: ModelPackManifest | null; remoteManifest: ModelPackManifest | null }> {
@@ -209,6 +262,7 @@ export async function checkModelPackUpdateAvailable(
   const meta = getMetaFile(fs, rootDir);
 
   const installedManifest = meta.exists ? await readInstalledManifest(meta) : null;
+  if (installedManifest) assertManifestFor(installedManifest, id, opts.kind);
 
   if (!opts.manifestUrl || !opts.manifestUrl.trim()) {
     return { installed: Boolean(installedManifest), updateAvailable: false, installedManifest, remoteManifest: null };
@@ -220,7 +274,7 @@ export async function checkModelPackUpdateAvailable(
     timeoutMs: opts.timeoutMs,
     signal: opts.signal,
   });
-  if (remote.packId !== id) throw new Error('model_pack_manifest_packid_mismatch');
+  assertManifestFor(remote, id, opts.kind);
 
   if (!installedManifest) {
     return { installed: false, updateAvailable: false, installedManifest: null, remoteManifest: remote };

@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DownloadOptions, DownloadProgressData, DownloadResumable } from 'expo-file-system/legacy';
 
-import { checkModelPackUpdateAvailable, ensureModelPackInstalled, getModelPackInstallSummary, removeModelPack } from '@/voice/modelPacks/installer.native';
+import { checkModelPackUpdateAvailable, ensureModelPackInstalled, findRunningModelPackInstall, getModelPackInstallSummary, removeModelPack } from '@/voice/modelPacks/installer.native';
+import { isModelPackCancellation } from '@/voice/modelPacks/installer/network';
 import { createMemFs, createMemNativeDownload } from '@/voice/modelPacks/installerTestFs';
+import { deriveModelPackStagingPlan } from '@happier-dev/voice-modelpacks';
 
 const nativeDownload = vi.hoisted(() => vi.fn<(
   url: string, uri: string, options?: DownloadOptions, progress?: (value: DownloadProgressData) => void,
@@ -15,6 +17,151 @@ vi.mock('react-native', async () => {
 });
 
 describe('modelPacks installer (native)', () => {
+  it.each(['observer', 'removal'] as const)('settles shared installation and native cleanup when cancelled by %s', async (canceller) => {
+    const { fs, files, root } = createMemFs();
+    const manifest = { packId: `cancel-${canceller}`, kind: 'tts_sherpa', model: 'kokoro', version: 'v1',
+      files: [{ path: 'model.bin', url: 'https://example.com/model.bin', sizeBytes: 1,
+        sha256: '4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a' }] };
+    let transferSignal: AbortSignal | null = null;
+    const fetchImpl: typeof fetch = async (input, init) => {
+      if (String(input).includes('manifest.json')) return Response.json(manifest);
+      transferSignal = init?.signal ?? null;
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      });
+    };
+    const overrides = { fs, fetch: fetchImpl, download: createMemNativeDownload(fs, fetchImpl), invalidatePackRuntime: async () => {} };
+    const firstController = new AbortController();
+    const started = ensureModelPackInstalled({ packId: manifest.packId, mode: 'download_if_missing',
+      manifestUrl: 'https://example.com/manifest.json', timeoutMs: null, signal: firstController.signal }, overrides);
+    const startedOutcome = started.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(transferSignal).not.toBeNull());
+    const running = await findRunningModelPackInstall({ packId: manifest.packId }, overrides);
+    expect(running).not.toBeNull();
+    const controller = new AbortController();
+    const followed = running!.follow({ signal: controller.signal }).catch((error: unknown) => error);
+    if (canceller === 'observer') controller.abort();
+    else await removeModelPack({ packId: manifest.packId }, overrides);
+    expect(isModelPackCancellation(await followed, controller.signal)).toBe(true);
+    expect(isModelPackCancellation(await startedOutcome, firstController.signal)).toBe(true);
+    expect((transferSignal as AbortSignal | null)?.aborted).toBe(true);
+    expect(await findRunningModelPackInstall({ packId: manifest.packId }, overrides)).toBeNull();
+    expect([...files.keys()].some(path => path.startsWith(`${root}/.${manifest.packId}.downloads/`))).toBe(false);
+    expect(files.has(`${root}/${manifest.packId}/pack.json`)).toBe(false);
+  });
+
+  it('shares a running install with another caller for the same pack directory', async () => {
+    const { fs, files, root } = createMemFs();
+    const bytes = new Uint8Array([1]);
+    const manifest = { packId: 'shared-install', kind: 'tts_sherpa', model: 'kokoro', version: 'v1',
+      files: [{ path: 'model.bin', url: 'https://example.com/model.bin', sizeBytes: 1,
+        sha256: '4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a' }] };
+    let releaseDownload!: () => void;
+    const downloadHeld = new Promise<void>(resolve => { releaseDownload = resolve; });
+    const artifactRequests: string[] = [];
+    const fetchImpl: typeof fetch = async (input) => {
+      if (String(input).includes('manifest.json')) return Response.json(manifest);
+      artifactRequests.push(String(input));
+      await downloadHeld;
+      return new Response(bytes);
+    };
+    const overrides = { fs, fetch: fetchImpl, download: createMemNativeDownload(fs, fetchImpl), invalidatePackRuntime: async () => {} };
+    const request = { packId: manifest.packId, mode: 'download_if_missing' as const,
+      manifestUrl: 'https://example.com/manifest.json', timeoutMs: null, signal: new AbortController().signal };
+    const first = ensureModelPackInstalled(request, overrides);
+    await vi.waitFor(() => expect(artifactRequests).toHaveLength(1));
+    const followerProgress: number[] = [];
+    const second = ensureModelPackInstalled({ ...request, signal: new AbortController().signal,
+      onProgress: progress => followerProgress.push(progress.loaded) }, overrides);
+    const results = Promise.allSettled([first, second]);
+    releaseDownload();
+    expect((await results).map(result => result.status)).toEqual(['fulfilled', 'fulfilled']);
+    expect(artifactRequests).toEqual(['https://example.com/model.bin']);
+    expect(followerProgress.at(-1)).toBe(bytes.length);
+    expect(files.get(`${root}/shared-install/model.bin`)).toEqual(bytes);
+  });
+
+  it('checks remaining model bytes against free space before downloading and accepts a fitting resumed install', async () => {
+    const { fs, files, root } = createMemFs();
+    const bytes = new Uint8Array([1, 2, 3]);
+    const { createHash } = await import('node:crypto');
+    const manifest = { packId: 'disk-check', kind: 'tts_sherpa' as const, model: 'kokoro', version: 'v1',
+      files: [{ path: 'model.bin', url: 'https://example.com/model.bin', sizeBytes: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex') }] };
+    const artifactRequests: string[] = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      if (String(input).includes('manifest.json')) return Response.json(manifest);
+      artifactRequests.push(String(input));
+      const ranged = new Headers(init?.headers).get('Range') === 'bytes=2-';
+      return new Response(ranged ? bytes.slice(2) : bytes, { status: ranged ? 206 : 200 });
+    };
+    const request = { packId: manifest.packId, mode: 'download_if_missing' as const,
+      manifestUrl: 'https://example.com/manifest.json', timeoutMs: null, signal: new AbortController().signal };
+    const overrides = { fs, fetch: fetchImpl, download: createMemNativeDownload(fs, fetchImpl), invalidatePackRuntime: async () => {} };
+    fs.Paths.availableDiskSpace = 2;
+    await expect(ensureModelPackInstalled(request, overrides)).rejects.toThrow('model_pack_insufficient_disk_space');
+    expect(artifactRequests).toEqual([]);
+    files.set(`${root}/.disk-check.scratch/.resume-plan.json`, new TextEncoder().encode(JSON.stringify({
+      schemaVersion: 1, ...deriveModelPackStagingPlan(manifest),
+    })));
+    files.set(`${root}/.disk-check.scratch/model.bin`, bytes.slice(0, 2));
+    fs.Paths.availableDiskSpace = 1;
+    await ensureModelPackInstalled(request, overrides);
+    expect(files.get(`${root}/disk-check/model.bin`)).toEqual(bytes);
+    expect(artifactRequests).toEqual(['https://example.com/model.bin']);
+  });
+
+  it('excludes native staging, transfer and recreated installed directories from backup', async () => {
+    const { fs, files, root, backupExcludedDirectories } = createMemFs();
+    const bytes = new Uint8Array([1]);
+    const manifest = { packId: 'backup-check', kind: 'tts_sherpa', model: 'kokoro', version: 'v1',
+      files: [{ path: 'model.bin', url: 'https://example.com/model.bin', sizeBytes: 1,
+        sha256: '4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a' }] };
+    const excludedAtDownload: boolean[] = [];
+    const fetchImpl: typeof fetch = async (input) => {
+      if (String(input).includes('manifest.json')) return Response.json(manifest);
+      excludedAtDownload.push(backupExcludedDirectories.has(`${root}/.backup-check.scratch`)
+        && backupExcludedDirectories.has(`${root}/.backup-check.downloads`));
+      return new Response(bytes);
+    };
+    const overrides = { fs, fetch: fetchImpl, download: createMemNativeDownload(fs, fetchImpl),
+      invalidatePackRuntime: async () => {}, excludeFromBackup: async (uri: string) => { backupExcludedDirectories.add(uri); } };
+    const request = { packId: manifest.packId, mode: 'download_if_missing' as const,
+      manifestUrl: 'https://example.com/manifest.json', timeoutMs: null, signal: new AbortController().signal };
+    await ensureModelPackInstalled(request, overrides);
+    expect(backupExcludedDirectories.has(`${root}/backup-check`)).toBe(true);
+    // An upgrade can first encounter a pack installed before backup exclusion existed.
+    backupExcludedDirectories.delete(`${root}/backup-check`);
+    await ensureModelPackInstalled({ ...request, mode: 'require_installed' }, overrides);
+    expect(backupExcludedDirectories.has(`${root}/backup-check`)).toBe(true);
+    await removeModelPack({ packId: manifest.packId }, overrides);
+    expect(backupExcludedDirectories.has(`${root}/backup-check`)).toBe(false);
+    await ensureModelPackInstalled(request, overrides);
+    expect(files.get(`${root}/backup-check/model.bin`)).toEqual(bytes);
+    expect(backupExcludedDirectories.has(`${root}/backup-check`)).toBe(true);
+    expect(excludedAtDownload).toEqual([true, true]);
+  });
+
+  it.each(['installed', 'download'] as const)('rejects a %s pack published for a different speech role', async (source) => {
+    const { fs, files, root } = createMemFs();
+    const bytes = new Uint8Array([1]);
+    const manifest = { packId: 'role-check', kind: 'tts_sherpa', model: 'kokoro', version: 'v1',
+      files: [{ path: 'model.onnx', url: 'https://example.com/model.onnx', sizeBytes: bytes.length,
+        sha256: '4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a' }] };
+    if (source === 'installed') {
+      files.set(`${root}/role-check/pack.json`, new TextEncoder().encode(JSON.stringify({ manifest })));
+      files.set(`${root}/role-check/model.onnx`, bytes);
+    }
+    const request = { packId: manifest.packId, mode: 'download_if_missing' as const,
+      kind: 'stt_sherpa' as const, manifestUrl: 'https://example.com/manifest.json', timeoutMs: null,
+      signal: new AbortController().signal };
+    const fetchImpl: typeof fetch = async (input) => String(input).includes('manifest.json')
+      ? Response.json(manifest) : new Response(bytes);
+    await expect(ensureModelPackInstalled(request, {
+      fs, fetch: fetchImpl, download: createMemNativeDownload(fs, fetchImpl), invalidatePackRuntime: async () => {},
+    })).rejects.toThrow('model_pack_manifest_kind_mismatch');
+  });
+
   it.each(['voices', 'defaultVoiceId', 'frontend'] as const)('updates runtime metadata (%s) even when model files are unchanged', async (field) => {
     const { fs, files } = createMemFs();
     const bytes = new Uint8Array([1]);

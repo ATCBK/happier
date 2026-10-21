@@ -127,6 +127,9 @@ class HappierSherpaNativeModule internal constructor(
 
   override fun definition() = ModuleDefinition {
     Name("HappierSherpaNative")
+
+    // Per-directory URL backup flags are an iOS capability; Android uses app backup rules.
+    AsyncFunction("excludeFromBackup") { _: Map<String, Any?> -> }
     OnDestroy {
       handleModuleDestroy()
     }

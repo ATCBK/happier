@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DownloadOptions, DownloadProgressData, DownloadResumable } from 'expo-file-system/legacy';
 import { createMemNativeDownload } from '@/voice/modelPacks/installerTestFs';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 
 import { invokeVoiceDeviceModelPackOperation } from './voiceDeviceModelPackOperation.native';
 import * as React from 'react';
@@ -32,7 +33,7 @@ vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNati
     { platformOS: 'ios' }, { Alert: nativeDialogs }));
 // Model operations never start the unavailable vendor conversation SDK.
 vi.mock('@elevenlabs/client/web', () => ({ Conversation: { startSession: () => { throw new Error('Unexpected ElevenLabs conversation start'); } } }));
-const { getPreferredLanguage, setPreferredLanguageFromSettings } = await import('@/text');
+const { getPreferredLanguage, setPreferredLanguageFromSettings, t } = await import('@/text');
 const { renderMountedCurrentUiContext } = await import('@/dev/testkit/harness/mountedCurrentUiContext');
 const { createVoiceSettingsAccountTestHarness } = await import('./panels/voiceSettingsAccountTestHarness');
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
@@ -77,6 +78,52 @@ describe('native device model operations through the real installer', () => {
         });
     });
     afterEach(() => vi.unstubAllGlobals());
+
+    it('explains the required and available storage before starting a native download', async () => {
+        filesystem.fs.Paths.availableDiskSpace = 0;
+        try {
+            const hook = await renderHook(useLocalNeuralModelPackState, { initialProps: {
+                ...input, manifestUrl: 'https://example.test/manifest.json',
+            } });
+            await act(async () => { await hook.getCurrent().prepareModel(); });
+            expect(hook.getCurrent().modelStatus).toBe('error');
+            const reason = t('settingsVoice.local.modelPackDownload.insufficientStorage', {
+                required: formatHappierDataBytes(1), available: formatHappierDataBytes(0),
+            });
+            expect(nativeDialogs.alert.mock.calls.some(call => String(call[1]).includes(reason))).toBe(true);
+            expect(filesystem.files.has(modelUri())).toBe(false);
+            expect(nativeTransferReplies).toEqual([]);
+        } finally { delete filesystem.fs.Paths.availableDiskSpace; }
+    });
+
+    it('keeps an admitted download running when settings closes and follows it on return', async () => {
+        const artifactStarted = createDeferred<AbortSignal>();
+        const response = createDeferred<Response>();
+        vi.stubGlobal('fetch', vi.fn(async (url: string, options: RequestInit) => {
+            if (String(url).includes('manifest')) return Response.json(manifest);
+            if (!options.signal) throw new Error('Expected native transfer signal');
+            artifactStarted.resolve(options.signal);
+            return response.promise;
+        }));
+        const props = { ...input, manifestUrl: 'https://example.test/manifest.json' };
+        const starter = await renderHook(useLocalNeuralModelPackState, { initialProps: props });
+        let operation!: Promise<void>;
+        await act(async () => { operation = starter.getCurrent().prepareModel(); });
+        const signal = await artifactStarted.promise;
+        let follower: { getCurrent: () => ReturnType<typeof useLocalNeuralModelPackState> } | undefined;
+        try {
+            await starter.unmount();
+            expect(signal.aborted).toBe(false);
+            follower = await renderHook(useLocalNeuralModelPackState, { initialProps: props });
+            await vi.waitFor(() => expect(follower?.getCurrent().modelStatus).toBe('downloading'));
+        } finally {
+            response.resolve(new Response(new Uint8Array([1])));
+            await act(async () => { await operation; });
+        }
+        await vi.waitFor(() => expect(follower?.getCurrent().modelStatus).toBe('ready'));
+        expect(filesystem.files.has(modelUri())).toBe(true);
+        expect(nativeDialogs.alert).not.toHaveBeenCalled();
+    });
 
     it('cancels mounted native preparation through settings.invoke without removing model files', async () => {
         const account = await createVoiceSettingsAccountTestHarness(settingsParse({ voice: { providerId: 'local_conversation',

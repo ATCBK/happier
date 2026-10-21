@@ -279,6 +279,7 @@ async function prepareKokoroSynthContext(
     {
       packId: assetSetId,
       mode: 'require_installed',
+      kind: 'tts_sherpa',
       manifestUrl,
       timeoutMs: opts.timeoutMs,
       signal: opts.signal,
@@ -418,6 +419,7 @@ export async function prepareKokoroTts(
     {
       packId: assetSetId,
       mode: 'download_if_missing',
+      kind: 'tts_sherpa',
       manifestUrl,
       timeoutMs: opts.timeoutMs,
       signal: opts.signal,

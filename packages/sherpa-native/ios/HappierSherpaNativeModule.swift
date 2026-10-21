@@ -51,6 +51,18 @@ public class HappierSherpaNativeModule: Module {
 
   public func definition() -> ModuleDefinition {
     Name("HappierSherpaNative")
+
+    // Downloaded models under Documents are reproducible and must stay out of iCloud backups.
+    AsyncFunction("excludeFromBackup") { (params: [String: Any]) in
+      let path = (params["path"] as? String) ?? ""
+      if path.isEmpty {
+        throw NSError(domain: "HappierSherpaNative", code: 107, userInfo: [NSLocalizedDescriptionKey: "path is required"])
+      }
+      var url = URL(fileURLWithPath: path, isDirectory: true)
+      var values = URLResourceValues()
+      values.isExcludedFromBackup = true
+      try url.setResourceValues(values)
+    }
     OnDestroy {
       self.handleModuleDestroy()
     }

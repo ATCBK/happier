@@ -1,5 +1,6 @@
 import { parseModelPackManifest, type ModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
 import { assertManifestUrlsAllowed, assertModelPackUrlAllowed, type ModelPackUrlPolicy } from '@happier-dev/voice-modelpacks';
+import { ModelPackInstallCancelledError } from './errors';
 
 export function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new Error('aborted');
@@ -7,6 +8,7 @@ export function throwIfAborted(signal: AbortSignal): void {
 
 /** A cancelled signal does not make a storage/cleanup failure an expected abort. */
 export function isModelPackCancellation(error: unknown, signal: AbortSignal): boolean {
+  if (error instanceof ModelPackInstallCancelledError) return true;
   return signal.aborted && error instanceof Error && (error.message === 'aborted' || error.name === 'AbortError');
 }
 

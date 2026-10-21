@@ -7,6 +7,7 @@ import { Modal } from '@/modal';
 import { t } from '@/text';
 import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import { parseDownloadProgress } from '@/voice/downloads/downloadProgress';
+import { ModelPackInsufficientDiskSpaceError } from '@/voice/modelPacks/installer/errors';
 
 /**
  * Row presentation shared by the native model pack settings screens (Kokoro TTS, streaming STT), so
@@ -14,6 +15,16 @@ import { parseDownloadProgress } from '@/voice/downloads/downloadProgress';
  */
 
 export type ModelPackRowStatus = 'idle' | 'downloading' | 'ready' | 'error';
+
+export function describeModelPackInstallError(error: unknown): string {
+    if (error instanceof ModelPackInsufficientDiskSpaceError) {
+        return t('settingsVoice.local.modelPackDownload.insufficientStorage', {
+            required: formatHappierDataBytes(error.requiredBytes),
+            available: formatHappierDataBytes(error.availableBytes),
+        });
+    }
+    return error instanceof Error ? error.message : String(error);
+}
 
 export type ModelPackRowPresentation = Readonly<{
     detail: string;

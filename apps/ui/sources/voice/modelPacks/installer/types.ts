@@ -42,7 +42,7 @@ export type ExpoFsFileCtor = new (...args: unknown[]) => ExpoFsFile;
 export type InstallerFs = {
   Directory: ExpoFsDirectoryCtor;
   File: ExpoFsFileCtor;
-  Paths: { document: unknown };
+  Paths: { document: unknown; readonly availableDiskSpace?: number | null };
 };
 
 export type InstallerOverrides = {
@@ -57,6 +57,8 @@ export type InstallerOverrides = {
    * replacement would otherwise keep serving the superseded pack.
    */
   invalidatePackRuntime?: InvalidatePackRuntime;
+  /** OS backup metadata boundary; called for every newly used model directory. */
+  excludeFromBackup?: (directoryUri: string) => Promise<void>;
 };
 
 /** Called with the live pack directory uri whose bytes are about to change. */

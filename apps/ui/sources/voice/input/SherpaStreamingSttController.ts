@@ -177,6 +177,7 @@ export function createSherpaStreamingSttController(deps: CreateSherpaStreamingSt
       const installed = await ensureModelPackInstalled({
         packId,
         mode: 'require_installed',
+        kind: 'stt_sherpa',
         manifestUrl: resolveModelPackManifestUrl({ packId }),
         timeoutMs: 10_000,
         signal: abortController.signal,

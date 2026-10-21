@@ -38,7 +38,9 @@ import type {
   ModelPackPromotionPriorInstallV1,
   ModelPackStagingPlan,
   ModelPackStagingHandle,
+  ModelPackCoreProgress,
 } from '@happier-dev/voice-modelpacks';
+import type { ModelPackManifest } from '@happier-dev/protocol';
 import {
   createSha256Hasher,
   isLegacyModelPackPromotionIntent,
@@ -55,6 +57,8 @@ import {
 } from './paths';
 import type { ExpoFsDirectory, ExpoFsFile, InstallerFs, InvalidatePackRuntime } from './types';
 import { downloadNativeModelPackFile, type NativeModelPackDownload } from './nativeDownload';
+import { ModelPackInsufficientDiskSpaceError, ModelPackInstallCancelledError } from './errors';
+import { isModelPackCancellation, raceWithAbort, throwIfAborted } from './network';
 
 const SCRATCH_SUFFIX = '.scratch';
 const BACKUP_SUFFIX = '.backup';
@@ -62,13 +66,79 @@ const INTENT_SUFFIX = '.promote-intent';
 const RESUME_PLAN_FILE = '.resume-plan.json';
 const DOWNLOAD_SUFFIX = '.download';
 const DOWNLOADS_SUFFIX = '.downloads';
-type ExpoModelPackOperationLease = Readonly<{
+export type ExpoModelPackOperationLease = Readonly<{
   key: string;
   token: symbol;
   release: () => void;
 }>;
 
-const activeOperationTokens = new Map<string, symbol>();
+type InstallResult = Readonly<{ packDirUri: string; manifest: ModelPackManifest }>;
+type InstallObserver = Readonly<{ signal: AbortSignal; onProgress?: (progress: ModelPackCoreProgress) => void }>;
+type RunningInstall = {
+  identity: string;
+  controller: AbortController;
+  promise: Promise<InstallResult>;
+  listeners: Set<(progress: ModelPackCoreProgress) => void>;
+  lastProgress: ModelPackCoreProgress | null;
+};
+const activeOperations = new Map<string, { token: symbol; install?: RunningInstall }>();
+
+async function followInstall(install: RunningInstall, observer: InstallObserver): Promise<InstallResult> {
+  const cancel = () => install.controller.abort();
+  if (observer.signal.aborted) cancel();
+  else observer.signal.addEventListener('abort', cancel, { once: true });
+  const listener = observer.onProgress;
+  if (listener) {
+    install.listeners.add(listener);
+    if (install.lastProgress) listener(install.lastProgress);
+  }
+  try {
+    return await install.promise;
+  } catch (error) {
+    if (!observer.signal.aborted && isModelPackCancellation(error, install.controller.signal)) {
+      throw new ModelPackInstallCancelledError();
+    }
+    throw error;
+  } finally {
+    observer.signal.removeEventListener('abort', cancel);
+    if (listener) install.listeners.delete(listener);
+  }
+}
+
+export function findRunningExpoModelPackInstall(fs: InstallerFs, packId: string): {
+  follow: (observer: InstallObserver) => Promise<InstallResult>;
+} | null {
+  const install = activeOperations.get(installKeyFor(fs, packId))?.install;
+  return install && !install.controller.signal.aborted ? { follow: observer => followInstall(install, observer) } : null;
+}
+
+/** The host's existing directory lease owns the install from manifest fetch through native cleanup. */
+export async function runExpoModelPackInstall(opts: InstallObserver & {
+  fs: InstallerFs;
+  packId: string;
+  identity: string;
+  run: (context: { lease: ExpoModelPackOperationLease; signal: AbortSignal;
+    onProgress: (progress: ModelPackCoreProgress) => void }) => Promise<InstallResult>;
+}): Promise<InstallResult> {
+  const key = installKeyFor(opts.fs, opts.packId);
+  for (let running = activeOperations.get(key)?.install; running; running = activeOperations.get(key)?.install) {
+    throwIfAborted(opts.signal);
+    if (!running.controller.signal.aborted && running.identity === opts.identity) return followInstall(running, opts);
+    await raceWithAbort(opts.signal, [running.promise.catch(() => undefined)]);
+  }
+  throwIfAborted(opts.signal);
+  const lease = acquireOperationLease(opts.fs, opts.packId);
+  const install: RunningInstall = { identity: opts.identity, controller: new AbortController(),
+    promise: Promise.resolve(null as never), listeners: new Set(), lastProgress: null };
+  activeOperations.set(key, { token: lease.token, install });
+  install.promise = Promise.resolve().then(() => opts.run({ lease, signal: install.controller.signal,
+    onProgress: progress => {
+      install.lastProgress = progress;
+      for (const listener of install.listeners) listener(progress);
+    },
+  })).finally(lease.release);
+  return followInstall(install, opts);
+}
 
 /** Payload retained for retry/discard; host metadata is not downloaded model data. */
 export function getExpoModelPackPartialBytes(opts: { fs: InstallerFs; packId: string }): number {
@@ -99,9 +169,9 @@ function installKeyFor(fs: InstallerFs, packId: string): string {
 
 function acquireOperationLease(fs: InstallerFs, packId: string): ExpoModelPackOperationLease {
   const key = installKeyFor(fs, packId);
-  if (activeOperationTokens.has(key)) throw new Error('model_pack_install_already_in_progress');
+  if (activeOperations.has(key)) throw new Error('model_pack_install_already_in_progress');
   const token = Symbol(key);
-  activeOperationTokens.set(key, token);
+  activeOperations.set(key, { token });
   let released = false;
   return Object.freeze({
     key,
@@ -109,7 +179,7 @@ function acquireOperationLease(fs: InstallerFs, packId: string): ExpoModelPackOp
     release: () => {
       if (released) return;
       released = true;
-      if (activeOperationTokens.get(key) === token) activeOperationTokens.delete(key);
+      if (activeOperations.get(key)?.token === token) activeOperations.delete(key);
     },
   });
 }
@@ -120,7 +190,7 @@ function assertOperationAvailable(
   lease?: ExpoModelPackOperationLease,
 ): void {
   const key = installKeyFor(fs, packId);
-  const activeToken = activeOperationTokens.get(key);
+  const activeToken = activeOperations.get(key)?.token;
   if (activeToken && activeToken !== lease?.token) {
     throw new Error('model_pack_install_already_in_progress');
   }
@@ -146,6 +216,39 @@ function tryMkdir(dir: Pick<ExpoFsDirectory, 'create'>): void {
     dir.create?.({ intermediates: true, idempotent: true });
   } catch {
     // ignore
+  }
+}
+
+function assertStagingFitsOnDisk(fs: InstallerFs, directory: ExpoFsDirectory, plan: ModelPackStagingPlan): void {
+  let available: unknown;
+  try {
+    available = fs.Paths.availableDiskSpace;
+  } catch (error) {
+    console.warn('model_pack_free_disk_space_unavailable', error);
+    return;
+  }
+  if (typeof available !== 'number' || !Number.isFinite(available) || available < 0) {
+    console.warn('model_pack_free_disk_space_unavailable');
+    return;
+  }
+  let reusableBytes = 0;
+  for (const entry of plan.files) {
+    const file = stagedFile(fs, directory, entry.path);
+    const size = file.exists ? file.size : 0;
+    if (typeof size === 'number' && Number.isSafeInteger(size) && size >= 0 && size <= entry.sizeBytes) reusableBytes += size;
+  }
+  const requiredBytes = Math.max(0, plan.totalBytes - reusableBytes);
+  if (requiredBytes > available) throw new ModelPackInsufficientDiskSpaceError(requiredBytes, available);
+}
+
+async function excludeDirectoryFromBackup(
+  directoryUri: string,
+  exclude?: (directoryUri: string) => Promise<void>,
+): Promise<void> {
+  try {
+    await exclude?.(directoryUri);
+  } catch (error) {
+    console.warn('model_pack_backup_exclusion_failed', error instanceof Error ? error.name : 'unknown');
   }
 }
 
@@ -226,12 +329,14 @@ function pruneScratchTreeToPlan(
 function createDownloadOpener(
   fs: InstallerFs,
   download: NativeModelPackDownload,
+  excludeFromBackup?: (directoryUri: string) => Promise<void>,
 ): (request: ModelPackDownloadRequest) => Promise<ModelPackDownloadStream> {
   return async (request) => {
     if (!request.packId) throw new Error('model_pack_download_packid_missing');
     // The pack lease owns directory cleanup; each concurrent transfer owns one native file.
     const temporaryDir = getPackSiblingDir(fs, request.packId, DOWNLOADS_SUFFIX);
     tryMkdir(temporaryDir);
+    await excludeDirectoryFromBackup(temporaryDir.uri, excludeFromBackup);
     const temporaryFile = new fs.File(temporaryDir, randomUUID());
     let chunks: ReturnType<typeof readFileChunks> | undefined;
     let closed = false;
@@ -279,14 +384,18 @@ export function createExpoModelPackInstallerHost(opts: {
    * the creator window between that retirement and the filesystem mutation.
    */
   invalidatePackRuntime?: InvalidatePackRuntime;
+  excludeFromBackup?: (directoryUri: string) => Promise<void>;
+  operationLease?: ExpoModelPackOperationLease;
 }): ModelPackInstallerHost {
   const { fs } = opts;
 
   return {
-    openDownload: createDownloadOpener(fs, opts.download ?? downloadNativeModelPackFile),
+    openDownload: createDownloadOpener(fs, opts.download ?? downloadNativeModelPackFile, opts.excludeFromBackup),
     createHasher: createSha256Hasher,
     beginStaging: async (packId, plan: ModelPackStagingPlan): Promise<ModelPackStagingHandle> => {
-      const lease = acquireOperationLease(fs, packId);
+      const lease = opts.operationLease ?? acquireOperationLease(fs, packId);
+      assertOperationAvailable(fs, packId, lease);
+      const releaseStagingLease = () => { if (!opts.operationLease) lease.release(); };
       // `Directory.move` mutates the instance uri, so never reuse a captured handle
       // across a move. Build a fresh handle for the current path each time.
       const freshScratchDir = () => getPackSiblingDir(fs, packId, SCRATCH_SUFFIX);
@@ -331,7 +440,9 @@ export function createExpoModelPackInstallerHost(opts: {
         } else if (freshScratchDir().exists) {
           pruneScratchTreeToPlan(freshScratchDir(), plan.filePaths);
         }
+        assertStagingFitsOnDisk(fs, freshScratchDir(), plan);
         tryMkdir(freshScratchDir());
+        await excludeDirectoryFromBackup(freshScratchDir().uri, opts.excludeFromBackup);
         const resumePlanFile = freshResumePlanFile();
         try {
           resumePlanFile.create?.();
@@ -340,7 +451,7 @@ export function createExpoModelPackInstallerHost(opts: {
         }
         resumePlanFile.write(JSON.stringify({ schemaVersion: 1, key: plan.key, filePaths: plan.filePaths }));
       } catch (error) {
-        lease.release();
+        releaseStagingLease();
         throw error;
       }
 
@@ -434,6 +545,7 @@ export function createExpoModelPackInstallerHost(opts: {
             freshScratchDir().move(getPackRootDir(fs, packId));
             promoted = true;
             swapWindowClosed = true;
+            await excludeDirectoryFromBackup(getPackRootDir(fs, packId).uri, opts.excludeFromBackup);
           } catch (error) {
             let rollbackRestored = !backupCreated;
             if (!promoted && backupCreated) {
@@ -518,7 +630,7 @@ export function createExpoModelPackInstallerHost(opts: {
           try {
             deleteRequired(getPackSiblingDir(fs, packId, DOWNLOADS_SUFFIX));
             deleteRequired(getPackSiblingFile(fs, packId, DOWNLOAD_SUFFIX));
-          } finally { lease.release(); }
+          } finally { releaseStagingLease(); }
         },
       };
     },
@@ -541,8 +653,9 @@ export async function reconcileExpoModelPackPromotion(opts: {
   outcome?: 'commit' | 'rollback';
   /** Awaited on both sides of a rollback that rewrites the live directory (see `createExpoModelPackInstallerHost`). */
   invalidatePackRuntime?: InvalidatePackRuntime;
+  operationLease?: ExpoModelPackOperationLease;
 }): Promise<boolean> {
-  return reconcileExpoModelPackPromotionOwned(opts);
+  return reconcileExpoModelPackPromotionOwned(opts, opts.operationLease);
 }
 
 async function reconcileExpoModelPackPromotionOwned(opts: {
@@ -669,6 +782,11 @@ export async function removeExpoModelPackWithHost(opts: {
   invalidatePackRuntime?: InvalidatePackRuntime;
 }): Promise<void> {
   const { fs, packId, signal } = opts;
+  const install = activeOperations.get(installKeyFor(fs, packId))?.install;
+  if (install) {
+    install.controller.abort();
+    await install.promise.catch(() => undefined);
+  }
   const lease = acquireOperationLease(fs, packId);
   try {
     throwIfRemoveAborted(signal);

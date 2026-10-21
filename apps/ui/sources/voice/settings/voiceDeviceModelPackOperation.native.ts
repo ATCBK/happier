@@ -47,7 +47,7 @@ export async function invokeVoiceDeviceModelPackOperation(input: VoiceDeviceMode
     if (!manifestUrl) return { status: 'unavailable', reason: 'model_manifest_unavailable' };
     if (input.operation === 'update') {
         const status = await checkModelPackUpdateAvailable({ packId: input.packId, manifestUrl,
-            timeoutMs: null, signal });
+            timeoutMs: null, signal, kind: input.role });
         if (!await isCurrent()) return { status: 'cancelled' };
         if (!status.installed) return { status: 'unavailable', reason: 'model_not_installed' };
         const remoteBuild = formatModelPackBuildLabel(status.remoteManifest);
@@ -65,6 +65,7 @@ export async function invokeVoiceDeviceModelPackOperation(input: VoiceDeviceMode
     if (!await isCurrent()) return { status: 'cancelled' };
     input.onDownloadStarted?.();
     const result = await ensureModelPackInstalled({ packId: input.packId, manifestUrl, mode: 'download_if_missing',
+        kind: input.role,
         ...(input.operation === 'update' ? { updatePolicy: 'manual_update_if_available' as const } : {}),
         timeoutMs: null, signal,
         onProgress: input.onProgress });
