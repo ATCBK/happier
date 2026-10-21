@@ -10,7 +10,7 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import type { ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
-import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
+import { readInputTypeOptionsProducer } from '@/sync/domains/plugins/ui/inputTypeOptionsProducer';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import type { ResolveSessionActionFieldOptions, InputFieldOptionsContext } from './sessionActionFieldOptions';
 import type { InputTypePickerHostContext } from './InputTypePickerHostProvider';
@@ -103,12 +103,7 @@ export function useInputFieldOptions(params: Readonly<{
             ? { machineId: sessionMachines[index] } : { unavailableReasonCode: 'input_type_options_unavailable' };
         if (params.pluginUiProjection === undefined) return null;
         const type = params.pluginUiProjection?.inputTypesById[buildQualifiedPluginContributionKey(request.field.inputType)];
-        const origin = readPluginUiContributionOrigin(type);
-        return origin?.phase === 'current' && origin.interactionEnabled && origin.serverId && optionServerId
-            && areServerProfileIdentifiersEquivalent(origin.serverId, optionServerId)
-            ? { machineId: origin.machineId, occurrenceId: type?.occurrenceId, executionOrigin: origin.executionOrigin }
-            : !origin && params.pluginUiMachineId ? { machineId: params.pluginUiMachineId, occurrenceId: type?.occurrenceId }
-            : { unavailableReasonCode: 'input_type_options_unavailable' };
+        return readInputTypeOptionsProducer(type, optionServerId, params.pluginUiMachineId);
     });
     const signature = JSON.stringify([accountScope?.accountId, params.accountLifetime?.revision, optionServerId, machineId,
         params.sessionId, producerRoutes, params.requests.map((request) => ({ ...request,

@@ -1,4 +1,6 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 
 import { createPluginUiHostApiClient } from '@happier-dev/plugin-sdk/ui/client';
 import { PluginError, isPluginError, definePlugin } from '@happier-dev/plugin-sdk';
@@ -49,73 +51,37 @@ import {
     type PluginUiArtifactsManifestEntryV2,
 } from '@happier-dev/protocol/plugins/ui';
 
-import { createPluginHostedWebHostApiBridgeHandler } from '@/components/plugins/hostApi/hostedWebAdapter';
-import { machinePluginStructuredMessageActionExecute, resetMachineProjectionReadsForTests } from '@/sync/ops/machineContributionRegistryProjection';
-import { getMachineContributionRegistryProjectionRevision } from '@/sync/ops/machineContributionRegistryProjectionRevision';
-import { resolveReasonCopy } from '@/sync/domains/surfaces/copy';
-import { createActionExecutorBoundaryFixture } from '@/dev/testkit';
 import { resolveThemeProfile } from '@/theme/profiles/resolveThemeProfile';
 
 import { projectPluginUiTheme } from './pluginUiThemeProjection';
-import { createCanonicalPluginReactNativeHostApiAdapter } from '@/components/plugins/reactNative/hostApi';
-import { createPluginReactNativeBundleCache } from '@/components/plugins/reactNative/bundleCache';
-import {
-    getInstalledPluginUiClientExecutableComposition,
-    resolvePluginUiClientActionRegistration,
-} from '@/components/plugins/reactNative/clientExecutableContributions';
-import { resolveProjectedPluginUiClientExecutables } from '@/components/plugins/reactNative/clientExecutableProjection';
 import type {
     PluginReactNativeExecutableExport,
     PluginReactNativeLoaderBackend,
 } from '@/components/plugins/reactNative/loader';
-import {
-    EMPTY_PLUGIN_UI_PROJECTION,
-    type PluginUiProjectionModel,
-} from '@/sync/domains/plugins/ui/projection';
-import { PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY } from '@/sync/domains/plugins/ui/projectionUnion';
+import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import type { PluginReactNativeBundleCacheIdentity } from '@/sync/domains/plugins/ui/reactNativeRuntime';
 
-import {
-    createPluginSurfaceActionHostApi as createPluginSurfaceActionHostApiImpl,
-    dispatchPluginSurfaceAction as dispatchPluginSurfaceActionImpl,
-    type DispatchPluginSurfaceActionInput,
-    type PluginSurfaceContributedActionTransport,
-    type PluginSurfaceHostActionExecute,
+import type {
+    DispatchPluginSurfaceActionInput,
+    PluginSurfaceContributedActionTransport,
+    PluginSurfaceHostActionExecute,
 } from './pluginSurfaceActionDispatch';
-import { createBoundPluginSurfaceController } from './boundPluginSurfaceController';
-import { createPluginSurfaceStoredImageOwner } from './pluginSurfaceStoredImage';
-import { dispatchPluginResolvedSemanticCommand } from './dispatchPluginResolvedSemanticCommand';
-import { dispatchPluginAppPageHeaderAction } from '@/components/appShell/plugins/pluginAppPageHeaderActions';
 import type { PluginAppPage } from '@/components/appShell/plugins/pluginAppPages';
-import { getPluginUiEphemeralSharedScope } from './pluginUiEphemeralSharedScope';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { getStorage } from '@/sync/domains/state/storageStore';
-import { getCurrentAuth, setCurrentAuth } from '@/auth/context/currentAuth';
-import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { readCredentialAuthorityKind } from '@/auth/context/credentialAuthority';
-import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { AuthTokenProvenanceSchema } from '@happier-dev/protocol/auth/authToken';
-import { createEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropRuntime';
-import { createPluginEntityDragDropBinding, executeMountedPluginEntityDropAction, settlePluginEntityDropActionResult } from './entityDragDrop/pluginEntityDragDropBinding';
 import { createActionOperationRunner } from '../../../../../cli/src/daemon/actionOperations/actionOperationRunner';
 import { createActionOperationStore } from '../../../../../cli/src/daemon/actionOperations/actionOperationStore';
-import { createUiAccountActionTransport } from '@/sync/ops/actions/accountActionTransport';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { NotificationsNotifyMeResultV1Schema } from '@happier-dev/protocol/account/notifications/notifyMeV1';
 import { DocCollaborationActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
 import { captureDocPassageV1 } from '@happier-dev/protocol/artifacts/artifactPassageV1';
 import { DiscussionReadResultV1Schema } from '@happier-dev/protocol/discussions/actions';
-import { answerDiscussionThreadForTests, createAccountTokenForTests, createHomeGovernanceHarness,
-    installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { createPluginSurfaceContextFixture } from '@/dev/testkit/fixtures/pluginSurfaceContextFixture';
 import { externalAuthoringPlugin, readExternalDoc, commentOnExternalDoc, proposeExternalDocEdit,
     requestExternalDocAcceptance, requestExternalDocDecline } from '../../../../../../packages/plugin-ui/fixtures/external-authoring/src/index';
 import { manifest as authoredAccountManifest, activate as activateAuthoredAccount } from '../../../../../../packages/plugin-sdk/fixtures/account-actions/src/accountRuntime';
-import { readPluginAccountAvailability, replacePluginAccountAvailabilityProjection, clearPluginAccountAvailabilityProjection } from '@/sync/domains/plugins/availability/projection';
-
-// The dispatcher and serializer stay real. The server-scoped RPC is the
-// system boundary that terminates this UI-side transport path.
-const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
+// Configure responses only at the physical daemon boundary, after real scoped
+// Home/Account and per-caller read admission have run.
+const daemonRpc = vi.hoisted(() => vi.fn());
 const newSessionNavigation = vi.hoisted(() => vi.fn());
 const nestedActionConfirmation = vi.hoisted(() => ({
     onShow: null as null | ((confirm: () => void, cancel: () => void) => void),
@@ -126,9 +92,41 @@ vi.mock('expo-router', async () => {
     return createExpoRouterMock({ router: { push: newSessionNavigation } }).module;
 });
 
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: machineRpcWithServerScopeMock,
-}));
+// Install transport before runtime fixtures: pluginSurfaceContext reaches the
+// Account encryption reader, which otherwise retains the real Socket.IO import.
+const network = await installSessionOpsNetworkBoundary();
+const { createActionExecutorBoundaryFixture } = await import('@/dev/testkit/fixtures/actionExecutorBoundary');
+const { createPluginSurfaceContextFixture } = await import('@/dev/testkit/fixtures/pluginSurfaceContextFixture');
+const { createPluginHostedWebHostApiBridgeHandler } = await import('@/components/plugins/hostApi/hostedWebAdapter');
+const { machinePluginStructuredMessageActionExecute, resetMachineProjectionReadsForTests } = await import('@/sync/ops/machineContributionRegistryProjection');
+const { getMachineContributionRegistryProjectionRevision } = await import('@/sync/ops/machineContributionRegistryProjectionRevision');
+const { resolveReasonCopy } = await import('@/sync/domains/surfaces/copy');
+const { createCanonicalPluginReactNativeHostApiAdapter } = await import('@/components/plugins/reactNative/hostApi');
+const { createPluginReactNativeBundleCache } = await import('@/components/plugins/reactNative/bundleCache');
+const { getInstalledPluginUiClientExecutableComposition, resolvePluginUiClientActionRegistration } = await import('@/components/plugins/reactNative/clientExecutableContributions');
+const { resolveProjectedPluginUiClientExecutables } = await import('@/components/plugins/reactNative/clientExecutableProjection');
+const { EMPTY_PLUGIN_UI_PROJECTION } = await import('@/sync/domains/plugins/ui/projection');
+const { PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY } = await import('@/sync/domains/plugins/ui/projectionUnion');
+const { createPluginSurfaceActionHostApi: createPluginSurfaceActionHostApiImpl, dispatchPluginSurfaceAction: dispatchPluginSurfaceActionImpl } = await import('./pluginSurfaceActionDispatch');
+const { createBoundPluginSurfaceController } = await import('./boundPluginSurfaceController');
+const { createPluginSurfaceStoredImageOwner } = await import('./pluginSurfaceStoredImage');
+const { dispatchPluginResolvedSemanticCommand } = await import('./dispatchPluginResolvedSemanticCommand');
+const { dispatchPluginAppPageHeaderAction } = await import('@/components/appShell/plugins/pluginAppPageHeaderActions');
+const { getPluginUiEphemeralSharedScope } = await import('./pluginUiEphemeralSharedScope');
+const { getStorage } = await import('@/sync/domains/state/storageStore');
+const { getCurrentAuth, setCurrentAuth } = await import('@/auth/context/currentAuth');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const { readCredentialAuthorityKind } = await import('@/auth/context/credentialAuthority');
+const { createEntityDragDropRuntime } = await import('@/components/ui/treeDragDrop/entityDragDropRuntime');
+const { createPluginEntityDragDropBinding, executeMountedPluginEntityDropAction, settlePluginEntityDropActionResult } = await import('./entityDragDrop/pluginEntityDragDropBinding');
+const { createUiAccountActionTransport } = await import('@/sync/ops/actions/accountActionTransport');
+const { answerDiscussionThreadForTests, createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+const { readPluginAccountAvailability, replacePluginAccountAvailabilityProjection, clearPluginAccountAvailabilityProjection } = await import('@/sync/domains/plugins/availability/projection');
+const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
+const { setActiveServer } = await import('@/sync/domains/server/serverRuntime');
+const { listServerProfiles } = await import('@/sync/domains/server/serverProfiles');
+const rpcHomes = new Map<string, Awaited<ReturnType<typeof network.addHome>>>();
 
 /**
  * Action schemas are not in the projection; the daemon answers them per Action.
@@ -148,18 +146,39 @@ function answerActionSchemasRead(request: unknown): unknown {
         : { ok: false, code: 'plugin_action_schemas_unavailable' };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+    network.resetRequests();
     resetMachineProjectionReadsForTests();
-    machineRpcWithServerScopeMock.mockImplementation(async (request: unknown) => answerActionSchemasRead(request));
+    daemonRpc.mockReset();
+    daemonRpc.mockImplementation(async (request: unknown) => answerActionSchemasRead(request));
+    await Promise.all(['server-client-action', 'server-wire', 'server-default', 'schema-home', 'server-composed', 'server-rn', 'server-1'].map(async name => {
+        const home = await network.addHome(`https://${name}`, 'test-account',
+            name === 'server-client-action' ? { serverIdentityId: 'srv_client_action' } : {});
+        rpcHomes.set(name, home);
+    }));
+    await setActiveServer({ serverId: rpcHomes.get('server-client-action')!.id });
+    network.setHttpResponder(async (url, init) => createEmptyAccountBootstrapHttpResponse(new URL(String(url)).pathname, init));
+    network.setRpcResponder(async request => daemonRpc({
+        machineId: request.targetId,
+        serverId: listServerProfiles().find(home => home.serverUrl === request.serverUrl)?.id,
+        method: request.method,
+        payload: request.payload,
+        timeoutMs: request.timeoutMs,
+    }));
 });
+
+afterEach(async () => {
+    await serverScopedRpcSocketPool.stopAll();
+    resetScopedMachineTransportCacheForTests();
+});
+afterAll(async () => { await network.dispose(); });
 
 async function readContributedActionWire(machineId: string, options: Parameters<PluginSurfaceContributedActionTransport>[1]) {
     let payload: unknown;
     // Observe the actual serializer at its network boundary, including its issuance fence.
-    machineRpcWithServerScopeMock.mockImplementationOnce(async (request: unknown) => {
+    daemonRpc.mockImplementationOnce(async (request: unknown) => {
         if (!request || typeof request !== 'object' || !('payload' in request)) throw new Error('Expected an RPC payload');
         expect('method' in request && request.method).toBe(RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE);
-        if ('onIssued' in request && typeof request.onIssued === 'function') request.onIssued();
         payload = request.payload;
         return { ok: true, result: {} };
     });
@@ -796,7 +815,7 @@ describe('Account Action placement through the executable dispatcher', () => {
         const provider = PluginProjectedActionV2Schema.parse({ ...resolveDaemonTargetAction({ pluginId: source.manifest.id, localId: 'inspect' }),
             occurrenceId: 'machine-source-current', surfaces: ['plugin'] });
         const requests: ReturnType<typeof DaemonPluginStructuredMessageActionExecuteRequestSchema.parse>[] = [];
-        machineRpcWithServerScopeMock.mockImplementation(async (request: { method: string; payload: unknown; onIssued?: () => void }) => {
+        daemonRpc.mockImplementation(async (request: { method: string; payload: unknown; onIssued?: () => void }) => {
             if (request.method === RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ) return {
                 status: 'sourceDeclarations', pluginId: CALLER_PLUGIN_ID, sourceDeclarations: [{ occurrenceId: provider.occurrenceId,
                     sourceCustody: { kind: 'development', registeredRootId: 'machine-source-root' },
@@ -805,7 +824,6 @@ describe('Account Action placement through the executable dispatcher', () => {
                         ui: { renderers: [] } } } }],
             };
             if (request.method !== RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE) throw new Error('Unexpected Machine request');
-            request.onIssued?.();
             requests.push(DaemonPluginStructuredMessageActionExecuteRequestSchema.parse(request.payload));
             return { ok: true, result: { key: 'source read' } };
         });
@@ -854,7 +872,7 @@ describe('Account Action placement through the executable dispatcher', () => {
         await activation.composition.unload();
         try {
             await activation.composition.reconcile([activation.activation]);
-            machineRpcWithServerScopeMock.mockClear();
+            daemonRpc.mockClear();
             const dispatch = (value: PluginUiJsonValueV1) => dispatchPluginSurfaceAction({
                 action: { pluginId: authoredAccountManifest.id, localId: 'echo' }, input: value,
                 invocationSurface: 'ui', clientAction: {}, pluginUiProjection: activation.projection,
@@ -867,7 +885,7 @@ describe('Account Action placement through the executable dispatcher', () => {
                 scopedLaunchFacts: { machineId: null, serverId: 'server-client-action', interactionEnabled: true },
                 accountLifetime, scopeIsCurrent: () => accountLifetime.isCurrent(),
             })).toEqual({ ok: true, result: { key: 'public path', surface: 'ui' } });
-            expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
+            expect(daemonRpc).not.toHaveBeenCalled();
         } finally { await activation.composition.unload(); accountLifetime.retire(); }
     });
 
@@ -918,7 +936,7 @@ describe('Account Action placement through the executable dispatcher', () => {
         await activation.composition.unload();
         try {
             await activation.composition.reconcile([activation.activation]);
-            machineRpcWithServerScopeMock.mockClear();
+            daemonRpc.mockClear();
             const dispatch = (value: PluginUiJsonValueV1) => dispatchPluginSurfaceAction({
                 action: { pluginId: CALLER_PLUGIN_ID, localId: activation.action.id }, input: value,
                 invocationSurface: surface, clientAction: {}, pluginUiProjection: activation.projection,
@@ -928,7 +946,7 @@ describe('Account Action placement through the executable dispatcher', () => {
             expect(effects).toBe(0);
             expect(await dispatch({ value: 'one write' })).toEqual({ ok: true, result: { kind: 'uncertain', value: { value: 'one write' } } });
             expect(effects).toBe(1);
-            expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
+            expect(daemonRpc).not.toHaveBeenCalled();
             accountLifetime.retire();
             expect(await dispatch({ value: 'retired' })).toMatchObject({ ok: false });
             expect(effects).toBe(1);
@@ -1297,9 +1315,9 @@ describe('plugin-surface action branch selection', () => {
         const shown = new Promise<void>((resolve) => { dialogShown = resolve; });
         nestedActionConfirmation.onShow = (approve) => { confirm = approve; dialogShown(); };
         const requests: unknown[] = [];
-        machineRpcWithServerScopeMock.mockImplementation(async (request: Readonly<{ method: string; payload?: unknown; onIssued?: () => void }>) => {
+        daemonRpc.mockImplementation(async (request: Readonly<{ method: string; payload?: unknown; onIssued?: () => void }>) => {
             if (request.method !== RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE) return answerActionSchemasRead(request);
-            requests.push(request.payload); request.onIssued?.();
+            requests.push(request.payload);
             throw new Error('acknowledgement lost after the nested mutation was emitted');
         });
         const authorErrors: unknown[] = [];
@@ -1359,7 +1377,7 @@ describe('plugin-surface action branch selection', () => {
             target: { pluginId: CALLER_PLUGIN_ID, occurrenceId: `occurrence-${CALLER_PLUGIN_ID}`, sourceCustody: TARGET_SOURCE_CUSTODY },
             points: [],
         };
-        machineRpcWithServerScopeMock.mockImplementation(async (request: Readonly<{ method: string }>) => (
+        daemonRpc.mockImplementation(async (request: Readonly<{ method: string }>) => (
             request.method === RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ
                 ? { status: 'current', targetedContributions, targetedSurfaceMounts: [] }
                 : answerActionSchemasRead(request)
@@ -1380,7 +1398,7 @@ describe('plugin-surface action branch selection', () => {
                 resolveContributedAction: resolveExactClientAction(activation.action),
                 clientAction: {},
             })).resolves.toEqual({ ok: true, result: { targetedContributions, supportsSelection: true } });
-            expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+            expect(daemonRpc).toHaveBeenCalledWith(expect.objectContaining({
                 method: RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ,
                 machineId: CLIENT_ACTION_ORIGIN.materializationRef.machineId,
                 serverId: 'server-client-action',
@@ -1392,7 +1410,7 @@ describe('plugin-surface action branch selection', () => {
     });
 
     it('refuses source handles from a newer target occurrence while the client Action remains registered', async () => {
-        machineRpcWithServerScopeMock.mockImplementation(async (request: Readonly<{ method: string }>) => (
+        daemonRpc.mockImplementation(async (request: Readonly<{ method: string }>) => (
             request.method === RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ
                 ? { status: 'current', targetedContributions: {
                     target: { pluginId: CALLER_PLUGIN_ID, occurrenceId: 'replacement-target', sourceCustody: TARGET_SOURCE_CUSTODY },
@@ -1439,7 +1457,7 @@ describe('plugin-surface action branch selection', () => {
         clientActionSchemasByQualifiedId.set(buildQualifiedPluginContributionKey(operation.action), {
             inputSchema: { type: 'object', properties: {}, additionalProperties: false },
         });
-        machineRpcWithServerScopeMock.mockImplementation(async (request: Readonly<{ method: string }>) => {
+        daemonRpc.mockImplementation(async (request: Readonly<{ method: string }>) => {
             if (request.method === RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ) {
                 return { status: 'current', targetedContributions, targetedSurfaceMounts: [] };
             }
@@ -1717,7 +1735,7 @@ describe('plugin-surface action branch selection', () => {
             accountLifetime,
             occurrenceId: 'triage-cold-search-generation',
         });
-        machineRpcWithServerScopeMock.mockImplementation(async (request: Readonly<{ method: string }>) => (
+        daemonRpc.mockImplementation(async (request: Readonly<{ method: string }>) => (
             request.method === RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ
                 ? { status: 'current', targetedContributions: PluginUiTargetedContributionsV1Schema.parse({
                     target: { pluginId: activation.action.pluginId, occurrenceId: activation.action.occurrenceId,
@@ -2037,7 +2055,7 @@ describe('plugin-surface action branch selection', () => {
             outputSchema,
         });
         const action = activation.action;
-        const rpcCallsBefore = machineRpcWithServerScopeMock.mock.calls.length;
+        const rpcCallsBefore = network.requests.length;
         // The bulk projection carries no schemas; dispatch reads them per Action.
         expect(action).not.toHaveProperty('inputSchema');
         expect(action).not.toHaveProperty('outputSchema');
@@ -2059,14 +2077,14 @@ describe('plugin-surface action branch selection', () => {
                 result: { accepted: true, privateResult: { title: 'Release' } },
             });
             expect(handler).toHaveBeenCalledWith({ title: 'Release' });
-            const schemaReads = machineRpcWithServerScopeMock.mock.calls
+            const schemaReads = network.requests
                 .slice(rpcCallsBefore)
-                .map(([request]) => request as Readonly<{ method: string; machineId: string; serverId: string | null; payload: unknown }>)
                 .filter((request) => request.method === RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ);
             // One read per Action occurrence, from the Action's own authority.
             expect(schemaReads).toEqual([expect.objectContaining({
-                machineId: CLIENT_ACTION_HOST_ORIGIN.machineId,
-                serverId: CLIENT_ACTION_HOST_ORIGIN.serverId,
+                targetId: CLIENT_ACTION_HOST_ORIGIN.machineId,
+                serverUrl: rpcHomes.get(CLIENT_ACTION_HOST_ORIGIN.serverId)!.serverUrl,
+                token: rpcHomes.get(CLIENT_ACTION_HOST_ORIGIN.serverId)!.token,
                 payload: {
                     machineId: CLIENT_ACTION_HOST_ORIGIN.machineId,
                     expectedOccurrenceId: action.occurrenceId,
@@ -2932,8 +2950,8 @@ describe('plugin-surface action branch selection', () => {
     });
 
     it('sends a mounted binding through the default daemon transport and omits it for unmounted dispatch', async () => {
-        machineRpcWithServerScopeMock.mockReset();
-        machineRpcWithServerScopeMock
+        daemonRpc.mockReset();
+        daemonRpc
             .mockResolvedValueOnce({ ok: true, result: { route: 'same' } })
             .mockResolvedValueOnce({ ok: true, result: { route: 'cross' } })
             .mockResolvedValueOnce({ ok: true, result: { route: 'unmounted' } });
@@ -2985,7 +3003,7 @@ describe('plugin-surface action branch selection', () => {
             },
         })).resolves.toEqual({ ok: true, result: { route: 'unmounted' } });
 
-        expect(machineRpcWithServerScopeMock).toHaveBeenNthCalledWith(1, expect.objectContaining({
+        expect(daemonRpc).toHaveBeenNthCalledWith(1, expect.objectContaining({
             machineId: 'machine-default',
             serverId: 'server-default',
             method: RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE,
@@ -3001,7 +3019,7 @@ describe('plugin-surface action branch selection', () => {
                 },
             },
         }));
-        expect(machineRpcWithServerScopeMock).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        expect(daemonRpc).toHaveBeenNthCalledWith(2, expect.objectContaining({
             machineId: 'machine-default',
             serverId: 'server-default',
             method: RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE,
@@ -3017,7 +3035,7 @@ describe('plugin-surface action branch selection', () => {
                 },
             },
         }));
-        expect(machineRpcWithServerScopeMock).toHaveBeenNthCalledWith(3, expect.objectContaining({
+        expect(daemonRpc).toHaveBeenNthCalledWith(3, expect.objectContaining({
             machineId: 'machine-default',
             serverId: 'server-default',
             method: RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE,
@@ -3029,7 +3047,7 @@ describe('plugin-surface action branch selection', () => {
                 executionSurface: 'ui',
             },
         }));
-        const unmountedRequest = machineRpcWithServerScopeMock.mock.calls[2]?.[0] as
+        const unmountedRequest = daemonRpc.mock.calls[2]?.[0] as
             | Readonly<{ payload?: Readonly<Record<string, unknown>> }>
             | undefined;
         expect(unmountedRequest?.payload).not.toHaveProperty('mountedBinding');
@@ -3180,7 +3198,7 @@ describe('plugin-surface action branch selection', () => {
     it('refreshes a stale occurrence refused by the Action schema read before dispatch', async () => {
         const scope = { serverId: 'schema-home', machineId: 'schema-machine' };
         const before = getMachineContributionRegistryProjectionRevision(scope);
-        machineRpcWithServerScopeMock.mockResolvedValueOnce({ ok: false, code: 'plugin_occurrence_stale' });
+        daemonRpc.mockResolvedValueOnce({ ok: false, code: 'plugin_occurrence_stale' });
         const result = await dispatchPluginSurfaceAction({
             callerPluginId: CALLER_PLUGIN_ID,
             action: 'refresh-index',
@@ -3238,11 +3256,11 @@ describe('present-user confirmation for daemon-target Actions', () => {
         const terminalToken = `header.${Buffer.from(JSON.stringify({ sub: 'terminal-account', tokenEpoch: 0,
             provenance: AuthTokenProvenanceSchema.parse({ v: 1, kind: 'terminal', authority: 'account_automation' }),
         })).toString('base64url')}.signature`;
-        const homes = await serveAccountHomes({ homes: [
-            { key: 'target', serverUrl: 'https://plugin-target.example.test', accountId: 'terminal-account', credentials: { token: terminalToken } },
-            { key: 'focused', serverUrl: 'https://plugin-focused.example.test', accountId: 'focused-account', currentAccount: true },
-        ], route: () => undefined });
-        const focusedHome = homes.homes.focused!;
+        const targetHome = await network.addHome('https://plugin-target.example.test', 'terminal-account', { credentials: { token: terminalToken } });
+        const focusedHome = await network.addHome('https://plugin-focused.example.test', 'focused-account', {
+            credentials: { token: createAccountTokenForTests('focused-account', { currentAccount: true }) },
+        });
+        await setActiveServer({ serverId: focusedHome.id });
         const focusedCredentials = await TokenStorage.getCredentialsForServerUrl(focusedHome.serverUrl, { serverId: focusedHome.id });
         if (!focusedCredentials) throw new Error('Focused Home credential missing');
         setCurrentAuth({ isAuthenticated: true, credentials: focusedCredentials,
@@ -3263,11 +3281,14 @@ describe('present-user confirmation for daemon-target Actions', () => {
                     ...resolveConfirmedDaemonTargetAction(identity), dangerLevel: 'writesLocal',
                     confirmationWhen: { presentUserUi: false },
                 }), requestCurrentIntent,
-                contributedAction: { machineId: 'machine-1', serverId: homes.homes.target!.id, execute: contributed },
+                contributedAction: { machineId: 'machine-1', serverId: targetHome.id, execute: contributed },
             })).toMatchObject({ ok: true });
             expect(requestCurrentIntent).toHaveBeenCalledOnce();
             expect(contributed.mock.calls[0]?.[1].presentUserIntent).toBe('confirmed');
-        } finally { setCurrentAuth(previousAuth); await homes.dispose(); }
+            expect(network.requests.filter(request => request.method === RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ)).toEqual([
+                expect.objectContaining({ serverUrl: targetHome.serverUrl, token: terminalToken, targetId: 'machine-1' }),
+            ]);
+        } finally { setCurrentAuth(previousAuth); }
     });
 
     it.each([

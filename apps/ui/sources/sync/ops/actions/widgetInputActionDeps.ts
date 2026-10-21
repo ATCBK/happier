@@ -27,6 +27,7 @@ import { readWidgetInputTargetV1, validateWidgetWorkspaceInputV1 } from '@happie
 import { readSessionWidgetProvidedContext } from '@/components/widgets/surface/sessionWidgetContext';
 import { MachineTargetV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { canUsePrivateProjectAccountAction, createUiProjectAccountRowsClient } from '@/sync/api/projects/projectAccountRowsClient';
+import { readInputTypeOptionsProducer } from '@/sync/domains/plugins/ui/inputTypeOptionsProducer';
 
 const NO_PURPOSE_BINDINGS: QualifiedConnectedAccountPurposeBindingsV1 = { v: 1, bindings: [] };
 
@@ -288,9 +289,18 @@ export function createWidgetInputActionDepsV1(account: LazyActionAccountContext 
             const descriptor = descriptors.get(request);
             const targetDeclaration = descriptor ? readWidgetInputTargetV1(descriptor) : null;
             const selected = targetDeclaration?.kind === 'session' ? VoiceTrackedSessionAddressV1Schema.safeParse(readInputPath(input, targetDeclaration.path)) : null;
+            let context = request.context;
+            if (field.inputType && 'pluginId' in field.inputType) {
+                const runtime = await readWidgetActionRuntimeV1(request.ref.surface, account, request.signal, selected?.success ? selected.data : undefined, deps);
+                if ('ok' in runtime || !runtime.isCurrent()) return { status: 'unavailable', reasonCode: 'input_type_options_unavailable' };
+                const type = runtime.projection?.inputTypesById[buildQualifiedPluginContributionKey(field.inputType)];
+                const producer = readInputTypeOptionsProducer(type, request.ref.surface.serverId, runtime.machineId);
+                if (producer.unavailableReasonCode) return { status: 'unavailable', reasonCode: producer.unavailableReasonCode };
+                context = { ...context, externalActionTarget: { kind: 'machine', machineId: producer.machineId } };
+            }
             const result = await executor.execute('action.options.resolve', { consumer: { kind: 'widget', surface: request.ref.surface, definition: request.instance.definition,
                 ...(selected?.success ? { selectedSession: selected.data } : {}) },
-                fieldPath: field.path, draftInput: input, values }, { ...request.context, ...(request.signal ? { signal: request.signal } : {}) });
+                fieldPath: field.path, draftInput: input, values }, { ...context, ...(request.signal ? { signal: request.signal } : {}) });
             account.assertCurrent();
             if (!result.ok) return { status: result.errorCode === 'credential_scope_denied' ? 'denied' : 'unavailable', reasonCode: result.errorCode ?? 'widget_input_options_unavailable' };
             return (getActionSpec('action.options.resolve').outputSchema!.parse(result.result) as PublicActionResultById['action.options.resolve']).options;

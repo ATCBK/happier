@@ -7,9 +7,10 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createPluginWidgetAreaHostPortV1 } from '@happier-dev/protocol/plugins/ui';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createHomeHubArtifactHttpBoundary, createLayoutArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
-import { buildWidgetSurfaceArtifactIdV1, WidgetAreaLayoutV1Schema, WIDGET_SURFACE_ARTIFACT_KIND_V1, type WidgetAreaLayoutV1 } from '@happier-dev/protocol/widgets';
+import { buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1, WidgetAreaLayoutV1Schema, WIDGET_SURFACE_ARTIFACT_KIND_V1, type WidgetAreaLayoutV1 } from '@happier-dev/protocol/widgets';
 import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { ExternalActionExecutionAuthorizationRequestV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { widgetProjectionEntry, widgetProjectionOf, widgetInstalledPackage } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
@@ -28,6 +29,8 @@ import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/e
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { ExternalActionRequesterInvocationV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { createPlainProjectAccountRowListFixture, createProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoardArtifactBoundary';
+import { createWorkBoardArtifactPortV1 } from '@happier-dev/protocol/boards/workBoardArtifactV1';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 
 // The viewer accepts the real Action confirmation at its presentation boundary.
@@ -662,6 +665,7 @@ it('resolves installed Board Count choices and input admission on the consumer S
     await import('@/sync/syncEngine');
     const http = createHomeHubArtifactHttpBoundary('viewer');
     let approvalHttp: ReturnType<typeof createLayoutArtifactHttpBoundary<ReturnType<typeof ApprovalRequestV2Schema.parse>>> | null = null;
+    let areaHttp: ReturnType<typeof createLayoutArtifactHttpBoundary<WidgetAreaLayoutV1>> | null = null;
     const serverIdentityId = 'srv_board_counter_inputs';
     const features = createRootLayoutFeaturesResponse({ capabilities: { serverIdentity: { serverIdentityId } } });
     const invocations: ExternalActionRequesterInvocationV1[] = [];
@@ -672,6 +676,11 @@ it('resolves installed Board Count choices and input admission on the consumer S
             return { actionId: 'widgets.catalog.list', fieldPath: 'filter', optionsSourceId: 'plugin-input:examples.widget-areas/count-kind',
                 options: [{ value: 'files', label: 'Files' }, { value: 'folders', label: 'Folders' }] };
         },
+    });
+    const missingConsumerHttp = await createExternalActionAccountHttpBoundary({ serverUrl: 'http://board-counter-input.test',
+        serverIdentityId, accountId: 'viewer', machineId: 'a-other-machine', actionId: 'action.options.resolve', tokenEpoch: 0,
+        execute: () => null,
+        failure: () => ({ errorCode: 'input_type_consumer_unavailable', error: 'input_type_consumer_unavailable' }),
     });
     const { encodeSessionSystemRecordRevision } = await import('../../../../../server/sources/app/session/systemRecords/sessionSystemRecordRevision');
     const instanceId = 'c15c9e20-f054-4681-ae82-cb89c6cf5533';
@@ -690,11 +699,17 @@ it('resolves installed Board Count choices and input admission on the consumer S
     const connection = await restoreServerAccountForTest({ serverUrl: 'http://board-counter-input.test', serverIdentityId, accountId: 'viewer',
         credentials: { token: createAccountTokenForTests('viewer', { currentAccount: true }) }, request: async (input, init) => {
         const url = new URL(String(input));
+        if (areaHttp && (url.pathname.startsWith(`/v1/artifacts/${areaHttp.artifactId}`)
+            || url.pathname === '/v1/artifacts' && init?.method === 'POST'
+                && Reflect.get(JSON.parse(String(init.body)), 'id') === areaHttp.artifactId)) return areaHttp.request(input, init);
         if (approvalHttp && url.pathname.startsWith(`/v1/artifacts/${approvalHttp.artifactId}`)) return approvalHttp.request(input, init);
-        const options = await optionsHttp.handle(url, init);
-        if (options && url.pathname === '/v1/machines') return Response.json([
-            createPlainMachineRowFixture({ id: 'a-other-machine', accountId: 'viewer' }), ...await options.json(),
-        ]);
+        if (url.pathname === '/v1/machines') return Response.json([missingConsumerHttp.machine, optionsHttp.machine]);
+        if (url.pathname === '/v1/machines/read-batch') return createMachineReadBatchResponseFixture(init?.body,
+            id => [missingConsumerHttp.machine, optionsHttp.machine].find(machine => machine.id === id) ?? null);
+        const optionsRequest = init?.body && (url.pathname.startsWith('/v1/actions/') || url.pathname.startsWith('/v1/action-'))
+            ? ExternalActionExecutionAuthorizationRequestV1Schema.safeParse(JSON.parse(String(init.body))) : null;
+        const options = await (optionsRequest?.success && optionsRequest.data.machineId === 'a-other-machine'
+            ? missingConsumerHttp : optionsHttp).handle(url, init);
         if (options) return options;
         if (url.pathname === '/v1/features' || url.pathname === '/v1/features/authenticated') return Promise.resolve(Response.json(features));
         if (url.pathname === '/v2/sessions/counter-session/system-records/record') { boardRecordReads++; return Promise.resolve(Response.json({ record: url.searchParams.get('kind') === 'item.v1' ? record() : null })); }
@@ -717,6 +732,9 @@ it('resolves installed Board Count choices and input admission on the consumer S
             machines: Object.fromEntries(machines.map(machine => [machine.id, machine])), machineListByServerId: { [scope.serverId]: machines } });
         const pluginId = 'examples.widget-areas';
         const inputType = { pluginId, localId: 'count-kind' };
+        const typeOrigin = { serverIdentityId, materializationRef: {
+            machineId: 'z-counter-machine', materializationId: 'counter-materialization', pluginId,
+        } };
         const countKindSchema = { type: 'string', enum: ['files', 'folders'] } satisfies PluginJsonSchemaV2;
         const inputSchema: PluginJsonSchemaV2 = { type: 'object', additionalProperties: false, required: ['directory', 'filter'],
             properties: { directory: { type: 'string', minLength: 1 }, filter: countKindSchema } };
@@ -728,18 +746,21 @@ it('resolves installed Board Count choices and input admission on the consumer S
                     { path: 'directory', title: 'Directory on the serving machine', widget: 'text', required: true },
                     { path: 'filter', title: 'Count', widget: 'select', required: true, inputType },
                 ] } })])) }, inputTypes: { family: 'inputTypes', entriesById: { [`${pluginId}/count-kind`]: { id: `${pluginId}/count-kind`, pluginId,
+                    executionOrigin: typeOrigin,
                     pluginVersion: '1.0.0', occurrenceId: 'counter-occurrence', definition: { id: 'count-kind', title: 'Count kind', semantic: 'directory-count-kind',
                         valueSchema: countKindSchema, options: { resource: 'count-kinds' } } } } } } });
         daemon.projections.set('z-counter-machine', projection);
         clearDaemonMergedProjectionCacheForTests();
         const projected = unionPluginUiProjections([{ machineId: 'z-counter-machine', serverId: scope.serverId, projection: normalizePluginUiProjection(projection),
-            phase: 'current', interactionEnabled: true }], new Map());
+            phase: 'current', interactionEnabled: true }], new Map([[pluginId, typeOrigin]]));
         await act(async () => { tree = renderer.create(<AppShellPluginUiProjectionValueProvider value={{ ...projected,
             pluginBrowserProjection: null, platform: 'web', accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' },
             reloadClientExecutables() {}, reloadConnectedAccountProjection() {} }}><></></AppShellPluginUiProjectionValueProvider>); });
         const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
         const { useInputFieldOptions } = await import('@/components/sessions/actions/useInputFieldOptions');
-        const executor = createDefaultActionExecutor();
+        const workBoardHttp = createWorkBoardArtifactBoundary({ v: 1, boards: [{ id: 'pins', name: 'Pins',
+            source: { picked: [] }, mode: 'canvas', snap: true, positionsByItemRef: {}, pinnedInSessions: false }] });
+        const executor = createDefaultActionExecutor({ workBoardArtifacts: createWorkBoardArtifactPortV1(workBoardHttp.transport) });
         const surface = { ...scope, owner: { kind: 'sessionBoard' as const, sessionId: session.id } };
         const { resolveUiAccountActionFallbackMachineId } = await import('./accountActionDeps');
         expect(resolveUiAccountActionFallbackMachineId(scope)).toBe('a-other-machine');
@@ -763,6 +784,63 @@ it('resolves installed Board Count choices and input admission on the consumer S
                 await vi.waitFor(() => expect(hook.getCurrent().state(field)).toMatchObject({ status: 'ready',
                     options: [{ value: 'files' }, { value: 'folders' }] }));
             } finally { await hook.unmount(); }
+        }
+        // App widgets have no Session target. The Account's first reachable
+        // machine has no Count consumer; setup and write admission must both
+        // use the type producer retained by the real union projection.
+        {
+            const pinnedSurface = { ...scope, owner: { kind: 'pluginArea' as const, pluginId,
+                pageId: 'gallery', area: 'pinned' } };
+            areaHttp = createLayoutArtifactHttpBoundary('viewer', {
+                artifactId: buildWidgetSurfaceArtifactIdV1(pinnedSurface), kind: WIDGET_SURFACE_ARTIFACT_KIND_V1,
+                defaultLayout: { v: 1, surface: pinnedSurface, items: [] },
+                parseLayout: value => WidgetAreaLayoutV1Schema.parse(value), buildHeader: buildWidgetSurfaceArtifactHeaderV1,
+            });
+            areaHttp.seed({ v: 1, surface: pinnedSurface, items: [] });
+            const pinned = { ...instance(), id: 'pinned-count' };
+            const context = { surface: 'ui' as const, serverId: scope.serverId, expectedAccountId: scope.accountId };
+            const options = await executor.execute('action.options.resolve', {
+                consumer: { kind: 'widget', surface: pinnedSurface, definition: pinned.definition }, fieldPath: 'filter',
+                draftInput: { directory: pinned.bindings.directory.value },
+            }, { ...context, externalActionTarget: { kind: 'machine', machineId: 'z-counter-machine' } });
+            expect(options, JSON.stringify(options)).toMatchObject({ ok: true, result: { options: [{ value: 'files' }, { value: 'folders' }] } });
+            const { createWidgetAreaActionDepsV1 } = await import('./widgetAreaActionDeps');
+            const { createUiAccountAction } = await import('./accountActionDeps');
+            const relay = createUiAccountAction({ account });
+            const base = createActionExecutorBoundaryFixture({ ...createWidgetAreaActionDepsV1(account), widgetAccountScope: () => account,
+                readAdmittedInputTypeOptions: ({ input, context }) => relay({ actionId: 'action.options.resolve', input, context }) });
+            const owner = createWidgetInputActionDepsV1(account, { ...base, ...createWidgetCatalogActionDepsV1(account, base) }).widgetInputs!;
+            const admitted = await owner.resolve({ ref: { surface: pinnedSurface, instanceId: pinned.id }, instance: pinned,
+                admission: 'configuration', context: { ...context, authority: 'present_user', actionCaller: { kind: 'host' }, runtimeAccountId: scope.accountId } });
+            expect(admitted, JSON.stringify(admitted)).toEqual({ status: 'ready', input: {
+                directory: pinned.bindings.directory.value, filter: 'files',
+            } });
+            const added = await executor.execute('widgets.item.add', { surface: pinnedSurface, instance: pinned }, context);
+            expect(added, JSON.stringify(added)).toMatchObject({ ok: true });
+            expect(areaHttp.layout().items).toMatchObject([{ kind: 'widget', instance: pinned }]);
+            const edited = await executor.execute('widgets.item.inputs.set', {
+                ref: { surface: pinnedSurface, instanceId: pinned.id }, bindings: { filter: { kind: 'value', value: 'folders' } }, paths: ['filter'],
+            }, context);
+            expect(edited, JSON.stringify(edited)).toMatchObject({ ok: true });
+            expect(areaHttp.layout().items).toMatchObject([{ kind: 'widget', instance: { bindings: {
+                directory: pinned.bindings.directory, filter: { kind: 'value', value: 'folders' },
+            } } }]);
+            for (const owner of [{ kind: 'home' as const }, { kind: 'workBoard' as const, boardId: 'pins' }]) {
+                const surface = { ...scope, owner };
+                const copy = { ...pinned, id: `pin-${owner.kind}` };
+                const added = await executor.execute('widgets.item.add', { surface, instance: copy }, context);
+                expect(added, JSON.stringify(added)).toMatchObject({ ok: true });
+                expect(await executor.execute('widgets.item.inputs.validate', {
+                    ref: { surface, instanceId: copy.id }, bindings: copy.bindings,
+                }, context)).toMatchObject({ ok: true, result: { status: 'ready' } });
+                expect(await executor.execute('widgets.item.inputs.set', {
+                    ref: { surface, instanceId: copy.id }, bindings: { filter: { kind: 'value', value: 'folders' } }, paths: ['filter'],
+                }, context)).toMatchObject({ ok: true });
+                expect(await executor.execute('widgets.item.list', { surface }, context)).toMatchObject({ ok: true, result: {
+                    instances: expect.arrayContaining([expect.objectContaining({ instance: { ...copy,
+                        bindings: { ...copy.bindings, filter: { kind: 'value', value: 'folders' } } } })]),
+                } });
+            }
         }
         // A CLI proposal is executed by the approving Account app. Keep its real
         // catalog/type/options composition and inspect the durable replay result.
