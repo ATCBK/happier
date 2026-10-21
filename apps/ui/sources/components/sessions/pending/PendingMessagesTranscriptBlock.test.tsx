@@ -2218,6 +2218,29 @@ describe('PendingMessagesTranscriptBlock', () => {
             .toBe('Queued. Waiting for an earlier message');
     });
 
+    it('says a waiting message is held behind a blocked one and names that message for assistive tech', async () => {
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+        sessionValue = { active: true, presence: 'online', runtimeActivityState: 'idle', runtimeActivityActiveCount: 0 };
+        const blocked: PendingMessage = {
+            ...queuedMessage('stuck', 0),
+            text: 'Continue the retry cap review',
+            source: 'server_pending',
+            pendingDeliveryStatus: 'blocked',
+            pendingDeliveryBlockedReason: 'provider_rejected_before_acceptance',
+        };
+        const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
+            sessionId: 's1',
+            pendingMessages: [queuedMessage('ahead', 0), blocked, queuedMessage('held', 2)],
+            discardedMessages: [],
+        }));
+
+        expect(screen.findByTestId('pendingMessages.pendingAffordanceLabel:held')?.props.children).toBe('Behind a blocked message');
+        expect(screen.findByTestId('pendingMessages.pendingAffordance:held')?.props.accessibilityLabel)
+            .toBe('Behind a blocked message. Waiting for “Continue the retry cap review”');
+        // A row ahead of the blocked one is not held by it.
+        expect(screen.findByTestId('pendingMessages.pendingAffordanceLabel:ahead')?.props.children).toBe('Queued');
+    });
+
     it('delegates pending edit to the composer owner without opening a prompt', async () => {
         const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
         const onEditPendingMessage = vi.fn();

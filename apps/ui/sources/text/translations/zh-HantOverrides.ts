@@ -6943,6 +6943,8 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
                     waitingForRuntimeActivity: '正在等待執行階段活動結束',
                     runtimeActivityUnknown: '正在等待執行階段活動狀態',
                     waitingForPredecessor: '正在等待較早的訊息',
+                    waitingForBlockedPredecessor: '排在一則被阻擋的訊息之後',
+                    waitingForNamedMessage: ({ excerpt }: { excerpt: string }) => `正在等待「${excerpt}」`,
                     waitingForRuntime: '正在等待工作階段執行環境',
                     unsupportedAction: '傳送操作需要檢查',
                 },

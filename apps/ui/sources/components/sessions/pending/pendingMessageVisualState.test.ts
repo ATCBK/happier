@@ -72,6 +72,7 @@ describe('getPendingMessageVisualState', () => {
     it.each([
         [{ runtimeReachable: false }, 'waiting_for_runtime'],
         [{ runtimeReachable: true, hasEarlierRow: true, foregroundState: 'ready' }, 'waiting_for_predecessor'],
+        [{ runtimeReachable: true, hasEarlierRow: true, hasBlockedEarlierRow: true, foregroundState: 'ready' }, 'waiting_for_blocked_predecessor'],
         [{ runtimeReachable: true, foregroundState: 'active_unsteerable' }, 'waiting_for_foreground_turn'],
         [{ runtimeReachable: true, foregroundState: 'ready', deliveryTiming: 'after_runtime_idle', runtimeActivity: 'active' }, 'waiting_for_runtime_activity'],
         [{ runtimeReachable: true, foregroundState: 'ready', deliveryTiming: 'after_runtime_idle', runtimeActivity: 'unknown' }, 'runtime_activity_unknown'],

@@ -9938,6 +9938,8 @@ const enSession = {
       waitingForRuntimeActivity: 'Waiting for runtime activity to finish',
       runtimeActivityUnknown: 'Waiting for runtime activity status',
       waitingForPredecessor: 'Waiting for an earlier message',
+      waitingForBlockedPredecessor: 'Behind a blocked message',
+      waitingForNamedMessage: ({ excerpt }: { excerpt: string }) => `Waiting for “${excerpt}”`,
       waitingForRuntime: 'Waiting for the session runtime',
       unsupportedAction: 'Delivery action needs review',
     },

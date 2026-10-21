@@ -68,6 +68,15 @@ function getPendingText(message: PendingMessage | DiscardedPendingMessage): stri
     return String(raw);
 }
 
+/** The opening words of a pending message, enough to name it (one line, cut at a word). */
+function excerptPendingText(message: PendingMessage): string {
+    const text = getPendingText(message).replace(/\s+/g, ' ').trim();
+    if (text.length <= 48) return text;
+    const cut = text.slice(0, 48);
+    const atWord = cut.lastIndexOf(' ');
+    return `${(atWord > 24 ? cut.slice(0, atWord) : cut).trimEnd()}…`;
+}
+
 async function copyPendingMessageText(message: PendingMessage | DiscardedPendingMessage): Promise<boolean> {
     const text = getPendingText(message).trim();
     if (!text) return false;
@@ -345,6 +354,13 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         () => new Set(Object.keys(materializingLocalIdMap)),
         [materializingLocalIdMap],
     );
+    // The first row the queue is stuck on, read from that row's own state: rows after it say they
+    // wait behind it and name it, instead of a bare "Queued" (C3 U2 held Discussion carriers).
+    const blockedPendingIndex = React.useMemo(
+        () => pendingMessages.findIndex((message) => getPendingMessageVisualState(message, { materializingLocalIds }).kind === 'blocked'),
+        [materializingLocalIds, pendingMessages],
+    );
+    const blockedPendingExcerpt = blockedPendingIndex >= 0 ? excerptPendingText(pendingMessages[blockedPendingIndex]!) : '';
 
     const toggleMessageExpanded = React.useCallback((id: string) => {
         setExpandedMessageIds((prev) => {
@@ -682,6 +698,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
             hasEarlierRow: pendingMessages.slice(0, index).some((candidate) =>
                 candidate.source !== 'local_outbound' || candidate.deliveryStatus === 'accepted',
             ),
+            hasBlockedEarlierRow: blockedPendingIndex >= 0 && blockedPendingIndex < index,
             hasProviderDeliveryInFlight,
             runtimeReachable: pendingQueueRuntimeReachable,
             foregroundState: pendingQueueForegroundState,
@@ -745,6 +762,9 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                     // A delivery action that needs review is this message's own problem and says so.
                     : visualState.queuedReason === 'unsupported_action'
                         ? t('session.pendingMessages.queuedReasons.unsupportedAction')
+                    // Held behind a blocked row is this queue's own fact, not the Session's: say it here.
+                    : visualState.queuedReason === 'waiting_for_blocked_predecessor'
+                        ? t('session.pendingMessages.queuedReasons.waitingForBlockedPredecessor')
                     // A message waiting its turn wears one quiet "Queued" mark; why the queue waits
                     // is the Session's cause, said once on the composer's status line.
                     : visualState.queuedReason
@@ -764,6 +784,10 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                     ? t('session.pendingMessages.queuedReasons.runtimeActivityUnknown')
                     : visualState.queuedReason === 'waiting_for_predecessor'
                         ? t('session.pendingMessages.queuedReasons.waitingForPredecessor')
+                    : visualState.queuedReason === 'waiting_for_blocked_predecessor'
+                        ? t('session.pendingMessages.queuedReasons.waitingForNamedMessage', {
+                            excerpt: blockedPendingExcerpt,
+                        })
                         : visualState.queuedReason === 'waiting_for_runtime'
                             ? t('session.pendingMessages.queuedReasons.waitingForRuntime')
                             : null;
@@ -1180,6 +1204,8 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         handleSendNow,
         handleSteerNow,
         hasProviderDeliveryInFlight,
+        blockedPendingIndex,
+        blockedPendingExcerpt,
         isWeb,
         materializingLocalIds,
         menuPressAnchor,

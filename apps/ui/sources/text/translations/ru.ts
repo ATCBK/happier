@@ -8719,6 +8719,8 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
             waitingForRuntimeActivity: 'Ожидание завершения активности среды',
             runtimeActivityUnknown: 'Ожидание состояния активности среды',
             waitingForPredecessor: 'Ожидание предыдущего сообщения',
+            waitingForBlockedPredecessor: 'За заблокированным сообщением',
+            waitingForNamedMessage: ({ excerpt }: { excerpt: string }) => `Ожидание «${excerpt}»`,
             waitingForRuntime: 'Ожидание среды выполнения сеанса',
             unsupportedAction: 'Действие доставки требует проверки',
           },

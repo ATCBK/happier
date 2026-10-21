@@ -27,12 +27,15 @@ export type PendingMessageVisualState = Readonly<{
         | 'waiting_for_runtime_activity'
         | 'runtime_activity_unknown'
         | 'waiting_for_predecessor'
+        | 'waiting_for_blocked_predecessor'
         | 'waiting_for_runtime'
         | 'unsupported_action';
 }>;
 
 export type PendingMessageQueuedStateOptions = Readonly<{
     hasEarlierRow?: boolean;
+    /** An earlier row in this queue is itself blocked, so this one waits behind it. */
+    hasBlockedEarlierRow?: boolean;
     hasProviderDeliveryInFlight?: boolean;
     runtimeReachable?: boolean;
     foregroundState?: 'ready' | 'active_steerable' | 'active_unsteerable';
@@ -271,6 +274,7 @@ export function getPendingMessageVisualState(
     const queuedRequestedAction = message.pendingRequestedAction?.kind ?? 'enqueue';
     const queuedReason = derivePendingMessageQueuedReason(message, {
         hasEarlierRow: options?.hasEarlierRow ?? false,
+        hasBlockedEarlierRow: options?.hasBlockedEarlierRow ?? false,
         hasProviderDeliveryInFlight: options?.hasProviderDeliveryInFlight ?? false,
         runtimeReachable: options?.runtimeReachable ?? true,
         foregroundState: options?.foregroundState ?? 'ready',
@@ -305,6 +309,7 @@ function derivePendingMessageQueuedReason(
         || (action === 'steer_if_active' && context.foregroundState === 'active_steerable');
     if (context.hasProviderDeliveryInFlight) return 'waiting_for_predecessor';
     if (isUrgent) return undefined;
+    if (context.hasBlockedEarlierRow) return 'waiting_for_blocked_predecessor';
     if (context.hasEarlierRow) return 'waiting_for_predecessor';
     if (context.foregroundState !== 'ready') return 'waiting_for_foreground_turn';
     if (context.deliveryTiming !== 'after_runtime_idle') return undefined;

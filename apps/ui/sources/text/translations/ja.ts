@@ -8646,6 +8646,8 @@ localTailscale: {
           waitingForRuntimeActivity: 'ランタイムの処理完了を待っています',
           runtimeActivityUnknown: 'ランタイムの状態を待っています',
           waitingForPredecessor: '前のメッセージを待っています',
+          waitingForBlockedPredecessor: 'ブロックされたメッセージの後ろ',
+          waitingForNamedMessage: ({ excerpt }: { excerpt: string }) => `「${excerpt}」を待っています`,
           waitingForRuntime: 'セッションのランタイムを待っています',
           unsupportedAction: '配信アクションの確認が必要です',
         },

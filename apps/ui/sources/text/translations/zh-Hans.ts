@@ -8022,6 +8022,8 @@ const zhHansValues = {
           waitingForRuntimeActivity: '正在等待运行时活动结束',
           runtimeActivityUnknown: '正在等待运行时活动状态',
           waitingForPredecessor: '正在等待较早的消息',
+          waitingForBlockedPredecessor: '排在一条被阻止的消息之后',
+          waitingForNamedMessage: ({ excerpt }: { excerpt: string }) => `正在等待“${excerpt}”`,
           waitingForRuntime: '正在等待会话运行时',
           unsupportedAction: '递送操作需要检查',
         },
