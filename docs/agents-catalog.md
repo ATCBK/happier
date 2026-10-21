@@ -10,6 +10,15 @@ The goal is that both surfaces:
 - stay **explicit and reviewable** (no filesystem scanning, no side-effect self-registration),
 - share a stable **AgentId contract** across packages.
 
+In 0.3 development source, `@happier-dev/agents/presentation` exposes
+`readBundledAgentPresentation(agentId)` for hosts that need only a bundled
+Agent's declared name and optional light/dark identity colors. The existing
+bundled-plugin publisher derives these facts from the admitted manifest and UI
+descriptor; the UI's generated hues consume that same projection. This reader
+does not activate plugins, import app UI, or supply installed Agent metadata.
+Unknown ids return `null`; the shared `getNeutralAgentIdentityColor` supplies
+the existing neutral hue when a host has no admitted color.
+
 ---
 
 ## Key concepts (shared language)
