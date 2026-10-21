@@ -213,6 +213,12 @@ contract. The UI maps that code to the existing cancellation notice; it does not
 parse diagnostic prose. Already complete outputs remain complete when their
 retained conversation is stopped.
 
+A Start refusal proven to have created no Run can save a failed output while
+keeping its captured comparison. A temporarily absent receiver carries
+`reasonCode: 'RPC_CLIENT_NOT_AVAILABLE'` as well as its diagnostic reason. This
+does not authorize resending Start. An uncertain or lost Start observation keeps
+the original pending revision so the original request can still publish into it.
+
 `scm.diffSummary.investigateSurroundingFiles` is off by default in unreleased
 0.3 source. Generation uses the Account preference when the request omits
 `investigateSurroundingFiles`; an explicit boolean overrides it for that request.
