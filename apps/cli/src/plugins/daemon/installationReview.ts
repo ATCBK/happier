@@ -121,17 +121,22 @@ function projectOptionalHostAccess(
 }
 
 /**
- * The one executable-realm projection. It is both the realm set a human
- * reviews before installing and the set an automatic `allowed`
- * update may only contract, so the review dialog and the update-review policy
- * read the same realms from one owner.
+ * The executable-realm disclosure shared by every install-review surface.
+ * Portable contributions declare executable code even without a UI renderer.
  */
 export function projectPluginInstallationReviewExecutableRealms(
   manifest: CanonicalPluginManifest,
 ): PluginInstallationReview['executableRealms'] {
   const realms: Array<'daemon' | 'reactNative' | 'hostedWeb'> = [];
   if (manifest.entrypoints?.daemon || manifest.entrypoints?.development) realms.push('daemon');
-  if (manifest.contributes.ui.renderers.some((renderer) => renderer.kind === 'reactNative')) {
+  const hasPortableExecutable = PLUGIN_CONTRIBUTION_CATALOG_V2.some((entry) => (
+    entry.readEntries(manifest.contributes).some((value) => {
+      if (!value || typeof value !== 'object') return false;
+      const target = entry.runtimeRegistrationTarget(value as Readonly<Record<string, unknown>>);
+      return target?.realm === 'client' || target?.realm === 'account';
+    })
+  ));
+  if (hasPortableExecutable || manifest.contributes.ui.renderers.some((renderer) => renderer.kind === 'reactNative')) {
     realms.push('reactNative');
   }
   if (manifest.contributes.ui.renderers.some((renderer) => renderer.kind === 'hostedWeb' || renderer.kind === 'hostedHtml')) {

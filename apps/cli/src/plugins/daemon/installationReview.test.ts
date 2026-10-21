@@ -90,6 +90,30 @@ function createManifest(options: Readonly<{
 }
 
 describe('projectPluginInstallationReview', () => {
+  it('admits the authored Account Action artifact only when verified identities exactly match its declarations', async () => {
+    const { manifest: authoredManifest } = await import('../../../../../packages/plugin-sdk/fixtures/account-actions/src/index');
+    const manifest = readCanonicalPluginManifest(authoredManifest);
+    if (!manifest) throw new Error('Expected canonical authored Account Action manifest');
+    const source: PluginInstallationReviewSourceFacts = {
+      kind: 'path', locator: '/tmp/account-actions', development: false,
+      packageName: null, publisher: { status: 'unavailable' },
+      signature: { status: 'notProvided' }, provenance: { status: 'notProvided' },
+      curation: { status: 'notApplicable' }, updatePolicy: 'allowed',
+    };
+    const review = projectPluginInstallationReview({
+      manifest, source,
+      uiArtifacts: { verification: 'verified', contributionIds: ['account-runtime'] },
+    });
+    expect(review.uiArtifacts).toEqual({ status: 'verified', contributionIds: ['account-runtime'] });
+    expect(review.executableRealms).toEqual(['daemon', 'reactNative']);
+    expect(PluginInstallationReviewSchema.safeParse(review).success).toBe(true);
+    for (const contributionIds of [[], ['account-runtime', 'undeclared-runtime']]) {
+      expect(() => projectPluginInstallationReview({
+        manifest, source, uiArtifacts: { verification: 'verified', contributionIds },
+      })).toThrow('Verified plugin UI artifact identities do not match the manifest declarations');
+    }
+  });
+
   it('does not synthesize a review host floor when the canonical manifest omits its optional engine', () => {
     const review = projectPluginInstallationReview({
       manifest: createManifest({ includeHappierEngine: false }),
@@ -108,6 +132,28 @@ describe('projectPluginInstallationReview', () => {
     });
 
     expect(review.compatibility).toEqual({ runtimeApiVersion: 1 });
+    expect(review.executableRealms).toEqual(['daemon']);
+  });
+
+  it('discloses a client Action executable without requiring a UI renderer', () => {
+    const manifest = readCanonicalPluginManifest(createPluginManifestV2Fixture({
+      contributes: { actions: [{
+        id: 'preview', title: 'Preview', surfaces: ['cli'], scopes: ['global'], dangerLevel: 'safe',
+        execution: { target: 'client', platforms: ['web'], client: { artifactId: 'client-runtime', exportName: 'activate' } },
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      }] },
+    }));
+    if (!manifest) throw new Error('Expected canonical client Action manifest');
+    const review = projectPluginInstallationReview({
+      manifest,
+      source: {
+        kind: 'path', locator: '/tmp/client-actions', development: false,
+        packageName: null, publisher: { status: 'unavailable' }, signature: { status: 'notProvided' },
+        provenance: { status: 'notProvided' }, curation: { status: 'notApplicable' }, updatePolicy: 'allowed',
+      },
+      uiArtifacts: { verification: 'verified', contributionIds: ['client-runtime'] },
+    });
+    expect(review.executableRealms).toEqual(['daemon', 'reactNative']);
   });
 
   it('retains a bounded selected compatible engine range verbatim', () => {
@@ -204,6 +250,7 @@ describe('projectPluginInstallationReview', () => {
       uiArtifacts: { verification: 'verified', contributionIds: ['raw-voice-client'] },
     });
 
+    expect(review.executableRealms).toEqual(['daemon', 'reactNative']);
     expect(review.rawCredentialAccess).toEqual([
       {
         accessMode: 'raw',

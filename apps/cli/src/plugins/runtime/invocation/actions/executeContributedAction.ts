@@ -52,6 +52,8 @@ export type PluginActionExecutorResult = Readonly<
     ok: false;
     errorCode: string;
     error: string;
+    /** Canonical host Action details, projected by their owning producer. */
+    details?: unknown;
     /** Present only for a proven canonical PluginError from the target handler. */
     retryable?: boolean;
     /** The target's own published PluginError contract payload. */
@@ -422,6 +424,8 @@ export async function executeContributedAction(params: Readonly<{
     surface?: PluginActionSurface;
     /** Actual host invocation origin, never inferred from diagnostic provenance. */
     invocationSurface?: PluginActionSurface;
+    /** Receiver-admitted client/Account Action call, never a wire or SDK claim. */
+    admittedPluginActionSurface?: 'plugin';
     /** Diagnostic provenance from the immediate plugin caller, never a policy surface. */
     originSurface?: PluginInvocationOriginSurface;
     /** Host-stamped caller provenance for plugin-to-plugin dispatch. */
@@ -519,7 +523,9 @@ export async function executeContributedAction(params: Readonly<{
     };
   }
 
-  // The declared-surface check follows the host-stamped invocation origin, not
+  // An admitted client/Account Action calls the target on its plugin surface,
+  // independently of the physical origin retained for confirmation. Otherwise
+  // the declared-surface check follows the host-stamped invocation origin, not
   // the caller kind. A mounted Plugin UI invocation derives a plugin-kind
   // caller — the plugin that owns the validated mount — but its authority is
   // the user's UI interaction itself: the daemon ingress admits that caller
@@ -528,9 +534,8 @@ export async function executeContributedAction(params: Readonly<{
   // authority no direct plugin call can claim. The plugin runtime
   // (ActionsService) and background/automation ingresses are the real
   // plugin-authority callers and check the target's `plugin` surface.
-  const actionSurface = invocationSurface === 'plugin' || invocationSurface === 'background'
-    ? 'plugin'
-    : invocationSurface;
+  const actionSurface = params.context.admittedPluginActionSurface
+    ?? (invocationSurface === 'plugin' || invocationSurface === 'background' ? 'plugin' : invocationSurface);
   if (action.definition.surfaces[actionSurface] !== true) {
     return {
       matched: true,

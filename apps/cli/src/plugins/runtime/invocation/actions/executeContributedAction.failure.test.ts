@@ -124,6 +124,7 @@ describe('executeContributedAction invocation-authority derivation', () => {
                 surface: 'plugin',
                 invocationSurface: 'ui',
                 caller: mountedUiCaller(),
+                isMountedCallerCurrent: async () => true,
             },
         })).resolves.toEqual({
             matched: true,

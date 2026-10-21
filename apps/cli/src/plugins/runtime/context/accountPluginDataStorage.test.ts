@@ -239,14 +239,15 @@ function bindHost(params: Readonly<{
 
 describe('Account plugin Data storage host', () => {
     describe('authenticated encryption identity admission', () => {
-        function createHost(initialCredentials: StoredCredentials = plainCredentials) {
+        function createHost(initialCredentials: StoredCredentials = plainCredentials,
+            contracts: readonly NormalizedPluginAccountCollectionContractV1[] = [admitted]) {
             let credentials: StoredCredentials = initialCredentials;
             let baseUrl = 'https://data.example.test';
             const post = vi.fn(async (url: string) => ({ status: 200, data: url.endsWith('/query')
                 ? { rows: [], changeCursor: 17 }
                 : { row: null, absenceEpoch: 0 } }));
             const host = createAccountPluginDataStorageHost({
-                contracts: [admitted], readCredentials: async () => credentials,
+                contracts, readCredentials: async () => credentials,
                 isCurrentAccount: () => true, resolveAccountScopeKey: () => ACCOUNT_SCOPE_KEY,
                 resolveBaseUrl: () => baseUrl,
                 // Only the HTTP boundaries are substituted: currentness parsing,
@@ -262,6 +263,41 @@ describe('Account plugin Data storage host', () => {
             return { bind, post, setCredentials: (next: StoredCredentials) => { credentials = next; },
                 setBaseUrl: (next: string) => { baseUrl = next; } };
         }
+
+        it('requires fresh authority for identityTag after a mode commit without a socket publication', async () => {
+            const channel = await createRequesterCurrentnessSocketHarness();
+            const accountId = 'data-identity-tag';
+            const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.authenticated`;
+            const credentials = { ...plainCredentials, token };
+            let serverFact: AccountEncryptionCurrentnessResponse = currentnessFor(credentials);
+            const get = vi.spyOn(axios, 'get').mockImplementation(async () => ({ status: 200, data: serverFact }));
+            const observation = acquireRequesterAccountEncryptionCurrentness({
+                accountId, token, serverBaseUrl: 'https://data.example.test',
+            });
+            try {
+                await observation.read();
+                const host = createHost(credentials, [identityAdmitted]);
+                const collection = host.bind().collection(identityCollectionDefinition);
+                const request = { field: 'id', components: ['scope', '42'] };
+                await expect(collection.identityTag(request)).resolves.toBe(derivePluginCollectionIdentityTagV1({
+                    accountEncryptionMode: 'plain', material: null, pluginId: PLUGIN_ID, collectionId: COLLECTION_ID,
+                    ...request,
+                }));
+                // Home committed E2EE, but the admitted socket still holds Plain.
+                // A locally returned identity tag has no later Data HTTP admission.
+                serverFact = { ...currentnessFor(encryptedCredentials), version: 2, updatedAt: 2 };
+                await expect(observation.read()).resolves.toMatchObject({ mode: 'plain' });
+                const beforeTag = get.mock.calls.length;
+                await expect(collection.identityTag(request)).rejects.toMatchObject({ code: 'plugin_account_storage_unavailable' });
+                expect(get.mock.calls.length - beforeTag).toBe(1);
+                expect(host.post).not.toHaveBeenCalled();
+                expect(channel.clients).toHaveLength(1);
+            } finally {
+                await observation.dispose();
+                await channel.close();
+                get.mockRestore();
+            }
+        });
 
         it('borrows the authenticated socket identity for repeated reads while final sealing stays fresh before a delayed push', async () => {
             const channel = await createRequesterCurrentnessSocketHarness();

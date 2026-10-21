@@ -4,6 +4,8 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { logger } from '@/ui/logger';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { accountSettingsParse } from '@happier-dev/protocol';
+import { TriageSourcesContributionProtocolV1 } from '@happier-dev/triage-protocol/v1';
 import type { DaemonPluginMountedInvocationV1 } from '@happier-dev/protocol/plugins/actions/daemonInvocationV1';
 import { DaemonPluginStructuredMessageActionExecuteResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { definePlugin } from '@happier-dev/plugin-sdk';
@@ -17,11 +19,12 @@ import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { readCurrentAccountPluginExecutionSelection } from '@/plugins/runtime/accountPluginActivationSource';
 import { createTargetActionCurrentIntentAdapter } from '@/session/actions/approvals/targetActionCurrentIntent';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { TargetActionApprovalRequestV1Schema, type TargetActionApprovalRequestV1 } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
 import { registerDaemonContributionRegistryProjectionHandler } from './daemonContributionRegistryProjection';
 
 describe('mounted caller admission through the real contributed Action RPC', () => {
-    it('admits an external Account Action caller from current release custody and refuses changed custody before effects', async () => {
+    it.each(['ui', 'cli'] as const)('admits an external Account Action caller from %s to a plugin-only source and refuses changed custody before effects', async executionSurface => {
         const pluginId = 'com.acme.account-aggregate';
         const manifest = normalizePluginManifestV2(createPluginManifestV2Fixture({ id: pluginId, entrypoints: {}, contributes: {
             actions: [{ id: 'aggregate', title: 'Aggregate', scopes: ['global'], surfaces: ['ui', 'cli'], dangerLevel: 'safe',
@@ -70,10 +73,12 @@ describe('mounted caller admission through the real contributed Action RPC', () 
         const sdkEntry = pathToFileURL(createRequire(import.meta.url).resolve('@happier-dev/plugin-sdk')).href;
         const fixture = await createAuthoredAdmittedPluginRuntimeFixture({ plugins: [{
             manifest: createPluginManifestV2Fixture({ id: 'com.acme.machine-source', contributes: {
-                actions: [{ id: 'read', title: 'Read source', scopes: ['global'], surfaces: ['ui', 'cli'], placementBindings: [], dangerLevel: 'safe',
+                actions: [{ id: 'read', title: 'Read source', scopes: ['global'],
+                    surfaces: TriageSourcesContributionProtocolV1.operations.scan.declaration.surfaces,
+                    placementBindings: [], dangerLevel: 'safe',
                     execution: { target: 'daemon' }, inputSchema: { type: 'object', additionalProperties: false },
                     resultSchema: { type: 'object', additionalProperties: true } },
-                { id: 'write', title: 'Write source', scopes: ['global'], surfaces: ['cli'], placementBindings: [], dangerLevel: 'writesRemote',
+                { id: 'write', title: 'Write source', scopes: ['global'], surfaces: ['plugin'], placementBindings: [], dangerLevel: 'writesRemote',
                     confirmation: { title: 'Write source' }, execution: { target: 'daemon' },
                     inputSchema: { type: 'object', properties: { uncertain: { type: 'boolean' } }, additionalProperties: false },
                     resultSchema: { type: 'object', properties: { writes: { type: 'number' } }, required: ['writes'], additionalProperties: false } }],
@@ -105,12 +110,24 @@ describe('mounted caller admission through the real contributed Action RPC', () 
             expect(fixture.registry.readPluginOccurrenceId?.(pluginId)).toBeNull();
             const clientActionBinding = { pluginId, contributionLocalId: 'aggregate', occurrenceId: 'invoking-process-occurrence',
                 sourceCustody: { kind: 'account_release' as const, pluginId, version: manifest.version, archiveDigestSha256: digest } };
-            const run = (binding = clientActionBinding, input: Record<string, unknown> = {}, localId = 'read') => handler({ machineId: 'reading-machine',
+            const run = (binding = clientActionBinding, input: Record<string, unknown> = {}, localId = 'read', presentUserIntent?: 'confirmed') => handler({ machineId: 'reading-machine',
                 qualifiedActionId: `com.acme.machine-source/${localId}`, expectedContributorOccurrenceId: targetOccurrence,
-                executionSurface: 'cli', invocation: { kind: 'clientPluginAction', clientActionBinding: binding }, input });
+                executionSurface, invocation: { kind: 'clientPluginAction', clientActionBinding: binding }, input,
+                ...(presentUserIntent ? { presentUserIntent } : {}) });
+            // The physical UI/CLI origin does not expose this role as a root Action.
+            expect(await handler({ machineId: 'reading-machine', qualifiedActionId: 'com.acme.machine-source/read',
+                expectedContributorOccurrenceId: targetOccurrence, executionSurface, input: {} }))
+                .toMatchObject({ ok: false, code: 'plugin_action_unavailable' });
             expect(await run()).toEqual({ ok: true, result: { reads: 1, writes: 0, caller: { kind: 'plugin', pluginId,
                 contribution: { id: 'aggregate', qualifiedId: `${pluginId}/aggregate` }, occurrenceId: clientActionBinding.occurrenceId,
-                sourceCustody: clientActionBinding.sourceCustody, originSurface: 'cli' } } });
+                sourceCustody: clientActionBinding.sourceCustody, originSurface: executionSurface } } });
+            for (const [index, override] of [{ disabledSurfaces: ['plugin'] }, { enabled: false }, {}].entries()) {
+                setActiveAccountSettingsSnapshot({ source: 'network', scopeKey: 'account-source-policy', settingsVersion: index + 1,
+                    loadedAtMs: index + 1, settingsSecretsReadKeys: [], settings: accountSettingsParse({ actionsSettingsV1: {
+                        v: 1, actions: { 'com.acme.machine-source/actions/read': override },
+                    } }) });
+                if (index < 2) expect(await run()).toMatchObject({ ok: false, code: 'plugin_action_unavailable' });
+            }
             expect(await run(clientActionBinding, { unknown: true })).toMatchObject({ ok: false });
             digest = `sha256:${'b'.repeat(64)}`;
             expect(await run()).toEqual({ ok: false, code: 'plugin_mounted_caller_unavailable' });
@@ -120,6 +137,16 @@ describe('mounted caller admission through the real contributed Action RPC', () 
             enabled = true;
             revokeAfterRead = false;
             expect(await run()).toMatchObject({ ok: true, result: { reads: 2 } });
+            if (executionSurface === 'ui') {
+                // UI carries its own settled confirmation; it cannot borrow the CLI Artifact presenter.
+                expect(await run(clientActionBinding, {}, 'write'))
+                    .toMatchObject({ ok: false, code: 'plugin_action_current_intent_unavailable' });
+                expect(await run(clientActionBinding, {}, 'write', 'confirmed')).toEqual({ ok: true, result: { writes: 1 } });
+                expect(await run(clientActionBinding, { uncertain: true }, 'write', 'confirmed'))
+                    .toMatchObject({ ok: false, code: 'plugin_action_outcome_unknown' });
+                expect(await run()).toMatchObject({ ok: true, result: { writes: 2 } });
+                return;
+            }
             expect(await run(clientActionBinding, {}, 'write')).toEqual({ ok: true, result: { writes: 1 } });
             decision = 'reject';
             expect(await run(clientActionBinding, {}, 'write')).toMatchObject({ ok: false, code: 'plugin_action_current_intent_rejected' });
@@ -131,7 +158,7 @@ describe('mounted caller admission through the real contributed Action RPC', () 
             expect(await run()).toMatchObject({ ok: true, result: { writes: 1 } });
             expect(await run(clientActionBinding, { uncertain: true }, 'write')).toMatchObject({ ok: false, code: 'plugin_action_outcome_unknown' });
             expect(await run()).toMatchObject({ ok: true, result: { writes: 2 } });
-        } finally { restore(); await app.close(); await fixture.dispose(); }
+        } finally { resetActiveAccountSettingsSnapshotForTests(); restore(); await app.close(); await fixture.dispose(); }
     });
     it('admits an ordinary installed external detail contributor through the same RPC and rejects retired custody', async () => {
         const targetId = 'acme.detail-host';
@@ -211,7 +238,7 @@ describe('mounted caller admission through the real contributed Action RPC', () 
             plugins: [{
                 manifest: createPluginManifestV2Fixture({ id: 'acme.probe', contributes: {
                     actions: [{ id: 'probe', title: 'Read admitted caller', scopes: ['global'],
-                        surfaces: ['ui'], placementBindings: [], dangerLevel: 'safe',
+                        surfaces: ['ui', 'plugin'], placementBindings: [], dangerLevel: 'safe',
                         inputSchema: { type: 'object', additionalProperties: false },
                         resultSchema: { type: 'object', additionalProperties: true },
                         execution: { target: 'daemon' } },

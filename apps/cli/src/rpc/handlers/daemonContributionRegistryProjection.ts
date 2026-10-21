@@ -2885,11 +2885,13 @@ export function registerDaemonContributionRegistryProjectionHandler(
                 },
                 requestCurrentIntent: createPresentUserCurrentIntent(request.data.presentUserIntent, opts?.requestCurrentIntent),
                 context: {
-                    // The canonical contributed-Action owner derives the target
-                    // plugin surface from authenticated caller identity. This
-                    // adapter supplies only the actual UI execution origin.
+                    // Keep the physical origin for confirmation. Only an admitted
+                    // client/Account Action grants nested plugin-surface semantics;
+                    // an ordinary mounted UI press does not.
                     surface: invocationSurface,
                     invocationSurface,
+                    ...(mountedCaller.status === 'available' && invocation?.kind === 'clientPluginAction'
+                        ? { admittedPluginActionSurface: 'plugin' as const } : {}),
                     // This ingress already admitted the present user's mounted or host-presented intent.
                     initiatingActionCaller: { kind: 'host' },
                     ...(mountedCaller.status === 'available'

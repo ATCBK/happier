@@ -2061,7 +2061,8 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                         // with the contract in Protocol so the daemon and the
                         // direct Plugin UI client cannot drift.
                         const credentials = await currentCredentials(options?.signal);
-                        const encryption = await currentEncryption(credentials, options?.signal, 'observed');
+                        // This local tag has no later server admission point.
+                        const encryption = await currentEncryption(credentials, options?.signal);
                         await assertCurrentAccount(credentials, options?.signal);
                         const resolved = resolvePluginCollectionIdentityTagV1({
                             contract: collection.contract,
