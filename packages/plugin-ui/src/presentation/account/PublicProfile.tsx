@@ -44,21 +44,44 @@ export type HappierPublicProfileLabels = Readonly<{
   report: string;
   madeWith: string;
   inert: InertDeclarativeLabels;
+  /** The applied picture's credit or "Your picture · Halftone"; shown on the band. */
+  heroCredit?: string;
 }>;
+
+/**
+ * The atmosphere band's geometry (lab `pphero`), owned here so the app's live painter and the server's
+ * raster paint the same rectangle the page reserves.
+ */
+export const HAPPIER_PUBLIC_PROFILE_HERO_METRICS = Object.freeze({
+  bandHeightPx: Object.freeze({ wide: 420, phone: 300 }),
+  avatarPx: Object.freeze({ wide: 84, phone: 64 }),
+});
+
+export type HappierPublicProfileHeroGeometry = Readonly<{ bandHeightPx: number; singleColumn: boolean }>;
 
 type PublishedPublicProfileProps = Readonly<{
   view: Omit<PublicProfileViewV1, 'appearance'>;
   labels: HappierPublicProfileLabels;
-  /** The applied atmosphere band (picture, planet or nothing), painted by the host's own adapter. */
-  renderHero?: () => ReactNode;
+  /**
+   * The applied atmosphere band (picture or planet), painted by the host's own adapter at the given
+   * geometry. Omitted for an atmosphere of None: the page keeps its name-only header.
+   */
+  renderHero?: (geometry: HappierPublicProfileHeroGeometry) => ReactNode;
   /** The admitted avatar or the planet mark; omitted when the owner shares neither. */
   renderAvatar?: () => ReactNode;
   /** Paint, localization and identity marks for the shared Usage bodies. */
   usage?: HappierPublicProfileUsageHost;
   /** One column: a phone host or a narrow window. Wider pages still wrap a pair that cannot fit. */
   singleColumn?: boolean;
+  /**
+   * The owner's own view: blocks that visitors don't see stay in place, quieted and labelled, so the
+   * layout never jumps while consent changes. Visitors and the server never pass this.
+   */
+  owner?: HappierPublicProfileOwner;
   testID?: string;
 }>;
+
+export type HappierPublicProfileOwner = Readonly<{ hiddenBlockIds: ReadonlySet<string>; onlyYou: string }>;
 
 export type HappierPublicProfileProps = PublishedPublicProfileProps | Readonly<{
   /** Withdrawal states have no fabricated snapshot, period, coverage or applied blocks. */
@@ -117,16 +140,14 @@ function PublishedPublicProfile(props: PublishedPublicProfileProps) {
         labels={labels}
         usageModels={usageModels}
         usage={props.usage}
+        owner={props.owner}
         singleColumn={columns === 1}
         testID={testID}
       />
     ) : null;
   };
-  return (
-    <View testID={testID} style={styles.page}>
-      {props.renderHero?.()}
-      <View style={styles.column}>
-        <View style={styles.identity}>
+  const identity = (
+        <View style={[styles.identity, columns === 1 && props.renderHero ? styles.identityStacked : null]}>
           {props.renderAvatar?.()}
           <View style={styles.identityText}>
             <HappierText
@@ -158,6 +179,21 @@ function PublishedPublicProfile(props: PublishedPublicProfileProps) {
             ) : null}
           </View>
         </View>
+  );
+  return (
+    <View testID={testID} style={styles.page}>
+      {props.renderHero ? (
+        <PublicProfileHero
+          testID={testID}
+          singleColumn={columns === 1}
+          credit={labels.heroCredit}
+          renderBand={props.renderHero}
+        >
+          {identity}
+        </PublicProfileHero>
+      ) : null}
+      <View style={styles.column}>
+        {props.renderHero ? null : identity}
         <View style={styles.period}>
           <HappierText variant="heading" tone="neutral">
             {labels.periodTitle}
@@ -209,6 +245,39 @@ function PublishedPublicProfile(props: PublishedPublicProfileProps) {
   );
 }
 
+/**
+ * The band is reserved at its full height before any artwork paints, and the identity sits over its
+ * lower edge (lab `pphero`): beside the avatar on a wide page, under it on a phone.
+ */
+function PublicProfileHero(
+  props: Readonly<{
+    testID: string;
+    singleColumn: boolean;
+    credit?: string;
+    renderBand: (geometry: HappierPublicProfileHeroGeometry) => ReactNode;
+    children: ReactNode;
+  }>,
+) {
+  const theme = useHappierUiTheme();
+  const kind = props.singleColumn ? 'phone' : 'wide';
+  const bandHeightPx = HAPPIER_PUBLIC_PROFILE_HERO_METRICS.bandHeightPx[kind];
+  const avatarPx = HAPPIER_PUBLIC_PROFILE_HERO_METRICS.avatarPx[kind];
+  return (
+    <View testID={`${props.testID}-hero`} style={styles.hero}>
+      <View testID={`${props.testID}-hero-band`} style={[styles.band, styles.heroBand, { height: bandHeightPx }]}>
+        {props.renderBand({ bandHeightPx, singleColumn: props.singleColumn })}
+        {props.credit ? (
+          <View style={[styles.credit, props.singleColumn ? styles.creditPhone : styles.creditWide,
+            { backgroundColor: theme.colors.surface }]}>
+            <HappierText variant="micro" tone="secondary" numberOfLines={1}>{props.credit}</HappierText>
+          </View>
+        ) : null}
+      </View>
+      <View style={[styles.column, { marginTop: -avatarPx / 2 }]}>{props.children}</View>
+    </View>
+  );
+}
+
 function Band(
   props: Readonly<{
     band: WidgetGroupBand;
@@ -238,6 +307,7 @@ function PublicProfileItem(
     labels: HappierPublicProfileLabels;
     usageModels: PublicUsageChartModels;
     usage?: HappierPublicProfileUsageHost;
+    owner?: HappierPublicProfileOwner;
     singleColumn: boolean;
     testID: string;
   }>,
@@ -250,6 +320,7 @@ function PublicProfileItem(
         labels={props.labels}
         usageModels={props.usageModels}
         usage={props.usage}
+        owner={props.owner}
         testID={props.testID}
       />
     );
@@ -283,6 +354,7 @@ function PublicProfileItem(
                 labels={props.labels}
                 usageModels={props.usageModels}
                 usage={props.usage}
+                owner={props.owner}
                 testID={props.testID}
                 bare
               />
@@ -300,15 +372,23 @@ function PublicProfileBlock(
     labels: HappierPublicProfileLabels;
     usageModels: PublicUsageChartModels;
     usage?: HappierPublicProfileUsageHost;
+    owner?: HappierPublicProfileOwner;
     testID: string;
     bare?: boolean;
   }>,
 ) {
   const theme = useHappierUiTheme();
+  const onlyYou = props.owner?.hiddenBlockIds.has(props.widget.id) ? props.owner.onlyYou : null;
+  const marker = onlyYou ? (
+    <View style={[styles.onlyYou, { borderColor: theme.colors.border }]}>
+      <HappierText variant="micro" tone="secondary">{onlyYou}</HappierText>
+    </View>
+  ) : null;
   const body = props.widget.presentation.kind === 'usage'
     ? props.usage ? <PublicProfileUsageBody presentation={props.widget.presentation} models={props.usageModels}
       host={props.usage} testID={`${props.testID}-usage-${props.widget.id}`} /> : null
     : renderInertDeclarativeView(props.widget.presentation.document.root, theme, props.labels.inert);
+  const shownBody = onlyYou ? <View style={styles.quieted}>{body}</View> : body;
   if (props.bare)
     return (
       <View
@@ -316,7 +396,8 @@ function PublicProfileBlock(
         style={styles.bareBlock}
       >
         {props.widget.title ? <HappierText variant="heading" tone="neutral">{props.widget.title}</HappierText> : null}
-        {body}
+        {marker}
+        {shownBody}
       </View>
     );
   return (
@@ -324,9 +405,10 @@ function PublicProfileBlock(
       frameStyle={props.widget.frameStyle}
       placement="home"
       title={props.widget.title ?? null}
+      accessory={marker}
       testID={`${props.testID}-block-${props.widget.id}`}
     >
-      {body}
+      {shownBody}
     </HappierWidgetFrame>
   );
 }
@@ -363,6 +445,19 @@ function PublicLink(
 
 const styles = StyleSheet.create({
   page: { width: '100%' },
+  hero: { width: '100%', marginBottom: HAPPIER_PAGE_METRICS.cardGapPx * 2 },
+  heroBand: { position: 'relative', overflow: 'hidden' },
+  credit: {
+    position: 'absolute',
+    right: HAPPIER_PAGE_METRICS.sheetInsetPx,
+    maxWidth: '70%',
+    paddingHorizontal: HAPPIER_PAGE_METRICS.pageHeaderLineGapPx * 2,
+    paddingVertical: HAPPIER_PAGE_METRICS.pageHeaderLineGapPx / 2,
+    borderRadius: HAPPIER_PAGE_METRICS.controlHeightPx,
+  },
+  creditWide: { top: HAPPIER_PAGE_METRICS.cardPaddingPx },
+  // On a phone the credit stays on the picture, just above where the identity begins.
+  creditPhone: { bottom: HAPPIER_PAGE_METRICS.cardPaddingPx * 3 },
   column: {
     width: '100%',
     maxWidth: HAPPIER_PAGE_METRICS.columnMaxWidthPx.wide,
@@ -377,6 +472,8 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: HAPPIER_PAGE_METRICS.cardPaddingPx,
   },
+  // On a phone the avatar sits on the band's edge and the words drop below it.
+  identityStacked: { flexDirection: 'column', alignItems: 'flex-start' },
   identityText: {
     flexShrink: 1,
     minWidth: 0,
@@ -405,6 +502,14 @@ const styles = StyleSheet.create({
     gap: HAPPIER_PAGE_METRICS.cardGapPx,
   },
   bareBlock: { minWidth: 0 },
+  onlyYou: {
+    alignSelf: 'flex-start',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: HAPPIER_PAGE_METRICS.controlHeightPx,
+    paddingHorizontal: HAPPIER_PAGE_METRICS.pageHeaderLineGapPx * 2,
+  },
+  // A private block stays in place for its owner, quieted, so consent changes never move the layout.
+  quieted: { opacity: 0.45 },
   footer: {
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingTop: HAPPIER_PAGE_METRICS.cardPaddingPx,

@@ -12,6 +12,7 @@ import { projectHappierUiEnvironment } from '../../environment/projectEnvironmen
 import { mountThroughReactNativeWeb } from '../../rnwMount.testSupport.js';
 import { createSurfaceContext } from '../../surfaceFixture.testSupport.js';
 import {
+  HAPPIER_PUBLIC_PROFILE_HERO_METRICS,
   HappierPublicProfile,
   type HappierPublicProfileLabels,
 } from './PublicProfile.js';
@@ -113,6 +114,63 @@ function render(policy = { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1,
 }
 
 describe('HappierPublicProfile', () => {
+  it.each([false, true])('reserves the atmosphere band, lays the identity over its edge and credits the picture (phone: %s)', singleColumn => {
+    const view = projectPublicProfile({ context, policy: DEFAULT_PUBLIC_PROFILE_POLICY_V1, metadata: {}, snapshot,
+      appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1, layout: { v: 1, items: [] } });
+    if (!view) throw new Error('expected a published view');
+    const seen: { bandHeightPx: number; singleColumn: boolean }[] = [];
+    const mounted = mountThroughReactNativeWeb(createElement(HappierUiEnvironmentProvider, {
+      environment: projectHappierUiEnvironment(createSurfaceContext()),
+      children: createElement(HappierPublicProfile, { view, singleColumn,
+        labels: { ...labels, heroCredit: 'White rocks, open sea · davide ragusa · Unsplash' },
+        renderHero: geometry => { seen.push(geometry); return createElement('div', { 'data-testid': 'band-art' }); } }),
+    }));
+    try {
+      const expected = singleColumn ? HAPPIER_PUBLIC_PROFILE_HERO_METRICS.bandHeightPx.phone : HAPPIER_PUBLIC_PROFILE_HERO_METRICS.bandHeightPx.wide;
+      expect(seen.at(-1)).toEqual({ bandHeightPx: expected, singleColumn });
+      const band = mounted.container.querySelector<HTMLElement>('[data-testid="public-profile-hero-band"]');
+      // The band's height is known before any artwork paints, so nothing below it moves on arrival.
+      expect(band?.style.height).toBe(`${expected}px`);
+      expect(band?.querySelector('[data-testid="band-art"]')).not.toBeNull();
+      expect(band?.textContent).toContain('White rocks, open sea');
+      const hero = mounted.container.querySelector('[data-testid="public-profile-hero"]');
+      expect(hero?.querySelector('[data-testid="public-profile-name"]')?.textContent).toBe('Leeroy Brun');
+    } finally { mounted.unmount(); }
+  });
+
+  it('marks the owner’s placed-but-private blocks as only theirs without changing the visitor tree', () => {
+    const view = projectPublicProfile({ context, policy: DEFAULT_PUBLIC_PROFILE_POLICY_V1, metadata: {}, snapshot,
+      appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1,
+      layout: { v: 1, items: [metric('tokens', 'Tokens', 'tokens', 'medium'), metric('days', 'Active days', 'activeDays', 'medium')] } });
+    if (!view) throw new Error('expected a published view');
+    const mount = (owner?: { hiddenBlockIds: ReadonlySet<string>; onlyYou: string }) => mountThroughReactNativeWeb(createElement(HappierUiEnvironmentProvider, {
+      environment: projectHappierUiEnvironment(createSurfaceContext()),
+      children: createElement(HappierPublicProfile, { view, labels, ...(owner ? { owner } : {}) }),
+    }));
+    const owned = mount({ hiddenBlockIds: new Set(['tokens']), onlyYou: 'Only you' });
+    try {
+      const hidden = owned.container.querySelector('[data-testid="public-profile-block-tokens"]');
+      expect(hidden?.textContent).toContain('Only you');
+      expect(owned.container.querySelector('[data-testid="public-profile-block-days"]')?.textContent).not.toContain('Only you');
+    } finally { owned.unmount(); }
+    const visitor = mount();
+    try { expect(visitor.container.textContent).not.toContain('Only you'); } finally { visitor.unmount(); }
+  });
+
+  it('keeps a name-only header with no band when the page has no atmosphere', () => {
+    const view = projectPublicProfile({ context, policy: DEFAULT_PUBLIC_PROFILE_POLICY_V1, metadata: {}, snapshot,
+      appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1, layout: { v: 1, items: [] } });
+    if (!view) throw new Error('expected a published view');
+    const mounted = mountThroughReactNativeWeb(createElement(HappierUiEnvironmentProvider, {
+      environment: projectHappierUiEnvironment(createSurfaceContext()),
+      children: createElement(HappierPublicProfile, { view, labels }),
+    }));
+    try {
+      expect(mounted.container.querySelector('[data-testid="public-profile-hero-band"]')).toBeNull();
+      expect(mounted.container.querySelector('[data-testid="public-profile-name"]')?.textContent).toBe('Leeroy Brun');
+    } finally { mounted.unmount(); }
+  });
+
   it('renders a real local picture preview through the same placed tree and its host-owned hero slot', () => {
     const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j1ioAAAAASUVORK5CYII=';
     const appearance = PublicProfilePreparedAppearanceV1Schema.parse({ theme: 'light', atmosphere: {

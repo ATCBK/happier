@@ -2,6 +2,8 @@ import { useMemo } from 'react';
 import { View } from 'react-native';
 import { Circle, Defs, G, Path, RadialGradient, Stop, Svg } from 'react-native-svg';
 
+import { HappierText } from '../../text/Text.js';
+
 import {
   UsageChartCaption, UsageChartColumn, UsageChartKey, UsageChartValues, resolveUsageChartInk, usageChartMix, usageChartRound as r1,
   usageSmoothPath, useUsageChartSvgText, useUsageChartWidth,
@@ -120,6 +122,10 @@ export function UsageSkyOfDays(props: UsageSkyOfDaysProps) {
   keyItems.push({ id: 'none', label: labels.key.noActivity, value: String(inactive), swatch: { kind: 'speck', color: ink.neutral } });
   if (notRecorded) keyItems.push({ id: 'notRecorded', label: labels.key.notRecorded, value: String(notRecorded), swatch: { kind: 'ring', color: ink.neutral } });
 
+  const undatedBest = model.best && !model.best.startDate ? model.best : null;
+  const undatedCurrent = model.current && !model.current.startDate ? model.current : null;
+  const streakWords = [undatedCurrent ? labels.streakNow(undatedCurrent.days) : null, undatedBest ? labels.streakBest(undatedBest.days) : null]
+    .filter((part): part is string => part !== null).join(' · ') || null;
   const leaderName = (leader: UsageSkyLeader | null | undefined) => !leader ? '' : leader.kind === 'agent' ? agents.get(leader.agentId)?.name ?? leader.agentId
     : leader.kind === 'tie' ? `${labels.values.tie}: ${leader.agentIds.map((id) => agents.get(id)?.shortName ?? agents.get(id)?.name ?? id).join(', ')}` : labels.values.notAttributed;
   const levelNames = ['', labels.levels.quiet, labels.levels.steady, labels.levels.busy, labels.levels.busiest];
@@ -191,6 +197,8 @@ export function UsageSkyOfDays(props: UsageSkyOfDaysProps) {
         {geometry.months.map((month) => svgText.draw({ x: month.x, y: height - 4, text: labels.month(month.date) }, `m${month.date}`))}
       </Svg> : null}
     </View>
+    {/* A streak shared as a count only (no dates) is said in words; the body never invents its position. */}
+    {streakWords ? <HappierText testID={props.testID ? `${props.testID}-streaks` : undefined} style={svgText.styles.strong}>{streakWords}</HappierText> : null}
     <UsageChartKey theme={props.theme} items={keyItems} testID={props.testID ? `${props.testID}-key` : undefined} />
     <UsageChartCaption theme={props.theme}>{labels.caption}</UsageChartCaption>
     <UsageChartValues theme={props.theme} label={props.label} labels={labels.values} testID={props.testID}

@@ -1,4 +1,6 @@
 import { View } from 'react-native';
+
+import { HappierText } from '../../text/Text.js';
 import { Circle, Defs, G, Path, Pattern, Rect, Svg } from 'react-native-svg';
 
 import {
@@ -22,8 +24,13 @@ export type UsageDayModel = Readonly<{
   waitCount: number;
 }>;
 
+/** A public edition: only the period's approved peak, no day, clock, lanes or attribution. */
+export type UsageDayPeakModel = Readonly<{ kind: 'peakOnly'; count: number }>;
+
 export type UsageDayLabels = Readonly<{
   unknownAgent: string;
+  /** Says what the peak-only figure is and that a day's timeline is not shared. */
+  peakOnlyCaption: string;
   clock: (hour: number) => string;
   duration: (ms: number) => string;
   atOnce: string;
@@ -41,7 +48,7 @@ export type UsageDayLabels = Readonly<{
 }>;
 
 export type UsageDayInAgentsProps = UsageChartBaseProps & Readonly<{
-  model: UsageDayModel;
+  model: UsageDayModel | UsageDayPeakModel;
   agents: readonly UsageChartAgent[];
   style: 'lanes' | 'dial';
   labels: UsageDayLabels;
@@ -55,6 +62,24 @@ const PHONE_BELOW_PX = 440;
  * signature alternative.
  */
 export function UsageDayInAgents(props: UsageDayInAgentsProps) {
+  const model = props.model;
+  if ('kind' in model) return <UsageDayPeakOnly {...props} model={model} />;
+  return <UsageDayInAgentsDrawn {...props} model={model} />;
+}
+
+/** The same body's reduced edition: one figure, said plainly, never a fabricated day. */
+function UsageDayPeakOnly(props: UsageDayInAgentsProps & Readonly<{ model: UsageDayPeakModel }>) {
+  const text = useUsageChartSvgText(props.theme).styles;
+  return <UsageChartColumn testID={props.testID}>
+    <View accessible accessibilityLabel={`${props.label}: ${props.labels.peakCount(props.model.count)}`} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: props.paint.accent }} />
+      <HappierText tabularNumbers style={{ ...text.metric }}>{props.labels.peakCount(props.model.count)}</HappierText>
+    </View>
+    <UsageChartCaption theme={props.theme}>{props.labels.peakOnlyCaption}</UsageChartCaption>
+  </UsageChartColumn>;
+}
+
+function UsageDayInAgentsDrawn(props: UsageDayInAgentsProps & Readonly<{ model: UsageDayModel }>) {
   const [width, onLayout] = useUsageChartWidth(props.width);
   const agents = new Map(props.agents.map((agent) => [agent.id, agent]));
   const agent = (id: string | null) => id === null ? undefined : agents.get(id);
@@ -80,7 +105,7 @@ export function UsageDayInAgents(props: UsageDayInAgentsProps) {
   </UsageChartColumn>;
 }
 
-type DayDrawProps = UsageDayInAgentsProps & Readonly<{ width: number; lanes: UsageDayModel['lanes']; name: (id: string | null) => string }>;
+type DayDrawProps = UsageDayInAgentsProps & Readonly<{ model: UsageDayModel; width: number; lanes: UsageDayModel['lanes']; name: (id: string | null) => string }>;
 
 function DayLanes(props: DayDrawProps & Readonly<{ phone: boolean }>) {
   const ink = resolveUsageChartInk(props.theme, props.paint);
@@ -97,7 +122,7 @@ function DayLanes(props: DayDrawProps & Readonly<{ phone: boolean }>) {
   const bins = model.atOnce.length || 1;
   const points = model.atOnce.map((count, index) => [x(((index + 0.5) / bins) * 24), cy(count)] as const);
   const curve = points.length > 1 ? usageSmoothPath(points) : '';
-  const px = x(model.peak.atHour + 12 / bins), py = cy(model.peak.count);
+  const px = x(model.peak.atHour), py = cy(model.peak.count);
   const right = px > label + plot * 0.62;
   const hatch = `usage-day-hatch-${props.testID ?? 'day'}`;
   const colour = (id: string | null) => props.agents.find((agent) => agent.id === id)?.color ?? ink.neutral;
@@ -151,7 +176,7 @@ function DayDial(props: DayDrawProps) {
   const bins = model.atOnce.length || 1;
   const shape = model.atOnce.map((count, index) => at(inner + ((outer - inner) * Math.min(6, count)) / 6, ((index + 0.5) / bins) * 24));
   const colour = (id: string | null) => props.agents.find((agent) => agent.id === id)?.color ?? ink.neutral;
-  const peakAt = at(inner + ((outer - inner) * Math.min(6, model.peak.count)) / 6, model.peak.atHour + 12 / bins);
+  const peakAt = at(inner + ((outer - inner) * Math.min(6, model.peak.count)) / 6, model.peak.atHour);
   const peakLine = props.labels.peakLine(model.peak.atHour, model.peak.byAgent.map((entry) => ({ name: props.name(entry.agentId), count: entry.count })));
   const arc = (radius: number, from: number, to: number) => {
     const [x1, y1] = at(radius, from), [x2, y2] = at(radius, to);

@@ -456,8 +456,11 @@ export {
   type WidgetGroupContentState,
 } from './layout/widgetGroupLayout.js';
 export {
+  HAPPIER_PUBLIC_PROFILE_HERO_METRICS,
   HappierPublicProfile,
+  type HappierPublicProfileHeroGeometry,
   type HappierPublicProfileLabels,
+  type HappierPublicProfileOwner,
   type HappierPublicProfileProps,
 } from './account/PublicProfile.js';
 export type {

@@ -87,7 +87,8 @@ export type UsageDaylightLabels = Readonly<{
   clock: (hour: number) => string;
   /** "Night · 23:00–07:00 · 30%". */
   night: (fromHour: number, toHour: number, share: number | null) => string;
-  caption: (peakHour: number, nightShare: number | null) => string;
+  /** `peakHour` is null when no hour is known: the caption never names a busiest hour it was not given. */
+  caption: (peakHour: number | null, nightShare: number | null) => string;
   values: UsageChartValuesLabels & Readonly<{ hourColumn: string; valueColumn: string; formatValue: (value: number) => string; levelNames: readonly string[] }>;
 }>;
 
@@ -101,7 +102,7 @@ export function UsageDaylight(props: UsageChartBaseProps & Readonly<{ model: Usa
   const svgText = useUsageChartSvgText(props.theme);
   const hours = props.model.hours.map((value) => value ?? 0);
   const max = Math.max(0, ...hours) || 1;
-  const peakHour = hours.indexOf(Math.max(...hours));
+  const peakHour = props.model.hours.some((value) => value !== null && value > 0) ? hours.indexOf(Math.max(...hours)) : null;
   const night = props.model.night;
   const inNight = (hour: number) => night !== null && (night.fromHour > night.toHour ? hour >= night.fromHour || hour < night.toHour : hour >= night.fromHour && hour < night.toHour);
   const small = width !== null && width < 420;
