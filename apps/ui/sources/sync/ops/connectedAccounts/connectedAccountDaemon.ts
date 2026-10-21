@@ -85,6 +85,7 @@ export async function runConnectedAccountAuthenticationCommand(
         signal?: AbortSignal;
     }>,
 ): Promise<ConnectedAccountAttemptResponse> {
+    const quotaServerBasis = input.expectedActiveServer ?? getActiveServerSnapshot();
     const assertExpectedActiveServer =
         createExpectedActiveServerAssertion(
             input.expectedActiveServer,
@@ -114,7 +115,15 @@ export async function runConnectedAccountAuthenticationCommand(
             : {}),
         ...(input.signal ? { signal: input.signal } : {}),
     });
-    return ConnectedAccountAttemptResponseSchema.parse(response);
+    const parsed = ConnectedAccountAttemptResponseSchema.parse(response);
+    if (parsed.status === 'connected') {
+        const { revalidateQualifiedQuotaSnapshotAfterCredentialChange } = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
+        await revalidateQualifiedQuotaSnapshotAfterCredentialChange({ ref: parsed.account,
+            serverBasis: input.serverId && input.serverId !== quotaServerBasis.serverId
+                ? { ...quotaServerBasis, serverId: input.serverId } : quotaServerBasis,
+            ...(input.accountId ? { accountId: input.accountId } : {}) });
+    }
+    return parsed;
 }
 
 /** UI ingress shares the admitted Actions; the transport above remains daemon-owned delivery. */

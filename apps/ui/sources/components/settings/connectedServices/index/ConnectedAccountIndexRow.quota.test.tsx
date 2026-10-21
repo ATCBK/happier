@@ -8,7 +8,7 @@ import { primeServerFeaturesSnapshot, deleteServerFeaturesSnapshot } from '@/syn
 import { getActiveServerSnapshot, setActiveServer, upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import { removeServerProfile } from '@/sync/domains/server/serverProfiles';
 import { storage } from '@/sync/domains/state/storageStore';
-import { __resetQualifiedConnectedAccountQuotaSnapshotStore } from '@/hooks/server/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore';
+import { __resetQualifiedConnectedAccountQuotaSnapshotStore } from '@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore';
 import { __resetConnectedServiceQuotaSnapshotStore } from '@/hooks/server/connectedServices/connectedServiceQuotaSnapshotStore';
 import { createQualifiedQuotaTestHarness } from '@/hooks/server/connectedServices/qualifiedConnectedAccountQuotaTestHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';

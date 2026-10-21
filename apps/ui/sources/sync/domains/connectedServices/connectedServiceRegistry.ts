@@ -1,4 +1,5 @@
 import { BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID } from '@happier-dev/protocol/connect/generatedBuiltInLegacyConnectedAccountCompatibility';
+import { BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS } from '@/agents/registry/generatedBundledPluginEntries';
 import { buildQualifiedPluginContributionKey, parseQualifiedPluginContributionKey, type PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 import { ConnectedServiceIdSchema, type ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
 import type { PluginConnectedAccountAuthenticationModeV2, PluginConnectedAccountAuthenticationV2 } from '@happier-dev/protocol/connect/plugin-connected-account-authentication-v2';
@@ -396,6 +397,17 @@ export function getQualifiedConnectedServiceRegistryEntry(
     entry.service
       && buildQualifiedPluginContributionKey(entry.service) === key
   )) ?? null;
+}
+
+/** Usage context comes from the same plugin declaration as authentication. */
+export function getConnectedServiceUsageIdentity(
+  service: PluginContributionIdentityV1,
+): ConnectedAccountUiProjectionEntryV1['usageIdentity'] | null {
+  const entry = getQualifiedConnectedServiceRegistryEntry(service);
+  const candidates = entry?.projectedDescriptorCandidates
+    ?? (entry?.projectedDescriptor ? [entry.projectedDescriptor] : []);
+  if (candidates.length > 0) return candidates.find(candidate => candidate.usageIdentity)?.usageIdentity ?? null;
+  return BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS[`${service.pluginId}/${service.localId}`]?.descriptor.usageIdentity ?? null;
 }
 
 /** Account authoring consumes current declaration facts, not native execution availability. */

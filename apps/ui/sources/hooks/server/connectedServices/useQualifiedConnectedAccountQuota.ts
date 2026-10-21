@@ -17,7 +17,7 @@ import {
     retainQualifiedQuotaSnapshotPolling,
     subscribeQualifiedQuotaSnapshotEntry,
     type QualifiedQuotaSnapshotStoreContext,
-} from './qualifiedConnectedAccountQuotaSnapshotStore';
+} from '@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore';
 
 export type UseQualifiedConnectedAccountQuotaResult = Readonly<{
     supported: boolean | null;

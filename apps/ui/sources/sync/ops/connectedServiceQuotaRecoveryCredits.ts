@@ -7,7 +7,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { t } from '@/text';
 import { sanitizeEndpointErrorMessage } from '@/sync/runtime/connectivity/sanitizeEndpointErrorMessage';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
-import { reloadQualifiedQuotaSnapshotAfterRecovery } from '@/hooks/server/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore';
+import { reloadQualifiedQuotaSnapshotAfterRecovery } from '@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore';
 import {
     getActiveServerSnapshot,
     type ActiveServerSnapshot,

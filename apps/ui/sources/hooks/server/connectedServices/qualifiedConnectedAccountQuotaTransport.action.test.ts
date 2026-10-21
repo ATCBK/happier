@@ -3,7 +3,7 @@ import { createQualifiedQuotaTestHarness, quotaTestRef as ref } from './qualifie
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { storage } from '@/sync/domains/state/storageStore';
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
-import { refreshQualifiedConnectedAccountQuota } from './qualifiedConnectedAccountQuotaTransport';
+import { refreshQualifiedConnectedAccountQuota } from '@/sync/api/account/qualifiedConnectedAccountQuotaTransport';
 
 vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());

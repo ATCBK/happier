@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { __resetQualifiedConnectedAccountQuotaSnapshotStore } from './qualifiedConnectedAccountQuotaSnapshotStore';
+import { __resetQualifiedConnectedAccountQuotaSnapshotStore } from '@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore';
 import { createQualifiedQuotaTestHarness, quotaTestResponse } from './qualifiedConnectedAccountQuotaTestHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
@@ -88,7 +88,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
         { intent: 'cancel', policy: 'poll' },
     ] as const)('handles an unresolved native refresh on $intent for a $policy consumer', async ({ intent, policy }) => {
         vi.useFakeTimers();
-        const store = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        const store = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
         const context = buildContext('server-a', 1);
         const key = store.buildQualifiedQuotaSnapshotScopeKey(context);
         const snapshot = { v: 1, ref, activeAccountId: 'provider-work', fetchedAt: 1, staleAfterMs: 30 * 60_000, planLabel: null, accountLabel: null, meters: [] };
@@ -134,7 +134,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
 
     it('polls an explicit cached refresh until new data and then returns to cache-only reads', async () => {
         vi.useFakeTimers();
-        const store = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        const store = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
         const context = buildContext('server-a', 1);
         const key = store.buildQualifiedQuotaSnapshotScopeKey(context);
         const snapshot = { v: 1, ref, activeAccountId: 'provider-work', fetchedAt: 1, staleAfterMs: 30 * 60_000, planLabel: null, accountLabel: null, meters: [] };
@@ -163,7 +163,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
     });
     it.each(['snapshot', 'error'] as const)('keeps an accepted native refresh pending until a newer %s arrives', async (outcome) => {
         vi.useFakeTimers();
-        const store = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        const store = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
         const context = buildContext('server-a', 1);
         const key = store.buildQualifiedQuotaSnapshotScopeKey(context);
         const snapshot = { v: 1, ref, activeAccountId: 'provider-work', fetchedAt: 1, staleAfterMs: 30 * 60_000, planLabel: null, accountLabel: null, meters: [] };
@@ -191,7 +191,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
     });
 
     it('retains the last native snapshot when an accepted refresh read temporarily has no data', async () => {
-        const store = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        const store = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
         const context = buildContext('server-a', 1);
         const key = store.buildQualifiedQuotaSnapshotScopeKey(context);
         const snapshot = { v: 1, ref, activeAccountId: 'provider-work', fetchedAt: 1, staleAfterMs: 30 * 60_000, planLabel: null, accountLabel: null, meters: [] };
@@ -210,7 +210,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
 
     it('stops pending native refresh polling when its last consumer leaves', async () => {
         vi.useFakeTimers();
-        const store = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        const store = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
         const context = buildContext('server-a', 1);
         const key = store.buildQualifiedQuotaSnapshotScopeKey(context);
         getQuotaMock.mockResolvedValue(null);
@@ -246,7 +246,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
 
     it('parks retained reads while inactive and refreshes immediately on return, retaining the last snapshot', async () => {
         vi.useFakeTimers();
-        const store = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        const store = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
         const initialListeners = new Set(runtime.listeners);
         const context = buildContext('server-a', 1);
         const key = store.buildQualifiedQuotaSnapshotScopeKey(context);
@@ -294,7 +294,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
         const snapshot = { v: 1, ref, activeAccountId: 'provider-work', fetchedAt: 1, staleAfterMs: 60_000, planLabel: null, accountLabel: null, meters: [] };
         getQuotaMock.mockResolvedValue({ ref, sourceResolution });
         snapshotFixture.mockReturnValue(snapshot);
-        const store = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        const store = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
         const current = buildContext('server-a', 1);
         const other = buildContext('server-b', 1);
         const currentKey = store.buildQualifiedQuotaSnapshotScopeKey(current);
@@ -338,7 +338,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
             buildQualifiedQuotaSnapshotScopeKey,
             getQualifiedQuotaSnapshotEntry,
             retainQualifiedQuotaSnapshotPolling,
-        } = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        } = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
         const context = buildContext('server-a', 1);
         const key = buildQualifiedQuotaSnapshotScopeKey(context);
 
@@ -363,7 +363,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
 
     it('keeps a newly connected account refreshable when its first read has no snapshot', async () => {
         getQuotaMock.mockResolvedValue(null);
-        const store = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        const store = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
         const context = buildContext('server-a', 1);
         const key = store.buildQualifiedQuotaSnapshotScopeKey(context);
         const release = store.retainQualifiedQuotaSnapshotPolling(key, context);
@@ -391,7 +391,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
         };
         snapshotFixture.mockReturnValue(snapshot);
         getQuotaMock.mockResolvedValue({ metadata: { status: 'error' } });
-        const store = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        const store = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
         const context = buildContext('server-a', 1);
         const key = store.buildQualifiedQuotaSnapshotScopeKey(context);
         const release = store.retainQualifiedQuotaSnapshotPolling(key, context);
@@ -410,7 +410,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
 
     it('marks quota support unavailable only when refresh admission proves the operation unsupported', async () => {
         getQuotaMock.mockResolvedValue(null);
-        const store = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        const store = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
         const context = buildContext('server-a', 1);
         boundary.control.mockResolvedValue({ status: 'unavailable', code: 'connected_account_v4_operation_unsupported' });
         const key = store.buildQualifiedQuotaSnapshotScopeKey(context);
@@ -438,7 +438,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
         };
         snapshotFixture.mockReturnValue(snapshot);
         getQuotaMock.mockResolvedValue({ metadata: { status: 'error' } });
-        const store = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        const store = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
         const context = buildContext('server-a', 1);
         const key = store.buildQualifiedQuotaSnapshotScopeKey(context);
         const release = store.retainQualifiedQuotaSnapshotPolling(key, context);
@@ -482,7 +482,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
             buildQualifiedQuotaSnapshotScopeKey,
             getQualifiedQuotaSnapshotEntry,
             retainQualifiedQuotaSnapshotPolling,
-        } = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        } = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
         const serverA = buildContext('server-a', 1);
         const keyA = buildQualifiedQuotaSnapshotScopeKey(serverA);
         const releaseA = retainQualifiedQuotaSnapshotPolling(keyA, serverA);
@@ -525,7 +525,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
             getQualifiedQuotaSnapshotEntry,
             refreshQualifiedQuotaSnapshot,
             retainQualifiedQuotaSnapshotPolling,
-        } = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        } = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
         const context = buildContext('server-a', 1);
         const key = buildQualifiedQuotaSnapshotScopeKey(context);
 
@@ -545,7 +545,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
     });
 
     it('settles an accepted refresh on a quota read refusal while retaining the last snapshot', async () => {
-        const store = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        const store = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
         const context = buildContext('server-a', 1);
         const key = store.buildQualifiedQuotaSnapshotScopeKey(context);
         const snapshot = { v: 1, ref, activeAccountId: 'provider-work', fetchedAt: 1, staleAfterMs: 60_000, planLabel: null, accountLabel: null, meters: [] };
@@ -575,7 +575,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
             buildQualifiedQuotaSnapshotScopeKey,
             getQualifiedQuotaSnapshotEntry,
             retainQualifiedQuotaSnapshotPolling,
-        } = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        } = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
         const context = buildContext('server-a', 1);
         const key = buildQualifiedQuotaSnapshotScopeKey(context);
 
@@ -611,7 +611,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
             const {
                 buildQualifiedQuotaSnapshotScopeKey,
                 retainQualifiedQuotaSnapshotPolling,
-            } = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+            } = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
             const context = buildContext('server-a', 1);
             const key = buildQualifiedQuotaSnapshotScopeKey(context);
 
@@ -674,7 +674,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
             buildQualifiedQuotaSnapshotScopeKey,
             getQualifiedQuotaSnapshotEntry,
             retainQualifiedQuotaSnapshotPolling,
-        } = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        } = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
         const serverA = buildContext('server-a', 1);
         const keyA = buildQualifiedQuotaSnapshotScopeKey(serverA);
 

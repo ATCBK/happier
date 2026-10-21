@@ -15,7 +15,7 @@ import type { getQualifiedConnectedAccountQuotaV4 } from '@/sync/api/account/api
 
 import { renderHookAndCollectValues } from '../serverFeatureHookHarness.testHelpers';
 import { __resetConnectedServiceQuotaSnapshotStore } from './connectedServiceQuotaSnapshotStore';
-import { __resetQualifiedConnectedAccountQuotaSnapshotStore } from './qualifiedConnectedAccountQuotaSnapshotStore';
+import { __resetQualifiedConnectedAccountQuotaSnapshotStore } from '@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore';
 
 const stableCredentials = { token: 't', secret: Buffer.from(new Uint8Array(32).fill(3)).toString('base64url') } as const;
 
@@ -352,7 +352,7 @@ describe('useConnectedServiceQuotaSummaries', () => {
         ]);
 
         // A read still in flight is loading, never "unavailable".
-        const { __resetQualifiedConnectedAccountQuotaSnapshotStore } = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        const { __resetQualifiedConnectedAccountQuotaSnapshotStore } = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
         __resetQualifiedConnectedAccountQuotaSnapshotStore();
         getQualifiedConnectedAccountQuotaV4Spy.mockImplementation(() => new Promise(() => {}));
         const pending = await renderHookAndCollectValues(() => useConnectedServiceQuotaSummaries({ fetchPolicy: 'once' }));

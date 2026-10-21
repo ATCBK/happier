@@ -48,7 +48,7 @@ import {
     retainQualifiedQuotaSnapshotPolling,
     subscribeQualifiedQuotaSnapshotEntry,
     type QualifiedQuotaSnapshotStoreContext,
-} from './qualifiedConnectedAccountQuotaSnapshotStore';
+} from '@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore';
 import {
     useConnectedServiceLegacyOperationAdmission,
 } from './useConnectedServiceLegacyOperationAdmission';

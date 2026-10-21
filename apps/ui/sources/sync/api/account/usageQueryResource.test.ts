@@ -33,7 +33,7 @@ import { buildProviderAccountUsageScopeKey } from '@/sync/domains/connectedServi
 import { getProviderAccountUsageCacheState, updateProviderAccountUsageCacheEntries } from '@/sync/domains/connectedServices/accountUsage/providerAccountUsageCache';
 import { getProviderAccountUsageSnapshotPlain } from './apiProviderAccountUsage';
 import { buildQualifiedQuotaSnapshotScopeKey, getQualifiedQuotaSnapshotEntry, loadQualifiedQuotaSnapshotOnce, reloadQualifiedQuotaSnapshotAfterRecovery,
-  subscribeQualifiedQuotaSnapshotEntry } from '@/hooks/server/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore';
+  subscribeQualifiedQuotaSnapshotEntry } from '@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore';
 import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { settingsParse } from '@/sync/domains/settings/settings';
@@ -2906,10 +2906,19 @@ describe('usage query captured Resource adapter', () => {
     failing = true;
     publishHomeAccountChange(captured.accountLifetime.scope.serverId, ['shared'], { changeKinds: ['session'], usageQueryAffects: true });
     const replacement = await readUiUsageQueryBatch(captured, input, undefined, settled);
-    expect(replacement.results[0]?.howYouWork?.intervals, 'a surviving Session is not the full selected total').toBeNull();
+    if (status === 503) {
+      expect(replacement.results[0]?.howYouWork?.intervals, 'retain the complete admitted population, never only the surviving Session')
+        .toEqual(settled.results[0]?.howYouWork?.intervals);
+      expect(replacement.results[0]?.sources).toEqual(expect.arrayContaining([
+        expect.objectContaining({ source: 'how_you_work', status: 'stale', errorCode: 'usage_session_evidence_read_failed' }),
+      ]));
+    } else {
+      expect(replacement.results[0]?.howYouWork?.intervals, 'a surviving Session is not the full selected total').toBeNull();
+    }
     failing = false;
     const recovered = await readUiUsageQueryBatch(captured, input, undefined, replacement);
-    expect(recovered.results[0]?.howYouWork?.intervals?.agentTimeMs).toBe(900);
+    expect(recovered.results[0]?.howYouWork?.intervals).toEqual(settled.results[0]?.howYouWork?.intervals);
+    expect(recovered.results[0]?.sources.find(source => source.source === 'how_you_work')?.errorCode).toBeUndefined();
   });
 
   it('shares private Session evidence while seq is unchanged and isolates consumer retirement', async () => {

@@ -274,7 +274,7 @@ describe('connected-account daemon machine RPC', () => {
         const pending = runConnectedAccountAuthenticationCommand({ serverId, machineId: 'machine-1', expectedActiveServer, command: beginConnect });
         const rejected = expect(pending).rejects.toMatchObject({ code: 'STALE_SERVER_GENERATION' });
         try {
-            await vi.waitFor(() => expect(homes.requestsFor('/v1/machines/machine-1')).toHaveLength(1));
+            await vi.waitFor(() => expect(homes.requestsFor('/v1/machines/read-batch')).toHaveLength(1));
             await homes.addHome({ name: 'New focused Home', serverUrl: 'https://new-connected-account-home.test', accountId: 'account-b' });
             // Change the captured selection while discovery is held; cold Account teardown
             // would instead retire the socket before its issuance guard can run.

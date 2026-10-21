@@ -54,7 +54,7 @@ const response = {
 
 // Compile the real transport graph during collection, after the HTTP boundary
 // is installed. The read's deadline must measure delivery/opening, not cold imports.
-const { readQualifiedConnectedAccountQuota } = await import('./qualifiedConnectedAccountQuotaTransport');
+const { readQualifiedConnectedAccountQuota } = await import('@/sync/api/account/qualifiedConnectedAccountQuotaTransport');
 
 describe('qualifiedConnectedAccountQuotaTransport', () => {
     beforeEach(() => {
