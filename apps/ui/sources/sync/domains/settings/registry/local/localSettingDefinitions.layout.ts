@@ -94,7 +94,8 @@ export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
     },
     detailsPaneWidthPx: {
         schema: z.number(),
-        default: 520,
+        // The editor column a person gets before they drag it (files lab FB1: a 600 px Details drawer at 1440).
+        default: 600,
         description: 'Preferred details pane dock width in px',
         storageScope: 'local',
         analytics: {
