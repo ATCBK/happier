@@ -720,6 +720,11 @@ fingerprint requires its own confirmation.
 In development source, Team runtime admission demand-loads the recipient's
 Provider catalog in the captured Account context and rereads that same authority
 after broker/tunnel work. The daemon Account cannot supply recipient consent.
+Home catalog reads and broker-open revalidation both request the source-only
+projection, so the offered source revision is not recomputed with the custodian's
+Agent adapter or consent. Closed broker-open refusal codes remain typed through
+the daemon/runner boundary and construction diagnostics; they are not daemon
+authority failures.
 The Agent receives the local machine-carrier capability through its declared raw
 credential header, not a public-header/config literal; signed Home authority
 remains with the admitted stream. This transport correction changes the worker

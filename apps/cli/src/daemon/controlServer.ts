@@ -10,6 +10,7 @@ import { SessionFollowOccurrenceNotificationSchema, type SessionFollowOccurrence
 import { SessionActivityChangedResponseSchema, type SessionActivityChangedResult } from './sessions/sessionActivityChangedContract';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { configuration } from '@/configuration';
+import { SessionTeamCredentialLaunchUnavailableError } from '@/session/services/sessionTeamCredentialLaunch';
 import { DoctorSnapshotResourceVitalsSchema, type DoctorSnapshotResourceVitals } from '@happier-dev/protocol/diagnostics/doctorSnapshot';
 import { createDaemonAdmissionDrain, EXECUTION_RUN_ADMISSION_PATH, ExecutionRunDaemonAdmissionResponseSchema, type DaemonAdmissionDrain } from './lifecycle/admissionDrain';
 import { AUTHORITY_CEILING_HEADER_V1, resolveInvocationAuthority } from '@happier-dev/protocol/actions/invocationAuthority';
@@ -3229,10 +3230,9 @@ export function createDaemonControlApp({
       );
     } catch (error) {
       if (request.body.operation.kind === 'provider_broker.binding.open'
-        && error instanceof Error
-        && error.message === 'team_credential_provider_selection_not_current') {
+        && error instanceof SessionTeamCredentialLaunchUnavailableError) {
         return { ok: false as const, error: {
-          code: 'team_credential_provider_selection_not_current', message: 'team_credential_provider_selection_not_current',
+          code: error.code, message: error.code,
         } };
       }
       if (request.body.operation.kind === 'model_transition.authorize') {

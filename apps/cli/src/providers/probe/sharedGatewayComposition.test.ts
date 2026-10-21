@@ -24,10 +24,19 @@ import { createNativeAgentRuntimeSessionPlanFixture, createNativeSessionClientTe
 import { projectEngineRuntimeContributionFromAgent } from '@/agent/runtime/registry/engineRegistry/contributions';
 import { buildPluginSessionBindingInput } from '@/plugins/runtime/runtimeCore/plugin/sessionLaunch';
 import { runHostSessionRuntime } from '@/agent/runtime/session/loop/runHostSessionRuntime';
-import { createAccountConnectionManagedConsumerSourceOpen } from '@/providers/broker/accountConnectionSource';
+import { createAccountConnectionManagedConsumerSourceOpen, retireAccountConnectionBrokerSource } from '@/providers/broker/accountConnectionSource';
 import { createManagedProviderExplicitStartCustody } from '@/providers/connections/publicManagedRuntimeStart';
 import { startManagedProviderConsumerApplication } from '@/providers/broker/managedProviderConsumerApplication';
 import { createProviderManagedRuntimeBindingFingerprintV1 } from '@happier-dev/protocol/providers/contributions';
+import { createProviderBrokerRouteGrantSigningInputV2, type ProviderBrokerAccountOpenResponseV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { DIRECT_ROUTE_GRANT_TTL_MS } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantCachePolicyV1';
+import tweetnacl from 'tweetnacl';
+import { createDaemonMachineIrohRuntime } from '@/daemon/peer/iroh/daemonMachineIrohRuntime';
+import { createProviderBrokerMachineCarrierTunnelOpen } from '@/daemon/peer/iroh/providerBrokerMachineCarrierTunnelOpen';
+import { startPeerMediationLoopbackServer } from '@/daemon/peer/mediation/loopback/server';
+import { openAccountConnectionProviderBrokerAccess } from '@/providers/broker/accountConnectionClient';
+import { startDaemonProviderBrokerRuntime } from '@/providers/broker/daemonProviderBrokerRuntime';
+import { createTeamCredentialBrokerSourceOwner } from '@/providers/broker/teamCredentialBrokerSourceOwner';
 
 import { createRuntimeProviderServices } from './runtimeServices';
 
@@ -194,7 +203,86 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
                 const processFile = join(fixture.gateway!.directory, 'gateway-started');
                 const localPid = await readFile(processFile, 'utf8');
                 expect(Number(localPid)).toBeGreaterThan(0);
-                const peer = await openConsumer(peerSessionId, peerMachineId);
+                // Exercise the actual peer carrier and hub application, not a
+                // second local consumer that bypasses broker endpoint discovery.
+                const worker = await createDaemonMachineIrohRuntime({ happyHomeDir: homeDir, identity: 'ephemeral',
+                  relayConfig: { relayPolicy: 'disabled', relayUrls: [] } });
+                const hub = await createDaemonMachineIrohRuntime({ happyHomeDir: homeDir, identity: 'ephemeral',
+                  relayConfig: { relayPolicy: 'disabled', relayUrls: [] } });
+                consumerScope.register(worker.shutdown);
+                consumerScope.register(hub.shutdown);
+                if (!worker.available || !hub.available) throw new Error('Expected native peer endpoints');
+                const key = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(7));
+                const trustRoots = [{ keyId: 'home', publicKey: Buffer.from(key.publicKey).toString('base64url') }];
+                const custody = createManagedProviderExplicitStartCustody({ machineId: hubMachineId,
+                  happyHomeDir: homeDir, controller: pluginReloadController });
+                const broker = await startDaemonProviderBrokerRuntime({ machineId: hubMachineId,
+                  resolveTrustRoots: () => trustRoots, nowMs: Date.now, createRequestId: () => 'peer-request',
+                  accountConnection: { homeId: 'home', accountId: 'account',
+                    open: async ({ authority, signal }) => await openSource({ source: authority.payload.source,
+                      application: authority.payload.application, consumer: authority.payload.consumer,
+                      consumerMachineId: authority.payload.initiator.machineId, signal }),
+                    retire: async ({ authority }) => await retireAccountConnectionBrokerSource({
+                      homeId: 'home', accountId: 'account', machineId: hubMachineId, custody, authority }),
+                  },
+                  sourceOwner: createTeamCredentialBrokerSourceOwner({ machineId: hubMachineId, custody,
+                    selectConnectedServicesSourceMember: async () => null, openConnectedServicesSource: async () => null,
+                    openProviderConnectionSource: async () => null }),
+                  resolveRequestPolicy: async () => { throw new Error('Unexpected Team request'); },
+                  admitRequest: async () => { throw new Error('Unexpected Team admission'); },
+                  authorizeModelCatalog: async () => { throw new Error('Unexpected Team catalog'); },
+                });
+                consumerScope.register(broker.close);
+                let forwarding = true;
+                const admission = await startPeerMediationLoopbackServer({ nowMs: Date.now,
+                  expected: { accountId: 'account', machineId: hubMachineId, flowKind: 'machine_rpc',
+                    routeKind: 'loopback_direct', endpointFingerprint: hub.endpoint.endpointId },
+                  trustRoots, endpointExpiresAt: Date.now() + DIRECT_ROUTE_GRANT_TTL_MS.directTcpTunnel,
+                  irohMachineAdmission: { localEndpointId: hub.endpoint.endpointId, role: 'acceptor', allowedFlows: [],
+                    resolveApplicationTarget: async () => null,
+                    resolveProviderBrokerApplicationTarget: async request => forwarding
+                      ? await broker.resolveProviderBrokerApplicationTarget(request) : null },
+                });
+                consumerScope.register(admission.stop);
+                await hub.startAttemptAcceptor({ admissionPort: Number(new URL(admission.url).port) });
+                const openPeer = () => openAccountConnectionProviderBrokerAccess({ homeId: 'home', accountId: 'account',
+                  initiatorMachineId: peerMachineId, targetMachineId: hubMachineId, connectionId: basis.connectionId,
+                  expectedConnectionSecurityFingerprint: source.expectedConnectionSecurityFingerprint,
+                  expectedManagedRuntimeBindingFingerprint: source.expectedManagedRuntimeBindingFingerprint,
+                  consumer: { kind: 'session', sessionId: peerSessionId }, application, signal,
+                  // Home signing/admission are the network boundary. Exact
+                  // route verification, native carrier and hub custody stay real.
+                  openBroker: async request => {
+                    const issuedAt = Date.now();
+                    const payload = { v: 2 as const, grantId: 'peer-grant', aud: 'happier-provider-broker-route-v2' as const,
+                      issuedAt, expiresAt: issuedAt + DIRECT_ROUTE_GRANT_TTL_MS.directTcpTunnel,
+                      homeId: 'home', accountId: 'account', initiatorTokenEpoch: 0, source: request.source,
+                      initiator: { accountId: 'account', machineId: peerMachineId, endpointId: worker.endpoint.endpointId },
+                      target: { custodianAccountId: 'account', machineId: hubMachineId, endpointId: hub.endpoint.endpointId },
+                      consumer: request.consumer, application: request.application };
+                    return { ok: true, authority: { payload, signature: { alg: 'Ed25519', keyId: 'home',
+                      valueBase64Url: Buffer.from(tweetnacl.sign.detached(Buffer.from(
+                        createProviderBrokerRouteGrantSigningInputV2(payload)), key.secretKey)).toString('base64url') } },
+                      target: { custodianAccountId: 'account', brokerMachineId: hubMachineId,
+                        endpointId: hub.endpoint.endpointId, endpointRevision: 1, endpoint: hub.endpoint },
+                    } satisfies ProviderBrokerAccountOpenResponseV2;
+                  },
+                  admitConsumer: async () => true,
+                  openTunnel: createProviderBrokerMachineCarrierTunnelOpen({ homeId: 'home', accountId: 'account',
+                    localMachineId: peerMachineId, runtime: worker, resolveTrustRoots: () => trustRoots }),
+                });
+                forwarding = false;
+                await expect(openPeer()).rejects.toBeDefined();
+                forwarding = true;
+                const remote = await openPeer();
+                consumerScope.register(remote.cleanup);
+                const remoteBinding = await remote.readHttpBinding();
+                expect(new URL(remoteBinding.endpointUrl).port).not.toBe(new URL(consumer.endpointUrl).port);
+                const peerApplication = await startManagedProviderConsumerApplication({ signal, endpointUrl: remoteBinding.endpointUrl,
+                  credentialTransport: basis.runtimeCredentialTransport,
+                  request: async request => ({ ok: true, response: await remote.access.request(request) }) });
+                const peer = { ...peerApplication, retire: remote.cleanup };
+                consumerScope.register(peer.cleanup);
                 expect(await readFile(processFile, 'utf8')).toBe(localPid);
                 expect(peer.credential).not.toBe(consumer.credential);
                 const readModels = async (endpoint: typeof consumer, credential = endpoint.credential) => {

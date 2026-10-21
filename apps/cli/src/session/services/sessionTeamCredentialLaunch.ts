@@ -13,6 +13,7 @@ import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/
 import { isSameTeamCredentialBrokerApplication } from '@/providers/broker/teamCredentialModelCatalog';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { readLeasedAgentProviderRequirements } from '@/plugins/runtime/providerBindings/adapter';
+import type { ProviderBrokerAdmissionFailureCodeV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
 /** Runtime opens use the worker's admitted application and the shared catalog transport. */
 export async function readSessionTeamCredentialProviderModels(input: Readonly<{
@@ -42,8 +43,8 @@ export type NormalizedSessionTeamCredentialLaunch = Readonly<{
 }>;
 
 export class SessionTeamCredentialLaunchUnavailableError extends Error {
-  readonly code = 'team_credential_provider_selection_not_current';
-  constructor() { super('team_credential_provider_selection_not_current'); }
+  constructor(readonly code: ProviderBrokerAdmissionFailureCodeV1 | 'team_credential_provider_selection_not_current'
+    = 'team_credential_provider_selection_not_current') { super(code); }
 }
 
 /** Reads source-owned model rows through the one paginated recipient transport.

@@ -15,6 +15,8 @@ import { resolveTeamCredentialModelCompatibility } from './teamCredentialModelCo
 import { commitActiveProviderConnectionsCatalog, getActiveAccountSettingsSnapshotLifetimeToken, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { ProviderBrokerAdmissionFailureCodeV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { SessionTeamCredentialLaunchUnavailableError } from '@/session/services/sessionTeamCredentialLaunch';
 
 import {
   openExactSessionTeamCredentialProviderBinding,
@@ -113,6 +115,20 @@ const authority = {
 
 describe('Session Team credential Provider binding', () => {
   afterEach(() => resetActiveAccountSettingsSnapshotForTests());
+
+  it.each(ProviderBrokerAdmissionFailureCodeV1Schema.options)('retains exact broker-open refusal %s as a typed launch error', async code => {
+    const refused = await openExactSessionTeamCredentialProviderBinding({
+      sessionId: 'session-1', machineId: 'worker-1', agentId: 'codex',
+      selection: { ...row.selection, descriptor: row.descriptor, application: row.application,
+        sourceRevision: row.sourceRevision, sourceFacts: row.sourceFacts, brokerMachineId: 'broker-1' },
+      lease: lease({ v: 1, adapterVersion: 1, prepare: prepareSpawnEnv, materialize: materializeEmptySpawnEnv }),
+      materializationBaseDir: '/tmp/happier-team-broker-refusal', signal: new AbortController().signal,
+      openBroker: async () => ({ ok: false, reasonCode: code }),
+      openTunnel: async () => { throw new Error('Refused broker must not open tunnel'); },
+    }).then(() => null, (error: unknown) => error);
+    expect(refused).toBeInstanceOf(SessionTeamCredentialLaunchUnavailableError);
+    expect(refused).toMatchObject({ code, message: code });
+  });
 
   it('requires the recipient confirmation and recomputes compatibility with the worker adapter', async () => {
     const sourceFacts = { ...row.sourceFacts, compatibilityOverrides: row.sourceFacts.compatibilityOverrides!.map(override => ({
@@ -497,15 +513,17 @@ describe('Session Team credential Provider binding', () => {
       upstream: { normalizedUrl: 'http://127.0.0.1:43123/v1' },
     });
     // The Agent receives only its loopback endpoint and the tunnel's local
-    // capability as its bearer. The Home-signed cross-Account authority stays
+    // capability through its raw credential header. Home-signed authority stays
     // with the trusted transport owner and never enters Agent configuration.
     expect(adapter.materialize).toHaveBeenCalledWith(expect.objectContaining({
-      credential: { kind: 'apiKey', transport: expect.anything(), value: 'c'.repeat(64) },
+      binding: expect.objectContaining({ endpoint: expect.objectContaining({ publicHeaders: {} }) }),
+      credential: { kind: 'apiKey', transport: expect.objectContaining({
+        destination: { kind: 'httpHeader', name: 'x-happier-machine-local-capability', format: 'raw' },
+      }), value: 'c'.repeat(64) },
     }));
     expect(JSON.stringify(vi.mocked(adapter.materialize).mock.calls)).not.toContain(authority.signature.valueBase64Url);
-    // The one-shot local capability is the Agent's bearer and also travels in
-    // the endpoint's public headers, so it must be redacted from transcripts
-    // exactly like a direct source credential.
+    // The carrier capability is a credential, never a public-header literal,
+    // and must still be redacted like a direct source credential.
     expect(opened?.additionalRedactionValues).toContain('c'.repeat(64));
     await opened?.cleanup();
     await opened?.cleanup();

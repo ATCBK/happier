@@ -276,6 +276,7 @@ export function registerTeamCredentialProviderBrokerRoutes(app: Fastify, persona
                         machineId: projection.brokerMachineId,
                         agentTargetKey: projection.agentTargetKey,
                         application: projection.application,
+                        sourceCatalog: true,
                         ...(projection.source.kind === 'provider_connection'
                             ? { providerConnection: {
                                 connectionId: projection.source.connectionId,

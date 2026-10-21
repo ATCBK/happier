@@ -5,11 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { createProviderErrorV1, ProviderConnectionIdSchema } from '@happier-dev/protocol';
+import { presentSessionProviderBinding } from '@/providers/session/presentation';
 
 const describeProviderBindingStatus = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: (request: Readonly<{ payload: unknown }>) => describeProviderBindingStatus(request.payload),
+    machineRpcWithServerScope: (request: Readonly<{ payload: unknown }>) => describeProviderBindingStatus(request.payload, request),
 }));
 const account = createProviderSettingsAccountHarness();
 let serverId = '';
@@ -25,6 +27,63 @@ describe('useProviderBindingStatus', () => {
         standardCleanup();
         await account.reset();
     });
+
+    const launchBinding = {
+        v: 1 as const, connectionId: ProviderConnectionIdSchema.parse('pc_launch'), contributionKey: null, connectionRevision: 1,
+        protocol: 'openai-responses' as const, materialization: 'engineConfig' as const,
+        compatibilityFingerprint: 'compatibility:v1:a', bindingSecurityFingerprint: 'binding-security:v1:a',
+        displaySnapshot: { providerName: 'Gateway', connectionName: 'Launch', connectionRole: 'named' as const,
+            connectionDisplayNameMode: 'custom' as const },
+    };
+    const selection = {
+        v: 1 as const, updatedAt: 2,
+        ref: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: launchBinding.connectionId, modelId: 'next' },
+    };
+    function useBindingPresentation() {
+        const result = useProviderBindingStatus({ enabled: true, machineId: 'machine-a', serverId, selection, launchBinding });
+        return { ...result, banner: presentSessionProviderBinding({ binding: launchBinding, status: result.status, error: result.error }).banner };
+    }
+
+    it('keeps the banner absent throughout a successful current read on the Session Home', async () => {
+        serverId = await account.addHome({ name: 'Session Home', serverUrl: 'https://provider-binding-peer.test',
+            serverIdentityId: 'srv_binding_peer', accountId: 'peer-session', currentAccount: true, active: false });
+        describeProviderBindingStatus.mockResolvedValue({ status: 'current' });
+        const banners: unknown[] = [];
+        const rendered = await renderHook(() => {
+            const result = useBindingPresentation();
+            banners.push(result.banner);
+            return result;
+        });
+        expect(rendered.getCurrent()).toMatchObject({ status: { status: 'current' }, error: null, loading: false, banner: null });
+        expect(banners.every(banner => banner === null)).toBe(true);
+        expect(describeProviderBindingStatus).toHaveBeenLastCalledWith(
+            { machineId: 'machine-a', agentTargetKey: selection.ref.agentTargetKey, selection, launchBinding },
+            expect.objectContaining({ serverId: 'srv_binding_peer', accountId: 'peer-session', machineId: 'machine-a', method: 'daemon.providers.binding.status' }),
+        );
+    });
+
+    it.each([false, true])('retains the typed failure until retry settles (persistent failure: %s)', async persistent => {
+        const failure = createProviderErrorV1('provider_catalog_unavailable', { connectionId: 'pc_launch', machineId: 'machine-a' });
+        let settle!: () => void;
+        const retry = new Promise<{ status: 'current' }>((resolve, reject) => {
+            settle = () => persistent ? reject(failure) : resolve({ status: 'current' });
+        });
+        // Only the Machine Action transport is mocked; Action dispatch, error parsing,
+        // mounted read custody and banner presentation all run their production logic.
+        describeProviderBindingStatus.mockRejectedValueOnce(failure).mockReturnValueOnce(retry);
+        const rendered = await renderHook(useBindingPresentation);
+        expect(rendered.getCurrent()).toMatchObject({ status: null, error: failure, loading: false,
+            banner: { kind: 'status-error', action: 'retry' } });
+        let refresh!: Promise<void>;
+        await act(async () => { refresh = rendered.getCurrent().refresh(); });
+        expect(rendered.getCurrent()).toMatchObject({ error: failure, loading: true,
+            banner: { kind: 'status-error', action: 'retry' } });
+        await act(async () => { settle(); await refresh; });
+        expect(rendered.getCurrent()).toMatchObject(persistent
+            ? { status: null, error: failure, loading: false, banner: { kind: 'status-error', action: 'retry' } }
+            : { status: { status: 'current' }, error: null, loading: false, banner: null });
+    });
+
     it('clears a successful binding status immediately when its machine scope changes', async () => {
         let resolveB!: (value: unknown) => void;
         describeProviderBindingStatus

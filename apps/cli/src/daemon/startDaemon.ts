@@ -1938,6 +1938,7 @@ export async function startDaemon(
               lease,
               materializationBaseDir: join(configuration.happyHomeDir, 'providers', 'materialized'),
               signal: input.signal,
+              providerSettingsOperationContext: input.providerSettingsOperationContext,
               readCatalog: signal => readSessionTeamCredentialProviderModels({
                 homeDomainAction, lease, agentId: input.agentId, agentTargetKey: input.agentTargetKey,
                 resourceId: input.resourceId, teamId: input.teamId, signal,

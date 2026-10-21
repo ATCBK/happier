@@ -109,6 +109,7 @@ import { refreshTerminalPresentUserPolicy } from '@/settings/accountSettings/res
 import { getSessionNotificationTitle } from '@/agent/runtime/notifications/sessionNotificationContext';
 import { createPersonalFollowOccurrenceDispatcher } from '@/notifications/activity/dispatchPersonalFollowOccurrence';
 import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/savedSecretOperationContext';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/savedSecretOperationContext';
 import { PushNotificationClient } from '@/api/pushNotifications';
 import type { SessionActivityChangedResult } from '@/daemon/sessions/sessionActivityChangedContract';
 import { createCommittedInputTypeDeps } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
@@ -2522,6 +2523,7 @@ export async function startDaemonSessionControlRuntime(
         agentTargetKey: string;
         modelId: string;
         consumer?: import('@happier-dev/protocol').ProviderBrokerConsumerV1;
+        providerSettingsOperationContext?: SavedSecretOperationContextV1;
         signal: AbortSignal;
       }>,
     ) => Promise<
@@ -17631,9 +17633,10 @@ export async function startDaemonSessionControlRuntime(
                 return null;
               return { teamId, deliveryMode: teamBinding.deliveryMode };
             })();
+            const openTeamBinding = params.openTeamCredentialProviderBinding;
             if (
               !tracked ||
-              !params.openTeamCredentialProviderBinding ||
+              !openTeamBinding ||
               !binding ||
               consumerAgentId === null
             ) {
@@ -17647,21 +17650,32 @@ export async function startDaemonSessionControlRuntime(
             }
             let opened;
             try {
-              opened = await params.openTeamCredentialProviderBinding({
-                sessionId,
-                teamId: binding.teamId,
-                resourceId: request.operation.resourceId,
-                expectedResourceRevision:
-                  request.operation.expectedResourceRevision,
-                deliveryMode: binding.deliveryMode,
-                agentId: consumerAgentId,
-                agentTargetKey: request.operation.agentTargetKey,
-                modelId: request.operation.modelId,
-                ...(request.operation.consumer
-                  ? { consumer: request.operation.consumer }
-                  : {}),
-                signal: context.signal ?? new AbortController().signal,
-              });
+              const signal = context.signal ?? new AbortController().signal;
+              opened = await withSessionAccountContext(sessionId, async requester => {
+                const result = await withSessionAccountHome(requester, () => openTeamBinding({
+                  sessionId,
+                  teamId: binding.teamId,
+                  resourceId: request.operation.resourceId,
+                  expectedResourceRevision:
+                    request.operation.expectedResourceRevision,
+                  deliveryMode: binding.deliveryMode,
+                  agentId: consumerAgentId,
+                  agentTargetKey: request.operation.agentTargetKey,
+                  modelId: request.operation.modelId,
+                  ...(request.operation.consumer
+                    ? { consumer: request.operation.consumer }
+                    : {}),
+                  ...(requester ? { providerSettingsOperationContext: requester.bootstrap.savedSecretOperationContext } : {}),
+                  signal,
+                }));
+                try {
+                  await assertSessionAccountCurrent(sessionId, requester, undefined, signal);
+                  return result;
+                } catch (error) {
+                  await result.cleanup();
+                  throw error;
+                }
+              }, undefined, signal);
             } catch (error) {
               const providerError = ProviderErrorV1Schema.safeParse(error);
               if (providerError.success) {

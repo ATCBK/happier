@@ -40,6 +40,7 @@ import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids'
 import { openSessionTeamCredentialProviderBinding } from '@/providers/broker/sessionTeamCredentialProviderBinding';
 import { openCurrentRunnerTeamCredentialProviderBinding } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceAuthorityClient';
 import { readSessionPreparationFailureDiagnostic } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
+import { ProviderModelBindingSourceV1Schema } from '@happier-dev/protocol/providers/binding-compatibility';
 
 type RecordAdmission = NonNullable<
   Parameters<typeof createDaemonControlApp>[0][
@@ -74,7 +75,8 @@ function createRetainedAgent() {
 }
 
 describe('daemon control server: runner-scoped Agent runtime services', () => {
-  it('preserves a real Team selection refusal from the broker producer through the runner client', async () => {
+  it.each(['team_credential_provider_selection_not_current', 'resource_unavailable', 'broker_unavailable'] as const)(
+    'preserves a real Team selection refusal (%s) from the broker producer through the runner client', async code => {
     const fixture = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
       runtimeOptions: { pluginIds: ['happier.agent.codex'] } });
     const lease = await acquireAuthoritativePluginRuntimeRegistryLease();
@@ -96,17 +98,40 @@ describe('daemon control server: runner-scoped Agent runtime services', () => {
       stopSession: async () => ({ status: 'not_found' as const }),
       spawnSession: async () => ({ type: 'success' as const, sessionId: 'unused' }),
       requestShutdown: () => {}, onHappySessionWebhook: () => {}, controlToken: 'control-token',
-      // Real broker decision and HTTP route/client; only the Home catalog read is supplied.
+      // Real broker decision and HTTP route/client; only Home catalog/open network results are supplied.
       agentRuntimeDaemonServices: { dispatch: async () => {
         await openSessionTeamCredentialProviderBinding({ sessionId, machineId: 'machine-1', agentId: 'codex',
           agentTargetKey: operation.agentTargetKey, modelId: operation.modelId,
           binding: { v: 1, slot: { kind: 'provider_model' }, resourceId: operation.resourceId,
             expectedResourceRevision: 2, teamId: 'team-1', deliveryMode: 'brokered' },
           lease, materializationBaseDir: configuration.happyHomeDir, signal: new AbortController().signal,
-          readCatalog: async () => [],
+          readCatalog: async () => code === 'team_credential_provider_selection_not_current' ? [] : [{
+            selection: { kind: 'team_credential_provider_model', resourceId: operation.resourceId, teamId: 'team-1',
+              expectedResourceRevision: 2, deliveryMode: 'brokered', agentTargetKey: operation.agentTargetKey, modelId: operation.modelId },
+            descriptor: { id: operation.modelId, name: 'Test model', capabilities: { toolRoundTrips: 'supported' } },
+            availability: 'available', sourceRevision: 'source-2',
+            application: { agentTargetKey: operation.agentTargetKey,
+              implementationIdentity: { pluginId: 'happier.provider.cliproxyapi', localId: 'cliproxyapi' },
+              endpointTemplateId: 'responses', protocol: 'openai-responses' },
+            sourceFacts: ProviderModelBindingSourceV1Schema.parse({ endpoint: { id: 'responses', protocol: 'openai-responses',
+              capabilities: { streaming: 'supported', toolRoundTrips: 'supported',
+                statefulResponses: 'supported', reasoningControls: 'supported' } },
+              compatibilityOverrides: [{ agentTargetKey: operation.agentTargetKey, protocol: 'openai-responses', status: 'verified',
+                reason: 'Fixture contract', evidence: { sourceUrls: ['https://example.test'], verifiedAt: '2026-10-21' } }] }),
+          }],
+          openBroker: async () => {
+            if (code === 'team_credential_provider_selection_not_current') throw new Error('Absent selection must not open broker');
+            return { ok: false, reasonCode: code };
+          },
+          openTunnel: async () => { throw new Error('Refused broker must not open tunnel'); },
         });
         throw new Error('Expected the absent Team model to refuse open');
       } },
+    });
+    let wireResponse: unknown;
+    app.addHook('onSend', async (_request, _reply, payload) => {
+      if (typeof payload === 'string') wireResponse = JSON.parse(payload);
+      return payload;
     });
     let capabilityDigest: string | undefined;
     try {
@@ -120,11 +145,11 @@ describe('daemon control server: runner-scoped Agent runtime services', () => {
       tracked.agentRuntimeDaemonServiceCapabilityHash = capabilityDigest;
       const refused = await openCurrentRunnerTeamCredentialProviderBinding({ authority, operation })
         .then(() => null, (error: unknown) => error);
+      expect(wireResponse).toEqual({ ok: false, error: { code, message: code } });
       expect(refused).toBeInstanceOf(Error);
-      expect(refused).toMatchObject({ code: 'team_credential_provider_selection_not_current',
-        message: 'team_credential_provider_selection_not_current' });
+      expect(refused).toMatchObject({ code, message: code });
       expect(readSessionPreparationFailureDiagnostic(refused)).toEqual({
-        originalCode: 'team_credential_provider_selection_not_current', reason: 'unknown', contextSource: 'unknown',
+        originalCode: code, reason: 'unknown', contextSource: 'unknown',
       });
     } finally {
       await app.close();

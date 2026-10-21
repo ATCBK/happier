@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi, type TestContext } from 'vitest';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
@@ -41,6 +41,7 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
 import { createSpawnHappyCliEnvScope, withTempHappyCliEntrypoint } from '@/testkit/process/spawnHappyCliHarness';
 import { logger } from '@/ui/logger';
+import { PROVIDER_BROKER_OPEN_HTTP_PATH_V1, ProviderBrokerOpenResponseV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { executeSpawnSessionRequest } from './executeSpawnSessionRequest';
 import { readOrCreateDeviceLocalSecretStorage } from '../deviceLocalSecretStorage';
 
@@ -92,6 +93,8 @@ const { registerTeamRoutes }: typeof import('../../../../server/sources/app/team
 const { resolveServerFeaturesForGating }: typeof import('../../../../server/sources/app/features/catalog/serverFeatureGate') = await import(server + 'app/features/catalog/serverFeatureGate');
 const { createSessionPublisherPresence }: typeof import('../../../../server/sources/app/presence/sessionPublisherPresence') = await import(server + 'app/presence/sessionPublisherPresence');
 const { openTeamCredentialProviderBroker }: typeof import('../../../../server/sources/app/teams/credentials/providerBrokerAdmission') = await import(server + 'app/teams/credentials/providerBrokerAdmission');
+const { writeSessionTeamCredentialBindingsInTx }: typeof import('../../../../server/sources/app/teams/credentials/sessionBinding') = await import(server + 'app/teams/credentials/sessionBinding');
+const { inTx }: typeof import('../../../../server/sources/storage/inTx') = await import(server + 'storage/inTx');
 const { createQualifiedConnectedAccountServiceDigest, createQualifiedConnectedAccountGroupDigest,
   createQualifiedConnectedAccountIdentityDigest, createServiceAccountTokenIdentityFields }: typeof import('../../../../server/sources/app/api/routes/connect/qualifiedConnectedAccounts/identity') = await import(server + 'app/api/routes/connect/qualifiedConnectedAccounts/identity');
 
@@ -123,7 +126,7 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
   }, 180_000);
   afterAll(async () => { await harness?.close(); });
 
-  it('runs gpt-5.5 with an answer distinct from its prompt through recipient confirmation, CLI/RPC ingress and protected attach', async ({ onTestFailed }) => withTempHappyCliEntrypoint(async entrypoint => {
+  const runJourney = async (brokerOnly: boolean, onTestFailed: TestContext['onTestFailed']) => withTempHappyCliEntrypoint(async entrypoint => {
     let phase = 'setup';
     let runnerFailure: string | null = null;
     const answersObserved: string[] = [];
@@ -132,7 +135,7 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
     let readLaunchMessages: () => readonly string[] = () => [];
     onTestFailed(() => { console.error('Team Pool deciding failure', { phase, runnerFailure, answersObserved, completedIngresses,
       launchPhases: readLaunchPhases(), launchMessages: readLaunchMessages(), os: os.observed }); });
-    const surface = 'shared';
+    const surface = brokerOnly ? 'broker-catalog' : 'shared';
     const launchEnv = createSpawnHappyCliEnvScope();
     launchEnv.patch({ HAPPIER_CLI_SUBPROCESS_RUNTIME: 'node', HAPPIER_CLI_SUBPROCESS_ENTRYPOINT: entrypoint,
       HAPPIER_MANAGED_NODE_BIN: process.execPath, HAPPIER_CLI_SUBPROCESS_PREFER_TSX: '0',
@@ -152,8 +155,14 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
     // used by the managed-gateway composition; no native credential is supplied.
     const nativeCli = writeExecutableShimSync({ dir: directory, fileName: process.platform === 'win32' ? 'managed-run-agent.cmd' : 'managed-run-agent',
       contents: process.platform === 'win32' ? '@echo off\r\necho 1.0.0\r\n' : '#!/bin/sh\necho 1.0.0\n' });
-    const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH']);
+    const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH',
+      'HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_KEY_ID', 'HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_PRIVATE_KEY',
+      'HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_PUBLIC_KEY']);
     env.patch({ HAPPIER_HOME_DIR: join(directory, 'worker'), PATH: `${directory}${delimiter}${process.env.PATH ?? ''}` }); reloadConfiguration();
+    const routeSigningSeed = new Uint8Array(32).fill(43);
+    env.patch({ HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_KEY_ID: 'broker-catalog',
+      HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_PRIVATE_KEY: Buffer.from(routeSigningSeed).toString('base64url'),
+      HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_PUBLIC_KEY: Buffer.from(tweetnacl.sign.keyPair.fromSeed(routeSigningSeed).publicKey).toString('base64url') });
     // Use the pinned broker's real upstream family/model registry. The
     // independent external Agent is installed only on the worker.
     const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
@@ -232,7 +241,14 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
       const project = (application: import('@happier-dev/protocol').ProviderBrokerApplicationBindingV1) => sourceRuntime.projectModels({
         machineId: broker.id, agentTargetKey: worker.agentTargetKey, connectedAccountTarget: target,
         sourceCatalog: true, application, refreshPolicy: 'current_only' });
-      app.addHook('onRequest', async request => { request.headers['x-test-user-id'] = recipient.id; });
+      app.addHook('onRequest', async request => {
+        request.headers['x-test-user-id'] = recipient.id;
+        request.authTokenEpoch = recipient.tokenEpoch;
+      });
+      app.decorate('machineDaemonPresence', { in: () => ({ fetchSockets: async () => [
+        { data: { clientType: 'machine-scoped', userId: recipient.id, machineId: worker.machineId } },
+        { data: { clientType: 'machine-scoped', userId: custodian.id, machineId: broker.id } },
+      ] }) });
       // RPC is the cross-Machine boundary; retain the real Home route and
       // source runtime beneath it, including their strict request consumers.
       app.decorate('forwardRpcForUser', async (request: Readonly<{ method: string; params: unknown }>) => {
@@ -265,6 +281,24 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
         const offered = resources.flatMap(row => row.providerModels).find(row => row.descriptor.id === 'gpt-5.5');
         expect(offered, JSON.stringify(resources)).toBeDefined();
         if (!offered) throw new Error('Home did not offer the source gpt-5.5 row');
+        if (brokerOnly) {
+          phase = 'catalog:broker-open';
+          const session = await db.session.create({ data: { accountId: recipient.id, tag: crypto.randomUUID(),
+            metadata: '{}', active: true } });
+          await db.accessKey.create({ data: { accountId: recipient.id, machineId: worker.machineId, sessionId: session.id, data: '{}' } });
+          expect(await inTx(tx => writeSessionTeamCredentialBindingsInTx(tx, { accountId: recipient.id, sessionId: session.id,
+            authentication, intents: [{ v: 1, slot: { kind: 'provider_model' }, resourceId: resource.id,
+              expectedResourceRevision: resource.revision, teamId: team.id, deliveryMode: 'brokered' }] }))).toEqual({ ok: true });
+          const response = await app.inject({ method: 'POST', url: PROVIDER_BROKER_OPEN_HTTP_PATH_V1,
+            payload: { v: 1, resourceId: resource.id, expectedResourceRevision: resource.revision,
+              initiatorMachineId: worker.machineId, consumer: { kind: 'session', sessionId: session.id },
+              application: offered.application, modelId: offered.descriptor.id, sourceRevision: offered.sourceRevision } });
+          const opened = ProviderBrokerOpenResponseV1Schema.parse(response.json());
+          expect(opened, JSON.stringify(opened)).toMatchObject({ ok: true, authority: { payload: { resourceId: resource.id,
+            sourceRevision: offered.sourceRevision, application: offered.application,
+            target: { machineId: broker.id } } } });
+          return;
+        }
         const recipientRuntime = createRuntimeProviderModelManagementServices({ machineId: worker.machineId, happyHomeDir: worker.happyHomeDir,
           featureGate: { isEnabled: () => true }, getAccountSettingsSnapshot: () => recipientSnapshot,
           acquireRuntimeLease: async () => ({ ...worker.lease, release: async () => {} }), modelSettingsMutation: unavailable });
@@ -436,5 +470,9 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
       await source.controller.shutdown(); source.disposeCredentialBoundary(); await worker.cleanup();
       env.restore(); launchEnv.restore(); reloadConfiguration(); await rm(directory, { recursive: true, force: true });
     }
-  }));
+  });
+  it('opens the offered source catalog revision through the real Home broker route and source runtime',
+    ({ onTestFailed }) => runJourney(true, onTestFailed));
+  it('runs gpt-5.5 with an answer distinct from its prompt through recipient confirmation, CLI/RPC ingress and protected attach',
+    ({ onTestFailed }) => runJourney(false, onTestFailed));
 });

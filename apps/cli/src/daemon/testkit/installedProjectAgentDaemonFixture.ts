@@ -20,7 +20,7 @@ export async function createInstalledProjectAgentDaemonFixture(readControl: () =
   authoredPlugin?: Parameters<typeof createAuthoredAdmittedPluginRuntimeFixture>[0]['plugins'][number],
   controller?: PluginReloadController,
   requesterOptions?: Pick<Parameters<typeof createRequesterSessionRuntimeContext>[0], 'resolveQualifiedConnectedAccountV4Support'>
-    & Pick<Parameters<typeof startDaemonSessionControlRuntime>[0], 'resolveCurrentMachineExecutionOriginContext' | 'processEnv'>) {
+    & Pick<Parameters<typeof startDaemonSessionControlRuntime>[0], 'resolveCurrentMachineExecutionOriginContext' | 'processEnv' | 'openTeamCredentialProviderBinding'>) {
   const accountActionCredentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'requester',
     provenance: { v: 1, kind: 'terminal', authority: 'account_automation' } })).toString('base64url')}.signature`, encryption: null };
   const fixture = await createInstalledProjectAgentLaunchFixture({ accountActionCredentials });
@@ -75,6 +75,7 @@ export async function createInstalledProjectAgentDaemonFixture(readControl: () =
   });
   const daemon = await startDaemonSessionControlRuntime({ machineId: 'machine', serverId: 'session-home', serverBaseUrl: 'https://session-home.test',
     resolveCurrentMachineExecutionOriginContext: requesterOptions?.resolveCurrentMachineExecutionOriginContext,
+    openTeamCredentialProviderBinding: requesterOptions?.openTeamCredentialProviderBinding,
     externalActionAccountId: 'custodian', credentials: { token: 'custodian-token', encryption: null }, api: {} as never,
     deviceLocalSecretStorage: await readOrCreateDeviceLocalSecretStorage({ path: join(f.directory, 'fixture-device-secret') }),
     pluginRuntimeController: plugin.controller, connectedServiceRuntimeRegistry,

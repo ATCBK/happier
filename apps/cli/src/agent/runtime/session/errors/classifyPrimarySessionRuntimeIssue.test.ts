@@ -11,12 +11,12 @@ import { McpServerCatalogUnavailableError } from '@/mcp/servers/readMcpServersSe
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 
 describe('classifyPrimarySessionRuntimeIssue', () => {
-  it('preserves the safe shared Provider startup cause through public issue publication', () => {
-    const code = 'plugin_services_managed_provider_authority_unavailable';
+  it.each(['plugin_services_managed_provider_authority_unavailable', 'provider_endpoint_unavailable'])(
+    'preserves the safe shared Provider startup cause %s through public issue publication', code => {
     const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error:
       Object.assign(new Error('private hub lease and access context'), { code }), occurredAt: 100 });
     expect(issue).toMatchObject({ code, source: 'agent_session_error' });
-    expect(issue.sanitizedPreview).toMatch(/shared Provider.*retry/iu);
+    expect(issue.sanitizedPreview).toMatch(/Provider.*retry/iu);
     expect(JSON.stringify(issue)).not.toContain('private');
     const published = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: {
       code: issue.code, details: { v: 1, source: issue.source },

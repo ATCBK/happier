@@ -35,6 +35,7 @@ import { TeamCredentialDirectMaterialOperationError } from '@/daemon/connectedSe
 import { isProvenPreDispatchConnectionFailure } from '@/api/client/classifyServerEndpointError';
 import { readMcpRequestAuthDiagnosticCode } from '@/mcp/runtime/mcpRequestAuth';
 import { SessionTeamCredentialLaunchUnavailableError } from '@/session/services/sessionTeamCredentialLaunch';
+import { ProviderBrokerAdmissionFailureCodeV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
 export const RUNNER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_TRANSITION_CODE =
   'runner_agent_runtime_daemon_service_authority_transition';
@@ -233,6 +234,10 @@ export async function openCurrentRunnerTeamCredentialProviderBinding(
       throw Object.assign(new Error(providerCode.data), createProviderErrorV1(providerCode.data, {
         connectionId: input.operation.resourceId,
       }));
+    }
+    const brokerCode = ProviderBrokerAdmissionFailureCodeV1Schema.safeParse(response.error.code);
+    if (brokerCode.success) {
+      throw new SessionTeamCredentialLaunchUnavailableError(brokerCode.data);
     }
     const teamCredentialCode = TeamCredentialErrorCodeV1Schema.safeParse(response.error.code);
     if (teamCredentialCode.success) {

@@ -23,6 +23,7 @@ import { MACHINE_HTTP_LOCAL_CAPABILITY_HEADER } from '@happier-dev/iroh-native/n
 import { readProviderBrokerEndpointUrl, PROVIDER_BROKER_MODEL_ID_HEADER, teamCredentialBrokerLocalCredentialTransport } from './providerBrokerPrivateProtocol';
 import { assertTeamCredentialModelAdmission, type TeamCredentialModelCompatibilityInput } from './teamCredentialModelCompatibility';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/savedSecretOperationContext';
+import { SessionTeamCredentialLaunchUnavailableError } from '@/session/services/sessionTeamCredentialLaunch';
 
 type BrokerTunnel = Readonly<{
   localPort: number;
@@ -85,18 +86,18 @@ function resolveProviderBrokerConsumer(input: Readonly<{
   const sessionId = input.sessionId?.trim();
   if (input.consumer?.kind === 'execution_run') {
     const executionRunId = input.consumer.executionRunId.trim();
-    if (!executionRunId) throw new Error('team_credential_provider_selection_not_current');
+    if (!executionRunId) throw new SessionTeamCredentialLaunchUnavailableError();
     return { kind: 'execution_run', executionRunId };
   }
   if (input.consumer?.kind === 'session') {
     const consumerSessionId = input.consumer.sessionId.trim();
     if (!consumerSessionId || (sessionId && consumerSessionId !== sessionId)) {
-      throw new Error('team_credential_provider_selection_not_current');
+      throw new SessionTeamCredentialLaunchUnavailableError();
     }
     return { kind: 'session', sessionId: consumerSessionId };
   }
   if (!sessionId) {
-    throw new Error('team_credential_provider_selection_not_current');
+    throw new SessionTeamCredentialLaunchUnavailableError();
   }
   return { kind: 'session', sessionId };
 }
@@ -172,7 +173,7 @@ export async function openExactSessionTeamCredentialProviderBinding(
     application: selection.application,
   } as const;
   const opened = input.initialBrokerOpen ?? await input.openBroker(brokerOpenRequest, input.signal);
-  if (!opened.ok) throw new Error(opened.reasonCode);
+  if (!opened.ok) throw new SessionTeamCredentialLaunchUnavailableError(opened.reasonCode);
   const authority = opened.authority.payload;
   if (
     opened.target.brokerMachineId !== selection.brokerMachineId
@@ -247,6 +248,7 @@ export async function openExactSessionTeamCredentialProviderBinding(
           endpointTemplateId: selection.application.endpointTemplateId,
           normalizedUrl: endpointUrl,
           protocol: selection.application.protocol,
+          publicHeaders: {},
         },
         runtimeCredentialTransport: credentialTransport,
         compatibilityFingerprint: selection.sourceRevision,
@@ -366,7 +368,7 @@ export async function openSessionTeamCredentialProviderBinding(input: Readonly<{
     && candidate.selection.modelId === input.modelId
     && candidate.availability === 'available'
   ));
-  if (!row) throw new Error('team_credential_provider_selection_not_current');
+  if (!row) throw new SessionTeamCredentialLaunchUnavailableError();
   await assertTeamCredentialModelAdmission({ lease: input.lease, agentId: input.agentId,
     model: { ...row, deliveryMode: row.selection.deliveryMode }, signal: input.signal,
     providerSettingsOperationContext: input.providerSettingsOperationContext });
@@ -505,7 +507,7 @@ export async function openSessionTeamCredentialProviderBinding(input: Readonly<{
     consumer,
     application: row.application,
   }, input.signal);
-  if (!opened.ok) throw new Error(opened.reasonCode);
+  if (!opened.ok) throw new SessionTeamCredentialLaunchUnavailableError(opened.reasonCode);
 
   return await openExactSessionTeamCredentialProviderBinding({
     consumer,
