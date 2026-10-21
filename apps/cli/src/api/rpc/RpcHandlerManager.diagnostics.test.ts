@@ -71,7 +71,8 @@ describe('RPC completion diagnostics', () => {
             if (lifetime === 'disconnect') rpc.onSocketDisconnect();
             await vi.waitFor(() => expect(result).toBeDefined());
             expect(result).toEqual({ error: lifetime === 'deadline' ? 'RPC request timed out'
-                : lifetime === 'cancel' ? 'RPC request cancelled by caller' : 'RPC target transport disconnected' });
+                : lifetime === 'cancel' ? 'RPC request cancelled by caller' : 'RPC target transport disconnected',
+                ...(lifetime === 'deadline' ? { errorCode: 'MACHINE_RPC_TIMEOUT' } : {}) });
             expect(dispatched).toBe(false);
             expect(logger).toHaveBeenLastCalledWith('[RPC] Request completed', expect.objectContaining({
                 ...(lifetime === 'deadline' ? { outcomeCode: 'RPC_REQUEST_TIMEOUT' } : {}),
@@ -151,8 +152,18 @@ describe('RPC completion diagnostics', () => {
             context.signal.addEventListener('abort', () => reject(context.signal.reason), { once: true });
         }));
         expect(await rpc.handleRequest({ method: 'machine:demo.wait', params: {}, timeoutMs: 1 }))
-            .toEqual({ error: 'RPC request timed out' });
+            .toEqual({ error: 'RPC request timed out', errorCode: 'MACHINE_RPC_TIMEOUT' });
         expect(logger.mock.calls).toEqual([['[RPC] Request completed', expect.objectContaining({ outcomeCode: 'RPC_REQUEST_TIMEOUT' })]]);
+    });
+
+    it('preserves the owning deadline code when a cancelled handler rejects with a boundary abort error', async () => {
+        const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger() {} });
+        rpc.registerHandler('demo.wait', (_input, context) => new Promise((_resolve, reject) => {
+            if (!context) throw new Error('Expected actual handler cancellation context');
+            context.signal.addEventListener('abort', () => reject(new DOMException('Boundary aborted', 'AbortError')), { once: true });
+        }));
+        expect(await rpc.handleRequest({ method: 'machine:demo.wait', params: {}, timeoutMs: 1 }))
+            .toMatchObject({ errorCode: 'MACHINE_RPC_TIMEOUT' });
     });
 
     it.each(['EACCES', 'ENOENT', 'RIPGREP_ABORTED'])(

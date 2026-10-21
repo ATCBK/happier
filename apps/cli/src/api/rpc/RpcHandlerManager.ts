@@ -27,7 +27,7 @@ import { MANAGED_FINITE_WAKE_RPC_METHOD } from '@happier-dev/protocol/machines/m
 import { SESSION_SERVER_START_DAEMON_RPC_METHOD_V1 } from '@happier-dev/protocol/sessions/creation/sessionServerStartV1';
 import { isSocketRpcActionApiServerOriginAuthorizationContext, isSocketRpcAutomationReplyHandoffServerOriginAuthorizationContext, isSocketRpcSessionServerStartServerOriginAuthorizationContext, isSocketRpcMachineAccessLossServerOriginAuthorizationContext, isSocketRpcSessionAuthorizationNamespace, parseSocketRpcAuthorizationContext, resolveSocketRpcSessionAuthorization } from '@happier-dev/protocol/socketRpc';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
+import { MACHINE_RPC_TIMEOUT_ERROR_CODE, RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { CallerInputConstraintsV1Schema } from '@happier-dev/protocol/auth/callerInputConstraintsV1';
@@ -117,7 +117,8 @@ const SERVER_ORIGIN_RPC_FAMILIES: readonly Readonly<{
 function readOutcomeCode(value: unknown, thrown = false): string {
     if (!value || typeof value !== 'object') return thrown ? 'unclassified_error' : 'ok';
     const result = value as Record<string, unknown>;
-    const code = readRpcErrorCode(value) ?? result.errorCode
+    const code = (thrown && result.code === 'RPC_REQUEST_TIMEOUT' ? result.code : undefined)
+        ?? readRpcErrorCode(value) ?? result.errorCode
         ?? (thrown || result.ok === false ? result.code : undefined)
         ?? (result.ok === false ? result.error : undefined);
     // Retain typed native refusals as well as transport codes, never error prose.
@@ -624,7 +625,9 @@ export class RpcHandlerManager {
             if (cancellationDeadlineAtMs === null) return;
             timeout = setTimeout(() => {
                 if (Date.now() < cancellationDeadlineAtMs) { armDeadline(); return; }
-                controller.abort(Object.assign(new Error('RPC request timed out'), { code: 'RPC_REQUEST_TIMEOUT' }));
+                controller.abort(Object.assign(new Error('RPC request timed out'), {
+                    code: 'RPC_REQUEST_TIMEOUT', rpcErrorCode: MACHINE_RPC_TIMEOUT_ERROR_CODE,
+                }));
             }, Math.min(2_147_483_647, Math.max(0, cancellationDeadlineAtMs - Date.now())));
         };
         armDeadline();
@@ -1008,7 +1011,8 @@ export class RpcHandlerManager {
             if (confidential) {
                 return await respond(request, { error: 'confidential_continuation_failed', errorCode: 'confidential_continuation_failed' });
             }
-            const rpcErrorCode = readRpcErrorCode(error);
+            const rpcErrorCode = readRpcErrorCode(controller.signal.aborted ? controller.signal.reason : error)
+                ?? readRpcErrorCode(error);
             const errorResponse = {
                 error: error instanceof Error ? error.message : 'Unknown error',
                 ...(rpcErrorCode ? { errorCode: rpcErrorCode } : {}),
