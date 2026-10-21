@@ -566,12 +566,18 @@ describe('canonical Session creation admission', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it.each(['restored', 'unavailable', 'different-session'] as const)(
+  it.each(['restored', 'unavailable', 'different-session', 'stopped', 'legacy-stopped', 'resume-only'] as const)(
     'restores an archived same-key candidate through ordinary tag rejoin before success (%s)', async (outcome) => {
     const envelopes = buildSessionMetadataEnvelopeCreateFields({ credentials: params.credentials,
       accountEncryptionMode: 'plain', storedContentMode: 'plain', agentState: null,
-      metadata: { path: '/repo', host: 'host', sessionCreationCorrespondenceV1: sessionCreationCorrespondence } });
+      metadata: { path: '/repo', host: 'host', sessionCreationCorrespondenceV1: sessionCreationCorrespondence,
+        ...(outcome === 'legacy-stopped' ? { hostPid: 123 } : {}) } });
     const session = { id: 'session-existing', seq: 0, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
+      ...(outcome === 'stopped' || outcome === 'legacy-stopped' || outcome === 'resume-only' ? {
+        runtimeActivityState: outcome === 'stopped' ? 'idle' : 'unknown', runtimeActivityActiveCount: 0,
+        runtimeActivityObservedAt: outcome === 'stopped' ? 1 : null,
+        runtimeActivityRevision: outcome === 'stopped' ? 2 : 0,
+      } : {}),
       archivedAt: 123, metadataLayoutVersion: envelopes.metadataLayoutVersion, metadata: envelopes.sharedMetadata.ciphertext,
       ownerMetadata: envelopes.ownerMetadata, metadataVersion: 1, encryptionMode: 'plain',
       agentState: null, agentStateVersion: 0, dataEncryptionKey: null, share: null };
@@ -593,8 +599,8 @@ describe('canonical Session creation admission', () => {
     vi.stubGlobal('fetch', vi.fn(async () => Response.json(FeaturesResponseSchema.parse({ features: {},
       capabilities: { encryption: { storagePolicy: 'optional', allowAccountOptOut: true, defaultAccountMode: 'plain' } } }))));
 
-    const result = createSpawnedSession(params);
-    if (outcome === 'restored') {
+    const result = createSpawnedSession({ ...params, ...(outcome === 'resume-only' ? { resumeOnly: true } : {}) });
+    if (outcome === 'restored' || outcome === 'stopped' || outcome === 'legacy-stopped' || outcome === 'resume-only') {
       await expect(result).resolves.toMatchObject({ disposition: 'rejoined', sessionId: session.id,
         session: { id: session.id, archivedAt: null } });
     } else if (outcome === 'different-session') {

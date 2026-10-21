@@ -85,6 +85,58 @@ export type ResolveSpawnChildEnvironmentResult =
   | ResolveSpawnChildEnvironmentSuccess
   | ResolveSpawnChildEnvironmentFailure;
 
+function expandSpawnProfileEnvironment(
+  profileEnv: Readonly<Record<string, string>>,
+  profileId: string | undefined,
+  processEnv: NodeJS.ProcessEnv,
+  allowNativeAccountCredentials = true,
+): Record<string, string> {
+  const sessionProfileEnv: Record<string, string> = profileId === undefined ? {} : { HAPPIER_SESSION_PROFILE_ID: profileId };
+  return expandEnvironmentVariables(
+    { ...profileEnv, ...sessionProfileEnv },
+    { ...(allowNativeAccountCredentials ? processEnv : {}), ...profileEnv, ...sessionProfileEnv },
+  );
+}
+
+/** Shared executable admission before Session commit and against the final launch environment. */
+export async function validateSpawnAgentCliLaunch(input: Readonly<{
+  agentId: string;
+  options: SpawnSessionOptions;
+  processEnv: NodeJS.ProcessEnv;
+  happyHomeDir?: string;
+  profileEnvironmentVariables?: Readonly<Record<string, string>>;
+  allowNativeAccountCredentials?: boolean;
+  pluginRuntimeRegistry?: ResolvedExecutablePluginRuntimeRegistry;
+  savedSecretOperationContext?: Parameters<typeof resolveAgentCliLaunchSpecForSession>[1]['savedSecretOperationContext'];
+}>): Promise<Readonly<
+  | { ok: true; launchSpec?: AgentCliLaunchSpec }
+  | { ok: false; errorMessage: string }
+>> {
+  const profileEnv = input.profileEnvironmentVariables
+    ? expandSpawnProfileEnvironment(
+      stripSessionControlEnvOverrides(sanitizeEnvVarRecord(input.profileEnvironmentVariables)),
+      input.options.profileId, input.processEnv, input.allowNativeAccountCredentials,
+    ) : {};
+  const resolutionOptions = {
+    processEnv: { ...input.processEnv, ...profileEnv,
+      ...(input.happyHomeDir ? { HAPPIER_HOME_DIR: input.happyHomeDir } : {}) },
+    ...(input.pluginRuntimeRegistry ? { catalogSnapshot: input.pluginRuntimeRegistry.contributes } : {}),
+  };
+  const launchSpec = await resolveAgentCliLaunchSpecForSession(input.agentId, {
+    ...resolutionOptions, options: input.options, savedSecretOperationContext: input.savedSecretOperationContext,
+  });
+  if (launchSpec !== null) return { ok: true, launchSpec };
+  // Only an admitted, current native Session factory proves that no CLI is required.
+  if (input.pluginRuntimeRegistry && !requiresAgentSessionCli(input.agentId, input.pluginRuntimeRegistry)) {
+    return { ok: true };
+  }
+  try {
+    return { ok: false, errorMessage: buildMissingAgentCliCommandErrorMessage(input.agentId, resolutionOptions) };
+  } catch {
+    return { ok: false, errorMessage: `Agent '${input.agentId}' has no CLI runtime metadata in the current Agent catalog.` };
+  }
+}
+
 type LateProviderBindingMaterialization =
   | Readonly<{
       ok: true;
@@ -258,9 +310,6 @@ async function resolveSpawnChildEnvironmentImpl(params: {
     : null;
   const resolvedAgentId = normalizedResolvedAgentId
     ?? (backendTarget?.sourceKind === 'built_in' ? backendTarget.backendId : null);
-  const agentCliRequired = resolvedAgentId && params.pluginRuntimeRegistry
-    ? requiresAgentSessionCli(resolvedAgentId, params.pluginRuntimeRegistry)
-    : true;
   const selectedAgentCredentialEnvironmentVariables = resolvedAgentId
     ? params.pluginRuntimeRegistry?.contributes.agentDefinitionsById
       .get(resolvedAgentId)?.cliMetadata?.auth.environmentVariables ?? []
@@ -453,14 +502,8 @@ async function resolveSpawnChildEnvironmentImpl(params: {
     ...Object.keys(sanitizedAuthEnv),
   ]));
 
-  const sessionProfileEnv: Record<string, string> = {};
-  if (params.options.profileId !== undefined) {
-    sessionProfileEnv.HAPPIER_SESSION_PROFILE_ID = params.options.profileId;
-  }
-
-  const expandedProfileEnv = expandEnvironmentVariables(
-    { ...profileEnv, ...sessionProfileEnv },
-    { ...(params.allowNativeAccountCredentials === false ? {} : params.processEnv), ...profileEnv, ...sessionProfileEnv },
+  const expandedProfileEnv = expandSpawnProfileEnvironment(
+    profileEnv, params.options.profileId, params.processEnv, params.allowNativeAccountCredentials,
   );
   // Connected Account materialization is producer-authored credential output,
   // not a profile template. Preserve its bytes exactly even when a secret
@@ -477,35 +520,9 @@ async function resolveSpawnChildEnvironmentImpl(params: {
     | { ok: true; launchSpec?: AgentCliLaunchSpec }
     | { ok: false; errorMessage: string }
   >> {
-    // Every installed Agent is validated here, bundled or externally
-    // contributed. An id the catalog no longer carries has no CLI runtime
-    // metadata at all, which is the same "CLI unavailable" refusal rather than
-    // an exception escaping the spawn path.
-    const resolutionOptions = {
-      processEnv,
-      ...(params.pluginRuntimeRegistry
-        ? { catalogSnapshot: params.pluginRuntimeRegistry.contributes }
-        : {}),
-    };
-    const launchSpec = await resolveAgentCliLaunchSpecForSession(agentId, { ...resolutionOptions,
-      options: params.options, savedSecretOperationContext: params.savedSecretOperationContext });
-    if (launchSpec !== null) {
-      return { ok: true, launchSpec };
-    }
-    // A factory without a static CLI may still resolve an executable from its
-    // admitted definition. Only a genuinely absent spec uses the factory proof.
-    if (!agentCliRequired) return { ok: true };
-    try {
-      return {
-        ok: false,
-        errorMessage: buildMissingAgentCliCommandErrorMessage(agentId, resolutionOptions),
-      };
-    } catch {
-      return {
-        ok: false,
-        errorMessage: `Agent '${agentId}' has no CLI runtime metadata in the current Agent catalog.`,
-      };
-    }
+    return validateSpawnAgentCliLaunch({ agentId, processEnv, options: params.options,
+      pluginRuntimeRegistry: params.pluginRuntimeRegistry,
+      savedSecretOperationContext: params.savedSecretOperationContext });
   }
 
   let agentCliLaunchSpec: AgentCliLaunchSpec | undefined;

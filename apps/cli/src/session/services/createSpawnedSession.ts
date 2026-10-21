@@ -595,13 +595,13 @@ async function submitSpawnInitialInput(params: Readonly<{
 // outcome model. Only these known producers reject before a runner can attach;
 // every other response, throw, or legacy code may still name a live child.
 /**
- * Dispatch the launch for an already-committed replay-seeded row.
+ * Dispatch the launch for an already-committed row.
  *
  * A returned row may be fresh or rejoined. Cleanup is therefore deliberately
  * narrower than dispatch failure: only a fresh row plus a known pre-admission
  * rejection proves this creator can archive it.
  */
-async function dispatchReplaySeededSpawn(args: Readonly<{
+async function dispatchCommittedSpawn(args: Readonly<{
   token: string;
   sessionId: string;
   createdHere: boolean;
@@ -838,7 +838,7 @@ async function createSeededSpawnedSession(args: Readonly<{
     machineId: params.machineId,
   });
 
-  const spawnResponse = await dispatchReplaySeededSpawn({
+  const spawnResponse = await dispatchCommittedSpawn({
     token: params.credentials.token,
     sessionId,
     createdHere: created.created === true,
@@ -1117,6 +1117,14 @@ export async function createSpawnedSession(
           { sessionId: existing.id },
         );
       }
+      // The exact Activity baseline plus no runner-authored process identity
+      // distinguishes a committed launch from a Session that ran and stopped.
+      // Older/migrated rows may have revision zero but retain their hostPid;
+      // missing Activity evidence must never authorize an automatic launch.
+      const needsInitialRunner = existing.active === false
+        && existing.runtimeActivityRevision === 0
+        && ownerMetadata?.hostPid === undefined;
+      if (afterSpawnFailure && needsInitialRunner) return null;
       if ((existing.archivedAt !== null && existing.archivedAt !== undefined)
         || params.discussionParticipant || params.sessionCreationCorrespondence.recipe.discussionParticipant) {
         // Authentication proves identity, not a usable carrier or current
@@ -1140,6 +1148,36 @@ export async function createSpawnedSession(
             { sessionId: existing.id });
         }
         existing = current.session;
+      }
+      if (needsInitialRunner && params.resumeOnly !== true) {
+        await ensureSessionMachineAccessKeyBinding({
+          serverUrl: resolveServerHttpBaseUrl(), token: params.credentials.token,
+          sessionId: existing.id, machineId: params.machineId,
+        });
+        // Attach through the same launch owner as seeded creation. Its daemon
+        // pre-gate also owns any already-pending runner; rejoin adds no launcher.
+        const spawnResponse = await dispatchCommittedSpawn({
+          token: params.credentials.token, sessionId: existing.id, createdHere: false,
+          spawnRequestInput, dispatchSpawnRequest,
+        });
+        const settled = await awaitSpawnedSessionId({
+          result: spawnResponse, spawnNonce, resolveSpawnSessionByNonce,
+          ...(params.signal ? { signal: params.signal } : {}),
+        });
+        if (settled.type === 'error') {
+          throw createCodedError(settled.errorMessage, settled.errorCode, {
+            sessionId: existing.id, spawnResponse,
+            ...(settled.agentId ? { agentId: settled.agentId } : {}),
+            ...(settled.errorDetail ? { errorDetail: settled.errorDetail } : {}),
+          });
+        }
+        if (settled.sessionId !== existing.id) {
+          throw createCodedError('Session retry changed its committed Session', 'creation_conflict',
+            { sessionId: existing.id });
+        }
+        const current = await fetchSessionById({ token: params.credentials.token, sessionId: existing.id,
+          ...(params.signal ? { signal: params.signal } : {}) });
+        if (current) existing = current;
       }
       let organizationPlacement = params.sessionCreationCorrespondence.recipe.organization;
       try {
@@ -1260,7 +1298,7 @@ export async function createSpawnedSession(
   const birthSpawnRequestInput = { ...spawnRequestInput, ...birthContext,
     ...(preparedInitialTriggers !== undefined ? { initialTriggers: preparedInitialTriggers } : {}) };
   const birthSpawnRequest = SpawnDaemonSessionRequestSchema.parse(birthSpawnRequestInput);
-  const dispatchSpawnRequest = async (request: SpawnDaemonSessionRequest): Promise<unknown> => {
+  async function dispatchSpawnRequest(request: SpawnDaemonSessionRequest): Promise<unknown> {
     try {
       if ((params.creationAuthorization || params.callerInputConstraints) && !params.directTransport) {
         throw new Error('Caller launch authority requires the exact host-private daemon transport');
@@ -1327,7 +1365,7 @@ export async function createSpawnedSession(
       }
       throw error;
     }
-  };
+  }
 
   let seededCreation: SeededSessionCreationV1 | undefined = params.replaySeededCreation;
   if ((params.attestedContext || params.discussionParticipant) && !seededCreation) {
@@ -1361,7 +1399,11 @@ export async function createSpawnedSession(
   } else {
     spawnResponse = await dispatchSpawnRequest(birthSpawnRequest);
   }
-  const resolveSpawnSessionByNonce: SpawnSessionNonceResolver = async (nonce, timeoutMs, observation) => {
+  async function resolveSpawnSessionByNonce(
+    nonce: string,
+    timeoutMs?: number,
+    observation?: Parameters<SpawnSessionNonceResolver>[2],
+  ): Promise<SpawnSessionNonceResolution> {
     const signal = observation?.signal;
     try {
       if (params.directTransport) {
@@ -1394,7 +1436,7 @@ export async function createSpawnedSession(
       }
       throw error;
     }
-  };
+  }
   const spawnResponseRecord = readSpawnResponseRecord(spawnResponse);
   const directSessionId = typeof spawnResponseRecord?.sessionId === 'string'
     ? spawnResponseRecord.sessionId.trim()

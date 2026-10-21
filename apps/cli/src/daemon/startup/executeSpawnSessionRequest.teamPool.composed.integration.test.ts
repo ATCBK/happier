@@ -1,12 +1,13 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi, type TestContext } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi, type TestContext } from 'vitest';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import type { ChildProcess } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import tweetnacl from 'tweetnacl';
+import { MACHINE_HTTP_LOCAL_CAPABILITY_HEADER } from '@happier-dev/iroh-native/node';
 import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1,
   ProviderSettingsV1Schema, splitProviderSettingsV1 } from '@happier-dev/protocol';
 import { createAccountProviderActionExecuteV1 } from '@happier-dev/protocol/providers/connections/accountProviderActionV1';
@@ -36,6 +37,7 @@ import { readSessionTeamCredentialResourceCatalog, readSessionTeamCredentialProv
 import { createNativeSessionClientTestPort } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit';
 import { createCurrentSessionPresentationHost } from '@/session/presentation/currentSessionPresentationService';
 import { SessionHostBridge } from '@/agent/runtime/bridges/session/SessionHostBridge';
+import { archiveSessionOnceInactive } from '@/session/services/archiveSessionOnceInactive';
 import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
@@ -48,6 +50,7 @@ import { readOrCreateDeviceLocalSecretStorage } from '../deviceLocalSecretStorag
 // Only process creation is replaced. Production daemon preparation creates
 // the bootstrap/attach files; the admitted external Agent runs in this worker.
 const os = { runner: null as null | ((args: readonly string[], environment: NodeJS.ProcessEnv) => void), pid: 0,
+  refuseStart: false,
   child: null as ChildProcess | null,
   observed: [] as Array<{ executable: string; existingSessionFlag: boolean; argc: number }>,
 };
@@ -62,6 +65,7 @@ function installProcessBoundary(): void {
       existingSessionFlag: Array.isArray(args[1]) && args[1].includes('--existing-session'),
       argc: Array.isArray(args[1]) ? args[1].length : 0 });
     if (os.runner && Array.isArray(args[1]) && args[1].some(value => value === '--existing-session')) {
+      if (os.refuseStart) throw Object.assign(new Error('Controlled native start refused'), { code: 'EACCES' });
       // Startup markers validate live OS identity. Keep an owned process at
       // this boundary while the actual Agent runtime executes in this worker.
       const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], {
@@ -87,6 +91,9 @@ const { createLightSqliteHarness }: typeof import('../../../../server/sources/te
 const { createAuthenticatedTestApp }: typeof import('../../../../server/sources/app/api/testkit/sqliteFastify') = await import(server + 'app/api/testkit/sqliteFastify');
 const { registerSessionCreateOrLoadRoute }: typeof import('../../../../server/sources/app/api/routes/session/registerSessionCreateOrLoadRoute') = await import(server + 'app/api/routes/session/registerSessionCreateOrLoadRoute');
 const { registerSessionListingRoutes }: typeof import('../../../../server/sources/app/api/routes/session/registerSessionListingRoutes') = await import(server + 'app/api/routes/session/registerSessionListingRoutes');
+const { registerSessionLookupByTagsRoute }: typeof import('../../../../server/sources/app/api/routes/session/registerSessionLookupByTagsRoute') = await import(server + 'app/api/routes/session/registerSessionLookupByTagsRoute');
+const { sessionPendingRoutes }: typeof import('../../../../server/sources/app/api/routes/session/pendingRoutes') = await import(server + 'app/api/routes/session/pendingRoutes');
+const { registerSessionArchiveRoutes }: typeof import('../../../../server/sources/app/api/routes/session/registerSessionArchiveRoutes') = await import(server + 'app/api/routes/session/registerSessionArchiveRoutes');
 const { accessKeysRoutes }: typeof import('../../../../server/sources/app/api/routes/accessKeys/accessKeysRoutes') = await import(server + 'app/api/routes/accessKeys/accessKeysRoutes');
 const { db }: typeof import('../../../../server/sources/storage/db') = await import(server + 'storage/db');
 const { registerTeamRoutes }: typeof import('../../../../server/sources/app/teams/registerTeamRoutes') = await import(server + 'app/teams/registerTeamRoutes');
@@ -108,6 +115,7 @@ async function closeControlledRunner(): Promise<void> {
 
 afterEach(async () => {
   os.runner = null;
+  os.refuseStart = false;
   await closeControlledRunner();
   resetActiveAccountSettingsSnapshotForTests(); vi.restoreAllMocks();
   syncBuiltinESMExports();
@@ -115,16 +123,17 @@ afterEach(async () => {
 
 describe('Team Pool Session launch through Action/CLI and an external Agent', () => {
   let harness: Awaited<ReturnType<typeof createLightSqliteHarness>>;
-  // Reuse the broker-admission suite's SQLite setup lifecycle and budget;
-  // migration/setup must not consume each ordinary Session launch's budget.
-  beforeAll(async () => {
+  // Each fixture owns its Machine identities and database. Keep migration
+  // setup outside each ordinary Session launch's existing budget.
+  beforeEach(async () => {
     harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-team-pool-journey-db-', env: {
       HAPPIER_FEATURE_TEAMS__ENABLED: '1', HAPPIER_FEATURE_TEAMS_CREDENTIAL_RESOURCES__ENABLED: '1',
       HAPPIER_FEATURE_PROVIDERS__ENABLED: '1',
       HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional', HAPPIER_FEATURE_E2EE__KEYLESS_ACCOUNTS_ENABLED: '1',
     } });
   }, 180_000);
-  afterAll(async () => { await harness?.close(); });
+  afterEach(async () => { await harness?.close(); });
+  afterAll(async () => { await pluginReloadController.shutdown(); });
 
   const runJourney = async (brokerOnly: boolean, onTestFailed: TestContext['onTestFailed']) => withTempHappyCliEntrypoint(async entrypoint => {
     let phase = 'setup';
@@ -169,6 +178,7 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
     const worker = await createManagedRunLaunchFixture({ directory: join(directory, 'agent'), happyHomeDir: configuration.happyHomeDir,
       controller: pluginReloadController, physicalGateway: true, signedOutAgentCli: true, readUpstreamAnswer: true,
       includeBundledDeclarations: true,
+      runtimeCredentialHeader: { name: MACHINE_HTTP_LOCAL_CAPABILITY_HEADER, format: 'raw' },
       connectedAccounts: [{ purpose: 'primary', service, required: false, credentialKinds: ['oauth'], materializationKinds: ['httpHeaders'] }] });
     const source = createSharedGatewayRegistryTestkit({ directory: join(directory, 'source'),
       includeBundledDeclarations: true,
@@ -261,12 +271,14 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
         } catch (error) { sourceRpcFailures.push(error); throw error; }
       });
       registerSessionCreateOrLoadRoute(app); registerSessionListingRoutes(app); accessKeysRoutes(app);
+      registerSessionLookupByTagsRoute(app);
+      sessionPendingRoutes(app);
+      registerSessionArchiveRoutes(app);
       registerTeamRoutes(app);
       app.get('/v1/features', async () => resolveServerFeaturesForGating(process.env));
       app.get('/v1/account/profile', async () => AccountProfileResponseSchema.parse({ id: recipient.id }));
       app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode: 'plain' }));
       app.get('/v2/account/settings', async () => ({ content: { t: 'plain', v: {} }, version: 1 }));
-      app.post('/v2/sessions/lookup-by-tags', async () => ({ sessions: [] }));
       await app.listen({ host: '127.0.0.1', port: 0 });
       const address = app.server.address();
       if (!address || typeof address === 'string') throw new Error('Missing Home address');
@@ -307,6 +319,7 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
         expect(local).toMatchObject({ status: 'success', groups: [{ rows: [{ compatibility: { confirmed: false } }] }] });
         if (local.status !== 'success') throw new Error('Worker compatibility unavailable');
         const compatibility = local.groups[0]!.rows[0]!.compatibility;
+        expect(compatibility.result, JSON.stringify(compatibility.result)).toMatchObject({ status: 'experimental' });
         if (compatibility.result.status !== 'experimental') throw new Error('Expected recipient consent');
         const confirm = createAccountProviderActionExecuteV1({ assertCurrent() {}, now: () => 2,
           readDefinitions: async () => [], readCatalog: async () => recipientSnapshot.providerConnectionsCatalog,
@@ -330,6 +343,7 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
         const timeouts = new Map<number, NodeJS.Timeout>();
         let runner: Promise<void> | undefined;
         let sessionId = '';
+        let closePublisher: (() => Promise<unknown>) | undefined;
         os.pid = process.pid + 1_000_000;
         const signingKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(41));
         const lifetime = new AbortController();
@@ -347,6 +361,7 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
           const registered = await presence.registerPublisher({ socket: publisherSocket,
             binding: { accountId: recipient.id, machineId: worker.machineId, sessionId },
             completeActivitySnapshot: { state: 'idle', activeCount: 0 } });
+          closePublisher = () => presence.closePublisher({ socket: publisherSocket });
           expect(registered, JSON.stringify(registered, (_key, value) => typeof value === 'bigint' ? String(value) : value))
             .toMatchObject({ status: 'registered' });
           phase = `${surface}:native-plan`;
@@ -396,7 +411,6 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
             phase = `${surface}:native-close`;
             unsubscribe?.();
             await operations.resetOrDisposeRuntime();
-            await presence.closePublisher({ socket: publisherSocket });
           }
           await expect(readFile(attachPath)).rejects.toMatchObject({ code: 'ENOENT' });
           phase = `${surface}:webhook`;
@@ -442,32 +456,99 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
           readLaunchPhases = () => launchPhases;
           const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: '', mode: 'plain', ctx: null,
             sessionSpawnDirectTargetTransport: createMachineSessionDirectTargetTransport({ machineId: worker.machineId, spawnLifecycleHandler: handler }) });
-          const result = await createActionExecutor(deps).execute('session.spawn_new', {
+          const start = () => createActionExecutor(deps).execute('session.spawn_new', {
             creationKey: `team-pool-${surface}`, executionTarget: { serverId: configuration.activeServerId, machineId: worker.machineId },
             directory: { kind: 'path', path: directory }, agentTarget: { kind: 'agent', identity: { pluginId: 'acme.managed-run', localId: 'agent' } },
             permissionMode: 'default', modelSelection: { v: 1, updatedAt: 1,
               ref: { agentTargetKey: worker.agentTargetKey, providerConnectionId: null, modelId: 'gpt-5.5' } },
             connectedServices: { v: 2, bindingsByServiceId: { [`${service.pluginId}/${service.localId}`]: {
               source: 'team_resource', resourceId: resource.id, deliveryMode: 'brokered' } } },
+            initialInput: { text: 'TEAM_POOL_NATIVE_PROMPT' },
           }, { surface, authority: 'present_user', actionCaller: { kind: 'host' } });
+          if (surface === 'cli') {
+            // Missing native tooling is a definite pre-runner refusal. Its
+            // creation key must remain usable after the person installs it.
+            const uninstalledCli = `${nativeCli}.uninstalled`;
+            await rename(nativeCli, uninstalledCli);
+            try {
+              const refused = await start();
+              expect(await db.session.findMany({ where: { accountId: recipient.id }, select: { id: true } })).toEqual([]);
+              expect(refused, JSON.stringify(refused)).toMatchObject({ ok: true,
+                result: { type: 'error', code: 'agent_cli_missing' } });
+              expect(runner).toBeUndefined();
+            } finally {
+              await rename(uninstalledCli, nativeCli);
+            }
+          }
+          let refusedSessionId: string | undefined;
+          if (surface === 'cli') {
+            // The real daemon has committed its Team-bound row before the OS
+            // refuses process creation. Repeating that refusal must stay typed;
+            // once the OS permits launch, the SAME creation key must run it.
+            os.refuseStart = true;
+            try {
+              for (const attempt of [1, 2]) {
+                const refused = await start();
+                expect(refused, JSON.stringify({ attempt, refused })).toMatchObject({ ok: true,
+                  result: { type: 'error', code: 'spawn_failed', launchError: { code: 'SPAWN_FAILED' } } });
+                const rows = await db.session.findMany({ where: { accountId: recipient.id },
+                  select: { id: true, active: true, runtimeActivityRevision: true } });
+                expect(rows).toEqual([{ id: expect.any(String), active: false, runtimeActivityRevision: 0n }]);
+                refusedSessionId ??= rows[0]!.id;
+                expect(rows[0]!.id).toBe(refusedSessionId);
+                expect(await db.sessionPendingMessage.count()).toBe(0);
+                expect(runner).toBeUndefined();
+                // Post-commit preparation cleanup uses this same archive
+                // owner. Exercise retry both from the retained row and after
+                // its ordinary archival, without editing lifecycle facts.
+                await archiveSessionOnceInactive({ token: credentials.token, sessionId: refusedSessionId });
+                expect((await db.session.findUniqueOrThrow({ where: { id: refusedSessionId } })).archivedAt)
+                  .toBeInstanceOf(Date);
+              }
+            } finally { os.refuseStart = false; }
+          }
+          const result = await start();
           expect(runner, JSON.stringify({ result, diagnostics: startupDiagnostics.mock.calls.filter(([message]) =>
             /failed|refused|cleanup/iu.test(message)) })).toBeDefined();
           await expect(runner, JSON.stringify({ result, preparationFailures: startupDiagnostics.mock.calls.filter(([message]) =>
             message === '[DAEMON RUN] Session spawn failed after startup preparation') })).resolves.toBeUndefined();
           expect(result, JSON.stringify({ result, preparationFailures: startupDiagnostics.mock.calls.filter(([message]) =>
-            message === '[DAEMON RUN] Session spawn failed after startup preparation') })).toMatchObject({ ok: true, result: { type: 'success' } });
+            message === '[DAEMON RUN] Session spawn failed after startup preparation') })).toMatchObject({ ok: true,
+              result: { type: 'success', initialInput: { status: 'accepted' } } });
+          if (refusedSessionId) expect(sessionId).toBe(refusedSessionId);
+          expect(await db.session.findUniqueOrThrow({ where: { id: sessionId }, select: { active: true, archivedAt: true } }))
+            .toEqual({ active: true, archivedAt: null });
+          expect(await db.sessionPendingMessage.count({ where: { sessionId, status: 'queued' } })).toBe(1);
+          expect(await db.session.count({ where: { accountId: recipient.id } })).toBe(surface === 'cli' ? 1 : 2);
           expect(requests.slice(requestStart)).toEqual([{ model: 'gpt-5.5', input: 'TEAM_POOL_NATIVE_PROMPT' }]);
           expect(await db.sessionTeamCredentialBinding.findMany({ where: { sessionId } })).toEqual(expect.arrayContaining([
             expect.objectContaining({ slotKind: 'provider_model:brokered', resourceId: resource.id }),
           ]));
+          if (surface === 'cli') {
+            await closePublisher?.(); closePublisher = undefined;
+            await closeControlledRunner();
+            // A Session which really ran keeps normal rejoin/Resume behavior.
+            // Leave an OS refusal armed so an accidental relaunch is visible.
+            os.runner = () => { throw new Error('Stopped Session unexpectedly relaunched'); };
+            os.refuseStart = true;
+            try {
+              expect(await start()).toMatchObject({ ok: true,
+                result: { type: 'success', disposition: 'rejoined', sessionId } });
+              expect(await db.session.findUniqueOrThrow({ where: { id: sessionId }, select: { active: true } }))
+                .toEqual({ active: false });
+            } finally { os.runner = null; os.refuseStart = false; }
+          }
           completedIngresses.push(surface);
-        } finally { lifetime.abort(); for (const timer of timeouts.values()) clearTimeout(timer); await closeControlledRunner(); }
+        } finally { lifetime.abort(); for (const timer of timeouts.values()) clearTimeout(timer); await closePublisher?.(); await closeControlledRunner(); }
         }
       });
     } finally {
       await app.close(); await new Promise<void>(resolve => carrier.close(() => resolve()));
       await releaseSource?.();
-      await source.controller.shutdown(); source.disposeCredentialBoundary(); await worker.cleanup();
+      await source.controller.shutdown(); source.disposeCredentialBoundary();
+      // The daemon singleton belongs to the suite; shutting it down for the
+      // catalog case prevents the next independent launch case from running.
+      await worker.lease.release(); worker.gateway?.disposeCredentialBoundary();
       env.restore(); launchEnv.restore(); reloadConfiguration(); await rm(directory, { recursive: true, force: true });
     }
   });

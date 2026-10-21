@@ -166,7 +166,8 @@ vi.mock('../spawn/resolveSpawnBackendIdentity', () => ({
   resolveSpawnBackendIdentity: hoisted.resolveSpawnBackendIdentity,
 }));
 
-vi.mock('../spawn/resolveSpawnChildEnvironment', () => ({
+vi.mock('../spawn/resolveSpawnChildEnvironment', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../spawn/resolveSpawnChildEnvironment')>(),
   resolveSpawnChildEnvironment: vi.fn(),
 }));
 

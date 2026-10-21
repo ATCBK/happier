@@ -62,6 +62,7 @@ import {
     type MissingConnectedServiceMaterializationIdentityRepair,
 } from '../spawn/prepareDaemonConnectedServices';
 import { prepareDaemonSpawnChildEnvironment } from '../spawn/prepareDaemonSpawnChildEnvironment';
+import { validateSpawnAgentCliLaunch } from '../spawn/resolveSpawnChildEnvironment';
 import { prepareDaemonSpawnLifecycle } from '../spawn/prepareDaemonSpawnLifecycle';
 import {
     commitDaemonLaunchSession,
@@ -827,6 +828,25 @@ export async function executeSpawnSessionRequest(
                 !normalizedExistingSessionId
                 && daemonLaunchRequiresCommittedSession(optionsWithProviderIsolation)
             ) {
+                // A definite missing executable must not consume the creation
+                // key with a durable row that a later retry can only rejoin.
+                // Credential checks still need the Home-accepted Team binding
+                // and therefore remain at final child-environment admission.
+                if (catalogAgentId) {
+                    const executable = await validateSpawnAgentCliLaunch({
+                        agentId: catalogAgentId, options: optionsWithProviderIsolation,
+                        happyHomeDir: configuration.happyHomeDir,
+                        processEnv: params.processEnv ?? process.env,
+                        profileEnvironmentVariables: { ...profileLaunchEnvironment, ...terminalPresentation.environmentOverlay },
+                        allowNativeAccountCredentials: options.requesterSessionBootstrap
+                            ? options.requesterSessionBootstrap.allowNativeAccountCredentials === true : true,
+                        pluginRuntimeRegistry: appliedPluginRuntimeLease.registry,
+                        savedSecretOperationContext: acpOperationContext,
+                    });
+                    if (!executable.ok) return await refuseSpawn({ type: 'error',
+                        errorCode: SPAWN_SESSION_ERROR_CODES.AGENT_CLI_MISSING,
+                        errorMessage: executable.errorMessage, agentId: catalogAgentId });
+                }
                 const committed = await commitDaemonLaunchSession({
                     ...(requesterRuntime ? { accountSettings: requesterRuntime.readAccountSettingsSnapshot().settings } : {}),
                     api: params.api,
@@ -845,8 +865,8 @@ export async function executeSpawnSessionRequest(
                 if (committed.session.created) {
                     const committedSessionId = committed.session.sessionId;
                     launchResourceScope.register({
-                        // A launch refused before its runner started leaves no
-                        // Session behind; once submitted, the runner owns it.
+                        // Archive this launch's new row on pre-runner refusal;
+                        // once submitted, the runner owns it.
                         onFailure: async () => {
                             if (childLaunchSubmitted) return;
                             await archiveSessionOnceInactive({

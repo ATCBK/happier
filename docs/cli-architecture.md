@@ -4604,6 +4604,20 @@ launch is an attach to that exact Session:
 The creator seeds only the launch intents an attaching runner never takes from
 its own process: session mode, configuration overrides and capability selection. A
 launch refused before its runner starts archives a Session this call created.
+Before committing the row, the daemon validates Agent executable availability
+through the same owner used by final child-environment admission. A missing
+Agent therefore leaves no Session row or consumed creation key; installing it
+and submitting the same key can start a fresh Session. Native authentication
+and final environment checks still run after accepted Team material is available.
+In 0.3 development source, an authenticated same-key rejoin of a committed,
+inactive Session with runtime Activity revision zero and no runner-authored
+`hostPid` launches that same Session through the existing committed-row spawn
+owner before submitting initial input. Archived rows first use ordinary tag
+restoration. A repeated launch refusal keeps its typed error and admits no
+initial input. Sessions with prior Activity, a retained process identity, or
+missing Activity evidence keep ordinary rejoin and explicit Resume; a
+resolve-only request never dispatches another launch. No new persisted launch
+marker is needed.
 Creation refusals keep their exact terminal spawn detail, through the same
 classification the runner uses.
 In development source, a Session create/load HTTP 5xx retains its status through

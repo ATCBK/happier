@@ -17,7 +17,7 @@ import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { createAdmittedPluginRuntimeFixture, createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { createProviderLaunchResourceScope } from '@/providers/lifecycle/resourceScope';
 import { createProviderRedactionLease } from '@/providers/spawn/redaction';
-import { resolveSpawnChildEnvironment } from './resolveSpawnChildEnvironment';
+import { resolveSpawnChildEnvironment, validateSpawnAgentCliLaunch } from './resolveSpawnChildEnvironment';
 import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract';
 import { prepareDaemonSpawnChildEnvironment } from './prepareDaemonSpawnChildEnvironment';
 import { commitDaemonLaunchSession } from './commitDaemonLaunchSession';
@@ -66,6 +66,27 @@ async function createPinnedSpawnAgentRegistry(): Promise<ResolvedExecutablePlugi
 }
 
 describe('daemon Agent preconditions', () => {
+  it('uses the same profile-selected executable for precommit and final launch admission', async () => {
+    const home = await createTempDir('happier-spawn-profile-executable-', tmpdir());
+    try {
+      const registry = await createPinnedSpawnAgentRegistry();
+      const cli = writeExecutableShimSync({ dir: home,
+        fileName: process.platform === 'win32' ? 'codex.cmd' : 'codex',
+        contents: process.platform === 'win32' ? '@echo off\r\necho codex-cli 0.160.0\r\n' : '#!/bin/sh\necho codex-cli 0.160.0\n' });
+      const input = {
+        options: { directory: home, backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' } },
+        happyHomeDir: home, pluginRuntimeRegistry: registry, processEnv: { PATH: '', HOME: home, USERPROFILE: home },
+        profileEnvironmentVariables: { AGENT_DIRECTORY: home,
+          HAPPIER_CODEX_PATH: '${AGENT_DIRECTORY}/' + (process.platform === 'win32' ? 'codex.cmd' : 'codex') },
+        daemonSpawnHooks: null, logDebug() {}, logInfo() {}, logWarn() {},
+      } satisfies Parameters<typeof resolveSpawnChildEnvironment>[0];
+      const beforeCommit = await validateSpawnAgentCliLaunch({ ...input, agentId: 'codex' });
+      expect(beforeCommit).toMatchObject({ ok: true, launchSpec: { resolvedPath: cli } });
+      const final = await resolveSpawnChildEnvironment({ ...input, resolvedAgentId: 'codex' });
+      expect(final).toMatchObject({ ok: true, agentCliLaunchSpec: { resolvedPath: cli } });
+    } finally { await removeTempDir(home); }
+  });
+
   it('admits a validated custom Session factory without an undeclared CLI prerequisite', async () => {
     const fixtureRoot = new URL('../../../../../packages/tests/fixtures/plugin-platform/agent-runtime-conformance/', import.meta.url);
     const sourceManifest = PluginManifestV2Schema.parse(JSON.parse(await readFile(new URL('.happier-plugin/plugin.json', fixtureRoot), 'utf8')));
