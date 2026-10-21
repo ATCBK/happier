@@ -94,9 +94,20 @@ function base64EncodedLength(value: number): number {
   return 4 * Math.ceil(value / 3);
 }
 
+function isInvalidGoogleApiKey(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const error = (value as Readonly<Record<string, unknown>>).error;
+  if (!error || typeof error !== 'object' || Array.isArray(error)) return false;
+  const details = (error as Readonly<Record<string, unknown>>).details;
+  return Array.isArray(details) && details.some((detail: unknown) =>
+    detail !== null && typeof detail === 'object' && !Array.isArray(detail)
+    && (detail as Readonly<Record<string, unknown>>).reason === 'API_KEY_INVALID');
+}
+
 function readJson(response: HttpResponse, registeredSensitiveValues: readonly string[]): unknown {
   const httpFailure = classifyVoiceProviderHttpFailure(response.status);
-  if (httpFailure) throw providerError(httpFailure);
+  // GenerateContent also reports invalid API keys as structured HTTP 400 errors.
+  if (httpFailure && response.status !== 400) throw providerError(httpFailure);
   const declaredHeader = readResponseHeader(response.headers, 'content-length');
   if (declaredHeader !== null) {
     const declared = Number(declaredHeader);
@@ -114,7 +125,12 @@ function readJson(response: HttpResponse, registeredSensitiveValues: readonly st
   if (containsProviderRegisteredSensitiveValue(text, registeredSensitiveValues)) {
     throw providerError('provider_response_invalid');
   }
-  try { return JSON.parse(text); } catch { throw providerError('provider_response_invalid'); }
+  let value: unknown;
+  try { value = JSON.parse(text); } catch { throw providerError('provider_response_invalid'); }
+  if (httpFailure) {
+    throw providerError(isInvalidGoogleApiKey(value) ? 'credential_unavailable' : httpFailure);
+  }
+  return value;
 }
 
 function clean(value: unknown, max = 512): string | null {
@@ -219,17 +235,19 @@ async function transcribe(
   const instruction = request.language
     ? `Transcribe this audio. Language: ${request.language}. Return only the transcript text.`
     : 'Transcribe this audio. Return only the transcript text.';
+  const model = request.model.replace(/^models\//u, '');
+  const disableThinking = /^gemini-2\.5-flash(?:-lite)?(?:-preview-\d{2}-\d{2,4})?$/u.test(model);
   const body = encodeJson({ contents: [{ role: 'user', parts: [
     { text: instruction },
-    { inline_data: { mime_type: request.mimeType, data: Buffer.from(request.bytes).toString('base64') } },
-  ] }] });
+    { inline_data: { mime_type: request.mimeType === 'audio/mp4' ? 'audio/m4a' : request.mimeType, data: Buffer.from(request.bytes).toString('base64') } },
+  ] }], ...(disableThinking ? { generationConfig: { thinkingConfig: { thinkingBudget: 0 } } } : {}) });
   if (body.byteLength > GOOGLE_GEMINI_INLINE_REQUEST_MAX_BYTES) {
     throw providerError('invalid_parameters');
   }
   const secret = await materializeApiKey(context.credentials, GEMINI_ORIGIN, context.signal);
   const response = await context.http.request(
     {
-      url: `${GEMINI_ORIGIN}/v1beta/models/${encodeURIComponent(request.model.replace(/^models\//u, ''))}:generateContent`,
+      url: `${GEMINI_ORIGIN}/v1beta/models/${encodeURIComponent(model)}:generateContent`,
       method: 'POST',
       headers: { 'content-type': 'application/json', [GOOGLE_API_KEY_HEADER]: secret },
       redirect: 'error',
