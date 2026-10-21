@@ -1,10 +1,6 @@
 import { createSharedSubscriptionStore } from '@/sync/runtime/subscriptions/sharedSubscriptionStore';
 import { MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@happier-dev/protocol/rpcErrors';
-import { apiSocket } from '@/sync/api/session/apiSocket';
-import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
-import { subscribeMachineRequestRecovery } from '@/sync/domains/machines/reachability/machineReachability';
+import { subscribeMachineRpcRecovery } from '@/sync/runtime/orchestration/serverScopedRpc/subscribeMachineRpcRecovery';
 import {
     type LocalServiceInventorySnapshotClientInput,
     type LocalServiceInventorySnapshotClientResult,
@@ -98,27 +94,7 @@ const store = createSharedSubscriptionStore<
         applyLocalServiceInventoryRefreshFailed(state, input.machineId)
     ),
     failWatch: (state, input) => applyLocalServiceInventoryRefreshFailed(state, input.machineId),
-    subscribeRecovery: (input, recover) => {
-        const matchesHome = (serverId: string) => areServerProfileIdentifiersEquivalent(
-            input.serverId ?? getActiveServerSnapshot().serverId, serverId,
-        );
-        const detachFocused = apiSocket.onStatusChange(status => {
-            if (status !== 'connected') return;
-            // The connection owner clears failed Machine reachability after publishing status.
-            // Let that same connection commit finish before admitting the recovered read.
-            void Promise.resolve().then(() => {
-                const scope = apiSocket.getMachineRequestScope();
-                if (scope && matchesHome(scope.serverId)) recover();
-            });
-        });
-        const detachConcurrent = subscribeHomeAccountChange(event => {
-            if (event.source === 'connected' && matchesHome(event.serverId)) recover();
-        });
-        const detachMachine = subscribeMachineRequestRecovery((scope, machineId) => {
-            if (machineId === input.machineId && matchesHome(scope.serverId)) recover();
-        });
-        return () => { detachFocused(); detachConcurrent(); detachMachine(); };
-    },
+    subscribeRecovery: subscribeMachineRpcRecovery,
     applySnapshot: applyLocalServiceInventorySnapshot,
     defaultWatchClient,
     watchAfterRefresh: true,

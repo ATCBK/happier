@@ -41,6 +41,7 @@ const { machineRpcWithServerScope } = await import('@/sync/runtime/orchestration
 const { subscribeLocalServiceInventoryStore, getLocalServiceInventoryState, resetLocalServiceInventoryStoreForTests } = await import('@/sync/domains/local/services/inventory/sharedStore');
 const { DEFAULT_BROWSER_CAPABILITIES } = await import('@happier-dev/protocol/features/payload/capabilities/browserCapabilities');
 const { useLocalServiceInventoryState } = await import('@/sync/domains/local/services/inventory/useLocalServiceInventoryState');
+const { clearMachineRequestReachabilityForMachine } = await import('@/sync/domains/machines/reachability/machineReachability');
 
 type MachineCall = Readonly<{ method: string; requestId: string; params: unknown; reply(value: unknown): Promise<void>; refuse(errorCode: string): void }>;
 
@@ -166,6 +167,49 @@ it('retains supported Vitals through unavailable transport and recovers on Retry
             await vi.waitFor(() => expect(machineResourceStore.getState(input).snapshot?.sample?.sampledAt).toBe(fresh.sampledAt));
             expect(machineResourceStore.getState(input).status).toBe('ready');
         } finally { release(); }
+    });
+});
+
+it.each(['snapshot', 'watch'] as const)('recovers a failed Vitals %s on authenticated Machine reconnect without navigation or daemon-state change', async failure => {
+    await withMachineHome(async home => {
+        const input = { machineId: 'shared-machine', serverId: home.serverId, expectedAccountId: 'owner', view: 'overview' as const };
+        const initial = vitals();
+        const fresh = vitals(initial.sample!.sampledAt + 2_000);
+        let recovering = false;
+        let recoveredWatch: MachineCall | undefined;
+        home.setAnswer(async call => {
+            if (call.method === RPC_METHODS.MACHINES_VITALS_GET) {
+                if (!recovering && failure === 'snapshot') call.refuse(RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE);
+                else await call.reply(recovering ? fresh : initial);
+            }
+            if (call.method === RPC_METHODS.DAEMON_VITALS_WATCH) {
+                if (recovering) recoveredWatch = call;
+                else call.refuse(RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE);
+            }
+        });
+        const release = machineResourceStore.demand(input);
+        try {
+            await vi.waitFor(() => expect(machineResourceStore.getState(input)).toMatchObject({
+                status: 'error', errorCode: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE,
+            }));
+            const held = machineResourceStore.getState(input);
+            expect(held.snapshot).toEqual(failure === 'snapshot' ? null : initial);
+            recovering = true;
+            // The existing reconnect producer is the boundary; scope matching and read/watch recovery stay real.
+            clearMachineRequestReachabilityForMachine({ serverId: home.serverId, accountId: 'other-account' }, input.machineId);
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(machineResourceStore.getState(input)).toBe(held);
+            clearMachineRequestReachabilityForMachine({ serverId: home.serverId, accountId: 'owner' }, input.machineId);
+            await vi.waitFor(() => expect(machineResourceStore.getState(input)).toMatchObject({ status: 'ready', snapshot: fresh }));
+            await vi.waitFor(() => expect(recoveredWatch).toBeDefined());
+            const next = { ...fresh.sample!, sampledAt: fresh.sample!.sampledAt + 2_000 };
+            await recoveredWatch!.reply({ changed: true, samples: [next] });
+            await vi.waitFor(() => expect(machineResourceStore.getState(input).snapshot?.sample?.sampledAt).toBe(next.sampledAt));
+        } finally { release(); }
+        const held = machineResourceStore.getState(input);
+        clearMachineRequestReachabilityForMachine({ serverId: home.serverId, accountId: 'owner' }, input.machineId);
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(machineResourceStore.getState(input)).toBe(held);
     });
 });
 

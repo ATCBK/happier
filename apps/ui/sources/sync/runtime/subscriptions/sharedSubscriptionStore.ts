@@ -132,6 +132,7 @@ type SharedSubscriptionStoreEntry<TInput, TState, TSnapshotClient, TWatchClient>
     watching: boolean;
     watchRetired: boolean;
     watchRecoveryRequested: boolean;
+    watchRecoveryNeedsRefresh: boolean;
     unsubscribeRecovery: (() => void) | null;
     nowMs: () => number;
 };
@@ -189,6 +190,7 @@ export function createSharedSubscriptionStore<
                 watching: false,
                 watchRetired: false,
                 watchRecoveryRequested: false,
+                watchRecoveryNeedsRefresh: false,
                 unsubscribeRecovery: null,
                 nowMs: options?.nowMs ?? Date.now,
             };
@@ -242,7 +244,8 @@ export function createSharedSubscriptionStore<
             // A mutation or source update during this read must not be swallowed by
             // single-flight sharing. Coalesce those invalidations into one subsequent read.
             if (entry.refreshRequested && entry.refCount > 0 && !abortController?.signal.aborted) {
-                void runRefresh(entry);
+                const refresh = runRefresh(entry);
+                if (config.watchAfterRefresh) void refresh.then(() => runWatchLoop(entry));
             }
         } })();
         entry.inFlight = promise;
@@ -263,6 +266,7 @@ export function createSharedSubscriptionStore<
         }
         entry.watching = true;
         entry.watchRecoveryRequested = false;
+        entry.watchRecoveryNeedsRefresh = false;
         const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
         entry.watchAbortController = abortController;
         let dispatched = Promise.resolve();
@@ -299,6 +303,11 @@ export function createSharedSubscriptionStore<
                 }
             }
             if (!abortController?.signal.aborted) {
+                // A reconnect may arrive before the old request's failure. Re-read
+                // when that reply cannot seed another watch, preserving the wake.
+                if (entry.watchRecoveryNeedsRefresh && config.shouldWatch?.(entry.state) === false) {
+                    await runRefresh(entry);
+                }
                 // Install the new cursor before re-arming, then let transport preparation reach
                 // dispatch before synchronous subscribers (including React) can occupy the thread.
                 await runWatchLoop(entry);
@@ -351,8 +360,12 @@ export function createSharedSubscriptionStore<
                     // reply to re-arm once without replacing a healthy outstanding watch.
                     if (entry.watching) {
                         entry.watchRecoveryRequested = true;
-                    } else if (entry.watchRetired) {
+                        entry.watchRecoveryNeedsRefresh = true;
+                    } else if (entry.watchRetired || config.shouldWatch?.(entry.state) === false) {
+                        // An initial read can fail before any watch starts. It still needs
+                        // the same authenticated recovery wake as a retired parked watch.
                         entry.watchRetired = false;
+                        if (entry.inFlight) entry.refreshRequested = true;
                         const refresh = runRefresh(entry);
                         if (config.watchAfterRefresh) void refresh.then(() => runWatchLoop(entry));
                         else runWatchLoop(entry);

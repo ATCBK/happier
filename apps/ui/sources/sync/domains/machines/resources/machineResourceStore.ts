@@ -5,6 +5,7 @@ import { projectMachineResourceSummaryV1, type MachineResourceSummaryV1, type Ma
 import { MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@happier-dev/protocol/rpcErrors';
 
 import { createSharedSubscriptionStore, type SharedSubscriptionWatchOutcome } from '@/sync/runtime/subscriptions/sharedSubscriptionStore';
+import { subscribeMachineRpcRecovery } from '@/sync/runtime/orchestration/serverScopedRpc/subscribeMachineRpcRecovery';
 import type {
     MachineResourceKey, MachineVitalsView, MachineVitalsRange, MachineResourceRpcResult,
     MachineVitalsReadInput, MachineVitalsHistoryReadInput, MachineVitalsWatchInput,
@@ -250,6 +251,7 @@ export function createMachineResourceStore(clients: MachineResourceClients, nowM
         storeKey: input => JSON.stringify([machineKey(input), input.view]),
         defaultSnapshotClient: clients.snapshotClient, defaultWatchClient: clients.watchClient,
         retainState: true, watchAfterRefresh: true,
+        subscribeRecovery: subscribeMachineRpcRecovery,
         shouldWatch: state => (state.status === 'ready' || state.status === 'slow'
             || (state.status === 'error' && state.errorCode === MACHINE_RPC_TIMEOUT_ERROR_CODE)) && state.snapshot?.state === 'reporting',
         refresh: async ({ input, state, snapshotClient, signal }): Promise<MachineResourceState> => {
@@ -300,14 +302,10 @@ export function createMachineResourceStore(clients: MachineResourceClients, nowM
                     const current = getHeldState(input);
                     const kind = current.status === 'slow' || current.status === 'error' ? 'error' : 'slow';
                     const update: ResourceUpdate = { kind, ...('errorCode' in result && result.errorCode ? { errorCode: result.errorCode } : {}) };
-                    // A deadline can expire while the renderer is blocked or the daemon is slow.
-                    // The existing transport budget paces retries; presentation failure is not
-                    // retirement while this reporting machine still has demand.
-                    if (kind === 'slow' || ('errorCode' in result && result.errorCode === MACHINE_RPC_TIMEOUT_ERROR_CODE)) {
-                        return { status: 'changed', snapshot: update };
-                    }
-                    store.publish(input, update);
-                    return { status: 'unavailable' };
+                    // The state predicate owns re-arming: deadlines keep their existing
+                    // transport cadence, other failures await recovery or explicit Retry.
+                    // A failed reply is not a successful publication/recovery wake.
+                    return { status: 'changed', snapshot: update };
                 }
                 return { status: 'changed', snapshot: result.value.changed
                     ? { kind: 'samples', samples: result.value.samples } : { kind: 'freshness' } };

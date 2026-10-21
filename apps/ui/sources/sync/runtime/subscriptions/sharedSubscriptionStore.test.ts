@@ -15,6 +15,40 @@ type TestState = Readonly<{
 type TestSnapshot = Readonly<{ value: number }>;
 
 describe('createSharedSubscriptionStore', () => {
+    it.each(['settled', 'in-flight'] as const)('recovers a failed initial snapshot on the existing recovery signal (%s)', async phase => {
+        let recover: (() => void) | undefined;
+        let finishInitial!: (value: number) => void;
+        let available = false;
+        const replies: Array<(value: SharedSubscriptionWatchOutcome<number>) => void> = [];
+        const store = createSharedSubscriptionStore({
+            emptyState: 0, createState: () => 0, normalizeInput: (key: string) => key, storeKey: (key: string) => key,
+            defaultSnapshotClient: async () => available ? 1 : await new Promise<number>(resolve => { finishInitial = resolve; }),
+            defaultWatchClient: {}, watchAfterRefresh: true, retainState: true,
+            refresh: ({ snapshotClient }) => snapshotClient(), applySnapshot: (_state: number, snapshot: number) => snapshot,
+            shouldWatch: state => state > 0,
+            subscribeRecovery: (_input: string, listener: () => void) => { recover = listener; return () => {}; },
+            watch: () => new Promise<SharedSubscriptionWatchOutcome<number>>(resolve => replies.push(resolve)),
+        });
+        const release = store.subscribe('machine', () => {});
+        try {
+            expect(replies).toHaveLength(0);
+            if (phase === 'in-flight') {
+                available = true;
+                recover?.();
+                finishInitial(-1);
+            } else {
+                finishInitial(-1);
+                await vi.waitFor(() => expect(store.getState('machine')).toBe(-1));
+                available = true;
+                recover?.();
+            }
+            await vi.waitFor(() => expect(store.getState('machine')).toBe(1));
+            expect(replies).toHaveLength(1);
+            replies[0]!({ status: 'changed', snapshot: 2 });
+            await vi.waitFor(() => expect(store.getState('machine')).toBe(2));
+        } finally { release(); store.reset(); }
+    });
+
     it('recovers retired observation only on a demanded recovery event and releases its listener', async () => {
         let recover: (() => void) | undefined;
         const detach = vi.fn();
@@ -50,6 +84,29 @@ describe('createSharedSubscriptionStore', () => {
         recover?.();
         expect(reads).toBe(2);
         store.reset();
+    });
+
+    it('keeps a recovery wake when the old watch subsequently makes the retained state unwatchable', async () => {
+        let recover: (() => void) | undefined;
+        let value = 1;
+        const replies: Array<(value: SharedSubscriptionWatchOutcome<number>) => void> = [];
+        const store = createSharedSubscriptionStore({
+            emptyState: 0, createState: () => 0, normalizeInput: (key: string) => key, storeKey: (key: string) => key,
+            defaultSnapshotClient: async () => value, defaultWatchClient: {}, watchAfterRefresh: true, retainState: true,
+            refresh: ({ snapshotClient }) => snapshotClient(), applySnapshot: (_state: number, snapshot: number) => snapshot,
+            shouldWatch: state => state > 0,
+            subscribeRecovery: (_input: string, listener: () => void) => { recover = listener; return () => {}; },
+            watch: () => new Promise<SharedSubscriptionWatchOutcome<number>>(resolve => replies.push(resolve)),
+        });
+        const release = store.subscribe('machine', () => {});
+        try {
+            await vi.waitFor(() => expect(replies).toHaveLength(1));
+            value = 2;
+            recover?.();
+            replies[0]!({ status: 'changed', snapshot: -1 });
+            await vi.waitFor(() => expect(store.getState('machine')).toBe(2));
+            expect(replies).toHaveLength(2);
+        } finally { release(); store.reset(); }
     });
 
     it('rearms a retired watch when a retained entry gains demand again', async () => {
