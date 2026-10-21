@@ -235,6 +235,19 @@ a kept workspace tab, like Alt-click or middle-click, even during selection.
 which is why sending has its own explicitly editable-safe binding rather than
 relying on you leaving the field first.
 
+## Inline chip editing (0.3 development)
+
+The unreleased 0.3 composer treats each reference chip as one item. Left and
+Right Arrow step across the whole chip. Backspace immediately after a chip
+selects it; a second Backspace removes it. Delete immediately before a chip
+removes it whole. Undo restores a deleted chip. Removing an attachment from
+the tray also removes its chips; undo does not bring the removed attachment
+back.
+
+Copy and cut write readable reference markers. Pasting text keeps it plain,
+so it cannot recreate a chip. Deleting an image chip keeps the image in the
+tray. See [Attachments and image previews](/apps/attachments).
+
 ## Changing them
 
 **Settings → Keyboard shortcuts** lists every command with its current binding
