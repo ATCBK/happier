@@ -7,9 +7,11 @@ import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { MachineReadBatchRequestV1Schema } from '@happier-dev/protocol/machines/machineReadBatchV1';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import {
+    configureConnectedServerSocketBoundary,
     installDisconnectedServerSocketBoundary,
     restoreServerAccountForTest,
 } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -290,7 +292,8 @@ describe('ConnectedAccountSetupController real ownership', () => {
         return { readPresentation: () => presentation, readWriteSignal: () => writeSignal };
     }
 
-    function installPurposeBoundary(bindings: Extract<ConnectedAccountCatalogRecordV1, { key: 'purposes' }>['value']['bindings']) {
+    function installPurposeBoundary(bindings: Extract<ConnectedAccountCatalogRecordV1, { key: 'purposes' }>['value']['bindings'],
+        actionsSettingsV1: ReturnType<typeof ActionsSettingsV1Schema.parse>) {
         let record: Extract<ConnectedAccountCatalogRecordV1, { key: 'purposes' }> | null = null;
         let revision = 0;
         let settingsVersion = 3;
@@ -298,7 +301,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
         const rowWrites: Array<Extract<ConnectedAccountCatalogRecordV1, { key: 'purposes' }>> = [];
         // The Home stores Settings sparsely: only what the person set. A full defaults document would make the
         // Sync engine's storage normalization rewrite it (a Settings POST) between the source read and the row write.
-        const source = () => raw ??= { connectedAccountPurposeBindingsV1: { v: 1, bindings } };
+        const source = () => raw ??= { actionsSettingsV1, connectedAccountPurposeBindingsV1: { v: 1, bindings } };
         return {
             readBindings: () => record?.value.bindings,
             readSource: source,
@@ -335,7 +338,8 @@ describe('ConnectedAccountSetupController real ownership', () => {
         };
     }
 
-    async function seedPurposeDefaults(target: QualifiedConnectedAccountPurposeBindingTargetV1) {
+    async function seedPurposeDefaults(target: QualifiedConnectedAccountPurposeBindingTargetV1,
+        actionsSettingsV1 = storage.getState().settings.actionsSettingsV1) {
         const bindings = [
             { purpose: { consumer: { pluginId: 'custom.agent', localId: 'one' }, purpose: 'model' }, target },
             { purpose: { consumer: { pluginId: 'custom.agent', localId: 'two' }, purpose: 'model' }, target },
@@ -343,16 +347,17 @@ describe('ConnectedAccountSetupController real ownership', () => {
                 target: { kind: 'account' as const, account: { service, accountId: 'account-2' } } },
         ];
         const predecessorSettings = { ...storage.getState().settings,
+            actionsSettingsV1,
             connectedAccountPurposeBindingsV1: { v: 1, bindings },
         };
         storage.getState().applySettings(predecessorSettings, 2);
-        purposeBoundary = installPurposeBoundary(bindings);
+        purposeBoundary = installPurposeBoundary(bindings, actionsSettingsV1);
         return bindings;
     }
 
     async function transferPurposeDefaults() {
         const result = await readConnectedAccountCatalog({ serverId: account.home.id, accountId: 'account-a' }, 'purposes');
-        expect(result, JSON.stringify(result)).toMatchObject({ status: 'ready' });
+        expect(result, JSON.stringify({ result, requests: httpRequests.map(url => url.pathname) })).toMatchObject({ status: 'ready' });
         expect(purposeBoundary!.readSource()).not.toHaveProperty('connectedAccountPurposeBindingsV1');
     }
 
@@ -384,7 +389,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
         // Captured Account authentication uses the exact scoped socket, while diagnostic
         // controls may use the active socket. Both are genuine transport boundaries.
         installDisconnectedServerSocketBoundary(socket => {
-            socket.connected = true;
+            configureConnectedServerSocketBoundary(socket);
             vi.spyOn(socket, 'timeout').mockReturnValue(socket);
             vi.spyOn(socket, 'emitWithAck').mockImplementation(async (_event: string, payload: SocketRpcRequestPayload) => {
                 const separator = payload.method.indexOf(':');
@@ -400,6 +405,19 @@ describe('ConnectedAccountSetupController real ownership', () => {
             request: async (url, init) => {
                 const parsed = new URL(String(url));
                 httpRequests.push(parsed);
+                if (parsed.pathname === '/v1/machines/read-batch' && init?.method === 'POST') {
+                    const demand = MachineReadBatchRequestV1Schema.parse(typeof init.body === 'string' ? JSON.parse(init.body) : init.body);
+                    if (handleMachineRead && demand.machineIds.includes('machine-1')) {
+                        // This exact HTTP oracle owns the delayed read and whole-request refusals.
+                        const response = await handleMachineRead();
+                        if (!response.ok && response.status !== 404) return response;
+                        const body: unknown = response.status === 404 ? null : await response.json();
+                        const machine = body && typeof body === 'object' && 'machine' in body ? body.machine : null;
+                        return createMachineReadBatchResponseFixture(demand, id => id === 'machine-1'
+                            ? machine : machineRows.find(row => row.id === id) ?? null);
+                    }
+                    return createMachineReadBatchResponseFixture(demand, id => machineRows.find(row => row.id === id) ?? null);
+                }
                 if (parsed.pathname === '/v1/machines/machine-1') {
                     if (handleMachineRead) return handleMachineRead();
                     return machineRows[0] ? Response.json({ machine: machineRows[0] }) : new Response('{}', { status: 404 });
@@ -507,7 +525,8 @@ describe('ConnectedAccountSetupController real ownership', () => {
         const screen = await manualScreen();
         await act(async () => screen.changeTextByTestId('connected-account-manual:token', 'secret-token'));
         const submission = screen.pressByTestIdAsync('connected-account-manual:submit');
-        await vi.waitFor(() => expect(approvals).toHaveLength(1));
+        await vi.waitFor(() => expect(approvals, JSON.stringify({ rendered: screen.getTextContent(),
+            requests: httpRequests.map(url => url.pathname), alerts: vi.mocked(Modal.alert).mock.calls })).toHaveLength(1));
         expect(approvals[0]).toMatchObject({ actionId: 'connectedServices.authentication.submitManual', status: 'open' });
         expect(authenticationCommands).toEqual([{ operation: 'beginConnect', service, modeId: 'manual' }]);
         expect(platform.confirm).not.toHaveBeenCalled();
@@ -1565,11 +1584,12 @@ describe('ConnectedAccountSetupController real ownership', () => {
             ref: { service, accountId: 'account-1' }, status: 'connected', authenticationModeId: 'manual',
             revisionSemantics: 'revisioned', credentialRevision, configurationReady: true, configurationRevision: null, scopes: [],
         };
-        const bindings = await seedPurposeDefaults({ kind: 'account', account: targetAccount.ref });
-        installDescription({ ...described, accounts: [targetAccount] });
-        storage.getState().applySettings({ ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+        const actionsSettingsV1 = ActionsSettingsV1Schema.parse({
             v: 1, approvalWaivedSurfaces: { 'connectedServices.accounts.revoke': ['ui'] },
-        }) }, 3);
+        });
+        const bindings = await seedPurposeDefaults({ kind: 'account', account: targetAccount.ref }, actionsSettingsV1);
+        installDescription({ ...described, accounts: [targetAccount] });
+        storage.getState().applySettings({ ...storage.getState().settings, actionsSettingsV1 }, 3);
         const resource = createManagedResourceDependencyFixture();
         const renewedResource = createManagedResourceDependencyFixture(resource.intentRevision + 1);
         handleHttp = async (rawUrl, init) => {
@@ -1677,13 +1697,14 @@ describe('ConnectedAccountSetupController real ownership', () => {
             revisionSemantics: 'revisioned', credentialRevision, configurationReady: true, configurationRevision: null, scopes: [],
         };
         const otherAccount = { ...targetAccount, ref: { service, accountId: 'account-2' } };
-        const bindings = await seedPurposeDefaults({ kind: 'account', account: targetAccount.ref });
+        const actionsSettingsV1 = ActionsSettingsV1Schema.parse({
+            v: 1, approvalWaivedSurfaces: { 'connectedServices.accounts.revoke': ['ui'] },
+        });
+        const bindings = await seedPurposeDefaults({ kind: 'account', account: targetAccount.ref }, actionsSettingsV1);
         installDescription({ ...described, accounts: [targetAccount, otherAccount] });
         // This neighbor exercises a settled reply under an explicit shared
         // policy waiver. The default Ask's Artifact boundary is covered above.
-        storage.getState().applySettings({ ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
-            v: 1, approvalWaivedSurfaces: { 'connectedServices.accounts.revoke': ['ui'] },
-        }) }, 3);
+        storage.getState().applySettings({ ...storage.getState().settings, actionsSettingsV1 }, 3);
         expect(storage.getState().settings.actionsSettingsV1.approvalWaivedSurfaces?.['connectedServices.accounts.revoke']).toEqual(['ui']);
         handleHttp = async (rawUrl, init) => {
             const url = new URL(String(rawUrl));
