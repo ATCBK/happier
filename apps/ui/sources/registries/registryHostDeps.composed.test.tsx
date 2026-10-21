@@ -426,6 +426,23 @@ it('routes native non-GitHub Git through the captured Account Machine transport 
         expect(transport.calls.map(call => ({ machineId: call.machineId, serverId: call.serverId, accountId: call.accountId, method: call.method, payload: call.payload })))
             .toEqual([{ machineId: machine.id, serverId: account.serverId, accountId: account.accountId, method: 'daemon.registries.fetch',
                 payload: { op: 'list', kind: 'skill', sourceId: 'native-other-git' } }]);
+        const selectedMachine = createMachineFixture({ id: 'zz-explicit-registry-machine', createdAt: machine.createdAt - 1, activeAt: Date.now() });
+        storage.setState({ machines: { [machine.id]: machine, [selectedMachine.id]: selectedMachine },
+            machineListByServerId: { ...previousMachines, [account.serverId]: [machine, selectedMachine] } });
+        const targeted = await createUiRegistryHostV1(account, port, {
+            externalActionTarget: { kind: 'machine', machineId: selectedMachine.id },
+        });
+        const defaultRead = { kind: 'skill' as const, sourceIds: ['native-other-git'] };
+        await host.execute('registries.items.list', defaultRead);
+        const targetedOutput = REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.items.list'].parse(
+            await targeted.execute('registries.items.list', defaultRead));
+        expect(targetedOutput.pages[0]?.machineId).toBe(selectedMachine.id);
+        expect(transport.calls.at(-1)?.machineId).toBe(selectedMachine.id);
+        storage.setState({ machines: { [machine.id]: machine },
+            machineListByServerId: { ...previousMachines, [account.serverId]: [machine] } });
+        const missingTarget = REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.items.list'].parse(
+            await targeted.execute('registries.items.list', { ...defaultRead, refresh: true }));
+        expect(missingTarget.pages[0]?.status.state).toBe('needs_machine');
         storage.setState({ machines: {}, machineListByServerId: { ...previousMachines, [account.serverId]: [] } });
         const offline = REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.items.list'].parse(await host.execute('registries.items.list', {
             kind: 'skill', sourceIds: ['native-other-git', 'native-github'], refresh: true,

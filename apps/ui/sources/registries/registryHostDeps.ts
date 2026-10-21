@@ -25,8 +25,9 @@ function memoFor(account: Pick<LazyActionAccountContext, 'serverId' | 'accountId
     return memo;
 }
 
-function registryReadKey(actionId: RegistryActionIdV1, input: Record<string, unknown>) {
-    return JSON.stringify([actionId, Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'refresh'))]);
+function registryReadKey(actionId: RegistryActionIdV1, input: Record<string, unknown>, machineId?: string) {
+    const key = JSON.stringify([actionId, Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'refresh'))]);
+    return machineId === undefined ? key : `${key}:${JSON.stringify(machineId)}`;
 }
 
 /** Explicit item refresh is an owner-local memo operation, not an unapproved wire field. */
@@ -34,7 +35,12 @@ export function invalidateUiRegistryItemMemoV1(scope: Readonly<{ serverId: strin
     const memo = sessionMemos.get(JSON.stringify([scope.serverId, scope.accountId]));
     if (!memo) return;
     const key = registryReadKey('registries.items.read', REGISTRY_ACTION_INPUT_SCHEMAS_V1['registries.items.read'].parse(input));
-    memo.values.delete(key); memo.pending.delete(key); memo.refreshReads.add(key);
+    for (const cache of [memo.values, memo.pending]) {
+        for (const candidate of cache.keys()) {
+            if (candidate === key || candidate.startsWith(`${key}:`)) cache.delete(candidate);
+        }
+    }
+    memo.refreshReads.add(key);
 }
 
 /** Compose the protocol registry owner with the captured Account's existing row CAS and Machine transport. */
@@ -67,6 +73,10 @@ export async function createUiRegistryHostV1(account: LazyActionAccountContext, 
         ]);
         const machines = resolveVisibleMachinesForActiveServerFromState(storage.getState(), account);
         const candidates = source?.origin.kind === 'plugin' ? machines.filter(machine => source.origin.kind === 'plugin' && source.origin.suppliers.includes(machine.id)) : machines;
+        if (context.externalActionTarget?.kind === 'machine') {
+            const machineId = context.externalActionTarget.machineId;
+            return candidates.find(machine => machine.id === machineId);
+        }
         return candidates.find(machine => isMachineReachable(account, machine))
             ?? (options?.explicitRefresh ? candidates[0] : undefined);
     };
@@ -153,7 +163,8 @@ export async function createUiRegistryHostV1(account: LazyActionAccountContext, 
         if (cacheable && memo.sourceSignature !== sourceSignature) {
             memo.values.clear(); memo.pending.clear(); memo.sourceSignature = sourceSignature;
         }
-        const key = registryReadKey(actionId, args);
+        const key = registryReadKey(actionId, args,
+            context.externalActionTarget?.kind === 'machine' ? context.externalActionTarget.machineId : undefined);
         if (cacheable && args.refresh !== true && memo.values.has(key)) {
             account.assertCurrent(); context.signal?.throwIfAborted();
             return memo.values.get(key);
