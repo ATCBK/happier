@@ -737,49 +737,49 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
                         onFilePressPinned={(file) => (props.onOpenFilePinned ?? props.onOpenFile)(file.fullPath)}
                         {...props.scrollProps}
                     />
-                ) : (
-                    <WorkspaceRepositoryTreeList
-                        fileHref={props.fileHref}
-                        theme={theme}
-                        scope={workspaceScope}
-                        directoryListing={machineRpcTargetAvailable}
-                        directoryUnavailable={!machineRpcTargetAvailable}
-                        reconciliationPaused={props.reconciliationPaused === true || createPromptPending || pendingCreateSignal !== null || rowActions.isRenaming}
-                        onRequestRefresh={refresh}
-                        reloadToken={treeReloadNonce}
-                        detailsMode={detailsMode}
-                        visibilityMode={visibilityMode}
-                        revealedPaths={revealedPaths}
-                        revealRequest={latestRequest}
-                        onGitIgnoreAvailableChange={setGitIgnoreAvailable}
-                        expandedPaths={expandedPaths}
-                        onExpandedPathsChange={setExpandedPaths}
-                        onOpenFile={handleTreeOpenFile}
-                        onOpenFilePinned={handleTreeOpenFilePinned}
-                        scmSnapshot={effectiveScmSnapshot}
-                        webFileDropEnabled={transferActionsAvailable && Platform.OS === 'web'}
-                        webDropHoverPath={props.webDropHoverPath ?? webDropState.dropHoverPath}
-                        renderRowActions={props.renderRowActions ?? defaultRenderRowActions}
-                        showInlineLoadingHeader={false}
-                        onRootLoadingChange={setTreeRootLoading}
-                        changedOnly={showChangedOnly}
-                        onShowAllFiles={showAllFiles}
-                        selectedPath={props.selectedPath ?? null}
-                        machineName={machineName}
-                        rootDirectoryPath={folderPage?.path}
-                        folderPage={folderPageNavigation}
-                        renderRowMetadata={folderPage?.renderRowMetadata}
-                        renderRowSubtitle={folderPage?.renderRowSubtitle}
-                        onNodesChange={folderPage?.onNodesChange}
-                        onVisibleNodesChange={folderPage?.onVisibleNodesChange}
-                        listHeader={folderPage?.listHeader}
-                        listFooter={folderPage?.listFooter}
-                        listEmpty={folderPage?.listEmpty}
-                        maxRows={folderPage?.maxRows}
-                        emptyLabel={folderPage ? t('projects.code.emptyFolder') : undefined}
-                        {...props.scrollProps}
-                    />
-                )}
+                ) : null}
+                <WorkspaceRepositoryTreeList
+                    visible={!shouldShowSearchResults}
+                    fileHref={props.fileHref}
+                    theme={theme}
+                    scope={workspaceScope}
+                    directoryListing={machineRpcTargetAvailable}
+                    directoryUnavailable={!machineRpcTargetAvailable}
+                    reconciliationPaused={props.reconciliationPaused === true || createPromptPending || pendingCreateSignal !== null || rowActions.isRenaming}
+                    onRequestRefresh={refresh}
+                    reloadToken={treeReloadNonce}
+                    detailsMode={detailsMode}
+                    visibilityMode={visibilityMode}
+                    revealedPaths={revealedPaths}
+                    revealRequest={latestRequest}
+                    onGitIgnoreAvailableChange={setGitIgnoreAvailable}
+                    expandedPaths={expandedPaths}
+                    onExpandedPathsChange={setExpandedPaths}
+                    onOpenFile={handleTreeOpenFile}
+                    onOpenFilePinned={handleTreeOpenFilePinned}
+                    scmSnapshot={effectiveScmSnapshot}
+                    webFileDropEnabled={transferActionsAvailable && Platform.OS === 'web'}
+                    webDropHoverPath={props.webDropHoverPath ?? webDropState.dropHoverPath}
+                    renderRowActions={props.renderRowActions ?? defaultRenderRowActions}
+                    showInlineLoadingHeader={false}
+                    onRootLoadingChange={setTreeRootLoading}
+                    changedOnly={showChangedOnly}
+                    onShowAllFiles={showAllFiles}
+                    selectedPath={props.selectedPath ?? null}
+                    machineName={machineName}
+                    rootDirectoryPath={folderPage?.path}
+                    folderPage={folderPageNavigation}
+                    renderRowMetadata={folderPage?.renderRowMetadata}
+                    renderRowSubtitle={folderPage?.renderRowSubtitle}
+                    onNodesChange={folderPage?.onNodesChange}
+                    onVisibleNodesChange={folderPage?.onVisibleNodesChange}
+                    listHeader={folderPage?.listHeader}
+                    listFooter={folderPage?.listFooter}
+                    listEmpty={folderPage?.listEmpty}
+                    maxRows={folderPage?.maxRows}
+                    emptyLabel={folderPage ? t('projects.code.emptyFolder') : undefined}
+                    {...props.scrollProps}
+                />
                 <RepositoryTreeDropOverlay
                     visible={webDropState.fileDragActive}
                     destinationLabel={webDropState.dropDestinationDir || folderPage?.path || rootLabel}

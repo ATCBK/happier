@@ -81,6 +81,8 @@ type AppTheme = ReturnType<typeof useUnistyles>['theme'];
 
 type WorkspaceRepositoryTreeListProps = Readonly<{
     theme: AppTheme;
+    /** Inline search replaces the rows while the canonical directory controller keeps reconciling. */
+    visible?: boolean;
     /** The workspace, as one identity: what the tree is keyed by AND read through. */
     scope: WorkspaceScopeBase;
     reloadToken?: number;
@@ -228,7 +230,7 @@ function renderEntryIcon(node: WorkspaceRepositoryTreeNode, theme: AppTheme) {
     return <FileIcon fileName={node.name} size={16} appearance="line" />;
 }
 
-export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceRepositoryTreeList(props: WorkspaceRepositoryTreeListProps): React.ReactElement {
+export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceRepositoryTreeList(props: WorkspaceRepositoryTreeListProps): React.ReactElement | null {
     const { theme, expandedPaths, onExpandedPathsChange, onOpenFile } = props;
     const accountScope = useActiveServerAccountScope();
     const detailsMode = props.detailsMode === true;
@@ -684,6 +686,8 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
             </TreeRowArrival>
         );
     }, []);
+
+    if (props.visible === false) return null;
 
     if (changedOnly && props.scmSnapshot != null && changedNodes.length === 0) {
         return (
