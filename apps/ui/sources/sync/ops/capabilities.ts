@@ -116,13 +116,20 @@ export async function machineCapabilitiesDetect(
 
 export type MachineCapabilitiesInvokeResult =
     | { supported: true; response: CapabilitiesInvokeResponse }
-    | { supported: false; reason: 'not-supported' | 'error'; requestDisposition?: RpcRequestDisposition };
+    | { supported: false; reason: 'not-supported' | 'error' | 'outcomeUnknown'; requestDisposition?: RpcRequestDisposition };
 
 export async function machineCapabilitiesInvoke(
     machineId: string,
     request: CapabilitiesInvokeRequest,
     options?: { timeoutMs?: number | null; operationTimeoutMs?: null; serverId?: string | null; accountId?: string | null; signal?: AbortSignal },
 ): Promise<MachineCapabilitiesInvokeResult> {
+    // CLI preflight owns native preparation, inspection and cleanup. The
+    // transport timeout still bounds setup, but must not abandon its reply.
+    const preflightOwnsOperation = request.id.startsWith('cli.') && (
+        request.method === 'probeModels' || request.method === 'probeModes'
+        || request.method === 'probeConfigOptions' || request.method === 'probeCatalogs'
+        || request.method === 'probePassiveRealtimeSetup'
+    );
     try {
         const result = await machineRpcWithServerScope<unknown, CapabilitiesInvokeRequest>({
             machineId,
@@ -134,7 +141,7 @@ export async function machineCapabilitiesInvoke(
             ...(typeof options?.timeoutMs === 'number'
                 ? { timeoutMs: options.timeoutMs }
                 : { operationTimeoutMs: null }),
-            ...(options?.operationTimeoutMs === null ? { operationTimeoutMs: null } : {}),
+            ...(preflightOwnsOperation || options?.operationTimeoutMs === null ? { operationTimeoutMs: null } : {}),
         });
 
         if (isRpcMethodNotFoundResult(result)) return { supported: false, reason: 'not-supported' };
@@ -146,7 +153,8 @@ export async function machineCapabilitiesInvoke(
     } catch (error) {
         if (options?.signal?.aborted) throw error;
         const requestDisposition = readRpcRequestDisposition(error);
-        return { supported: false, reason: 'error', ...(requestDisposition ? { requestDisposition } : {}) };
+        return { supported: false, reason: preflightOwnsOperation && requestDisposition === 'outcomeUnknown' ? 'outcomeUnknown' : 'error',
+            ...(requestDisposition ? { requestDisposition } : {}) };
     }
 }
 

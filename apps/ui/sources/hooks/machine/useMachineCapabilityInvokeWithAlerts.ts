@@ -5,10 +5,11 @@ import {
     machineCapabilitiesInvoke,
     type CapabilitiesInvokeRequest,
     type CapabilitiesInvokeResponse,
+    type MachineCapabilitiesInvokeResult,
 } from '@/sync/ops/capabilities';
 import { t } from '@/text';
 
-type UnsupportedReason = 'not-supported' | 'error';
+type UnsupportedReason = Extract<MachineCapabilitiesInvokeResult, { supported: false }>['reason'];
 
 function resolveLogPathFromInvokeResponse(response: CapabilitiesInvokeResponse): string | null {
     if (!response.ok) return typeof (response as any).logPath === 'string' ? (response as any).logPath : null;

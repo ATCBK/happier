@@ -20,8 +20,15 @@ describe('capabilities ops server-scoped routing', () => {
     it.each(['notSent', 'outcomeUnknown'] as const)('retains the transport admission disposition (%s) for invoke callers', async (requestDisposition) => {
         machineRpcWithServerScopeMock.mockRejectedValueOnce(markRpcRequestDisposition(new Error('Transport unavailable'), requestDisposition));
         const { machineCapabilitiesInvoke } = await import('./capabilities');
+        await expect(machineCapabilitiesInvoke('machine', { id: 'cli.external-agent/modes', method: 'probeModes', params: {} }))
+            .resolves.toEqual({ supported: false, reason: requestDisposition === 'outcomeUnknown' ? 'outcomeUnknown' : 'error', requestDisposition });
+    });
+
+    it('preserves the generic capability failure contract outside Agent preflight', async () => {
+        machineRpcWithServerScopeMock.mockRejectedValueOnce(markRpcRequestDisposition(new Error('Transport unavailable'), 'outcomeUnknown'));
+        const { machineCapabilitiesInvoke } = await import('./capabilities');
         await expect(machineCapabilitiesInvoke('machine', { id: 'tool.systemTasks', method: 'start', params: {} }))
-            .resolves.toEqual({ supported: false, reason: 'error', requestDisposition });
+            .resolves.toEqual({ supported: false, reason: 'error', requestDisposition: 'outcomeUnknown' });
     });
 
     it('preserves the existing invoke error shape when admission is unclassified', async () => {

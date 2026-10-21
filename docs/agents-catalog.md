@@ -511,6 +511,10 @@ back before the Agent contribution runs. Model, mode, config-option, and passive
 consume that same environment and include the selected profile identity in their cache scope.
 In development source, every discovery method validates supplied Connected Account bindings;
 malformed input returns `connected-service-preflight-failed` before credential resolution.
+The app's shared capability invocation keeps CLI preflight replies under the daemon's native
+operation lifetime, including preparation and cleanup; the transport budget bounds setup only.
+This applies equally to installed Agent plugins. A lost reply retains `outcomeUnknown` rather
+than claiming that the native inventory failed or is empty.
 
 In development source, native execution-run structured-output admission uses that same preflight owner
 with the Run's Connected Account selection and Saved Secret overlay. A retained

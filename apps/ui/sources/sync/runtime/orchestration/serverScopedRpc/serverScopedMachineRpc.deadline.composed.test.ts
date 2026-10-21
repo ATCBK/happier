@@ -117,6 +117,75 @@ async function closeHttp(http: HttpServer) {
     await new Promise<void>((resolve, reject) => http.close(error => error ? reject(error) : resolve()));
 }
 
+it.each(['cli.external-agent/mode-reader', 'cli.external-agent/lost-mode-reader', 'tool.external-mode-reader'] as const)(
+    'keeps the native mode probe reply under its owner lifetime only for Agent preflight (%s)', async capabilityId => {
+        const { machineCapabilitiesInvoke } = await import('@/sync/ops/capabilities');
+        const { AgentSessionModesProbeObservationSchema } = await import('@happier-dev/protocol/capabilities');
+        const issued = createDeferred<void>();
+        const release = createDeferred<void>();
+        const observation = AgentSessionModesProbeObservationSchema.parse({
+            availableModes: [{ id: 'project-review', name: 'Project review' }], source: 'dynamic',
+        });
+        const http = createServer((request, response) => {
+            response.setHeader('content-type', 'application/json');
+            if (request.url === '/health' || request.url === '/v1/auth/ping') response.end('{}');
+            else if (request.url === '/v1/machines/mode-machine') response.end(JSON.stringify({ machine: {
+                id: 'mode-machine', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+            } }));
+            else if (request.url === '/v1/account/encryption') response.end(JSON.stringify({ mode: 'plain', updatedAt: 1 }));
+            else { response.statusCode = 404; response.end('{}'); }
+        });
+        const relay = new Server(http, { path: '/v1/updates/' });
+        relay.on('connection', socket => socket.on(SOCKET_RPC_EVENTS.CALL,
+            async (packet: SocketRpcRequestPayload, ack: (value: unknown) => void) => {
+                const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, packet.params, packet.method);
+                expect(packet.method).toBe(`mode-machine:${RPC_METHODS.CAPABILITIES_INVOKE}`);
+                expect(decoded.params).toMatchObject({ id: capabilityId, method: 'probeModes' });
+                issued.resolve();
+                if (capabilityId === 'cli.external-agent/lost-mode-reader') {
+                    socket.disconnect(true);
+                    return;
+                }
+                await release.promise;
+                ack({ ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'plain' },
+                    { ok: true, result: observation }, decoded.callId) });
+            }));
+        try {
+            const port = await listen(http);
+            credentials.token = `header.${Buffer.from(JSON.stringify({ sub: 'mode-account' })).toString('base64url')}.signature`;
+            const home = await upsertServerProfile({ serverUrl: `http://127.0.0.1:${port}`, name: 'Native mode preflight' });
+            const pending = machineCapabilitiesInvoke('mode-machine', { id: capabilityId, method: 'probeModes',
+                params: { cwd: '/project' } }, { serverId: home.id, accountId: 'mode-account', timeoutMs: 4_000 });
+            await Promise.race([issued.promise, pending.then(() => {
+                throw new Error('Mode probe settled before the producer received it');
+            })]);
+            // Real HTTP/Socket.IO and a held native reply: the setup deadline has
+            // elapsed, but the producer has not finished its preparation/read/cleanup.
+            if (capabilityId !== 'cli.external-agent/lost-mode-reader') {
+                await new Promise(resolve => setTimeout(resolve, 4_100));
+            }
+            release.resolve();
+            const result = await pending;
+            if (capabilityId === 'cli.external-agent/lost-mode-reader') {
+                expect(result).toEqual({ supported: false, reason: 'outcomeUnknown', requestDisposition: 'outcomeUnknown' });
+            } else if (capabilityId.startsWith('cli.')) {
+                expect(result).toEqual({ supported: true, response: { ok: true, result: observation } });
+                if (!result.supported || !result.response.ok) throw new Error('Expected native inventory');
+                expect(AgentSessionModesProbeObservationSchema.parse(result.response.result).availableModes)
+                    .toEqual(observation.availableModes);
+            } else {
+                // Mis-wiring the same method as a tool must retain the explicit
+                // operation deadline and report uncertainty, never an empty inventory.
+                expect(result).toEqual({ supported: false, reason: 'error', requestDisposition: 'outcomeUnknown' });
+            }
+        } finally {
+            release.resolve();
+            await serverScopedRpcSocketPool.stopAll();
+            await new Promise<void>(resolve => relay.close(() => resolve()));
+        }
+    }, 60_000,
+);
+
 it('connects the scoped socket while the fresh Machine row is still being read', async () => {
     const connected = createDeferred<void>();
     const http = createServer(async (request, response) => {

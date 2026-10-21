@@ -147,10 +147,7 @@ async function probeAgentInventory(
                 ...(target.backendTargetParam ? { backendTarget: target.backendTargetParam } : {}),
             },
         },
-        { ...(serverId ? { serverId } : {}), ...(transportTimeoutMs ? { timeoutMs: transportTimeoutMs } : {}),
-            // Model preflight owns its native timeout, credential preparation and cleanup.
-            // The transport budget bounds setup; its ACK must not preempt that owner's reply.
-            ...(method === 'probeModels' ? { operationTimeoutMs: null } : {}) },
+        { ...(serverId ? { serverId } : {}), ...(transportTimeoutMs ? { timeoutMs: transportTimeoutMs } : {}) },
     );
     if (!res.supported || !res.response.ok) return { ok: false };
     const result = res.response.result;
