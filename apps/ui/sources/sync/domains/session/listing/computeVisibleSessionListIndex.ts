@@ -1409,7 +1409,11 @@ function projectWorkflowRunRows(
     visible: SessionListIndexItem[],
     params: ComputeVisibleSessionListIndexParams,
 ): SessionListIndexItem[] {
-    if (!params.workFilter && !params.workflowRuns) return nestSessionListReports(visible, params.resolveSessionRow);
+    if (!params.workFilter && !params.workflowRuns) {
+        const nested = nestSessionListReports(visible, params.resolveSessionRow);
+        // A report pulled under its lead can empty its own group's header.
+        return nested === visible ? visible : pruneOrphanHeaders(nested);
+    }
     const filter = params.workFilter ?? normalizeSessionListFilterV1({
         homeServerIds: [...new Set(params.workflowRuns?.map((run) => run.serverId) ?? [])],
     });
