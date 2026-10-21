@@ -11,7 +11,10 @@ import { inTx, type Tx } from '@/storage/inTx';
 export const USAGE_MODEL_PRICE_CACHE_KEY = 'usage:model-price-catalog:v1';
 
 async function readStoredCatalog(reader?: Pick<Tx, 'simpleCache'>): Promise<UsageModelPriceCatalog> {
-    const stored = await readFromSimpleCache(USAGE_MODEL_PRICE_CACHE_KEY, reader);
+    return resolveStoredCatalog(await readFromSimpleCache(USAGE_MODEL_PRICE_CACHE_KEY, reader));
+}
+
+function resolveStoredCatalog(stored: string | null): UsageModelPriceCatalog {
     if (stored !== null) {
         try {
             const parsed = UsageModelPriceCatalogSchema.safeParse(JSON.parse(stored));
@@ -33,11 +36,22 @@ async function isFetchEnabled(tx?: Tx): Promise<boolean> {
 
 /** Query and price reads never fetch. Disabling selects bundled prices without discarding the cache. */
 export async function readUsageModelPriceCatalog(): Promise<UsageModelPriceCatalog> {
-    return await inTx(readUsageModelPriceCatalogInTx, { readOnly: true });
+    return resolveCapturedUsageModelPriceCatalog(await inTx(captureUsageModelPriceCatalogInTx, { readOnly: true }));
 }
 
-export async function readUsageModelPriceCatalogInTx(tx: Tx): Promise<UsageModelPriceCatalog> {
-    return await isFetchEnabled(tx) ? readStoredCatalog(tx) : disabledCatalog();
+export interface CapturedUsageModelPriceCatalog {
+    fetchEnabled: boolean;
+    stored: string | null;
+}
+
+/** Capture cache bytes with the accounting rows; decode after releasing the connection. */
+export async function captureUsageModelPriceCatalogInTx(tx: Tx): Promise<CapturedUsageModelPriceCatalog> {
+    const fetchEnabled = await isFetchEnabled(tx);
+    return { fetchEnabled, stored: fetchEnabled ? await readFromSimpleCache(USAGE_MODEL_PRICE_CACHE_KEY, tx) : null };
+}
+
+export function resolveCapturedUsageModelPriceCatalog(captured: CapturedUsageModelPriceCatalog): UsageModelPriceCatalog {
+    return captured.fetchEnabled ? resolveStoredCatalog(captured.stored) : disabledCatalog();
 }
 
 /** Only this explicit action accesses the static public source; no Account data enters the request. */

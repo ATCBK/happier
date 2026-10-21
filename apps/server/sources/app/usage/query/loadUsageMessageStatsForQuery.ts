@@ -25,19 +25,19 @@ export async function loadUsageMessageStatsForQuery(
     request: UsageAnalyticsQueryRequest,
     sessionIds: string[],
 ): Promise<UsageMessageCounts> {
-    return await inTx(tx => loadUsageMessageStatsForQueryInTx(tx, accountId, request, sessionIds), { readOnly: true });
+    const counts = await inTx(tx => loadUsageMessageCountsBySessionInTx(tx, accountId, request, sessionIds), { readOnly: true });
+    return { messageCount: [...counts.values()].reduce((total, count) => total + count, 0) };
 }
 
-export async function loadUsageMessageStatsForQueryInTx(
+/** Candidate Sessions can be filtered after accounting reconciliation without another DB read. */
+export async function loadUsageMessageCountsBySessionInTx(
     tx: Tx,
     accountId: string,
     request: UsageAnalyticsQueryRequest,
     sessionIds: string[],
-): Promise<UsageMessageCounts> {
+): Promise<ReadonlyMap<string, number>> {
     if (sessionIds.length === 0) {
-        return {
-            messageCount: 0,
-        };
+        return new Map();
     }
 
     const publicationRows = await tx.session.findMany({
@@ -50,7 +50,9 @@ export async function loadUsageMessageStatsForQueryInTx(
             ...SESSION_TRANSCRIPT_PUBLICATION_SELECT,
         },
     });
-    const messageCount = await tx.sessionMessage.count({
+    const counts = await tx.sessionMessage.groupBy({
+        by: ['sessionId'],
+        _count: { _all: true },
         where: {
             ...buildSessionMessagesPublicationWhere(publicationRows),
             createdAt: toObservedAtFilter(request),
@@ -60,7 +62,5 @@ export async function loadUsageMessageStatsForQueryInTx(
         },
     });
 
-    return {
-        messageCount,
-    };
+    return new Map(counts.map(row => [row.sessionId, row._count._all]));
 }

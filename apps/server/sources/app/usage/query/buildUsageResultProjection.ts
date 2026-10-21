@@ -1,5 +1,6 @@
 import type { UsageAccountingCoverageReason, UsageAnalyticsBreakdownDimension, UsageAnalyticsCostFact, UsageAnalyticsCoverage, UsageAnalyticsQueryRequest, UsageAnalyticsQueryResponse, UsageObservationTokens } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
-import { readUsageAccountingMetadata, readUsageRequestAttribution } from "@happier-dev/protocol/usage/usageAnalyticsContracts";
+import { readUsageRequestAttribution } from "@happier-dev/protocol/usage/usageAnalyticsContracts";
+import { readScopedUsageAccountingEvidence } from './scopedUsageEventRow';
 import { resolveUsageContributionDimensionKey, resolveUsageCostBasis, resolveUsageCostFacts, resolveUsageCostMode } from "@happier-dev/protocol/usage/usageCost";
 import { resolveUsageTokenCategories } from "@happier-dev/protocol/usage/usageTokenCategories";
 import { ProviderConnectionIdSchema, ProviderContributionKeySchema } from "@happier-dev/protocol/providers/ids";
@@ -18,7 +19,7 @@ export interface UsageResultProjectionInput {
 }
 
 function costFactsForRow(row: ScopedUsageContribution): UsageAnalyticsCostFact[] {
-    const accounting = readUsageAccountingMetadata(row.metadata);
+    const { accounting } = readScopedUsageAccountingEvidence(row);
     const complete = accounting?.status === "available" && accounting.historyComplete === true && !row.coverageReasons?.length;
     const base = {
         currency: row.cost.currency,
@@ -43,7 +44,7 @@ export function buildUsageResultProjection(input: UsageResultProjectionInput): {
     costPresentation?: UsageAnalyticsQueryResponse["costPresentation"];
 } {
     const reasons = new Set(input.coverageReasons);
-    const perContributionCategories = input.contributions.map((row) => resolveUsageTokenCategories(row.tokens, readUsageAccountingMetadata(row.metadata)));
+    const perContributionCategories = input.contributions.map((row) => resolveUsageTokenCategories(row.tokens, readScopedUsageAccountingEvidence(row).accounting));
     if (perContributionCategories.some((categories) => categories === null)) reasons.add("unknown_token_categories");
     const tokenCategories = input.contributions.length > 0 && perContributionCategories.every((categories) => categories !== null)
         ? perContributionCategories.reduce<UsageObservationTokens>((sum, categories) => categories ? addUsageTokens(sum, categories) : sum, createEmptyUsageTokens())
@@ -56,7 +57,7 @@ export function buildUsageResultProjection(input: UsageResultProjectionInput): {
 
     const sources = new Map<string, UsageAnalyticsCoverage["sources"][number]>();
     for (const row of input.evidenceRows) {
-        const accounting = readUsageAccountingMetadata(row.metadata);
+        const { accounting } = readScopedUsageAccountingEvidence(row);
         const source = row.source ?? "unknown";
         const path = accounting?.path ?? "unknown";
         const status = accounting?.status ?? "unknown";
@@ -116,13 +117,14 @@ export function buildUsageResultProjection(input: UsageResultProjectionInput): {
             range: { ...input.request.dateRange, complete: historyComplete }, ranked,
         },
         contributions: input.contributions.map((row, index) => {
+            const { accounting } = readScopedUsageAccountingEvidence(row);
             // A counter remainder has no witnessed model-source attribution.
-            const metadata = row.modelId && readUsageAccountingMetadata(row.metadata)?.path === "runtime"
+            const metadata = row.modelId && accounting?.path === "runtime"
                 && row.scope === "turn_delta" && !row.isCumulative
                 && row.metadata && typeof row.metadata === "object" ? row.metadata : null;
             const provider = ProviderContributionKeySchema.safeParse(metadata && Reflect.get(metadata, "providerId"));
             const connection = ProviderConnectionIdSchema.safeParse(metadata && Reflect.get(metadata, "providerConnectionId"));
-            const captured = row.scope === "turn_delta" && !row.isCumulative && readUsageAccountingMetadata(row.metadata)?.path === "runtime"
+            const captured = row.scope === "turn_delta" && !row.isCumulative && accounting?.path === "runtime"
                 ? readUsageRequestAttribution(row.metadata) : null;
             const source = captured?.turnId === row.turnId ? captured.source : null;
             return {

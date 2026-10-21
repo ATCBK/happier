@@ -3,7 +3,7 @@ import { UsageModelPriceCatalogSchema } from '@happier-dev/protocol/usage/usageM
 import { z } from "zod/mini";
 import { inTx, type Tx } from "@/storage/inTx";
 import { log } from "@/utils/logging/log";
-import { queryUsageAnalyticsInTx } from "@/app/usage/usageQueryService";
+import { captureUsageAnalyticsInTx, projectUsageAnalytics } from "@/app/usage/usageQueryService";
 import { recordLegacyUsageReport, recordUsageEvent, deleteNativeUsageHistory } from "@/app/usage/usageWriteService";
 import { LegacyUsageReportRouteBodySchema } from "@/app/usage/legacyUsageReportSchema";
 import { type Fastify } from "../../types";
@@ -59,31 +59,34 @@ export function registerAccountUsageRoutes(app: Fastify): void {
         const actualGroupBy = groupBy || 'day';
 
         try {
-            return await inTx(async tx => {
+            const query = UsageAnalyticsQueryRequestSchema.parse({
+                granularity: actualGroupBy, includeSeries: true,
+                filters: sessionId ? { sessionIds: [sessionId] } : undefined,
+                dateRange: startTime || endTime ? {
+                    ...(startTime ? { startMs: startTime * 1000 } : {}),
+                    // v1's retained millisecond instant is inclusive; v2 ranges are half-open.
+                    ...(endTime ? { endMs: endTime * 1000 + 1 } : {}),
+                } : undefined,
+            });
+            const snapshot = await inTx(async tx => {
                 if (sessionId) {
                     if (!await ensureReadableSessionIds(tx, userId, [sessionId], readSessionAccessAuthenticationFromRequest(request))) {
-                        return reply.code(404).send({ error: 'Session not found' });
+                        return null;
                     }
                 }
-                const result = await queryUsageAnalyticsInTx(tx, userId, UsageAnalyticsQueryRequestSchema.parse({
-                    granularity: actualGroupBy, includeSeries: true,
-                    filters: sessionId ? { sessionIds: [sessionId] } : undefined,
-                    dateRange: startTime || endTime ? {
-                        ...(startTime ? { startMs: startTime * 1000 } : {}),
-                        // v1's retained millisecond instant is inclusive; v2 ranges are half-open.
-                        ...(endTime ? { endMs: endTime * 1000 + 1 } : {}),
-                    } : undefined,
-                }));
-                return reply.send({
-                    usage: (result.series ?? []).map((bucket) => ({
-                        timestamp: Math.floor(bucket.bucketStartMs / 1000), tokens: bucket.tokens,
-                        cost: bucket.cost.effectiveUsd === undefined ? {} : { total: bucket.cost.effectiveUsd },
-                        reportCount: bucket.eventCount,
-                    })),
-                    groupBy: actualGroupBy,
-                    totalReports: result.totals.eventCount,
-                });
+                return captureUsageAnalyticsInTx(tx, userId, query);
             }, { readOnly: true });
+            if (!snapshot) return reply.code(404).send({ error: 'Session not found' });
+            const result = projectUsageAnalytics(snapshot, query);
+            return reply.send({
+                usage: (result.series ?? []).map((bucket) => ({
+                    timestamp: Math.floor(bucket.bucketStartMs / 1000), tokens: bucket.tokens,
+                    cost: bucket.cost.effectiveUsd === undefined ? {} : { total: bucket.cost.effectiveUsd },
+                    reportCount: bucket.eventCount,
+                })),
+                groupBy: actualGroupBy,
+                totalReports: result.totals.eventCount,
+            });
         } catch (error) {
             log({ module: 'api', level: 'error' }, `Failed to query usage reports: ${error}`);
             return reply.code(500).send({ error: 'Failed to query usage reports' });
@@ -102,18 +105,19 @@ export function registerAccountUsageRoutes(app: Fastify): void {
         preHandler: app.authenticate,
     }, async (request, reply) => {
         try {
-            return await inTx(async tx => {
+            const snapshot = await inTx(async tx => {
                 if (request.body.filters?.sessionIds?.length) {
                     const isReadable = await ensureReadableSessionIds(tx, request.userId, request.body.filters.sessionIds,
                         readSessionAccessAuthenticationFromRequest(request));
                     if (!isReadable) {
-                        return reply.code(404).send({ error: 'Session not found' });
+                        return null;
                     }
                 }
 
-                const response = await queryUsageAnalyticsInTx(tx, request.userId, request.body);
-                return reply.send(response);
+                return captureUsageAnalyticsInTx(tx, request.userId, request.body);
             }, { readOnly: true });
+            if (!snapshot) return reply.code(404).send({ error: 'Session not found' });
+            return reply.send(projectUsageAnalytics(snapshot, request.body));
         } catch (error) {
             log({ module: 'api', level: 'error' }, `Failed to query usage analytics: ${error}`);
             return reply.code(500).send({ error: 'Failed to query usage analytics' });

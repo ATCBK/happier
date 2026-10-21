@@ -115,6 +115,14 @@ describe("usageQueryService scoped aggregation", () => {
         });
         const result = await queryUsageAnalytics(owner.accountId, request);
         expect(result.messageStats).toEqual({ sessionCount: 2, messageCount: 4 });
+        // Candidate counts are captured before reconciliation/filtering. A
+        // filtered-out Session must not contribute messages to the projection.
+        await db.usageEvent.updateMany({ where: { sessionId: partial.id }, data: { source: 'native' } });
+        const filtered = await queryUsageAnalytics(owner.accountId, UsageAnalyticsQueryRequestSchema.parse({
+            ...request, filters: { ...request.filters, sources: ['codex_app_server'] },
+        }));
+        expect(filtered.messageStats).toEqual({ sessionCount: 1, messageCount: 1 });
+        expect(filtered.totals.tokens.total).toBe(1);
         await db.session.update({ where: { id: partial.id }, data: { acceptedThroughServerSeq: 1 } });
         expect((await queryUsageAnalytics(owner.accountId, request)).messageStats).toEqual({ sessionCount: 2, messageCount: 2 });
     });

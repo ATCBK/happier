@@ -7,6 +7,7 @@ import { NonBlankOpaqueIdentifierSchema } from '../strings/opaqueIdentifier.js';
 import { ProviderConnectionIdSchema, ProviderContributionKeySchema } from '../providers/ids.js';
 import { UsageModelPriceCatalogSchema } from './usageModelPriceSchemas.js';
 import { QualifiedConnectedAccountRefSchema } from '../connect/qualifiedConnectedAccountPersistence.js';
+import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 const NonNegativeNumberSchema = lazyZodSchema(() => z.number().check(z.minimum(0)));
 const OptionalNonEmptyStringSchema = lazyZodSchema(() => z.nullable(z.optional(z.string().check(z.trim(), z.minLength(1)))));
@@ -352,11 +353,13 @@ export const UsageAccountingMetadataSchema = lazyZodSchema(() => z.strictObject(
 }));
 export type UsageAccountingMetadata = z.infer<typeof UsageAccountingMetadataSchema>;
 
+const StoredUsageAccountingMetadataSchema = createStoredReadSchema(UsageAccountingMetadataSchema);
+
 /** Stored diagnostic read projection: drop extras, never infer admission authority. */
 export function readUsageAccountingMetadata(metadata: unknown): UsageAccountingMetadata | null {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
   const value = Reflect.get(metadata, 'usageAccounting');
-  const result = lazyZodSchema(() => (<T extends zMini.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strip>)(UsageAccountingMetadataSchema)).safeParse(value);
+  const result = StoredUsageAccountingMetadataSchema.safeParse(value);
   return result.success ? result.data : null;
 }
 

@@ -20,6 +20,7 @@ type UsageEventRow = Pick<
     | "machineId"
     | "source"
     | "metadata"
+    | "accountingEvidence"
     | "tokens"
     | "cost"
     | "contributingEventIds"

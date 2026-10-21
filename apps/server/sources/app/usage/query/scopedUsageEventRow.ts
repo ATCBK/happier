@@ -1,9 +1,31 @@
-import type { UsageObservationCost } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
+import type { UsageAccountingMetadata, UsageNativeAccountingSubject, UsageObservationCost } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { readUsageAccountingMetadata, UsageNativeAccountingSubjectSchema, UsageObservationCostSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { resolveUsageCostBasis } from '@happier-dev/protocol/usage/usageCostFacts';
 
 import type { ScopedUsageEventRow } from "./resolveScopedUsageContributions";
+
+export interface ScopedUsageAccountingEvidence {
+    accounting: UsageAccountingMetadata | null;
+    subject: UsageNativeAccountingSubject | null;
+}
+
+const nativeSubjectReadSchema = createStoredReadSchema(UsageNativeAccountingSubjectSchema);
+
+/** Keep parsed evidence on the row, including the neutral parser's normalized JSON snapshots. */
+export function readScopedUsageAccountingEvidence(
+    row: Pick<ScopedUsageEventRow, "metadata" | "accountingEvidence">,
+): ScopedUsageAccountingEvidence {
+    if (row.accountingEvidence) return row.accountingEvidence;
+    const metadata = row.metadata;
+    const subject = metadata && typeof metadata === "object" && !Array.isArray(metadata)
+        ? nativeSubjectReadSchema.safeParse(Reflect.get(metadata, "accountingSubject"))
+        : undefined;
+    return {
+        accounting: readUsageAccountingMetadata(metadata),
+        subject: subject?.success ? subject.data : null,
+    };
+}
 
 /**
  * The UsageEvent database fields the scoped contribution owner reads. Every
@@ -94,11 +116,8 @@ export function toScopedUsageEventRow(row: ScopedUsageEventDbRow): ScopedUsageEv
     if (typeof metadata === "string") {
         try { metadata = JSON.parse(metadata); } catch { metadata = null; }
     }
-    const accounting = readUsageAccountingMetadata(metadata);
-    const subject = metadata && typeof metadata === "object" && !Array.isArray(metadata)
-        ? createStoredReadSchema(UsageNativeAccountingSubjectSchema).safeParse(Reflect.get(metadata, "accountingSubject"))
-        : undefined;
-    const accountingSubject = subject?.success ? subject.data : undefined;
+    const accountingEvidence = readScopedUsageAccountingEvidence({ metadata });
+    const { accounting, subject: accountingSubject } = accountingEvidence;
     // This internal mapper also serves Team usage coverage. Preserve its
     // distinct evidence while normalizing only the accounting-owned fields.
     const internalMetadata = metadata && typeof metadata === "object" && !Array.isArray(metadata)
@@ -139,6 +158,7 @@ export function toScopedUsageEventRow(row: ScopedUsageEventDbRow): ScopedUsageEv
         brokerMachineId: row.brokerMachineId,
         credentialDeliveryMode: row.credentialDeliveryMode,
         metadata: Object.keys(projectedMetadata).length > 0 ? projectedMetadata : undefined,
+        accountingEvidence,
         contextUsedTokens: row.contextUsedTokens,
         contextWindowTokens: row.contextWindowTokens,
         tokens: {

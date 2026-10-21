@@ -1,7 +1,6 @@
 import type { UsageAccountingCoverageReason, UsageObservationCost, UsageObservationTokens } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import type { UsageAnalyticsSourceContext } from "@happier-dev/protocol/usage/usageAnalyticsContracts";
-import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import { UsageNativeAccountingSubjectSchema, readUsageAccountingMetadata } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
+import { readScopedUsageAccountingEvidence, type ScopedUsageAccountingEvidence } from './scopedUsageEventRow';
 
 import { addUsageCost, addUsageTokens, createEmptyUsageCost, createEmptyUsageTokens, subtractUsageCost, subtractUsageTokens, usageHasAnyValue } from "../usageMetrics";
 
@@ -29,6 +28,7 @@ export interface ScopedUsageEventRow {
     brokerMachineId?: string | null;
     credentialDeliveryMode?: string | null;
     metadata?: unknown;
+    accountingEvidence?: ScopedUsageAccountingEvidence;
     contextUsedTokens: number | null;
     contextWindowTokens: number | null;
     tokens: UsageObservationTokens;
@@ -47,20 +47,13 @@ export interface ResolvedScopedUsageContributions {
     coverageReasons: UsageAccountingCoverageReason[];
 }
 
-const nativeSubjectReadSchema = createStoredReadSchema(UsageNativeAccountingSubjectSchema);
-
-function readNativeSubject(metadata: unknown) {
-    return nativeSubjectReadSchema.safeParse(metadata && typeof metadata === "object"
-        ? Reflect.get(metadata, "accountingSubject") : undefined);
-}
-
 /** Capture path is not execution placement: admitted native replay may belong to a real Session. */
-export function resolveUsageContributionSourceContext(row: Pick<ScopedUsageEventRow, "metadata" | "sessionId">): UsageAnalyticsSourceContext {
-    const path = readUsageAccountingMetadata(row.metadata)?.path ?? "unknown";
-    const subject = readNativeSubject(row.metadata);
+export function resolveUsageContributionSourceContext(row: Pick<ScopedUsageEventRow, "metadata" | "sessionId" | "accountingEvidence">): UsageAnalyticsSourceContext {
+    const { accounting, subject } = readScopedUsageAccountingEvidence(row);
+    const path = accounting?.path ?? "unknown";
     const execution = path === "runtime" && row.sessionId ? "happier"
-        : path === "native" && subject.success && subject.data.linkedSessionId === row.sessionId && row.sessionId ? "happier"
-        : path === "native" && subject.success && !subject.data.linkedSessionId && !row.sessionId ? "outside"
+        : path === "native" && subject && subject.linkedSessionId === row.sessionId && row.sessionId ? "happier"
+        : path === "native" && subject && !subject.linkedSessionId && !row.sessionId ? "outside"
         : "unknown";
     return { path, execution };
 }
@@ -68,14 +61,14 @@ export function resolveUsageContributionSourceContext(row: Pick<ScopedUsageEvent
 export function usageAccountingSubjectKey(row: ScopedUsageEventRow): string {
     // A witnessed native subject owns accounting across live and collector
     // rows; the real Session remains attribution on the selected contribution.
-    const subject = readNativeSubject(row.metadata);
-    if (subject.success) {
-        const native = subject.data;
+    const { accounting, subject } = readScopedUsageAccountingEvidence(row);
+    if (subject) {
+        const native = subject;
         return JSON.stringify(["native", native.machineId, native.agent.pluginId, native.agent.localId,
             native.sourceRootKey, native.nativeSessionKey]);
     }
     if (row.sessionId) return JSON.stringify(["session", row.sessionId, row.agentId]);
-    const nativeSessionId = readUsageAccountingMetadata(row.metadata)?.nativeSessionId;
+    const nativeSessionId = accounting?.nativeSessionId;
     // Admission owns native identity. A missing subject cannot merge every
     // nullable Session row into one counter stream.
     return nativeSessionId
@@ -110,7 +103,7 @@ function resolveGroup(rows: readonly ScopedUsageEventRow[]): ResolvedScopedUsage
     const inferences = new Map<string, ScopedUsageEventRow>();
     const uncorrelated: ScopedUsageEventRow[] = [];
     for (const row of [...rows].sort(compareChronologically)) {
-        const identity = readUsageAccountingMetadata(row.metadata)?.inferenceId;
+        const identity = row.accountingEvidence?.accounting?.inferenceId;
         if (row.scope !== "turn_delta" || row.isCumulative || !identity) {
             uncorrelated.push(row);
             continue;
@@ -121,8 +114,8 @@ function resolveGroup(rows: readonly ScopedUsageEventRow[]): ResolvedScopedUsage
         }
         // Explicit replay identity is the only cross-source inference witness.
         // Prefer the live observation when both paths witnessed the same request.
-        const previousPath = previous && readUsageAccountingMetadata(previous.metadata)?.path;
-        const path = readUsageAccountingMetadata(row.metadata)?.path;
+        const previousPath = previous?.accountingEvidence?.accounting?.path;
+        const path = row.accountingEvidence?.accounting?.path;
         if (!previous || previousPath !== "runtime" || path === "runtime") inferences.set(identity, row);
     }
     const ordered = [...uncorrelated, ...inferences.values()].sort(compareChronologically);
@@ -144,8 +137,8 @@ function resolveGroup(rows: readonly ScopedUsageEventRow[]): ResolvedScopedUsage
             intervalTokens = addUsageTokens(intervalTokens, delta.tokens);
             intervalCost = addUsageCost(intervalCost, delta.cost);
         }
-        const epoch = readUsageAccountingMetadata(snapshot.metadata)?.counterEpoch;
-        const previousEpoch = previous && readUsageAccountingMetadata(previous.metadata)?.counterEpoch;
+        const epoch = snapshot.accountingEvidence?.accounting?.counterEpoch;
+        const previousEpoch = previous?.accountingEvidence?.accounting?.counterEpoch;
         const witnessedReset = previous && epoch !== undefined && previousEpoch !== undefined && epoch !== previousEpoch;
         const reset = previous && (witnessedReset || snapshot.tokens.total < previous.tokens.total);
         if (reset) reportedCoverageStartIndex = intervalStartIndex;
@@ -153,7 +146,7 @@ function resolveGroup(rows: readonly ScopedUsageEventRow[]): ResolvedScopedUsage
         const baselineTokens = previous && !reset ? previous.tokens : createEmptyUsageTokens();
         const baselineCost = previous && !reset ? previous.cost : createEmptyUsageCost(snapshot.cost.currency);
         const missingBaseline = !previous && snapshot.tokens.total > intervalTokens.total
-            && readUsageAccountingMetadata(snapshot.metadata)?.historyComplete !== true;
+            && snapshot.accountingEvidence?.accounting?.historyComplete !== true;
         const increaseTokens = subtractUsageTokens(snapshot.tokens, baselineTokens);
         if (increaseTokens.total < intervalTokens.total) reasons.add("ambiguous_overlap");
         const tokens = subtractUsageTokens(increaseTokens, intervalTokens);
@@ -201,7 +194,7 @@ function resolveGroup(rows: readonly ScopedUsageEventRow[]): ResolvedScopedUsage
         previous = snapshot;
     }
     for (; deltaIndex < deltas.length; deltaIndex++) contributions.push(asContribution(deltas[deltaIndex]!));
-    const uncorrelatedSources = new Set(deltas.filter((row) => !readUsageAccountingMetadata(row.metadata)?.inferenceId).map((row) => row.source));
+    const uncorrelatedSources = new Set(deltas.filter((row) => !row.accountingEvidence?.accounting?.inferenceId).map((row) => row.source));
     if (uncorrelatedSources.size > 1) reasons.add("ambiguous_overlap");
     const resolved = contributions.sort(compareChronologically).map((row) => ({ ...row, coverageReasons: [...new Set([...reasons, ...row.coverageReasons ?? []])] }));
     return { totalContributions: resolved, bucketAttributions: resolved, coverageReasons: [...new Set(resolved.flatMap((row) => row.coverageReasons ?? []))] };
@@ -211,6 +204,8 @@ export function resolveScopedUsageContributions(
     rows: readonly ScopedUsageEventRow[],
     range?: Readonly<{ startMs?: number; endMs?: number }>,
 ): ResolvedScopedUsageContributions {
+    // DB rows arrive projected; in-memory callers share the same boundary once.
+    rows = rows.map((row) => row.accountingEvidence ? row : { ...row, accountingEvidence: readScopedUsageAccountingEvidence(row) });
     const sessionsWithNativeUsage = new Set(
         rows.flatMap((row) => (
             row.sessionId && row.source !== "legacy_usage_report" ? [row.sessionId] : []

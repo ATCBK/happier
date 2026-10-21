@@ -11,18 +11,17 @@ import {
 import { buildUsageBreakdownList } from '@happier-dev/protocol/usage/usageLeaderProjection';
 import { resolveUsageBucketBounds as resolveBucketBounds } from '@happier-dev/protocol/usage/usageCalendar';
 import { resolveUsageContributionDimensionKey } from '@happier-dev/protocol/usage/usageCostFacts';
-import { readUsageAccountingMetadata } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { resolveUsageTokenCategories } from '@happier-dev/protocol/usage/usageTokenCategories';
 import { repriceUsageObservationCost, repriceUsageAnalyticsResponse } from '@happier-dev/protocol/usage/usageCost';
-import { readUsageModelPriceCatalogInTx } from './usageModelPriceCatalog';
-import { loadUsageMessageStatsForQueryInTx } from "./query/loadUsageMessageStatsForQuery";
+import { captureUsageModelPriceCatalogInTx, resolveCapturedUsageModelPriceCatalog, type CapturedUsageModelPriceCatalog } from './usageModelPriceCatalog';
+import { loadUsageMessageCountsBySessionInTx } from "./query/loadUsageMessageStatsForQuery";
 import {
     resolveScopedUsageContributions,
     usageAccountingSubjectKey,
     type ScopedUsageContribution,
     type ScopedUsageEventRow,
 } from "./query/resolveScopedUsageContributions";
-import { toScopedUsageEventRow } from "./query/scopedUsageEventRow";
+import { readScopedUsageAccountingEvidence, toScopedUsageEventRow } from "./query/scopedUsageEventRow";
 import { addUsageTokens, createEmptyUsageCost, createEmptyUsageTokens, normalizeLegacyUsageCost, normalizeLegacyUsageTokens } from "./usageMetrics";
 import { addUsageCostForMode, resolveUsageCostMode, withEffectiveUsageCost, type UsageCostMode } from "./query/resolveUsageCostMode";
 import { TEAM_CREDENTIAL_ONLY_USAGE_SOURCES } from "./usageSourceClassifier";
@@ -186,18 +185,23 @@ function matchesUsageFilters(row: ScopedUsageContribution, filters: UsageAnalyti
         && matches(filters?.sources, row.source);
 }
 
-async function loadRetainedLegacyUsageRows(
+async function loadRetainedLegacyUsageReports(
     tx: Tx, accountId: string, request: UsageAnalyticsQueryRequest,
-    bridgedRows: readonly { sessionId: string | null; source: string | null; metadata: unknown }[],
-): Promise<ScopedUsageEventRow[]> {
-    const bridged = new Set(bridgedRows.filter((row) => row.source === 'legacy_usage_report')
-        .map((row) => JSON.stringify([row.sessionId, readLegacyUsageReportKey(row.metadata)])));
-    const reports = await tx.usageReport.findMany({ where: {
+) {
+    return await tx.usageReport.findMany({ where: {
         accountId,
         sessionId: request.filters?.sessionIds?.length ? { in: request.filters.sessionIds } : undefined,
         updatedAt: request.dateRange?.endMs !== undefined ? { lt: new Date(request.dateRange.endMs) } : undefined,
     }, orderBy: legacyUsageReportCanonicalOrder,
     select: { id: true, sessionId: true, key: true, data: true, createdAt: true, updatedAt: true } });
+}
+
+function resolveRetainedLegacyUsageRows(
+    reports: UsageAnalyticsSnapshot['legacyReports'],
+    bridgedRows: UsageAnalyticsSnapshot['rows'],
+): ScopedUsageEventRow[] {
+    const bridged = new Set(bridgedRows.filter((row) => row.source === 'legacy_usage_report')
+        .map((row) => JSON.stringify([row.sessionId, readLegacyUsageReportKey(row.metadata)])));
     const retainedKeys = new Set<string>();
     return reports.flatMap((report): ScopedUsageEventRow[] => {
         const key = JSON.stringify([report.sessionId, report.key]);
@@ -223,23 +227,48 @@ export async function queryUsageAnalytics(
     accountId: string,
     request: UsageAnalyticsQueryRequest,
 ): Promise<UsageAnalyticsQueryResponse> {
-    return await inTx(tx => queryUsageAnalyticsInTx(tx, accountId, request), { /* Usage events, retained reports and transcript attribution share one analytics snapshot. */ isolationLevel: "Serializable", readOnly: true });
+    const snapshot = await inTx(tx => captureUsageAnalyticsInTx(tx, accountId, request), { /* Usage events, retained reports and transcript attribution share one analytics snapshot. */ isolationLevel: "Serializable", readOnly: true });
+    return projectUsageAnalytics(snapshot, request);
 }
 
-/** Ownership admission and every query reader share the caller's captured snapshot. */
-export async function queryUsageAnalyticsInTx(
+export interface UsageAnalyticsSnapshot {
+    rows: Awaited<ReturnType<typeof loadUsageEventsForQuery>>;
+    legacyReports: Awaited<ReturnType<typeof loadRetainedLegacyUsageReports>>;
+    priceCatalog: CapturedUsageModelPriceCatalog;
+    messageCountsBySession: ReadonlyMap<string, number> | undefined;
+}
+
+/** Ownership admission and every DB reader share the caller's transaction. No result computation or reply runs here. */
+export async function captureUsageAnalyticsInTx(
     tx: Tx,
     accountId: string,
     request: UsageAnalyticsQueryRequest,
-): Promise<UsageAnalyticsQueryResponse> {
+): Promise<UsageAnalyticsSnapshot> {
     const rows = await loadUsageEventsForQuery(tx, accountId, request);
-    const scopedRows = [...rows.map(toScopedUsageEventRow), ...await loadRetainedLegacyUsageRows(tx, accountId, request, rows)];
+    const legacyReports = await loadRetainedLegacyUsageReports(tx, accountId, request);
+    const priceCatalog = await captureUsageModelPriceCatalogInTx(tx);
+    // Reconciliation may exclude candidates. Capture their counts now and sum
+    // only the selected Sessions after commit, preserving publication ceilings.
+    let messageCountsBySession: ReadonlyMap<string, number> | undefined;
+    if (request.includeMessageStats || request.includeInsights) {
+        const sessionIds = new Set<string>();
+        for (const row of rows) if (row.sessionId) sessionIds.add(row.sessionId);
+        for (const report of legacyReports) if (report.sessionId) sessionIds.add(report.sessionId);
+        messageCountsBySession = await loadUsageMessageCountsBySessionInTx(tx, accountId, request, [...sessionIds]);
+    }
+    return { rows, legacyReports, priceCatalog, messageCountsBySession };
+}
+
+/** Reconcile, price and aggregate only committed captured rows, without retaining a pooled connection. */
+export function projectUsageAnalytics(snapshot: UsageAnalyticsSnapshot, request: UsageAnalyticsQueryRequest): UsageAnalyticsQueryResponse {
+    const scopedRows = [...snapshot.rows.map(toScopedUsageEventRow), ...resolveRetainedLegacyUsageRows(snapshot.legacyReports, snapshot.rows)
+        .map((row) => ({ ...row, accountingEvidence: readScopedUsageAccountingEvidence(row) }))];
     const resolved = resolveScopedUsageContributions(scopedRows, request.dateRange);
     const costMode = resolveUsageCostMode(request.costMode);
-    const priceCatalog = await readUsageModelPriceCatalogInTx(tx);
+    const priceCatalog = resolveCapturedUsageModelPriceCatalog(snapshot.priceCatalog);
     const totalContributions = resolved.totalContributions.filter((row) => matchesUsageFilters(row, request.filters)).map((row) => ({
         ...row, cost: repriceUsageObservationCost(row.cost, row.modelId,
-            resolveUsageTokenCategories(row.tokens, readUsageAccountingMetadata(row.metadata)), priceCatalog, {}, costMode),
+            resolveUsageTokenCategories(row.tokens, readScopedUsageAccountingEvidence(row).accounting), priceCatalog, {}, costMode),
     }));
     const bucketAttributions = totalContributions;
     const premiumRows = totalContributions.map(toPremiumEventRow);
@@ -250,8 +279,9 @@ export async function queryUsageAnalyticsInTx(
             premiumRows.flatMap((row) => (row.sessionId ? [row.sessionId] : [])),
         ),
     );
-    const messageCounts = request.includeMessageStats || request.includeInsights
-        ? await loadUsageMessageStatsForQueryInTx(tx, accountId, request, sessionIds)
+    const capturedMessageCounts = snapshot.messageCountsBySession;
+    const messageCounts = capturedMessageCounts
+        ? { messageCount: sessionIds.reduce((count, sessionId) => count + (capturedMessageCounts.get(sessionId) ?? 0), 0) }
         : undefined;
     const insights = messageCounts
         ? buildUsageInsights(premiumRows, messageCounts, request.timeZoneOffsetMinutes)
