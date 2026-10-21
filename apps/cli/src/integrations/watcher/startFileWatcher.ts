@@ -326,7 +326,6 @@ export function startFileWatcher(
                         break;
                     }
                     if (!isDirectory && name && name !== targetName) continue;
-                    logger.debug('[FILE_WATCHER] Watched file changed');
                     await onFileChange(
                         options?.reportEventPath === true && isDirectory && name
                             ? resolve(file, name)
