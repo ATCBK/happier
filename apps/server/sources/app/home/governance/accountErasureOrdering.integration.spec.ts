@@ -1,8 +1,12 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import Fastify from "fastify";
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from "fastify-type-provider-zod";
+import { DEFAULT_PUBLIC_PROFILE_POLICY_V1 } from '@happier-dev/protocol/account/publicProfile';
+import { DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1, PublicProfilePublishBodyV1Schema } from '@happier-dev/protocol/account/publicProfilePublication';
 
 import type { Fastify as AppFastify } from "@/app/api/types";
+import { publishPublicProfile } from '@/app/account/profile/publicProfilePublish';
+import { publicProfileServerDependencies } from '@/app/account/profile/publicProfileDependencies';
 import { startSocket } from "@/app/api/socket";
 import { enableAuthentication } from "@/app/api/utils/enableAuthentication";
 import { homeGovernanceRoutes } from "@/app/api/routes/home/homeGovernanceRoutes";
@@ -122,6 +126,18 @@ describe("Account erasure ordering against Home ownership", () => {
     it.each(["home", "self"] as const)("reports bounded encryption cleanup through the %s route before retirement or object deletion", async (route) => {
         const { accountId: ownerId } = await createAccountWithBlob({ homeRole: "owner" });
         const { accountId, path } = await createAccountWithBlob({ homeRole: "member" });
+        await db.account.update({ where: { id: accountId }, data: { username: `erasure_profile_${sequence}` } });
+        expect((await publishPublicProfile(accountId, PublicProfilePublishBodyV1Schema.parse({
+            policy: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, bio: true } },
+            metadata: { bio: 'withdraw-before-blob-io' }, projectSelections: [],
+            query: { population: 'public_eligible_personal', period: { startMs: 1, endMs: 2 }, timeZoneOffsetMinutes: 0 },
+            snapshot: { v: 1, computedAtMs: 2, period: { startMs: 1, endMs: 2, timeZoneOffsetMinutes: 0 },
+                coverage: { status: 'unavailable', method: 'unknown' }, fieldCoverage: {}, facts: {} },
+            layout: { v: 1, items: [] }, appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1,
+        }), { HAPPIER_PUBLIC_SERVER_URL: 'https://profiles.example.test',
+            HAPPIER_PUBLIC_PROFILE_REPORT_URL: 'mailto:operator@example.test' }, publicProfileServerDependencies)).kind).toBe('updated');
+        const publicationBefore = await db.accountPublicProfile.findUniqueOrThrow({ where: { accountId } });
+        expect(publicationBefore.metadataJson).toContain('withdraw-before-blob-io');
         const transitionId = `erasure-transition-${sequence}`;
         await db.accountEncryptionTransition.create({ data: {
             id: transitionId,
@@ -193,9 +209,16 @@ describe("Account erasure ordering against Home ownership", () => {
             .toEqual({ status: "active", tokenEpoch: 0 });
         expect(await db.accountEncryptionTransitionCollectionStage.count({ where: { transitionId } })).toBe(1);
         expect(await db.uploadedFile.count({ where: { accountId } })).toBe(1);
+        expect(await db.accountPublicProfile.findUnique({ where: { accountId } })).toEqual(publicationBefore);
 
+        let publicationAtBlobDeletion: unknown = 'object storage not called';
+        duringBlobDeletion = async () => {
+            publicationAtBlobDeletion = await db.accountPublicProfile.findUnique({ where: { accountId } });
+        };
         failBlobDeletion = true;
         await expect(erase()).resolves.toEqual({ status: "failed", code: "account_erasure_blob_delete_failed" });
+        expect(publicationAtBlobDeletion).toBeNull();
+        expect(await db.accountPublicProfile.findUnique({ where: { accountId } })).toBeNull();
         expect(await db.accountEncryptionTransitionCollectionStage.count({ where: { transitionId } })).toBe(0);
         expect(await db.account.findUniqueOrThrow({ where: { id: accountId }, select: { status: true } }))
             .toEqual({ status: "disabled" });

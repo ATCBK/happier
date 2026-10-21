@@ -3,7 +3,7 @@ import type { Tx } from '@/storage/inTx';
 export const EMPTY_PUBLIC_PROFILE_PAYLOAD = { state: 'draft', policyJson: null, metadataJson: null, queryJson: null, snapshotJson: null,
     layoutJson: null, appearanceJson: null, publishedAt: null } as const;
 
-/** Identity changes and unpublish share one payload withdrawal, preserving operator restriction. */
+/** Identity changes, unpublish and erasure share payload withdrawal, preserving operator restriction. */
 export async function withdrawPublicProfileInTx(tx: Tx, accountId: string): Promise<void> {
     const row = await tx.accountPublicProfile.findUnique({ where: { accountId } });
     if (!row) return;
