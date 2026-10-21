@@ -1285,9 +1285,9 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, messageId,
                                             )}
                                             <View style={styles.optionContent}>
                                                 <ToolFindText messageId={messageId} blockId={`tool-question-${qIndex}-option-${oIndex}-label`} text={option.label} style={styles.optionLabel} />
-                                                {option.description && (
+                                                {option.description ? (
                                                     <ToolFindText messageId={messageId} blockId={`tool-question-${qIndex}-option-${oIndex}-description`} text={option.description} style={styles.optionDescription} />
-                                                )}
+                                                ) : null}
                                             </View>
                                         </TouchableOpacity>
                                     );

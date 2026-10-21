@@ -149,7 +149,11 @@ function createQuestionDaemonProjection() {
 }
 let daemonProjection = createQuestionDaemonProjection();
 
-vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native', async () => {
+    const { View } = await vi.importActual<typeof import('react-native-web')>('react-native-web');
+    // RN Web observes empty-string View children before React's host renderer drops them.
+    return (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ View });
+});
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: (key) => key }));
 // The app owns errors and modal lifetime beneath Radix's DOM boundary.
@@ -251,6 +255,23 @@ describe('AskUserQuestionView', () => {
             ...overrides,
         });
     }
+
+    it.each([undefined, '', 'Updates the deployment target.'])(
+        'renders an optional option description without raw View text (%j)', async description => {
+            const errors = vi.spyOn(console, 'error');
+            try {
+                const tool = makeTool({ input: { questions: [{
+                    question: 'Pick a deployment target', multiSelect: false,
+                    options: [{ label: 'Staging', ...(description === undefined ? {} : { description }) }],
+                }] } });
+                const screen = await renderScreen(React.createElement(AskUserQuestionView, makeToolViewProps(tool, { sessionId: 's1' })));
+                expect(screen.findHostByTestId('ask-user-question.option:0:0')).toBeTruthy();
+                expect(screen.getTextContent()).toContain('Staging');
+                if (description) expect(screen.getTextContent()).toContain(description);
+                expect(errors.mock.calls.filter(args => String(args[0]).startsWith('Unexpected text node:'))).toEqual([]);
+            } finally { errors.mockRestore(); }
+        },
+    );
 
     it('names the authenticated person in the completed question answer byline', async () => {
         const viewer = storage.getState().profileScope;
