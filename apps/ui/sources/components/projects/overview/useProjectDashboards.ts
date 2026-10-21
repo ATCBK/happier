@@ -125,13 +125,23 @@ export function useWidgetAreaLayouts(
   }, [interest]);
   const approval = useActionApprovalContinuation({ scopeKey: surfaceKey ?? '', serverId: scope?.serverId ?? '', onExecuted: () => {} });
   const baseSurface = React.useMemo(() => surface ? widgetAreaLayoutBaseSurface(surface) : null, [surface]);
-  const publications = storage(useShallow(store => baseSurface ? Object.values(store.artifacts).flatMap(artifact => {
-    if (!artifact.isDecrypted || artifact.ownerAccountId !== baseSurface.accountId || artifact.access !== 'owner') return [];
-    const header = readWidgetSurfaceArtifactHeaderV1({ artifactId: artifact.id, header: artifact.rawHeader });
-    if (!header || !sameStrictJsonValue(widgetAreaLayoutBaseSurface(header.surface), baseSurface)) return [];
-    // Header reads may republish the same document; only changed revision/access facts renew it.
-    return [JSON.stringify([artifact.id, artifact.headerVersion, artifact.bodyVersion ?? null])];
-  }).sort() : []));
+  const selectPublications = React.useMemo(() => {
+    let previousArtifacts: ReturnType<typeof storage.getState>['artifacts'] | undefined;
+    let publications: string[] = [];
+    return (store: ReturnType<typeof storage.getState>) => {
+      if (store.artifacts === previousArtifacts) return publications;
+      previousArtifacts = store.artifacts;
+      publications = baseSurface ? Object.values(store.artifacts).flatMap(artifact => {
+        if (!artifact.isDecrypted || artifact.ownerAccountId !== baseSurface.accountId || artifact.access !== 'owner') return [];
+        const header = readWidgetSurfaceArtifactHeaderV1({ artifactId: artifact.id, header: artifact.rawHeader });
+        if (!header || !sameStrictJsonValue(widgetAreaLayoutBaseSurface(header.surface), baseSurface)) return [];
+        // Header reads may republish the same document; only changed revision/access facts renew it.
+        return [JSON.stringify([artifact.id, artifact.headerVersion, artifact.bodyVersion ?? null])];
+      }).sort() : [];
+      return publications;
+    };
+  }, [baseSurface]);
+  const publications = storage(useShallow(selectPublications));
 
   const run = React.useCallback(
     async (actionId: Extract<ActionId, `widgets.area.layout.${string}`>, args: unknown): Promise<ActionExecuteResult> => {

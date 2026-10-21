@@ -339,6 +339,35 @@ it('discovers externally created layouts and ignores other areas without remount
     await hook.unmount();
 });
 
+it('does not rescan the layout Artifact inventory for unrelated store updates', async () => {
+    const baseline = storage.getState();
+    let enumerations = 0;
+    // Observe the real store's full-inventory work without replacing its classification logic.
+    const observed = new Proxy(baseline.artifacts, { ownKeys(target) {
+        enumerations++;
+        return Reflect.ownKeys(target);
+    } });
+    storage.setState({ artifacts: observed });
+    const input = { serverId: runtime.serverId, pageId: 'usage', area: 'main', context: {}, presets: [
+        { id: 'overview', name: 'Overview', items: [] },
+    ] };
+    const hook = await renderHook(() => {
+        const binding = useCorePageWidgetAreaBinding(input);
+        return useWidgetAreaLayouts({ surface: binding.surface, execute: binding.executeLayoutAction });
+    });
+    try {
+        await vi.waitFor(() => expect(hook.getCurrent().state.status).toBe('ready'));
+        const admitted = hook.getCurrent().state;
+        enumerations = 0;
+        await act(async () => { storage.setState({ isSessionDraftsReady: !baseline.isSessionDraftsReady }); });
+        expect(hook.getCurrent().state).toBe(admitted);
+        expect(enumerations).toBe(0);
+    } finally {
+        await hook.unmount();
+        storage.setState({ artifacts: baseline.artifacts, isSessionDraftsReady: baseline.isSessionDraftsReady });
+    }
+});
+
 it('keeps the Usage tabs and the live preset projection in agreement after edit, Reset and Undo without remounting', async () => {
     const input = { serverId: runtime.serverId, pageId: 'usage', area: 'main', context: {}, presets: [
         { id: 'overview', name: 'Overview', items: [{ kind: 'widget' as const,
