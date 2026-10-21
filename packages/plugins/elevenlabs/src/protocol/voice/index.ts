@@ -7,6 +7,7 @@ import { SecretStringV1Schema } from '@happier-dev/plugin-sdk/secrets';
 import {
   createVoiceRecordSchema,
   VoiceProviderContributionSchema,
+  type VoiceProviderSettings,
   withVoiceSchemaField,
 } from '@happier-dev/plugin-sdk/voice';
 import { PLUGIN_MANIFEST } from '../../manifest.js';
@@ -22,7 +23,7 @@ if (
 ) {
   throw new Error('invalid_elevenlabs_voice_provider_settings_declaration');
 }
-export const ELEVENLABS_VOICE_PROVIDER_SETTINGS_DECLARATION =
+export const ELEVENLABS_VOICE_PROVIDER_SETTINGS_DECLARATION: VoiceProviderSettings =
   ELEVENLABS_VOICE_PROVIDER_CONTRIBUTION.settings;
 
 function readDefaultElevenLabsVoiceId(): string {

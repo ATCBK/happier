@@ -111,6 +111,6 @@ export const widgetAreasPlugin = definePlugin({
 export const { manifest, activate } = widgetAreasPlugin;
 
 /** Native and declarative pages use the shared area port; hosted HTML uses ordinary widget Actions. */
-export function runWidgetAreaExample(host: Pick<PluginUiHostApi, 'widgetArea'>, operation: PluginUiWidgetAreaOperationV1, filter = 'files', directory = '.') {
+export function runWidgetAreaExample(host: Pick<PluginUiHostApi, 'widgetArea'>, operation: PluginUiWidgetAreaOperationV1, filter = 'files', directory = '.'): ReturnType<PluginUiHostApi['widgetArea']> {
     return host.widgetArea({ area: 'pinned', context: { directory, filter }, operation });
 }
