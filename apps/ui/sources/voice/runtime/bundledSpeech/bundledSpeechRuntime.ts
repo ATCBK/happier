@@ -14,7 +14,7 @@ import { guessAudioMimeType } from '@/voice/input/guessAudioMimeType';
 import { playAudioBytesWithStopper } from '@/voice/output/playAudioBytesWithStopper';
 import type { VoiceProviderRegistry } from '@/voice/registry/providerRegistry';
 import { bundledSpeechDaemonClient } from '@/voice/credentials/bundledSpeechClient';
-import type { VoicePlaybackStopperRegistrar } from '@/voice/runtime/playback/VoicePlaybackController';
+import { createVoicePlaybackController, type VoicePlaybackStopperRegistrar } from '@/voice/runtime/playback/VoicePlaybackController';
 
 type BundledSpeechClient = Pick<typeof bundledSpeechDaemonClient, 'transcribe' | 'synthesize'>
   & Partial<Pick<typeof bundledSpeechDaemonClient, 'fetchCatalog'>>;
@@ -158,16 +158,11 @@ export function createBundledSpeechRuntime(input: Readonly<{
         contribution: declaration, settings: config,
       }));
       const abortController = new AbortController();
-      let stopPlayback: (() => void) | null = null;
+      const playback = createVoicePlaybackController();
+      const registerPlaybackOnly = playback.registerStopper.captureAttempt?.() ?? playback.registerStopper;
       const stop = () => {
         abortController.abort();
-        const stopper = stopPlayback;
-        stopPlayback = null;
-        try {
-          stopper?.();
-        } catch {
-          // Playback teardown is best-effort; synthesis cancellation remains authoritative.
-        }
+        playback.interrupt();
       };
       const abortFromSignal = () => stop();
       if (params.signal?.aborted) stop();
@@ -188,12 +183,6 @@ export function createBundledSpeechRuntime(input: Readonly<{
             signal: abortController.signal,
           });
           if (abortController.signal.aborted || params.preparation?.isCurrent() === false) return;
-          const registerPlaybackOnly: VoicePlaybackStopperRegistrar = (stopper) => {
-            stopPlayback = stopper;
-            return () => {
-              if (stopPlayback === stopper) stopPlayback = null;
-            };
-          };
           await (input.play ?? playAudioBytesWithStopper)({
             bytes: result.bytes.buffer.slice(
               result.bytes.byteOffset,

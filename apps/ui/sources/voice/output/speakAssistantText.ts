@@ -1,3 +1,4 @@
+import { toSpeechText } from '@happier-dev/protocol/voice/speechText';
 import type { VoicePlaybackStopperRegistrar } from '@/voice/runtime/playback/VoicePlaybackController';
 import type { VoiceMachineError } from '@/voice/runtime/machine/voiceMachineError';
 import { speakWithLocalTtsProvider } from '@/voice/backends/tts/runtime';
@@ -12,7 +13,7 @@ export async function speakAssistantText(params: {
   onSpeaking: () => void;
   onTtsFailed?: (error: VoiceMachineError) => void;
 }): Promise<void> {
-  const trimmed = params.text.trim();
+  const trimmed = toSpeechText(params.text);
   if (!trimmed) return;
 
   const { config } = resolveLocalVoiceAdapterSettings(params.settings);

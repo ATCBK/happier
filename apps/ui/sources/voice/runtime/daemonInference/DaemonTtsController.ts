@@ -5,7 +5,7 @@ import {
     createTtsPlaybackController,
     type TtsChunk,
 } from '@/voice/output/TtsController';
-import type { VoicePlaybackStopperRegistrar } from '@/voice/runtime/playback/VoicePlaybackController';
+import { createVoicePlaybackController, type VoicePlaybackStopperRegistrar } from '@/voice/runtime/playback/VoicePlaybackController';
 import { VOICE_RUNTIME_CONFIG_DEFAULTS } from '@/voice/runtime/voiceRuntimeConfigDefaults';
 
 import {
@@ -132,17 +132,10 @@ export class DaemonTtsController {
             }
         }
 
-        let stopPlayback: (() => void) | null = null;
+        const playback = createVoicePlaybackController();
+        const registerPlaybackOnly = playback.registerStopper.captureAttempt?.() ?? playback.registerStopper;
         let clearStopper = () => {};
-        const stopActivePlayback = () => {
-            const stopper = stopPlayback;
-            stopPlayback = null;
-            try {
-                stopper?.();
-            } catch {
-                // Playback teardown is best-effort; lifecycle cleanup continues.
-            }
-        };
+        const stopActivePlayback = () => playback.interrupt();
         abortController.signal.addEventListener('abort', stopActivePlayback);
 
         try {
@@ -151,21 +144,11 @@ export class DaemonTtsController {
             }
             clearStopper = params.registerPlaybackStopper(() => {
                 abortController.abort();
-                stopActivePlayback();
             });
 
             if (abortController.signal.aborted) {
                 return;
             }
-
-            const registerPlaybackOnly: VoicePlaybackStopperRegistrar = (stopper) => {
-                stopPlayback = stopper;
-                return () => {
-                    if (stopPlayback === stopper) {
-                        stopPlayback = null;
-                    }
-                };
-            };
 
             let speakingNotified = false;
             const notifySpeakingOnce = () => {

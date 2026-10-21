@@ -1,4 +1,4 @@
-import type { VoicePlaybackStopperRegistrar } from '@/voice/runtime/playback/VoicePlaybackController';
+import { createVoicePlaybackController, type VoicePlaybackStopperRegistrar } from '@/voice/runtime/playback/VoicePlaybackController';
 import { playAudioBytesWithStopper } from '@/voice/output/playAudioBytesWithStopper';
 import { streamKokoroWavSentences } from '@/voice/kokoro/runtime/synthesizeKokoroWav';
 import { isKokoroRuntimeSupported } from '@/voice/kokoro/runtime/kokoroSupport';
@@ -17,7 +17,8 @@ export async function speakKokoroText(opts: {
   }
 
   const controller = new AbortController();
-  let stopPlayback: (() => void) | null = null;
+  const playback = createVoicePlaybackController();
+  const registerPlaybackOnly = playback.registerStopper.captureAttempt?.() ?? playback.registerStopper;
   let clearStopper = () => {};
   let playbackStarted = false;
   const notifyPlaybackStarted = () => {
@@ -33,23 +34,8 @@ export async function speakKokoroText(opts: {
       } catch {
         // ignore
       }
-      const stopper = stopPlayback;
-      if (!stopper) return;
-      try {
-        stopper();
-      } catch {
-        // ignore
-      }
+      playback.interrupt();
     });
-
-    const registerPlaybackOnly: VoicePlaybackStopperRegistrar = (stopper) => {
-      stopPlayback = stopper;
-      return () => {
-        if (stopPlayback === stopper) {
-          stopPlayback = null;
-        }
-      };
-    };
 
     for await (const chunk of streamKokoroWavSentences({
       text: opts.text,
