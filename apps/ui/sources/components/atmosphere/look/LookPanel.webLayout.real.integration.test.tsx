@@ -84,7 +84,7 @@ function Editor(
   const editor = React.useMemo<AtmosphereEditor>(
     () => ({
       value,
-      update: (edit) => setValue((current) => edit(current)),
+      update: (edit) => setValue((current) => ({ ...current, ...edit(current) })),
       ...(props.project
         ? { sameAsHome: true, resetToHome: () => undefined }
         : {}),

@@ -49,7 +49,7 @@ function Harness(
       value,
       update: (edit) =>
         setValue((current) => {
-          const next = edit(current);
+          const next = { ...current, ...edit(current) };
           props.written.push(next);
           return next;
         }),
@@ -144,7 +144,7 @@ describe('Look panel writes', () => {
       const [same, setSame] = React.useState(true);
       const editor = React.useMemo<AtmosphereEditor>(() => ({
         value: HOME, sameAsHome: same, resetToHome: () => setSame(true),
-        update: (edit) => { written.push(edit(HOME)); setSame(false); },
+        update: (edit) => { written.push({ ...HOME, ...edit(HOME) }); setSame(false); },
       }), [same]);
       return <LookPanel editor={editor} />;
     }

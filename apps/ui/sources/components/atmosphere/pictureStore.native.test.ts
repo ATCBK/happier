@@ -123,6 +123,7 @@ describe('native picture store', () => {
         const revision = store.getRevision();
         const result = await store.prepare('file:///picker/review.webp', { format: 'png' });
         expect(result).toMatch(/^data:image\/png;base64,/);
+        if (typeof result !== 'string') throw new Error('Expected a native PNG data URL');
         expect(JSON.parse(Buffer.from(result.split(',')[1]!, 'base64').toString())).toEqual({
             format: 4, quality: 86, width: 2560, height: 640,
         });
