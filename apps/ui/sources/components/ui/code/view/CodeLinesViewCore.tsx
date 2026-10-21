@@ -734,7 +734,9 @@ export function CodeLinesViewCore(
             testID={props.testID}
             style={VIRTUALIZED_LIST_STYLE}
             disableVirtualization={!virtualized}
-            initialScrollIndex={scrollIndex >= 0 ? scrollIndex : undefined}
+            // Web opens from the top and the effect above lands the line: React Native Web renders only the window
+            // after an initial index and never fills the rows above it when the content does not scroll.
+            initialScrollIndex={scrollIndex >= 0 && Platform.OS !== 'web' ? scrollIndex : undefined}
             getItemLayout={wrapLines ? undefined : getItemLayout}
             contentContainerStyle={contentContainerStyle}
             ListFooterComponent={listFooterComponent}

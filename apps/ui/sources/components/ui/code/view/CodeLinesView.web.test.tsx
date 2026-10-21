@@ -83,6 +83,19 @@ async function flushReactAsyncWork(): Promise<void> {
 }
 
 describe('CodeLinesView (web)', () => {
+    it('opens a web list at a later line from the top, so rows before that line are not left as an unrendered gap', async () => {
+        // React Native Web's list rendered only the window after `initialScrollIndex` and never filled the rows
+        // above it when the content did not scroll (File page Changes opening at its first change). The scroll
+        // effect lands the line instead.
+        const { CodeLinesViewCore } = await import('./CodeLinesViewCore');
+        const { buildCodeLinesFromFile } = await import('../model/buildCodeLinesFromFile');
+        const lines = buildCodeLinesFromFile({ text: Array.from({ length: 30 }, (_, index) => `line ${index + 1}`).join('\n') });
+        const screen = await renderScreen(<CodeLinesViewCore lines={lines} virtualized scrollToLineId={lines[12]!.id} />);
+
+        const list = screen.tree.root.findAll((node) => (node.type as unknown) === 'FlatList')[0]!;
+        expect(list.props.initialScrollIndex).toBeUndefined();
+    });
+
     it('delegates nested token pointer offsets in UTF-16 and never activates removed diff lines', async () => {
         const { CodeLinesViewCore } = await import('./CodeLinesViewCore');
         const { buildCodeLinesFromFile } = await import('../model/buildCodeLinesFromFile');
