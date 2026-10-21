@@ -176,6 +176,8 @@ export function createWorkspaceDetailsSurfaceRenderers(
                         onOpenChanges={options.onOpenChanges}
                         scopeId={options.scopeId}
                         scope={options.workspaceScope}
+                        workspaceRefId={options.workspaceRefId}
+                        targetKind="project"
                         filePath={filePath}
                         initialView={readWorkspaceFileLinkView(input.tab.resource)}
                         deepLinkAnchor={readFileTargetAnchorResource(input.tab.resource)}

@@ -39,6 +39,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
             onOpenChanges={navigation.openChanges}
             scopeId={props.scopeId}
             scope={scope}
+            targetKind="session"
             filePath={props.filePath}
             initialView={props.initialView}
             deepLinkAnchor={props.deepLinkAnchor ?? null}

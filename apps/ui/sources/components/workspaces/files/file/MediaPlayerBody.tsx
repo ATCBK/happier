@@ -15,6 +15,7 @@ import { MediaDownloadLine, MediaLoadStoppedState } from '@/components/ui/media/
 import {
   useFilePreviewSource,
   type UseFilePreviewSourceInput,
+  type FilePreviewSourceState,
 } from '@/components/ui/media/useFilePreviewSource';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
@@ -36,6 +37,8 @@ export type MediaPlayerBodyProps = Readonly<{
   isActive: boolean;
   onDownload?: () => void;
   onOpenInDefaultApp?: () => void;
+  /** The stage reuses the body's held bytes for handoff; it never starts another materializer. */
+  onPreviewChange?: (preview: FilePreviewSourceState) => void;
   testID?: string;
 }>;
 
@@ -315,6 +318,9 @@ export function MediaPlayerBody(props: MediaPlayerBodyProps) {
         : props.source.cacheKey,
   });
   React.useEffect(() => setPlaybackError(null), [attempt, preview.uri]);
+  React.useEffect(() => {
+    props.onPreviewChange?.(preview);
+  }, [props.onPreviewChange, preview.status, preview.uri, preview.error]);
   if (!lifecycle.enabled)
     return <View testID={props.testID} style={styles.page} />;
   if (stopped) {

@@ -189,7 +189,8 @@ function ReadmeBody(props: Props): React.ReactElement {
     if (read.kind === 'error') return <SurfaceStateCard testID={props.testID} size="line" kind="error"
         title={t('projects.code.readUnavailable')} action={{ label: t('common.retry'), onPress: () => setRefresh(value => value + 1) }} />;
     if (!read.path) return <SurfaceStateCard testID={props.testID} size="line" kind="empty" title={t('projects.widgets.readmeMissing')} />;
-    return <View testID={props.testID}><WorkspaceFileDetailsView scopeId={scopeId} scope={scope} filePath={read.path} presentation="panel" /></View>;
+    return <View testID={props.testID}><WorkspaceFileDetailsView scopeId={scopeId} scope={scope} filePath={read.path} presentation="panel"
+        targetKind="project" workspaceRefId={props.workspace.workspaceId} /></View>;
 }
 
 /**

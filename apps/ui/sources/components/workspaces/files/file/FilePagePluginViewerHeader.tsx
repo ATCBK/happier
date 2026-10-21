@@ -8,8 +8,12 @@ import { t } from '@/text';
 import { desktopHostKind } from '@/utils/platform/desktopHost';
 import { FilePageHeader } from './FilePageHeader';
 import { formatFilePageBytes } from './FilePageStates';
-import { resolveFileMenuItems } from './fileMenus';
-import { useWorkspaceFileShareActions } from './useWorkspaceFileShareActions';
+import { resolveFileMenuItems, type FileMenuIntent } from './fileMenus';
+import { useFilePageSharing } from './useFilePageSharing';
+import { useFilePageDetailsActions } from './useFilePageDetailsActions';
+import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
+import { getFileLanguageFromPath } from '@/utils/code/fileLanguage';
+import { useSurfaceStateSize } from '@/components/ui/surfaces/surfaceStateSize';
 
 const noop = () => {};
 
@@ -23,6 +27,9 @@ export function FilePagePluginViewerHeader(
     scope: WorkspaceScopeBase;
     filePath: string;
     sizeBytes?: number | null;
+    sessionId?: string | null;
+    workspaceRefId?: string | null;
+    targetKind?: 'session' | 'project';
     /** Text files: leave the viewer for the built-in editor. */
     onEdit?: () => void;
     onRevealInFilesTree?: (path: string) => void;
@@ -36,13 +43,21 @@ export function FilePagePluginViewerHeader(
   const unavailableReason = t('projects.checkouts.notAnswering', {
     machine: reachability.machineName,
   });
-  const share = useWorkspaceFileShareActions({
-    workspaceScope: props.scope,
-    path: props.filePath,
-    actionScope: accountScope,
+  const share = useFilePageSharing({
+    scope: props.scope,
+    filePath: props.filePath,
+    accountScope,
+    sessionId: props.sessionId,
+    workspaceRefId: props.workspaceRefId,
+    targetKind: props.targetKind,
     machineReachable,
     unavailableReason,
+    sourceFacts: typeof props.sizeBytes === 'number' ? formatFilePageBytes(props.sizeBytes) : '',
   });
+  const size = useSurfaceStateSize();
+  const fileDetails = useFilePageDetailsActions({ path: props.filePath,
+    kind: resolveFileViewerKind({ path: props.filePath }).kind,
+    language: getFileLanguageFromPath(props.filePath), sizeBytes: props.sizeBytes });
   const menuActions = resolveFileMenuItems(
     {
       machineReachable,
@@ -57,13 +72,18 @@ export function FilePagePluginViewerHeader(
       revealInFiles: props.onRevealInFilesTree
         ? () => props.onRevealInFilesTree?.(props.filePath)
         : undefined,
-      copyPath: share.copyPath ? () => share.copyPath?.() : undefined,
+      showInfo: fileDetails.showInfo,
+      chooseBackground: fileDetails.chooseBackground,
+      copyPath: share.copyPath ? intent => share.copyPath?.({ absolute: intent?.altKey === true }) : undefined,
+      copyAbsolutePath: share.copyAbsolutePath,
       copyLink: share.copyLink,
+      attachToMessage: share.attachToMessage,
+      saveAsArtifact: share.saveAsArtifact,
       download: () => share.download(),
       shareFile: share.shareFile,
       openInDefaultApp: share.openInDefaultApp,
     },
-    'page',
+    size === 'phone' ? 'phone' : 'page',
   ).map((item) => ({
     id: item.id,
     title: item.title ?? t(item.titleKey),
@@ -73,7 +93,7 @@ export function FilePagePluginViewerHeader(
       ? { disabled: true, subtitle: item.state.disabledReason }
       : {}),
     ...(item.id === 'download' && share.busy ? { loading: true } : {}),
-    onSelect: () => item.run(),
+    onSelect: (intent?: FileMenuIntent) => item.run(intent),
   }));
   const fileName = props.filePath.split('/').pop() ?? props.filePath;
   return (
@@ -92,6 +112,7 @@ export function FilePagePluginViewerHeader(
       find={null}
       edit={props.onEdit ? { kind: 'edit', onPress: props.onEdit } : null}
       menuActions={menuActions}
+      fileDetails={fileDetails}
       diffMode="pending"
       onDiffMode={noop}
       hasPendingDelta={false}

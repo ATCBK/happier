@@ -6,6 +6,12 @@ import type { VideoPlayer } from 'expo-video';
 import { createWorkspaceFileDownloadHarness } from '@/dev/testkit/harness/workspaceFileDownloadHarness';
 
 const boundary = vi.hoisted(() => ({ players: [] as Array<{ pause: ReturnType<typeof vi.fn>; released: boolean; status: string; loop: boolean; muted: boolean; staysActiveInBackground: boolean }>, appState: null as null | { emit: (state: 'active' | 'background') => void } }));
+const handoff = vi.hoisted(() => vi.fn(async (_input: { fileUri: string; action: string }) => ({ canceled: false })));
+vi.mock('@/sync/runtime/files/nativeFileActions', () => ({ performAndroidFileAction: handoff }));
+vi.mock('react-native-reanimated', async () => {
+    const { createReanimatedModuleMock } = await import('@/dev/testkit/mocks/reanimated');
+    return createReanimatedModuleMock({ settleTimingCallbacks: true });
+});
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock, createReactNativeAppStateEmitter } = await import('@/dev/testkit/mocks/reactNative');
     const state = createReactNativeAppStateEmitter('active');
@@ -44,6 +50,8 @@ vi.mock('expo-video', async () => {
 import { MediaPlayerBody } from './MediaPlayerBody';
 import { buildWorkspacePreviewIdentity } from '@/components/ui/media/buildWorkspacePreviewIdentity';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+import { MediaStage } from '@/components/ui/media/stage/MediaStage';
+import { KeyboardShortcutProvider, useKeyboardCommand } from '@/keyboard/KeyboardShortcutProvider';
 
 /** The File page's video source: the workspace file at its stat revision, transfer-owned admission. */
 function videoSource(scope: WorkspaceScopeBase, revision: string | null | undefined) {
@@ -81,9 +89,36 @@ function RefreshedVideo({ snapshotSignature }: Readonly<{ snapshotSignature: str
             source={videoSource(harness.scope, state.fileContent.binaryPreviewRevision)} isActive /> : null}
     </DestinationInstanceHost>;
 }
-beforeEach(async () => { harness = await createWorkspaceFileDownloadHarness({ name: 'clip.mp4', bytes: new Uint8Array([1, 2, 3]) }); });
+beforeEach(async () => {
+    harness = await createWorkspaceFileDownloadHarness({ name: 'clip.mp4', bytes: new Uint8Array([1, 2, 3]) });
+    // These lifetime tests delete OS fixture files between cases; no cached URI may outlive that fixture.
+    const { storage } = await import('@/sync/domains/state/storage');
+    storage.getState().applySettingsLocal({ filesImagePreviewCacheMaxEntries: 0 });
+    handoff.mockClear();
+});
 afterEach(async () => { await currentScreen?.unmount(); currentScreen = null; await harness.reset(); boundary.players.length = 0; await act(async () => { boundary.appState?.emit('active'); }); fileSystem.current?.files.clear(); fileSystem.current?.deleteFile.mockClear(); });
 describe('workspace file video', () => {
+    it('reuses the mixed-gallery video body source for handoff and can continue onto the adjacent image', async () => {
+        let execute!: ReturnType<typeof useKeyboardCommand>;
+        function Controls() { execute = useKeyboardCommand(); return null; }
+        const screen = currentScreen = await renderScreen(<DestinationInstanceHost tabId="stage" ref={{ kind: 'newTab', params: {} }} pathname="/" focused visible>
+            <KeyboardShortcutProvider handlers={{}}><Controls /><MediaStage initialIndex={0} onClose={() => {}} items={[
+                { kind: 'video', title: 'clip.mp4', source: videoSource(harness.scope, 'stage-revision') },
+                { kind: 'image', title: 'next.png', source: { enabled: true, source: { kind: 'uri', uri: 'file:///next.png' } } },
+            ]} /></KeyboardShortcutProvider>
+        </DestinationInstanceHost>);
+        await waitForPlayer(screen);
+        const original = [...fileSystem.current!.files.keys()][0]!;
+        await vi.waitFor(() => expect(screen.findByTestId('media-stage-save')).not.toBeNull());
+        await screen.pressByTestIdAsync('media-stage-save');
+        await vi.waitFor(() => expect(handoff).toHaveBeenCalled());
+        const copy = handoff.mock.calls.at(-1)![0].fileUri;
+        expect(copy).not.toBe(original);
+        expect(fileSystem.current!.files.get(copy)).toEqual([1, 2, 3]);
+        await act(async () => { expect(execute('media.next')).toBe(true); });
+        expect(screen.findByTestId('media-stage-image')!.props.source).toEqual({ uri: 'file:///next.png' });
+        expect(fileSystem.current!.files.has(copy)).toBe(true);
+    });
     it('retains playback through unrelated repository refreshes and reloads the selected same-size file', async () => {
         const screen = currentScreen = await renderScreen(<RefreshedVideo snapshotSignature="snapshot-1" />);
         await waitForPlayer(screen);

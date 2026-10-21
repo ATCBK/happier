@@ -24,6 +24,7 @@ import {
 import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
 import { useWorkspaceRefs } from '@/sync/store/hooks';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { readWorkspaceFileEditorHolder, subscribeFileEditorActionOwners } from '@/sync/ops/actions/scopeActionFamily';
 import { askCodeDiagnosticsToFix } from '@/sync/domains/workspaces/languageIntelligence/askCodeDiagnosticsToFix';
 import { useAskSelectionTargetContext } from '@/components/ui/code/selection/useAskSelection';
 import { selectCodeDiagnostics } from '@/sync/domains/workspaces/languageIntelligence/codeDiagnostics';
@@ -161,6 +162,8 @@ export type UseFilePageCodeIntelligenceInput = Readonly<{
   language: string | null;
   /** Text files that a person reads or edits; binary, partial and deleted files have no language features. */
   enabled: boolean;
+  /** A full-text outline can be available without server/pointer presentation (Markdown). */
+  outlineEnabled?: boolean;
   active: boolean;
   liveValue: Readonly<{
     get(): string;
@@ -173,9 +176,6 @@ export type UseFilePageCodeIntelligenceInput = Readonly<{
   machineName: string;
   machineUnreachable: boolean;
   agentName: string | null;
-  /** P4's save of this page's buffer; resolves false when nothing was saved. */
-  saveFileEdits: () => Promise<unknown> | unknown;
-  readSavedText: () => Readonly<{ savedText: string; unsaved: boolean }>;
   /** Phones: bring the tapped line (1-based) into the top of the view, above the name sheet (LS2 T); null lets it go. */
   revealLine?: (line: number | null) => void;
 }>;
@@ -348,15 +348,19 @@ export function useFilePageCodeIntelligence(
     if (!controller) return;
     let previousKind = controller.getSnapshot().kind;
     let previousQuery = controller.getSnapshot().querySelection;
+    let previousResult = controller.getSnapshot().result;
+    let previousStatus = controller.getSnapshot().status;
     return controller.subscribe(() => {
       const snapshot = controller.getSnapshot();
       const changed =
         snapshot.kind !== previousKind ||
         snapshot.querySelection !== previousQuery;
+      const settled = snapshot.result !== previousResult || snapshot.status !== previousStatus;
       previousKind = snapshot.kind;
       previousQuery = snapshot.querySelection;
-      if (!changed) return;
-      if (snapshot.kind === 'references') {
+      previousResult = snapshot.result;
+      previousStatus = snapshot.status;
+      if (changed && snapshot.kind === 'references') {
         if (phone)
           interaction.open({
             anchor: interaction.getState()?.anchor ?? null,
@@ -369,6 +373,7 @@ export function useFilePageCodeIntelligence(
         }
       }
       if (
+        (changed || settled) &&
         snapshot.kind === 'definition' &&
         snapshot.status === 'ready' &&
         snapshot.result &&
@@ -544,7 +549,14 @@ export function useFilePageCodeIntelligence(
 
   // Ask {agent} to fix N problems (P5's Ask owner, one batch); unsaved-only problems save first.
   const allProblems = snapshotForPage?.diagnostics ?? null;
-  const unsaved = input.getUnsaved();
+  const readUnsavedProblems = React.useCallback(() => {
+    const current = latest.current;
+    if (!controller || !current.scope || !current.accountId) return false;
+    const { scope, accountId } = current;
+    return selectCodeDiagnostics(controller.getDiagnosticsProjection()).items.some(item =>
+      readWorkspaceFileEditorHolder(scope, accountId, item.path)?.file?.read().unsaved === true);
+  }, [controller]);
+  const unsaved = React.useSyncExternalStore(subscribeFileEditorActionOwners, readUnsavedProblems, () => false);
   const askCount =
     allProblems?.state === 'ready' ? (allProblems.count ?? 0) : 0;
   const askLabel =
@@ -572,11 +584,12 @@ export function useFilePageCodeIntelligence(
   const askToFix = React.useCallback(async (): Promise<boolean> => {
     const current = latest.current;
     if (!controller || !current.scope) return false;
+    const workspaceScope = current.scope;
     const lifetime = captureActiveServerAccountScopeLifetime();
     const owner = controller;
     const result = await askCodeDiagnosticsToFix({
       projection: owner.getDiagnosticsProjection(),
-      workspaceScope: current.scope,
+      workspaceScope,
       sessionTarget: current.sessionId
         ? {
             sessionId: current.sessionId,
@@ -588,14 +601,14 @@ export function useFilePageCodeIntelligence(
       targetContext: askTargetContext(),
       isCurrent: () =>
         latestController.current === owner && (lifetime?.isCurrent() ?? true),
-      readFile: async (path) =>
-        path === latest.current.filePath
-          ? latest.current.readSavedText()
-          : { savedText: '', unsaved: false },
+      readFile: async (path) => current.accountId
+        ? readWorkspaceFileEditorHolder(workspaceScope, current.accountId, path)?.file?.read() ?? null
+        : null,
       saveFileEdits: async (path) => {
-        if (path !== latest.current.filePath) return false;
-        const saved = await latest.current.saveFileEdits();
-        return saved !== false;
+        if (!current.accountId) return false;
+        const holder = readWorkspaceFileEditorHolder(workspaceScope, current.accountId, path);
+        const saved = await holder?.save();
+        return saved?.status === 'saved' || saved?.status === 'clean';
       },
     });
     return result.created > 0;
@@ -650,11 +663,14 @@ export function useFilePageCodeIntelligence(
 
   // ⌘P / @ from this page lists this document's symbols (the Search owner's existing holder input).
   const symbols = React.useMemo<WorkspaceSymbolSearchInput | null>(() => {
-    if (!input.scope || !input.accountId || !input.enabled || !controller)
+    if (!input.scope || !input.accountId || !(input.outlineEnabled ?? input.enabled))
       return null;
     const lifetime = captureActiveServerAccountScopeLifetime();
     if (!lifetime) return null;
     const owner = controller;
+    const holder = input.liveValue;
+    const path = input.filePath;
+    const scopeId = input.scopeId;
     return {
       target: {
         kind: 'workspaceFile',
@@ -670,8 +686,9 @@ export function useFilePageCodeIntelligence(
       flushPendingChange: async () => {
         await latest.current.editorHandleRef.current?.flushPendingChange();
       },
-      getServerOutline: (signal) => owner.outline(signal),
-      isCurrent: () => latestController.current === owner,
+      ...(owner ? { getServerOutline: (signal: AbortSignal) => owner.outline(signal) } : {}),
+      isCurrent: () => latestController.current === owner && latest.current.liveValue === holder
+        && latest.current.filePath === path && latest.current.scopeId === scopeId,
       accountLifetime: lifetime,
       language: input.language ?? 'text',
       isDark: theme.dark === true,
@@ -681,6 +698,8 @@ export function useFilePageCodeIntelligence(
     controller,
     input.accountId,
     input.enabled,
+    input.outlineEnabled,
+    input.liveValue,
     input.filePath,
     input.language,
     input.scope,

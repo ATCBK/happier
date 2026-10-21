@@ -17,7 +17,7 @@ import { buildWorkspaceFileLink } from '@/utils/url/sessionFileDeepLink';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { buildFileShareClipboardRequest, resolveFileShareActionScope, type FileShareClipboardIntent } from './fileShareClipboard';
-import { desktopHostKind } from '@/utils/platform/desktopHost';
+import { canOpenFileInDefaultApp } from '@/sync/runtime/files/saveFileBytes';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 
@@ -68,7 +68,7 @@ export function useWorkspaceFileShareActions(input: WorkspaceFileShareActionsInp
         });
         if (!result.ok && !result.canceled) throw new Error(result.error);
     });
-    const openSupported = Platform.OS === 'android' || Platform.OS === 'ios' || desktopHostKind() === 'tauri';
+    const openSupported = canOpenFileInDefaultApp();
     const openInDefaultApp = openSupported ? () => download('open') : undefined;
     const composer = input.composer;
     const attachToMessage = composer && input.workspaceScope ? () => report(async () => {

@@ -302,6 +302,7 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
             {/* The reader sits inside the Code page, under the Project's own header: it doesn't take the pane's controls into its band. */}
             <HeaderActionsScope scopeKey={null}>
                 <WorkspaceFileDetailsView scopeId={props.paneScopeId} scope={props.scope} filePath={location.path} presentation="screen"
+                    targetKind="project" workspaceRefId={props.fileLinkTarget?.kind === 'project' ? props.fileLinkTarget.workspaceRefId : undefined}
                     breadcrumbRoot={props.rootLabel} onOpenFolder={openFolder} />
             </HeaderActionsScope>
         </GlassSurface>

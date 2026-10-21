@@ -10,6 +10,16 @@ export type FileDiffMode = 'included' | 'pending' | 'both';
 export type FilePageMode = 'view' | 'preview' | 'source' | 'changes';
 export type FilePageModeOption = Readonly<{ id: FilePageMode; displayMode: FileDisplayMode }>;
 
+/** The code body and Info name the same text lines, without allocating another line array. */
+export function countFileTextLines(text: string): number {
+    if (text.length === 0) return 0;
+    let lines = 1;
+    for (let index = 0; index < text.length; index += 1) {
+        if (text.charCodeAt(index) === 10) lines += 1;
+    }
+    return text.endsWith('\n') ? lines - 1 : lines;
+}
+
 export function resolveFilePageAttribution(input: Readonly<{
     agentName: string | null;
     requesterActor: TranscriptAccountActor | null | undefined;

@@ -15,6 +15,7 @@ import { StatusPill } from '@/components/ui/status/StatusPill';
 import { FileEditorStatusPill } from './editor/FileEditorStatusPill';
 import { Text } from '@/components/ui/text/Text';
 import type { WorkspaceFileEditorHeaderModel } from '@/components/workspaces/files/details/workspaceFileDetails/workspaceFileEditorHeaderModel';
+import type { FilePageDetailsModel } from './useFilePageDetailsActions';
 import { Typography } from '@/constants/Typography';
 import { resolveScmDiffAreaLabel } from '@/scm/diff/diffAreaLabels';
 import type { ScmProjectInFlightOperation } from '@/sync/runtime/orchestration/projectManager';
@@ -68,6 +69,8 @@ export type FilePageHeaderProps = Readonly<{
     find?: Readonly<{ onOpen: () => void; active?: boolean }> | null;
     /** The `⋯` menu, already resolved from the page's one item list (`fileMenus.ts`). */
     menuActions?: readonly PageHeaderMenuAction[];
+    /** Page composition consumes the Info/Background state reached from the shared menu. */
+    fileDetails?: FilePageDetailsModel;
     /** The phone page carries its view controls in a bottom toolbar instead (`FilePageToolbar`). */
     toolbarBelow?: boolean;
     diffMode: FileDiffMode;

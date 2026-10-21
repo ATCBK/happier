@@ -116,7 +116,7 @@ export function RepositoryTreeRowActionsMenu(props: Readonly<{
         disabled: item.state !== 'enabled',
         subtitle: item.state === 'enabled' ? undefined : item.state.disabledReason,
         destructive: item.destructive,
-        onPress: item.run,
+        onPress: () => item.run(),
     } satisfies ItemAction)), [sharedItems]);
 
     const items = React.useMemo<RepositoryTreeRowActionItem[]>(() => {
