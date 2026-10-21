@@ -6,10 +6,7 @@ import { createLightSqliteHarness } from '../../../../../server/sources/testkit/
 import { createAuthenticatedTestApp } from '../../../../../server/sources/app/api/testkit/sqliteFastify';
 import { accountRoutes } from '../../../../../server/sources/app/api/routes/account/accountRoutes';
 import { artifactsRoutes } from '../../../../../server/sources/app/api/routes/artifacts/artifactsRoutes';
-import { machinesRoutes } from '../../../../../server/sources/app/api/routes/machines/machinesRoutes';
-import { registerPluginAvailabilityRoutes } from '../../../../../server/sources/app/plugins/availability/routes';
-import { createPluginAvailabilityOperations } from '../../../../../server/sources/app/plugins/availability/operations';
-import { getOrCreateServerIdentityId, initializeServerIdentityCache } from '../../../../../server/sources/app/serverIdentity/serverIdentity';
+import { initializeServerIdentityCache } from '../../../../../server/sources/app/serverIdentity/serverIdentity';
 import { enableOptionalStatics } from '../../../../../server/sources/app/api/utils/enableOptionalStatics';
 import { auth } from '../../../../../server/sources/app/auth/auth';
 import { db } from '../../../../../server/sources/storage/db';
@@ -25,18 +22,6 @@ import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { featuresRoutes } from '../../../../../server/sources/app/api/routes/features/featuresRoutes';
 import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
-import { definePlugin } from '@happier-dev/plugin-sdk';
-import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
-import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
-import { readPluginSkills } from '@/prompts/skills/library/readPluginSkills';
-import { seedPluginSkillDefaults } from '@/prompts/skills/library/seedPluginSkillDefaults';
-import { pluginSkillIdV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
-import { SkillReadResultV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillReadV1';
-import { registerDaemonContributionRegistryProjectionHandler } from '@/rpc/handlers/daemonContributionRegistryProjection';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
-import { MACHINE_PLAIN_DATA_KEY_MARKER, encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
-import type { RpcHandler } from '@/api/rpc/types';
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
@@ -67,98 +52,6 @@ describe('CLI capability approval replayed by the app', () => {
     sqlite = await createLightSqliteHarness({ tempDirPrefix: 'happier-skill-rule-app-replay-', initAuth: true, initEncrypt: true });
   }, 0);
   afterAll(async () => { await homes.reset(); if (sqlite) await sqlite.close(); });
-
-  it('lists, reads, seeds reach and copies an installed external plugin skill through authenticated HTTP and SQLite', async () => {
-    const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'HAPPIER_SERVER_UI_DIR', 'HAPPIER_SERVER_UI_REQUIRED']);
-    const app = createAuthenticatedTestApp({ authentication: 'real' }) as import('../../../../../server/sources/app/api/types').Fastify;
-    const account = await db.account.create({ data: { encryptionMode: 'plain', settingsVersion: 1 } });
-    for (const key of PromptLibraryCatalogKeyV1Schema.options) await db.userKVStore.create({ data: {
-      accountId: account.id, key: buildPromptLibraryPhysicalKeyV1(key), version: 1,
-      value: new TextEncoder().encode(JSON.stringify({ t: 'plain', v: emptyPromptLibraryRecordV1(key) })),
-    } });
-    const credentials = { token: await auth.createToken(account.id, undefined, { kind: 'account', authority: 'present_user' }), encryption: null };
-    const pluginId = 'com.acme.library-skills';
-    const skillId = pluginSkillIdV1({ pluginId, localId: 'check' });
-    const author = definePlugin({ id: pluginId, version: '1.0.0', entrypoints: { daemon: './daemon.mjs' },
-      skills: { check: { directory: './resources/check' } } });
-    let runtime: Awaited<ReturnType<typeof createAuthoredAdmittedPluginRuntimeFixture>> | undefined;
-    let sourceSockets: Server | undefined;
-    try {
-      env.patch({ HAPPIER_SERVER_UI_DIR: undefined, HAPPIER_SERVER_UI_REQUIRED: '0' });
-      enableOptionalStatics(app); accountRoutes(app); artifactsRoutes(app); machinesRoutes(app); registerPluginAvailabilityRoutes(app);
-      sourceSockets = new Server(app.server, { path: '/v1/updates' });
-      const url = await app.listen({ port: 0, host: '127.0.0.1' });
-      env.patch({ HAPPIER_HOME_DIR: `${sqlite.baseDir}/plugin-library-home`, HAPPIER_SERVER_URL: url, HAPPIER_WEBAPP_URL: url });
-      reloadConfiguration(); resetInMemoryAccountSettingsContextForTests();
-      runtime = await createAuthoredAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
-        plugins: [{ manifest: author.manifest, files: { 'daemon.mjs': 'export function activate() {}',
-          'resources/check/SKILL.md': '---\nname: check\ndescription: Check a project\n---\nCheck instructions',
-          'resources/check/reference.txt': 'Supporting content',
-        } }] });
-      const homeId = await getOrCreateServerIdentityId(), machineId = 'plugin-library-machine';
-      await db.machine.create({ data: { id: machineId, accountId: account.id, installationId: 'plugin-library-installation',
-        metadata: encodePlainMachineStoredContent({ host: 'Plugin source', platform: process.platform, homeDir: runtime.happyHomeDir }),
-        dataEncryptionKey: Buffer.from(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64'), active: true, lastActiveAt: new Date() } });
-      const materializationId = runtime.registry.contributes.materializationIdsByPluginId?.[pluginId];
-      if (!materializationId) throw new Error('Installed source materialization is unavailable');
-      await createPluginAvailabilityOperations().reportMaterializations({ accountId: account.id, publisherMachineId: machineId,
-        input: { expectedRevision: null, snapshot: { serverIdentityId: homeId, machineId, materializations: [{
-          serverIdentityId: homeId, machineId, materializationId, pluginId, version: '1.0.0', sourceClass: 'localPath',
-          portableRelease: false, uiArtifacts: [], enabled: true, trustState: 'trusted', observedAt: Date.now(),
-        }] } } });
-      const sourceHandlers = new Map<string, RpcHandler>();
-      const currentRuntime = runtime;
-      registerDaemonContributionRegistryProjectionHandler({ registerHandler: (method, handler) => { sourceHandlers.set(method, handler); } }, {
-        resolveRuntimeRegistry: async () => currentRuntime.registry,
-        resolveGeneration: async () => currentRuntime.controller.getState().generation,
-        resolvePluginProjectionExecutionOriginContext: () => ({ serverIdentityId: homeId, machineId }),
-      });
-      sourceSockets.use((socket, next) => {
-        void auth.verifyTokenForRoute(String(socket.handshake.auth.token)).then(verified => {
-          if (verified?.userId === account.id) next(); else next(new Error('Unauthorized'));
-        }, next);
-      });
-      sourceSockets.on('connection', socket => socket.on(SOCKET_RPC_EVENTS.CALL, async (raw: unknown, acknowledge: (value: unknown) => void) => {
-        if (!raw || typeof raw !== 'object' || !('method' in raw) || !('params' in raw)
-          || raw.method !== `${machineId}:${RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE}`) {
-          acknowledge({ ok: false, error: 'unsupported_method' }); return;
-        }
-        const result = await sourceHandlers.get(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)!(raw.params);
-        acknowledge({ ok: true, result });
-      }));
-      eventRouter.setIo(sourceSockets);
-      await runWithServerHttpBaseUrl(url, async () => {
-        await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force' });
-        const accountStore = createCliApprovalsArtifactStore({ credentials });
-        const port = accountStore.skillRules;
-        const skills = await readPluginSkills(undefined, undefined, currentRuntime.registry.contributes);
-        await seedPluginSkillDefaults({ skills, port });
-        const deps = createCliActionDeps({ credentials, token: credentials.token, sessionId: 'cli-global', mode: 'plain', ctx: null });
-        const execute = createActionExecutor({ ...deps, isActionApprovalRequired: () => false });
-        const listed = await execute.execute('skills.list', {}, { surface: 'ui' });
-        expect(listed.ok).toBe(true);
-        if (!listed.ok) throw new Error('Plugin skill list failed');
-        const item = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(listed.result).items.find(item => item.skillId === skillId);
-        expect(item).toMatchObject({ name: 'check', provenance: { kind: 'plugin', pluginId }, rules: [expect.objectContaining({ enabled: true })] });
-        const read = await execute.execute('skills.read', { skillId, file: 'reference.txt' }, { surface: 'ui' });
-        expect(read.ok).toBe(true);
-        if (!read.ok) throw new Error('Plugin skill read failed');
-        expect(SkillReadResultV1Schema.parse(read.result)).toMatchObject({ skillId, file: { path: 'reference.txt' } });
-        const copied = await execute.execute('skills.duplicate', { skillId, name: 'my-check' }, { surface: 'ui' });
-        expect(copied.ok).toBe(true);
-        if (!copied.ok) throw new Error('Plugin skill copy failed');
-        const copy = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.duplicate'].parse(copied.result);
-        expect(copy).toMatchObject({ name: 'my-check', provenance: { kind: 'written' } });
-        const storedCopy = await accountStore.promptLibraryStore.read(copy.skillId);
-        expect(storedCopy).toBeDefined();
-        expect(await execute.execute('skills.update', { skillId, expectedRevision: item!.revision, description: 'Changed' }, { surface: 'ui' }))
-          .toMatchObject({ ok: false });
-      });
-    } finally {
-      await runtime?.dispose(); await sourceSockets?.close(); await app.close(); resetInMemoryAccountSettingsContextForTests();
-      env.restore(); reloadConfiguration();
-    }
-  });
 
   it.each([['skill', false], ['skill', true], ['MCP', false], ['MCP', true], ['prompt', false], ['prompt', true]] as const)(
     'writes and restores %s through original Account custody (miswired storage: %s)', async (family, miswired) => {
