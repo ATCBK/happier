@@ -29,6 +29,7 @@ import type {
 } from '@/providers/probe/runtimeServices';
 import type { ProviderRuntimeStateStore } from '@/providers/runtimeState';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import type { RpcHandlerContext } from '@/api/rpc/types';
 
 import {
   createProviderModelLoadHttpPort,
@@ -68,6 +69,8 @@ import {
   awaitAbortableWithinProviderOperation,
   awaitWithinProviderOperation,
   createProviderOperationLifetime,
+  createProviderOperationPhaseObserver,
+  observeProviderOperationPhase,
   ProviderOperationAbandonedError,
 } from '@/providers/operationLifetime';
 import { selectCurrentProviderEndpointHealthByTemplateId } from '@/providers/connections/runtimeSummary';
@@ -177,6 +180,7 @@ export type RuntimeProviderModelManagementServices = Readonly<{
   resolveCatalogContext: RuntimeProviderServices['resolveCatalogContext'];
   projectModels(
     request: DaemonProviderModelProjectionRequestV1,
+    signal?: AbortSignal,
   ): Promise<DaemonProviderModelProjectionResponseV1>;
   projectModelsForAccount(
     request: DaemonProviderModelProjectionRequestV1,
@@ -184,6 +188,7 @@ export type RuntimeProviderModelManagementServices = Readonly<{
   ): Promise<DaemonProviderModelProjectionResponseV1>;
   resolveTeamCredentialRequestPolicySupport(
     request: DaemonProviderTeamCredentialRequestPolicySupportRequestV1,
+    signal?: AbortSignal,
   ): Promise<DaemonProviderTeamCredentialRequestPolicySupportResponseV1>;
   resolveTeamCredentialResourceTestCandidate(
     request: DaemonProviderTeamCredentialResourceTestCandidateRequestV1,
@@ -210,9 +215,11 @@ export type RuntimeProviderModelManagementServices = Readonly<{
   }> | null>;
   mutateModelSettings(
     request: DaemonProviderModelSettingsMutationRequestV1,
+    signal?: AbortSignal,
   ): Promise<DaemonProviderModelSettingsMutationResponseV1>;
   resolveBindingStatus(
     request: DaemonProviderBindingStatusRequestV1,
+    context?: Pick<RpcHandlerContext, 'signal' | 'reportOperationDiagnostics'>,
   ): Promise<DaemonProviderBindingStatusResponseV1>;
   runtimeStore: ProviderRuntimeStateStore;
   probeInfrastructure: RuntimeProviderServices['probeInfrastructure'];
@@ -1063,12 +1070,19 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
     }
   };
 
-  const resolveAgentTargetKeys = async (): Promise<string[]> => {
-    const lease = await (input.acquireRuntimeLease
+  const resolveAgentTargetKeys = async (signal?: AbortSignal): Promise<string[]> => {
+    const lifetime = createProviderOperationLifetime({ signal });
+    const pendingLease = input.acquireRuntimeLease
       ? input.acquireRuntimeLease()
       : acquireAuthoritativePluginRuntimeRegistryLease({
           happyHomeDir: input.happyHomeDir ?? configuration.happyHomeDir,
-        }));
+        });
+    let lease: Awaited<typeof pendingLease>;
+    try { lease = await awaitWithinProviderOperation(pendingLease, lifetime); }
+    catch (error) {
+      void pendingLease.then(late => late.release(), () => {});
+      throw error;
+    }
     try {
       return [...lease.registry.contributes.agentDefinitionsById.values()]
         .flatMap((agent) => agent.identity
@@ -1079,53 +1093,59 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
     }
   };
 
-  const resolveTeamCredentialRequestPolicySupport: RuntimeProviderModelManagementServices['resolveTeamCredentialRequestPolicySupport'] = async (request) => {
-    const agentTargetKeys = await resolveAgentTargetKeys();
-    if (agentTargetKeys.length === 0) {
-      return { status: 'unavailable', reason: 'application_unavailable' };
-    }
-    const models = new Map<string, DaemonProviderTeamCredentialRequestPolicySupportV1>();
-    let sourceFound = false;
-    let applicationFound = false;
-    for (const agentTargetKey of [...new Set(agentTargetKeys)].sort()) {
-      const projection = await projectModels({
-        machineId: request.machineId,
-        agentTargetKey,
-        includeTeamCredentialRequestPolicySupport: true,
-        sourceCatalog: true,
-        ...(request.refreshPolicy ? { refreshPolicy: request.refreshPolicy } : {}),
-        ...projectTeamCredentialSourceModelFilter(request.source),
-      });
-      if (projection.status !== 'success') continue;
-      for (const group of projection.groups) {
-        if (!group.authorization.authorized || !group.sourceRevision) continue;
-        sourceFound = true;
-        for (const row of group.rows) {
-          if (row.application) applicationFound = true;
-          if (row.visibility !== 'visible'
-            || row.catalog.stale
-            || row.compatibility.result.status === 'incompatible'
-            || !row.requestPolicySupport) continue;
-          const support = row.requestPolicySupport;
-          models.set(JSON.stringify([
-            support.application,
-            support.sourceRevision,
-            support.model.canonicalId,
-          ]), support);
+  const resolveTeamCredentialRequestPolicySupport: RuntimeProviderModelManagementServices['resolveTeamCredentialRequestPolicySupport'] = async (request, signal) => {
+    try {
+      const agentTargetKeys = await resolveAgentTargetKeys(signal);
+      if (agentTargetKeys.length === 0) {
+        return { status: 'unavailable', reason: 'application_unavailable' };
+      }
+      const models = new Map<string, DaemonProviderTeamCredentialRequestPolicySupportV1>();
+      let sourceFound = false;
+      let applicationFound = false;
+      for (const agentTargetKey of [...new Set(agentTargetKeys)].sort()) {
+        const projection = await projectModels({
+          machineId: request.machineId,
+          agentTargetKey,
+          includeTeamCredentialRequestPolicySupport: true,
+          sourceCatalog: true,
+          ...(request.refreshPolicy ? { refreshPolicy: request.refreshPolicy } : {}),
+          ...projectTeamCredentialSourceModelFilter(request.source),
+        }, undefined, signal);
+        if (signal?.aborted) return { status: 'unavailable', reason: 'source_unavailable' };
+        if (projection.status !== 'success') continue;
+        for (const group of projection.groups) {
+          if (!group.authorization.authorized || !group.sourceRevision) continue;
+          sourceFound = true;
+          for (const row of group.rows) {
+            if (row.application) applicationFound = true;
+            if (row.visibility !== 'visible'
+              || row.catalog.stale
+              || row.compatibility.result.status === 'incompatible'
+              || !row.requestPolicySupport) continue;
+            const support = row.requestPolicySupport;
+            models.set(JSON.stringify([
+              support.application,
+              support.sourceRevision,
+              support.model.canonicalId,
+            ]), support);
+          }
         }
       }
+      if (models.size > 0) {
+        return { status: 'success', models: [...models.values()] };
+      }
+      return {
+        status: 'unavailable',
+        reason: !sourceFound
+          ? 'source_unavailable'
+          : !applicationFound
+            ? 'application_unavailable'
+            : 'model_unavailable',
+      };
+    } catch (error) {
+      if (error instanceof ProviderOperationAbandonedError) return { status: 'unavailable', reason: 'source_unavailable' };
+      throw error;
     }
-    if (models.size > 0) {
-      return { status: 'success', models: [...models.values()] };
-    }
-    return {
-      status: 'unavailable',
-      reason: !sourceFound
-        ? 'source_unavailable'
-        : !applicationFound
-          ? 'application_unavailable'
-          : 'model_unavailable',
-    };
   };
 
   const resolveResourceTestCandidate = async (
@@ -1135,7 +1155,12 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
     if (!input.featureGate.isEnabled('providers') || request.machineId !== input.machineId) {
       return { status: 'unavailable', reason: 'source_unavailable' };
     }
-    const agentTargetKeys = await resolveAgentTargetKeys();
+    let agentTargetKeys: string[];
+    try { agentTargetKeys = await resolveAgentTargetKeys(signal); }
+    catch (error) {
+      if (error instanceof ProviderOperationAbandonedError) return { status: 'unavailable', reason: 'source_unavailable' };
+      throw error;
+    }
     const candidate = await resolveTeamCredentialResourceTestCandidate({
       machineId: request.machineId,
       teamId: request.teamId,
@@ -1294,6 +1319,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
 
   const mutateModelSettings = async (
     request: DaemonProviderModelSettingsMutationRequestV1,
+    signal?: AbortSignal,
   ): Promise<DaemonProviderModelSettingsMutationResponseV1> => {
     const context = 'connectionId' in request
       ? { connectionId: request.connectionId, machineId: request.machineId }
@@ -1305,63 +1331,74 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       return { status: 'error', error: createProviderErrorV1('provider_not_enabled_on_machine', context) };
     }
 
-    if (request.action === 'manualAdd') {
-      const snapshot = await readAdmittedSnapshot();
-      const read = snapshot ? readProviderSettingsForCli(snapshot) : null;
-      const connection = read?.settings.connections.find((candidate) => candidate.id === request.connectionId);
-      if (!connection) {
-        return { status: 'error', error: createProviderErrorV1('provider_connection_not_found', context) };
+    const lifetime = createProviderOperationLifetime({ signal });
+    try {
+      if (request.action === 'manualAdd') {
+        const snapshot = await awaitWithinProviderOperation(readAdmittedSnapshot(undefined, signal), lifetime);
+        const read = snapshot ? readProviderSettingsForCli(snapshot) : null;
+        const connection = read?.settings.connections.find((candidate) => candidate.id === request.connectionId);
+        if (!connection) {
+          return { status: 'error', error: createProviderErrorV1('provider_connection_not_found', context) };
+        }
+        if (connection.revision !== request.expectedConnectionRevision) {
+          return { status: 'error', error: createProviderErrorV1('provider_connection_changed', context) };
+        }
+        const catalog = resolveProviderManualModelCatalog(
+          await awaitWithinProviderOperation(resolveManagementRegistry(), lifetime),
+          connection.source,
+        );
+        if (!catalog || catalog.manualModelPolicy !== 'allowed') {
+          return { status: 'error', error: createProviderErrorV1('provider_model_not_found', context) };
+        }
+        const expectedManualSource: Readonly<
+          { kind: 'custom' } | { kind: 'contribution'; contributionKey: string }
+        > = connection.source.kind === 'custom'
+          ? { kind: 'custom' }
+          : { kind: 'contribution', contributionKey: connection.source.contributionKey };
+        if (signal?.aborted) throw new ProviderOperationAbandonedError('cancelled');
+        return input.modelSettingsMutation({ ...request, expectedManualSource });
       }
-      if (connection.revision !== request.expectedConnectionRevision) {
-        return { status: 'error', error: createProviderErrorV1('provider_connection_changed', context) };
-      }
-      const catalog = resolveProviderManualModelCatalog(
-        await resolveManagementRegistry(),
-        connection.source,
-      );
-      if (!catalog || catalog.manualModelPolicy !== 'allowed') {
-        return { status: 'error', error: createProviderErrorV1('provider_model_not_found', context) };
-      }
-      const expectedManualSource: Readonly<
-        { kind: 'custom' } | { kind: 'contribution'; contributionKey: string }
-      > = connection.source.kind === 'custom'
-        ? { kind: 'custom' }
-        : { kind: 'contribution', contributionKey: connection.source.contributionKey };
-      return input.modelSettingsMutation({ ...request, expectedManualSource });
-    }
 
-    if (request.action === 'confirmExperimental') {
-      const projection = await projectModels({
-        machineId: request.machineId,
-        agentTargetKey: request.agentTargetKey,
-        ...(request.connectedAccountTarget
-          ? { connectedAccountTarget: request.connectedAccountTarget, refreshPolicy: 'current_only' as const }
-          : { sourceConnectionId: request.connectionId }),
-        mode: 'management',
-      });
-      if (projection.status === 'error') return projection;
-      const group = projection.groups.find((candidate) => candidate.connectionId === request.connectionId);
-      const row = group?.rows.find((candidate) =>
-        candidate.compatibility.result.status === 'experimental'
-        && candidate.compatibility.compatibilityFingerprint === request.compatibilityFingerprint
-        && candidate.compatibility.result.confirmationScope.kind === (request.modelId === null ? 'connection' : 'model')
-        && (request.modelId === null || candidate.ref.modelId === request.modelId));
-      if (!group) {
-        return { status: 'error', error: createProviderErrorV1('provider_compatibility_unverified', context) };
+      if (request.action === 'confirmExperimental') {
+        const projection = await projectModels({
+          machineId: request.machineId,
+          agentTargetKey: request.agentTargetKey,
+          ...(request.connectedAccountTarget
+            ? { connectedAccountTarget: request.connectedAccountTarget, refreshPolicy: 'current_only' as const }
+            : { sourceConnectionId: request.connectionId }),
+          mode: 'management',
+        }, undefined, signal);
+        if (signal?.aborted) throw new ProviderOperationAbandonedError('cancelled');
+        if (projection.status === 'error') return projection;
+        const group = projection.groups.find((candidate) => candidate.connectionId === request.connectionId);
+        const row = group?.rows.find((candidate) =>
+          candidate.compatibility.result.status === 'experimental'
+          && candidate.compatibility.compatibilityFingerprint === request.compatibilityFingerprint
+          && candidate.compatibility.result.confirmationScope.kind === (request.modelId === null ? 'connection' : 'model')
+          && (request.modelId === null || candidate.ref.modelId === request.modelId));
+        if (!group) {
+          return { status: 'error', error: createProviderErrorV1('provider_compatibility_unverified', context) };
+        }
+        if (group.connectionRevision !== request.expectedConnectionRevision) {
+          return { status: 'error', error: createProviderErrorV1('provider_connection_changed', context) };
+        }
+        if (!row) {
+          return { status: 'error', error: createProviderErrorV1('provider_compatibility_unverified', context) };
+        }
       }
-      if (group.connectionRevision !== request.expectedConnectionRevision) {
-        return { status: 'error', error: createProviderErrorV1('provider_connection_changed', context) };
-      }
-      if (!row) {
-        return { status: 'error', error: createProviderErrorV1('provider_compatibility_unverified', context) };
-      }
-    }
 
-    return input.modelSettingsMutation(request);
+      if (signal?.aborted) throw new ProviderOperationAbandonedError('cancelled');
+      return input.modelSettingsMutation(request);
+    } catch (error) {
+      if (error instanceof ProviderOperationAbandonedError) return { status: 'error',
+        error: createProviderErrorV1('provider_catalog_unavailable', context) };
+      throw error;
+    }
   };
 
   const resolveBindingStatus = async (
     request: DaemonProviderBindingStatusRequestV1,
+    context?: Pick<RpcHandlerContext, 'signal' | 'reportOperationDiagnostics'>,
   ): Promise<DaemonProviderBindingStatusResponseV1> => {
     const connectionId = request.selection.ref.providerConnectionId;
     const errorContext = { ...(connectionId ? { connectionId } : {}), machineId: request.machineId };
@@ -1377,228 +1414,207 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         error: createProviderErrorV1('provider_not_enabled_on_machine', errorContext),
       };
     }
-    const operationLifetime = createProviderOperationLifetime({});
-    let snapshot;
+    const diagnostics = createProviderOperationPhaseObserver(context?.reportOperationDiagnostics);
+    const lifetime = { ...createProviderOperationLifetime({ signal: context?.signal,
+      wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs }), diagnostics };
     try {
-      snapshot = await awaitWithinProviderOperation(readAdmittedSnapshot(undefined, operationLifetime.signal), operationLifetime);
-    } catch (error) {
-      if (error instanceof ProviderOperationAbandonedError) {
-        return { status: 'incompatible', error: createProviderErrorV1('provider_endpoint_unavailable', errorContext) };
-      }
-      throw error;
-    }
-    if (!snapshot) {
-      return {
-        status: 'connection_missing',
-        error: createProviderErrorV1('provider_connection_not_found', errorContext),
-      };
-    }
-    const target = parseBackendTargetKeyV2(request.agentTargetKey);
-    const pendingLease = input.acquireRuntimeLease
-      ? input.acquireRuntimeLease()
-      : acquireAuthoritativePluginRuntimeRegistryLease({
-          happyHomeDir: input.happyHomeDir ?? configuration.happyHomeDir,
-        });
-    let lease: Awaited<typeof pendingLease>;
-    try {
-      lease = await awaitWithinProviderOperation(pendingLease, operationLifetime);
-    } catch (error) {
-      void pendingLease.then((lateLease) => lateLease.release(), () => {});
-      if (error instanceof ProviderOperationAbandonedError) {
-        return {
-          status: 'incompatible',
-          error: createProviderErrorV1('provider_endpoint_unavailable', errorContext),
-        };
-      }
-      throw error;
-    }
-    try {
-      if (typeof lease.registry.generation !== 'number') {
-        return {
-          status: 'incompatible',
-          error: createProviderErrorV1('provider_endpoint_unavailable', errorContext),
-        };
-      }
-      const agentId = resolveAgentRoutingIdForTarget(lease.registry.contributes, target);
-      if (!agentId) {
-        return {
-          status: 'incompatible',
-          error: createProviderErrorV1('provider_endpoint_unavailable', errorContext),
-        };
-      }
-      try {
-        await awaitWithinProviderOperation(
-          activateAgentRuntimeContributionOnDemand(lease.registry, agentId),
-          operationLifetime,
-        );
-      } catch (error) {
-        if (error instanceof ProviderOperationAbandonedError) {
+      return await awaitAbortableWithinProviderOperation(async (signal): Promise<DaemonProviderBindingStatusResponseV1> => {
+        const operationLifetime = { ...lifetime, signal };
+        const snapshot = await observeProviderOperationPhase(operationLifetime, 'catalog', () =>
+          awaitWithinProviderOperation(readAdmittedSnapshot(undefined, signal), operationLifetime));
+        if (!snapshot) {
           return {
-            status: 'incompatible',
-            error: createProviderErrorV1('provider_endpoint_unavailable', errorContext),
+            status: 'connection_missing',
+            error: createProviderErrorV1('provider_connection_not_found', errorContext),
           };
         }
-        throw error;
-      }
-      const registry = resolveProviderContributionRegistryView(
-        lease.registry.contributes,
-        lease.registry.generation,
-        lease.registry.readPluginOccurrenceId,
-      );
-      const providerSettings = readProviderSettingsForCli(snapshot).settings;
-      let dnsEvidenceByEndpointUrl;
-      try {
-        dnsEvidenceByEndpointUrl = await collectProviderConnectionDnsEvidence({
-          connectionId,
-          machineId: request.machineId,
-          providerSettings,
-          registry,
-          ...(input.resolveAddresses ? { resolveAddresses: input.resolveAddresses } : {}),
-          admitResolution: sharedRuntime.probeInfrastructure.scheduler.runDns,
-          isCurrent: () => input.featureGate.isEnabled('providers'),
-          lifetime: operationLifetime,
-        });
-      } catch (error) {
-        if (error instanceof ProviderProbeAdmissionCapacityError) {
-          return {
-            status: 'incompatible',
-            error: createProviderErrorV1('provider_probe_capacity_exhausted', errorContext),
-          };
-        }
-        if (error instanceof ProviderOperationAbandonedError) {
-          const unavailable = createProviderErrorV1('provider_endpoint_unavailable', errorContext);
-          return { status: 'incompatible', error: unavailable };
-        }
-        throw error;
-      }
-      const connectionResolution = resolveProviderConnectionForMachine({
-        connectionId,
-        machineId: request.machineId,
-        providerSettings,
-        registry,
-        dnsEvidenceByEndpointUrl,
-      });
-      let managedPurposeBindingSnapshot:
-        import('@happier-dev/protocol').QualifiedConnectedAccountPurposeBindingsV1
-        | undefined;
-      let managedProviderRuntime:
-        import('@/plugins/projection/registry/types')
-          .ResolvedManagedProviderRuntime
-        | undefined;
-      if (
-        connectionResolution.status === 'resolved'
-        && connectionResolution.record.deployment.kind === 'managedLocal'
-      ) {
-        if (!input.resolveManagedPurposeBindingIntent) {
-          const error = createProviderErrorV1(
-            'provider_connection_invalid',
-            errorContext,
-          );
-          return { status: 'incompatible', error };
+        const target = parseBackendTargetKeyV2(request.agentTargetKey);
+        const pendingLease = input.acquireRuntimeLease
+          ? input.acquireRuntimeLease()
+          : acquireAuthoritativePluginRuntimeRegistryLease({
+              happyHomeDir: input.happyHomeDir ?? configuration.happyHomeDir,
+            });
+        let lease: Awaited<typeof pendingLease>;
+        try {
+          lease = await observeProviderOperationPhase(operationLifetime, 'registry', () =>
+            awaitWithinProviderOperation(pendingLease, operationLifetime));
+        } catch (error) {
+          void pendingLease.then((lateLease) => lateLease.release(), () => {});
+          throw error;
         }
         try {
-          managedPurposeBindingSnapshot =
-            await resolveManagedProviderPurposeBindingSnapshot({
-              implementationIdentity:
-                connectionResolution.record.deployment.implementationIdentity,
-              connectedAccounts:
-                connectionResolution.record.deployment.managedRuntime
-                  .connectedAccounts,
-              purposeBindingIntents:
-                connectionResolution.record.deployment.purposeBindingIntents,
-              resolveBindingIntent: input.resolveManagedPurposeBindingIntent,
-            });
-          managedProviderRuntime =
-            await lease.registry.acquireManagedProviderRuntime?.(
-              connectionResolution.record.deployment
-                .implementationIdentity,
-            ) ?? undefined;
-          if (!managedProviderRuntime?.isCurrent()) {
-            throw new Error('Managed Provider runtime is unavailable');
-          }
-        } catch (error) {
-          return { status: 'incompatible', error: providerManagedPurposeBindingError(error, errorContext) };
-        }
-      }
-      let runtimeCatalogSelection: Awaited<ReturnType<typeof resolveProviderRuntimeCatalogSelectionObservation>>;
-      try {
-        runtimeCatalogSelection = await awaitAbortableWithinProviderOperation(signal => resolveProviderRuntimeCatalogSelectionObservation({
-        selection: request.selection,
-        machineId: request.machineId,
-        accountSettings: snapshot.settings,
-        savedSecretResources: snapshot.savedSecretResources,
-        providerSettings,
-        registry,
-        dnsEvidenceByEndpointUrl,
-        runtimeStateStore: sharedRuntime.runtimeStore,
-        ...(input.readModelProjection ? { readModelProjection: input.readModelProjection } : {}),
-        signal,
-        ...(input.resolveManagedPurposeBindingIntent
-          ? {
-              resolveManagedPurposeBindingIntent:
-                input.resolveManagedPurposeBindingIntent,
-            }
-          : {}),
-        ...(managedPurposeBindingSnapshot
-          ? { managedPurposeBindingSnapshot }
-          : {}),
-        }), operationLifetime);
-      } catch (error) {
-        const parsed = ProviderErrorV1Schema.safeParse(error);
-        return { status: 'incompatible', error: parsed.success ? parsed.data
-          : createProviderErrorV1('provider_endpoint_unavailable', errorContext) };
-      }
-      const resolved = resolveProviderSpawnAuthorization({
-        selection: request.selection,
-        machineId: request.machineId,
-        agentTargetKey: request.agentTargetKey,
-        agentId,
-        accountSettings: snapshot.settings,
-        providerSettings,
-        registry,
-        dnsEvidenceByEndpointUrl,
-        lease,
-        ...(managedProviderRuntime ? { managedProviderRuntime } : {}),
-        ...(managedPurposeBindingSnapshot
-          ? { managedPurposeBindingSnapshot }
-          : {}),
-        ...(runtimeCatalogSelection?.model
-          ? { runtimeModelDescriptor: runtimeCatalogSelection.model }
-          : {}),
-        ...(runtimeCatalogSelection !== null
-          ? { runtimeCatalogSnapshotExists: true }
-          : {}),
-      });
-      if (resolved.ok) {
-        return resolved.authorization.bindingSecurityFingerprint === request.launchBinding.bindingSecurityFingerprint
-          ? { status: 'current' }
-          : {
-              status: 'changed',
-              nextBindingSecurityFingerprint: resolved.authorization.bindingSecurityFingerprint,
+          if (typeof lease.registry.generation !== 'number') {
+            return {
+              status: 'incompatible',
+              error: createProviderErrorV1('provider_endpoint_unavailable', errorContext),
             };
+          }
+          const agentId = resolveAgentRoutingIdForTarget(lease.registry.contributes, target);
+          if (!agentId) {
+            return {
+              status: 'incompatible',
+              error: createProviderErrorV1('provider_endpoint_unavailable', errorContext),
+            };
+          }
+          await observeProviderOperationPhase(operationLifetime, 'registry', () => awaitWithinProviderOperation(
+            activateAgentRuntimeContributionOnDemand(lease.registry, agentId), operationLifetime,
+          ));
+          const registry = resolveProviderContributionRegistryView(
+            lease.registry.contributes,
+            lease.registry.generation,
+            lease.registry.readPluginOccurrenceId,
+          );
+          const providerSettings = readProviderSettingsForCli(snapshot).settings;
+          let dnsEvidenceByEndpointUrl;
+          try {
+            dnsEvidenceByEndpointUrl = await observeProviderOperationPhase(operationLifetime, 'dns', () => collectProviderConnectionDnsEvidence({
+              connectionId,
+              machineId: request.machineId,
+              providerSettings,
+              registry,
+              ...(input.resolveAddresses ? { resolveAddresses: input.resolveAddresses } : {}),
+              admitResolution: sharedRuntime.probeInfrastructure.scheduler.runDns,
+              isCurrent: () => input.featureGate.isEnabled('providers'),
+              lifetime: operationLifetime,
+            }));
+          } catch (error) {
+            if (error instanceof ProviderProbeAdmissionCapacityError) {
+              return {
+                status: 'incompatible',
+                error: createProviderErrorV1('provider_probe_capacity_exhausted', errorContext),
+              };
+            }
+            throw error;
+          }
+          const connectionResolution = resolveProviderConnectionForMachine({
+            connectionId,
+            machineId: request.machineId,
+            providerSettings,
+            registry,
+            dnsEvidenceByEndpointUrl,
+          });
+          let managedPurposeBindingSnapshot:
+            import('@happier-dev/protocol').QualifiedConnectedAccountPurposeBindingsV1
+            | undefined;
+          let managedProviderRuntime:
+            import('@/plugins/projection/registry/types')
+              .ResolvedManagedProviderRuntime
+            | undefined;
+          if (
+            connectionResolution.status === 'resolved'
+            && connectionResolution.record.deployment.kind === 'managedLocal'
+          ) {
+            if (!input.resolveManagedPurposeBindingIntent) {
+              const error = createProviderErrorV1(
+                'provider_connection_invalid',
+                errorContext,
+              );
+              return { status: 'incompatible', error };
+            }
+            try {
+              managedPurposeBindingSnapshot =
+                await observeProviderOperationPhase(operationLifetime, 'purpose_bindings', () =>
+                  awaitAbortableWithinProviderOperation(signal => resolveManagedProviderPurposeBindingSnapshot({
+                    implementationIdentity: connectionResolution.record.deployment.implementationIdentity,
+                    connectedAccounts: connectionResolution.record.deployment.managedRuntime.connectedAccounts,
+                    purposeBindingIntents: connectionResolution.record.deployment.purposeBindingIntents,
+                    resolveBindingIntent: input.resolveManagedPurposeBindingIntent,
+                    signal,
+                  }), operationLifetime));
+              managedProviderRuntime = await observeProviderOperationPhase(operationLifetime, 'managed_runtime', () =>
+                awaitWithinProviderOperation(Promise.resolve(lease.registry.acquireManagedProviderRuntime?.(
+                  connectionResolution.record.deployment.implementationIdentity,
+                )), operationLifetime)) ?? undefined;
+              if (!managedProviderRuntime?.isCurrent()) {
+                throw new Error('Managed Provider runtime is unavailable');
+              }
+            } catch (error) {
+              return { status: 'incompatible', error: providerManagedPurposeBindingError(error, errorContext) };
+            }
+          }
+          let runtimeCatalogSelection: Awaited<ReturnType<typeof resolveProviderRuntimeCatalogSelectionObservation>>;
+          try {
+            runtimeCatalogSelection = await observeProviderOperationPhase(operationLifetime, 'catalog', () =>
+              awaitAbortableWithinProviderOperation(signal => resolveProviderRuntimeCatalogSelectionObservation({
+                selection: request.selection,
+                machineId: request.machineId,
+                accountSettings: snapshot.settings,
+                savedSecretResources: snapshot.savedSecretResources,
+                providerSettings,
+                registry,
+                dnsEvidenceByEndpointUrl,
+                runtimeStateStore: sharedRuntime.runtimeStore,
+                ...(input.readModelProjection ? { readModelProjection: input.readModelProjection } : {}),
+                signal,
+                ...(input.resolveManagedPurposeBindingIntent
+                  ? { resolveManagedPurposeBindingIntent: input.resolveManagedPurposeBindingIntent }
+                  : {}),
+                ...(managedPurposeBindingSnapshot ? { managedPurposeBindingSnapshot } : {}),
+              }), operationLifetime));
+          } catch (error) {
+            if (error instanceof ProviderOperationAbandonedError) throw error;
+            const parsed = ProviderErrorV1Schema.safeParse(error);
+            return { status: 'incompatible', error: parsed.success ? parsed.data
+              : createProviderErrorV1('provider_endpoint_unavailable', errorContext) };
+          }
+          const resolved = resolveProviderSpawnAuthorization({
+            selection: request.selection,
+            machineId: request.machineId,
+            agentTargetKey: request.agentTargetKey,
+            agentId,
+            accountSettings: snapshot.settings,
+            providerSettings,
+            registry,
+            dnsEvidenceByEndpointUrl,
+            lease,
+            ...(managedProviderRuntime ? { managedProviderRuntime } : {}),
+            ...(managedPurposeBindingSnapshot
+              ? { managedPurposeBindingSnapshot }
+              : {}),
+            ...(runtimeCatalogSelection?.model
+              ? { runtimeModelDescriptor: runtimeCatalogSelection.model }
+              : {}),
+            ...(runtimeCatalogSelection !== null
+              ? { runtimeCatalogSnapshotExists: true }
+              : {}),
+          });
+          if (resolved.ok) {
+            return resolved.authorization.bindingSecurityFingerprint === request.launchBinding.bindingSecurityFingerprint
+              ? { status: 'current' }
+              : {
+                  status: 'changed',
+                  nextBindingSecurityFingerprint: resolved.authorization.bindingSecurityFingerprint,
+                };
+          }
+          const error = resolved.error;
+          switch (error.code) {
+            case 'provider_connection_not_found':
+              return { status: 'connection_missing', error };
+            case 'provider_contribution_unavailable':
+              return { status: 'contribution_unavailable', error };
+            case 'provider_account_grant_stale':
+            case 'provider_machine_grant_stale':
+            case 'provider_authorization_changed':
+            case 'provider_binding_changed':
+              return { status: 'grant_stale', error };
+            case 'provider_connection_disabled':
+            case 'provider_not_enabled_on_machine':
+            case 'provider_secret_missing':
+            case 'provider_feature_disabled':
+              return { status: 'disabled', error };
+            default:
+              return { status: 'incompatible', error };
+          }
+        } finally {
+          await observeProviderOperationPhase(operationLifetime, 'registry', () => lease.release());
+        }
+      }, lifetime);
+    } catch (error) {
+      if (error instanceof ProviderOperationAbandonedError) {
+        return { status: 'incompatible', error: createProviderErrorV1('provider_catalog_unavailable', errorContext) };
       }
-      const error = resolved.error;
-      switch (error.code) {
-        case 'provider_connection_not_found':
-          return { status: 'connection_missing', error };
-        case 'provider_contribution_unavailable':
-          return { status: 'contribution_unavailable', error };
-        case 'provider_account_grant_stale':
-        case 'provider_machine_grant_stale':
-        case 'provider_authorization_changed':
-        case 'provider_binding_changed':
-          return { status: 'grant_stale', error };
-        case 'provider_connection_disabled':
-        case 'provider_not_enabled_on_machine':
-        case 'provider_secret_missing':
-        case 'provider_feature_disabled':
-          return { status: 'disabled', error };
-        default:
-          return { status: 'incompatible', error };
-      }
-    } finally {
-      await lease.release();
-    }
+      throw error;
+    } finally { diagnostics.finish(); }
   };
 
   const projectModelsForAccount: RuntimeProviderModelManagementServices['projectModelsForAccount'] =
@@ -1609,7 +1625,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
     models: sharedRuntime.models,
     summary: sharedRuntime.summary,
     resolveCatalogContext: sharedRuntime.resolveCatalogContext,
-    projectModels,
+    projectModels: (request: DaemonProviderModelProjectionRequestV1, signal?: AbortSignal) => projectModels(request, undefined, signal),
     projectModelsForAccount,
     resolveTeamCredentialRequestPolicySupport,
     resolveTeamCredentialResourceTestCandidate: resolveResourceTestCandidate,

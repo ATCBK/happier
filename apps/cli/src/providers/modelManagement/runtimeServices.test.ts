@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import * as persistence from '@/persistence';
 import {
   AccountSettingsSchema,
+  PROVIDER_ENDPOINT_SAFETY_LIMITS,
   DEFAULT_PROVIDER_SETTINGS_V1,
   ProviderConnectionIdSchema,
   ProviderContributionV1Schema,
@@ -35,6 +36,10 @@ import { commitActiveProviderConnectionsCatalog, getActiveAccountSettingsSnapsho
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { refreshActiveProviderConnectionsCatalog, refreshDemandedActiveProviderConnectionsCatalog } from '@/providers/settings/hydrate';
 import * as accountSnapshots from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { registerMachineProviderRpcHandlers } from '@/api/machine/rpcHandlers.providers';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { createLegacyProfileMigrationRpcServices } from '@/providers/migrations/rpc';
 import { resolveProviderConnectionForMachine } from '@/providers/registry';
 import * as providerContributions from '@/providers/registry/contributions';
 import {
@@ -238,6 +243,57 @@ async function runtimeStoreWithState(state = createEmptyProviderRuntimeStateFile
   await store.update(() => state);
   return store;
 }
+
+it.each(['projection', 'manualAdd', 'models'] as const)('cancels the registered Provider %s handler inside its pending Home catalog read', async operation => {
+  const credentials = { token: 'provider-read-cancellation', encryption: null };
+  setActiveAccountSettingsSnapshot({ ...providerSnapshot(DEFAULT_PROVIDER_SETTINGS_V1),
+    scopeKey: resolveAccountSettingsScopeKeyForToken(credentials.token), providerConnectionsCatalog: undefined });
+  vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+  let enterRow = () => {};
+  let releaseRow = () => {};
+  const rowEntered = new Promise<void>(resolve => { enterRow = resolve; });
+  const rowReleased = new Promise<void>(resolve => { releaseRow = resolve; });
+  let transportSignal: AbortSignal | undefined;
+  vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+      mode: 'plain', version: 1, settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    if (path === '/v1/account/entity-rows/provider-connections') {
+      transportSignal = options?.signal as AbortSignal;
+      enterRow(); await rowReleased;
+      return { status: 200, data: { status: 'absent' } };
+    }
+    if (path === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
+    const history = emptyAccountSettingsHistoryCaptureResponse(path);
+    if (history) return history;
+    throw new Error(`Unexpected cancelled Provider HTTP boundary: ${path}`);
+  });
+  const services = createRuntimeProviderModelManagementServices({ machineId: 'machine-a',
+    featureGate: { isEnabled: () => true }, modelSettingsMutation: async (): Promise<never> => {
+      throw new Error('Cancelled catalog admission must not mutate');
+    } });
+  const connections = createRuntimeProviderConnectionServices({ machineId: 'machine-a', credentials,
+    featureGate: { isEnabled: () => true }, runtimeSummary: services.summary });
+  const rpc = new RpcHandlerManager({ scopePrefix: 'machine-a', encryptionMode: 'plain', logger: () => {} });
+  registerMachineProviderRpcHandlers({ rpcHandlerManager: rpc, machineId: 'machine-a', featureGate: { isEnabled: () => true },
+    services: { ...services, ...connections, ...createLegacyProfileMigrationRpcServices({ credentials }) } });
+  const controller = new AbortController();
+  const method = operation === 'projection' ? RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION
+    : operation === 'models' ? RPC_METHODS.DAEMON_PROVIDERS_MODELS : RPC_METHODS.DAEMON_PROVIDERS_MODEL_SETTINGS_MUTATE;
+  const request = operation === 'projection' ? { machineId: 'machine-a', agentTargetKey: 'agent:happier.agent.codex/codex', refreshPolicy: 'current_only' }
+    : operation === 'models' ? { machineId: 'machine-a', connectionId: 'pc_missing' }
+      : { action: 'manualAdd', machineId: 'machine-a', connectionId: 'pc_missing', expectedConnectionRevision: 1,
+          models: [{ id: 'model-a', name: 'Model A' }] };
+  let settled = false;
+  const pending = rpc.invokeLocal(method, request, { signal: controller.signal }).then(result => { settled = true; return result; });
+  try {
+    await Promise.race([rowEntered, pending.then(result => { throw new Error(`Settled before Home read: ${JSON.stringify(result)}`); })]);
+    controller.abort();
+    await vi.waitFor(() => expect(settled).toBe(true));
+    expect(transportSignal?.aborted).toBe(true);
+    await expect(pending).resolves.toMatchObject({ status: 'error', error: { code: 'provider_catalog_unavailable', action: 'retry' } });
+  } finally { releaseRow(); await pending; }
+});
 
 function providerSnapshot(
   providerSettings: ProviderSettingsV1,
@@ -831,8 +887,8 @@ describe('runtime provider model-management composition', () => {
     });
     if (!authorization.ok) throw new Error('Expected provider authorization');
     if (custody === 'ambient') {
-      // Binding status reads current Home authority; it sends no endpoint probe.
-      // A slow but valid Home read must not inherit the probe's 30 s budget.
+      // Binding status shares the explicit read/probe budget, including Home
+      // admission. A Home read that ignores withdrawal cannot retain this RPC.
       let releaseCatalog!: () => void;
       catalogReadGate = new Promise<void>(resolve => { releaseCatalog = resolve; });
       vi.useFakeTimers();
@@ -840,10 +896,18 @@ describe('runtime provider model-management composition', () => {
         agentTargetKey: 'agent:happier.agent.codex/codex', selection,
         launchBinding: authorization.authorization.sessionBindingMetadata });
       try {
-        await vi.advanceTimersByTimeAsync(35_000);
+        let settled = false;
+        void pending.then(() => { settled = true; });
+        await vi.advanceTimersByTimeAsync(PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs + 1);
+        expect(settled).toBe(true);
+        await expect(pending).resolves.toMatchObject({ status: 'incompatible',
+          error: { code: 'provider_catalog_unavailable', retryable: true, action: 'retry' } });
         releaseCatalog();
-        await expect(pending).resolves.toEqual({ status: 'current' });
-      } finally { releaseCatalog(); catalogReadGate = undefined; await pending; vi.useRealTimers(); }
+      } finally {
+        releaseCatalog(); catalogReadGate = undefined; await pending; vi.useRealTimers();
+        // Drain the deliberately unabortable transport before exercising recovery.
+        await refreshActiveProviderConnectionsCatalog({ credentials: { token, encryption: null } });
+      }
     } else {
       await expect(services.resolveBindingStatus({ machineId: 'machine-a',
         agentTargetKey: 'agent:happier.agent.codex/codex', selection,

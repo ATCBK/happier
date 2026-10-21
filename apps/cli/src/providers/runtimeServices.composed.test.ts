@@ -427,15 +427,16 @@ describe('public Provider operations composed routing', () => {
     expect(routeMatrix.map(([operation]) => operation)).toEqual(
       PUBLIC_PROVIDER_OPERATION_IDS,
     );
-    // Probe retains its waiter lifetime; describe carries the same operation's
-    // cancellation interest into advisory installation checks.
+    // The host keeps each invocation's cancellation interest at its read owner.
     const waiterLifetime = expect.objectContaining({
       signal: expect.any(AbortSignal),
       isCurrent: expect.any(Function),
     });
     for (const [operation, route] of routeMatrix) {
       const trailingArguments = operation === 'catalog.probe' ? [waiterLifetime]
-        : operation === 'connections.describe' ? [expect.any(AbortSignal)] : [];
+        : operation === 'connections.bindingStatus' ? [expect.objectContaining({ signal: expect.any(AbortSignal) })]
+        : ['connections.describe', 'catalog.listModels', 'catalog.projectModels', 'catalog.mutateModelSettings'].includes(operation)
+          ? [expect.any(AbortSignal)] : [];
       expect(route).toHaveBeenCalledTimes(2);
       expect(route).toHaveBeenNthCalledWith(
         1,

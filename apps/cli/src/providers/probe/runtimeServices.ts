@@ -1560,8 +1560,8 @@ export function createRuntimeProviderServices(input: Readonly<{
 
   const models = createProviderSavedModelsRpcHandler({
     machineId: input.machineId,
-    models: async (identity): Promise<ProviderSavedModelsRpcResult> => {
-      const operationScope = withOperationLifetime(undefined);
+    models: async (identity, signal): Promise<ProviderSavedModelsRpcResult> => {
+      const operationScope = withOperationLifetime(undefined, signal);
       const unavailable = await refreshAmbientCatalog(identity, operationScope.lifetime);
       if (unavailable) return { status: 'error', error: unavailable };
       const connection = await resolveConnectionContext(identity, operationScope);

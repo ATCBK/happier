@@ -8,6 +8,7 @@ import type {
   ProviderModelLoadResult,
 } from '@/providers/modelManagement/load';
 import type { RpcHandlerManager } from '../rpc/RpcHandlerManager';
+import type { RpcHandlerContext } from '../rpc/types';
 import { createProviderModelLoadRpcHandler } from '@/providers/modelManagement/rpc';
 import {
   createProviderSavedModelsRpcHandler,
@@ -29,14 +30,15 @@ export type MachineProviderRpcServices = Readonly<{
     input: DaemonProviderDraftProbeRequestV1,
     waiterLifetime?: ProviderProbeWaiterLifetime,
   ): Promise<ProviderCatalogRefreshResult>;
-  models(input: Readonly<{ connectionId: string; machineId: string }>): Promise<ProviderSavedModelsRpcResult>;
+  models(input: Readonly<{ connectionId: string; machineId: string }>, signal?: AbortSignal): Promise<ProviderSavedModelsRpcResult>;
   loadModel(input: ProviderModelLoadRequest): Promise<ProviderModelLoadResult>;
   cancelModelLoad(input: ProviderModelLoadRequest): Promise<ProviderModelLoadResult>;
   describeConnections(input: DaemonProviderConnectionsDescribeRequestV1, signal?: AbortSignal): Promise<DaemonProviderConnectionsDescribeResponseV1>;
   mutateConnection(input: DaemonProviderConnectionMutationRequestV1): Promise<DaemonProviderConnectionMutationResponseV1>;
-  projectModels(input: DaemonProviderModelProjectionRequestV1): Promise<DaemonProviderModelProjectionResponseV1>;
+  projectModels(input: DaemonProviderModelProjectionRequestV1, signal?: AbortSignal): Promise<DaemonProviderModelProjectionResponseV1>;
   resolveTeamCredentialRequestPolicySupport(
     input: DaemonProviderTeamCredentialRequestPolicySupportRequestV1,
+    signal?: AbortSignal,
   ): Promise<DaemonProviderTeamCredentialRequestPolicySupportResponseV1>;
   resolveTeamCredentialResourceTestCandidate(
     input: DaemonProviderTeamCredentialResourceTestCandidateRequestV1,
@@ -46,8 +48,9 @@ export type MachineProviderRpcServices = Readonly<{
     input: DaemonProviderTeamCredentialBrokerEligibilityRequestV1,
     signal?: AbortSignal,
   ): Promise<DaemonProviderTeamCredentialBrokerEligibilityResponseV1>;
-  mutateModelSettings(input: DaemonProviderModelSettingsMutationRequestV1): Promise<DaemonProviderModelSettingsMutationResponseV1>;
-  resolveBindingStatus(input: DaemonProviderBindingStatusRequestV1): Promise<DaemonProviderBindingStatusResponseV1>;
+  mutateModelSettings(input: DaemonProviderModelSettingsMutationRequestV1, signal?: AbortSignal): Promise<DaemonProviderModelSettingsMutationResponseV1>;
+  resolveBindingStatus(input: DaemonProviderBindingStatusRequestV1,
+    context?: Pick<RpcHandlerContext, 'signal' | 'reportOperationDiagnostics'>): Promise<DaemonProviderBindingStatusResponseV1>;
   previewProfileMigration(input: DaemonProviderProfileMigrationPreviewRequestV1): Promise<DaemonProviderProfileMigrationPreviewResponseV1>;
   confirmProfileMigration(input: DaemonProviderProfileMigrationConfirmRequestV1): Promise<DaemonProviderProfileMigrationConfirmResponseV1>;
   confirmProfileMigrationConflict(input: DaemonProviderProfileMigrationConflictConfirmRequestV1): Promise<DaemonProviderProfileMigrationConflictConfirmResponseV1>;
@@ -191,13 +194,13 @@ export function registerMachineProviderRpcHandlers(input: Readonly<{
   );
   input.rpcHandlerManager.registerHandler(
     RPC_METHODS.DAEMON_PROVIDERS_MODELS,
-    async (raw) => DaemonProviderModelsResponseV1Schema.parse(
+    async (raw, context) => DaemonProviderModelsResponseV1Schema.parse(
       await createProviderSavedModelsRpcHandler({
         machineId: input.machineId,
-        models: async (request) => input.featureGate.isEnabled('providers')
-          ? input.services.models(request)
+        models: async (request, signal) => input.featureGate.isEnabled('providers')
+          ? input.services.models(request, signal)
           : featureDisabled(request),
-      })(raw),
+      })(raw, context?.signal),
     ),
   );
   input.rpcHandlerManager.registerHandler(
@@ -214,7 +217,7 @@ export function registerMachineProviderRpcHandlers(input: Readonly<{
   );
   input.rpcHandlerManager.registerHandler(
     RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION,
-    async (raw) => {
+    async (raw, context) => {
       const request = DaemonProviderModelProjectionRequestV1Schema.parse(raw);
       const result = !input.featureGate.isEnabled('providers')
         ? featureDisabled(request)
@@ -222,17 +225,17 @@ export function registerMachineProviderRpcHandlers(input: Readonly<{
           ? { status: 'error' as const, error: createProviderErrorV1('provider_not_enabled_on_machine', {
               machineId: request.machineId,
             }) }
-          : await input.services.projectModels(request);
+          : await input.services.projectModels(request, context?.signal);
       return DaemonProviderModelProjectionResponseV1Schema.parse(result);
     },
   );
   input.rpcHandlerManager.registerHandler(
     RPC_METHODS.DAEMON_PROVIDERS_TEAM_CREDENTIAL_REQUEST_POLICY_SUPPORT,
-    async (raw) => {
+    async (raw, context) => {
       const request = DaemonProviderTeamCredentialRequestPolicySupportRequestV1Schema.parse(raw);
       const result = !input.featureGate.isEnabled('providers') || request.machineId !== input.machineId
         ? { status: 'unavailable' as const, reason: 'source_unavailable' as const }
-        : await input.services.resolveTeamCredentialRequestPolicySupport(request);
+        : await input.services.resolveTeamCredentialRequestPolicySupport(request, context?.signal);
       return DaemonProviderTeamCredentialRequestPolicySupportResponseV1Schema.parse(result);
     },
   );
@@ -260,7 +263,7 @@ export function registerMachineProviderRpcHandlers(input: Readonly<{
   );
   input.rpcHandlerManager.registerHandler(
     RPC_METHODS.DAEMON_PROVIDERS_MODEL_SETTINGS_MUTATE,
-    async (raw) => {
+    async (raw, context) => {
       const request = DaemonProviderModelSettingsMutationRequestV1Schema.parse(raw);
       const connectionId = 'connectionId' in request ? request.connectionId : undefined;
       const result = !input.featureGate.isEnabled('providers')
@@ -269,13 +272,13 @@ export function registerMachineProviderRpcHandlers(input: Readonly<{
           ? { status: 'error' as const, error: createProviderErrorV1('provider_not_enabled_on_machine', {
               machineId: request.machineId, ...(connectionId ? { connectionId } : {}),
             }) }
-          : await input.services.mutateModelSettings(request);
+          : await input.services.mutateModelSettings(request, context?.signal);
       return DaemonProviderModelSettingsMutationResponseV1Schema.parse(result);
     },
   );
   input.rpcHandlerManager.registerHandler(
     RPC_METHODS.DAEMON_PROVIDERS_BINDING_STATUS,
-    async (raw) => {
+    async (raw, context) => {
       const request = DaemonProviderBindingStatusRequestV1Schema.parse(raw);
       const result = !input.featureGate.isEnabled('providers')
         ? {
@@ -293,7 +296,7 @@ export function registerMachineProviderRpcHandlers(input: Readonly<{
                 machineId: request.machineId,
               }),
             }
-          : await input.services.resolveBindingStatus(request);
+          : await input.services.resolveBindingStatus(request, context);
       return DaemonProviderBindingStatusResponseV1Schema.parse(result);
     },
   );

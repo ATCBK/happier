@@ -1,8 +1,8 @@
 import type { RpcOperationDiagnostics } from '@/api/rpc/types';
 
-export type ProviderOperationPhase = 'catalog' | 'purpose_bindings' | 'pre_effect_revalidation' | 'managed_runtime' | 'catalog_dispatch';
+export type ProviderOperationPhase = 'catalog' | 'registry' | 'dns' | 'purpose_bindings' | 'pre_effect_revalidation' | 'managed_runtime' | 'catalog_dispatch';
 
-/** Probe-only observations share the lifetime, including nested pre-effect reads. */
+/** Provider read/probe observations share the lifetime, including nested reads. */
 export function createProviderOperationPhaseObserver(
   report?: (diagnostics: RpcOperationDiagnostics) => void,
   now: () => number = Date.now,

@@ -307,7 +307,9 @@ export function createRuntimeProviderOperationsProducer(input: Readonly<{
                 ...request,
                 machineId: input.machineId,
               }),
-              dispatch: async (parsed) => await input.machineServices.resolveBindingStatus(parsed),
+              dispatch: async (parsed) => await input.machineServices.resolveBindingStatus(parsed, {
+                signal: composeOperationSignal(binding, options),
+              }),
               parseResult: (value) => DaemonProviderBindingStatusResponseV1Schema.parse(value),
             }),
         }),
@@ -339,7 +341,7 @@ export function createRuntimeProviderOperationsProducer(input: Readonly<{
                 ...request,
                 machineId: input.machineId,
               }),
-              dispatch: async (parsed) => await input.machineServices.models(parsed),
+              dispatch: async (parsed) => await input.machineServices.models(parsed, composeOperationSignal(binding, options)),
               parseResult: (value) => DaemonProviderModelsResponseV1Schema.parse(value),
             }),
           setModelLoad: async (request: ProviderModelLoadRequest, options?: PluginCancellationOptions) => {
@@ -384,7 +386,7 @@ export function createRuntimeProviderOperationsProducer(input: Readonly<{
                 ...request,
                 machineId: input.machineId,
               }),
-              dispatch: async (parsed) => await input.machineServices.projectModels(parsed),
+              dispatch: async (parsed) => await input.machineServices.projectModels(parsed, composeOperationSignal(binding, options)),
               parseResult: (value) => DaemonProviderModelProjectionResponseV1Schema.parse(value),
             }),
           mutateModelSettings: async (request: ProviderModelSettingsMutationRequest, options?: PluginCancellationOptions) =>
@@ -395,7 +397,7 @@ export function createRuntimeProviderOperationsProducer(input: Readonly<{
                 ...request,
                 machineId: input.machineId,
               }),
-              dispatch: async (parsed) => await input.machineServices.mutateModelSettings(parsed),
+              dispatch: async (parsed) => await input.machineServices.mutateModelSettings(parsed, composeOperationSignal(binding, options)),
               parseResult: (value) => DaemonProviderModelSettingsMutationResponseV1Schema.parse(value),
               failure: (error) => DaemonProviderModelSettingsMutationResponseV1Schema.parse({
                 status: 'error',

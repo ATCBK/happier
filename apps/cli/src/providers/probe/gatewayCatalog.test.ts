@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { PROVIDER_ENDPOINT_SAFETY_LIMITS, ProviderConnectionIdSchema, ProviderSettingsV1Schema, SessionModelSelectionV1Schema, splitProviderSettingsV1 } from '@happier-dev/protocol';
 import { ProviderConnectionsRowMutationV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
-import { DaemonProviderModelProjectionRequestV1Schema, DaemonProviderModelProjectionResponseV1Schema, DaemonProviderModelsResponseV1Schema, DaemonProviderProbeResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
+import { DaemonProviderBindingStatusResponseV1Schema, DaemonProviderModelProjectionRequestV1Schema, DaemonProviderModelProjectionResponseV1Schema, DaemonProviderModelsResponseV1Schema, DaemonProviderProbeResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { createProviderManagedProbeRequestFingerprintV1, createProviderProbeRequestFingerprintV1 } from '@happier-dev/protocol/providers/securityFingerprintsV1';
 import * as persistence from '@/persistence';
@@ -43,6 +43,7 @@ import { DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1 } from '@/daemon/connect
 import type { QualifiedConnectedAccountGroupV4, QualifiedConnectedAccountProfileV4 } from '@happier-dev/protocol';
 import { createRuntimeProviderProbeAuthorizationPort } from '@/providers/spawn/probePort';
 import { createProviderOperationLifetime } from '@/providers/operationLifetime';
+import { resolveProviderSpawnAuthorization } from '@/providers/spawn/resolve';
 
 const transport = vi.hoisted(() => ({ call: vi.fn<typeof callExactMachineRpc>() }));
 const socketBoundary = vi.hoisted(() => ({ io: vi.fn() }));
@@ -51,6 +52,85 @@ vi.mock('socket.io-client', () => ({ io: socketBoundary.io }));
 // daemons' catalog, authorization, managed process and endpoint owners are real.
 vi.mock('@/session/transport/rpc/machineRpc', () => ({ callExactMachineRpc: transport.call }));
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); transport.call.mockReset(); });
+
+it.each(['deadline', 'cancelled'] as const)('settles Gateway binding status during a pending purpose Home read on %s', reason =>
+  withConfiguredDaemonTestHome({ prefix: 'gateway-binding-status-lifetime-' }, async ({ homeDir }) => {
+    let entered = () => {};
+    let release = () => {};
+    const homeEntered = new Promise<void>(resolve => { entered = resolve; });
+    const homeReleased = new Promise<void>(resolve => { release = resolve; });
+    let homeSignal: AbortSignal | undefined;
+    let holdHome = true;
+    const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'), happyHomeDir: homeDir,
+      controller: createPluginReloadController(), physicalGateway: true,
+      resolveAccountTarget: async (target, signal) => {
+        if (holdHome) { homeSignal = signal; entered(); await homeReleased; signal.throwIfAborted(); }
+        return target.kind === 'account' ? { account: target.account, displayName: 'Upstream' } : null;
+      },
+    });
+    let pending: Promise<unknown> | undefined;
+    try {
+      const gateway = fixture.gateway!;
+      const selection = SessionModelSelectionV1Schema.parse({ v: 1, updatedAt: 1,
+        ref: { agentTargetKey: fixture.agentTargetKey, providerConnectionId: 'run-gateway', modelId: 'example' } });
+      if (fixture.record.deployment.kind !== 'managedLocal') throw new Error('Expected managed Gateway');
+      const managedProviderRuntime = await fixture.lease.registry.acquireManagedProviderRuntime?.(fixture.record.deployment.implementationIdentity);
+      const authorization = resolveProviderSpawnAuthorization({ selection, machineId: fixture.machineId,
+        agentTargetKey: fixture.agentTargetKey, agentId: fixture.agentId,
+        accountSettings: fixture.snapshot.settings, providerSettings: fixture.providerSettings,
+        registry: fixture.contributes, dnsEvidenceByEndpointUrl: new Map(), lease: fixture.lease,
+        managedPurposeBindingSnapshot: gateway.purposeBindings,
+        ...(managedProviderRuntime ? { managedProviderRuntime } : {}),
+      });
+      if (!authorization.ok) throw new Error(`Expected launch binding: ${JSON.stringify(authorization)}`);
+      const services = createRuntimeProviderModelManagementServices({ machineId: fixture.machineId, happyHomeDir: homeDir,
+        featureGate: { isEnabled: () => true }, getAccountSettingsSnapshot: () => fixture.snapshot,
+        acquireRuntimeLease: async () => {
+          const lease = gateway.controller.tryAcquireRuntimeRegistry();
+          if (!lease) throw new Error('Expected Gateway registry');
+          return lease;
+        },
+        resolveManagedPurposeBindingIntent: gateway.purposeBindingOwner.resolveBindingIntent,
+        modelSettingsMutation: async () => { throw new Error('No model mutation'); },
+      });
+      const logs = vi.fn();
+      const rpc = new RpcHandlerManager({ scopePrefix: fixture.machineId, encryptionMode: 'plain', logger: logs });
+      registerMachineProviderRpcHandlers({ rpcHandlerManager: rpc, machineId: fixture.machineId,
+        featureGate: { isEnabled: () => true }, services: {
+          ...services,
+          ...createRuntimeProviderConnectionServices({ machineId: fixture.machineId, happyHomeDir: homeDir,
+            credentials: { token: 'binding-fixture-token', encryption: null }, featureGate: { isEnabled: () => true },
+            runtimeSummary: services.summary }),
+          ...createLegacyProfileMigrationRpcServices({ credentials: { token: 'binding-fixture-token', encryption: null } }),
+        } });
+      const controller = new AbortController();
+      const request = { machineId: fixture.machineId, agentTargetKey: fixture.agentTargetKey, selection,
+        launchBinding: authorization.authorization.sessionBindingMetadata };
+      if (reason === 'deadline') vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+      let settled = false;
+      pending = rpc.invokeLocal(RPC_METHODS.DAEMON_PROVIDERS_BINDING_STATUS, request, { signal: controller.signal })
+        .then(result => { settled = true; return result; });
+      await Promise.race([homeEntered, pending.then(result => { throw new Error(`Settled before Home read: ${JSON.stringify(result)}`); })]);
+      if (reason === 'deadline') {
+        await vi.advanceTimersByTimeAsync(PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs + 1);
+        expect(settled).toBe(true);
+      } else {
+        controller.abort();
+        await vi.waitFor(() => expect(settled).toBe(true));
+      }
+      expect(DaemonProviderBindingStatusResponseV1Schema.parse(await pending)).toMatchObject({ status: 'incompatible',
+        error: { code: 'provider_catalog_unavailable', retryable: true, action: 'retry' } });
+      expect(homeSignal?.aborted).toBe(true);
+      expect(logs).toHaveBeenCalledWith('[RPC] Request completed', expect.objectContaining({
+        method: RPC_METHODS.DAEMON_PROVIDERS_BINDING_STATUS, failedPhase: 'purpose_bindings', causeCode: reason,
+        phaseDurationsMs: expect.objectContaining({ purpose_bindings: expect.any(Number) }),
+      }));
+      expect(JSON.stringify(logs.mock.calls)).not.toMatch(/binding-fixture-token|upstream-account|run-gateway/);
+      release(); holdHome = false; vi.useRealTimers();
+      expect(DaemonProviderBindingStatusResponseV1Schema.parse(await rpc.invokeLocal(
+        RPC_METHODS.DAEMON_PROVIDERS_BINDING_STATUS, request))).toEqual({ status: 'current' });
+    } finally { release(); vi.useRealTimers(); await pending; await fixture.cleanup(); }
+  }));
 
 it.each(['admission', 'pre-launch'] as const)('keeps a requester Home outage retryable at %s instead of reporting changed authorization', phase =>
   withConfiguredDaemonTestHome({ prefix: 'gateway-catalog-home-outage-' }, async ({ homeDir }) => {

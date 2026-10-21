@@ -223,7 +223,7 @@ describe('provider probe RPC boundary', () => {
       status: 'error', error: { code: 'provider_not_enabled_on_machine', machineId: 'machine-b' },
     });
     expect(probe).toHaveBeenCalledWith(request);
-    expect(models).toHaveBeenCalledWith(request);
+    expect(models).toHaveBeenCalledWith(request, undefined);
   });
 
   it('preserves a stable provider refusal when saved state changes during resolution', async () => {

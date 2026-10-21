@@ -128,7 +128,7 @@ describe('machine provider RPC registration', () => {
     } as const;
     await expect(h.handlers.get(RPC_METHODS.DAEMON_PROVIDERS_TEAM_CREDENTIAL_REQUEST_POLICY_SUPPORT)!(request))
       .resolves.toEqual({ status: 'unavailable', reason: 'model_unavailable' });
-    expect(h.services.resolveTeamCredentialRequestPolicySupport).toHaveBeenCalledWith(request);
+    expect(h.services.resolveTeamCredentialRequestPolicySupport).toHaveBeenCalledWith(request, undefined);
 
     await expect(h.handlers.get(RPC_METHODS.DAEMON_PROVIDERS_TEAM_CREDENTIAL_REQUEST_POLICY_SUPPORT)!({
       ...request, machineId: 'machine-b',
@@ -304,7 +304,7 @@ describe('machine provider RPC registration', () => {
     const projection = { machineId: 'machine-a', agentTargetKey: 'agent:happier.agent.codex/codex' } as const;
     await expect(h.handlers.get(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION)!(projection))
       .resolves.toEqual({ status: 'success', agentTargetKey: 'agent:happier.agent.codex/codex', groups: [] });
-    expect(h.services.projectModels).toHaveBeenCalledWith(projection);
+    expect(h.services.projectModels).toHaveBeenCalledWith(projection, undefined);
 
     const mutation = {
       action: 'setVisibility' as const, machineId: 'machine-a',
@@ -313,7 +313,7 @@ describe('machine provider RPC registration', () => {
     };
     await expect(h.handlers.get(RPC_METHODS.DAEMON_PROVIDERS_MODEL_SETTINGS_MUTATE)!(mutation))
       .resolves.toEqual({ status: 'success', action: 'setVisibility' });
-    expect(h.services.mutateModelSettings).toHaveBeenCalledWith(mutation);
+    expect(h.services.mutateModelSettings).toHaveBeenCalledWith(mutation, undefined);
   });
 
   it('registers strict connection describe/mutate handlers and validates redacted responses', async () => {
@@ -378,7 +378,7 @@ describe('machine provider RPC registration', () => {
     await h.handlers.get(RPC_METHODS.DAEMON_PROVIDERS_MODEL_LOAD)!({ action: 'load', connectionId: 'pc_1', machineId: 'machine-a', modelId: 'm' });
     await h.handlers.get(RPC_METHODS.DAEMON_PROVIDERS_MODEL_LOAD)!({ action: 'cancel', connectionId: 'pc_1', machineId: 'machine-a', modelId: 'm' });
     expect(h.services.probe).toHaveBeenCalledWith({ connectionId: 'pc_1', machineId: 'machine-a' });
-    expect(h.services.models).toHaveBeenCalledWith({ connectionId: 'pc_1', machineId: 'machine-a' });
+    expect(h.services.models).toHaveBeenCalledWith({ connectionId: 'pc_1', machineId: 'machine-a' }, undefined);
     expect(h.services.loadModel).toHaveBeenCalledWith({ connectionId: 'pc_1', machineId: 'machine-a', modelId: 'm' });
     expect(h.services.cancelModelLoad).toHaveBeenCalledWith({ connectionId: 'pc_1', machineId: 'machine-a', modelId: 'm' });
   });

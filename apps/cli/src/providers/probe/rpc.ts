@@ -251,10 +251,10 @@ export function createProviderSavedProbeRpcHandler(dependencies: Readonly<{
 /** Identity-only daemon boundary for the canonical merged model catalog. */
 export function createProviderSavedModelsRpcHandler(dependencies: Readonly<{
   machineId: string;
-  models(input: Readonly<{ connectionId: string; machineId: string }>): Promise<ProviderSavedModelsRpcResult>;
+  models(input: Readonly<{ connectionId: string; machineId: string }>, signal?: AbortSignal): Promise<ProviderSavedModelsRpcResult>;
 }>) {
   const ownedMachineId = ProviderMachineIdSchema.parse(dependencies.machineId);
-  return async (rawInput: unknown): Promise<ProviderSavedModelsRpcResult> => {
+  return async (rawInput: unknown, signal?: AbortSignal): Promise<ProviderSavedModelsRpcResult> => {
     const input = SavedConnectionMachineRequestSchema.parse(rawInput);
     if (input.machineId !== ownedMachineId) {
       return {
@@ -262,6 +262,6 @@ export function createProviderSavedModelsRpcHandler(dependencies: Readonly<{
         error: createProviderErrorV1('provider_not_enabled_on_machine', input),
       };
     }
-    return dependencies.models(input);
+    return dependencies.models(input, signal);
   };
 }
