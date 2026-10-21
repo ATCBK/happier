@@ -9,8 +9,13 @@ import {
     TeamCredentialResourceSummaryV1Schema,
 } from "@happier-dev/protocol/teams";
 import {
+    decodePeerTcpTunnelBinaryFrameV2,
+    encodePeerTcpTunnelBinaryFrameV2,
     encodePasswordCredentialFieldV1,
+    PeerTcpTunnelRelayAuthorizationPayloadV2Schema,
+    verifyPeerTcpTunnelRelayAuthorizationV2,
     type AccountPasswordCredentialV1,
+    type PeerTcpTunnelRelayEnvelope,
 } from "@happier-dev/protocol";
 import type { ProviderConnectionId } from "@happier-dev/protocol/providers/ids";
 
@@ -29,6 +34,7 @@ import { inTx } from "@/storage/inTx";
 import { recordConnectedServiceAccountProfileChange } from "@/app/api/routes/connect/connectedServicesAccountProfileChange";
 import { TEAM_CHANGE_ENTITY_ID } from "../teamChanges";
 import { recordTeamCredentialDirectDeliveryActivityInTx } from "./resourceActivity";
+import { createTeamCredentialResourceTestBrokerDispatcher } from "@/app/api/routes/providers/externalProviderBrokerDispatcher";
 
 describe("Team credential resource routes (SQLite integration)", () => {
     afterEach(() => vi.restoreAllMocks());
@@ -93,6 +99,118 @@ describe("Team credential resource routes (SQLite integration)", () => {
     async function createAccount() {
         return await db.account.create({ data: { encryptionMode: "plain", publicKey: null } });
     }
+
+    it("tests a newly saved revision-zero resource through signed relay admission", async () => {
+        const custodian = await createAccount();
+        const team = await db.team.create({ data: { name: "Initial resource Test" } });
+        await db.teamMembership.create({ data: { teamId: team.id, accountId: custodian.id, role: "owner" } });
+        const broker = await db.machine.create({ data: {
+            id: `initial-resource-broker-${custodian.id}`, accountId: custodian.id,
+            metadata: "{}", kind: "persistent", active: true,
+            operationProtocolCapabilities: {
+                providerBrokerIngress: { protocolVersions: [1] },
+                irohMachineEndpoint: { protocolVersions: [1], endpointId: "e".repeat(64) },
+            },
+            operationProtocolCapabilitiesRevision: 1,
+        } });
+        const source = {
+            v: 1, kind: "connected_account",
+            target: { kind: "account", account: {
+                service: { pluginId: "happier.agent.codex", localId: "openai-codex" },
+                accountId: "initial-connected-account",
+            } },
+            credentialIncarnation: "initial-credential-incarnation",
+        } as const;
+        // Keep the database's initial revision, just as the saved-resource route does.
+        const resource = await db.teamCredentialResource.create({ data: {
+            teamId: team.id, custodianAccountId: custodian.id, displayName: "New source",
+            disclosureCeiling: "brokered_only", sessionUsePolicy: "personal_allowed",
+            sourceBindingJson: JSON.stringify(source), brokerMachineId: broker.id,
+        } });
+        expect(resource.revision).toBe(0);
+        const application = {
+            agentTargetKey: "agent:happier.agent.codex/codex",
+            implementationIdentity: { pluginId: "happier.provider.openai", localId: "openai" },
+            endpointTemplateId: "responses", protocol: "openai-responses",
+        } as const;
+        const previousPresence = app.machineDaemonPresence;
+        const previousRpc = app.forwardRpcForUser;
+        const previousDispatch = app.forwardTeamCredentialBrokerResourceTest;
+        app.machineDaemonPresence = { in: () => ({ fetchSockets: async () => [{
+            data: { clientType: "machine-scoped", userId: custodian.id, machineId: broker.id },
+        }] }) };
+        // The remote daemon is a genuine process boundary; all route, placement,
+        // actor, binding construction, minting and signature checks stay real.
+        app.forwardRpcForUser = async () => ({ ok: true, result: {
+            status: "success", application,
+            request: { v: 1, kind: "resource_test", requestId: "initial-resource-test",
+                teamId: team.id, resourceId: resource.id, route: "responses",
+                method: "POST", pathAndQuery: "/v1/responses", bodyBase64: "e30=" },
+        } });
+        const signing = peerMediationGrantSigningEnv();
+        const trustRoots = [{ keyId: signing.HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_KEY_ID!,
+            publicKeyBase64Url: signing.HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_PUBLIC_KEY! }];
+        const relaySocketId = "initial-resource-relay";
+        let admitted = false;
+        let receive: ((envelope: PeerTcpTunnelRelayEnvelope) => void) | undefined;
+        app.forwardTeamCredentialBrokerResourceTest = createTeamCredentialResourceTestBrokerDispatcher({
+            env: signing, enabled: () => true,
+            createRelayTransport: () => ({
+                relaySocketId, close() {},
+                subscribe(handler) { receive = handler; return () => { receive = undefined; }; },
+                send(_event, envelope) {
+                    if (envelope.v === 1 && envelope.frame.kind === "open") {
+                        const authorization = envelope.frame.open.relayAuthorization;
+                        expect(authorization).toBeDefined();
+                        const verified = verifyPeerTcpTunnelRelayAuthorizationV2({
+                            authorization, nowMs: Date.now(), trustRoots,
+                        });
+                        expect(verified).toMatchObject({ valid: true });
+                        if (!verified.valid) return;
+                        expect(PeerTcpTunnelRelayAuthorizationPayloadV2Schema.parse(verified.payload).providerBroker)
+                            .toEqual({ v: 1, kind: "resource_test", teamId: team.id, resourceId: resource.id,
+                                requestId: "initial-resource-test", actorAccountId: custodian.id,
+                                expectedResourceRevision: resource.revision, application, source });
+                        expect(verifyPeerTcpTunnelRelayAuthorizationV2({ authorization,
+                            nowMs: verified.payload.exp, trustRoots }))
+                            .toEqual({ valid: false, reasonCode: "authorization_expired" });
+                        admitted = true;
+                    }
+                    if (envelope.v !== 2) return;
+                    const decoded = decodePeerTcpTunnelBinaryFrameV2({ frame: envelope.frame,
+                        maxHeaderBytes: 64 * 1024, maxPayloadBytes: 64 * 1024 });
+                    if (!decoded.ok || decoded.header.kind !== "data") return;
+                    expect(admitted).toBe(true);
+                    const reply = (frame: Uint8Array) => receive?.({
+                        v: 2, encoding: "binary_frame_v2", frame, scopeUserId: custodian.id,
+                        sender: { kind: "machine", machineId: broker.id },
+                        recipient: { kind: "user", socketId: relaySocketId },
+                    });
+                    const payload = new TextEncoder().encode("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+                    const header = { version: 2 as const, tunnelId: decoded.header.tunnelId,
+                        substreamId: decoded.header.substreamId, direction: "daemon_to_client" as const };
+                    reply(encodePeerTcpTunnelBinaryFrameV2({ header: { ...header, kind: "data",
+                        sequence: 0, payloadLength: payload.byteLength }, payload }));
+                    reply(encodePeerTcpTunnelBinaryFrameV2({ header: { ...header, kind: "close",
+                        halfClose: true, reasonCode: "upstream_eof", payloadLength: 0 } }));
+                },
+            }),
+        });
+        const diagnostics = vi.spyOn(logger, "warn");
+        try {
+            const tested = await post("/v1/teams/credential-resources/test", custodian.id, {
+                teamId: team.id, resourceId: resource.id,
+            });
+            expect(tested.statusCode, tested.body).toBe(200);
+            expect(tested.json(), JSON.stringify(diagnostics.mock.calls))
+                .toMatchObject({ result: "available", readiness: { kind: "available" } });
+            expect(admitted).toBe(true);
+        } finally {
+            app.machineDaemonPresence = previousPresence;
+            app.forwardRpcForUser = previousRpc;
+            app.forwardTeamCredentialBrokerResourceTest = previousDispatch;
+        }
+    });
 
     it("keeps valid catalog siblings when one resource source binding is malformed", async () => {
         const owner = await createAccount();

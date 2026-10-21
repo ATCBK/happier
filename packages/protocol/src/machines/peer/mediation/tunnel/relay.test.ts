@@ -9,6 +9,26 @@ async function loadTunnelRelayModule(): Promise<TunnelRelayModule | null> {
 }
 
 describe('peer TCP tunnel relay protocol', () => {
+  it('admits the initial resource-test revision while rejecting invalid revisions and expanded authority', () => {
+    const binding = {
+      v: 1, kind: 'resource_test', teamId: 'team', resourceId: 'resource',
+      requestId: 'request', actorAccountId: 'actor', expectedResourceRevision: 0,
+      application: { agentTargetKey: 'agent:happier.agent.codex/codex',
+        implementationIdentity: { pluginId: 'happier.provider.openai', localId: 'openai' },
+        endpointTemplateId: 'responses', protocol: 'openai-responses' },
+      source: { v: 1, kind: 'provider_connection', connectionId: 'connection',
+        connectionSecurityFingerprint: 'connection-security:v1:initial', credentialSlotId: 'apiKey' },
+    };
+    const schema = tunnelRelayModule.ProviderBrokerResourceTestRelayBindingV1Schema;
+    expect(schema.safeParse(binding).success).toBe(true);
+    for (const expectedResourceRevision of [-1, 0.5, NaN, Infinity]) {
+      expect(schema.safeParse({ ...binding, expectedResourceRevision }).success).toBe(false);
+    }
+    expect(schema.safeParse({ ...binding, extraAuthority: true }).success).toBe(false);
+    expect(schema.safeParse({ ...binding, application: { ...binding.application, extraAuthority: true } }).success).toBe(false);
+    expect(schema.safeParse({ ...binding, source: { ...binding.source, extraAuthority: true } }).success).toBe(false);
+  });
+
   it('binds Provider-broker relay authorization to an application request without a TCP destination', async () => {
     const mod = await loadTunnelRelayModule();
     const parsed = mod?.PeerTcpTunnelRelayAuthorizationPayloadV2Schema.safeParse({

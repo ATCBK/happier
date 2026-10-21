@@ -51,7 +51,7 @@ export const ProviderBrokerResourceTestRelayBindingV1Schema = lazyZodSchema(() =
   resourceId: z.string().check(z.minLength(1)),
   requestId: z.string().check(z.minLength(1)),
   actorAccountId: z.string().check(z.minLength(1)),
-  expectedResourceRevision: z.number().check(z.int(), z.positive()),
+  expectedResourceRevision: z.number().check(z.int(), z.nonnegative()),
   application: ProviderBrokerApplicationBindingV1Schema,
   source: TeamCredentialSourceBindingV1Schema,
   verifiedCredentialEvidence: z.optional(AuthTokenAuthenticationEvidenceSnapshotV1Schema),
