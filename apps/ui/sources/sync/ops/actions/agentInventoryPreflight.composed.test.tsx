@@ -3,7 +3,7 @@ import { Server } from 'socket.io';
 import { afterEach, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
-import { AgentSessionModesProbeObservationSchema } from '@happier-dev/protocol/capabilities';
+import { AgentConfigOptionsProbeObservationSchema, AgentSessionModesProbeObservationSchema } from '@happier-dev/protocol/capabilities';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ConnectedServiceBindingsV1Schema } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
@@ -32,7 +32,9 @@ vi.mock('@/auth/storage/tokenStorage', async importOriginal => {
 const { invokeAgentInventoryProbeAction } = await import('./agentInventoryActionDeps');
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
 const { useNewSessionPreflightSessionModesState } = await import('@/components/sessions/new/hooks/screenModel/useNewSessionPreflightSessionModesState');
+const { useNewSessionPreflightConfigOptionsState } = await import('@/components/sessions/new/hooks/screenModel/useNewSessionPreflightConfigOptionsState');
 const modeCache = await import('@/sync/domains/sessionModes/dynamicSessionModeProbeCache');
+const configCache = await import('@/sync/domains/sessionControl/dynamicConfigOptionsProbeCache');
 
 afterEach(async () => {
     vi.useRealTimers();
@@ -42,16 +44,19 @@ afterEach(async () => {
     clearMachineRequestReachabilityForTest();
     resetServerFeaturesClientForTests();
     modeCache.resetDynamicSessionModeProbeCacheForTests();
+    configCache.resetDynamicConfigOptionsProbeCacheForTests();
 });
 
 type NativeReply = 'hold' | 'lost' | 'success' | 'unavailable' | 'absent';
-async function preflightHome(options: Readonly<{ holdLost?: boolean }> = {}) {
+async function preflightHome(options: Readonly<{ holdLost?: boolean; inventory?: 'config' }> = {}) {
     const issued: string[] = [];
     const cancelled: unknown[] = [];
     const mode = new Map<string, NativeReply>();
     const loseReplies: Array<() => void> = [];
     const observation = AgentSessionModesProbeObservationSchema.parse({ source: 'dynamic',
         availableModes: [{ id: 'project-review', name: 'Project review' }] });
+    const configObservation = AgentConfigOptionsProbeObservationSchema.parse({ source: 'dynamic',
+        configOptions: [{ id: 'sandbox', name: 'Sandbox', type: 'boolean', currentValue: 'true' }] });
     const http = createServer((request, response) => {
         response.setHeader('content-type', 'application/json');
         const path = request.url?.split('?')[0];
@@ -84,7 +89,9 @@ async function preflightHome(options: Readonly<{ holdLost?: boolean }> = {}) {
                 return;
             }
             if (reply === 'absent') { ack({ ok: false, error: 'not found', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND }); return; }
-            const result = reply === 'unavailable' ? AgentSessionModesProbeObservationSchema.parse({ source: 'unavailable', availableModes: [] }) : observation;
+            const result = options.inventory === 'config'
+                ? (reply === 'unavailable' ? AgentConfigOptionsProbeObservationSchema.parse({ source: 'unavailable', configOptions: [] }) : configObservation)
+                : (reply === 'unavailable' ? AgentSessionModesProbeObservationSchema.parse({ source: 'unavailable', availableModes: [] }) : observation);
             ack({ ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'plain' }, { ok: true, result }, decoded.callId) });
         });
     });
@@ -97,7 +104,7 @@ async function preflightHome(options: Readonly<{ holdLost?: boolean }> = {}) {
         capabilityParams: { cwd: '/repo' } });
     const picker = (machineId: string) => ({ backendTarget: { kind: 'backend' as const, backendId: 'external.agent/reader' },
         runtimeCarrierAgentId: 'external.agent/reader', selectedMachineId: machineId, capabilityServerId: home.id, cwd: '/repo' });
-    return { issued, cancelled, mode, home, params, picker, observation, loseReplies,
+    return { issued, cancelled, mode, home, params, picker, observation, configObservation, loseReplies,
         async dispose() { await serverScopedRpcSocketPool.stopAll(); await new Promise<void>(resolve => relay.close(() => resolve())); } };
 }
 
@@ -248,5 +255,118 @@ it('keeps definite native unavailability on the ordinary resource retry policy',
         await act(async () => vi.advanceTimersByTimeAsync(modeCache.DYNAMIC_SESSION_MODE_PROBE_ERROR_BACKOFF_MS + 1));
         await vi.waitFor(() => expect(picker.getCurrent().preflightModes?.availableModes).toEqual(f.observation.availableModes));
         expect(f.issued).toEqual(['mode-machine', 'mode-machine']);
+    } finally { vi.useRealTimers(); await picker.unmount(); await f.dispose(); }
+});
+
+it.each(['unmount', 'machine-change'] as const)('releases the config picker occurrence on %s through Action and Machine', async departure => {
+    const f = await preflightHome({ inventory: 'config' });
+    f.mode.set('next-machine', 'success');
+    const picker = await renderHook(useNewSessionPreflightConfigOptionsState, { initialProps: f.picker('pending-config') });
+    try {
+        await vi.waitFor(() => expect(f.issued).toEqual(['pending-config']));
+        if (departure === 'unmount') await picker.unmount();
+        else await picker.rerender(f.picker('next-machine'));
+        await vi.waitFor(() => expect(f.cancelled).toHaveLength(1));
+        if (departure === 'machine-change') {
+            await vi.waitFor(() => expect(picker.getCurrent().configOptions).toEqual(f.configObservation.configOptions));
+        }
+        f.mode.set('pending-config', 'success');
+        const next = await renderHook(useNewSessionPreflightConfigOptionsState, { initialProps: f.picker('pending-config') });
+        try {
+            await vi.waitFor(() => expect(next.getCurrent().configOptions).toEqual(f.configObservation.configOptions));
+            expect(f.issued.filter(machine => machine === 'pending-config')).toHaveLength(2);
+        } finally { await next.unmount(); }
+    } finally { await picker.unmount(); await f.dispose(); }
+});
+
+it('keeps the config occurrence until its final picker consumer leaves', async () => {
+    const f = await preflightHome({ inventory: 'config' });
+    const first = await renderHook(useNewSessionPreflightConfigOptionsState, { initialProps: f.picker('pending-config') });
+    const second = await renderHook(useNewSessionPreflightConfigOptionsState, { initialProps: f.picker('pending-config') });
+    try {
+        await vi.waitFor(() => expect(f.issued).toEqual(['pending-config']));
+        await first.unmount();
+        await flushHookEffects();
+        expect(f.cancelled).toHaveLength(0);
+        expect(second.getCurrent().probe.phase).toBe('loading');
+        await second.unmount();
+        await vi.waitFor(() => expect(f.cancelled).toHaveLength(1));
+    } finally { await first.unmount(); await second.unmount(); await f.dispose(); }
+});
+
+it('binds config resource cancellation to its consumer through Action and Machine, not a neighboring signal', async () => {
+    const f = await preflightHome({ inventory: 'config' });
+    const owner = new AbortController();
+    const neighbor = new AbortController();
+    const pending = configCache.runDynamicConfigOptionsProbeDedupe('owned-config', signal =>
+        invokeAgentInventoryProbeAction({ ...f.params('pending-config'), signal }, 'probeConfigOptions'), owner.signal)
+        .then(value => value, (error: unknown) => error);
+    try {
+        await vi.waitFor(() => expect(f.issued).toEqual(['pending-config']));
+        neighbor.abort();
+        await flushHookEffects();
+        expect(f.cancelled).toHaveLength(0);
+        owner.abort();
+        await vi.waitFor(() => expect(f.cancelled).toHaveLength(1));
+        expect(await pending).toBeInstanceOf(Error);
+    } finally { owner.abort(); await f.dispose(); }
+});
+
+it.each([false, true])('retains config unknown without automatic resubmission and permits explicit Refresh (last good: %s)', async retain => {
+    const f = await preflightHome({ inventory: 'config', holdLost: true });
+    f.mode.set('config-machine', retain ? 'success' : 'lost');
+    const picker = await renderHook(useNewSessionPreflightConfigOptionsState, { initialProps: f.picker('config-machine') });
+    let lastGoodAt: number | null = null;
+    try {
+        if (retain) {
+            await vi.waitFor(() => expect(picker.getCurrent().configOptions).toEqual(f.configObservation.configOptions));
+            lastGoodAt = picker.getCurrent().probe.refreshedAt;
+            f.mode.set('config-machine', 'lost');
+            await act(async () => picker.getCurrent().probe.onRefresh());
+        }
+        await vi.waitFor(() => expect(f.loseReplies).toHaveLength(1));
+        vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+        await act(async () => {
+            // Separate the failure's observation time from the successful data age.
+            vi.advanceTimersByTime(1_000);
+            f.loseReplies[0]!();
+        });
+        await vi.waitFor(() => expect(picker.getCurrent().probe.phase).toBe('idle'));
+        expect(picker.getCurrent().probe).toMatchObject({ reason: 'outcomeUnknown', requestDisposition: 'outcomeUnknown', refreshedAt: lastGoodAt });
+        expect(picker.getCurrent().configOptions).toEqual(retain ? f.configObservation.configOptions : null);
+        const count = retain ? 2 : 1;
+        await act(async () => vi.advanceTimersByTimeAsync(configCache.DYNAMIC_CONFIG_OPTIONS_PROBE_ERROR_BACKOFF_MS * 2));
+        expect(f.issued).toHaveLength(count);
+        await picker.unmount();
+        const next = await renderHook(useNewSessionPreflightConfigOptionsState, { initialProps: f.picker('config-machine') });
+        try {
+            await flushHookEffects();
+            expect(f.issued).toHaveLength(count);
+            expect(next.getCurrent().probe).toMatchObject({ reason: 'outcomeUnknown', requestDisposition: 'outcomeUnknown', refreshedAt: lastGoodAt });
+            expect(next.getCurrent().configOptions).toEqual(retain ? f.configObservation.configOptions : null);
+            f.mode.set('config-machine', 'success');
+            await act(async () => next.getCurrent().probe.onRefresh());
+            await vi.waitFor(() => expect(next.getCurrent().configOptions).toEqual(f.configObservation.configOptions));
+            await vi.waitFor(() => expect(next.getCurrent().probe.phase).toBe('idle'));
+            expect(next.getCurrent().probe).not.toHaveProperty('reason', 'outcomeUnknown');
+            expect(next.getCurrent().probe.refreshedAt).toBeGreaterThan(lastGoodAt ?? 0);
+            expect(f.issued).toHaveLength(count + 1);
+        } finally { await next.unmount(); }
+    } finally { vi.useRealTimers(); await picker.unmount(); await f.dispose(); }
+});
+
+it('keeps definite config unavailability on the ordinary recovery policy', async () => {
+    const f = await preflightHome({ inventory: 'config' });
+    f.mode.set('config-machine', 'unavailable');
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const picker = await renderHook(useNewSessionPreflightConfigOptionsState, { initialProps: f.picker('config-machine') });
+    try {
+        await vi.waitFor(() => expect(picker.getCurrent().unavailable).toBe(true));
+        expect(picker.getCurrent().probe).not.toHaveProperty('reason', 'outcomeUnknown');
+        f.mode.set('config-machine', 'success');
+        await act(async () => vi.advanceTimersByTimeAsync(configCache.DYNAMIC_CONFIG_OPTIONS_PROBE_ERROR_BACKOFF_MS + 1));
+        await vi.waitFor(() => expect(picker.getCurrent().configOptions).toEqual(f.configObservation.configOptions));
+        expect(picker.getCurrent().unavailable).toBe(false);
+        expect(f.issued).toEqual(['config-machine', 'config-machine']);
     } finally { vi.useRealTimers(); await picker.unmount(); await f.dispose(); }
 });

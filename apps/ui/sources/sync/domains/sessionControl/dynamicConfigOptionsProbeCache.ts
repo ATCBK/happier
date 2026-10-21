@@ -1,9 +1,9 @@
 import { normalizeAcpConfigOptionsArray, type AcpConfigOption } from '@/sync/domains/sessionControl/configOptionsControl';
 import type { ProbedResourceSnapshot } from '@happier-dev/protocol';
 
-import { createPersistentProbedResourceCache } from '@/sync/runtime/probedResources/createPersistentProbedResourceCache';
+import { createPersistentProbedResourceCache, ProbedResourceError, type ProbedResourceFailure } from '@/sync/runtime/probedResources/createPersistentProbedResourceCache';
 
-export type DynamicConfigOptionsProbeCacheEntry =
+export type DynamicConfigOptionsProbeCacheEntry = ProbedResourceFailure & (
     | Readonly<{
         kind: 'success';
         updatedAt: number;
@@ -11,7 +11,7 @@ export type DynamicConfigOptionsProbeCacheEntry =
         value: readonly AcpConfigOption[];
         unavailable?: boolean;
     }>
-    | Readonly<{ kind: 'error'; updatedAt: number; expiresAt: number }>;
+    | Readonly<{ kind: 'error'; updatedAt: number; expiresAt: number }>);
 
 export const DYNAMIC_CONFIG_OPTIONS_PROBE_SUCCESS_TTL_MS = 24 * 60 * 60_000;
 export const DYNAMIC_CONFIG_OPTIONS_PROBE_ERROR_BACKOFF_MS = 60_000;
@@ -69,12 +69,14 @@ export function readDynamicConfigOptionsProbeCache(key: string): DynamicConfigOp
     const transientUnavailable = readTransientUnavailable(key);
     if (transientUnavailable) return transientUnavailable;
     const snap: ProbedResourceSnapshot<readonly AcpConfigOption[]> = persistedCache.getSnapshot(key);
+    const failure = snap.error instanceof ProbedResourceError ? snap.error.failure : undefined;
     if (snap.dataUpdatedAt !== null && snap.data) {
         return {
             kind: 'success',
             updatedAt: snap.dataUpdatedAt,
             expiresAt: snap.dataUpdatedAt + DYNAMIC_CONFIG_OPTIONS_PROBE_SUCCESS_TTL_MS,
             value: snap.data,
+            ...failure,
         };
     }
     if (snap.errorUpdatedAt !== null) {
@@ -82,6 +84,7 @@ export function readDynamicConfigOptionsProbeCache(key: string): DynamicConfigOp
             kind: 'error',
             updatedAt: snap.errorUpdatedAt,
             expiresAt: snap.errorUpdatedAt + DYNAMIC_CONFIG_OPTIONS_PROBE_ERROR_BACKOFF_MS,
+            ...failure,
         };
     }
     return null;
@@ -96,9 +99,9 @@ export function writeDynamicConfigOptionsProbeCacheSuccess(
     persistedCache.writeSuccess(key, value, nowMs);
 }
 
-export function writeDynamicConfigOptionsProbeCacheError(key: string, nowMs = Date.now()): void {
+export function writeDynamicConfigOptionsProbeCacheError(key: string, nowMs = Date.now(), failure?: ProbedResourceFailure): void {
     transientUnavailableByKey.delete(key);
-    persistedCache.writeError(key, new Error('dynamic-config-options-probe-failed'), nowMs);
+    persistedCache.writeError(key, new ProbedResourceError('dynamic-config-options-probe-failed', failure), nowMs);
 }
 
 export function writeDynamicConfigOptionsProbeCacheUnavailable(key: string, nowMs = Date.now()): void {
@@ -112,7 +115,8 @@ export function writeDynamicConfigOptionsProbeCacheUnavailable(key: string, nowM
 
 export async function runDynamicConfigOptionsProbeDedupe<T>(
     key: string,
-    run: () => Promise<T>,
+    run: (signal: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
 ): Promise<T> {
-    return await persistedCache.runDedupe(key, run);
+    return await persistedCache.runDedupe(key, run, signal);
 }

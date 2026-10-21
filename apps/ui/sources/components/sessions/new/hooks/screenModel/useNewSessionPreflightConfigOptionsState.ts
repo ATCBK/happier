@@ -21,6 +21,7 @@ import {
     type NewSessionCapabilityProbeContext,
 } from '@/components/sessions/new/modules/newSessionCapabilityProbeContext';
 import { NEW_SESSION_CAPABILITY_PROBE_TIMEOUT_MS } from '@/components/sessions/new/modules/newSessionCapabilityProbeTimeoutMs';
+import type { ProbedResourceFailure } from '@/sync/runtime/probedResources/createPersistentProbedResourceCache';
 import {
     scheduleProbedResourceRetryAfterDelay,
     scheduleProbedResourceRetryAfterExpiry,
@@ -40,6 +41,8 @@ export function useNewSessionPreflightConfigOptionsState(params: Readonly<{
     probe: Readonly<{
         phase: 'idle' | 'loading' | 'refreshing';
         refreshedAt: number | null;
+        reason?: ProbedResourceFailure['reason'];
+        requestDisposition?: ProbedResourceFailure['requestDisposition'];
         onRefresh: () => void;
     }>;
 }> {
@@ -47,6 +50,7 @@ export function useNewSessionPreflightConfigOptionsState(params: Readonly<{
     const [unavailable, setUnavailable] = React.useState(false);
     const [probePhase, setProbePhase] = React.useState<'idle' | 'loading' | 'refreshing'>('idle');
     const [refreshedAt, setRefreshedAt] = React.useState<number | null>(null);
+    const [failure, setFailure] = React.useState<ProbedResourceFailure>({});
     const [refreshNonce, setRefreshNonce] = React.useState(0);
     const lastHandledRefreshNonceRef = React.useRef(0);
     const configOptionsRef = React.useRef<readonly AcpConfigOption[] | null>(null);
@@ -118,6 +122,7 @@ export function useNewSessionPreflightConfigOptionsState(params: Readonly<{
 
     React.useEffect(() => {
         if (params.enabled === false) {
+            setFailure({});
             setConfigOptions(null);
             configOptionsRef.current = null;
             setUnavailable(false);
@@ -128,6 +133,7 @@ export function useNewSessionPreflightConfigOptionsState(params: Readonly<{
             return;
         }
         if (!cacheKey || !agentType) {
+            setFailure({});
             setConfigOptions(null);
             configOptionsRef.current = null;
             setUnavailable(false);
@@ -145,6 +151,7 @@ export function useNewSessionPreflightConfigOptionsState(params: Readonly<{
         }
 
         const cacheEntry = readDynamicConfigOptionsProbeCache(cacheKey);
+        setFailure({ reason: cacheEntry?.reason, requestDisposition: cacheEntry?.requestDisposition });
         const cached = cacheEntry?.kind === 'success' ? cacheEntry.value : null;
         const scopeStable = lastScopeKeyRef.current !== null && probeScopeKey !== null && lastScopeKeyRef.current === probeScopeKey;
         lastScopeKeyRef.current = probeScopeKey;
@@ -164,9 +171,9 @@ export function useNewSessionPreflightConfigOptionsState(params: Readonly<{
         }
 
         const nowMs = Date.now();
-        if (!shouldForceProbe && cacheEntry && nowMs >= 0 && nowMs < cacheEntry.expiresAt) {
+        if (!shouldForceProbe && cacheEntry && (cacheEntry.reason === 'outcomeUnknown' || (nowMs >= 0 && nowMs < cacheEntry.expiresAt))) {
             setProbePhase('idle');
-            retryTimeout = scheduleProbedResourceRetryAfterExpiry(cacheEntry, nowMs, () => {
+            retryTimeout = cacheEntry.reason === 'outcomeUnknown' ? null : scheduleProbedResourceRetryAfterExpiry(cacheEntry, nowMs, () => {
                 setRefreshNonce((n) => n + 1);
             });
             return () => {
@@ -175,6 +182,7 @@ export function useNewSessionPreflightConfigOptionsState(params: Readonly<{
         }
 
         let cancelled = false;
+        const controller = new AbortController();
         const run = async () => {
             const probeAgentType = agentType;
             if (!probeAgentType) return;
@@ -182,15 +190,17 @@ export function useNewSessionPreflightConfigOptionsState(params: Readonly<{
             setProbePhase(configOptionsRef.current ? 'refreshing' : 'loading');
             const cwd = typeof params.cwd === 'string' ? params.cwd.trim() : '';
             const attempt = await runDynamicConfigOptionsProbeDedupe<Readonly<{
-                value: readonly AcpConfigOption[];
-                cacheable: boolean;
+                value?: readonly AcpConfigOption[];
+                cacheable?: boolean;
                 unavailable?: boolean;
-            }> | null>(cacheKey, async () => {
+                failure?: ProbedResourceFailure;
+            }> | null>(cacheKey, async (signal) => {
                 const response = await invokeAgentInventoryProbeAction({
                     agentId: probeAgentType,
                     machineId: params.selectedMachineId!,
                     serverId: params.capabilityServerId,
                     backendTarget: backendTargetForProbe,
+                    signal,
                     capabilityParams: {
                             timeoutMs: NEW_SESSION_CAPABILITY_PROBE_TIMEOUT_MS,
                             ...(probeContextCapabilityParams ? probeContextCapabilityParams : {}),
@@ -198,21 +208,33 @@ export function useNewSessionPreflightConfigOptionsState(params: Readonly<{
                     },
                 }, 'probeConfigOptions');
 
-                if (!response.supported) return null;
+                if (!response.supported) return { failure: {
+                    reason: response.reason,
+                    ...(response.requestDisposition ? { requestDisposition: response.requestDisposition } : {}),
+                } };
                 if (!response.response.ok) return null;
-                const result = response.response.result as any;
-                const source = typeof result?.source === 'string' ? result.source : null;
+                const result = response.response.result;
+                if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
+                const record = result as Record<string, unknown>;
+                const source = typeof record.source === 'string' ? record.source : null;
                 if (source === 'unavailable') {
                     return { value: [], cacheable: false, unavailable: true };
                 }
-                const normalized = normalizeAcpConfigOptionsArray(result?.configOptions);
+                const normalized = normalizeAcpConfigOptionsArray(record.configOptions);
                 if (!normalized) return null;
                 const cacheable = source !== 'static';
                 return { value: normalized, cacheable };
-            });
+            }, controller.signal);
 
             if (cancelled) return;
             const commitNowMs = Date.now();
+            const probeFailure = attempt?.failure;
+            setFailure(probeFailure ?? {});
+            if (probeFailure?.reason === 'outcomeUnknown') {
+                writeDynamicConfigOptionsProbeCacheError(cacheKey, commitNowMs, probeFailure);
+                setProbePhase('idle');
+                return;
+            }
             const value = attempt?.value ?? null;
             const nextUnavailable = attempt?.unavailable === true;
 
@@ -271,7 +293,7 @@ export function useNewSessionPreflightConfigOptionsState(params: Readonly<{
                 return;
             }
 
-            writeDynamicConfigOptionsProbeCacheError(cacheKey, commitNowMs);
+            writeDynamicConfigOptionsProbeCacheError(cacheKey, commitNowMs, probeFailure);
             setUnavailable(false);
             setProbePhase('idle');
             retryTimeout = setTimeout(() => {
@@ -279,9 +301,12 @@ export function useNewSessionPreflightConfigOptionsState(params: Readonly<{
             }, DYNAMIC_CONFIG_OPTIONS_PROBE_ERROR_BACKOFF_MS);
         };
 
-        void run();
+        void run().catch(() => {
+            if (!cancelled) setProbePhase('idle');
+        });
         return () => {
             cancelled = true;
+            controller.abort();
             if (retryTimeout) clearTimeout(retryTimeout);
         };
     }, [agentType, backendTargetForProbe, cacheKey, params.enabled, params.capabilityServerId, params.cwd, params.selectedMachineId, probeContextCapabilityParams, probeContextKey, probeScopeKey, refreshNonce]);
@@ -292,6 +317,7 @@ export function useNewSessionPreflightConfigOptionsState(params: Readonly<{
         probe: {
             phase: probePhase,
             refreshedAt,
+            ...failure,
             onRefresh,
         },
     };
