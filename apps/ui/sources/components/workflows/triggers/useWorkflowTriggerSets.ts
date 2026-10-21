@@ -3,7 +3,7 @@ import type { WorkflowTriggerListRequestV1, WorkflowTriggerSetV1 } from '@happie
 
 import { getStorage, useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
 import { serverAccountScopeKeySuffix, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
-import { createWorkflowTriggerChangeSelector, createWorkflowTriggerSetSelector } from '@/sync/store/domains/automations';
+import { applyWorkflowTriggerSnapshotReceipt, createWorkflowTriggerChangeSelector, createWorkflowTriggerSetSelector } from '@/sync/store/domains/automations';
 import { listWorkflowTriggerSets } from '@/sync/domains/workflows/workflowTriggerActions';
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -30,15 +30,38 @@ export function useWorkflowTriggerSets(request: WorkflowTriggerListRequestV1 | n
     const readRequest = React.useMemo<WorkflowTriggerListRequestV1 | null>(() => queryKey === '' ? null
         : workflow === null ? { scope: requestedScope } : { workflow }, [queryKey, workflow, requestedScope]);
     const identity = React.useMemo(() => ({}), [queryKey, scopeKey, lifetime]);
+    const committedIdentity = React.useRef(identity);
+    React.useLayoutEffect(() => { committedIdentity.current = identity; }, [identity]);
     const selector = React.useMemo(() => focused ? createWorkflowTriggerSetSelector(queryKey, workflow !== null)
         : () => EMPTY_SETS, [focused, queryKey, workflow]);
     const sets = getStorage()(selector);
     const changeSelector = React.useMemo(() => !focused || queryKey === '' ? () => ''
         : createWorkflowTriggerChangeSelector(null, workflow, requestedScope === 'account_all'), [focused, queryKey, workflow, requestedScope]);
     const changeSignal = getStorage()(changeSelector);
-    const [state, setState] = React.useState<{ identity: object; status: 'loading' | 'ready' | 'failed'; sets?: readonly WorkflowTriggerSetV1[] }>(
+    const [state, setState] = React.useState<{ identity: object; status: 'loading' | 'ready' | 'failed' }>(
         () => ({ identity, status: request === null ? 'ready' : 'loading' }),
     );
+    const snapshot = React.useRef<Readonly<{ identity: object; sets: readonly WorkflowTriggerSetV1[] }> | null>(null);
+    const pendingRead = React.useRef<Readonly<{ identity: object; controller: AbortController }> | null>(null);
+    const acknowledge = React.useCallback((written: WorkflowTriggerSetV1) => {
+        if (!addressed || queryKey === '' || committedIdentity.current !== identity || !lifetime?.isCurrent()) return;
+        const previous = snapshot.current?.identity === identity ? snapshot.current.sets : EMPTY_SETS;
+        const next = applyWorkflowTriggerSnapshotReceipt(previous, queryKey, written);
+        if (next === null) return;
+        // This consumer's pending answer predates the receipt. Shared readers keep
+        // their transport; this read must not replace its acknowledgement with it.
+        if (pendingRead.current?.identity === identity) pendingRead.current.controller.abort();
+        snapshot.current = { identity, sets: next };
+        setState(current => next === previous && current.identity === identity && current.status === 'ready'
+            ? current : { identity, status: 'ready' });
+    }, [addressed, identity, lifetime, queryKey]);
+    React.useLayoutEffect(() => {
+        // When focus moves, retain this Account's last committed projection, including
+        // local write receipts. The earlier HTTP answer must not replace that view.
+        if (addressed && focused && state.identity === identity && lifetime?.isCurrent()) {
+            snapshot.current = { identity, sets };
+        }
+    }, [addressed, focused, identity, lifetime, sets, state]);
     const [attempt, setAttempt] = React.useState(0);
     React.useEffect(() => !accountLifetime ? undefined : subscribeHomeAccountChange(event => {
         if (areServerProfileIdentifiersEquivalent(event.serverId, accountLifetime.scope.serverId)) setAttempt(value => value + 1);
@@ -52,6 +75,8 @@ export function useWorkflowTriggerSets(request: WorkflowTriggerListRequestV1 | n
             return;
         }
         const controller = new AbortController();
+        const pending = { identity, controller };
+        pendingRead.current = pending;
         const retirement = lifetime.onRetire(() => { controller.abort(); setState({ identity, status: 'failed' }); });
         // A settled read keeps its answer while it refreshes (a change signal or a retry after
         // success): the store still holds the last-known sets, so nothing reverts to loading.
@@ -60,13 +85,19 @@ export function useWorkflowTriggerSets(request: WorkflowTriggerListRequestV1 | n
             : { identity, status: 'loading' });
         listWorkflowTriggerSets(readRequest, { signal: controller.signal,
             ...(addressed ? { accountLifetime } : {}) }).then(result => {
-            if (!controller.signal.aborted && lifetime.isCurrent()) setState({ identity, status: 'ready', ...(addressed ? { sets: result } : {}) });
+            if (!controller.signal.aborted && lifetime.isCurrent()) {
+                if (addressed) snapshot.current = { identity, sets: result };
+                setState({ identity, status: 'ready' });
+            }
         }).catch(() => {
             if (!controller.signal.aborted && lifetime.isCurrent()) setState(current => ({
                 ...(current.identity === identity ? current : {}), identity, status: 'failed',
             }));
         });
-        return () => { controller.abort(); retirement.dispose(); };
+        return () => {
+            controller.abort(); retirement.dispose();
+            if (pendingRead.current === pending) pendingRead.current = null;
+        };
     }, [attempt, changeSignal, identity, readRequest, addressed, accountLifetime, lifetime]);
     const retry = React.useCallback(() => setAttempt((value) => value + 1), []);
     // A read that failed while the Home was still being reached (right after sign-in or a restart) has not
@@ -82,5 +113,6 @@ export function useWorkflowTriggerSets(request: WorkflowTriggerListRequestV1 | n
     const status = state.identity !== identity ? 'loading' as const
         : state.status === 'failed' && homeSettling ? 'loading' as const : state.status;
     return { sets: request === null ? EMPTY_SETS : addressed ? state.identity === identity && accountLifetime?.isCurrent()
-        ? focused ? sets : state.sets ?? EMPTY_SETS : EMPTY_SETS : sets, status: request === null ? 'ready' as const : status, retry };
+        ? focused ? sets : snapshot.current?.identity === identity ? snapshot.current.sets : EMPTY_SETS
+        : EMPTY_SETS : sets, status: request === null ? 'ready' as const : status, retry, acknowledge };
 }

@@ -58,6 +58,45 @@ function mergeTriggerSets(previous: AutomationsDomain['workflowTriggerSetsById']
     return next ?? previous;
 }
 
+function matchesTriggerTargetQuery(queryKey: string, set: WorkflowTriggerSetV1 | undefined) {
+    // Session and Account-census membership is independent of the target.
+    if (queryKey !== 'account_inline' && !queryKey.startsWith('workflow:')) return true;
+    // An unavailable source supplies no new target authority.
+    const target = set?.target;
+    return !target || queryKey === (target.kind === 'workflow' ? `workflow:${target.ref}` : 'account_inline');
+}
+
+function isNewerTriggerReceipt(known: WorkflowTriggerSetV1 | undefined, written: WorkflowTriggerSetV1) {
+    return known === undefined || written.revision > known.revision;
+}
+
+/** An addressed read retains canonical receipts without publishing into another focused Account. */
+export function applyWorkflowTriggerSnapshotReceipt(
+    previous: readonly WorkflowTriggerSetV1[], queryKey: string, written: WorkflowTriggerSetV1,
+) {
+    const index = previous.findIndex(set => set.automationId === written.automationId);
+    const known = index < 0 ? undefined : previous[index];
+    if (known && written.revision < known.revision) return null;
+    if (!matchesTriggerTargetQuery(queryKey, written)) return index < 0 ? null
+        : previous.filter(set => set.automationId !== written.automationId);
+    if (!isNewerTriggerReceipt(known, written)) return previous;
+    return index < 0 ? [...previous, written] : previous.map((set, position) => position === index ? written : set);
+}
+
+function reconcileTriggerTargetMemberships(
+    windows: AutomationsDomain['workflowTriggerSetIdsByQuery'],
+    facts: AutomationsDomain['workflowTriggerSetsById'],
+    observedIds: ReadonlySet<string>,
+) {
+    let next = windows;
+    for (const [queryKey, ids] of Object.entries(windows)) {
+        if (queryKey !== 'account_inline' && !queryKey.startsWith('workflow:')) continue;
+        const retained = ids.filter(id => !observedIds.has(id) || matchesTriggerTargetQuery(queryKey, facts[id]));
+        if (retained.length !== ids.length) next = { ...next, [queryKey]: retained };
+    }
+    return next;
+}
+
 const EMPTY_TRIGGER_SETS: readonly WorkflowTriggerSetV1[] = [];
 /** One reader instance per mounted query; unrelated queries keep the same selected value. */
 export function createWorkflowTriggerSetSelector(queryKey: string, includeEmpty = false) {
@@ -377,28 +416,26 @@ export function createAutomationsDomain<S extends AutomationsDomain & Automation
             set((state) => {
                 if (!state.profileScope) return state;
                 const facts = mergeTriggerSets(state.workflowTriggerSetsById, sets, state.profileScope, triggerReceiptOrdering);
-                const ids = sets.map((value) => value.automationId);
+                const observedIds = sets.map((value) => value.automationId);
+                const ids = observedIds.filter(id => matchesTriggerTargetQuery(queryKey, facts[id]));
                 const previous = state.workflowTriggerSetIdsByQuery[queryKey];
                 const unchanged = previous !== undefined && ids.length === previous.length && ids.every((id, index) => previous[index] === id);
-                if (facts === state.workflowTriggerSetsById && unchanged) return state;
+                const windows = reconcileTriggerTargetMemberships(unchanged ? state.workflowTriggerSetIdsByQuery
+                    : { ...state.workflowTriggerSetIdsByQuery, [queryKey]: ids }, facts, new Set(observedIds));
+                if (facts === state.workflowTriggerSetsById && windows === state.workflowTriggerSetIdsByQuery) return state;
                 return {
                     ...state,
                     workflowTriggerSetsById: facts,
-                    workflowTriggerSetIdsByQuery: unchanged ? state.workflowTriggerSetIdsByQuery
-                        : { ...state.workflowTriggerSetIdsByQuery, [queryKey]: ids },
+                    workflowTriggerSetIdsByQuery: windows,
                 };
             });
         },
         upsertWorkflowTriggerSet: ({ queryKey, set: written }) => {
             set((state) => {
-                if (!state.profileScope || !triggerReceiptOrdering.admit(state.profileScope, written.automationId, written.revision)) return state;
+                if (!state.profileScope || !isNewerTriggerReceipt(state.workflowTriggerSetsById[written.automationId], written)
+                    || !triggerReceiptOrdering.admit(state.profileScope, written.automationId, written.revision)) return state;
                 const facts = mergeTriggerSets(state.workflowTriggerSetsById, [written], state.profileScope, triggerReceiptOrdering);
                 let windows = state.workflowTriggerSetIdsByQuery;
-                // Retargeting an Account inline set to a saved workflow moves
-                // its membership; it is not still an inline trigger row.
-                if (queryKey?.startsWith('workflow:') && windows.account_inline?.includes(written.automationId)) {
-                    windows = { ...windows, account_inline: windows.account_inline.filter((id) => id !== written.automationId) };
-                }
                 if (queryKey && !(windows[queryKey] ?? []).includes(written.automationId)) {
                     windows = { ...windows, [queryKey]: [...(windows[queryKey] ?? []), written.automationId] };
                 }
@@ -407,6 +444,7 @@ export function createAutomationsDomain<S extends AutomationsDomain & Automation
                 if (windows.account_all && !windows.account_all.includes(written.automationId)) {
                     windows = { ...windows, account_all: [...windows.account_all, written.automationId] };
                 }
+                windows = reconcileTriggerTargetMemberships(windows, facts, new Set([written.automationId]));
                 if (facts === state.workflowTriggerSetsById && windows === state.workflowTriggerSetIdsByQuery) return state;
                 return { ...state, workflowTriggerSetsById: facts, workflowTriggerSetIdsByQuery: windows };
             });

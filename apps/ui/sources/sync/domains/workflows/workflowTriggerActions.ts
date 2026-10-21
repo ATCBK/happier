@@ -7,7 +7,7 @@ import { callWorkflowAction, type WorkflowActionExecute } from './callWorkflowAc
 import { getStorage } from '@/sync/domains/state/storage';
 import { captureActiveServerAccountScopeCurrentness, captureActiveServerAccountScopeLifetime, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { WorkflowActionError } from './workflowActionError';
-import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 /**
@@ -33,7 +33,39 @@ type CallOptions = Readonly<{
     execute?: WorkflowActionExecute;
     /** Host-owned target facts, used only when the Action needs native host observations. */
     context?: Omit<ActionExecutorContext, 'signal'>;
+    /** The shared pending read still owns publication after awaiting its transport. */
+    isTriggerListCurrent?: () => boolean;
 }>;
+
+/** Only in-flight work is retained; empty lifetime entries are removed on settlement/invalidation. */
+const pendingTriggerLists = new Map<ServerAccountScopeLifetime, Map<string, Promise<readonly WorkflowTriggerSetV1[]>>>();
+
+function sameTriggerAccountScope(left: ServerAccountScope, right: ServerAccountScope) {
+    return left.accountId === right.accountId && areServerProfileIdentifiersEquivalent(left.serverId, right.serverId);
+}
+
+function invalidatePendingTriggerLists(scope: ServerAccountScope, automationId: string, written: WorkflowTriggerSetV1 | null,
+    requestedWorkflow: string | null) {
+    const queries = new Set(['account_all']);
+    if (requestedWorkflow) queries.add(`workflow:${requestedWorkflow}`);
+    if (written?.target && !written.scopeSessionId) {
+        queries.add(written.target.kind === 'workflow' ? `workflow:${written.target.ref}` : 'account_inline');
+    }
+    const state = getStorage().getState();
+    if (state.profileScope && sameTriggerAccountScope(state.profileScope, scope)) {
+        for (const [query, ids] of Object.entries(state.workflowTriggerSetIdsByQuery)) {
+            if (ids.includes(automationId)) queries.add(query);
+        }
+    }
+    const requestKeys = new Set([...queries].flatMap(query => query.startsWith('workflow:')
+        ? [JSON.stringify({ workflow: query.slice('workflow:'.length) })]
+        : query === 'account_all' || query === 'account_inline' ? [JSON.stringify({ scope: query })] : []));
+    for (const [lifetime, pending] of pendingTriggerLists) {
+        if (!sameTriggerAccountScope(lifetime.scope, scope)) continue;
+        for (const key of requestKeys) pending.delete(key);
+        if (pending.size === 0 && pendingTriggerLists.get(lifetime) === pending) pendingTriggerLists.delete(lifetime);
+    }
+}
 
 async function callTriggerAction<TResult>(
     actionId: ActionId,
@@ -42,6 +74,7 @@ async function callTriggerAction<TResult>(
     options: CallOptions,
 ): Promise<TResult> {
     const scope = options.accountLifetime === undefined ? captureActiveServerAccountScopeCurrentness() : options.accountLifetime;
+    const accountScope = options.accountLifetime === undefined ? getActiveServerAccountScope() : options.accountLifetime?.scope ?? null;
     const result = await callWorkflowAction({
         actionId,
         input,
@@ -54,30 +87,40 @@ async function callTriggerAction<TResult>(
     });
     if (!scope?.isCurrent()) throw new WorkflowActionError({ message: 'action_account_scope_changed', rawCode: 'action_account_scope_changed' });
     options.signal?.throwIfAborted();
+    const request = typeof input === 'object' && input !== null ? input : {};
+    const workflow = 'workflow' in request && typeof request.workflow === 'string' ? request.workflow : null;
+    const written = !actionId.endsWith('.list') && typeof result === 'object' && result !== null && 'set' in result
+        ? WorkflowTriggerWriteResultV1Schema.parse(result).set : null;
+    const removed = actionId === 'workflow.trigger.remove' && typeof result === 'object' && result !== null && 'deleted' in result
+        ? WorkflowTriggerRemoveResultV1Schema.parse(result) : null;
+    const mutatedId = written?.automationId ?? (removed && 'deleted' in removed ? removed.automationId : null);
+    if (accountScope && mutatedId) {
+        // Reads already in flight can predate this successful write, including
+        // reads started while it was pending. Keep their shared transport alive,
+        // but retire their publication before the canonical receipt is applied.
+        invalidatePendingTriggerLists(accountScope, mutatedId, written, workflow);
+    }
     // The incumbent Automation store is focused-Account content. An addressed read returns
     // the same FIN observation to its mounted consumer without publishing into another Home.
     if (options.accountLifetime) {
         const active = getActiveServerAccountScope();
-        if (!active || active.accountId !== options.accountLifetime.scope.accountId
-            || !areServerProfileIdentifiersEquivalent(active.serverId, options.accountLifetime.scope.serverId)) return result;
+        if (!active || !sameTriggerAccountScope(active, options.accountLifetime.scope)) return result;
     }
-    const request = typeof input === 'object' && input !== null ? input : {};
     // A deliberate retained-template review is a private draft, not an Account list observation.
     if (actionId === 'workflow.trigger.list' && 'review' in request && request.review === true) return result;
     const sessionId = 'sessionId' in request && typeof request.sessionId === 'string' ? request.sessionId : null;
-    const workflow = 'workflow' in request && typeof request.workflow === 'string' ? request.workflow : null;
     const queryKey = sessionId ? `session:${sessionId}` : workflow ? `workflow:${workflow}`
         : 'scope' in request && request.scope === 'account_all' ? 'account_all' : 'account_inline';
     if (actionId.endsWith('.list')) {
+        if (options.isTriggerListCurrent?.() === false) return result;
         const page = WorkflowTriggerListResultV1Schema.shape.sets.parse(
             typeof result === 'object' && result !== null && 'sets' in result ? result.sets : undefined,
         );
         getStorage().getState().applyWorkflowTriggerSetPage({ queryKey, sets: page });
-    } else if (actionId === 'workflow.trigger.remove' && typeof result === 'object' && result !== null && 'deleted' in result) {
-        const removed = WorkflowTriggerRemoveResultV1Schema.parse(result);
-        if ('deleted' in removed) getStorage().getState().removeAutomation(removed.automationId, removed.removedRevision);
+    } else if (removed && 'deleted' in removed) {
+        getStorage().getState().removeAutomation(removed.automationId, removed.removedRevision);
     } else {
-        const written = WorkflowTriggerWriteResultV1Schema.parse(result).set;
+        if (!written) return result;
         // A missing-source result has no readable target. Keep its known
         // memberships rather than guessing that it belongs to Account inline.
         const writtenQueryKey = sessionId || workflow ? queryKey
@@ -92,8 +135,6 @@ async function callTriggerAction<TResult>(
 }
 
 /** A workflow's trigger sets (one per Account and workflow, U1), or the Account's inline triggers. */
-const pendingTriggerLists = new WeakMap<object, Map<string, Promise<readonly WorkflowTriggerSetV1[]>>>();
-
 export async function listWorkflowTriggerSets(
     request: z.input<typeof WorkflowTriggerListRequestV1Schema>,
     options: CallOptions = {},
@@ -110,18 +151,20 @@ export async function listWorkflowTriggerSets(
     const existing = pending?.get(key);
     const controller = shared && !existing ? new AbortController() : null;
     const retirement = controller && lifetime ? lifetime.onRetire(() => controller.abort()) : null;
-    const promise = existing ?? callTriggerAction(
+    const promise: Promise<readonly WorkflowTriggerSetV1[]> = existing ?? callTriggerAction(
         'workflow.trigger.list',
         parsed,
         (value) => WorkflowTriggerListResultV1Schema.parse(value),
         shared ? { ...(controller ? { signal: controller.signal } : {}),
-            ...(options.accountLifetime === undefined ? {} : { accountLifetime: options.accountLifetime }) } : options,
+            ...(options.accountLifetime === undefined ? {} : { accountLifetime: options.accountLifetime }),
+            isTriggerListCurrent: () => pending?.get(key) === promise } : options,
     ).then(result => result.sets);
     if (pending && !existing) {
         pending.set(key, promise);
         void promise.finally(() => {
             retirement?.dispose();
             if (pending?.get(key) === promise) pending.delete(key);
+            if (pending?.size === 0 && lifetime && pendingTriggerLists.get(lifetime) === pending) pendingTriggerLists.delete(lifetime);
         }).catch(() => undefined);
     }
     const sets = await promise;

@@ -17,7 +17,7 @@ import type {
     AutomationDefinitionRun,
 } from '@/sync/domains/automations/automationTypes';
 import { loadSyncTuning } from '@/sync/runtime/syncTuning';
-import { createAutomationRunFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { createAutomationRunFixture, createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 
 import { createAutomationsDomain, createWorkflowTriggerChangeSelector, createWorkflowTriggerSetSelector } from './automations';
 import type { WorkflowTriggerSetV1 } from '@happier-dev/protocol';
@@ -243,7 +243,7 @@ describe('shared workflow trigger observations', () => {
         expect(select(h.get()).map((set) => set.automationId)).toEqual(['legacy']);
     });
 
-    it('suppresses an unchanged observation in the real store and retires inline membership on retarget', () => {
+    it('suppresses unchanged observations and retires previous target membership on current reads', () => {
         const store = createStore<State>((set, get) => ({
             profileScope,
             ...createWorkflowRunsDomain<State>({ get, set }),
@@ -252,6 +252,12 @@ describe('shared workflow trigger observations', () => {
         const written: WorkflowTriggerSetV1 = { automationId: '11111111-1111-4111-8111-111111111111', revision: 1,
             enabled: true, health: 'available', triggers: [] };
         store.getState().applyWorkflowTriggerSetPage({ queryKey: 'account_inline', sets: [written] });
+        const unrelatedQuery = 'workflow:00000000-0000-4000-8000-000000000007';
+        store.getState().applyWorkflowTriggerSetPage({ queryKey: unrelatedQuery,
+            sets: [{ ...written, automationId: 'unrelated-set', target: { kind: 'workflow', ref: unrelatedQuery.slice('workflow:'.length) } }] });
+        const selectUnrelated = createWorkflowTriggerSetSelector(unrelatedQuery, true);
+        const unrelatedSelection = selectUnrelated(store.getState());
+        const unrelatedMembership = store.getState().workflowTriggerSetIdsByQuery[unrelatedQuery];
         let notifications = 0;
         const dispose = store.subscribe(() => { notifications += 1; });
         store.getState().applyWorkflowTriggerSetPage({ queryKey: 'account_inline', sets: [{ ...written }] });
@@ -260,6 +266,32 @@ describe('shared workflow trigger observations', () => {
             set: { ...written, revision: 2, target: { kind: 'workflow', ref: '00000000-0000-4000-8000-000000000005' } } });
         expect(store.getState().workflowTriggerSetIdsByQuery.account_inline).toEqual([]);
         expect(store.getState().workflowTriggerSetIdsByQuery['workflow:00000000-0000-4000-8000-000000000005']).toEqual([written.automationId]);
+        const selectFirst = createWorkflowTriggerSetSelector('workflow:00000000-0000-4000-8000-000000000005', true);
+        const selectSecond = createWorkflowTriggerSetSelector('workflow:00000000-0000-4000-8000-000000000006', true);
+        expect(selectFirst(store.getState())).toHaveLength(1);
+        store.getState().applyWorkflowTriggerSetPage({ queryKey: 'workflow:00000000-0000-4000-8000-000000000006',
+            sets: [{ ...written, revision: 3, target: { kind: 'workflow', ref: '00000000-0000-4000-8000-000000000006' } }] });
+        expect(selectFirst(store.getState())).toEqual([]);
+        expect(selectSecond(store.getState())).toMatchObject([{ automationId: written.automationId }]);
+        const secondSelection = selectSecond(store.getState());
+        const notificationsBeforeStaleRead = notifications;
+        // A pre-retarget read cannot move the acknowledged target back to its former query.
+        store.getState().applyWorkflowTriggerSetPage({ queryKey: 'workflow:00000000-0000-4000-8000-000000000005',
+            sets: [{ ...written, revision: 2, target: { kind: 'workflow', ref: '00000000-0000-4000-8000-000000000005' } }] });
+        expect(selectFirst(store.getState())).toEqual([]);
+        expect(selectSecond(store.getState())).toBe(secondSelection);
+        expect(notifications).toBe(notificationsBeforeStaleRead);
+        store.getState().applyWorkflowTriggerSetPage({ queryKey: 'account_inline',
+            sets: [{ ...written, revision: 4, target: { kind: 'inline', definition: createWorkflowDefinitionFixture() } }] });
+        expect(selectSecond(store.getState())).toEqual([]);
+        expect(store.getState().workflowTriggerSetIdsByQuery.account_inline).toEqual([written.automationId]);
+        // A current remote observation moves the same membership through the same owner.
+        store.getState().applyWorkflowTriggerSetPage({ queryKey: 'workflow:00000000-0000-4000-8000-000000000006',
+            sets: [{ ...written, revision: 5, target: { kind: 'workflow', ref: '00000000-0000-4000-8000-000000000006' } }] });
+        expect(store.getState().workflowTriggerSetIdsByQuery.account_inline).toEqual([]);
+        expect(selectSecond(store.getState())).toMatchObject([{ automationId: written.automationId, revision: 5 }]);
+        expect(selectUnrelated(store.getState())).toBe(unrelatedSelection);
+        expect(store.getState().workflowTriggerSetIdsByQuery[unrelatedQuery]).toBe(unrelatedMembership);
         dispose();
     });
 });

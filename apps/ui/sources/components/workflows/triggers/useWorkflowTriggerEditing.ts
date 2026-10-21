@@ -61,7 +61,7 @@ export function useWorkflowTriggerEditing(params: Readonly<{
     accountLifetime?: ServerAccountScopeLifetime | null;
 }>): WorkflowTriggerEditing {
     const request = React.useMemo(() => params.definitionId === null ? null : { workflow: params.definitionId }, [params.definitionId]);
-    const { sets, status, retry } = useWorkflowTriggerSets(request, params.accountLifetime);
+    const { sets, status, retry, acknowledge } = useWorkflowTriggerSets(request, params.accountLifetime);
     const listedSet = params.definitionId === null ? null : sets[0] ?? null;
     const activeScope = useActiveServerAccountScope();
     const scope = params.accountLifetime === undefined ? activeScope : params.accountLifetime?.scope ?? null;
@@ -143,6 +143,7 @@ export function useWorkflowTriggerEditing(params: Readonly<{
             isCurrent: current,
             onAcknowledged: (edit, triggerId, acknowledgedSet) => {
                 if (!current()) return;
+                if (acknowledgedSet !== null) acknowledge(acknowledgedSet);
                 const beforeSet = previousSet;
                 previousSet = acknowledgedSet;
                 // This is the existing Action receipt, not a separate source of trigger facts.
@@ -160,7 +161,7 @@ export function useWorkflowTriggerEditing(params: Readonly<{
         }).finally(() => { if (pendingSave.current === pending) pendingSave.current = null; });
         if (!current()) return 'stale';
         return outcome.kind;
-    }, [params.accountLifetime]);
+    }, [params.accountLifetime, acknowledge]);
 
     const summary = React.useMemo(
         () => {
