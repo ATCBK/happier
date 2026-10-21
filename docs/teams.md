@@ -87,6 +87,16 @@ cannot reuse another application's model rows. Model controls come from the exac
 source descriptor through the shared picker, including Team rows. Catalog visibility
 and reasoning choices do not bypass native Team preflight refusal, worker compatibility
 checks, or experimental-model confirmation.
+After worker confirmation, New Session checks the selected model's exact current
+Team resource and the Agent's declared Provider authentication isolation. A binding
+that replaces the Agent's native authentication satisfies credential readiness
+without asking the recipient to sign in natively. Installation and current-resource
+checks still apply. Standalone native catalog/configuration probes have no Session
+authority and retain their Team credential refusal.
+Experimental-model approval details request the same Agent-qualified entitled
+catalog, matching its existing opaque confirmation source to show the resource and
+Team names. Generic discovery may have no model rows; approval display never reads
+the custodian's private Provider catalog.
 The active Team model choice is scoped to that Agent and clears when the Agent
 changes. Editing its controls does not save its backing model id as a native
 Account remembered choice; an explicit native or Account model selection clears

@@ -1332,7 +1332,11 @@ source and Agent-adapter Connected Account suppression as route disclosure. Only
 authorized, selectable exact model whose adapter replaces all of the Agent's accepted
 authentication services removes the native sign-in requirement; native probe facts
 remain unchanged. Missing or refused Provider routes cannot authorize launch, and
-explicit Native still requires its own credential. The inline signed-out state keeps Sign in and offers
+the same rule applies to a worker-confirmed Team model while its exact entitled
+resource/model/revision remains current. Team readiness uses the Agent's admitted
+Provider authentication-isolation declaration; it does not convert a native probe
+into a Session-authorized Team operation. Explicit Native still requires its own
+credential. The inline signed-out state keeps Sign in and offers
 a healthy connected account through the existing launch-binding writer. This changes
 only the draft selection, never the Agent's stored default. An empty admitted
 purpose-default catalog remains Native; availability alone does not select a default.

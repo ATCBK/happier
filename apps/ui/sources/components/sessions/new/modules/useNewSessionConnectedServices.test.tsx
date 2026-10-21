@@ -732,6 +732,44 @@ describe('New Session purpose catalog authority', () => {
 
 describe('useNewSessionConnectedServices', () => {
     beforeEach(arrangeLegacyConnectedServicesHomes);
+    it('uses a current selected Team model binding for credential readiness while retaining installation and native-auth checks', async () => {
+        const { useNewSessionConnectedServices } = await import('./useNewSessionConnectedServices');
+        const { TeamCredentialResourceCatalogEntryV1Schema } = await import('@happier-dev/protocol/teams');
+        const target = 'agent:happier.agent.codex/codex';
+        const resource = TeamCredentialResourceCatalogEntryV1Schema.parse({
+            id: 'shared-model', teamId: 'engineering', displayName: 'Engineering models', resourceRevision: 2,
+            readiness: { kind: 'available' }, recoveryAction: null, mayBroker: true, mayReceiveDirect: false,
+            directMaterialState: 'never_delivered', sessionUsePolicy: 'personal_allowed', sourcePresentation: null,
+            providerModels: [{ selection: { kind: 'team_credential_provider_model', teamId: 'engineering', resourceId: 'shared-model',
+                expectedResourceRevision: 2, agentTargetKey: target, modelId: 'gpt-5.5', deliveryMode: 'brokered' },
+                descriptor: { id: 'gpt-5.5', name: 'GPT-5.5' }, availability: 'available', sourceRevision: 'source-2',
+                application: { agentTargetKey: target, implementationIdentity: { pluginId: 'happier.provider.openai', localId: 'openai' },
+                    endpointTemplateId: 'responses', protocol: 'openai-responses' } }],
+        });
+        const agent = projectMachineAgent({ agentId: 'codex', title: 'Codex', checking: false, stale: false, job: null,
+            connectedServices: [{ serviceId: CODEX_SERVICE_KEY, title: 'ChatGPT', connected: false, healthy: false, profileLabel: null, profiles: [] }],
+            facts: { agentId: 'codex', title: 'Codex', installed: true, version: '1', latestVersion: null, update: { supported: false, command: null },
+                signIn: { status: 'signedOut', loginSupport: 'login_terminal' }, platform: { supported: true },
+                install: { available: false, mode: 'manual', sizeBytes: null, guideUrl: null }, dependencies: [] } });
+        const selection = { ...resource.providerModels[0]!.selection, source: 'team_resource' as const };
+        const hook = await renderHook((props: Readonly<{ current: boolean; installed: boolean; selected: boolean; revision: number }>) => useNewSessionConnectedServices({
+            agentCore: null, defaultAuthAgentId: 'codex', connectedAccounts: [], agentOptionState: null,
+            machineAgent: { ...agent, installed: props.installed }, nativeAgentTargetKey: target,
+            modelSelection: props.selected ? { ...selection, expectedResourceRevision: props.revision } : null,
+            teamCredentialResources: [resource], teamCredentialResourceCurrentKeys: new Set(props.current ? ['engineering:shared-model'] : []),
+            settings: { connectedServicesDefaultProfileByServiceId: {} }, targetServerId: activeHomeId,
+            router: { push() {} }, setAgentOptionStateForCurrentAgent() {},
+        }), { initialProps: { current: true, installed: true, selected: true, revision: 2 } });
+        expect(isMachineAgentReady(hook.getCurrent().selectedCredentialMachineAgent)).toBe(true);
+        await hook.rerender({ current: true, installed: false, selected: true, revision: 2 });
+        expect(hook.getCurrent().selectedCredentialMachineAgent?.state).toBe('notInstalled');
+        await hook.rerender({ current: false, installed: true, selected: true, revision: 2 });
+        expect(isMachineAgentReady(hook.getCurrent().selectedCredentialMachineAgent)).toBe(false);
+        await hook.rerender({ current: true, installed: true, selected: true, revision: 1 });
+        expect(isMachineAgentReady(hook.getCurrent().selectedCredentialMachineAgent)).toBe(false);
+        await hook.rerender({ current: true, installed: true, selected: false, revision: 2 });
+        expect(hook.getCurrent().selectedCredentialMachineAgent?.state).toBe('needsSignIn');
+    });
     it('authors an Account prompt trigger with a profile picked through the New Session authentication owner', async () => {
         const { TriggerPopover } = await import('@/components/workflows/triggers/TriggerPopover');
         const { NewSessionConnectedServicesSelectionContent } = await import('../components/NewSessionConnectedServicesSelectionContent');

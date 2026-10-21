@@ -833,6 +833,11 @@ host consumes the snapshot before capturing native runtime inputs. Only an
 accepted brokered inference binding satisfies native-auth preflight; native
 Sessions retain their sign-in check. Broker open and each request still enforce
 current resource, source and consumer authority, including Execution Run custody.
+New Session credential readiness uses the selected current Team model's binding
+facts and the Agent's admitted authentication-isolation declaration, as Account
+Provider selections do. When that binding replaces native authentication, native
+sign-in is not a launch prerequisite; installation, worker compatibility and
+experimental-model confirmation remain required.
 The runtime's entitled-catalog read derives its applications from the worker's
 leased Agent requirements and uses the same paginated Session catalog transport
 as launch normalization. The composed recipient Pool → Action/CLI spawn →

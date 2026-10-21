@@ -1314,9 +1314,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
         enabled: credentialResourcesEnabled,
         agentTargetKey: selectedBackendTargetKey,
     });
-    const teamCredentialConnectedServiceResources = React.useMemo(() => (
-        teamCredentialCatalog.resources.filter((resource) => resource.connectedServiceSelections.length > 0)
-    ), [teamCredentialCatalog.resources]);
     // The authoring owner composes the selected Agent's qualified Team catalog
     // with creator eligibility; picker and launch consume the same source rows.
     const composedTemporaryComputerCreator = React.useMemo(() => (
@@ -1960,7 +1957,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         selectedBackendTargetKey,
         connectedAccounts: connectedServicesAgent?.connectedAccounts,
         agentIdentity: connectedServicesAgent?.identity ?? null,
-        teamCredentialResources: teamCredentialConnectedServiceResources,
+        teamCredentialResources: teamCredentialCatalog.resources,
         teamCredentialResourceCurrentKeys: teamCredentialCatalog.currentResourceKeys,
         teamNameById: teamCredentialCatalog.teamNameById,
         setBackendNewSessionOptionStateByTargetKey,

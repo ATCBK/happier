@@ -63,6 +63,8 @@ import { projectMachineAgentForCredential } from '@/agents/machineAgents/machine
 import type { MachineAgent } from '@/agents/machineAgents/machineAgentTypes';
 import type { SessionInstrumentStripLineAction } from '@/components/sessions/agentInput/instrumentStrip';
 import { presentProviderModelRow } from '@/providers/models/presentProviderModelRow';
+import { readAccountAgentProviderRequirements } from '@/providers/catalog/accountProviderDeclarations';
+import { resourceHasAvailableTeamCredentialProviderModel } from '@/components/sessions/teamCredentials/teamCredentialProviderModelCurrentness';
 
 export type NewSessionConnectedServicesResult = Readonly<{
   routePresentation: ReturnType<typeof resolveSessionRoutePresentation>;
@@ -522,6 +524,20 @@ export function useNewSessionConnectedServices(params: Readonly<{
   }, [params.providerSources, routePresentation]);
   const selectedProviderRoute = React.useMemo(() => {
     const route = routePresentation.applied;
+    const selection = params.modelSelection;
+    if (selection && 'source' in selection && selection.source === 'team_resource') {
+      // Selection is committed only after worker compatibility/confirmation. Recheck
+      // the current entitled tuple; a Team model replaces the same native services
+      // as any other Provider binding through this Agent's admitted requirements.
+      const requirements = readAccountAgentProviderRequirements(selection.agentTargetKey);
+      return {
+        ready: Boolean(requirements && selection.agentTargetKey === params.nativeAgentTargetKey
+          && params.teamCredentialResourceCurrentKeys?.has(`${selection.teamId}:${selection.resourceId}`)
+          && params.teamCredentialResources?.some(resource => resourceHasAvailableTeamCredentialProviderModel(resource,
+            { ...selection, kind: 'team_credential_provider_model' }))),
+        suppressedConnectedServiceIds: requirements?.authIsolation.suppressConnectedServiceIds ?? [],
+      };
+    }
     if (route.kind !== 'provider') return null;
     const row = selectedProviderSource?.rows?.find(row => row.ref.modelId === route.modelId);
     return {
@@ -531,7 +547,8 @@ export function useNewSessionConnectedServices(params: Readonly<{
       }).selectionDisabled),
       suppressedConnectedServiceIds: selectedProviderSource?.suppressedConnectedServiceIds ?? [],
     };
-  }, [routePresentation, selectedProviderSource]);
+  }, [routePresentation, selectedProviderSource, params.modelSelection, params.nativeAgentTargetKey,
+    params.teamCredentialResources, params.teamCredentialResourceCurrentKeys]);
 
   const requesterSignInPurposes = React.useMemo(() => {
     if (connectedAccountDefaultsStatus !== 'ready') return [];

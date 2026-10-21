@@ -36,6 +36,7 @@ const socketBoundary = vi.hoisted(() => ({
     fetches: vi.fn(),
     result: null as SessionSpawnNewResultV1 | null,
     providerProjection: null as import('@happier-dev/protocol/rpc').DaemonProviderModelProjectionResponseV1 | null,
+    nativeSignInStatus: 'signedIn' as 'signedIn' | 'signedOut',
     controls: new Map<string, Readonly<{ disconnect: () => void; reconnect: () => void }>>(),
 }));
 const modalBoundary = vi.hoisted(() => ({
@@ -152,7 +153,10 @@ vi.mock('socket.io-client', async () => {
                             v: 2, generation: 1, installedPackagesById: {},
                             agentsById: Object.fromEntries(Object.entries(BUNDLED_AGENT_CONTRIBUTION_IDENTITIES).map(([id, identity]) => [id, {
                                 id, identity, title: id,
-                                connectedAccounts: BUNDLED_CANONICAL_AGENT_DECLARATIONS[id as keyof typeof BUNDLED_CANONICAL_AGENT_DECLARATIONS]?.connectedAccounts ?? [],
+                                // Match projection/v2.ts: manifest-local services become qualified on the wire.
+                                connectedAccounts: (BUNDLED_CANONICAL_AGENT_DECLARATIONS[id as keyof typeof BUNDLED_CANONICAL_AGENT_DECLARATIONS]?.connectedAccounts ?? [])
+                                    .map(declaration => ({ ...declaration, service: typeof declaration.service === 'string'
+                                        ? { pluginId: identity.pluginId, localId: declaration.service } : declaration.service })),
                                 capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
                             }])),
                             actionsById: {}, familiesById: {}, toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [],
@@ -163,7 +167,7 @@ vi.mock('socket.io-client', async () => {
                             results: Object.fromEntries(Object.keys(BUNDLED_AGENT_CONTRIBUTION_IDENTITIES).map(agentId => [`cli.${agentId}`, {
                                 ok: true, checkedAt: Date.now(), data: { agentId, title: agentId, installed: true,
                                     version: '1', latestVersion: null, update: { supported: false, command: null },
-                                    signIn: { status: 'signedIn', loginSupport: 'status_only' }, platform: { supported: true },
+                                    signIn: { status: socketBoundary.nativeSignInStatus, loginSupport: 'status_only' }, platform: { supported: true },
                                     install: { available: false, mode: 'manual', sizeBytes: null, guideUrl: null }, dependencies: [] },
                             }])),
                         } };
@@ -276,6 +280,7 @@ describe('multi-Home Session creation composition', () => {
         machineHttpSnapshots.clear();
         socketBoundary.result = null;
         socketBoundary.providerProjection = null;
+        socketBoundary.nativeSignInStatus = 'signedIn';
         routeBoundary.replace.mockClear();
         routeBoundary.push.mockClear();
         routeBoundary.params = { machineId: 'machine-b', directory: '/workspace/project', spawnServerId: 'srv_home_b' };
@@ -1413,12 +1418,14 @@ describe('multi-Home Session creation composition', () => {
         } finally { await hook.unmount(); }
     });
 
-    async function runTemporaryTeamModelJourney(journey: 'acquisition' | 'switch-agent' | 'remembered-control') {
+    async function runTemporaryTeamModelJourney(journey: 'acquisition' | 'switch-agent' | 'remembered-control' | 'launch') {
         const sourceCase = journey !== 'acquisition';
+        if (journey === 'launch') socketBoundary.nativeSignInStatus = 'signedOut';
         // The first genuine Home baseline owns this preference. Re-publishing
         // changed bytes at the same Settings revision would correctly be ignored.
         accountHttpSettings = { useEnhancedSessionWizard: true };
-        ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA('temporary-account-capture', { applyConnectionManager: true }));
+        ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA(
+            journey === 'launch' ? 'team-launch-signed-out' : 'temporary-account-capture', { applyConnectionManager: true }));
         // Account replacement during first-use acquisition is independent of
         // cross-Home selection. Keep this journey on its initiating Home; the
         // borrowed-Home material preparation contract is covered separately.
@@ -1442,6 +1449,7 @@ describe('multi-Home Session creation composition', () => {
         routeBoundary.params = { spawnServerId: homeBScopeId, draftServerId: homeBScopeId, draftAccountId: scope.accountId,
             backendTargetKey: 'agent:happier.agent.codex/codex' };
         writeNewSessionDraft({ scope, draftId, materializationIntent: 'userEdit', patch: {
+            ...(journey === 'launch' ? { selectedPath: '/workspace/project' } : {}),
             text: 'Prepare on the original target Account', authoring: { agentTarget: { kind: 'agent',
                 identity: { pluginId: 'happier.agent.codex', localId: 'codex' } }, profileId: null,
                 executionTarget: sourceCase
@@ -1564,6 +1572,27 @@ describe('multi-Home Session creation composition', () => {
                 const selected = hook.getCurrent();
                 if (selected.variant !== 'wizard') throw new Error('Expected the production Agent selector');
                 expect(selected.wizardProps.agent.selectedTeamCredentialModel).toEqual(entitled.resources[0]!.providerModels[0]!.selection);
+                if (journey === 'launch') {
+                    const { machineAgentInventoryStore } = await import('@/agents/machineAgents/machineAgentInventoryStore');
+                    const { serverAccountScopedResourceKey } = await import('@/sync/domains/scope/serverAccountScope');
+                    await vi.waitFor(() => {
+                        const model = hook.getCurrent();
+                        if (model.variant !== 'wizard') throw new Error('Expected the production composer');
+                        const nativeAgent = machineAgentInventoryStore.read(serverAccountScopedResourceKey(scope, 'machine-agents', 'machine-b'))
+                            .agents.find(agent => agent.agentId === 'codex');
+                        expect(nativeAgent?.signIn.native?.status).toBe('signedOut');
+                        expect(model.wizardProps.footer.canCreate, JSON.stringify(model.wizardProps.footer.connectionStatus)).toBe(true);
+                    });
+                    socketBoundary.result = { type: 'pending', outcome: 'unknown', retryWithSameCreationKey: true };
+                    socketBoundary.emits.mockClear();
+                    await act(async () => { await readProductionCreateAction(hook.getCurrent())({ initialMessage: 'skip' }); });
+                    expect(sessionSpawnCalls()).toHaveLength(1);
+                    expect(sessionSpawnCalls()[0]?.[0]).toMatchObject({ payload: { params: {
+                        teamCredentialBindings: [{ resourceId: 'runner-resource', deliveryMode: 'brokered',
+                            teamId: 'runner-team', expectedResourceRevision: 7, slot: { kind: 'provider_model' } }],
+                    } } });
+                    return;
+                }
                 if (journey === 'remembered-control') {
                     const detail = selected.wizardProps.agent.agentPickerOptions
                         .find(option => option.id === 'agent:happier.agent.codex/codex')?.renderDetailContent;
@@ -1669,6 +1698,10 @@ describe('multi-Home Session creation composition', () => {
 
     it('does not remember selected Team reasoning as a native Account model tuple', async () => {
         await runTemporaryTeamModelJourney('remembered-control');
+    });
+
+    it('submits a worker-confirmed Team model from New Session without native Agent sign-in', async () => {
+        await runTemporaryTeamModelJourney('launch');
     });
 
     it('reopens a Temporary computer draft without selecting or dispatching to an available Machine', async () => {
