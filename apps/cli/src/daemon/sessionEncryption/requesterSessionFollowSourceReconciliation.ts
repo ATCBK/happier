@@ -2,6 +2,8 @@ import type { createAccountSessionFollowRuleCache } from '@/agent/runtime/sessio
 import { logger } from '@/ui/logger';
 import type { AdmittedRequesterSessionBootstrap } from './requesterSessionCredentials';
 
+type Reconcile = (sourceSessionId: string | null) => Promise<void>;
+
 /** Reuses the captured Account feed and the daemon's bound receiver recovery. */
 export function createRequesterSessionFollowSourceReconciliation(input: Readonly<{
   bootstrap: Pick<AdmittedRequesterSessionBootstrap, 'subscribeSessionFollowSources' | 'getBoundSessionId'>;
@@ -9,27 +11,41 @@ export function createRequesterSessionFollowSourceReconciliation(input: Readonly
   isCurrent: () => Promise<boolean>;
 }>) {
   let disposed = false;
-  let binding: Readonly<{ reconcile: (sourceSessionId: string | null) => Promise<void>; signal: AbortSignal }> | null = null;
+  type Recovery = { sourceSessionId: string | null };
+  let binding: { reconcile: Reconcile; signal: AbortSignal; running: boolean; pending: Recovery | null } | null = null;
   const release = input.bootstrap.subscribeSessionFollowSources(sourceSessionId => {
     const captured = binding;
     if (!captured || captured.signal.aborted || disposed) return;
+    const destinationSessionId = input.bootstrap.getBoundSessionId();
+    if (!destinationSessionId) return;
+    const source = sourceSessionId === destinationSessionId ? null : sourceSessionId;
+    const previous = captured.pending;
+    captured.pending = { sourceSessionId: previous && previous.sourceSessionId !== source ? null : source };
+    if (captured.running) return;
+    captured.running = true;
     void (async () => {
-      const destinationSessionId = input.bootstrap.getBoundSessionId();
-      // Receiver progress/turn changes and reconnects re-observe all of its
-      // configured sources. Private-rule discovery only filters unrelated
-      // source changes; it cannot exclude manager or explicit Follow custody.
-      if (!destinationSessionId) return;
-      if (sourceSessionId !== null && sourceSessionId !== destinationSessionId
-        && !await input.sessionFollowRuleCache.hasEnabledSessionReceiver(destinationSessionId)) return;
-      if (!await input.isCurrent()) return;
-      if (captured === binding && !captured.signal.aborted) {
-        await captured.reconcile(sourceSessionId === destinationSessionId ? null : sourceSessionId);
-      }
-    })().catch(() => { if (!disposed) logger.warn('[Session Follow] Requester source recovery remains pending'); });
+      try {
+        // Receiver progress and reconnects remain receiver-wide. Only unrelated
+        // source hints require private-rule demand. Hints arriving during a pass
+        // merge into one subsequent observation, without cancelling that pass.
+        while (captured === binding && !captured.signal.aborted && !disposed && captured.pending) {
+          const request = captured.pending;
+          captured.pending = null;
+          try {
+            if (request.sourceSessionId !== null
+              && !await input.sessionFollowRuleCache.hasEnabledSessionReceiver(destinationSessionId)) continue;
+            if (!await input.isCurrent()) return;
+            if (captured === binding && !captured.signal.aborted && !disposed) {
+              await captured.reconcile(request.sourceSessionId);
+            }
+          } catch { if (!disposed) logger.warn('[Session Follow] Requester source recovery remains pending'); }
+        }
+      } finally { captured.running = false; }
+    })();
   });
   return {
-    bind: (reconcile: (sourceSessionId: string | null) => Promise<void>, signal: AbortSignal) => {
-      if (!disposed && !signal.aborted && binding?.signal !== signal) binding = { reconcile, signal };
+    bind: (reconcile: Reconcile, signal: AbortSignal) => {
+      if (!disposed && !signal.aborted && binding?.signal !== signal) binding = { reconcile, signal, running: false, pending: null };
     },
     dispose: () => { disposed = true; binding = null; release(); },
   };

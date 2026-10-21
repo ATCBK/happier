@@ -465,6 +465,10 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
         cursor = page.data.continuation;
       } while (cursor && await current());
     }
+    // Run discovery above has its own source authority. An empty Session
+    // observation needs no forced Account progress refresh without an enabled
+    // receiver rule; configuration changes invalidate this same cache.
+    if (request.observations.length === 0 && !await rules.hasEnabledSessionReceiver(request.destinationSessionId)) return { coveredEvents };
     // Progress changes independently of rule configuration. Refresh once at
     // this existing catch-up boundary, never for each original in the range.
     checkpoint(diagnostic, 'rules', 'started');
