@@ -103,7 +103,8 @@ class TeamCredentialCreateProjectionFailure extends Error {
 }
 
 type TeamCredentialResourceSummary = z.infer<typeof TeamCredentialResourceSummaryV1Schema>;
-type TeamCredentialResourceTestCandidate = z.infer<typeof DaemonProviderTeamCredentialResourceTestCandidateResponseV1Schema>;
+type TeamCredentialResourceTestCandidate = z.infer<typeof DaemonProviderTeamCredentialResourceTestCandidateResponseV1Schema>
+    | Readonly<{ status: 'unavailable'; reason: 'response_invalid' }>;
 type TeamCredentialBrokerEligibility = z.infer<typeof DaemonProviderTeamCredentialBrokerEligibilityResponseV1Schema>;
 
 async function readTeamCredentialProviderConnectionPresentation(
@@ -169,13 +170,14 @@ async function readTeamCredentialResourceCandidates(
         });
         if (!rpc.ok) return { machineId, candidate: null };
         const parsed = DaemonProviderTeamCredentialResourceTestCandidateResponseV1Schema.safeParse(rpc.result);
-        return { machineId, candidate: parsed.success ? parsed.data : null };
+        // Preserve the Home's content-free parse observation without echoing broker payloads.
+        return { machineId, candidate: parsed.success ? parsed.data : { status: 'unavailable', reason: 'response_invalid' } as const };
     }));
 }
 
 function readTeamCredentialBrokerRefusalReason(reasons: readonly (string | null)[]) {
     const first = reasons[0];
-    return (first === 'application_unavailable' || first === 'model_unavailable')
+    return (first === 'application_unavailable' || first === 'model_unavailable' || first === 'response_invalid')
         && reasons.every(reason => reason === first)
         ? first
         : null;
@@ -1007,9 +1009,11 @@ export function registerTeamCredentialResourceRoutes(
                     : { kind: "broker_unavailable", ...(brokerRefusalReason ? { reason: brokerRefusalReason } : {}) },
                 recovery: sourceUnavailable
                     ? "Repair the credential source and try again."
-                    : brokerRefusalReason
-                        ? "Review the broker application and model availability, then try again."
-                        : "Reconnect the broker Machine and try again.",
+                    : brokerRefusalReason === 'response_invalid'
+                        ? "Review the broker Machine logs and try again."
+                        : brokerRefusalReason
+                            ? "Review the broker application and model availability, then try again."
+                            : "Reconnect the broker Machine and try again.",
             }));
         }
         if (

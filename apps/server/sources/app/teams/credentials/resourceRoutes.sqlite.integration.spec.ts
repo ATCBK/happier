@@ -2602,6 +2602,26 @@ describe("Team credential resource routes (SQLite integration)", () => {
             });
         }
         expect(dispatch).toHaveBeenCalledOnce();
+        app.forwardRpcForUser = async () => ({ ok: true, result: {
+            status: "unavailable", reason: "unrecognized_broker_reason", detail: "private broker detail",
+        } });
+        const invalidCandidate = await post("/v1/teams/credential-resources/test", manager.id, {
+            teamId: team.id, resourceId: resource.id,
+        }, evidence);
+        expect(invalidCandidate.statusCode, invalidCandidate.body).toBe(200);
+        expect(invalidCandidate.json()).toMatchObject({
+            result: "needs_attention",
+            readiness: { kind: "broker_unavailable", reason: "response_invalid" },
+        });
+        expect(invalidCandidate.body).not.toContain("private broker detail");
+        expect(dispatch).toHaveBeenCalledOnce();
+        app.forwardRpcForUser = async () => ({ ok: false, error: "RPC transport unavailable" });
+        const unavailableTransport = await post("/v1/teams/credential-resources/test", manager.id, {
+            teamId: team.id, resourceId: resource.id,
+        }, evidence);
+        expect(unavailableTransport.statusCode, unavailableTransport.body).toBe(200);
+        expect(unavailableTransport.json().readiness).toEqual({ kind: "broker_unavailable" });
+        expect(dispatch).toHaveBeenCalledOnce();
         app.forwardRpcForUser = successfulCandidateRpc;
         await db.teamMembership.delete({ where: {
             teamId_accountId: { teamId: team.id, accountId: custodian.id },
