@@ -461,6 +461,8 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
   backendTarget?: BackendTargetRefV1;
   mode?: AccountSettingsBootstrapMode;
   refresh?: AccountSettingsRefreshMode;
+  /** Propagate refresh failures when the caller requires network authority, independently of a known Settings floor. */
+  allowCacheFallback?: boolean;
   /** Finite requester admission reads must not retarget the daemon's Account or process defaults. */
   publication?: 'active' | 'invocation';
   expectedAccountEncryptionMode?: 'plain' | 'e2ee';
@@ -885,7 +887,7 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
     const whenRefreshed = fetchAndPersist().catch(async (err) => {
       params.signal?.throwIfAborted();
       if (isClientE2eeRequiredError(err)) throw err;
-      if (minSettingsVersion !== null || isAccountSettingsContentUnavailableError(err)) {
+      if (params.allowCacheFallback === false || minSettingsVersion !== null || isAccountSettingsContentUnavailableError(err)) {
         throw err;
       }
       logger.debug('[accountSettings] background refresh failed; using cache', serializeAxiosErrorForLog(err));
@@ -904,7 +906,7 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
   } catch (err) {
     params.signal?.throwIfAborted();
     if (isClientE2eeRequiredError(err)) throw err;
-    if (minSettingsVersion !== null || isAccountSettingsContentUnavailableError(err)) {
+    if (params.allowCacheFallback === false || minSettingsVersion !== null || isAccountSettingsContentUnavailableError(err)) {
       throw err;
     }
     logger.debug('[accountSettings] fetch failed; falling back to cache', serializeAxiosErrorForLog(err));

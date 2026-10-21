@@ -16,6 +16,7 @@ import { rethrowRequesterHomeReadFailure } from "@/daemon/sessionEncryption/requ
 import { type AdmittedRequesterSessionBootstrap } from "./requesterSessionCredentials";
 import { bindRequesterSessionCredentialScope, decodeStoredCredentials, encodeStoredCredentials, type StoredCredentials } from '@/persistence';
 import { fetchAccountProfile } from '@/api/accountProfile';
+import { fetchAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentness';
 import { bootstrapAccountSettingsContext } from "@/settings/accountSettings/bootstrapAccountSettingsContext";
 import { resolvePublishedMachineEncryptionContext } from '@/api/machine/machineDataEncryptionKey';
 import type { AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';
@@ -310,10 +311,19 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
     }
     bindRequesterSessionCredentialScope(input.credentials, { serverId: input.serverId, serverHttpBaseUrl: input.serverHttpBaseUrl });
     phase = 'requester_settings';
+    // Finite admission needs a current Settings floor even when its live
+    // encryption identity has remained unchanged since another holder joined.
+    const settingsWitness = await trace('requester.settings_currentness', () => fetchAccountEncryptionCurrentness({
+      token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl,
+      ...(input.signal ? { signal: input.signal } : {}),
+    }));
+    if (!sameRequesterAccountEncryptionCurrentness(settingsWitness, currentness)
+      || !observation.isCurrent(currentness)) return refused('settings_identity');
     const accountSettingsContext = await trace('requester.settings', () => runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => bootstrapAccountSettingsContext({
       credentials: input.credentials, mode: 'blocking', refresh: 'force', publication: 'invocation',
+      allowCacheFallback: false,
       expectedAccountEncryptionMode: currentness.mode, honorAccountSettingsModeEnv: false,
-      minSettingsVersion: currentness.settingsVersion, shouldCommit: () => live && !input.signal?.aborted,
+      minSettingsVersion: settingsWitness.settingsVersion, shouldCommit: () => live && !input.signal?.aborted,
     })));
     if (accountSettingsContext.source !== 'network') return refused('settings_source');
     if (!await isCurrent()) return refused('custody');

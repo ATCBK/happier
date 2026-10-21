@@ -156,6 +156,19 @@ describe('bootstrapAccountSettingsContext', () => {
     expect(getActiveAccountSettingsSnapshot()).toBe(snapshot);
   });
 
+  it('preserves a required network failure without a Settings floor while ordinary bootstrap retains cache fallback', async () => {
+    Object.assign(mutableConfigurationForTest(), { clientEncryptionRequirement: 'follow_account' });
+    const failure = Object.assign(new Error('Settings Home unavailable'), { response: { status: 503 } });
+    vi.spyOn(axios, 'get').mockRejectedValue(failure);
+    const options = { credentials: createTokenOnlyCredentialsStub(), refresh: 'force' as const,
+      deps: { resolveCachePath: () => '/tmp/happier-settings-network-required',
+        readCache: async () => ({ version: 2 as const, cachedAt: 0, settingsVersion: 7,
+          settingsContent: { t: 'plain' as const, v: { preferredLanguage: 'fr' } } }),
+        writeCache: async () => {}, applySideEffects: () => {} } };
+    await expect(bootstrapAccountSettingsContext({ ...options, allowCacheFallback: false })).rejects.toBe(failure);
+    expect(await bootstrapAccountSettingsContext(options)).toMatchObject({ source: 'cache', settingsVersion: 7 });
+  });
+
   it.each([{ mode: 'plain' as const, custodian: true }, { mode: 'e2ee' as const, custodian: true },
     { mode: 'plain' as const, custodian: false }])('loads invocation-bound requester $mode policy without replacing custodian state or process defaults (custodian=$custodian)', async ({ mode, custodian }) => {
     const alice = { source: 'network' as const, settings: accountSettingsParse({}), settingsVersion: 1,

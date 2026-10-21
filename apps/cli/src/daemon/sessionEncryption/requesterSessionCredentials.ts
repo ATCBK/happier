@@ -386,7 +386,7 @@ export async function prepareRequesterSessionBootstrap(input: Readonly<{
     if (!await readPreparationCurrentness()) return null;
     const accountSettingsContext = await runWithServerHttpBaseUrl(input.boundary.serverHttpBaseUrl,
       () => bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force', publication: 'invocation',
-        signal: launchSignal,
+        signal: launchSignal, allowCacheFallback: false,
         expectedAccountEncryptionMode: currentness.mode, honorAccountSettingsModeEnv: false,
         minSettingsVersion: initializationSettingsWitness?.settingsVersion,
         shouldCommit: () => !input.signal?.aborted }));
