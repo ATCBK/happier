@@ -21,6 +21,23 @@ import {
 } from './v2.js';
 
 describe('plugin contribution catalog', () => {
+  it('extracts portable Action artifact references only from their declared execution target', () => {
+    const entry = PLUGIN_CONTRIBUTION_CATALOG_V2.find((candidate) => candidate.manifestKey === 'actions')!;
+    expect(entry.extractReferences({ execution: {
+      target: 'account', account: { artifactId: 'account-runtime', exportName: 'activate' },
+    } })).toEqual([{
+      targetFamily: 'generated.uiArtifacts', reference: 'account-runtime',
+      path: ['execution', 'account', 'artifactId'],
+    }]);
+    expect(entry.extractReferences({ execution: {
+      target: 'client', platforms: ['web'], client: { artifactId: 'client-runtime', exportName: 'activate' },
+    } })).toEqual([{
+      targetFamily: 'generated.uiArtifacts', reference: 'client-runtime',
+      path: ['execution', 'client', 'artifactId'],
+    }]);
+    expect(entry.extractReferences({ execution: { target: 'daemon' } })).toEqual([]);
+  });
+
   it('assigns Account actions only to their exact portable activation target', () => {
     const contributes = { actions: [{ id: 'read-account', execution: {
       target: 'account', account: { artifactId: 'account-runtime', exportName: 'activateAccount' },

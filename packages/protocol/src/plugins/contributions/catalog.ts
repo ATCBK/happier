@@ -260,6 +260,17 @@ function extractRuleReferences(
 }
 
 function extractNestedReferences(family: string, value: Readonly<Record<string, unknown>>): PluginContributionReferenceCandidateV2[] {
+  if (family === 'actions') {
+    const parsed = PluginActionDeclaredExecutionV2Schema.safeParse(value.execution);
+    if (!parsed.success || parsed.data.target === 'daemon') return [];
+    const execution = parsed.data;
+    const artifact = execution.target === 'account' ? execution.account : execution.client;
+    return [{
+      targetFamily: 'generated.uiArtifacts',
+      reference: artifact.artifactId,
+      path: ['execution', execution.target, 'artifactId'],
+    }];
+  }
   if (family === 'machineProvisioners') {
     return readMachineProvisionerActionRolesV1(value as MachineProvisionerContributionV1).map(binding => ({
       targetFamily: 'actions', reference: binding.action,
