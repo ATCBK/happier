@@ -332,6 +332,16 @@ describe('Codex global Voice permission custody composition', () => {
                 currentSession: currentSessionUi,
                 signal: sessionLifetime.signal,
                 isOccurrenceCurrent: () => true,
+                readActiveTurnAdmissionWitness: () => ({
+                    inputId: 'coding-input-1',
+                    turnId: 'coding-turn-1',
+                    userMessageSeq: 1,
+                    userMessageSeqs: [1],
+                    causalPermissionAuthority: {
+                        kind: 'admittedSessionInputV1',
+                        admittedPermissionCeiling: 'default',
+                    },
+                }),
             });
             const authorizedCommandEffects: Array<{
                 command: string;
@@ -428,6 +438,7 @@ describe('Codex global Voice permission custody composition', () => {
                         reason: 'The delegated turn needs permission.',
                     },
                     kind: 'permission',
+                    turnId: 'coding-turn-1',
                     owner: {
                         kind: 'plugin',
                         pluginId: 'happier.agent.codex',
@@ -449,20 +460,41 @@ describe('Codex global Voice permission custody composition', () => {
             expect(session.__getAgentState().requests?.[permissionRequestId]).toBeDefined();
             expect(abortCodingTurnCalls).toBe(0);
 
+            // A transcript tool-call id alone is not the complete response
+            // address. Preserve the pending request's host-stamped turn too.
+            for (const turnCustody of [{}, { turnId: 'previous-coding-turn' }]) {
+                await expect(respondPermission({
+                    id: permissionRequestId,
+                    ...turnCustody,
+                    ...response,
+                })).resolves.toEqual({
+                    ok: false,
+                    errorCode: 'permission_request_not_found',
+                    requestId: permissionRequestId,
+                });
+                expect(session.__getAgentState().requests?.[permissionRequestId]).toBeDefined();
+                expect(vendorResponseSettlements).toBe(0);
+                expect(authorizedCommandEffects).toEqual([]);
+            }
+
             const wirePermissionResponse = JSON.parse(JSON.stringify({
                 id: permissionRequestId,
+                turnId: 'coding-turn-1',
                 ...response,
             })) as {
                 id: string;
+                turnId: string;
                 approved: boolean;
                 decision: typeof response.decision;
             };
             expect(wirePermissionResponse).toEqual({
                 id: permissionRequestId,
+                turnId: 'coding-turn-1',
                 ...response,
             });
             const staleApproval = JSON.parse(JSON.stringify({
                 id: permissionRequestId,
+                turnId: 'coding-turn-1',
                 approved: true,
                 decision: 'approved',
             })) as {
@@ -506,6 +538,7 @@ describe('Codex global Voice permission custody composition', () => {
             await expect(respondPermission(JSON.parse(JSON.stringify(wirePermissionResponse)))).resolves.toBeUndefined();
             const conflictingResponse = {
                 id: permissionRequestId,
+                turnId: 'coding-turn-1',
                 approved: response.decision !== 'approved',
                 decision: response.decision === 'approved' ? 'denied' : 'approved',
             };
