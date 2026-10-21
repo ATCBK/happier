@@ -14263,6 +14263,6 @@ settingsSession: {
     },};
 
 
-export function createZhHant(base: typeof zhHans) {
+export function createZhHant(base: typeof zhHans): typeof zhHans {
     return defineTranslations(deepMerge(base, { ...zhHantOverrides, fileReviewNote: fileReviewNoteTranslations['zh-Hant'], hunkReview: hunkReviewTranslations['zh-Hant'], composerReferences: composerReferenceTranslations['zh-Hant'] }));
 }
