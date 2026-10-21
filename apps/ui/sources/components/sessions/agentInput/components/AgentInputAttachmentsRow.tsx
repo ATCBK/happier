@@ -682,6 +682,30 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
         );
     };
 
+    /** One picture's upload state over the tile: progress (or a spinner until the size is known), its number, a failure. */
+    const renderPictureState = (att: Extract<AgentInputAttachmentsRowItem, Readonly<{ kind: 'media' }>>, attachmentError: string | null, percent: number | null) => (
+        <>
+            {att.status === 'uploading' ? (
+                <View style={styles.attachmentImageOverlay} testID={`agent-input-attachment-uploading:${att.key}`}>
+                    {percent != null
+                        ? <Text style={styles.attachmentImageOverlayText}>{percent}%</Text>
+                        : <ActivitySpinner size="small" color={theme.colors.overlay.foreground} />}
+                </View>
+            ) : null}
+            {renderImageNumber(att)}
+            {attachmentError ? (
+                <View
+                    accessibilityLabel={attachmentError}
+                    accessibilityRole="alert"
+                    style={[styles.attachmentImageOverlay, styles.attachmentImageErrorOverlay]}
+                    testID={`agent-input-attachment-error:${att.key}`}
+                >
+                    <Icon name="warning-circle" size={20} color={theme.colors.overlay.foreground} />
+                </View>
+            ) : null}
+        </>
+    );
+
     if (props.items.length === 0) {
         return null;
     }
@@ -856,22 +880,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                                     {att.renderedPreview}
                                 </View>
                             )}
-                            {att.status === 'uploading' && percent != null ? (
-                                <View style={styles.attachmentImageOverlay}>
-                                    <Text style={styles.attachmentImageOverlayText}>{percent}%</Text>
-                                </View>
-                            ) : null}
-                            {renderImageNumber(att)}
-                            {attachmentError ? (
-                                <View
-                                    accessibilityLabel={attachmentError}
-                                    accessibilityRole="alert"
-                                    style={[styles.attachmentImageOverlay, styles.attachmentImageErrorOverlay]}
-                                    testID={`agent-input-attachment-error:${att.key}`}
-                                >
-                                    <Icon name="warning-circle" size={20} color={theme.colors.overlay.foreground} />
-                                </View>
-                            ) : null}
+                            {renderPictureState(att, attachmentError, percent)}
                         </TrayPictureTile>
                     )}
                 </AttachmentRowPreviewTrigger>
@@ -916,22 +925,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                                     style={[{ width: '100%', height: '100%' }, styles.attachmentImage]}
                                     contentFit="cover"
                                 />
-                                {att.status === 'uploading' && percent != null ? (
-                                    <View style={styles.attachmentImageOverlay}>
-                                        <Text style={styles.attachmentImageOverlayText}>{percent}%</Text>
-                                    </View>
-                                ) : null}
-                                {renderImageNumber(att)}
-                                {attachmentError ? (
-                                    <View
-                                        accessibilityLabel={attachmentError}
-                                        accessibilityRole="alert"
-                                        style={[styles.attachmentImageOverlay, styles.attachmentImageErrorOverlay]}
-                                        testID={`agent-input-attachment-error:${att.key}`}
-                                    >
-                                        <Icon name="warning-circle" size={20} color={theme.colors.overlay.foreground} />
-                                    </View>
-                                ) : null}
+                                {renderPictureState(att, attachmentError, percent)}
                             </Pressable>
                         </TrayPictureTile>
                     )}
