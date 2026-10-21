@@ -4515,6 +4515,7 @@ export type ConnectedServicesConfigurationActionResultById = {
             }[];
             providerId?: string | undefined;
             activeAccountId?: string | undefined;
+            providerOrganizationId?: string | undefined;
             fetchedAtMs?: number | undefined;
             staleAtMs?: number | undefined;
             source?: 'unknown' | 'cached' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | undefined;
