@@ -32,6 +32,7 @@ import type { PluginUiProjectionPhase } from './usePluginUiProjectionCurrentness
 import { composePluginMachineExecutionOriginV1, type PluginMachineSourceExecutionOriginCandidateV1, type PluginMachineExecutionOriginRejectionV1 } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import { resolveFleetSupplyAgreement } from '@/sync/domains/machines/administration/fleetUnion';
 import { projectNativeJsonValueForTransport, sameStrictJsonValue, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { readPluginUiAccountExecutableOrigin } from '@/components/plugins/reactNative/executableModuleHost';
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
@@ -97,15 +98,20 @@ export type PluginUiContributionSupplyV1 = PluginUiContributionOriginV1 & Readon
 
 // Availability and currentness publish immutable projection snapshots. An
 // AppShell render may wrap those same inputs in a fresh array; that wrapper
-// cannot invalidate the merge. Retain only the last merge per declaration
-// snapshot and compare every input, including live authority, below.
-const installedProjectionMerges = new WeakMap<PluginUiProjectionModel, Readonly<{
+// cannot invalidate the merge. Shell and mounted surfaces can share that
+// declaration with different runtime snapshots; neither may evict the other's
+// unchanged merge. Both keys are weak, so retired runtime graphs are not held
+// by a long-lived app-package declaration. Retain one input tuple per key pair.
+type InstalledProjectionMerge = Readonly<{
     installed: readonly PluginUiProjectionModel[];
-    runtime: PluginUiProjectionModel | null;
     materializations: Readonly<Record<string, PluginMachineMaterializationV1>> | undefined;
     explicitOrigins: PluginUiProjectionUnionOriginSelections | undefined;
     projection: PluginUiProjectionModel;
-}>>();
+}>;
+const installedProjectionMerges = new WeakMap<PluginUiProjectionModel, {
+    runtimes: WeakMap<PluginUiProjectionModel, InstalledProjectionMerge>;
+    withoutRuntime?: InstalledProjectionMerge;
+}>();
 
 /** Installed release slots bind the graph omitted by portable manifest-only declarations. */
 function matchesInstalledArtifactSlot(
@@ -137,10 +143,11 @@ export function mergeInstalledPluginUiProjections(
 ): PluginUiProjectionModel | null {
     if (installed.length === 0) return runtime;
     const firstInstalled = installed[0]!;
-    const previous = installedProjectionMerges.get(firstInstalled);
+    const merges = installedProjectionMerges.get(firstInstalled);
+    const previous = runtime ? merges?.runtimes.get(runtime) : merges?.withoutRuntime;
     if (previous?.installed.length === installed.length && installed.every((model, index) => model === previous.installed[index])
-        && previous.runtime === runtime && previous.materializations === materializations
-        && previous.explicitOrigins === explicitOrigins) return previous.projection;
+        && previous.materializations === materializations
+        && arePluginExecutionOriginSelectionsEquivalent(previous.explicitOrigins, explicitOrigins)) return previous.projection;
     const installedPluginIds = new Set(installed.flatMap(model => declarationMaps(model).flatMap(map =>
         Object.values(map).flatMap(entry => { const id = readString(asRecord(entry)?.pluginId); return id ? [id] : []; }))));
     const hostBundledPluginIds = new Set(installed.flatMap(model => Object.values(model.installedPackagesById)
@@ -148,6 +155,11 @@ export function mergeInstalledPluginUiProjections(
     const merge = <T>(read: (model: PluginUiProjectionModel) => Readonly<Record<string, T>>, artifactFacts = false) => {
         const declared: Record<string, T> = Object.assign({}, ...installed.map(read));
         for (const [key, entry] of Object.entries(runtime ? read(runtime) : {})) {
+            const declaration = asRecord(declared[key]);
+            // Account Actions and their per-Action executable graphs share
+            // Availability custody, independently of an optional Machine supplier.
+            if (artifactFacts && declaration?.generatedOwnerKind === 'clientContribution'
+                && readPluginUiAccountExecutableOrigin(declaration)) continue;
             const pluginId = readString(asRecord(entry)?.pluginId);
             const selectedOrigin = pluginId ? explicitOrigins?.get(pluginId) : undefined;
             if (pluginId && hostBundledPluginIds.has(pluginId) && selectedOrigin && 'sourceRef' in selectedOrigin
@@ -159,7 +171,6 @@ export function mergeInstalledPluginUiProjections(
                 declared[key] = entry;
                 continue;
             }
-            const declaration = asRecord(declared[key]);
             const executableOwner = asRecord(entry)?.generatedOwnerKind;
             if (artifactFacts && (executableOwner === 'clientContribution' || executableOwner === 'voiceProvider')
                 && declaration?.generatedOwnerKind !== 'renderer') {
@@ -222,7 +233,11 @@ export function mergeInstalledPluginUiProjections(
         skillsById: merge(model => model.skillsById),
         unknownEntriesById: merge(model => model.unknownEntriesById),
     });
-    installedProjectionMerges.set(firstInstalled, { installed: [...installed], runtime, materializations, explicitOrigins, projection });
+    const retained = { installed: [...installed], materializations, explicitOrigins, projection };
+    const cache: NonNullable<typeof merges> = merges ?? { runtimes: new WeakMap<PluginUiProjectionModel, InstalledProjectionMerge>() };
+    if (runtime) cache.runtimes.set(runtime, retained);
+    else cache.withoutRuntime = retained;
+    if (!merges) installedProjectionMerges.set(firstInstalled, cache);
     return projection;
 }
 
@@ -235,6 +250,20 @@ export type PluginUiProjectionUnionOriginSelections = ReadonlyMap<
     string,
     PluginMachineExecutionOriginV1
 >;
+
+/** Selection meaning, not a reporter's map wrapper, invalidates composition. */
+export function arePluginExecutionOriginSelectionsEquivalent(
+    left: PluginUiProjectionUnionOriginSelections | undefined,
+    right: PluginUiProjectionUnionOriginSelections | undefined,
+): boolean {
+    if (left === right) return true;
+    if ((left?.size ?? 0) !== (right?.size ?? 0)) return false;
+    for (const [pluginId, origin] of left ?? []) {
+        const other = right?.get(pluginId);
+        if (!other || !arePluginMachineExecutionOriginsEqual(origin, other)) return false;
+    }
+    return true;
+}
 
 export type PluginUiProjectionUnion = Readonly<{
     pluginUiProjection: PluginUiProjectionModel | null;
@@ -696,11 +725,13 @@ export function arePluginUiProjectionUnionMembersEquivalent(
     left: readonly PluginUiProjectionUnionMember[],
     right: readonly PluginUiProjectionUnionMember[],
 ): boolean {
+    if (left === right) return true;
     if (left.length !== right.length) {
         return false;
     }
     return left.every((member, index) => {
         const other = right[index];
+        if (member === other) return true;
         return other !== undefined
             && member.machineId === other.machineId
             && member.serverId === other.serverId

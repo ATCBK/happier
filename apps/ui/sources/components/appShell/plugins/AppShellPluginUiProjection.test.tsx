@@ -23,6 +23,7 @@ import {
 import { createDeferred, createMachineFixture, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import * as projectionCurrentness from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
 import * as executionOriginSelection from '@/sync/domains/machines/administration/usePluginExecutionOriginSelection';
+import * as projectionUnionOwner from '@/sync/domains/plugins/ui/projectionUnion';
 import {
     selectCurrentAppShellPluginExecutionOrigins,
     selectCurrentAppShellPluginUiCurrentness,
@@ -53,6 +54,7 @@ import { createBundledConversationRuntimeHostLease } from '@/voice/registry/bund
 import {
     clearPluginAccountAvailabilityProjection,
     replacePluginAccountAvailabilityProjection,
+    readPluginAccountAvailability,
 } from '@/sync/domains/plugins/availability/projection';
 import type {
     PluginAccountAvailabilitySnapshot,
@@ -890,6 +892,10 @@ function pluginUiProjectionWithClientAction(input: Readonly<{
 
 describe('AppShellPluginUiProjectionProvider', () => {
     it('does not rerender retained origin consumers for unchanged parent inputs', async () => {
+        // Count the real composition owners, forwarding all policy/normalization.
+        const unions = vi.spyOn(projectionUnionOwner, 'unionPluginUiProjections');
+        const merges = vi.spyOn(projectionUnionOwner, 'mergeInstalledPluginUiProjections');
+        onTestFinished(() => { unions.mockRestore(); merges.mockRestore(); });
         const pluginId = 'acme.retained-origin';
         const origin = installSelectedAppScopePluginFixture({ machineId: 'machine-retained', pluginId });
         projectionDescribeSpy.mockResolvedValue({ supported: true,
@@ -903,10 +909,41 @@ describe('AppShellPluginUiProjectionProvider', () => {
         const reads = () => selection.mock.calls.filter(([input]) => input.pluginId === pluginId).length;
         expect(reads()).toBeGreaterThan(0);
         const settled = reads();
+        const settledUnions = unions.mock.calls.length;
+        const settledMerges = merges.mock.calls.length;
         for (let index = 0; index < 3; index++) {
             await screen.update(<AppShellPluginUiProjectionProvider>{null}</AppShellPluginUiProjectionProvider>);
         }
         expect(reads()).toBe(settled);
+        console.info('R-C AppShell unchanged parent renders', { renders: 3,
+            unions: unions.mock.calls.length - settledUnions, merges: merges.mock.calls.length - settledMerges });
+        expect(unions.mock.calls.length).toBe(settledUnions);
+        expect(merges.mock.calls.length).toBe(settledMerges);
+        for (let index = 0; index < 3; index += 1) {
+            await act(async () => {
+                storageState.machines = storageState.machines.map(machine => ({ ...machine, activeAt: Date.now() + index }));
+            });
+            await flushHookEffects({ cycles: 3 });
+        }
+        console.info('R-C AppShell unchanged Machine publications', { publications: 3,
+            unions: unions.mock.calls.length - settledUnions, merges: merges.mock.calls.length - settledMerges });
+        expect(unions.mock.calls.length).toBe(settledUnions);
+        expect(merges.mock.calls.length).toBe(settledMerges);
+        const scope = captureActiveServerAccountScopeLifetime()!.scope;
+        const admission = readPluginAccountAvailability(scope).readMaterializations();
+        expect(admission.kind).toBe('available');
+        if (admission.kind !== 'available') throw new Error('Fixture Availability must be admitted');
+        await act(async () => {
+            replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+                availabilityCursor: admission.availabilityCursor + 1, intentReads: admission.intentReads,
+                materializations: admission.materializations, snapshots: admission.snapshots,
+            } });
+        });
+        await flushHookEffects({ cycles: 5 });
+        console.info('R-C AppShell cursor-only Availability publication', {
+            unions: unions.mock.calls.length - settledUnions, merges: merges.mock.calls.length - settledMerges });
+        expect(unions.mock.calls.length).toBe(settledUnions);
+        expect(merges.mock.calls.length).toBe(settledMerges);
         // A choice report changes the union's selected stamp, but not its
         // candidate supplies. It must settle without feeding a fresh facts
         // object back through the same selector on every parent publication.

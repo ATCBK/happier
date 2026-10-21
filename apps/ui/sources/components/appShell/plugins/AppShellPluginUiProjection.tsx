@@ -32,6 +32,7 @@ import {
 import {
     arePluginUiProjectionUnionMembersEquivalent,
     unionPluginUiProjections,
+    arePluginExecutionOriginSelectionsEquivalent,
     mergeInstalledPluginUiProjections,
     readPluginUiExecutionOriginCandidates,
     type PluginUiProjectionUnion,
@@ -255,17 +256,6 @@ function areSamePluginExecutionOrigin(
         && right !== null
         && arePluginMachineExecutionOriginsEqual(left, right)
     );
-}
-
-function arePluginExecutionOriginSelectionsEquivalent(
-    left: PluginUiProjectionUnionOriginSelections,
-    right: PluginUiProjectionUnionOriginSelections,
-): boolean {
-    if (left.size !== right.size) return false;
-    for (const [pluginId, origin] of left) {
-        if (!areSamePluginExecutionOrigin(origin, right.get(pluginId) ?? null)) return false;
-    }
-    return true;
 }
 
 export type AppShellAccountScopedPluginExecutionOriginReport = Readonly<{

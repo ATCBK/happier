@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createActionExecutor, PluginProjectionV2Schema, PluginProjectedResourceV2Schema, RPC_METHODS } from '@happier-dev/protocol';
 import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import * as originEquality from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { PluginSourceCustodyV1Schema } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import { PluginDeclarativeProjectedModelV1Schema } from '@happier-dev/protocol/plugins/contributions/ui/declarativeProjectedModelV1';
 import {
@@ -37,6 +38,7 @@ import {
     mergeInstalledPluginUiProjections,
     readPluginUiContributionSupplies,
     readPluginUiExecutionOriginCandidates,
+    PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY,
     type PluginUiProjectionUnionMember,
 } from './projectionUnion';
 
@@ -60,6 +62,11 @@ it('retains proven installed declarations on a cold client without fabricating r
 });
 
 it('retains current Account Actions through installed composition without replacing Machine Actions', () => {
+    const digest = `sha256:${'a'.repeat(64)}`;
+    const graph = PluginUiArtifactsManifestEntryV2Schema.parse({ artifactId: 'account', tier: 'reactNative', digest,
+        entry: 'react-native/account/entry.cjs.bundle',
+        files: [{ relativePath: 'react-native/account/entry.cjs.bundle', digest, byteSize: 1 }],
+        executable: { exports: ['activate'] }, builtWith: { bundler: 'esbuild', version: '0.27.2' }, hostUiApiRange: '^1.0.0' });
     const manifest = PluginPortableReleaseManifestV1Schema.parse({ schemaVersion: 2, id: 'happier.fixture', version: '1.0.0',
         displayName: 'Fixture', runtime: { apiVersion: 1 }, contributes: { actions: [{ id: 'read', title: 'Read',
             scopes: ['global'], surfaces: ['ui'], placementBindings: [], dangerLevel: 'safe',
@@ -69,7 +76,7 @@ it('retains current Account Actions through installed composition without replac
     const reader = createPluginAccountAvailabilityReader({ scope: { serverId: 'server-1', accountId: 'account-1' },
         snapshot: { availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [] },
         hostBundledUi: [{ pluginId: manifest.id, pluginVersion: manifest.version, displayName: 'Fixture',
-            packageName: '@happier-dev/plugins-fixture', normalizedManifest: manifest, artifactGraphs: [],
+            packageName: '@happier-dev/plugins-fixture', normalizedManifest: manifest, artifactGraphs: [graph],
             entriesById: projectPluginPortableUiDeclarationsV1(manifest) }],
     });
     const installed = reader.readAccountUiProjection()!;
@@ -84,6 +91,32 @@ it('retains current Account Actions through installed composition without replac
         'happier.fixture/read': action, 'happier.fixture/machine-read': runtimeAction,
     });
     expect(mergeInstalledPluginUiProjections([], runtime)?.actionsById).toEqual(runtime.actionsById);
+    const bundleId = 'reactNativeBundle:happier.fixture:read';
+    const accountBundle = installed.reactNativeBundlesById[bundleId]!;
+    expect(resolveProjectedPluginUiClientExecutables({ actionProjection: { projection: installed }, platform: 'web' }))
+        .toMatchObject([{ authority: { kind: 'account', custodyId: action.occurrenceId }, actions: [{ id: 'read' }] }]);
+    const machineOrigin = { machineId: 'machine-optional', serverId: 'server-1',
+        generation: 1, phase: 'current' as const, interactionEnabled: true, executionOrigin: null };
+    // Distinct Actions may use the same physical artifact/export in both realms.
+    const clientAction = { ...action, id: 'machine-client', hostAccountOrigin: undefined, occurrenceId: 'machine:current',
+        execution: { target: 'client' as const, client: { artifactId: 'account', exportName: 'activate' }, platforms: ['web' as const] },
+        [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: machineOrigin };
+    const clientBundleId = 'reactNativeBundle:happier.fixture:machine-client';
+    const runtimeWithExecutableGraph = { ...runtime, actionsById: { ...runtime.actionsById, 'happier.fixture/machine-client': clientAction },
+        reactNativeBundlesById: { [bundleId]: {
+        ...accountBundle, hostAccountOrigin: undefined, occurrenceId: 'machine:current',
+        [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: machineOrigin,
+    }, [clientBundleId]: { ...accountBundle, id: clientBundleId, contributionId: 'machine-client', hostAccountOrigin: undefined,
+        occurrenceId: 'machine:current', [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: machineOrigin } } };
+    const executableProjection = mergeInstalledPluginUiProjections([installed], runtimeWithExecutableGraph)!;
+    const executables = resolveProjectedPluginUiClientExecutables({ actionProjection: { projection: executableProjection }, platform: 'web' });
+    expect(executables).toHaveLength(2);
+    expect(executables).toEqual(expect.arrayContaining([
+        expect.objectContaining({ authority: { kind: 'account', serverId: 'server-1', accountId: 'account-1', custodyId: action.occurrenceId },
+            actions: [action], target: { realm: 'account', artifactId: 'account', exportName: 'activate', platform: 'web' } }),
+        expect.objectContaining({ authority: { machineId: 'machine-optional', serverId: 'server-1' }, actions: [clientAction],
+            target: { artifactId: 'account', exportName: 'activate', platform: 'web' } }),
+    ]));
     const origin = selectedOrigin(manifest.id, 'machine-optional');
     const entry = placementEntry({ pluginId: manifest.id, localId: 'page', container: 'appPage' });
     const runtimeWithSupplier = unionPluginUiProjections([member({ machineId: 'machine-optional', generation: 1,
@@ -334,6 +367,62 @@ it('retains runtime client callback graphs beside host-owned renderer bytes with
                 context: { authority: 'present_user' } },
         })).toEqual({ ok: true, result: { selected: 'linked-session' } });
     } finally { await composition.unload(); }
+});
+
+it('does not rescan retained union members during unchanged renders', () => {
+    const entry = placementEntry({ pluginId: 'acme.retained-comparison', localId: 'panel', container: 'appPage' });
+    const members = Array.from({ length: 32 }, (_, index) => member({ machineId: `machine-${index}`,
+        generation: 1, entriesById: { [entry.id]: entry } }));
+    const comparisons = vi.spyOn(originEquality, 'arePluginMachineExecutionOriginsEqual');
+    try {
+        for (let index = 0; index < 100; index += 1) {
+            expect(arePluginUiProjectionUnionMembersEquivalent(members, members)).toBe(true);
+            expect(arePluginUiProjectionUnionMembersEquivalent(members, [...members])).toBe(true);
+        }
+        console.info('R-C retained union member comparisons', { members: 32, reads: 200, originComparisons: comparisons.mock.calls.length });
+        expect(comparisons).toHaveBeenCalledTimes(0);
+        // A newly produced member still has to observe withdrawal and unsupported disposition.
+        expect(arePluginUiProjectionUnionMembersEquivalent(members, members.map((input, index) => index === 0
+            ? { ...input, phase: 'unavailable', unavailableReasonCode: 'daemon_unsupported', interactionEnabled: false } : input))).toBe(false);
+    } finally { comparisons.mockRestore(); }
+});
+
+it('keeps independent mounted-reader merges from invalidating the AppShell merge of the same declaration', () => {
+    const entry = placementEntry({ pluginId: 'acme.shared-merge', localId: 'panel', container: 'appPage' });
+    const installed = { ...machineProjection({ generation: 1, entriesById: { [entry.id]: { ...entry, occurrenceId: undefined } } }), generation: null };
+    const shellRuntime = machineProjection({ generation: 2, entriesById: { [entry.id]: entry } });
+    const mountedRuntime = machineProjection({ generation: 3, entriesById: { [entry.id]: entry } });
+    const shell = mergeInstalledPluginUiProjections([installed], shellRuntime);
+    const mounted = mergeInstalledPluginUiProjections([installed], mountedRuntime);
+    let recomputations = 0;
+    for (let index = 0; index < 100; index += 1) {
+        if (mergeInstalledPluginUiProjections([installed], shellRuntime) !== shell) recomputations += 1;
+        if (mergeInstalledPluginUiProjections([installed], mountedRuntime) !== mounted) recomputations += 1;
+    }
+    console.info('R-C shared merge counts', { inputs: 2, reads: 200, recomputations });
+    expect(recomputations).toBe(0);
+    expect(shell?.generation).toBe(2);
+    expect(mounted?.generation).toBe(3);
+    expect(mergeInstalledPluginUiProjections([installed], null)?.generation).toBeNull();
+    expect(mergeInstalledPluginUiProjections([installed], shellRuntime)).toBe(shell);
+});
+
+it('does not remerge unchanged origin selections when another selectable origin report republishes the map', () => {
+    const pluginId = 'acme.equal-selection';
+    const entry = placementEntry({ pluginId, localId: 'panel', container: 'appPage' });
+    const installed = { ...machineProjection({ generation: 1, entriesById: { [entry.id]: entry } }), generation: null };
+    const runtime = machineProjection({ generation: 2, entriesById: { [entry.id]: entry } });
+    const origin = selectedOrigin(pluginId, 'machine-a');
+    const merged = mergeInstalledPluginUiProjections([installed], runtime, undefined, selectedOrigins(origin));
+    let recomputations = 0;
+    for (let index = 0; index < 100; index += 1) {
+        if (mergeInstalledPluginUiProjections([installed], runtime, undefined, selectedOrigins({ ...origin })) !== merged) recomputations += 1;
+    }
+    console.info('R-C equal-selection merge counts', { reads: 100, recomputations });
+    expect(recomputations).toBe(0);
+    expect(mergeInstalledPluginUiProjections([installed], runtime, undefined,
+        selectedOrigins(selectedOrigin(pluginId, 'machine-b')))).not.toBe(merged);
+    expect(mergeInstalledPluginUiProjections([installed], runtime, undefined, new Map())).not.toBe(merged);
 });
 
 it('reuses the live occurrence for the same declared root without confusing runtime identity with content', () => {
