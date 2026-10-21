@@ -12,7 +12,7 @@ import { buildWorkspaceFileRestoreOperation } from '@happier-dev/protocol/machin
 import { DaemonWorkspaceFileReplacePreviewResponseSchema, DaemonWorkspaceFileReplaceApplyResponseSchema, WORKSPACE_FILE_SEARCH_MAX_RESPONSE_UTF8_BYTES } from '@happier-dev/protocol/machines/workspaceFiles';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import type { RpcHandler } from '@/api/rpc/types';
-import { applyWorkspaceFileReplace, registerWorkspaceFileReplaceHandlers } from './workspaceFileReplace';
+import { applyWorkspaceFileReplace, previewWorkspaceFileReplace, registerWorkspaceFileReplaceHandlers } from './workspaceFileReplace';
 import { registerSessionHandlers } from './registerSessionHandlers';
 import { ApiMachineClient } from '@/api/apiMachine';
 import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
@@ -34,7 +34,12 @@ describe('registered workspace replace transport', () => {
     root = await mkdtemp(join(tmpdir(), 'happier-replace-'));
     handlers = new Map();
     dispose = undefined;
-    registerWorkspaceFileReplaceHandlers({ registerHandler: (id, handler) => { handlers.set(id, handler); } }, root);
+    registerWorkspaceFileReplaceHandlers({ registerHandler: (id, handler) => { handlers.set(id, handler); } }, root, {
+      machineId: 'machine', actionExecutor: createActionExecutor({
+        workspaceFilesReplacePreview: ({ machineId: _machineId, ...request }, context) =>
+          previewWorkspaceFileReplace(request, root, { kind: 'osUser' }, context.signal ? { signal: context.signal } : undefined),
+      }),
+    });
   });
   afterEach(async () => {
     vi.mocked(filesystem.writeFile).mockImplementation((await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).writeFile);
@@ -43,14 +48,46 @@ describe('registered workspace replace transport', () => {
   const preview = async (extra = {}) => DaemonWorkspaceFileReplacePreviewResponseSchema.parse(await handlers.get(RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW)!({ rootPath: root, ...matcher, ...extra }));
   const apply = async (operation: unknown, signal?: AbortSignal) => DaemonWorkspaceFileReplaceApplyResponseSchema.parse(await applyWorkspaceFileReplace({ rootPath: root, operation }, root, { kind: 'osUser' }, signal ? { signal } : undefined));
 
-  it('refuses replacement at production registration without an Action admission owner', async () => {
+  it('refuses preview and replacement at production registration without an Action admission owner', async () => {
     handlers.clear();
     dispose = registerSessionHandlers({ registerHandler: (id, handler) => { handlers.set(id, handler); } }, root).dispose;
     await writeFile(join(root, 'a.txt'), 'old');
+    expect(await handlers.get(RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW)!({ rootPath: root, ...matcher }))
+      .toMatchObject({ ok: false });
     expect(await handlers.get(RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_APPLY)!({ rootPath: root,
       operation: { kind: 'replace', matcher, files: [{ path: 'a.txt', expectedHash: hash(Buffer.from('old')) }] },
     })).toMatchObject({ ok: false });
     expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('old');
+  });
+
+  it.each(['ui', 'rpc'] as const)('honors the configured %s Ask override before registered preview reads files', async surface => {
+    await writeFile(join(root, 'a.txt'), 'old');
+    const requests: unknown[] = [];
+    const settings = ActionsSettingsV1Schema.parse({ v: 1, actions: {
+      'workspace.files.replace.preview': { approvalRequiredSurfaces: [surface] },
+    } });
+    const executor = createActionExecutor({
+      // The physical implementation is real; an approval refusal must prevent reaching it.
+      workspaceFilesReplacePreview: ({ machineId: _machineId, ...request }, context) =>
+        previewWorkspaceFileReplace(request, root, { kind: 'osUser' }, context.signal ? { signal: context.signal } : undefined),
+      approvalsCreate: async ({ request }) => { requests.push(request); return { artifactId: 'preview-approval' }; },
+      approvalsUpdate: async () => ({ ok: true }),
+      approvalsWaitForDecision: async ({ request }) => ({ decision: 'reject', request }),
+      isActionApprovalRequired: (id, context, input) => isApprovalRequiredByActionsSettings(id, settings, context, undefined, undefined, input),
+    });
+    handlers.clear();
+    dispose = registerSessionHandlers({ registerHandler: (id, handler) => { handlers.set(id, handler); } }, root, {
+      workspaceFileReplaceActionExecutor: executor, workspaceFileReplaceMachineId: 'machine',
+    }).dispose;
+    const outcome = await handlers.get(RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW)!({ rootPath: root, ...matcher }, {
+      signal: new AbortController().signal, localActionContext: { surface, authority: surface === 'ui' ? 'present_user' : 'account_automation',
+        serverId: 'home', runtimeAccountId: 'account', actionRequestId: 'preview-request' },
+    });
+    expect(outcome).toMatchObject(surface === 'ui'
+      ? { kind: 'approval_request_created', actionId: 'workspace.files.replace.preview', artifactId: 'preview-approval' }
+      : { ok: false, errorCode: 'approval_rejected' });
+    expect(requests).toEqual([expect.objectContaining({ actionId: 'workspace.files.replace.preview',
+      actionArgs: { machineId: 'machine', rootPath: root, ...matcher } })]);
   });
 
   it('previews raw BOM hashes then applies only selected matches and restores exact bytes through Actions', async () => {
@@ -58,6 +95,8 @@ describe('registered workspace replace transport', () => {
     // owner registration makes removal/misbinding in registerSessionHandlers fail.
     handlers.clear();
     const executor = createActionExecutor({
+      workspaceFilesReplacePreview: ({ machineId: _machineId, ...request }, context) =>
+        previewWorkspaceFileReplace(request, root, { kind: 'osUser' }, context.signal ? { signal: context.signal } : undefined),
       workspaceFilesReplace: async ({ machineId: _machineId, ...request }, context) =>
         applyWorkspaceFileReplace(request, root, { kind: 'osUser' }, context.signal ? { signal: context.signal } : undefined),
     });
@@ -139,6 +178,7 @@ describe('registered workspace replace transport', () => {
     const runtime = createHostActionOperationRuntime({ machineId: 'machine', resolveAccountId: async () => 'account',
       generateOperationId: () => 'replace-operation' });
     const executor = createActionExecutor({ workspaceFilesReplace: client.createWorkspaceFileReplaceActionExecutor('home'),
+      workspaceFilesReplacePreview: client.createWorkspaceFileReplacePreviewActionExecutor('home'),
       runActionOperation: runtime.runActionOperation });
     client.setRPCHandlers({ spawnSession: async () => ({ type: 'error', errorCode: 'SPAWN_FAILED', errorMessage: 'unused' }),
       stopSession: async () => true, requestShutdown: () => {} }, { externalActionIngressOwner: {
@@ -153,6 +193,11 @@ describe('registered workspace replace transport', () => {
       if (!cancellation) cancellation = await runtime.handlers.cancel({ operationId: 'replace-operation' });
     });
     try {
+      expect(await executor.execute('workspace.files.replace.preview', { machineId: 'machine', rootPath: root, ...matcher },
+        { surface: 'ui', authority: 'present_user', serverId: 'home', runtimeAccountId: 'account',
+          externalActionTarget: { kind: 'machine', machineId: 'machine' } })).toMatchObject({ ok: true, result: {
+            ok: true, files: [{ path: 'a.txt', hash: hash(bytes) }, { path: 'b.txt', hash: hash(bytes) }],
+          } });
       const accepted = await executor.execute('workspace.files.replace', { machineId: 'machine', rootPath: root,
         operation: { kind: 'replace', matcher, files: ['a.txt', 'b.txt'].map(path => ({ path, expectedHash: hash(bytes) })) },
       }, { surface: 'ui', authority: 'present_user', serverId: 'home', runtimeAccountId: 'account',
