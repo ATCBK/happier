@@ -1,5 +1,7 @@
 import { PLUGIN_MANIFEST as OPENCODE_PLUGIN_MANIFEST } from '@happier-dev/plugins-opencode/manifest';
+import { PLUGIN_MANIFEST as DEVIN_PLUGIN_MANIFEST } from '@happier-dev/plugins-devin/manifest';
 import {
+    PluginContributesV2Schema,
     PluginProjectionV2Schema,
     type PluginProjectionV2,
 } from '@happier-dev/protocol';
@@ -19,6 +21,22 @@ vi.mock('@/text', async () => {
 const externalSessionBrowseModulePromise = import('./resolveExternalSessionBrowseSourceOptions');
 
 describe('qualified accounting source browse admission', () => {
+    it('offers the default native Devin source from its real manifest to qualified Browse', async () => {
+        const { listExternalSessionBrowseProviderIds, resolveExternalSessionBrowseSourceOptions } = await externalSessionBrowseModulePromise;
+        const declaration = PluginContributesV2Schema.parse(DEVIN_PLUGIN_MANIFEST.contributes).agents[0]!;
+        const projection = createProjection([declaration.id]);
+        const agent = projection.agentsById[declaration.id]!;
+        const pluginId = DEVIN_PLUGIN_MANIFEST.id;
+        projection.installedPackagesById[pluginId] = {
+            ...projection.installedPackagesById['happier.external-sessions-fixture']!, id: pluginId,
+        };
+        agent.externalSessions = { ...agent.externalSessions!, agent: { pluginId, localId: declaration.id },
+            sources: declaration.surfaces!.externalSession!.sources! };
+        expect(listExternalSessionBrowseProviderIds({ projection })).toContain(declaration.id);
+        expect(resolveExternalSessionBrowseSourceOptions({ projection, providerId: declaration.id,
+            profile: null, labelsByKey: {} })).toMatchObject([{ source: { kind: 'devinHome' } }]);
+    });
+
     it('maps the declared qualified identity, not a matching local string, and rejects disabled or resume-only producers', async () => {
         const { resolveExternalSessionBrowseTargetForQualifiedSource } = await externalSessionBrowseModulePromise;
         const projection = createProjection(['codex']);
