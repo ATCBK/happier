@@ -53,6 +53,9 @@ type Labels = Readonly<{
   noticeMovedOn: string;
   noticeUpdateRequired: (params: Machine) => string;
   noticeUnsupported: string;
+  discardStaged: string;
+  discardRenamedOrCopied: string;
+  discardUntracked: string;
   noticeUnavailable: string;
   noticeUnknown: string;
   undo: string;
@@ -125,6 +128,9 @@ export const hunkReviewTranslations = {
     noticeUpdateRequired: ({ machine }) =>
       `Update ${machine} to discard or restore changes`,
     noticeUnsupported: 'This change cannot be discarded here.',
+    discardStaged: 'Unstage these changes first.',
+    discardRenamedOrCopied: 'Individual changes cannot be discarded in renamed or copied files.',
+    discardUntracked: 'Individual changes cannot be discarded in untracked files.',
     noticeUnavailable: 'These changes are no longer available.',
     noticeUnknown: 'Could not confirm. Refresh.',
     undo: 'Undo',
@@ -198,6 +204,9 @@ export const hunkReviewTranslations = {
     noticeUpdateRequired: ({ machine }) =>
       `Mettez ${machine} à jour pour annuler ou restaurer des modifications`,
     noticeUnsupported: 'Cette modification ne peut pas être annulée ici.',
+    discardStaged: 'Retirez d’abord ces modifications de l’index.',
+    discardRenamedOrCopied: 'Les modifications individuelles des fichiers renommés ou copiés ne peuvent pas être annulées.',
+    discardUntracked: 'Les modifications individuelles des fichiers non suivis ne peuvent pas être annulées.',
     noticeUnavailable: 'Ces modifications ne sont plus disponibles.',
     noticeUnknown: 'Confirmation impossible. Actualisez.',
     undo: 'Rétablir',
@@ -272,6 +281,9 @@ export const hunkReviewTranslations = {
     noticeUpdateRequired: ({ machine }) =>
       `Aktualisiere ${machine}, um Änderungen zu verwerfen oder wiederherzustellen`,
     noticeUnsupported: 'Diese Änderung kann hier nicht verworfen werden.',
+    discardStaged: 'Nimm diese Änderungen zuerst aus dem Index.',
+    discardRenamedOrCopied: 'Einzelne Änderungen in umbenannten oder kopierten Dateien können nicht verworfen werden.',
+    discardUntracked: 'Einzelne Änderungen in nicht versionierten Dateien können nicht verworfen werden.',
     noticeUnavailable: 'Diese Änderungen sind nicht mehr verfügbar.',
     noticeUnknown: 'Nicht bestätigt. Aktualisieren.',
     undo: 'Rückgängig',
@@ -345,6 +357,9 @@ export const hunkReviewTranslations = {
     noticeUpdateRequired: ({ machine }) =>
       `Actualiza ${machine} para descartar o restaurar cambios`,
     noticeUnsupported: 'Este cambio no se puede descartar aquí.',
+    discardStaged: 'Quita primero estos cambios del área de preparación.',
+    discardRenamedOrCopied: 'No se pueden descartar cambios individuales en archivos renombrados o copiados.',
+    discardUntracked: 'No se pueden descartar cambios individuales en archivos sin seguimiento.',
     noticeUnavailable: 'Estos cambios ya no están disponibles.',
     noticeUnknown: 'No se pudo confirmar. Actualiza.',
     undo: 'Deshacer',
@@ -418,6 +433,9 @@ export const hunkReviewTranslations = {
     noticeUpdateRequired: ({ machine }) =>
       `Actualitza ${machine} per descartar o restaurar canvis`,
     noticeUnsupported: 'Aquest canvi no es pot descartar aquí.',
+    discardStaged: 'Treu primer aquests canvis de l’àrea de preparació.',
+    discardRenamedOrCopied: 'No es poden descartar canvis individuals en fitxers reanomenats o copiats.',
+    discardUntracked: 'No es poden descartar canvis individuals en fitxers sense seguiment.',
     noticeUnavailable: 'Aquests canvis ja no estan disponibles.',
     noticeUnknown: 'No s’ha pogut confirmar. Actualitza.',
     undo: 'Desfer',
@@ -491,6 +509,9 @@ export const hunkReviewTranslations = {
     noticeUpdateRequired: ({ machine }) =>
       `Aggiorna ${machine} per scartare o ripristinare le modifiche`,
     noticeUnsupported: 'Questa modifica non può essere scartata qui.',
+    discardStaged: 'Rimuovi prima queste modifiche dall’area di staging.',
+    discardRenamedOrCopied: 'Non è possibile scartare singole modifiche nei file rinominati o copiati.',
+    discardUntracked: 'Non è possibile scartare singole modifiche nei file non tracciati.',
     noticeUnavailable: 'Queste modifiche non sono più disponibili.',
     noticeUnknown: 'Impossibile confermare. Aggiorna.',
     undo: 'Annulla',
@@ -564,6 +585,9 @@ export const hunkReviewTranslations = {
     noticeUpdateRequired: ({ machine }) =>
       `Atualize ${machine} para descartar ou restaurar alterações`,
     noticeUnsupported: 'Esta alteração não pode ser descartada aqui.',
+    discardStaged: 'Remova primeiro estas alterações da área de preparação.',
+    discardRenamedOrCopied: 'Não é possível descartar alterações individuais em arquivos renomeados ou copiados.',
+    discardUntracked: 'Não é possível descartar alterações individuais em arquivos não rastreados.',
     noticeUnavailable: 'Estas alterações não estão mais disponíveis.',
     noticeUnknown: 'Não foi possível confirmar. Atualize.',
     undo: 'Desfazer',
@@ -637,6 +661,9 @@ export const hunkReviewTranslations = {
     noticeUpdateRequired: ({ machine }) =>
       `Zaktualizuj ${machine}, aby odrzucać lub przywracać zmiany`,
     noticeUnsupported: 'Tej zmiany nie można tu odrzucić.',
+    discardStaged: 'Najpierw usuń te zmiany z indeksu.',
+    discardRenamedOrCopied: 'Nie można odrzucać pojedynczych zmian w plikach o zmienionej nazwie lub skopiowanych.',
+    discardUntracked: 'Nie można odrzucać pojedynczych zmian w nieśledzonych plikach.',
     noticeUnavailable: 'Te zmiany nie są już dostępne.',
     noticeUnknown: 'Nie udało się potwierdzić. Odśwież.',
     undo: 'Cofnij',
@@ -709,6 +736,9 @@ export const hunkReviewTranslations = {
     noticeUpdateRequired: ({ machine }) =>
       `Обновите ${machine}, чтобы отменять или восстанавливать изменения`,
     noticeUnsupported: 'Это изменение нельзя отменить здесь.',
+    discardStaged: 'Сначала уберите эти изменения из индекса.',
+    discardRenamedOrCopied: 'Нельзя отменять отдельные изменения в переименованных или скопированных файлах.',
+    discardUntracked: 'Нельзя отменять отдельные изменения в неотслеживаемых файлах.',
     noticeUnavailable: 'Эти изменения больше недоступны.',
     noticeUnknown: 'Не удалось подтвердить. Обновите.',
     undo: 'Вернуть',
@@ -782,6 +812,9 @@ export const hunkReviewTranslations = {
     noticeUpdateRequired: ({ machine }) =>
       `変更の破棄や復元には ${machine} の更新が必要です`,
     noticeUnsupported: 'この変更はここでは破棄できません。',
+    discardStaged: '先にこれらの変更のステージングを解除してください。',
+    discardRenamedOrCopied: '名前変更またはコピーされたファイルでは個別の変更を破棄できません。',
+    discardUntracked: '追跡されていないファイルでは個別の変更を破棄できません。',
     noticeUnavailable: 'これらの変更はもう利用できません。',
     noticeUnknown: '確認できませんでした。更新してください。',
     undo: '元に戻す',
@@ -853,6 +886,9 @@ export const hunkReviewTranslations = {
     noticeMovedOn: '文件已更改，请重新审查。',
     noticeUpdateRequired: ({ machine }) => `请更新 ${machine} 以放弃或恢复更改`,
     noticeUnsupported: '此更改无法在这里放弃。',
+    discardStaged: '请先取消暂存这些更改。',
+    discardRenamedOrCopied: '无法放弃重命名或复制文件中的单个更改。',
+    discardUntracked: '无法放弃未跟踪文件中的单个更改。',
     noticeUnavailable: '这些更改已不可用。',
     noticeUnknown: '无法确认，请刷新。',
     undo: '撤销',
@@ -923,6 +959,9 @@ export const hunkReviewTranslations = {
     noticeMovedOn: '檔案已變更，請重新審查。',
     noticeUpdateRequired: ({ machine }) => `請更新 ${machine} 以捨棄或還原變更`,
     noticeUnsupported: '此變更無法在這裡捨棄。',
+    discardStaged: '請先取消暫存這些變更。',
+    discardRenamedOrCopied: '無法捨棄重新命名或複製檔案中的個別變更。',
+    discardUntracked: '無法捨棄未追蹤檔案中的個別變更。',
     noticeUnavailable: '這些變更已無法使用。',
     noticeUnknown: '無法確認，請重新整理。',
     undo: '復原',

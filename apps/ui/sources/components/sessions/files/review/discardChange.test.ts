@@ -10,6 +10,7 @@ import { createTransferManifestHasher } from '@/sync/domains/transfers/runtime/t
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 import type { DetailsTab } from '@/components/appShell/panes/model/appPaneReducer';
 import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
+import type { ScmWorkingEntry } from '@happier-dev/protocol/scm';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -222,6 +223,7 @@ describe('comparison Discard and guarded Undo', () => {
 
   it('offers project per-change Ask through the existing detached run destination', async () => {
     const opened: DetailsTab[] = [];
+    let liveEntry: Pick<ScmWorkingEntry, 'path' | 'kind' | 'hasIncludedDelta'> = { path: 'a.txt', kind: 'modified', hasIncludedDelta: false };
     const hook = await renderHook(() => {
       const getAskTargetContext = useAskSelectionTargetContext(React.useCallback(() => ({
         openDetailsTab: (tab: DetailsTab) => { opened.push(tab); },
@@ -229,6 +231,7 @@ describe('comparison Discard and guarded Undo', () => {
       return useFileChangesReview({
         scope: { machineId: 'm1', rootPath: '/repo', serverId }, filePath: 'a.txt',
         liveDiff: '@@ -1 +1 @@\n-old\n+new\n', refreshLiveDiff: () => {},
+        liveEntry,
         view: { changesScope: { kind: 'workingTree' } }, onChangesScopeChange: () => {}, active: true,
         getAskTargetContext,
       });
@@ -243,6 +246,19 @@ describe('comparison Discard and guarded Undo', () => {
     } });
     expect(opened[0]?.resource).toMatchObject({ initialInstructions: expect.stringContaining('a.txt:1') });
     expect(rpc.responses).toHaveLength(0);
+    // The real File-page hook feeds status to the same row/menu/keyboard owner without disabling Ask.
+    const staleDiscard = hook.getCurrent().keyboard.discardCurrent;
+    const requests = rpc.requests.length;
+    liveEntry = { ...liveEntry, hasIncludedDelta: true };
+    await hook.rerender();
+    expect(hook.getCurrent().discardDisabledReason).toBeTruthy();
+    await act(async () => { staleDiscard?.(); hook.getCurrent().keyboard.discardCurrent?.(); });
+    expect(rpc.requests).toHaveLength(requests);
+    expect(hook.getCurrent().keyboard.askCurrent).toBeTypeOf('function');
+    liveEntry = { ...liveEntry, kind: 'added' };
+    await hook.rerender();
+    expect(hook.getCurrent().keyboard.discardCurrent).toBeUndefined();
+    expect(hook.getCurrent().hunks.actions?.discard).toBeUndefined();
   });
 
   it('reports Undo note failure separately from the successful one-shot file write', async () => {

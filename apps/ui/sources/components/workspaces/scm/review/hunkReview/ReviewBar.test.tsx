@@ -18,6 +18,10 @@ describe('ReviewBar (phone review, lab rvp)', () => {
         expect(screen.tree.findByProps({ testID: 'review-bar-keep' }).props.disabled).toBe(false);
         await screen.pressByTestIdAsync('review-bar-keep');
         expect(keep).toHaveBeenCalledTimes(1);
+        // An added-file hunk offers no Discard at all; omission is distinct from disabled-with-reason.
+        await screen.update(<ReviewBar current={2} total={3} onKeep={keep} />);
+        expect(screen.tree.findAllByProps({ testID: 'review-bar-discard' })).toHaveLength(0);
+        expect(screen.tree.findByProps({ testID: 'review-bar-keep' }).props.disabled).toBe(false);
     });
     it('P2: the completion names the file Next file opens', async () => {
         const next = vi.fn();

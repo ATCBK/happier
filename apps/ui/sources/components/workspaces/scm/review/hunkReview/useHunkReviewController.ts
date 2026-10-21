@@ -1,5 +1,6 @@
 import * as React from 'react';
 import * as Clipboard from 'expo-clipboard';
+import { getScmComparisonDiscardRestriction, type ScmWorkingEntry, type ScmComparisonDiscardReason } from '@happier-dev/protocol/scm';
 import type { ScmComparison } from '@happier-dev/protocol/scm/comparison';
 import { buildReviewUnits, buildScmFileReviewUnits, buildScmReviewScopeId, type ReviewUnit } from '@happier-dev/protocol/scm/comparisonOccurrences';
 import { formatHunk } from '@happier-dev/protocol/diff/hunks';
@@ -7,6 +8,16 @@ import { useScmReviewedMarks, type ScmReviewedMarks } from '@/components/session
 import type { DiffHunkAction, DiffHunkInfo, DiffHunkReviewState, DiffViewerHunks } from '@/components/ui/code/diff/diffViewerTypes';
 import type { ScmDiffSummaryHost } from '@/sync/ops/scmDiffSummary/results';
 import { buildHunkReviewSummary, moveHunkReviewCursor, orderHunkReviewFiles, resolveHunkReviewUnit, type HunkReviewCursor, type HunkReviewFile } from './hunkReviewModel';
+import { t } from '@/text';
+
+function describeDiscardRestriction(reason: ScmComparisonDiscardReason): string {
+    switch (reason) {
+        case 'staged': return t('hunkReview.discardStaged');
+        case 'renamed_or_copied': return t('hunkReview.discardRenamedOrCopied');
+        case 'untracked': return t('hunkReview.discardUntracked');
+        case 'added_file': return t('hunkReview.noticeUnsupported');
+    }
+}
 
 export type HunkReviewSource = Readonly<{ kind: 'captured'; comparison: ScmComparison }>
     | Readonly<{ kind: 'live'; root: string }>;
@@ -40,6 +51,8 @@ export type HunkReviewControllerParams = Readonly<{
     marks?: ScmReviewedMarks;
     /** The live comparison's currently loaded files, when reviewing several files. */
     liveFiles?: readonly Readonly<{ path: string; unifiedDiff: string; generated?: boolean; lockfile?: boolean; pending?: boolean }>[];
+    /** Actual working-snapshot facts, not a kind inferred from a path or diff header. */
+    liveEntries?: readonly Pick<ScmWorkingEntry, 'path' | 'kind' | 'hasIncludedDelta'>[];
     onNavigate?: (cursor: HunkReviewCursor) => void;
     onDiscard?: (target: HunkReviewActionTarget) => void | Promise<void>;
     onAsk?: (target: HunkReviewActionTarget) => void | Promise<void>;
@@ -131,9 +144,20 @@ export function useHunkReviewController(params: HunkReviewControllerParams) {
         return unit ? { path, changeKey: key, ...(path === params.path && displayedHash ? { expectedHash: displayedHash } : {}),
             source: params.source, unit } : null;
     };
+    const restrictionFor = (key: string | null, path = params.path) => {
+        const current = latest.current;
+        if (current.params.source.kind === 'captured') {
+            const file = current.params.source.comparison.inventory.files.find(file => file.path === path);
+            const unit = current.unitsByPath.get(path)?.find(unit => unit.key === key);
+            return file && unit ? getScmComparisonDiscardRestriction({ kind: 'captured', file, hunkIndexes: [unit.hunkIndex] }) : null;
+        }
+        return getScmComparisonDiscardRestriction({ kind: 'live',
+            entry: current.params.liveEntries?.find(entry => entry.path === path), hunks: true });
+    };
+    const offersDiscard = (key: string | null, path = params.path) => Boolean(params.onDiscard) && restrictionFor(key, path)?.reason !== 'added_file';
     const discard = async (key: string, path = params.path) => {
         const current = target(key, path);
-        if (!current || latest.current.params.discardDisabledReason || !params.onDiscard) return;
+        if (!current || latest.current.params.discardDisabledReason || restrictionFor(key, path) || !params.onDiscard) return;
         params.onReviewAction?.();
         setDiscardingKey(key);
         try { await params.onDiscard(current); }
@@ -154,8 +178,12 @@ export function useHunkReviewController(params: HunkReviewControllerParams) {
         : revealed?.path === params.path && units.some(unit => unit.key === revealed.key) ? revealed.key : units[0]?.key ?? null;
     const nextFile = moveHunkReviewCursor(files, cursor, 1, marked, true);
     const stateOfKey = (key: string): DiffHunkReviewState => discardingKey === key ? 'discarding' : marked.has(key) ? 'kept' : 'open';
-    const disabledReason = (action: DiffHunkAction) => action === 'keep' ? marks.unavailableReason
-        : action === 'discard' ? params.discardDisabledReason ?? null : null;
+    const disabledReason = (action: DiffHunkAction, key = currentKey, path = params.path) => {
+        if (action === 'keep') return marks.unavailableReason;
+        if (action !== 'discard') return null;
+        const restriction = restrictionFor(key, path);
+        return restriction ? describeDiscardRestriction(restriction.reason) : params.discardDisabledReason ?? null;
+    };
     const changeActionsForKey = <DraftResult = never,>(key: string, options?: Readonly<{
         /** Dirty Discard is an editor transaction, so Machine reachability does not disable it. */
         discardInDraft?: () => Promise<DraftResult>;
@@ -166,14 +194,14 @@ export function useHunkReviewController(params: HunkReviewControllerParams) {
         return {
             state: stateOfKey(key), keep: () => keep(key), copy: () => copy(key, params.path),
             ...(params.onAsk ? { ask: () => ask(key) } : {}),
-            disabledReason: action => action === 'discard' && discardInDraft ? null : disabledReason(action),
+            disabledReason: action => action === 'discard' && discardInDraft ? null : disabledReason(action, key),
             ...(discardInDraft ? { discard: async () => {
                 if (!resolve(key)) return;
                 params.onReviewAction?.();
                 setDiscardingKey(key);
                 try { return await discardInDraft(); }
                 finally { setDiscardingKey(null); }
-            } } : params.onDiscard ? { discard: () => discard(key) } : {}),
+            } } : offersDiscard(key) ? { discard: () => discard(key) } : {}),
         };
     };
     const hunksForPath = (path: string): DiffViewerHunks => {
@@ -183,9 +211,9 @@ export function useHunkReviewController(params: HunkReviewControllerParams) {
         ...(path === params.path ? { onHunks } : {}),
         currentIndex: path === params.path && currentIndex >= 0 ? currentIndex : null, numberOffset: offset, numberTotal: summary.total,
         stateOf: hunk => stateOfKey(hunk.key),
-        disabledReason: (_hunk, action) => disabledReason(action),
+        disabledReason: (hunk, action) => disabledReason(action, hunk.key, path),
         actions: { keep: hunk => keep(hunk.key, path), copy: hunk => copy(hunk.key, path),
-            ...(params.onDiscard ? { discard: (hunk: DiffHunkInfo) => { void discard(hunk.key, path); } } : {}),
+            ...(offersDiscard(unitsByPath.get(path)?.[0]?.key ?? null, path) ? { discard: (hunk: DiffHunkInfo) => { void discard(hunk.key, path); } } : {}),
             ...(params.onAsk ? { ask: (hunk: DiffHunkInfo) => ask(hunk.key, path) } : {}) },
         };
     };
@@ -223,7 +251,9 @@ export function useHunkReviewController(params: HunkReviewControllerParams) {
             const open = [...units.slice(at + 1), ...units.slice(0, Math.max(0, at))].find(unit => !marked.has(unit.key));
             if (open) moveTo({ path: params.path, key: open.key });
         },
-        discardCurrent: params.onDiscard ? () => { if (currentKey) void discard(currentKey); } : undefined,
+        discardCurrent: offersDiscard(currentKey) ? () => { if (currentKey) void discard(currentKey); } : undefined,
+        discardUnavailableReason: restrictionFor(currentKey)?.reason ?? null,
+        discardDisabledReason: disabledReason('discard'),
         askCurrent: params.onAsk ? () => { if (currentKey) ask(currentKey); } : undefined,
         keepAll: () => { if (!marks.unavailableReason && units.length > 0) {
             params.onReviewAction?.(); marks.setReviewedKeys(units.map(unit => unit.key), true);

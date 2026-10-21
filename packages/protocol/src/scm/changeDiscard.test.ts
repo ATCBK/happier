@@ -1,10 +1,30 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod/mini';
 import { ScmChangeDiscardEntrySchema, ScmChangeDiscardResponseSchema } from './index.js';
+import { getScmComparisonDiscardRestriction } from './comparisonDiscard.js';
+import { ScmComparisonFileSchema } from './comparison.js';
 
 const comparison = { path: 'src/app.ts', kind: 'comparison', against: { source: { kind: 'workingTree' } }, changeKeys: ['key'], includeUndo: true };
 
 describe('comparison discard contract', () => {
+  it('restricts only selected staged evidence and keeps whole-file added restore separate from hunk discard', () => {
+    const file = ScmComparisonFileSchema.parse({ path: 'a.ts', changeKind: 'modified', beforeBlobId: 'before',
+      binary: false, generated: false, lockfile: false, evidence: { state: 'available', unifiedDiff: '' },
+      occurrences: [
+        { id: 'metadata', alias: 'metadata', path: 'a.ts', position: 0,
+          before: { startLine: 0, lineCount: 0 }, after: { startLine: 0, lineCount: 0 } },
+        ...(['staged', 'unstaged'] as const).map((layer, index) => ({ id: layer, alias: layer, path: 'a.ts', layer, position: index,
+          before: { startLine: index + 1, lineCount: 1 }, after: { startLine: index + 1, lineCount: 1 } })),
+      ] });
+    expect(getScmComparisonDiscardRestriction({ kind: 'captured', file, hunkIndexes: [0] })?.reason).toBe('staged');
+    expect(getScmComparisonDiscardRestriction({ kind: 'captured', file, hunkIndexes: [1] })).toBeNull();
+    expect(getScmComparisonDiscardRestriction({ kind: 'captured', file })?.reason).toBe('staged');
+    const added = { ...file, changeKind: 'added', beforeBlobId: undefined, occurrences: [] };
+    expect(getScmComparisonDiscardRestriction({ kind: 'captured', file: added, hunkIndexes: [0] })?.reason).toBe('added_file');
+    expect(getScmComparisonDiscardRestriction({ kind: 'captured', file: added })).toBeNull();
+    expect(getScmComparisonDiscardRestriction({ kind: 'captured', file: { ...added, changeKind: 'deleted', beforeBlobId: 'before' }, hunkIndexes: [0] })).toBeNull();
+    expect(getScmComparisonDiscardRestriction({ kind: 'live', entry: { kind: 'modified', hasIncludedDelta: false }, hunks: true })).toBeNull();
+  });
   it('admits comparison selectors while refusing ambiguous or silently downgraded writes', () => {
     expect(ScmChangeDiscardEntrySchema.safeParse(comparison).success).toBe(true);
     expect(ScmChangeDiscardEntrySchema.safeParse({ ...comparison, changeRefs: ['occurrence'] }).success).toBe(false);

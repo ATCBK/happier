@@ -1073,6 +1073,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         source: props.hunkReview?.source ?? { kind: 'live', root: workspaceScope?.rootPath ?? '' },
         host: props.hunkReview?.host ?? null, serverId: props.hunkReview?.serverId ?? null,
         path: activeReviewPath ?? '', unifiedDiff: activeUnifiedDiff, liveFiles: reviewControllerFiles,
+        liveEntries: snapshot?.entries,
         onNavigate: cursor => {
             const file = props.hunkReview?.source.kind === 'captured'
                 ? props.hunkReview.source.comparison.inventory.files.find(file => file.path === cursor.path) : null;

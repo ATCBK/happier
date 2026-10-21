@@ -71,5 +71,12 @@ describe('DiffHunkRow on a phone', () => {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); });
     // Comment lands on the change's first changed line.
     expect(comment).toHaveBeenCalledWith(expect.objectContaining({ kind: 'remove', oldLine: 4 }));
+    await screen.update(
+      <DiffViewer mode="unified" virtualized={false} filePath="a.ts" unifiedDiff={PATCH}
+        hunks={{ ...hunks, actions: { keep, ask: vi.fn(), copy: vi.fn() } }} onPressAddComment={comment} />,
+    );
+    await act(async () => { screen.findByTestId('diff-hunk-row-press-1')!.props.onLongPress(); });
+    expect(screen.findByTestId('hunk-menu-discard-1')).toBeFalsy();
+    for (const id of ['keep', 'comment', 'ask', 'copy']) expect(screen.findByTestId(`hunk-menu-${id}-1`)).toBeTruthy();
   });
 });

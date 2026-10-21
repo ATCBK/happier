@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { FileChangesScope } from '@happier-dev/protocol/scm';
+import type { FileChangesScope, ScmWorkingEntry } from '@happier-dev/protocol/scm';
 
 import type { SessionScmReviewComparison } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import { useSessionTurnNumber } from '@/components/sessions/files/review/sessionTurnNumber';
@@ -33,6 +33,8 @@ export type FileChangesReviewParams = Readonly<{
   filePath: string;
   /** The live snapshot diff the page already reads (Uncommitted). */
   liveDiff: string | null;
+  /** The open file's actual working-snapshot status, for comparison Discard eligibility. */
+  liveEntry?: Pick<ScmWorkingEntry, 'path' | 'kind' | 'hasIncludedDelta'> | null;
   refreshLiveDiff: () => void;
   /** Raw-byte hash of the file the displayed diff was computed on, when known. */
   contentHash?: string | null;
@@ -157,8 +159,10 @@ export function useFileChangesReview(params: FileChangesReviewParams) {
     [live, params.changedPaths, filePath, unifiedDiff],
   );
   const workspaceRefId = params.workspaceRefId?.trim() || null;
+  const liveEntries = React.useMemo(() => live && params.liveEntry ? [params.liveEntry] : undefined, [live, params.liveEntry]);
   const controller = useHunkReviewController({
     liveFiles,
+    liveEntries,
     source:
       live || !captured
         ? { kind: 'live', root: scope.rootPath }
@@ -230,9 +234,7 @@ export function useFileChangesReview(params: FileChangesReviewParams) {
     previous: controller.previous,
     keepCurrent: controller.keepCurrent,
     askCurrent: controller.askCurrent,
-    discardCurrent: discardDisabledReason
-      ? undefined
-      : controller.discardCurrent,
+    discardCurrent: controller.discardCurrent,
     nextFile: controller.nextFile,
     previousFile: controller.previousFile,
     ...(undoAvailable ? { undo } : {}),
@@ -276,7 +278,7 @@ export function useFileChangesReview(params: FileChangesReviewParams) {
     reviewUnits: controller.reviewUnits,
     scrollToLineId: controller.revealHunk?.revealLineId,
     keyboard,
-    discardDisabledReason,
+    discardDisabledReason: controller.discardDisabledReason,
     machineName,
     reachability,
     menuChanges: restore.changes,

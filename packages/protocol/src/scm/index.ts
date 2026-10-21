@@ -35,6 +35,7 @@ export * from './stash.js';
 export * from './pullRequests.js';
 export * from './diffSummary.js';
 export * from './comparisonOccurrences.js';
+export * from './comparisonDiscard.js';
 export * from './diffSummaryResult.js';
 export * from './diffSummaryCommitPlan.js';
 export * from './repositoryProvisioning.js';

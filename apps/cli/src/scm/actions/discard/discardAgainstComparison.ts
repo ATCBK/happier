@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import type { ScmChangeDiscardResultEntry, ScmComparisonDiscardEntry, ScmComparisonFile } from '@happier-dev/protocol/scm';
-import { buildReviewUnits, buildScmChangeKeys, buildScmFileReviewUnits, isMetadataOccurrence, locateComparisonOccurrences } from '@happier-dev/protocol/scm/comparisonOccurrences';
+import { getScmComparisonDiscardRestriction, type ScmChangeDiscardResultEntry, type ScmComparisonDiscardEntry, type ScmComparisonFile } from '@happier-dev/protocol/scm';
+import { buildReviewUnits, buildScmChangeKeys, buildScmFileReviewUnits, locateComparisonOccurrences } from '@happier-dev/protocol/scm/comparisonOccurrences';
 import { revertHunks, type Hunk, type InverseEdit } from '@happier-dev/protocol/diff/hunks';
 import { authorizeFilesystemPath } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemPathAuthorization';
 import { commitGuardedFileReplace, type GuardedFileReplaceResult, type GuardedFileAbsenceResult } from '@/rpc/handlers/fileSystem/commitGuardedFileReplace';
@@ -83,31 +83,27 @@ export async function prepareDiscardAgainstComparison(params: Params): Promise<P
         source: entry.against.source, ...(params.sessionId ? { sessionId: params.sessionId } : {}) });
       file = captured.comparison.inventory.files.find(candidate => candidate.path === entry.path);
       if (!file || file.evidence.state !== 'available') return refused(entry.path, 'COMPARISON_UNAVAILABLE', 'Comparison file evidence is unavailable', hashBefore);
-      if (file.changeKind === 'renamed' || file.changeKind === 'copied') return refused(entry.path, 'DISCARD_UNSUPPORTED', 'Use turn rollback for renamed or copied files', hashBefore);
-      if (file.occurrences.some(occurrence => occurrence.layer === 'untracked')) return refused(entry.path, 'DISCARD_UNSUPPORTED', 'Use Git discard for untracked files', hashBefore);
       const units = buildScmFileReviewUnits(file);
       const keys = entry.changeKeys ?? (entry.changeRefs ? entry.changeRefs.flatMap(ref => {
         const located = locateComparisonOccurrences(captured.comparison).located.get(ref);
         if (!located || located.file.path !== entry.path) return [''];
         return buildScmChangeKeys(captured.comparison).get(ref) ?? [''];
       }) : undefined);
-      if (keys) {
-        const occurrences = file.occurrences.filter(occurrence => !isMetadataOccurrence(occurrence));
-        const chosen = units.filter(unit => keys.includes(unit.key));
+      const chosen = keys ? units.filter(unit => keys.includes(unit.key)) : undefined;
+      if (keys && chosen) {
         if (keys.some(key => !chosen.some(unit => unit.key === key))) return refused(entry.path, 'CHANGE_MOVED_ON', 'Selected changes no longer identify this file', hashBefore);
-        if (chosen.some(unit => occurrences[unit.hunkIndex]?.layer === 'staged')) return refused(entry.path, 'DISCARD_UNSUPPORTED', 'Unstage these changes first', hashBefore);
         selected = chosen.map(unit => unit.hunk);
-      } else if (file.occurrences.some(occurrence => occurrence.layer === 'staged')) {
-        return refused(entry.path, 'DISCARD_UNSUPPORTED', 'Unstage these changes first', hashBefore);
       }
+      const restriction = getScmComparisonDiscardRestriction({ kind: 'captured', file,
+        ...(chosen ? { hunkIndexes: chosen.map(unit => unit.hunkIndex) } : {}) });
+      if (restriction) return refused(entry.path, 'DISCARD_UNSUPPORTED', restriction.error, hashBefore);
     } else {
       if (entry.against.source.kind !== 'workingTree') return refused(entry.path, 'COMPARISON_UNAVAILABLE', 'Captured comparison identity is required', hashBefore);
       const snapshot = await backend.statusSnapshot({ context, request: { cwd: root } });
       if (!snapshot.success) return refused(entry.path, 'COMPARISON_UNAVAILABLE', 'Live repository status is unavailable', hashBefore);
       const working = snapshot.snapshot?.entries.find(candidate => candidate.path === entry.path);
-      if (working?.kind === 'renamed' || working?.kind === 'copied' || working?.kind === 'untracked' || working?.hasIncludedDelta) {
-        return refused(entry.path, 'DISCARD_UNSUPPORTED', working.hasIncludedDelta ? 'Unstage these changes first' : 'Use Git discard for this file kind', hashBefore);
-      }
+      const restriction = getScmComparisonDiscardRestriction({ kind: 'live', entry: working, hunks: !!entry.changeKeys });
+      if (restriction) return refused(entry.path, 'DISCARD_UNSUPPORTED', restriction.error, hashBefore);
       if (entry.changeKeys) {
         const diff = await backend.diffFile?.({ context, request: { cwd: root, path: entry.path, area: 'both' } });
         if (!diff?.success || diff.diff === undefined) return refused(entry.path, 'COMPARISON_UNAVAILABLE', 'Live diff is unavailable', hashBefore);
@@ -122,7 +118,6 @@ export async function prepareDiscardAgainstComparison(params: Params): Promise<P
   let undo: readonly InverseEdit[] | undefined;
   let previous: ScmChangeDiscardResultEntry['previous'];
   if (file?.changeKind === 'added' && !file.beforeBlobId) {
-    if (unitArm) return refused(entry.path, 'DISCARD_UNSUPPORTED', 'Discard an added file as a whole file', hashBefore);
     const after = file.afterBlobId ? await backend.fileAtRevision?.({ context, request: { cwd: root,
       path: entry.path, selector: { blobId: file.afterBlobId } } }) : undefined;
     if (!after?.success) return refused(entry.path, 'COMPARISON_UNAVAILABLE', 'Comparison after bytes are unavailable', hashBefore);

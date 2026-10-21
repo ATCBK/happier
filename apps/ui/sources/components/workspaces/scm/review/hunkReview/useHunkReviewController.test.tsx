@@ -8,12 +8,14 @@ import {
 } from '@happier-dev/protocol/scm/reviewedMarks';
 import type { ScmReviewedMarksRecord } from '@happier-dev/protocol/scm/reviewedMarks';
 import { buildReviewUnits } from '@happier-dev/protocol/scm/comparisonOccurrences';
+import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
+import type { ScmWorkingEntry } from '@happier-dev/protocol/scm';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { storage } from '@/sync/domains/state/storage';
 import { KeyboardShortcutProvider } from '@/keyboard/KeyboardShortcutProvider';
 import { useReviewKeyboard } from './useReviewKeyboard';
-import { useHunkReviewController } from './useHunkReviewController';
+import { useHunkReviewController, type HunkReviewSource } from './useHunkReviewController';
 import { buildEditorChangeMarkers } from '@/components/ui/code/editor/editorChangeMarkers';
 import { useEditorChangeMarkers } from '@/components/ui/code/editor/useEditorChangeMarkers';
 import type {
@@ -34,6 +36,67 @@ afterEach(() => {
 const patch = '@@ -1,3 +1,3 @@\n-old\n+new\n middle\n-before\n+after\n';
 
 describe('hunk review through the shared keyboard and Account port', () => {
+  it.each([
+    ['live', 'modified', true, 'staged'],
+    ['live', 'renamed', false, 'renamed_or_copied'],
+    ['live', 'copied', false, 'renamed_or_copied'],
+    ['live', 'untracked', false, 'untracked'],
+    ['live', 'added', true, 'added_file'],
+    ['captured', 'modified', true, 'staged'],
+    ['captured', 'renamed', false, 'renamed_or_copied'],
+    ['captured', 'copied', false, 'renamed_or_copied'],
+    ['captured', 'untracked', false, 'untracked'],
+    ['captured', 'added', false, 'added_file'],
+  ] as const)('projects %s %s eligibility before Discard without disabling Keep, Ask or navigation', async (kind, changeKind, staged, reason) => {
+    const comparison = ScmComparisonSchema.parse({ id: 'capture', source: { kind: 'session', sessionId: 's1' },
+      repository: { rootPath: '/repo' }, endpoints: {}, inventory: { state: 'complete', reasons: [], files: [{
+        path: 'a.ts', changeKind, ...(changeKind === 'added' ? {} : { beforeBlobId: 'before' }),
+        binary: false, generated: false, lockfile: false, evidence: { state: 'available', unifiedDiff: patch },
+        occurrences: [{ id: 'first', alias: 'first', path: 'a.ts', position: 0,
+          before: { startLine: 1, lineCount: 3 }, after: { startLine: 1, lineCount: 3 },
+          layer: changeKind === 'untracked' ? 'untracked' : staged ? 'staged' : 'unstaged' }],
+      }] } });
+    const source: HunkReviewSource = kind === 'captured' ? { kind, comparison } : { kind, root: '/repo' };
+    const liveEntries: Pick<ScmWorkingEntry, 'path' | 'kind' | 'hasIncludedDelta'>[] = [{ path: 'a.ts', kind: changeKind, hasIncludedDelta: staged }];
+    const port = createScmReviewedMarksRecordPort({ source: { repositoryRootPath: '/repo', source: { kind: 'workingTree' },
+      changeKeys: buildReviewUnits('a.ts', undefined, patch).map(unit => unit.key) }, transport: {
+        read: async () => ({ value: null, version: -1 }), compareAndSet: async () => ({ success: true, version: 0 }),
+      } });
+    const discarded = vi.fn();
+    const asked = vi.fn();
+    let controller!: ReturnType<typeof useHunkReviewController>;
+    function Review() {
+      controller = useHunkReviewController({ source, path: 'a.ts', unifiedDiff: patch, liveEntries,
+        host: null, serverId: null, onDiscard: discarded, onAsk: asked, marks: { record: null,
+          unavailableReason: null, setReviewed: () => {}, clear: () => {},
+          setReviewedKeys: (keys, kept) => { void port.setReviewedKeys(keys, kept); } } });
+      return null;
+    }
+    await renderScreen(<Review />);
+    const row = { key: controller.reviewUnits[0]!.key } as DiffHunkInfo;
+    if (reason === 'added_file') {
+      expect(controller.discardCurrent).toBeUndefined();
+      expect(controller.hunks.actions?.discard).toBeUndefined();
+      expect(controller.changeActionsForKey(row.key)?.discard).toBeUndefined();
+    } else {
+      expect(controller.hunks.disabledReason?.(row, 'discard')).toBeTruthy();
+      await act(async () => { controller.hunks.actions?.discard?.(row); });
+      expect(controller.changeActionsForKey(row.key)?.disabledReason('discard')).toBeTruthy();
+      await act(async () => { await controller.changeActionsForKey(row.key)?.discard?.(); });
+      await act(async () => { controller.discardCurrent?.(); });
+    }
+    expect(controller.discardUnavailableReason).toBe(reason);
+    expect(discarded).not.toHaveBeenCalled();
+    expect(controller.hunks.disabledReason?.(row, 'keep')).toBeNull();
+    expect(controller.hunks.actions?.keep).toBeTypeOf('function');
+    await act(async () => { controller.askCurrent?.(); controller.next(); });
+    expect(asked).toHaveBeenCalled();
+    expect(controller.currentIndex).toBe(1);
+    // A dirty editor transaction is not the on-disk SCM operation and remains available.
+    const draft = controller.changeActionsForKey(row.key, { discardInDraft: async () => 'draft reverted' });
+    expect(draft?.disabledReason('discard')).toBeNull();
+    await act(async () => { expect(await draft?.discard?.()).toBe('draft reverted'); });
+  });
   it('binds a tracked gutter change to review actions and reverts dirty text as one undoable edit', async () => {
     const marker = buildEditorChangeMarkers('a.ts', null, patch)[0]!;
     let text = 'inserted\nnew\nmiddle\nafter\n';
