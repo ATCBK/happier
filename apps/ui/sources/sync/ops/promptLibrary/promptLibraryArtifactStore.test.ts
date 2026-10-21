@@ -348,7 +348,8 @@ describe('UI qualified prompt-library Artifact authority', () => {
     expect(storage.getState().artifacts[result.artifactId]).toMatchObject({ id: result.artifactId });
   });
   it('keeps native-signal finite reads observational while explicit Artifact refresh publishes the captured row', async () => {
-    const f = await home();
+    const catalog = createPromptLibraryCatalogBoundary();
+    const f = await home('prompt_doc.v2', undefined, { handleRequest: catalog.handle });
     storage.setState({ artifacts: {}, artifactsLoaded: false });
     await withUiPromptLibraryArtifactStore(async (store, account) => {
       const controller = new NativeAbortController();
@@ -357,6 +358,9 @@ describe('UI qualified prompt-library Artifact authority', () => {
       expect(signal.throwIfAborted).toBeUndefined();
       const read = await readPromptDocInLibrary({ store, artifactId: 'current', signal });
       expect(read).toMatchObject({ ok: true, artifactId: 'current', title: 'Current', markdown: 'original' });
+      expect(await listPromptLibrary({ store, request: {}, signal })).toMatchObject({
+        coverage: 'complete', items: [{ artifactId: 'current', title: 'Current' }],
+      });
       expect(storage.getState().artifacts.current).toBeUndefined();
       expect(storage.getState().artifactsLoaded).toBe(false);
       const requestsBeforeAbort = f.requests.length;

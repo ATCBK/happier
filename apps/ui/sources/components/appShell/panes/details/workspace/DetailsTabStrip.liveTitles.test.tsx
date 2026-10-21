@@ -81,6 +81,7 @@ describe('Details live instance titles', () => {
             rename: async (_id, title) => { currentTitle = title; return { kind: 'succeeded', value: { v: 1, serverId: address.serverId, discussion: summary(title) } }; },
             attention: unavailable, get: unavailable, read: unavailable, create: unavailable, post: unavailable, archive: unavailable, restore: unavailable, readState: unavailable,
             participants: unavailable, setParticipantPolicy: unavailable, invite: unavailable, inviteExecutableParticipant: unavailable, removeParticipant: unavailable, leave: unavailable,
+            getSettings: unavailable, setSettings: unavailable,
             transferOwner: unavailable, listGrants: unavailable, setGrant: unavailable, removeGrant: unavailable,
         };
         const repository = getDiscussionRepository({ scope: { serverId: address.serverId, accountId: 'titles-account' }, address, client });

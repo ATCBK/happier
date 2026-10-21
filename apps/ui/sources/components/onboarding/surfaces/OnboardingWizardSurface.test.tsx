@@ -202,7 +202,7 @@ nativeTasks.bridge.subscribe.mockImplementation(async (taskId, listener) => {
     } : spec?.kind === 'daemon.service.status.v1' ? {
         serviceInstalled: false, daemonRunning: false, needsAuth: false, machineId: null,
     } : spec?.kind === 'daemon.service.relay.disconnect.v1' ? { outcome: 'no_service' }
-        : spec?.kind === 'relay.access.configure.v1' && typeof spec.params?.providerId === 'string'
+        : spec?.kind === 'relay.access.configure.v1' && spec.params && typeof spec.params === 'object' && 'providerId' in spec.params && typeof spec.params.providerId === 'string'
             ? relayAccessSnapshot(nativeTaskScene.relayAccessProviderId = spec.params.providerId)
         : spec?.kind === 'relay.access.status.v1' ? relayAccessSnapshot(nativeTaskScene.relayAccessProviderId)
         : spec?.kind === 'local.ssh.discoverConfiguredHosts.v1' ? { hosts: [] }

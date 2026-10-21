@@ -34,7 +34,10 @@ vi.mock('@/hooks/server/useFeatureDecision', async (importOriginal) => {
     return {
         ...original,
         useFeatureDecision: ((featureId, scope) => featureId === 'app.ui.onboardingTour'
-            ? { featureId, state: 'enabled', blockedBy: null, blockerCode: 'none', diagnostics: [], evaluatedAt: 0, scope: scope ?? { scopeKind: 'runtime' } }
+            ? { featureId, state: 'enabled', blockedBy: null, blockerCode: 'none', diagnostics: [], evaluatedAt: 0, scope: {
+                scopeKind: scope?.scopeKind ?? 'main_selection',
+                ...(scope?.scopeKind === 'spawn' && scope.serverId ? { serverId: scope.serverId } : {}),
+            } }
             : original.useFeatureDecision(featureId, scope)) satisfies typeof original.useFeatureDecision,
     };
 });

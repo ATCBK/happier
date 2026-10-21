@@ -662,13 +662,15 @@ describe('ExternalSessionsSettingsView passive shell', () => {
         );
         await flushHookEffects();
 
+        if (!peerServerId) throw new Error('Expected the peer Home fixture');
+        const peerScopeId = scopeIdOf(peerServerId);
         await waitForHomeGovernance(() => expect(daemonProjectionRequest).toHaveBeenCalledWith({
             machineId: 'machine-2',
-            serverId: scopeIdOf(peerServerId),
+            serverId: peerScopeId,
         }));
         expect(effectBoundary.machineRpc).toHaveBeenCalledWith(expect.objectContaining({
             machineId: 'machine-2',
-            serverId: scopeIdOf(peerServerId),
+            serverId: peerScopeId,
             payload: expect.objectContaining({
                 machineId: 'machine-2',
             }),

@@ -256,9 +256,9 @@ describe('buildUsageRecapCardModels', () => {
         expect(rhythmCard?.visual).toMatchObject({
             kind: 'rankBars',
         });
-        expect(rhythmCard?.visual.kind === 'rankBars' ? rhythmCard.visual.rows.map((row) => row.value) : []).toEqual([12, 8, 4]);
-        expect(rhythmCard?.visual.kind === 'rankBars' ? rhythmCard.visual.rows[0]?.label : '').toContain('Sat');
-        expect(rhythmCard?.visual.kind === 'rankBars' ? rhythmCard.visual.rows[2]?.label : '').toContain('Thu');
+        expect(rhythmCard?.visual?.kind === 'rankBars' ? rhythmCard.visual.rows.map((row) => row.value) : []).toEqual([12, 8, 4]);
+        expect(rhythmCard?.visual?.kind === 'rankBars' ? rhythmCard.visual.rows[0]?.label : '').toContain('Sat');
+        expect(rhythmCard?.visual?.kind === 'rankBars' ? rhythmCard.visual.rows[2]?.label : '').toContain('Thu');
     });
 
     it('falls back to the top agent label when the engine metadata is unknown in the model card', () => {

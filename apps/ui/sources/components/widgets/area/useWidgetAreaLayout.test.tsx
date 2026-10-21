@@ -332,7 +332,10 @@ it('withdraws mounted effect admission on exact Artifact publication before a de
     const area = createWidgetAreaActionPortV1(() => owner);
     const port: WidgetAreaPort = { execute: async (operation) => {
         // The writer's own acknowledgement does not depend on this area's failing read.
-        if (operation.actionId !== 'widgets.item.list') return { ok: true, result: {} };
+        if (operation.actionId === 'widgets.item.rename') return {
+            ok: true, result: { ref: { surface, instanceId: operation.instanceId }, instance: null },
+        };
+        if (operation.actionId !== 'widgets.item.list') throw new Error('Unexpected widget operation');
         const result = await area.read(surface, {});
         return PluginUiWidgetAreaResultV1Schema.parse('ok' in result ? result : { ok: true, result });
     } };
