@@ -61,8 +61,7 @@ describe('captured Remote host first-read projection', () => {
     // this boundary rejection independently so ignored promises do not supply RED.
     const refused = Promise.reject(new Error('authority-refused'));
     void refused.catch(() => {});
-    const result = await projectionLoader()({ ...state.ports, onReady: () => refused });
-    expect(result).toMatchObject({ status: 'unavailable' });
+    await expect(projectionLoader()({ ...state.ports, onReady: () => refused })).rejects.toThrow('authority-refused');
     expect(state.readRaw()).toHaveProperty('remoteHostsV1');
   });
 
