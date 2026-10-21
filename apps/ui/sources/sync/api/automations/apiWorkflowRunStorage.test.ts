@@ -40,6 +40,8 @@ it('shares only admitted read bytes across invocation transports and leaves canc
     const second = createWorkflowRunAccountStorage({ credentials, serverId: home.id,
         request: createServerFetchForActiveServer(), readTransport, assertCurrent: () => {} });
     const controller = new AbortController();
+    // Native AbortSignal implementations need not expose this newer convenience method.
+    Object.defineProperty(controller.signal, 'throwIfAborted', { value: undefined });
     const departed = first.execute({ operation: 'list', request: { projection: 'membership' } },
         { signal: controller.signal }).catch(() => 'aborted');
     const live = second.execute({ operation: 'list', request: { projection: 'membership' } });

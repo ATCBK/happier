@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDeferred } from '@/dev/testkit';
 import type { ServerFetch } from '@/sync/http/client';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
-import { fetchArtifactReadBatch } from './apiArtifacts';
+import { createArtifact, fetchArtifactReadBatch } from './apiArtifacts';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { createCapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
 
@@ -33,6 +34,52 @@ function missing(artifactIds: readonly string[]): Response {
 }
 
 describe('Artifact read acquisition', () => {
+    it.each([200, 409, 400])('does not lend pre-write or in-write observations after mutation settlement (%s)', async status => {
+        const oldStarted = createDeferred<void>();
+        const writeStarted = createDeferred<void>();
+        const allowCommit = createDeferred<void>();
+        const releaseReads = createDeferred<void>();
+        const artifactId = ids[0]!;
+        const input = { id: artifactId, dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            header: encodePlainArtifactStoredContent({ title: 'Committed' }), body: encodePlainArtifactStoredContent({ body: 'Current' }) };
+        const stored = { ...input, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+        let committed = false;
+        let reads = 0;
+        const request: ServerFetch = async path => {
+            if (path === '/v1/artifacts') {
+                writeStarted.resolve();
+                await allowCommit.promise;
+                committed = true;
+                return Response.json(status === 200 ? stored : { error: status === 409 ? 'conflict' : 'ack_unavailable' }, { status });
+            }
+            if (path !== '/v1/artifacts/read') throw new Error(`Unexpected Artifact route: ${path}`);
+            const observed = committed;
+            reads++;
+            if (!observed) { oldStarted.resolve(); await releaseReads.promise; }
+            return observed ? Response.json({ items: [{ artifactId, ok: true, artifact: stored, recipientCensus: null }] }) : missing([artifactId]);
+        };
+        const readTransport = capturedRead(request);
+        const credentials = { token: 'same-authority' };
+        const old = fetchArtifactReadBatch(credentials, [artifactId], { readTransport });
+        let during: ReturnType<typeof fetchArtifactReadBatch> | undefined;
+        let write: Promise<unknown> | undefined;
+        try {
+            await oldStarted.promise;
+            write = createArtifact(credentials, input, { request, readTransport }).catch(error => error);
+            await writeStarted.promise;
+            during = fetchArtifactReadBatch(credentials, [artifactId], { readTransport });
+            await vi.waitFor(() => expect(reads).toBe(2));
+            allowCommit.resolve();
+            await write;
+            await expect(fetchArtifactReadBatch(credentials, [artifactId], { readTransport })).resolves.toMatchObject([{ ok: true, artifact: stored }]);
+            expect(reads).toBe(3);
+        } finally {
+            allowCommit.resolve(); releaseReads.resolve();
+            await Promise.allSettled([old, during, write]);
+        }
+    });
+
     it('does not infer neutral transport authority from an opaque request callback identity', async () => {
         const release = createDeferred<void>();
         let attempts = 0;

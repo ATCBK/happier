@@ -35,6 +35,7 @@ import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { handleUiBrowserRecordingCaptureFrameRequest } from '@/sync/domains/browser/recording/reverseCaptureHandler';
 import {
     createServerFetchAtEndpoint,
+    isIdempotentServerRead,
     serverFetch,
     type ServerFetch,
     type ServerResponseRequest,
@@ -79,7 +80,7 @@ import { ServerScopedTransportUnavailableError } from '@/sync/runtime/homeCarrie
 import { MachineLiveStreamPayloadErrorV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/payloadV1';
 import { createMachineLiveStreamSocketTransport, type ResolvedMachineLiveStreamContent } from '@/sync/domains/machines/peer/mediation/stream/socketTransport';
 import { resolveMachineLiveStreamContent } from '@/sync/runtime/orchestration/serverScopedRpc/resolveMachineLiveStreamContent';
-import { createCapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
+import { createCapturedServerReadTransport, type CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
 import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { parseToken } from '@/utils/auth/parseToken';
 import { EphemeralUpdateSchema } from '@happier-dev/protocol/updates';
@@ -561,6 +562,7 @@ class ApiSocket {
     }
 
     getAccountEncryptionObservationBinding(credentials: AuthCredentials): AccountEncryptionObservationBinding | null {
+        if (!this.socket?.connected) return null;
         const binding = this.accountEncryptionObservation?.binding;
         const snapshot = getActiveServerSnapshot();
         if (!this.config?.request && this.config && (canonicalizeServerUrl(this.config.endpoint) !== canonicalizeServerUrl(snapshot.serverUrl)
@@ -915,9 +917,12 @@ class ApiSocket {
             if (!socket.isPreparedRequestTargetCurrent(target)) throw new StaleServerGenerationError();
             return consumeResponse ? await socket.request(path, init, options, consumeResponse) : await socket.request(path, init, options);
         }
-        const binding = this.accountEncryptionObservation?.binding;
-        if (!binding || !this.isPreparedRequestTargetCurrent(target)) return request;
-        const isCurrent = () => !signal.aborted && socket.isPreparedRequestTargetCurrent(target) && binding.isCurrent();
+        const credentials = this.config?.credentials;
+        if (!credentials || !this.isPreparedRequestTargetCurrent(target)) return request;
+        const binding = this.getAccountEncryptionObservationBinding(credentials);
+        if (!binding) return request;
+        const isCurrent = () => !signal.aborted && socket.isPreparedRequestTargetCurrent(target)
+            && socket.getAccountEncryptionObservationBinding(credentials) === binding;
         return bindAccountEncryptionObservation(request, {
             ...binding,
             isCurrent,
@@ -929,6 +934,48 @@ class ApiSocket {
             },
             peek: () => isCurrent() ? binding.peek() : null,
         });
+    }
+
+    /** Logical active callers borrow the installed carrier, never reconstruct it from profiles. */
+    createReadTransportForActiveServer(target: Pick<PreparedSocketRequestTarget, 'endpoint' | 'serverId' | 'generation'>): CapturedServerReadTransport | undefined {
+        const config = this.config;
+        if (!config || config.request) return undefined;
+        return this.createReadTransportForPreparedTarget({
+            ...target,
+            ...(config.runtimeOrigin ? { runtimeOrigin: config.runtimeOrigin } : {}),
+            ...(config.carrier ? { carrier: config.carrier } : {}),
+            ...(config.homeCarrier !== undefined ? { homeCarrier: config.homeCarrier } : {}),
+        });
+    }
+
+    /** Pending reads borrow this actual configuration, never a later matching profile. */
+    createReadTransportForPreparedTarget(target: PreparedSocketRequestTarget): CapturedServerReadTransport | undefined {
+        const config = this.config;
+        if (!config) return undefined;
+        if (!this.isPreparedRequestTargetCurrent(target)) throw new StaleServerGenerationError();
+        if (config.request || !config.credentials) return undefined;
+        const capturedToken = config.token;
+        const controller = this.requestConfigurationAbortController;
+        const socket = this;
+        const request = this.createRequestForPreparedTarget(target);
+        const transport = createCapturedServerReadTransport({
+            serverId: target.serverId,
+            credentials: { ...config.credentials, token: capturedToken },
+            prepared: { ...target, endpointUrl: target.endpoint, scope: controller, request },
+        });
+        return {
+            get key() { return transport.key; },
+            scope: controller,
+            async read(path, init, options, consumeResponse) {
+                // Recovery may mutate this config's token without replacing its controller.
+                // The incumbent request owns admitting its own recovered response; only later dispatch is refused here.
+                if (socket.config !== config || socket.requestConfigurationAbortController !== controller
+                    || controller.signal.aborted || config.token !== capturedToken || !socket.isPreparedRequestTargetCurrent(target)) {
+                    throw new StaleServerGenerationError();
+                }
+                return await transport.read(path, init, options, consumeResponse);
+            },
+        };
     }
 
     private isPreparedRequestTargetCurrent(target: PreparedSocketRequestTarget): boolean {
@@ -969,6 +1016,7 @@ class ApiSocket {
         const generation = config.generation ?? snapshot.generation;
         const url = `${endpoint}${path}`;
         const method = String(options?.method ?? 'GET').toUpperCase();
+        const idempotentRead = isIdempotentServerRead(method, path);
         let credentialsToken: string;
         type RequestResult = InFlightHttpRequestResult & Readonly<{ consumption?: Readonly<{ value: T }> }>;
         const dispatch = async (request: ServerResponseRequest): Promise<RequestResult> => consumeResponse
@@ -1007,7 +1055,7 @@ class ApiSocket {
                 );
                 let ownRejectedCredentialRemoved = false;
                 let credentialReplaced = false;
-                if (method !== 'GET' && method !== 'HEAD') {
+                if (!idempotentRead) {
                     unsubscribeCredentialChanges = subscribeHomeCredentialChange((event) => {
                         if (event.kind === 'credentials_set'
                             && areServerProfileIdentifiersEquivalent(event.serverId, capturedServerId)) {
@@ -1586,11 +1634,8 @@ class ApiSocket {
                     homeCarrier: installedConfig.homeCarrier ?? undefined,
                     ...(!installedConfig.request && installedConfig.credentials && installedConfig.serverId
                         && typeof installedConfig.generation === 'number' ? {
-                            readTransport: createCapturedServerReadTransport({ serverId, credentials: installedConfig.credentials,
-                                prepared: { ...installedConfig, generation: installedConfig.generation,
-                                    endpointUrl: installedConfig.endpoint,
-                                    request: this.createRequestForPreparedTarget({ ...installedConfig, serverId,
-                                        generation: installedConfig.generation }) } }),
+                            readTransport: this.createReadTransportForPreparedTarget({ ...installedConfig, serverId,
+                                generation: installedConfig.generation }),
                         } : {}),
                 });
                 if (liveStreamLifetime.signal.aborted || this.socket !== socket || this.config !== installedConfig

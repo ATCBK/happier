@@ -1,4 +1,4 @@
-import { throwIfAborted } from '@/utils/runtime/abortSignals';
+import { mergeAbortSignals, throwIfAborted } from '@/utils/runtime/abortSignals';
 import { TokenStorage, type AuthCredentials } from '@/auth/storage/tokenStorage';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { resolvePortableServerIdentityForRoutingId } from '@/sync/domains/server/resolvePortableServerIdentityForRoutingId';
@@ -27,7 +27,6 @@ import { getActiveServerHomeCarrier } from '@/sync/domains/server/serverRuntime'
 import type { HomeCarrier } from '@/sync/runtime/homeCarrier';
 import { normalizeRequestBodyHeaders } from './requestBodyHeaders';
 import { bindAccountEncryptionObservation, matchesAccountEncryptionObservationCredentials, type AccountEncryptionObservationBinding } from './accountEncryptionObservationBinding';
-import { waitForAccountEncryptionObservation } from '@happier-dev/sync-client';
 
 export { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 
@@ -65,9 +64,9 @@ export type ServerFetchOptions = Readonly<{
     includeAuth?: boolean;
     expectedActiveServer?: ExpectedActiveServerFetchBasis;
     /**
-     * When `none`, perform a single direct `runtimeFetch` attempt and skip reachability gating and
-     * endpoint supervision. This is used by higher-level sync loops that implement their own
-     * orchestration/backoff and must not get stuck behind nested connectivity supervisors.
+     * When `none`, skip reachability gating and endpoint supervision. The canonical
+     * idempotent-read credential recovery still applies; no transport retry loop is added.
+     * Higher-level sync loops retain their own orchestration/backoff.
      */
     retry?: 'default' | 'none';
     /** Opt into a request bound. Requests are unbounded when omitted; zero also disables it. */
@@ -93,6 +92,17 @@ export type ServerResponseRequest<TOptions = ServerFetchOptions> = {
     <T>(path: string, init: RequestInit | undefined, options: TOptions | undefined,
         consumeResponse: (response: Response) => Promise<T>): Promise<T>;
 };
+
+/** These POST routes only read selected resources; no mutation may inherit read recovery. */
+export function isIdempotentServerRead(method: string, path: string): boolean {
+    const normalizedMethod = method.toUpperCase();
+    if (normalizedMethod === 'GET' || normalizedMethod === 'HEAD') return true;
+    if (normalizedMethod !== 'POST') return false;
+    const route = path.split(/[?#]/, 1)[0];
+    return route === '/v2/sessions/read-batch'
+        || route === '/v1/machines/read-batch'
+        || route === '/v1/artifacts/read';
+}
 
 type EndpointRequestContext = Readonly<{
     /** Stable logical URL used for identity, reachability, compatibility, and storage scope. */
@@ -517,6 +527,7 @@ async function requestAtEndpoint<T>(
     }
 
     const method = String(init?.method ?? 'GET').toUpperCase();
+    const idempotentRead = isIdempotentServerRead(method, normalizedPath);
     const effectiveTimeoutMs = resolveRequestTimeoutMs(options.timeoutMs);
     let didWriteTimeout = false;
     let writeTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
@@ -748,7 +759,7 @@ async function requestAtEndpoint<T>(
             }
             if (invalidatedStoredCredentials) {
                 try {
-                    if (method !== 'GET' && method !== 'HEAD') {
+                    if (!idempotentRead) {
                         context.onRejectedStoredCredentials?.(usedToken);
                     }
                 } finally {
@@ -764,7 +775,7 @@ async function requestAtEndpoint<T>(
             }
 
             // Only retry idempotent requests to avoid surprising duplication.
-            if (attempt !== 0 || (method !== 'GET' && method !== 'HEAD')) {
+            if (attempt !== 0 || !idempotentRead) {
                 break;
             }
 
@@ -918,10 +929,12 @@ export function createServerFetchAtEndpoint(
         isCurrent,
         read: async signal => {
             assertCurrent();
-            const read = observation.read(signal);
-            const identity = await (params.signal ? waitForAccountEncryptionObservation(read, params.signal) : read);
-            assertCurrent();
-            return identity;
+            const cancellation = mergeAbortSignals([params.signal, signal]);
+            try {
+                const identity = await observation.read(cancellation.signal);
+                assertCurrent();
+                return identity;
+            } finally { cancellation.dispose(); }
         },
         peek: () => isCurrent() ? observation.peek() : null,
     });

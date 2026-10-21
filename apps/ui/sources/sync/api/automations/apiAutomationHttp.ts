@@ -4,6 +4,7 @@ import { createServerFetchForActiveServer, StaleServerGenerationError, type Serv
 import { createCapturedServerReadTransport, type CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
 import { getActiveServerHomeCarrier, getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { resolveActiveServerRuntimeOrigin } from '@/sync/runtime/nativeLoopbackTunnels/runtimeOrigin';
+import { apiSocket } from '@/sync/api/session/apiSocket';
 import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
@@ -22,14 +23,16 @@ export type AutomationRequestContext = Readonly<{
 const automationReads = createScopedResolutionSingleFlight<unknown>();
 
 /** The native HTTP owner has already captured this active generation; no profile/auth recapture. */
-export function captureNativeAutomationRequestContext(credentials: AuthCredentials): AutomationRequestContext {
+export function captureNativeAutomationRequestContext(credentials?: AuthCredentials): AutomationRequestContext {
     const snapshot = getActiveServerSnapshot();
     const homeCarrier = getActiveServerHomeCarrier();
     const request = createServerFetchForActiveServer(snapshot);
     return { serverId: snapshot.serverId, request,
-        readTransport: createCapturedServerReadTransport({ serverId: snapshot.serverId, credentials,
+        readTransport: credentials ? createCapturedServerReadTransport({ serverId: snapshot.serverId, credentials,
             prepared: { endpointUrl: snapshot.serverUrl, runtimeOrigin: resolveActiveServerRuntimeOrigin(snapshot),
-                homeCarrier, generation: snapshot.generation, request } }),
+                homeCarrier, generation: snapshot.generation, request } })
+            : apiSocket.createReadTransportForActiveServer({ endpoint: snapshot.serverUrl,
+                serverId: snapshot.serverId, generation: snapshot.generation }),
         assertCurrent: () => {
             const current = getActiveServerSnapshot();
             if (current.serverId !== snapshot.serverId || current.generation !== snapshot.generation) throw new StaleServerGenerationError();
@@ -38,16 +41,21 @@ export function captureNativeAutomationRequestContext(credentials: AuthCredentia
 
 export async function readAutomationApiJson(path: string, init: RequestInit, options: ServerFetchOptions,
     context: AutomationRequestContext | undefined, fallback: ServerFetch, credentials?: AuthCredentials): Promise<unknown> {
-    context ??= credentials ? captureNativeAutomationRequestContext(credentials) : undefined;
+    context ??= captureNativeAutomationRequestContext(credentials);
     context?.assertCurrent?.();
-    if (!context?.readTransport) return await readAutomationJsonOrThrow(await fallback(path, init, options));
+    if (!context?.readTransport) {
+        const result = await readAutomationJsonOrThrow(await (context?.request ?? fallback)(path, init, options));
+        context?.assertCurrent?.();
+        return result;
+    }
     const transport = context.readTransport;
-    const scope = transport.key;
+    const bindingKey = transport.key;
+    const scope = transport.scope ?? bindingKey;
     const abort = new AbortController();
     const retirement = context.accountLifetime?.onRetire(() => abort.abort());
     const cancellation = mergeAbortSignals([init.signal ?? undefined, context.invocationSignal, abort.signal]);
     try {
-        const result = await automationReads.run(path,
+        const result = await automationReads.run(JSON.stringify([bindingKey, path]),
             signal => transport.read(path, { ...init, signal }, options, readAutomationJsonOrThrow),
             { scope, signal: cancellation.signal });
         context.assertCurrent?.();
@@ -58,7 +66,7 @@ export async function readAutomationApiJson(path: string, init: RequestInit, opt
 /** Local mutations also fence direct API readers that have no mounted Action. */
 export function invalidateAutomationReadAcquisitions(context?: AutomationRequestContext): void {
     const transport = context?.readTransport;
-    if (transport) automationReads.invalidate(transport.key);
+    if (transport) automationReads.invalidate(transport.scope ?? transport.key);
 }
 
 export type AutomationApiErrorPayload = Readonly<{
