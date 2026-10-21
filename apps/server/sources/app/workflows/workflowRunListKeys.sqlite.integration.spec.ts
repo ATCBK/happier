@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { WorkflowRunSummaryV1Schema } from "@happier-dev/protocol/workflows/workflowProgressV1";
 import { WorkflowRunRecipientCensusResponseV1Schema } from "@happier-dev/protocol/workflows/workflowRunKeyV1";
-import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from "@happier-dev/protocol/workflows";
+import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowCheckpointStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from "@happier-dev/protocol/workflows";
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent, sealEncryptedDataKeyEnvelopeV1 } from "@happier-dev/protocol";
 import * as privacyKit from "privacy-kit";
 import tweetnacl from "tweetnacl";
@@ -11,7 +11,7 @@ import { logger } from "@/utils/logging/log";
 import { materializeWorkflowAcceptedSnapshotFixture } from "@/testkit/workflowAcceptedSnapshot";
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { deriveAccountRecipientEnvelopeReadinessFromRow } from "@/app/encryption/accountRecipientEnvelopeReadiness";
-import { listWorkflowRuns, summarizeWorkflowRuns } from "./workflowRunService";
+import { getWorkflowRun, listWorkflowRuns, summarizeWorkflowRuns } from "./workflowRunService";
 
 // Native database boundary only: all SQL, snapshots, policy and keys stay real.
 type NativeDatabaseBoundary = Pick<typeof db, "$transaction" | "$executeRawUnsafe">;
@@ -154,6 +154,58 @@ it("keeps summary queries set-oriented for 1129 requested ids without acquiring 
         console.info("PERF-S4-workflow-summary-queries", { singleQueries, pageQueries: 1, requestedIds: oversizedIds.length,
             automationQueries, sourceQueries: rawQueries, privatePayloadColumns });
     } finally { Reflect.set(boundary, "_request", request); }
+});
+
+it("selects no unused checkpoint for public list availability while exact detail retains the frozen bytes", async () => {
+    const owner = await db.account.create({ data: { encryptionMode: "plain" } });
+    const machine = await db.machine.create({ data: { id: crypto.randomUUID(), accountId: owner.id, metadata: "test" } });
+    const runId = crypto.randomUUID();
+    const checkpoint = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowCheckpointStoredEnvelopeV1({
+        mode: "plain", binding: { v: 1, purpose: "checkpoint", accountId: owner.id, runId },
+        checkpoint: { kind: "happier.workflow-checkpoint.v1", rootRecordId: "root", nextSequence: "1",
+            frontier: { nextBlockOrdinal: 0, paused: false } },
+    }));
+    const snapshot = await materializeWorkflowAcceptedSnapshotFixture({
+        definition: { version: 1, inputs: [], defaults: {}, blocks: [{ kind: "wait", id: "answer",
+            document: { text: "Answer", references: [], attachments: [] }, result: { kind: "text" } }] },
+        context: { source: { kind: "inline" }, inputs: {}, machineId: machine.id, executionTarget: { kind: "session" },
+            workspaceTarget: { project: { machineId: machine.id, directory: "/repo", checkoutRootPath: "/repo" } },
+            origin: { kind: "direct" }, authorization: { principal: { kind: "host" } } },
+    });
+    const accepted = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({
+        mode: "plain", binding: { v: 1, purpose: "accepted_snapshot", accountId: owner.id, runId }, acceptedSnapshot: snapshot,
+    }));
+    await db.automationRun.create({ data: { id: runId, accountId: owner.id, originKind: "direct", causeKind: null,
+        state: "paused", scheduledAt: new Date(), dueAt: new Date(), workflowCustodyState: "pending",
+        workflowAcceptedSnapshotEnvelope: accepted, workflowCheckpointEnvelope: checkpoint,
+        assignments: { create: { machineId: machine.id, priority: 0 } } } });
+    // Real provider boundary, shared by the storage-owned read client and the exact detail client.
+    const client: unknown = Reflect.get(db, "_originalClient");
+    if (!client || typeof client !== "object") throw new Error("Native Prisma boundary unavailable");
+    const boundary: unknown = Object.getPrototypeOf(client);
+    if (!boundary || typeof boundary !== "object") throw new Error("Native Prisma prototype unavailable");
+    const request: unknown = Reflect.get(boundary, "_request");
+    if (typeof request !== "function") throw new Error("Native Prisma request boundary unavailable");
+    let checkpointBytes = 0;
+    Reflect.set(boundary, "_request", new Proxy(request, { async apply(target, receiver, args) {
+        const result: unknown = await Reflect.apply(target, receiver, args);
+        for (const row of Array.isArray(result) ? result : [result]) {
+            if (row && typeof row === "object" && "workflowCheckpointEnvelope" in row
+                && typeof row.workflowCheckpointEnvelope === "string") checkpointBytes += Buffer.byteLength(row.workflowCheckpointEnvelope);
+        }
+        return result;
+    } }));
+    try {
+        expect((await getWorkflowRun({ accountId: owner.id, runId })).checkpointEnvelope).toBe(checkpoint);
+        expect(checkpointBytes, "real detail acquisition must positively calibrate the observer").toBeGreaterThan(0);
+        const detailCheckpointBytes = checkpointBytes;
+        checkpointBytes = 0;
+        const page = await listWorkflowRuns({ accountId: owner.id, runIds: [runId], pageByteLimit: 1_000_000 });
+        expect(page.runs).toEqual([expect.objectContaining({ id: runId, availability: expect.objectContaining({ resumeBoundary: true }) })]);
+        console.info("PERF-S4-workflow-checkpoint", { detailCheckpointBytes, listCheckpointBytes: checkpointBytes });
+        expect(checkpointBytes, "public availability does not consume the frozen checkpoint").toBe(0);
+    } finally { Reflect.set(boundary, "_request", request); }
+    expect((await getWorkflowRun({ accountId: owner.id, runId })).checkpointEnvelope).toBe(checkpoint);
 });
 
 it.each(["membership", "automation-status"] as const)("freshly readmits Team %s after capture and refuses a revoked source grant", async projection => {

@@ -1283,7 +1283,7 @@ describe("workflowRunService (integration)", () => {
 
     it("offers boundary Resume for a paused Run that never needed a checkpoint", () => {
         expect(deriveWorkflowRunAvailability({ state: "paused", workflowCustodyState: "pending",
-            hasExecution: false, hasCheckpoint: false })).toMatchObject({ resumeBoundary: true });
+            hasExecution: false })).toMatchObject({ resumeBoundary: true });
     });
 
     it.each([

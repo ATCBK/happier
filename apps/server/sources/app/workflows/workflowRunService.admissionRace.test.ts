@@ -170,14 +170,12 @@ it("projects only coarse workspace-restore availability from server-visible Run 
         state: "interrupted",
         workflowCustodyState: "pending",
         hasExecution: true,
-        hasCheckpoint: false,
     })).toMatchObject({ restoreWorkspace: true });
 
     expect(deriveWorkflowRunAvailability({
         state: "interrupted",
         workflowCustodyState: "pending",
         hasExecution: false,
-        hasCheckpoint: false,
     })).toMatchObject({
         restoreWorkspace: false,
         disabledReasons: expect.arrayContaining([

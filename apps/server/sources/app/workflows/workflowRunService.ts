@@ -99,7 +99,6 @@ const workflowRunProjectionSelect = {
     claimedByMachineId: true,
     workflowCustodyState: true,
     originDeliveryAckRevision: true,
-    workflowCheckpointEnvelope: true,
     createdAt: true,
     updatedAt: true,
     finishedAt: true,
@@ -113,6 +112,7 @@ const workflowRunListSelect = {
 } satisfies Prisma.AutomationRunSelect;
 const workflowRunSelect = {
     ...workflowRunListSelect,
+    workflowCheckpointEnvelope: true,
     executionInputEnvelope: true,
     resultEnvelope: true,
     scheduledAt: true,
@@ -127,18 +127,16 @@ type NarrowedWorkflowRunRow<S extends Prisma.AutomationRunSelect> = Omit<
 > & {
     state: WorkflowRunState;
 };
-type WorkflowRunRow = Omit<NarrowedWorkflowRunRow<typeof workflowRunProjectionSelect>, "workflowCheckpointEnvelope">
-    & { workflowCheckpointEnvelope?: string | null; attentionRequired?: boolean };
+type WorkflowRunRow = NarrowedWorkflowRunRow<typeof workflowRunProjectionSelect> & { attentionRequired?: boolean };
 type WorkflowRunListRow = NarrowedWorkflowRunRow<typeof workflowRunListSelect> & { attentionRequired?: boolean };
-type WorkflowRunListCapturedRow = Omit<WorkflowRunListRow, "workflowAcceptedSnapshotEnvelope" | "workflowCheckpointEnvelope">
-    & { workflowAcceptedSnapshotEnvelope?: string | null; workflowCheckpointEnvelope?: string | null };
+type WorkflowRunListCapturedRow = Omit<WorkflowRunListRow, "workflowAcceptedSnapshotEnvelope">
+    & { workflowAcceptedSnapshotEnvelope?: string | null };
 type WorkflowRunFullRow = NarrowedWorkflowRunRow<typeof workflowRunSelect>;
 
 export function deriveWorkflowRunAvailability(input: Readonly<{
     state: WorkflowRunState;
     workflowCustodyState: WorkflowCustodyState | null;
     hasExecution: boolean;
-    hasCheckpoint: boolean;
 }>): WorkflowRunSummaryV1["availability"] {
     const { state, workflowCustodyState, hasExecution } = input;
     const terminal = AUTOMATION_RUN_TERMINAL_STATES.some((candidate) => candidate === state);
@@ -168,7 +166,6 @@ function availability(row: WorkflowRunRow): WorkflowRunSummaryV1["availability"]
         state: row.state as WorkflowRunState,
         workflowCustodyState: row.workflowCustodyState,
         hasExecution: row.workflowInvocations.length > 0,
-        hasCheckpoint: row.workflowCheckpointEnvelope != null,
     });
 }
 
@@ -997,7 +994,7 @@ export async function listWorkflowRuns(params: PageOptions & Readonly<{
                 ...(additionalWhere.length > 0 ? { AND: additionalWhere } : {}),
             },
             orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: batchSize + 1,
-            select: membershipOnly ? { ...workflowRunListSelect, workflowAcceptedSnapshotEnvelope: false, workflowCheckpointEnvelope: false } : workflowRunListSelect,
+            select: membershipOnly ? { ...workflowRunListSelect, workflowAcceptedSnapshotEnvelope: false } : workflowRunListSelect,
         }) as WorkflowRunListCapturedRow[];
         const candidateRows = rows.slice(0, batchSize);
         const roots = membershipOnly || candidateRows.length === 0 ? [] : await tx.workflowRunInvocation.findMany({
