@@ -18,6 +18,53 @@ type RemoteEnrollmentExecutorParams = Parameters<
 >[0];
 
 describe('native transport through the remote bootstrap task', () => {
+  it.each([60_000, 480_000])('gives service installation and start only the enrollment lifetime remaining after sign-in (%i ms)', async signInMs => {
+    vi.useFakeTimers();
+    try {
+      const startedAt = Date.now();
+      const seen: string[][] = [];
+      const task = createRemoteNativeBootstrapMachineTaskKind({
+        configuration: { relay: { relayUrl: HOME_TARGET.canonicalAuthUrl }, homeTarget: HOME_TARGET, serviceMode: 'user' },
+        assertCurrent: async () => {},
+        installRemoteCli: async () => { vi.setSystemTime(startedAt + 120_000); },
+        approveLocalAuthRequest: async () => {},
+        executor: {
+          runHappierJson: async args => {
+            if (args[0] === 'service' && ['install', 'start'].includes(args[1]!)) {
+              seen.push([...args]);
+              if (args[1] === 'install') vi.setSystemTime(Date.now() + 145_000);
+            }
+            return { ok: true, data: { authenticated: true, credentialState: 'valid', machineRegistrationState: 'server-confirmed', machineId: 'joined', services: [] },
+              service: { installed: true }, daemon: { running: true }, auth: { needsAuth: false, machineId: 'joined' },
+              server: { activeServerId: 'guest-home' } };
+          },
+          runHappierText: async args => {
+            if (args[1] === 'request') return { status: 0, stderr: '', stdout: JSON.stringify({
+              kind: 'remote_home_enrollment_pairing_request', protocolVersion: 1,
+              publicKey: Buffer.alloc(32, 1).toString('base64'), homeServerIdentityId: HOME_TARGET.homeServerIdentityId,
+              pairing: { secretB64Url: Buffer.alloc(32, 2).toString('base64url'), createdAtMs: Date.now(), expiresAtMs: Date.now() + 15 * 60_000 },
+              supportsTokenOnly: true, pairingRequirement: 'v3', remoteProfileId: 'guest-home',
+            }) };
+            vi.setSystemTime(Date.now() + signInMs);
+            return { status: 0, stderr: '', stdout: JSON.stringify({ kind: 'remote_home_enrollment_result', protocolVersion: 1,
+              success: true, homeServerIdentityId: HOME_TARGET.homeServerIdentityId, machineId: 'joined',
+              encryptionType: 'tokenOnly', pairingAuthentication: 'v3', remoteProfileId: 'guest-home' }) };
+          },
+        },
+      });
+      const result = task.run({ params: {}, emit() {}, prompt: async () => ({ approved: true }) });
+      if (signInMs === 480_000) {
+        await expect(result).rejects.toMatchObject({ code: 'auth_enrollment_timeout' });
+        expect(seen).toEqual([]);
+        return;
+      }
+      await expect(result).resolves.toMatchObject({ machineId: 'joined' });
+      expect(seen).toEqual([
+        ['service', 'install', '--wait-timeout-ms', '420000', '--json'],
+        ['service', 'start', '--wait-timeout-ms', '275000', '--json'],
+      ]);
+    } finally { vi.useRealTimers(); }
+  });
   it('shares the existing enrollment budget with installation authority reads without renewing it at sign-in', async () => {
     const stdout = await readFile(new URL('../recipes/fixtures/authRequest.cli-v0.2.16.json', import.meta.url), 'utf8');
     vi.useFakeTimers();
@@ -538,6 +585,8 @@ describe('createRemoteSshBootstrapMachineTaskKind', () => {
   });
 
   it('does not let a ready daemon on another active Home satisfy machine setup completion', async () => {
+    vi.useFakeTimers();
+    try {
     const kind = createRemoteSshBootstrapMachineTaskKind({
       resolveHostTrust: async () => ({ status: 'trusted' }),
       installRemoteCli: async () => undefined,
@@ -559,7 +608,8 @@ describe('createRemoteSshBootstrapMachineTaskKind', () => {
       },
     });
 
-    await expect(kind.run({
+    let settled = false;
+    const completion = kind.run({
       params: {
         ssh: { target: 'dev@example.test', auth: 'agent' },
         relay: { relayUrl: HOME_TARGET.applicationUrl },
@@ -568,7 +618,11 @@ describe('createRemoteSshBootstrapMachineTaskKind', () => {
       },
       emit: () => undefined,
       prompt: async () => ({ approved: true, replaceExistingServices: true }),
-    })).rejects.toMatchObject({ code: 'daemon_home_mismatch' });
+    }).catch((error: unknown) => { settled = true; return error; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(true);
+    await expect(completion).resolves.toMatchObject({ code: 'daemon_home_mismatch' });
+    } finally { vi.useRealTimers(); }
   });
 
   it('does not let an already-authenticated daemon on Home A satisfy an explicit URL target for Home B', async () => {

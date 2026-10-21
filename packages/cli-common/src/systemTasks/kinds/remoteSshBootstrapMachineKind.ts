@@ -876,6 +876,14 @@ async function runRemoteMachineBootstrapRecipe({
   ctx, parsedRemote, parsedLocalForApproval, relayRuntime, relayRuntimeLocalServerUrl,
   remoteHappierExecutor, serviceRecipeExecutor, createRemoteEnrollmentExecutor, approveLocalAuthRequest, assertCurrent, enrollmentProcessIO, enrollmentDeadlineMs, onEnrollmentDeadline,
 }: RemoteMachineBootstrapRecipeParams) {
+  const deadlineMs = enrollmentDeadlineMs ?? Date.now() + REMOTE_MACHINE_ENROLLMENT_TIMEOUT_MS;
+  const remainingEnrollmentMs = () => {
+    ctx.signal?.throwIfAborted();
+    const remaining = deadlineMs - Date.now();
+    if (remaining <= 0) throw new SystemTaskExecutionError('auth_enrollment_timeout',
+      'Remote Home enrollment timed out. Retry setup to request fresh approval.');
+    return remaining;
+  };
   const webappUrl = deriveWebappUrl(parsedRemote.relay.relayUrl, parsedRemote.relay.webappUrl);
   const relayProfile = {
     serverUrl: parsedRemote.relay.relayUrl, webappUrl,
@@ -890,15 +898,15 @@ async function runRemoteMachineBootstrapRecipe({
         },
         ...(serviceRecipeExecutor.installDaemonService ? { installDaemonService: async (options) => {
           await assertCurrent?.();
-          await serviceRecipeExecutor.installDaemonService!(options);
+          await serviceRecipeExecutor.installDaemonService!({ ...options, timeoutMs: remainingEnrollmentMs() });
         } } : {}),
         ...(serviceRecipeExecutor.startDaemonService ? { startDaemonService: async (options) => {
           await assertCurrent?.();
-          await serviceRecipeExecutor.startDaemonService!(options);
+          await serviceRecipeExecutor.startDaemonService!({ ...options, timeoutMs: remainingEnrollmentMs() });
         } } : {}),
         ...(serviceRecipeExecutor.restartDaemonService ? { restartDaemonService: async () => {
           await assertCurrent?.();
-          await serviceRecipeExecutor.restartDaemonService!();
+          await serviceRecipeExecutor.restartDaemonService!({ timeoutMs: remainingEnrollmentMs() });
         } } : {}),
         configureRelay: async (profile) => {
           await assertCurrent?.();
@@ -925,8 +933,7 @@ async function runRemoteMachineBootstrapRecipe({
               ? createTransferableHomeTargetInput(parsedRemote.homeTarget)
               : { kind: 'https_url', url: parsedRemote.relay.relayUrl },
             signal: ctx.signal,
-            timeoutMs: enrollmentDeadlineMs === undefined ? REMOTE_MACHINE_ENROLLMENT_TIMEOUT_MS
-              : Math.max(0, enrollmentDeadlineMs - Date.now()),
+            timeoutMs: remainingEnrollmentMs(),
             onEnrollmentDeadline,
             ...(parsedRemote.managedEnrollment ? { managedEnrollment: parsedRemote.managedEnrollment } : {}),
             approvePairingRequest: async (request) => {

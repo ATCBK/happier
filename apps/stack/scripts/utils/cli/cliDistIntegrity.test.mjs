@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import cliDistBuildManifest from './cliDistBuildManifestLoader.mjs';
 
 import {
   DEFAULT_CLI_DIST_RUNTIME_IMPORT_TIMEOUT_MS,
@@ -12,6 +13,30 @@ import {
   resolveCliDistEntrypointFromBin,
   writeCliDistBuildManifest,
 } from './cliDistIntegrity.mjs';
+
+test('dependency extraction scales below quadratic for a large emitted import table', () => {
+  const measure = (count) => {
+    const source = Array.from({ length: count }, (_, index) =>
+      `import x${index} from './module${index}.js';\n`).join('');
+    const samples = [];
+    for (let run = 0; run < 3; run++) {
+      const before = process.cpuUsage();
+      const specifiers = cliDistBuildManifest.extractRelativeModuleSpecifiers(source);
+      const used = process.cpuUsage(before);
+      samples.push(used.user + used.system);
+      assert.equal(specifiers.length, count);
+      assert.equal(specifiers.at(-1), `./module${count - 1}.js`);
+    }
+    return Math.min(...samples);
+  };
+  // Compare CPU scaling, not an absolute machine-specific startup deadline.
+  // Five times the input must remain below the n^1.5 envelope; rescanning the
+  // complete string/comment inventory for each import grows quadratically.
+  measure(1000);
+  const small = measure(10_000);
+  const large = measure(50_000);
+  assert.ok(large / small < 5 ** 1.5, `CPU scaling ${large}/${small} = ${large / small}`);
+});
 
 test('runtime import probe default budget covers source daemon startup verification', () => {
   assert.equal(DEFAULT_CLI_DIST_RUNTIME_IMPORT_TIMEOUT_MS, 120_000);

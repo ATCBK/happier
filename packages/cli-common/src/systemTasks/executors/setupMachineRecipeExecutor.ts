@@ -295,16 +295,19 @@ export function createSetupMachineRecipeExecutorFromHappierJsonExecutor(params: 
         ...buildServiceTakeoverArgs(opts?.takeover),
         // The CLI removes exactly its conflict plan's services for this target (R3-7).
         ...(opts?.replaceExisting ? ['--replace-existing=all', '--yes'] : []),
+        ...(opts?.timeoutMs === undefined ? [] : ['--wait-timeout-ms', String(opts.timeoutMs)]),
         '--json',
       ]);
     },
 
     async startDaemonService(opts) {
-      await executor.runHappierJson(['service', 'start', ...buildServiceTakeoverArgs(opts?.takeover), '--json']);
+      await executor.runHappierJson(['service', 'start', ...buildServiceTakeoverArgs(opts?.takeover),
+        ...(opts?.timeoutMs === undefined ? [] : ['--wait-timeout-ms', String(opts.timeoutMs)]), '--json']);
     },
 
-    async restartDaemonService() {
-      await executor.runHappierJson(['service', 'restart', '--json']);
+    async restartDaemonService(opts) {
+      await executor.runHappierJson(['service', 'restart',
+        ...(opts?.timeoutMs === undefined ? [] : ['--wait-timeout-ms', String(opts.timeoutMs)]), '--json']);
     },
 
     waitForReadyDaemon,

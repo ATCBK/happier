@@ -37,6 +37,8 @@ export function createRemoteSshBootstrapHappierJsonExecutor(params: Readonly<{
       const data: Record<string, unknown> = {
         ...(params.localServerUrl ? { localServerUrl: params.localServerUrl } : {}),
       };
+      const timeoutIndex = args.indexOf('--wait-timeout-ms');
+      if (timeoutIndex >= 0) data.waitTimeoutMs = Number(args[timeoutIndex + 1]);
       return await params.runRemoteCommand({
         label,
         parsed: params.parsed,

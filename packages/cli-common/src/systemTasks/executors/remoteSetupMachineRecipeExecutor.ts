@@ -74,7 +74,7 @@ export function createSetupMachineRecipeExecutorFromRemoteCommandRunner(params: 
       throw new SystemTaskExecutionError('unsupported_remote_command', 'Text execution is not available in this recipe.');
     },
   };
-  const canonicalReadiness = createSetupMachineRecipeExecutorFromHappierJsonExecutor({
+  const canonicalExecutor = createSetupMachineRecipeExecutorFromHappierJsonExecutor({
     executor: remoteJsonAdapter,
   });
 
@@ -105,25 +105,9 @@ export function createSetupMachineRecipeExecutorFromRemoteCommandRunner(params: 
       };
     },
 
-    installDaemonService: !shouldManageService
-      ? undefined
-      : async () => {
-          requireOk(
-            await remoteExecutor.runHappierJson({ args: ['service', 'install', '--json'] }),
-            'daemon.service.install',
-          );
-        },
-
-    startDaemonService: !shouldManageService
-      ? undefined
-      : async () => {
-          requireOk(
-            await remoteExecutor.runHappierJson({ args: ['service', 'start', '--json'] }),
-            'daemon.service.start',
-          );
-        },
-
-    waitForReadyDaemon: !shouldManageService ? undefined : canonicalReadiness.waitForReadyDaemon,
+    installDaemonService: !shouldManageService ? undefined : canonicalExecutor.installDaemonService,
+    startDaemonService: !shouldManageService ? undefined : canonicalExecutor.startDaemonService,
+    waitForReadyDaemon: !shouldManageService ? undefined : canonicalExecutor.waitForReadyDaemon,
   };
 }
 

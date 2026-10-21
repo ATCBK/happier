@@ -53,9 +53,8 @@ function readRegularExpressionEnd(source, slashIndex) {
   return null;
 }
 
-function computeStringCommentSpans(source) {
+function* iterateStringCommentSpans(source) {
   const text = String(source ?? '');
-  const spans = [];
   let index = 0;
 
   while (index < text.length) {
@@ -66,7 +65,7 @@ function computeStringCommentSpans(source) {
       const start = index;
       index += 2;
       while (index < text.length && text[index] !== '\n') index += 1;
-      spans.push([start, index]);
+      yield [start, index];
       continue;
     }
 
@@ -75,14 +74,14 @@ function computeStringCommentSpans(source) {
       index += 2;
       while (index < text.length && !(text[index] === '*' && text[index + 1] === '/')) index += 1;
       index = Math.min(index + 2, text.length);
-      spans.push([start, index]);
+      yield [start, index];
       continue;
     }
 
     if (character === '/') {
       const regularExpressionEnd = readRegularExpressionEnd(text, index);
       if (regularExpressionEnd !== null) {
-        spans.push([index, regularExpressionEnd]);
+        yield [index, regularExpressionEnd];
         index = regularExpressionEnd;
         continue;
       }
@@ -102,7 +101,7 @@ function computeStringCommentSpans(source) {
         }
         index += 1;
       }
-      spans.push([start, index]);
+      yield [start, index];
       continue;
     }
 
@@ -127,25 +126,23 @@ function computeStringCommentSpans(source) {
         if (braceDepth > 0 && text[index] === '}') braceDepth -= 1;
         index += 1;
       }
-      spans.push([start, index]);
+      yield [start, index];
       continue;
     }
 
     index += 1;
   }
-
-  return spans;
 }
 
 function extractModuleSpecifiers(source) {
   const text = String(source ?? '');
-  const maskedSpans = computeStringCommentSpans(text);
+  const maskedSpans = iterateStringCommentSpans(text);
+  let span = null;
   const isKeywordMasked = (index) => {
-    for (const [start, end] of maskedSpans) {
-      if (start > index) break;
-      if (index >= start && index < end) return true;
-    }
-    return false;
+    // Matches arrive in source order. Keep only the next relevant span rather
+    // than allocating the whole source inventory and rescanning it per import.
+    while (span === null || (!span.done && span.value[1] <= index)) span = maskedSpans.next();
+    return !span.done && span.value[0] <= index;
   };
   const specifiers = new Set();
   const matches = text.matchAll(

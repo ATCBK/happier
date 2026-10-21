@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { createOpenSshHappierJsonExecutor, parseStrictPersonalHomeTaskFinalResult } from './openSshHappierJsonExecutor.js';
 import { buildRemoteBootstrapCommand, buildRemoteHappierInvocationCommand } from '../ssh/remoteBootstrapCommandBuilder.js';
 import { createHappierJsonExecutorFromTextRunner } from './happierJsonExecutor.js';
+import { createSetupMachineRecipeExecutorFromRemoteCommandRunner } from './remoteSetupMachineRecipeExecutor.js';
 
 describe('transport-neutral Happier JSON executor', () => {
   it('refuses a failed CLI envelope even when the native process exits successfully', async () => {
@@ -36,6 +37,33 @@ describe('parseStrictPersonalHomeTaskFinalResult', () => {
 });
 
 describe('createOpenSshHappierJsonExecutor', () => {
+  it('keeps the finite service lifetime through the SSH label adapter and a real remote shell', async () => {
+    if (process.platform === 'win32') return;
+    const directory = await mkdtemp(join(tmpdir(), 'happier-ssh-service-lifetime-'));
+    const binary = join(directory, '.happier/cli/current/happier');
+    const observed: string[][] = [];
+    try {
+      await mkdir(join(directory, '.happier/cli/current'), { recursive: true });
+      await writeFile(binary, '#!/bin/sh\nprintf "%s\\n" "$@"\n');
+      await chmod(binary, 0o755);
+      const executor = createSetupMachineRecipeExecutorFromRemoteCommandRunner({
+        parsed: { ssh: { target: 'dev@example.test', auth: 'agent' }, relay: { relayUrl: 'https://home.example.test' } },
+        auth: { mode: 'agent' }, knownHostsMode: 'system', serviceMode: 'user',
+        runRemoteCommand: async ({ label, data }) => {
+          const remoteCommand = buildRemoteBootstrapCommand({ label, data, serverUrl: 'https://home.example.test' });
+          const result = await promisify(execFile)('/bin/sh', ['-c', remoteCommand], { env: { ...process.env, HOME: directory } });
+          observed.push(result.stdout.trim().split('\n'));
+          return { ok: true, data: {} };
+        },
+      });
+      await executor.installDaemonService!({ timeoutMs: 420_000 });
+      await executor.startDaemonService!({ timeoutMs: 275_000 });
+      expect(observed).toEqual([
+        ['service', 'install', '--mode=user', '--wait-timeout-ms', '420000', '--json'],
+        ['service', 'start', '--mode=user', '--wait-timeout-ms', '275000', '--json'],
+      ]);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
   it('preserves the selected release ring through a transport-neutral guest invocation', async () => {
     if (process.platform === 'win32') return;
     const directory = await mkdtemp(join(tmpdir(), 'happier-native-ring-'));

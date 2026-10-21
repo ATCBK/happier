@@ -61,6 +61,8 @@ export type SetupMachineRecipeSteps = Readonly<{
 }>;
 
 export type SetupMachineServiceCommandOptions = Readonly<{
+  /** Remaining containing-operation lifetime; omitted for standalone setup. */
+  timeoutMs?: number;
   /** Overrides the executor's construction-time manual-daemon takeover choice for this call. */
   takeover?: boolean;
   /** Remove the conflict plan's services for this target as part of the install. */
@@ -86,8 +88,8 @@ export type SetupMachineRecipeExecutor = Readonly<{
     }>) => Promise<void>;
   }>) => Promise<Readonly<{ publicKey: string | null; machineId: string | null }>>;
   installDaemonService?: (opts?: SetupMachineServiceCommandOptions) => Promise<void>;
-  startDaemonService?: (opts?: Pick<SetupMachineServiceCommandOptions, 'takeover'>) => Promise<void>;
-  restartDaemonService?: () => Promise<void>;
+  startDaemonService?: (opts?: Pick<SetupMachineServiceCommandOptions, 'takeover' | 'timeoutMs'>) => Promise<void>;
+  restartDaemonService?: (opts?: Pick<SetupMachineServiceCommandOptions, 'timeoutMs'>) => Promise<void>;
   waitForReadyDaemon?: (params: Readonly<{ signal?: AbortSignal }>) => Promise<SetupMachineDaemonStatus>;
 }>;
 

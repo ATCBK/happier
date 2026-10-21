@@ -111,6 +111,9 @@ export function buildRemoteBootstrapCommand(params: Readonly<{
 
   const useCloudId = shouldUseCloudProfileId(params);
   const relayArgs = buildRelayArgs(params);
+  const waitTimeoutMs = params.data?.waitTimeoutMs;
+  const serviceWaitArgs = typeof waitTimeoutMs === 'number' && Number.isSafeInteger(waitTimeoutMs) && waitTimeoutMs > 0
+    ? ` --wait-timeout-ms ${waitTimeoutMs}` : '';
   if (params.label === 'preflight.platform') {
     return "printf '{\"platform\":\"%s\"}\\n' \"$(uname -s | tr '[:upper:]' '[:lower:]')\"";
   }
@@ -132,9 +135,9 @@ export function buildRemoteBootstrapCommand(params: Readonly<{
   if (params.label === 'daemon.service.install') {
     const daemonServiceEnv = buildDaemonServiceEnv(params);
     if (params.daemonServiceMode === 'system') {
-      return `env ${daemonServiceEnv} sudo -E ${happier} service install --mode=system --system-user "$(id -un)" --json`;
+      return `env ${daemonServiceEnv} sudo -E ${happier} service install --mode=system --system-user "$(id -un)"${serviceWaitArgs} --json`;
     }
-    return `${daemonServiceEnv} ${happier} service install --mode=user --json`;
+    return `${daemonServiceEnv} ${happier} service install --mode=user${serviceWaitArgs} --json`;
   }
   if (params.label === 'daemon.service.uninstallAll') {
     return `${happier} service uninstall --all --yes --json`;
@@ -142,9 +145,9 @@ export function buildRemoteBootstrapCommand(params: Readonly<{
   if (params.label === 'daemon.service.start') {
     const daemonServiceEnv = buildDaemonServiceEnv(params);
     if (params.daemonServiceMode === 'system') {
-      return `env ${daemonServiceEnv} sudo -E ${happier} service start --mode=system --json`;
+      return `env ${daemonServiceEnv} sudo -E ${happier} service start --mode=system${serviceWaitArgs} --json`;
     }
-    return `${daemonServiceEnv} ${happier} service start --mode=user --json`;
+    return `${daemonServiceEnv} ${happier} service start --mode=user${serviceWaitArgs} --json`;
   }
   if (params.label === 'daemon.service.stop') {
     if (params.daemonServiceMode === 'system') {
