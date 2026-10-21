@@ -2208,6 +2208,17 @@ comments. Plan with a panel and Open a pull request remain origin-neutral;
 their synthesis review and disagreement Wait are genuine effect-gating holds.
 This is current-development source, not released or loaded-runtime certification.
 
+Session-scoped Habits keep scope, lifecycle source, execution placement and
+conversation destination separate. `session.trigger.add` authorizes its scope
+Session and defaults omitted `project` to that Session's project; an explicit
+project may repeat that authorized placement. A conflicting project returns
+`session_trigger_project_mismatch` rather than changing the execution Machine.
+Managed scope-end Actions retain their existing resource-controller placement.
+A B-scoped Habit may target A, while a lifecycle trigger's `sourceSessionId` must
+still name B. Invalid trigger inputs retain `invalid_input` with a specific
+closed `details.code`, such as `session_trigger_source_mismatch`. These are
+0.3 development semantics; they introduce no new stored format or migration.
+
 Session PR-comment and CI-failure triggers use the Channels binding writer to
 attach an authenticated GitHub pull-request endpoint to the scoped Automation.
 Native SCM credential selection, connection creation/reuse and principal resolution
