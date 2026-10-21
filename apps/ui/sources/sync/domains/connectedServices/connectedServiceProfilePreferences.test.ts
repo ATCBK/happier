@@ -34,13 +34,14 @@ describe('connectedServiceProfilePreferences', () => {
     expect(label).toBe('Work Account');
   });
 
-  it('resolves legacy profile label keys when stored without escaping', () => {
+  it('refuses unescaped legacy profile label keys', () => {
     const label = resolveConnectedServiceProfileLabel({
       labelsByKey: { 'anthropic/work/team': 'Legacy Account' },
       serviceId: 'anthropic',
       profileId: 'work/team',
     });
-    expect(label).toBe('Legacy Account');
+    // The canonical protocol reader admits escaped personal-label identities only.
+    expect(label).toBeNull();
   });
 
   it('returns null when a profile label is missing', () => {
