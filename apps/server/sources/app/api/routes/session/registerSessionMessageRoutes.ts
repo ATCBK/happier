@@ -46,7 +46,6 @@ import {
 } from "@/app/session/sessionTranscriptPublicationPolicy";
 import { parseStoredSessionTurns } from "@/app/session/turns/parseSessionTurnState";
 import { isSessionTurnTranscriptAnchorProjectionCurrent } from "@/app/session/turns/sessionTurnTranscriptAnchorProjection";
-import { isSessionTurnTranscriptAnchorProjectionProtocolActive } from "@/app/session/turns/sessionTurnTranscriptAnchorProjectionProtocolContract";
 import {
     resolveSessionTurnProjectionSeqs,
     type SessionTurnProjectionSeqs,
@@ -286,11 +285,7 @@ export async function readSessionMessagePage(input: Readonly<{ userId: string; s
     const sessionListPreviewProjection = previewRequest.externalActionExecutionAuthorized === true
         && previewRequest.externalActionEffectActionId === "session.list";
     const externalShareableProjection = query?.projection === "externalShareableV1";
-    // Served from the MATERIALISED turn anchors, and only once the anchor projection has
-    // been operator-activated — before that, `SessionTurn` rows may still be v0 and their
-    // anchors cannot be trusted to describe turn boundaries.
-    const turnProjection = query?.projection === "turns"
-        && isSessionTurnTranscriptAnchorProjectionProtocolActive();
+    const turnProjection = query?.projection === "turns";
     const { beforeSeq, afterSeq } = query ?? {};
     const limit = query?.limit ?? (externalShareableProjection
         ? EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_PAGE_ROWS_V1
@@ -426,16 +421,13 @@ export async function readSessionMessagePage(input: Readonly<{ userId: string; s
                 .filter((seq): seq is number => seq !== null);
             const firstPageSeq = pageSeqs.length > 0 ? Math.min(...pageSeqs) : null;
             const lastPageSeq = pageSeqs.length > 0 ? Math.max(...pageSeqs) : null;
-            const transcriptAnchorProjectionActive =
-                isSessionTurnTranscriptAnchorProjectionProtocolActive();
             let hasLegacyTurnProjection = false;
             let turnSnapshotExhausted = false;
             let hasInconsistentTurnProjection = false;
             let turnRows: Awaited<ReturnType<typeof tx.sessionTurn.findMany>> = [];
 
             if (
-                transcriptAnchorProjectionActive
-                && firstPageSeq !== null
+                firstPageSeq !== null
                 && lastPageSeq !== null
             ) {
                 const legacyTurn = await tx.sessionTurn.findFirst({
@@ -481,24 +473,17 @@ export async function readSessionMessagePage(input: Readonly<{ userId: string; s
             const consistentTurnRows = turnRows.filter((row) =>
                 isSessionTurnTranscriptAnchorProjectionCurrent(row));
 
-            if (!transcriptAnchorProjectionActive) {
-                // EXPAND/backfill has not crossed its final writer floor.
-                // A page-local barrier keeps all public consumers from
-                // claiming an irreversible external cursor on v0 facts.
-                turnSettlementBlockedFromSeq = firstPageSeq;
-            } else {
-                publicationBlockedFromSeq = resolveExternalShareableTranscriptBlockedFromSeq({
-                    rows: consistentTurnRows,
-                    publication,
-                });
-                turnSettlementBlockedFromSeq = resolveExternalShareableTranscriptTurnSettlementBlockedFromSeq({
-                    messages,
-                    turns: consistentTurnRows,
-                    hasLegacyTurnProjection,
-                    turnSnapshotExhausted,
-                    hasInconsistentTurnProjection,
-                });
-            }
+            publicationBlockedFromSeq = resolveExternalShareableTranscriptBlockedFromSeq({
+                rows: consistentTurnRows,
+                publication,
+            });
+            turnSettlementBlockedFromSeq = resolveExternalShareableTranscriptTurnSettlementBlockedFromSeq({
+                messages,
+                turns: consistentTurnRows,
+                hasLegacyTurnProjection,
+                turnSnapshotExhausted,
+                hasInconsistentTurnProjection,
+            });
             const visibleTurns = parseStoredSessionTurns(consistentTurnRows.filter((row) =>
                 isExternalShareableSessionTurnVisible({ row, publication })));
             const pageSeqSet = new Set(pageSeqs);

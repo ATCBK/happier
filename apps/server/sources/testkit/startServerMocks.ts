@@ -104,6 +104,15 @@ export function createStartServerDbMocks(options: StartServerDbMockOptions = {})
   const simpleCacheCreate = vi.fn()
   const simpleCacheUpsert = vi.fn()
   const accountCount = vi.fn()
+  // Storage boundary for startup's real, page-transactional turn conversion.
+  const sessionTurnFindMany = vi.fn<(...args: unknown[]) => Promise<unknown[]>>()
+  const sessionTurnUpdateMany = vi.fn<(...args: unknown[]) => Promise<{ count: number }>>()
+  const transactionClient = {
+    sessionTurn: { findMany: sessionTurnFindMany, updateMany: sessionTurnUpdateMany },
+    $queryRaw: vi.fn(async () => [{ statement_timeout: '0' }]),
+    $executeRawUnsafe: vi.fn(async () => 0),
+  }
+  const dbTransaction = async <T>(callback: (tx: typeof transactionClient) => Promise<T>) => callback(transactionClient)
   const isPrismaErrorCode = vi.fn((error: unknown, code: string) => {
     return !!error && typeof error === 'object' && (error as { code?: unknown }).code === code
   })
@@ -129,6 +138,8 @@ export function createStartServerDbMocks(options: StartServerDbMockOptions = {})
     simpleCacheCreate.mockReset().mockImplementation(async (args: any) => ({ value: args?.data?.value }))
     simpleCacheUpsert.mockReset().mockImplementation(async (args: any) => ({ value: args?.create?.value ?? args?.update?.value }))
     accountCount.mockReset().mockResolvedValue(0)
+    sessionTurnFindMany.mockReset().mockResolvedValue([])
+    sessionTurnUpdateMany.mockReset().mockResolvedValue({ count: 0 })
     isPrismaErrorCode.mockClear()
   }
 
@@ -140,6 +151,7 @@ export function createStartServerDbMocks(options: StartServerDbMockOptions = {})
         $connect: (...args: any[]) => dbConnect(...args),
         $disconnect: (...args: any[]) => dbDisconnect(...args),
         $queryRawUnsafe: (...args: any[]) => dbQueryRawUnsafe(...args),
+        $transaction: dbTransaction,
         simpleCache: {
           findUnique: (...args: any[]) => simpleCacheFindUnique(...args),
           create: (...args: any[]) => simpleCacheCreate(...args),
@@ -163,6 +175,8 @@ export function createStartServerDbMocks(options: StartServerDbMockOptions = {})
       isPrismaErrorCode: (...args: [unknown, string]) => isPrismaErrorCode(...args),
     },
     dbConnect,
+    sessionTurnFindMany,
+    sessionTurnUpdateMany,
     dbDisconnect,
     dbQueryRawUnsafe,
     getDbProviderFromEnv,

@@ -65,7 +65,6 @@
     "voice:identity-backfill": "node ./scripts/runTsx.mjs --tsconfig ./tsconfig.json ./scripts/voiceProviderIdentityBackfill.ts run",
     "voice:identity-backfill:verify": "node ./scripts/runTsx.mjs --tsconfig ./tsconfig.json ./scripts/voiceProviderIdentityBackfill.ts verify",
     "session-system-records:backfill": "node ./scripts/runTsx.mjs --tsconfig ./tsconfig.json ./scripts/sessionSystemRecordBackfill.ts",
-    "session-turn-anchor-projection:backfill": "node ./scripts/runTsx.mjs --tsconfig ./tsconfig.json ./scripts/sessionTurnTranscriptAnchorProjectionBackfill.ts",
     "session-message-author:backfill": "node ./scripts/runTsx.mjs --tsconfig ./tsconfig.json ./scripts/sessionMessageAuthorProjectionBackfill.ts"
   },
   "devDependencies": {

@@ -69,6 +69,10 @@ describe("resolveServerFeaturePayload", () => {
         resetSessionSystemRecordsProtocolV1ActivationForTests();
     });
 
+    it("advertises turn projection without operator activation", () => {
+        expect(resolveServerFeaturePayload({}, serverFeatureRegistry).capabilities.session.messages.turns).toBe(true);
+    });
+
     it("advertises approved Workflow activation only while its Automations dependency is enabled", () => {
         expect(readServerEnabledBit(
             resolveServerFeaturePayload({}, serverFeatureRegistry),

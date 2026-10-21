@@ -150,6 +150,29 @@ describe("startServer DB provider selection", () => {
         );
     });
 
+    it("automatically converts retained turn anchors before admitting the API", async () => {
+        const row = { id: "retained-turn", transcriptAnchorsJson: JSON.stringify({
+            startUserMessageSeq: 1, userMessageSeqs: [1], finalAssistantMessageSeq: 2,
+        }), transcriptAnchorProjectionVersion: 0, transcriptAnchorMinSeq: null as number | null,
+            transcriptAnchorMaxSeq: null as number | null };
+        startServerDbMocks.sessionTurnFindMany.mockImplementation(async () => [{ ...row }]);
+        startServerDbMocks.sessionTurnUpdateMany.mockImplementation(async (...args) => {
+            const update = args[0] as { data: {
+                transcriptAnchorProjectionVersion: number;
+                transcriptAnchorMinSeq: number | null;
+                transcriptAnchorMaxSeq: number | null;
+            } };
+            Object.assign(row, update.data);
+            return { count: 1 };
+        });
+        await startServerHarness.start("full", { SERVER_ROLE: "api", HAPPIER_DB_PROVIDER: "postgres" });
+        expect(row).toMatchObject({ transcriptAnchorProjectionVersion: 1,
+            transcriptAnchorMinSeq: 1, transcriptAnchorMaxSeq: 2 });
+        const { startApi } = await import("@/app/api/api");
+        expect(startServerDbMocks.sessionTurnUpdateMany.mock.invocationCallOrder[0])
+            .toBeLessThan(vi.mocked(startApi).mock.invocationCallOrder[0]);
+    });
+
     it("refuses startup when Session System Records remains on the expanded-only database shape", async () => {
         startServerDbMocks.dbQueryRawUnsafe.mockResolvedValue([]);
 

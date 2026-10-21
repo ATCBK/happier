@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { inTx } from "@/storage/inTx";
 
 import {
     deriveSessionTurnTranscriptAnchorProjection,
@@ -91,37 +92,19 @@ export async function backfillSessionTurnTranscriptAnchorProjectionPage(params: 
     };
 }
 
-export async function auditSessionTurnTranscriptAnchorProjectionPage(params: Readonly<{
-    db: BackfillClient;
-    afterId?: string;
-    limit?: number;
-}>): Promise<Readonly<{
-    processed: number;
-    legacyRows: number;
-    mismatchedRows: number;
-    nextAfterId: string | null;
-}>> {
-    const limit = resolvePageLimit(params.limit);
-    const rows = await readProjectionRows({
-        db: params.db,
-        ...(params.afterId === undefined ? {} : { afterId: params.afterId }),
-        limit,
-    });
-    let legacyRows = 0;
-    let mismatchedRows = 0;
-
-    for (const row of rows) {
-        if (row.transcriptAnchorProjectionVersion !== 1) {
-            legacyRows += 1;
-        } else if (!hasCurrentProjection(row)) {
-            mismatchedRows += 1;
-        }
+/**
+ * Run before API admission on fresh installs and forward upgrades. Each page
+ * uses the converter's existing bounded transaction; a restart rescans safely
+ * because current projections are skipped and updates retain their snapshot
+ * predicate. Current turn writers publish JSON and v1 scalars together.
+ */
+export async function initializeSessionTurnTranscriptAnchorProjection(signal?: AbortSignal): Promise<void> {
+    let afterId: string | undefined;
+    while (true) {
+        signal?.throwIfAborted();
+        const page = await inTx(tx => backfillSessionTurnTranscriptAnchorProjectionPage({ db: tx, afterId }));
+        signal?.throwIfAborted();
+        if (page.nextAfterId === null) return;
+        afterId = page.nextAfterId;
     }
-
-    return {
-        processed: rows.length,
-        legacyRows,
-        mismatchedRows,
-        nextAfterId: rows.length === limit ? rows.at(-1)?.id ?? null : null,
-    };
 }

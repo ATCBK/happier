@@ -1,23 +1,23 @@
-import { readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 const serverRoot = join(import.meta.dirname, "..", "..");
 const expandMigrationId = "20260810200000_expand_session_turn_anchor_projection";
-const contractMigrationId = "20260810210000_contract_session_turn_anchor_projection";
 
-describe("SessionTurn transcript-anchor projection migration lifecycle", () => {
+describe("SessionTurn transcript-anchor projection storage contract", () => {
     it.each([
-        "prisma/migrations",
-        "prisma/sqlite/migrations",
-        "prisma/mysql/migrations",
-    ] as const)("keeps the active %s root at EXPAND until final-contract activation is authorized", (migrationRoot) => {
-        const migrationNames = readdirSync(join(serverRoot, migrationRoot), { withFileTypes: true })
-            .filter((entry) => entry.isDirectory())
-            .map((entry) => entry.name);
-
-        expect(migrationNames).toContain(expandMigrationId);
-        expect(migrationNames).not.toContain(contractMigrationId);
+        "prisma",
+        "prisma/sqlite",
+        "prisma/mysql",
+    ] as const)("keeps %s legacy rows distinguishable for automatic startup conversion", (providerRoot) => {
+        const sql = readFileSync(join(serverRoot, providerRoot, "migrations", expandMigrationId, "migration.sql"), "utf8")
+            .replace(/[`\"]/g, "");
+        expect(sql).toMatch(/transcriptAnchorProjectionVersion\s+INTEGER\s+NOT NULL\s+DEFAULT 0/);
+        expect(sql).toContain("SessionTurn_transcript_anchor_range_idx");
+        const schema = readFileSync(join(serverRoot, providerRoot, "schema.prisma"), "utf8");
+        expect(schema).toMatch(/transcriptAnchorProjectionVersion\s+Int\s+@default\(0\)/);
+        expect(schema).toContain('@@index([sessionId, transcriptAnchorProjectionVersion, transcriptAnchorMaxSeq, transcriptAnchorMinSeq]');
     });
 });

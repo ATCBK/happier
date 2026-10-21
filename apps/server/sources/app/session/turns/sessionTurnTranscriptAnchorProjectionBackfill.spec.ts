@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-    auditSessionTurnTranscriptAnchorProjectionPage,
     backfillSessionTurnTranscriptAnchorProjectionPage,
 } from "./sessionTurnTranscriptAnchorProjectionBackfill";
 
@@ -150,46 +149,7 @@ describe("backfillSessionTurnTranscriptAnchorProjectionPage", () => {
             },
         }));
     });
-});
-
-describe("auditSessionTurnTranscriptAnchorProjectionPage", () => {
-    it("separates remaining legacy rows from v1 rows whose factual projection no longer matches", async () => {
-        const findMany = vi.fn(async () => [
-            {
-                id: "turn-legacy",
-                transcriptAnchorsJson: ANCHORED_TURN_JSON,
-                transcriptAnchorProjectionVersion: 0,
-                transcriptAnchorMinSeq: null,
-                transcriptAnchorMaxSeq: null,
-            },
-            {
-                id: "turn-stale-v1",
-                transcriptAnchorsJson: ANCHORED_TURN_JSON,
-                transcriptAnchorProjectionVersion: 1,
-                transcriptAnchorMinSeq: 8,
-                transcriptAnchorMaxSeq: 12,
-            },
-            {
-                id: "turn-correct-v1",
-                transcriptAnchorsJson: ANCHORED_TURN_JSON,
-                transcriptAnchorProjectionVersion: 1,
-                transcriptAnchorMinSeq: 7,
-                transcriptAnchorMaxSeq: 12,
-            },
-        ]);
-        const db = {
-            sessionTurn: { findMany },
-        } as unknown as Parameters<typeof auditSessionTurnTranscriptAnchorProjectionPage>[0]["db"];
-
-        await expect(auditSessionTurnTranscriptAnchorProjectionPage({ db, limit: 25 })).resolves.toEqual({
-            processed: 3,
-            legacyRows: 1,
-            mismatchedRows: 1,
-            nextAfterId: null,
-        });
-    });
-
-    it("repairs a predecessor's stale v1 scalar projection before the final audit can contract", async () => {
+    it("repairs stale v1 scalar values when rescanning after an anchor change", async () => {
         const row = {
             id: "turn-predecessor-update",
             transcriptAnchorsJson: ANCHORED_TURN_JSON,
@@ -226,25 +186,17 @@ describe("auditSessionTurnTranscriptAnchorProjectionPage", () => {
             transcriptAnchorMaxSeq: 12,
         });
 
-        // A supported predecessor can update anchors while retaining the v1 row
-        // shape, so the final audit must reject stale scalar values as well as v0.
+        // An interrupted conversion can resume after the anchors have changed.
         row.transcriptAnchorsJson = PREDECESSOR_REPLACED_ANCHOR_JSON;
-        await expect(auditSessionTurnTranscriptAnchorProjectionPage({ db })).resolves.toMatchObject({
-            legacyRows: 0,
-            mismatchedRows: 1,
-        });
 
         await expect(backfillSessionTurnTranscriptAnchorProjectionPage({ db })).resolves.toMatchObject({
             updated: 1,
-        });
-        await expect(auditSessionTurnTranscriptAnchorProjectionPage({ db })).resolves.toMatchObject({
-            legacyRows: 0,
-            mismatchedRows: 0,
         });
         expect(row).toMatchObject({
             transcriptAnchorProjectionVersion: 1,
             transcriptAnchorMinSeq: 20,
             transcriptAnchorMaxSeq: 24,
         });
+        await expect(backfillSessionTurnTranscriptAnchorProjectionPage({ db })).resolves.toMatchObject({ updated: 0 });
     });
 });

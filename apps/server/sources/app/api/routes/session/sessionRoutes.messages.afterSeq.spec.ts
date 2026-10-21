@@ -15,28 +15,10 @@ import {
 } from "./sessionRoutes.testkit";
 import { createAuthenticatedTestApp } from "../../testkit/sqliteFastify";
 import { registerSessionMessageRoutes } from "./registerSessionMessageRoutes";
-import {
-    initializeSessionTurnTranscriptAnchorProjectionProtocolActivation,
-    resetSessionTurnTranscriptAnchorProjectionProtocolActivationForTests,
-    SESSION_TURN_TRANSCRIPT_ANCHOR_PROJECTION_CONTRACT_MIGRATION,
-    SESSION_TURN_TRANSCRIPT_ANCHOR_PROJECTION_FINAL_CONTRACT_MARKER_VALUE,
-} from "@/app/session/turns/sessionTurnTranscriptAnchorProjectionProtocolContract";
 
 describe("sessionRoutes v1 messages pagination", () => {
     beforeEach(async () => {
         resetSessionRouteMocks();
-        resetSessionTurnTranscriptAnchorProjectionProtocolActivationForTests();
-        await initializeSessionTurnTranscriptAnchorProjectionProtocolActivation({
-            $queryRawUnsafe: async () => [{
-                migration_name: SESSION_TURN_TRANSCRIPT_ANCHOR_PROJECTION_CONTRACT_MIGRATION,
-            }],
-            simpleCache: {
-                findUnique: async () => ({
-                    value: SESSION_TURN_TRANSCRIPT_ANCHOR_PROJECTION_FINAL_CONTRACT_MARKER_VALUE,
-                }),
-            },
-            sessionTurn: { count: async () => 0 },
-        });
         sessionMessageFindMany.mockReset();
         txSessionTurnFindFirst.mockClear();
         txSessionTurnFindMany.mockClear();
@@ -608,8 +590,7 @@ describe("sessionRoutes v1 messages pagination", () => {
         expect(response).not.toHaveProperty("externalShareableSnapshot.publicationBlockedFromSeq");
     });
 
-    it("keeps an external cursor blocked when Session.seq is missing until the SessionTurn projection contract is activated", async () => {
-        resetSessionTurnTranscriptAnchorProjectionProtocolActivationForTests();
+    it("keeps an external cursor blocked when Session.seq is missing", async () => {
         // Deliberately omit Session.seq: an incomplete complete-snapshot
         // publication tuple must fail closed at sequence zero.
         sessionFindUnique.mockResolvedValue({ ...createSessionAccessProjectionRelations(), id: "s1", accountId: "u1",
@@ -645,7 +626,6 @@ describe("sessionRoutes v1 messages pagination", () => {
             hasMore: true,
             externalShareableSnapshot: {
                 turns: [],
-                turnSettlementBlockedFromSeq: 7,
             },
         });
     });

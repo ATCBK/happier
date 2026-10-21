@@ -1,4 +1,3 @@
-import { isSessionTurnTranscriptAnchorProjectionProtocolActive } from "@/app/session/turns/sessionTurnTranscriptAnchorProjectionProtocolContract";
 import { featuresSchema, type FeaturesResponse } from '../types';
 import { applyFeatureDependencies, evaluateServerFeatureDecisions } from '@happier-dev/protocol/features/featureDecisionEngine';
 import { evaluateFeatureBuildPolicy } from '@happier-dev/protocol/features/buildPolicy';
@@ -77,14 +76,13 @@ function assembleServerFeaturePayload(
         : undefined;
     const homeDisplayName = env.HAPPIER_HOME_DISPLAY_NAME?.trim();
 
-    // `turns` is advertised only while the transcript anchor projection is active: before that,
-    // `SessionTurn` rows may still be v0 and their anchors cannot be trusted to describe turn
-    // boundaries, so the route would have nothing sound to serve.
+    // Startup converts historical anchor projections automatically. The route
+    // retains per-Session barriers for any legacy or inconsistent rows.
     Object.assign(mergedCapabilities, mergeDeep(mergedCapabilities, {
         session: {
             messages: {
                 role: true,
-                turns: isSessionTurnTranscriptAnchorProjectionProtocolActive(),
+                turns: true,
             },
         },
     }));

@@ -23,6 +23,11 @@ contract and can add another.
 and exact sender addresses. It has its own trust checks rather than a pairing
 challenge.
 
+In the current 0.3 development source, the server prepares historical turn
+anchors automatically during startup, including after a 0.2 upgrade. Fresh
+installs and upgrades need no manual transcript-activation command. Replies
+still wait when the Session's publication or turn evidence is incomplete.
+
 ## The two halves
 
 Channels separates *the bot you connect* from *the conversations it carries*,

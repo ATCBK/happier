@@ -24,6 +24,7 @@ installStartServerCommonWiringMocks();
 
 const onShutdown = vi.fn();
 vi.mock('@/utils/process/shutdown', () => ({
+    shutdownSignal: new AbortController().signal,
     onShutdown,
     awaitShutdown: vi.fn(async () => {}),
 }));

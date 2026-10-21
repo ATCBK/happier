@@ -26,7 +26,7 @@ import {
     type HomeOwnerClaimRequestV1,
 } from '@/app/home/governance/claimHomeOwnerCommand';
 import { initializeSessionSystemRecordsProtocolV1Activation } from '@/app/session/systemRecords/sessionSystemRecordProtocolContract';
-import { initializeSessionTurnTranscriptAnchorProjectionProtocolActivation } from '@/app/session/turns/sessionTurnTranscriptAnchorProjectionProtocolContract';
+import { initializeSessionTurnTranscriptAnchorProjection } from '@/app/session/turns/sessionTurnTranscriptAnchorProjectionBackfill';
 import {
     resolveSqliteIncrementalVacuumIntervalMsFromEnv,
     resolveSqliteIncrementalVacuumPagesFromEnv,
@@ -36,7 +36,7 @@ import {
     startSqliteWalCheckpointWorker,
 } from '@/storage/sqliteWalCheckpoint';
 import { initializeServerLogging, log } from '@/utils/logging/log';
-import { awaitShutdown, onShutdown } from '@/utils/process/shutdown';
+import { awaitShutdown, onShutdown, shutdownSignal } from '@/utils/process/shutdown';
 import { isPersonalHomeRuntimePurpose } from '@/app/runtime/personalHomeRuntimePurpose';
 import {
     applyLightDefaultEnv,
@@ -359,7 +359,7 @@ export async function startServer(flavor: ServerFlavor, options?: StartServerOpt
             throw new Error(`Unsupported HAPPY_FILES_BACKEND/HAPPIER_FILES_BACKEND: ${String(filesBackend)}`);
         }
         await initializeSessionSystemRecordsProtocolV1Activation(db);
-        await initializeSessionTurnTranscriptAnchorProjectionProtocolActivation(db);
+        await initializeSessionTurnTranscriptAnchorProjection(shutdownSignal);
         if (shouldStartSqliteMaintenanceClient) {
             sqliteWalCheckpointClient = await createDbSqliteMaintenanceClient();
             await sqliteWalCheckpointClient.$connect();

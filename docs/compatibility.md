@@ -2983,6 +2983,23 @@ are inactive files, not the current Stack migration target. None of these
 development-only ledger shapes is a released compatibility direction or
 justification for a product alias, bridge, or reader.
 
+### Automatic Session turn transcript-anchor projection (0.3 development)
+
+The server automatically converts historical Session turn anchor projections
+before starting its API, using the existing JSON-derived converter in bounded
+transactions. A restart safely rescans the rows; completed updates are idempotent.
+This is the same path for fresh installs and forward upgrades from 0.2 on
+PostgreSQL, SQLite, MySQL and PGlite. No operator command, approval environment
+variable, cache marker or removed migration identity activates the projection.
+The current capability payload advertises turn projection directly.
+
+The external-shareable transcript still checks each Session's legacy and
+inconsistent rows in its read snapshot. An unconverted row holds the cursor at
+the first unsafe page sequence; removing the global activation switch does not
+relax these publication or turn-settlement barriers. Existing anchor JSON stays
+the authority; scalar ranges remain its query projection. Conversion does not
+rewrite message content or introduce a second transcript.
+
 ### Collection readers and answering-client routing (0.3 development)
 
 Independently upgraded apps retain their compiled Collection reader refs. A

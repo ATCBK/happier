@@ -18,6 +18,7 @@ installStartServerDbModuleMock(startServerDbMocks);
 installStartServerCommonWiringMocks();
 
 vi.mock("@/utils/process/shutdown", () => ({
+    shutdownSignal: new AbortController().signal,
     onShutdown: vi.fn(),
     awaitShutdown: vi.fn(async () => {}),
 }));
