@@ -3360,7 +3360,7 @@ export class ApiSessionClient extends EventEmitter {
                 durationMs: Math.round(performance.now() - queuedAt) });
             const publisherPrecondition =
                 await this.traceMetadataTuplePhase('publisher_metadata', 'publisher_authority', () =>
-                    this.readCurrentPublisherPrecondition());
+                    this.readCurrentPublisherPrecondition(this.socketAckAbortController.signal));
             if (!publisherPrecondition) {
                 throw Object.assign(
                     new Error('Session publisher authority was superseded'),
@@ -4360,7 +4360,9 @@ export class ApiSessionClient extends EventEmitter {
         return this.turnAssistantTextSnapshotStore;
     }
 
-    private async readCurrentPublisherPrecondition():
+    private async readCurrentPublisherPrecondition(
+        signal: AbortSignal = this.terminalPendingSettlementOperationAbortController.signal,
+    ):
         Promise<SessionMetadataPublisherPreconditionV1 | null> {
         while (true) {
             const contract = await this.waitForPublisherClaimServerContract();
@@ -4376,7 +4378,9 @@ export class ApiSessionClient extends EventEmitter {
                 // The publisher admission lock and inTx own this operation's
                 // duration. A shorter control timer can kill a current runner.
                 timeoutMs: null,
-                signal: this.terminalPendingSettlementOperationAbortController.signal,
+                // Metadata may drain during connected close. Startup/effect
+                // admissions retain the earlier terminal-input retirement.
+                signal,
                 payload: SessionPublisherAuthorityCheckRequestSchema.parse({
                     sessionId: this.sessionId,
                 }),

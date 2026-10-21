@@ -790,6 +790,72 @@ describe('ApiSessionClient socket write readiness', () => {
   });
 
 
+  it.each([false, true])('drains a fenced publisher metadata write while connected (close prepared: %s)', async closing => {
+    const session = createEncryptedOwnerSession(`s-publisher-close-${closing}`);
+    const socket = createSocket();
+    const client = createClient(session, [socket], { metadataAuthority: { kind: 'owner', credentials: ownerCredentials } });
+    await expect(client.claimCurrentSessionPublisherAuthorityForStartup()).resolves.toEqual({ status: 'claimed' });
+    if (closing) client.prepareForClose();
+    await expect(client.updateMetadataAsCurrentPublisher(metadata => ({ ...metadata,
+      lifecycleState: 'stopped', lifecycleStateSince: 1 }))).resolves.toBeUndefined();
+    expect(client.getMetadataSnapshot()).toMatchObject({ lifecycleState: 'stopped' });
+    expect(axios.patch).toHaveBeenCalledWith(`${serverUrl}/v2/sessions/${session.id}`, expect.objectContaining({
+      publisherPrecondition: { machineId: 'machine-1', committedFenceMs: 1_000, publisherGeneration: '1' },
+    }), expect.anything());
+    if (closing) {
+      // Only metadata drains through close: startup/effect admission is retired.
+      await expect(client.readCurrentPublisherPreconditionForStartup()).rejects.toMatchObject({ name: 'SocketAckAbortError' });
+      await expect(client.checkCurrentPublisherAuthority()).rejects.toMatchObject({ name: 'SocketAckAbortError' });
+    }
+  });
+
+  it('refuses a superseded publisher metadata write during connected close', async () => {
+    const session = createEncryptedOwnerSession('s-publisher-close-superseded');
+    const activity = createSessionRuntimeActivityHomeStub({ machineId: 'machine-1', committedFenceMs: 1_000 });
+    let superseded = false;
+    const socket = createApiSessionSocketStub({ emitWithAck: (event, payload) =>
+      event === 'session-publisher-authority-check' && superseded
+        ? { status: 'superseded', sessionId: session.id }
+        : activity.answer(event, payload) ?? { result: 'success' } });
+    const client = createClient(session, [socket], { metadataAuthority: { kind: 'owner', credentials: ownerCredentials } });
+    await client.claimCurrentSessionPublisherAuthorityForStartup();
+    superseded = true;
+    client.prepareForClose();
+    await expect(client.updateMetadataAsCurrentPublisher(metadata => ({ ...metadata, lifecycleState: 'stopped' })))
+      .rejects.toMatchObject({ code: 'session_publisher_authority_lost', retryable: false });
+    expect(axios.patch).not.toHaveBeenCalled();
+  });
+
+  it('cancels a close-time publisher metadata check when its socket disconnects', async () => {
+    const session = createEncryptedOwnerSession('s-publisher-close-disconnect');
+    const activity = createSessionRuntimeActivityHomeStub({ machineId: 'machine-1', committedFenceMs: 1_000 });
+    const attempted = createDeferred();
+    const reply = createDeferred();
+    let closing = false;
+    const socket = createApiSessionSocketStub({ emitWithAck: async (event, payload) => {
+      if (closing && event === 'session-publisher-authority-check') {
+        attempted.resolve();
+        await reply.promise;
+      }
+      return activity.answer(event, payload) ?? { result: 'success' };
+    } });
+    const client = createClient(session, [socket], { metadataAuthority: { kind: 'owner', credentials: ownerCredentials } });
+    await client.claimCurrentSessionPublisherAuthorityForStartup();
+    closing = true;
+    client.prepareForClose();
+    const write = client.updateMetadataAsCurrentPublisher(metadata => ({ ...metadata, lifecycleState: 'stopped' }));
+    const cancelled = expect(write).rejects.toMatchObject({ name: 'SocketAckAbortError' });
+    try {
+      await attempted.promise;
+      socket.connected = false;
+      socket.trigger('disconnect', 'transport close');
+      await cancelled;
+      expect(axios.patch).not.toHaveBeenCalled();
+    } finally {
+      reply.resolve();
+    }
+  });
+
   it('checks exact publisher authority through the authenticated session socket', async () => {
     const socket = createSocket();
     const client = createClient(createPlainSessionFixture({ id: 's-publisher-check' }), [socket]);
