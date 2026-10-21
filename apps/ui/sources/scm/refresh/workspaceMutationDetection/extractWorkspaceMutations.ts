@@ -14,6 +14,8 @@ export type WorkspaceMutationExtractionResult = Readonly<{
 export type ToolCallFileMutation = Readonly<{
     kind: 'create' | 'modify' | 'delete' | 'rename';
     region?: Readonly<{ startLine: number; endLine: number }>;
+    /** The text an edit replaces, when the call names no lines: the open file places it (P5 Track). */
+    anchorText?: string;
     /** The canonical hunk parser, rather than a second header parser, reads this at projection. */
     unifiedDiff?: string;
 }>;
@@ -273,7 +275,8 @@ export function readToolCallMutationPaths(toolPart: Readonly<{ name: string; inp
         hasUnknownMutations = readStringField(toolInput, ['command', 'cmd']) !== null;
     }
     const region = readInputRegion(toolInput);
-    for (const path of paths) mutations.set(path, { kind: defaultKind, ...(region ? { region } : {}) });
+    const anchorText = region ? undefined : readInputAnchorText(toolInput);
+    for (const path of paths) mutations.set(path, { kind: defaultKind, ...(region ? { region } : {}), ...(anchorText ? { anchorText } : {}) });
     if (toolKind === 'patch') {
         // This normalizer owns ACP arrays, Codex apply_patch text and canonical change maps.
         for (const file of deriveCanonicalPatchFileDiffs(toolInput)) {
@@ -299,6 +302,17 @@ function readInputRegion(input: unknown): ToolCallFileMutation['region'] {
     return typeof startLine === 'number' && Number.isInteger(startLine) && startLine > 0
         && typeof endLine === 'number' && Number.isInteger(endLine) && endLine >= startLine
         ? Object.freeze({ startLine, endLine }) : undefined;
+}
+
+/** Edit's `old_string`, or MultiEdit's first edit's: where the write lands when no lines are named. */
+function readInputAnchorText(input: unknown): string | undefined {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+    const record = input as Record<string, unknown>;
+    const edits = Array.isArray(record.edits) ? record.edits : null;
+    const first = edits?.[0];
+    const source = first && typeof first === 'object' && !Array.isArray(first) ? first as Record<string, unknown> : record;
+    const text = source.old_string ?? source.oldText;
+    return typeof text === 'string' && text.trim().length > 0 ? text : undefined;
 }
 
 export function extractWorkspaceMutationsFromNormalizedMessages(input: Readonly<{

@@ -88,6 +88,26 @@ describe('deriveLiveFileWrites', () => {
         }] })], options);
         expect(writes.get('src/app.ts')?.region).toEqual({ startLine: 8, endLine: 9 });
     });
+
+    it('targets the first hunk of a multi-hunk patch, not the span between its hunks (P5 Track region)', () => {
+        const writes = deriveLiveFileWrites([call('patch', 'Patch', { changes: [{ path: 'src/app.ts', kind: { type: 'update' },
+            diff: '@@ -3 +8,2 @@\n-a\n+b\n+c\n@@ -90 +95,3 @@\n-x\n+y\n+z\n+w',
+        }] })], options);
+        expect(writes.get('src/app.ts')?.region).toEqual({ startLine: 8, endLine: 9 });
+    });
+
+    it('carries the text an Edit replaces when the call names no lines, so the open file can place it', () => {
+        const writes = deriveLiveFileWrites([
+            call('edit', 'Edit', { file_path: 'src/edit.ts', old_string: 'const key = route;\nreturn key;', new_string: 'x' }),
+            call('multi', 'MultiEdit', { file_path: 'src/multi.ts', edits: [{ old_string: 'first', new_string: 'b' }, { old_string: 'second', new_string: 'c' }] }),
+            call('lines', 'Edit', { file_path: 'src/lines.ts', old_string: 'ignored', start_line: 4 }),
+        ], options);
+        expect(writes.get('src/edit.ts')).toMatchObject({ anchorText: 'const key = route;\nreturn key;' });
+        expect(writes.get('src/edit.ts')?.region).toBeUndefined();
+        expect(writes.get('src/multi.ts')).toMatchObject({ anchorText: 'first' });
+        expect(writes.get('src/lines.ts')).toMatchObject({ region: { startLine: 4, endLine: 4 } });
+        expect(writes.get('src/lines.ts')?.anchorText).toBeUndefined();
+    });
 });
 
 describe('deriveSettledFileWrites', () => {

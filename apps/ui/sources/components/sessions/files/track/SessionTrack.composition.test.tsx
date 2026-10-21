@@ -19,7 +19,7 @@ const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 await loadSyncSingletonForTests();
 const { storage } = await import('@/sync/domains/state/storage');
-const { useSessionTrack } = await import('./SessionTrack');
+const { useSessionTrack, readTrackPresence } = await import('./SessionTrack');
 const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
 const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
 const { PanePresentationProvider } = await import('@/components/appShell/panes/panePresentation');
@@ -46,68 +46,99 @@ afterEach(async () => {
     storage.setState(original, true);
 });
 
+type ScriptedWrite = Readonly<{ id: string; name: string; input: Record<string, unknown> }>;
+
+/** A Session whose agent is running one scripted write tool call, with the real Track composition mounted. */
+async function renderSessionTrack(tool: ScriptedWrite) {
+    const serverUrl = 'https://session-track-composition.test';
+    const serverId = await homes.addHome({ name: 'session-track-composition', serverUrl, accountId: 'alice', currentAccount: true });
+    const emptySessions = V2SessionListResponseSchema.parse({ sessions: [], hasNext: false, nextCursor: null });
+    homes.answer(serverId, '/v2/sessions', { body: emptySessions });
+    homes.answer(serverId, '/v2/sessions/active', { body: emptySessions });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = await TokenStorage.getCredentialsForServerUrl(serverUrl, { serverId });
+    if (!credentials) throw new Error('Expected Home credentials');
+    connection = await restoreServerAccountForTest({ serverUrl, accountId: 'alice', credentials, request: homes.request });
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    const sessionId = 'track-session';
+    const scopeId = 'session:track-composition';
+    const session = createSessionFixture({ id: sessionId, serverId, active: true, activeAt: Date.now(),
+        thinking: true, thinkingAt: Date.now(), latestTurnStatus: 'in_progress',
+        metadata: { machineId: 'machine', path: '/repo', host: 'test' } });
+    const message = createToolCallMessageFixture({ id: tool.id, tool: {
+        ...tool, state: 'running', createdAt: 1, startedAt: 2, completedAt: null, description: null,
+    } });
+    const messagesById = { [message.id]: message };
+    storage.setState({ sessions: { [sessionId]: session },
+        localSettings: { ...storage.getState().localSettings, filesTrackAgentEdits: true, detailsPaneTabsBehavior: 'preview' },
+        sessionMessages: { [sessionId]: { messageIdsOldestFirst: [message.id], messagesById, messagesMap: messagesById,
+            reducerState: createReducer(), messagesVersion: 1, isLoaded: true,
+            latestThinkingMessageId: null, latestThinkingMessageActivityAtMs: null } } });
+    const state = createWorkspaceState({ id: 'session-tab', target: { kind: 'session', params: { id: sessionId, serverId } }, pinned: true, preview: false });
+    const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: true, workflows: false, friends: false } });
+    const hrefs: string[] = [];
+    const navigation = createWorkspaceNavigationAdapter({ getState: () => state, getCatalog: () => catalog,
+        dispatch: () => {}, createId: () => 'opened-tab', onChange: () => {}, transport: { commit: href => { hrefs.push(href); } } });
+    const present = vi.fn();
+    const hook = await renderHook(() => {
+        const pane = useAppPaneScope(scopeId);
+        const paneRef = React.useRef(pane);
+        paneRef.current = pane;
+        React.useLayoutEffect(() => {
+            const execute = createWorkspaceActionAdapter({ getState: () => state, navigation, readCanvas: () => null, createId: () => 'opened-tab',
+                // The mounted Details viewport is the imperative UI boundary. Its real pane owner handles preview and presentation.
+                openFileInPlace: file => {
+                    paneRef.current.openDetailsTab(createWorkspaceFileDetailsTab(file.path, file.anchor, file.anchorSource), { intent: 'preview', present: false });
+                    return true;
+                } });
+            unregister = registerMountedWorkspaceAction(async request => execute(request.actionId, request.input));
+            return unregister;
+        }, []);
+        const track = useSessionTrack({ scopeId, sessionAddress: { serverId, sessionId }, workspaceRoot: '/repo', active: true });
+        return { pane, track };
+    }, { wrapper: ({ children }) => <AppPaneProvider><PanePresentationProvider value={present}>
+        <WorkspaceNavigationProvider value={{ active: true, state, canGoBack: false, canGoForward: false,
+            openHref: () => false, activateTab() {}, closeTab() {}, closeTabs() {}, dispatch() {},
+            navigationForTab: () => ({ push() {}, replace() {}, back() {} }), registerBackStep: () => () => {}, back() {}, forward() {} }}>
+            {children}
+        </WorkspaceNavigationProvider>
+    </PanePresentationProvider></AppPaneProvider> });
+    return { hook, hrefs, present };
+}
+
 describe('Session Track composition', () => {
     it('follows the current writing file through the real opener without navigating or presenting Details', async () => {
-        const serverUrl = 'https://session-track-composition.test';
-        const serverId = await homes.addHome({ name: 'session-track-composition', serverUrl, accountId: 'alice', currentAccount: true });
-        const emptySessions = V2SessionListResponseSchema.parse({ sessions: [], hasNext: false, nextCursor: null });
-        homes.answer(serverId, '/v2/sessions', { body: emptySessions });
-        homes.answer(serverId, '/v2/sessions/active', { body: emptySessions });
-        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-        const credentials = await TokenStorage.getCredentialsForServerUrl(serverUrl, { serverId });
-        if (!credentials) throw new Error('Expected Home credentials');
-        connection = await restoreServerAccountForTest({ serverUrl, accountId: 'alice', credentials, request: homes.request });
-        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
-        const sessionId = 'track-session';
-        const scopeId = 'session:track-composition';
-        const session = createSessionFixture({ id: sessionId, serverId, active: true, activeAt: Date.now(),
-            thinking: true, thinkingAt: Date.now(), latestTurnStatus: 'in_progress',
-            metadata: { machineId: 'machine', path: '/repo', host: 'test' } });
-        const message = createToolCallMessageFixture({ id: 'write-a', tool: {
-            id: 'write-a', name: 'Write', input: { file_path: '/repo/a.ts', content: 'hello' },
-            state: 'running', createdAt: 1, startedAt: 2, completedAt: null, description: null,
-        } });
-        const messagesById = { [message.id]: message };
-        storage.setState({ sessions: { [sessionId]: session },
-            localSettings: { ...storage.getState().localSettings, filesTrackAgentEdits: true, detailsPaneTabsBehavior: 'preview' },
-            sessionMessages: { [sessionId]: { messageIdsOldestFirst: [message.id], messagesById, messagesMap: messagesById,
-                reducerState: createReducer(), messagesVersion: 1, isLoaded: true,
-                latestThinkingMessageId: null, latestThinkingMessageActivityAtMs: null } } });
-        const state = createWorkspaceState({ id: 'session-tab', target: { kind: 'session', params: { id: sessionId, serverId } }, pinned: true, preview: false });
-        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: true, workflows: false, friends: false } });
-        const hrefs: string[] = [];
-        const navigation = createWorkspaceNavigationAdapter({ getState: () => state, getCatalog: () => catalog,
-            dispatch: () => {}, createId: () => 'opened-tab', onChange: () => {}, transport: { commit: href => { hrefs.push(href); } } });
-        const present = vi.fn();
-        const hook = await renderHook(() => {
-            const pane = useAppPaneScope(scopeId);
-            const paneRef = React.useRef(pane);
-            paneRef.current = pane;
-            React.useLayoutEffect(() => {
-                const execute = createWorkspaceActionAdapter({ getState: () => state, navigation, readCanvas: () => null, createId: () => 'opened-tab',
-                    // The mounted Details viewport is the imperative UI boundary. Its real pane owner handles preview and presentation.
-                    openFileInPlace: file => {
-                        paneRef.current.openDetailsTab(createWorkspaceFileDetailsTab(file.path, file.anchor, file.anchorSource), { intent: 'preview', present: false });
-                        return true;
-                    } });
-                unregister = registerMountedWorkspaceAction(async request => execute(request.actionId, request.input));
-                return unregister;
-            }, []);
-            const track = useSessionTrack({ scopeId, sessionAddress: { serverId, sessionId }, workspaceRoot: '/repo', active: true });
-            return { pane, track };
-        }, { wrapper: ({ children }) => <AppPaneProvider><PanePresentationProvider value={present}>
-            <WorkspaceNavigationProvider value={{ active: true, state, canGoBack: false, canGoForward: false,
-                openHref: () => false, activateTab() {}, closeTab() {}, closeTabs() {}, dispatch() {},
-                navigationForTab: () => ({ push() {}, replace() {}, back() {} }), registerBackStep: () => () => {}, back() {}, forward() {} }}>
-                {children}
-            </WorkspaceNavigationProvider>
-        </PanePresentationProvider></AppPaneProvider> });
+        const { hook, hrefs, present } = await renderSessionTrack({ id: 'write-a', name: 'Write', input: { file_path: '/repo/a.ts', content: 'hello' } });
         await act(async () => { await waitForHomeGovernance(() => {
             expect(hook.getCurrent().pane.scopeState?.details.tabs).toEqual([expect.objectContaining({ key: 'file:a.ts', isPreview: true, isPinned: false })]);
         }); });
         expect(hook.getCurrent().track.target?.path).toBe('a.ts');
         expect(hrefs).toEqual([]);
         expect(present).not.toHaveBeenCalled();
+        await hook.unmount();
+    });
+
+    it('hands the File page the caret region from the first hunk of the applied patch and keeps it while paused', async () => {
+        const { hook } = await renderSessionTrack({ id: 'patch-a', name: 'Patch', input: { changes: [{ path: '/repo/a.ts', kind: { type: 'update' },
+            diff: '@@ -3 +14,2 @@\n-a\n+b\n+c\n@@ -40 +41,1 @@\n-x\n+y' }] } });
+        await act(async () => { await waitForHomeGovernance(() => {
+            expect(readTrackPresence(hook.getCurrent().track)).toMatchObject({ path: 'a.ts', region: { startLine: 14, endLine: 15 } });
+        }); });
+        // A person's scroll pauses following at once (P5-I6); the caret still says where the agent is.
+        await act(async () => { hook.getCurrent().track.pause('scroll'); });
+        expect(hook.getCurrent().track.paused).toBe(true);
+        expect(readTrackPresence(hook.getCurrent().track)).toMatchObject({ path: 'a.ts', region: { startLine: 14, endLine: 15 } });
+        await act(async () => { hook.getCurrent().track.setEnabled(false); });
+        expect(readTrackPresence(hook.getCurrent().track)).toBeNull();
+        await hook.unmount();
+    });
+
+    it('carries an Edit\'s replaced text for the File page to place when the call names no lines', async () => {
+        const { hook } = await renderSessionTrack({ id: 'edit-a', name: 'Edit', input: { file_path: '/repo/a.ts', old_string: 'return key;', new_string: 'return route;' } });
+        await act(async () => { await waitForHomeGovernance(() => {
+            expect(readTrackPresence(hook.getCurrent().track)).toMatchObject({ path: 'a.ts', anchorText: 'return key;' });
+        }); });
+        expect(readTrackPresence(hook.getCurrent().track)?.region).toBeUndefined();
         await hook.unmount();
     });
 });

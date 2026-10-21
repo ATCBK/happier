@@ -20,6 +20,7 @@ export default function DevRouteLayout(): React.ReactElement | null {
     // The declarations and PageHeader visibility consume the same policy.
     const routeOptions = React.useMemo<Readonly<Record<string, ExtendedStackNavigationOptions>>>(() => ({
         changes: { headerShown: false },
+        track: { headerShown: false },
         artifacts: rootOptions['artifacts/index'],
         index: { headerTitle: t('navigation.developerTools') },
         'list-demo': { headerTitle: t('navigation.listComponentsDemo') },

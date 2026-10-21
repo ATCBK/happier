@@ -10,6 +10,8 @@ export type LiveFileWrite = Readonly<{
     startedAt: number;
     sessionId: string;
     region?: Readonly<{ startLine: number; endLine: number }>;
+    /** Without a region: the text the write replaces, for the open file to place (P5 Track caret). */
+    anchorText?: string;
 }>;
 export type FileWriteDerivationOptions = Readonly<{ workspaceRoot: string | null; sessionId?: string }>;
 export type SettledFileWrite = Readonly<{ toolCallId: string; sessionId: string; paths: readonly string[] }>;
@@ -43,15 +45,11 @@ function readSessionId(input: unknown): string {
 function regionForMutation(mutation: ToolCallFileMutation): LiveFileWrite['region'] {
     if (mutation.region) return mutation.region;
     if (!mutation.unifiedDiff) return undefined;
-    const hunks = parseUnifiedDiffHunks(mutation.unifiedDiff);
-    if (hunks.length === 0) return undefined;
-    let startLine = Infinity;
-    let endLine = 1;
-    for (const hunk of hunks) {
-        startLine = Math.min(startLine, Math.max(1, hunk.newStart));
-        endLine = Math.max(endLine, hunk.newStart + Math.max(1, hunk.newLines) - 1);
-    }
-    return Object.freeze({ startLine, endLine });
+    // The first hunk of the applied patch is where the write lands (P5 §3.10), not the span to its last hunk.
+    const first = parseUnifiedDiffHunks(mutation.unifiedDiff)[0];
+    if (!first) return undefined;
+    const startLine = Math.max(1, first.newStart);
+    return Object.freeze({ startLine, endLine: startLine + Math.max(1, first.newLines) - 1 });
 }
 
 /** Session-current writes exclude sidechains; workspace presence also covers nested subagent activity. */
@@ -66,7 +64,9 @@ export function deriveLiveFileWrites(messages: readonly Message[], options: File
             const normalized = relativePath(path, options.workspaceRoot);
             if (!normalized || (result.get(normalized)?.startedAt ?? -Infinity) > startedAt) continue;
             const region = regionForMutation(mutation);
-            result.set(normalized, Object.freeze({ toolCallId, sessionId, kind: mutation.kind, startedAt, ...(region ? { region } : {}) }));
+            const anchorText = region ? undefined : mutation.anchorText;
+            result.set(normalized, Object.freeze({ toolCallId, sessionId, kind: mutation.kind, startedAt,
+                ...(region ? { region } : {}), ...(anchorText ? { anchorText } : {}) }));
         }
     }, options.includeSidechains === true);
     return Object.freeze(result);

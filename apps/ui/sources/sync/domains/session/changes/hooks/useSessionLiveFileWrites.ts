@@ -10,7 +10,8 @@ const EMPTY: ReadonlyMap<string, LiveFileWrite> = Object.freeze(new Map<string, 
 function equalWrite(left: LiveFileWrite | undefined, right: LiveFileWrite): boolean {
     return left?.toolCallId === right.toolCallId && left.sessionId === right.sessionId
         && left.kind === right.kind && left.startedAt === right.startedAt
-        && left.region?.startLine === right.region?.startLine && left.region?.endLine === right.region?.endLine;
+        && left.region?.startLine === right.region?.startLine && left.region?.endLine === right.region?.endLine
+        && left.anchorText === right.anchorText;
 }
 
 /** Both session and workspace consumers read the same canonical effective activity answer. */

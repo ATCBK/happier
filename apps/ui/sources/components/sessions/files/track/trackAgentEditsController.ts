@@ -1,7 +1,7 @@
 export type TrackPauseReason = 'scroll' | 'touch' | 'selection' | 'typing' | 'tabActivation' | 'dirtyEditor';
 export type TrackRegion = Readonly<{ startLine: number; endLine: number; column?: number }>;
 /** Fields Track consumes from P3's live-writes projection; Track never extracts tool calls. */
-export type TrackWrite = Readonly<{ toolCallId: string; startedAt: number; sessionId: string; region?: TrackRegion }>;
+export type TrackWrite = Readonly<{ toolCallId: string; startedAt: number; sessionId: string; region?: TrackRegion; anchorText?: string }>;
 export type TrackTarget = Readonly<{ path: string; write: TrackWrite; region?: TrackRegion }>;
 export type TrackAgentEditsSnapshot = Readonly<{
     enabled: boolean;

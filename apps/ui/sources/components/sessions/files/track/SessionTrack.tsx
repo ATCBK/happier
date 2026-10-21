@@ -22,7 +22,7 @@ import { useLocalSettingMutable } from '@/sync/domains/state/storage';
 import { useWorkspaceScopeForSession } from '@/sync/domains/session/resolveWorkspaceScopeForSession';
 import { useDeviceType } from '@/utils/platform/responsive';
 
-import { TrackPauseSignalProvider } from './TrackPauseSignal';
+import { TrackPauseSignalProvider, type TrackPresence } from './TrackPauseSignal';
 import {
   useTrackAgentEdits,
   type TrackAgentEditsModel,
@@ -142,6 +142,26 @@ export function useSessionTrack(
 }
 
 /**
+ * Where the File pages draw the agent caret and wash: the file this Session's agent writes now, while Track is
+ * on (following or paused by your input; the caret reports the agent, pausing only stops the following).
+ */
+export function readTrackPresence(
+  track: Pick<SessionTrackModel, 'enabled' | 'target' | 'agentId' | 'agentTitle'>,
+): TrackPresence | null {
+    const target = track.target;
+    if (!track.enabled || !target) return null;
+    const anchorText = target.region ? undefined : target.write.anchorText;
+    if (!target.region && !anchorText) return null;
+    return {
+        path: target.path,
+        ...(target.region ? { region: target.region } : {}),
+        ...(anchorText ? { anchorText } : {}),
+        agentId: track.agentId,
+        agentName: track.agentTitle,
+    };
+}
+
+/**
  * Person input inside the Session's details pauses Track at once (P5-I6): wheel, touch, pointer and keys.
  * Track's own moves are programmatic and never reach these handlers.
  */
@@ -168,8 +188,13 @@ export function TrackInputBoundary(
         : null,
     [following, pause],
   );
+  const { enabled, target, agentId, agentTitle } = props.track;
+  const presence = React.useMemo(
+    () => readTrackPresence({ enabled, target, agentId, agentTitle }),
+    [enabled, target, agentId, agentTitle],
+  );
   return (
-    <TrackPauseSignalProvider signal={pause}>
+    <TrackPauseSignalProvider signal={pause} presence={presence}>
       <View
         style={{ flex: 1, minHeight: 0, minWidth: 0 }}
         {...(handlers ?? {})}
