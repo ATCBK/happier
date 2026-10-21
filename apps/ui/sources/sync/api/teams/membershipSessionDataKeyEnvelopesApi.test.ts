@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
 import { executeMembershipHistoryActionForScope } from './membershipSessionDataKeyEnvelopesApi';
-import { createRootLayoutFeaturesResponse } from '@/dev/testkit';
+import { createDeferred, createRootLayoutFeaturesResponse } from '@/dev/testkit';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 import { primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
@@ -63,7 +63,7 @@ async function setup(options?: Readonly<{ accountEncryption?: 'plain' | 'e2ee' }
         if (new URL(String(url)).pathname === '/v1/auth/ping') return new Response('{}');
         return request(String(url), init);
     });
-    return { target, request, token, TokenStorage };
+    return { active, target, request, token, TokenStorage };
 }
 
 /** One recipient Account with a real, correctly signed content-key binding. */
@@ -220,6 +220,150 @@ describe('membership history public Actions', () => {
 });
 
 describe('membership history envelope exact-Account transport', () => {
+    it('shares only the raw page between a public reader and an Action while one borrower cancels', async () => {
+        const env = await setup();
+        const { createMembershipSessionDataKeyEnvelopeClient } = await import('./membershipSessionDataKeyEnvelopesApi');
+        const held = createDeferred<void>();
+        const signals: Array<AbortSignal | null | undefined> = [];
+        env.request.mockImplementation(async (_url, init) => {
+            signals.push(init?.signal);
+            await Promise.race([held.promise, new Promise<never>((_resolve, reject) => {
+                init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+            })]);
+            return Response.json({ status: 'recipient_unavailable', recipientAccountId: 'recipient-1',
+                contentKey: { status: 'unavailable', reason: 'encryption_setup_required' } });
+        });
+        const scope = { serverId: env.target.id, accountId: 'target-account' };
+        const cancel = new AbortController();
+        const publicAdmitted = createDeferred<void>();
+        const actionAdmitted = createDeferred<void>();
+        let publicChecks = 0;
+        let actionChecks = 0;
+        // The first caller check precedes authority capture; the next is the
+        // bound page's pre-read admission. Observe both before withdrawing one.
+        const departed = createMembershipSessionDataKeyEnvelopeClient({ scope,
+            address: { serverId: env.target.id, teamId: TEAM_ID }, target: TEAM_TARGET,
+            recipientAccountId: 'recipient-1', availability: 'available', signal: cancel.signal,
+            isCurrent: () => { if (++publicChecks === 2) publicAdmitted.resolve(); return true; },
+        }).fetchPage(null).then(() => 'disclosed', () => 'cancelled');
+        const survivor = executeMembershipHistoryActionForScope({ scope, availability: 'available',
+            actionId: 'teams.members.history.preparation.get',
+            isCurrent: () => { if (++actionChecks === 2) actionAdmitted.resolve(); return true; },
+            input: { teamId: TEAM_ID, target: TEAM_TARGET, recipientAccountId: 'recipient-1' } });
+        try {
+            await Promise.all([publicAdmitted.promise, actionAdmitted.promise]);
+            await vi.waitFor(() => expect(signals.length).toBeGreaterThan(0));
+            cancel.abort();
+            await expect(departed).resolves.toBe('cancelled');
+            expect(signals.at(-1)?.aborted).toBe(false);
+            held.resolve();
+            await expect(survivor).resolves.toEqual({ status: 'recipient_unavailable', reason: 'encryption_setup_required' });
+            expect(env.request).toHaveBeenCalledTimes(1);
+        } finally {
+            held.resolve();
+            await Promise.allSettled([departed, survivor]);
+        }
+    });
+
+    it('partitions pending pages by Home, target, expected recipient and exact cursor bytes', async () => {
+        const env = await setup();
+        const { createMembershipSessionDataKeyEnvelopeClient } = await import('./membershipSessionDataKeyEnvelopesApi');
+        const { encodeMembershipSessionDataKeyEnvelopeCursorV1 } = await import('@happier-dev/protocol/sessions/encryption/membershipSessionDataKeyEnvelopes');
+        const held = createDeferred<void>();
+        env.request.mockImplementation(async () => {
+            await held.promise;
+            return Response.json({ status: 'recipient_unavailable', recipientAccountId: 'recipient-1',
+                contentKey: { status: 'unavailable', reason: 'encryption_setup_required' } });
+        });
+        const options = { scope: { serverId: env.target.id, accountId: 'target-account' },
+            address: { serverId: env.target.id, teamId: TEAM_ID }, target: TEAM_TARGET,
+            recipientAccountId: 'recipient-1', availability: 'available' as const };
+        const client = createMembershipSessionDataKeyEnvelopeClient(options);
+        const cursors = ['session/+ one', 'session/+ two'].map(encodeMembershipSessionDataKeyEnvelopeCursorV1);
+        const reads = [client.fetchPage(null), client.fetchPage(null),
+            createMembershipSessionDataKeyEnvelopeClient({ ...options, target: { ...TEAM_TARGET, teamMembershipId: 'mem/10' } }).fetchPage(null),
+            createMembershipSessionDataKeyEnvelopeClient({ ...options, target: GROUP_TARGET }).fetchPage(null),
+            createMembershipSessionDataKeyEnvelopeClient({ ...options, target: { ...GROUP_TARGET, teamGroupId: 'grp/8' } }).fetchPage(null),
+            executeMembershipHistoryActionForScope({ scope: options.scope, availability: 'available',
+                actionId: 'teams.members.history.preparation.get',
+                input: { teamId: TEAM_ID, target: TEAM_TARGET, recipientAccountId: 'replacement-recipient' } }),
+            ...cursors.map(cursor => client.fetchPage(cursor)),
+            createMembershipSessionDataKeyEnvelopeClient({ ...options,
+                scope: { serverId: env.active.id, accountId: 'active-account' },
+                address: { serverId: env.active.id, teamId: TEAM_ID } }).fetchPage(null)];
+        try {
+            // Nine callers contain one equivalent pair; only that pair may join.
+            await vi.waitFor(() => expect(env.request).toHaveBeenCalledTimes(8));
+            const urls = env.request.mock.calls.map(([url]) => new URL(url));
+            expect(urls.filter(url => url.origin === 'https://target.example'
+                && url.pathname.endsWith('/members/mem%2F9/sessions/data-key/envelopes')
+                && !url.searchParams.has('cursor'))).toHaveLength(2);
+            expect(urls.filter(url => url.origin === 'https://active.example')).toHaveLength(1);
+            expect(urls.filter(url => url.searchParams.has('cursor')).map(url => url.searchParams.get('cursor')).sort()).toEqual([...cursors].sort());
+            held.resolve();
+            const results = await Promise.all(reads);
+            expect(env.request).toHaveBeenCalledTimes(8);
+            expect(results[5]).toMatchObject({ ok: false, errorCode: 'recipient_changed' });
+            expect(results[0]).toMatchObject({ recipientAccountId: 'recipient-1' });
+        } finally {
+            held.resolve();
+            await Promise.allSettled(reads);
+        }
+    });
+
+    it.each(['success', 'unknown'] as const)('fences pre-write and during-write pages after %s PATCH settlement without sharing writes', async outcome => {
+        const env = await setup();
+        const { createMembershipSessionDataKeyEnvelopeClient } = await import('./membershipSessionDataKeyEnvelopesApi');
+        const { encryptDataKeyForRecipientV0 } = await import('@/sync/encryption/directShareEncryption');
+        const recipient = await createRecipient();
+        const pageGates = [createDeferred<void>(), createDeferred<void>(), createDeferred<void>()];
+        const writeGate = createDeferred<void>();
+        let gets = 0;
+        let patches = 0;
+        env.request.mockImplementation(async (_url, init) => {
+            if (init?.method === 'PATCH') {
+                patches += 1;
+                await writeGate.promise;
+                if (outcome === 'unknown') throw new Error('Connection lost after the write was issued');
+                return Response.json({ appliedCount: 1 });
+            }
+            const observation = ++gets;
+            const gate = pageGates[observation - 1];
+            if (!gate) throw new Error('Unexpected additional page acquisition');
+            await gate.promise;
+            return Response.json({ status: 'ready', recipientAccountId: 'recipient-1', contentKey: recipient.contentKey,
+                items: [], exceptions: { callerVisibleNonTransferableSessionCount: observation, callerEnvelopeRepairRequiredCount: 0 }, nextCursor: null });
+        });
+        const client = createMembershipSessionDataKeyEnvelopeClient({
+            scope: { serverId: env.target.id, accountId: 'target-account' },
+            address: { serverId: env.target.id, teamId: TEAM_ID }, target: TEAM_TARGET,
+            recipientAccountId: 'recipient-1', availability: 'available',
+        });
+        const request = { recipientAccountId: 'recipient-1', entries: [{ sessionId: 'session-1',
+            encryptedDataKey: encryptDataKeyForRecipientV0(new Uint8Array(32).fill(19), recipient.contentKey.contentPublicKey) }] };
+        const reads = [client.fetchPage(null)];
+        const writes: Array<Promise<string>> = [];
+        try {
+            await vi.waitFor(() => expect(gets).toBe(1));
+            writes.push(...[client.patchPage(request), client.patchPage(request)].map(write => write.then(() => 'applied', () => 'unknown')));
+            await vi.waitFor(() => expect(patches).toBe(2));
+            reads.push(client.fetchPage(null));
+            await vi.waitFor(() => expect(gets).toBe(2));
+            writeGate.resolve();
+            await expect(Promise.all(writes)).resolves.toEqual(outcome === 'success' ? ['applied', 'applied'] : ['unknown', 'unknown']);
+            reads.push(client.fetchPage(null));
+            await vi.waitFor(() => expect(gets).toBe(3));
+            for (const gate of pageGates) gate.resolve();
+            const pages = await Promise.all(reads);
+            expect(pages.map(page => page.status === 'ready' ? page.exceptions?.callerVisibleNonTransferableSessionCount : null)).toEqual([1, 2, 3]);
+            expect(patches).toBe(2);
+        } finally {
+            writeGate.resolve();
+            for (const gate of pageGates) gate.resolve();
+            await Promise.allSettled([...reads, ...writes]);
+        }
+    });
+
     it('uses one canonical identity that distinguishes every Team and Group target', () => {
         const args = {
             scope: { serverId: 'server-1', accountId: 'manager-1' },

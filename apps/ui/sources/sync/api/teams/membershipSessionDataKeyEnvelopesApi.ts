@@ -26,6 +26,10 @@ import {
     runWithServerAccountScopeRequestGuard,
     type ServerAccountScopeRequestGuard,
 } from '@/sync/runtime/orchestration/serverScopedRpc/serverAccountScopeRequestGuard';
+import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
+import { invalidateHomeAccountReadJoins } from '@/sync/runtime/orchestration/homeAccountChange';
+
+const membershipEnvelopePages = createScopedResolutionSingleFlight<ReturnType<typeof MembershipSessionDataKeyEnvelopePageV1Schema.parse>>();
 
 /**
  * The exact-Account transport for one Team or Group membership's historical Session data-key
@@ -115,6 +119,7 @@ type BoundMembershipEnvelopeCollection = Readonly<{
     authority: ServerAccountRequestAuthority;
     guard: ServerAccountScopeRequestGuard;
     path: string;
+    recipientAccountId: string;
 }>;
 
 async function requestMembershipEnvelopeCollection(
@@ -126,6 +131,10 @@ async function requestMembershipEnvelopeCollection(
     bound.guard.check();
     const payload: unknown = await response.json();
     bound.guard.check();
+    return admitMembershipEnvelopeResponse(response, payload);
+}
+
+function admitMembershipEnvelopeResponse(response: Pick<Response, 'ok' | 'status'>, payload: unknown): unknown {
     if (!response.ok) {
         const record = typeof payload === 'object' && payload !== null
             ? payload as Record<string, unknown>
@@ -142,19 +151,39 @@ async function requestMembershipEnvelopeCollection(
 function createMembershipEnvelopeTransport(
     bound: BoundMembershipEnvelopeCollection,
 ): MembershipSessionDataKeyEnvelopeTransport {
+    const transport = bound.authority.readTransport;
     return {
-        fetchPage: async (cursor) => MembershipSessionDataKeyEnvelopePageV1Schema.parse(
-            await requestMembershipEnvelopeCollection(
-                { ...bound, path: `${bound.path}${membershipEnvelopePageQuery(cursor)}` },
-            ),
-        ),
-        patchPage: async (request) => PatchMembershipSessionDataKeyEnvelopesResultV1Schema.parse(
-            await requestMembershipEnvelopeCollection(bound, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(request),
-            }),
-        ),
+        fetchPage: async cursor => {
+            bound.guard.check();
+            const transportKey = transport?.key;
+            const key = JSON.stringify([transportKey ?? null, bound.path, bound.recipientAccountId, cursor ?? null]);
+            try {
+                return await membershipEnvelopePages.run(key, async signal => {
+                    const consume = async (response: Response) => MembershipSessionDataKeyEnvelopePageV1Schema.parse(
+                        admitMembershipEnvelopeResponse(response, await response.json()));
+                    const path = `${bound.path}${membershipEnvelopePageQuery(cursor)}`;
+                    return transport ? await transport.read(path, { signal }, undefined, consume)
+                        : await consume(await bound.authority.request(path, { signal }));
+                }, { scope: transport?.scope ?? transportKey, signal: bound.guard.signal, fresh: !transport });
+            } finally {
+                bound.guard.check();
+            }
+        },
+        patchPage: async request => {
+            bound.guard.check();
+            // Writes never join. Separate reads both while a write is issued and
+            // after settlement, including a response with unknown commit outcome.
+            invalidateHomeAccountReadJoins(bound.authority.scope.serverId);
+            try {
+                return PatchMembershipSessionDataKeyEnvelopesResultV1Schema.parse(
+                    await requestMembershipEnvelopeCollection(bound, {
+                        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request),
+                    }),
+                );
+            } finally {
+                invalidateHomeAccountReadJoins(bound.authority.scope.serverId);
+            }
+        },
     };
 }
 
@@ -179,7 +208,7 @@ async function runWithMembershipEnvelopeAuthority<TResult>(
         return await runWithServerRequestAuthorityForServerAccountScope({
             scope: options.scope,
             activeRequest: async () => { throw new SessionAccessApiError('scope_changed'); },
-        }, async authority => await operation({ authority, guard, path }));
+        }, async authority => await operation({ authority, guard, path, recipientAccountId: options.recipientAccountId }));
     });
 }
 
