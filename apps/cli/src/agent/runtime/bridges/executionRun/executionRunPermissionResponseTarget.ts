@@ -14,6 +14,8 @@ import { logger } from '@/ui/logger';
 export type { ExecutionRunParentSessionPermissionResponseTarget };
 
 export type ExecutionRunPermissionRequestStore = Readonly<{
+  /** Host-private, same-scope persistence adoption; response registrations stay with this store. */
+  rebindPersistenceTargetFrom?(next: unknown): boolean;
   listOutstandingRequests?(): readonly Readonly<{ requestId: string; createdAt?: number; responseTarget?: AgentStateRequestResponseTarget }>[];
   readOutstandingRequest?(requestId: string): Readonly<{
     responseTarget?: AgentStateRequestResponseTarget;

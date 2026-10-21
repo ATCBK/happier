@@ -35,6 +35,7 @@ function createUnusedExecutionRunBridge(): ExecutionRunHostBridgeContract {
     waitForOutput: async () => unusedBridgeMethod(),
     waitForRunStateChange: async () => unusedBridgeMethod(),
     waitForInputTurn: async () => unusedBridgeMethod(),
+    rebindWorkflowInputPermissionRequestStore: () => unusedBridgeMethod(),
     getPublic: () => null,
     listPublic: () => [],
     listPublicForRequest: () => [],

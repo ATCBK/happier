@@ -52,6 +52,7 @@ import type { AutomationDefinitionDetail, AutomationDefinitionReconcileRequest }
 import { createAccountWorkflowTriggerActions } from '@happier-dev/protocol/actions/executor/workflowTriggerAccountHost';
 import { WorkflowTriggerWriteResultV1Schema } from '@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1';
 import { AUTOMATION_TEMPLATE_V02_EXISTING_ENCRYPTED, AUTOMATION_TEMPLATE_V02_EXISTING_PLAIN } from '../../../../../packages/protocol/src/automations/automationTemplateV02.testFixtures';
+import { projectWorkflowPermissionRequests } from '../../../../../apps/ui/sources/components/workflows/run/workflowPermissionRequests';
 import { createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { buildCommittedLaunchMetadata } from '@/agent/runtime/createSessionMetadata';
@@ -134,6 +135,13 @@ import { createWorkflowActionExecutor } from '@/session/actions/workflowActionEx
 import { createWorkflowDefinitionActions } from '@happier-dev/protocol/actions/executor/workflowDefinitions';
 import { createWorkflowDefinitionActions as createCliWorkflowDefinitionActions } from '@/session/actions/workflowDefinitions';
 import { createWorkflowRunActionOwner } from '@/session/actions/workflowRunActions';
+import { definePlugin } from '@happier-dev/plugin-sdk';
+import { ExecutionRunHostBridge } from '@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { resolveCliEngineRegistry } from '@/agent/runtime/registry/engineRegistry';
+import { createExecutionRunRpcActionExecutor } from '@/rpc/handlers/executionRuns/dispatchExecutionRunRpcAction';
+import { resolveExecutionRunPolicy } from '@/agent/executionRuns/policy/executionRunPolicy';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { workflowInvocationKey, WORKFLOW_CANCEL_REQUESTED_ABORT_REASON, WorkflowRuntimeInterruption } from './coordinator';
 import { createInMemoryWorkflowCoordinatorStore } from './workflowCoordinator.testkit';
 import { createProductionDaemonWorkflowRuntime, createWorkflowInvocationRecoveryObserver, resolveWorkflowSessionConversation } from './daemonRuntime';
@@ -1240,12 +1248,14 @@ it.each(['unavailable', 'missing-inventory', 'valid'] as const)(
   }
 });
 
-it('retires the old Judge observation writer on claim loss while the reclaimed owner commits the original result', async () => {
+it('retires the old Judge observation writer while reclaim preserves the late resume witness and continuation', async () => {
   const directory = await projectDirectory();
   const runId = '41414141-4141-4141-8141-414141414161';
   const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: retainedConversationDefaults(),
     blocks: [step('stage-one'), step('judge', { execution: { executionTarget: { kind: 'detached_run' },
-      conversation: { kind: 'fresh' } } })] };
+      conversation: { kind: 'fresh' } } }), step('judge-next', { execution: {
+        executionTarget: { kind: 'detached_run' }, conversation: { kind: 'from_step', producer: { blockId: 'judge', scope: { kind: 'current' } } },
+      } })] };
   const acceptedEnvelope = await sealDirectAccepted({ runId, definition, directory });
   const kit = createWorkflowRunStorageTestkit({ runId, machineId, state: 'claimed',
     origin: { kind: 'direct' }, acceptedEnvelope });
@@ -1263,6 +1273,10 @@ it('retires the old Judge observation writer on claim loss while the reclaimed o
   let sink: ExecutionRunWorkflowObservationSink | null = null;
   let localInputId = '';
   let starts = 0;
+  const providerResumeIdentity = { kind: 'provider_session.v1' as const,
+    backendTarget: { kind: 'backend' as const, backendId: 'claude', sourceKind: 'built_in' as const },
+    providerSessionId: 'late-native-provider-session' };
+  let continuedInputId = '';
   let observing!: () => void;
   const entered = new Promise<void>(resolve => { observing = resolve; });
   const sessionInput = sessionInputBoundary();
@@ -1271,12 +1285,23 @@ it('retires the old Judge observation writer on claim loss while the reclaimed o
     actionExecutor: { execute: async (actionId, value, context) => {
       if (actionId === 'execution.run.start') {
         starts++;
+        if (starts === 2) {
+          expect(value).toMatchObject({ resumeHandle: providerResumeIdentity });
+          expect(openRowProgress(kit, rowFor(kit, 'judge')!).execution)
+            .toMatchObject({ providerResumeIdentity });
+          continuedInputId = String((value as { localInputId: string }).localInputId);
+          return { ok: true, result: { runId: 'judge-resumed', callId: 'next-call', sidechainId: 'next-side' } };
+        }
         expect(rowFor(kit, 'stage-one')?.lifecycle).toBe('completed');
         localInputId = String((value as { localInputId: string }).localInputId);
         sink = readExecutionRunWorkflowObservationSink(context?.executionRunWorkflowObservationSink);
         if (!sink) throw new Error('Missing Judge observation writer');
         await sink.commit({ kind: 'input_accepted', runId: 'judge-native', localInputId, acceptedAtMs: 1 });
         return { ok: true, result: { runId: 'judge-native', callId: 'judge-call', sidechainId: 'judge-side' } };
+      }
+      if (actionId === 'execution.run.send') {
+        expect(value).toMatchObject({ runId: 'judge-native', resume: true });
+        return { ok: false, errorCode: 'execution_run_not_found', error: 'Host run is absent' };
       }
       if (actionId !== 'execution.run.get') throw new Error(`Unexpected Judge Action ${actionId}`);
       if (currentAttempt === 1) {
@@ -1288,11 +1313,15 @@ it('retires the old Judge observation writer on claim loss while the reclaimed o
       // Native events outlive the first Workflow claim. A retired observer
       // must not turn a truthful storage refusal into a failed native input.
       await sink!.commit({ kind: 'usage', runId: 'judge-native', localInputId, usage: { outputTokens: 2 } });
+      await sink!.commit({ kind: 'provider_resume_identity', runId: 'judge-native', localInputId,
+        providerResumeIdentity });
+      const resumed = (value as { runId: string }).runId === 'judge-resumed';
       return { ok: true, result: { run: {
-        runId: 'judge-native', callId: 'judge-call', sidechainId: 'judge-side', intent: 'agent',
+        runId: resumed ? 'judge-resumed' : 'judge-native', callId: 'judge-call', sidechainId: 'judge-side', intent: 'agent',
         backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, permissionMode: 'read_only',
         retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'request_response', status: 'running', startedAtMs: 1,
-        inputTurns: { occurrenceId: 'judge-occurrence', last: { turnId: 'judge-turn', inputIds: [localInputId],
+        resumeHandle: providerResumeIdentity,
+        inputTurns: { occurrenceId: 'judge-occurrence', last: { turnId: 'judge-turn', inputIds: [resumed ? continuedInputId : localInputId],
           state: 'completed', result: { kind: 'text', value: 'done' } } },
       } } };
     } },
@@ -1316,12 +1345,201 @@ it('retires the old Judge observation writer on claim loss while the reclaimed o
       attempt: 2, expectedRevision: kit.run().revision })).resolves.toMatchObject({ state: 'succeeded' });
     expect(rowFor(kit, 'judge')).toMatchObject({ id: judge.id, lifecycle: 'completed' });
     expect(openRowProgress(kit, rowFor(kit, 'judge')!).result).toBe('done');
+    expect(openRowProgress(kit, rowFor(kit, 'judge')!).execution).toMatchObject({ providerResumeIdentity });
+    expect(rowFor(kit, 'judge-next')?.lifecycle).toBe('completed');
     expect(kit.run()).toMatchObject({ state: 'succeeded', workflowCustodyState: 'settled' });
-    expect(starts).toBe(1);
+    expect(starts).toBe(2);
     expect(sessionInput.enqueue.mock.calls.map(([request]) => leafLabel(request.text))).toEqual(['stage-one']);
   } finally {
     interrupted.abort(new WorkflowRuntimeInterruption());
     await first.catch(() => undefined);
+  }
+});
+
+it.each(['before-native-admission', 'active'] as const)('persists a delayed native permission through the reclaimed exact Workflow input (%s)', async phase => {
+  const directory = await projectDirectory();
+  vi.stubEnv('HAPPIER_HOME_DIR', directory);
+  reloadConfiguration();
+  const runId = '41414141-4141-4141-8141-414141414163';
+  const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {
+    ...retainedConversationDefaults(), permissionMode: 'default',
+    agentTarget: { kind: 'agent', identity: { pluginId: 'acme.permission-reclaim', localId: 'default' } } },
+    blocks: [step('judge', { execution: { executionTarget: { kind: 'detached_run' }, conversation: { kind: 'fresh' } } })] };
+  const acceptedEnvelope = await sealDirectAccepted({ runId, definition, directory });
+  const kit = createWorkflowRunStorageTestkit({ runId, machineId, state: 'claimed', origin: { kind: 'direct' }, acceptedEnvelope });
+  let currentAttempt = 1;
+  let permissionPersisted!: (requestId: string) => void;
+  const persistedPermission = new Promise<string>(resolve => { permissionPersisted = resolve; });
+  const refusedWrites: Array<Readonly<{ operation: string; parentAttempt: number; currentAttempt: number }>> = [];
+  const storage = { execute: async (operation: WorkflowRunStorageTestkitOperation) => {
+    if ('parentAttempt' in operation && operation.parentAttempt !== currentAttempt) {
+      refusedWrites.push({ operation: operation.operation, parentAttempt: operation.parentAttempt, currentAttempt });
+      throw Object.assign(new Error('currentness_conflict'), { response: { status: 409, data: { error: 'currentness_conflict' } } });
+    }
+    const result = await kit.execute(operation);
+    const judge = rowFor(kit, 'judge');
+    const interaction = judge ? openRowProgress(kit, judge).interaction : undefined;
+    if (currentAttempt === 2 && isWorkflowJsonObject(interaction) && isWorkflowJsonObject(interaction.requests)) {
+      const requestId = Object.keys(interaction.requests)[0];
+      if (requestId) permissionPersisted(requestId);
+    }
+    return result;
+  } };
+  let releaseProvision!: () => void;
+  const provision = new Promise<void>(resolve => { releaseProvision = resolve; });
+  let nativeContext: import('@happier-dev/plugin-sdk/agents/runtime').AgentExecutionRunRuntimeContextV1 | undefined;
+  let nativeReady!: () => void;
+  const nativeOpened = new Promise<void>(resolve => { nativeReady = resolve; });
+  let finishNative!: () => void;
+  let nativeOpens = 0;
+  const executionRunContextV1 = { async open(request: { runId: string }, context: NonNullable<typeof nativeContext>) {
+    nativeOpens++;
+    await provision;
+    nativeContext = context;
+    const events: import('@happier-dev/plugin-sdk/agents/runtime').AgentExecutionRunEvent[] = [];
+    let listener: ((event: typeof events[number]) => void) | undefined;
+    let sequence = 0;
+    const emit = (event: typeof events[number]) => { events.push(event); listener?.(event); };
+    emit({ kind: 'run-start', runId: request.runId, sequence: ++sequence, emittedAtMs: sequence });
+    finishNative = () => {
+      emit({ kind: 'output-delta', runId: request.runId, sequence: ++sequence, emittedAtMs: sequence, channel: 'assistant', text: 'done' });
+      emit({ kind: 'run-complete', runId: request.runId, sequence: ++sequence, emittedAtMs: sequence });
+    };
+    return { async send() { return { status: 'admitted' as const }; }, async stop() {
+      emit({ kind: 'run-cancelled', runId: request.runId, sequence: ++sequence, emittedAtMs: sequence });
+      return { status: 'requested' as const }; },
+      watch(next: NonNullable<typeof listener>) { listener = next; for (const event of events) next(event);
+        nativeReady();
+        return { dispose() { listener = undefined; } }; }, async dispose() {} };
+  } };
+  const agentRuntime: import('@happier-dev/plugin-sdk/agents/runtime').AgentRuntime = {
+    sessions: { async open() { throw new Error('Unexpected Session open'); }, executionRunContextV1 },
+  };
+  const plugin = definePlugin({ id: 'acme.permission-reclaim', version: '1.0.0', entrypoints: { daemon: './daemon.mjs' }, agents: {
+    default: { declaration: { title: 'Permission reclaim fixture', runtime: { kind: 'custom' }, primary: 'sessions',
+      capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true, workspaceWrites: 'deny', executionRunContext: { versions: [1] } } } },
+      factory: async () => agentRuntime,
+      sessionRunnerFactory: { module: './agent.mjs', export: 'createRuntime', runtimeApiVersion: 1 } },
+  } });
+  const { readCurrentContributionRegistry } = await import('@/agent/catalog/snapshot');
+  const { resolveExecutablePluginRuntimeRegistry } = await import('@/plugins/runtime/resolveExecutablePluginRuntimeRegistry');
+  const baselineContributes = readCurrentContributionRegistry();
+  const admitted = await createAuthoredAdmittedPluginRuntimeFixture({ happyHomeDir: directory, controller: pluginReloadController,
+    plugins: [{ manifest: plugin.manifest,
+    files: { 'agent.mjs': 'let create; export function configure(callback) { create = callback; } export function createRuntime() { return create(); }',
+      'daemon.mjs': `import * as leaf from './agent.mjs';
+        export function configure(callback) { leaf.configure(callback); return { activate }; }
+        export function activate(api) { api.agents.register('default', leaf.createRuntime, {
+          sessionRunnerFactory: { module: './agent.mjs', export: 'createRuntime', runtimeApiVersion: 1 } }); }` },
+    // Physical registration and native factory stay real; only the external
+    // public SDK Agent implementation and its loading lifetime are supplied.
+    instantiateCommittedModule(module) {
+      if (typeof module.configure !== 'function') throw new Error('Missing SDK fixture callback');
+      const configured: unknown = module.configure(() => agentRuntime);
+      if (!configured || typeof configured !== 'object' || !('activate' in configured) || typeof configured.activate !== 'function') {
+        throw new Error('Missing SDK fixture activation');
+      }
+      return configured as import('@/plugins/runtime/types').PluginDaemonModuleNamespace;
+    },
+  }] });
+  onTestFinished(async () => {
+    await admitted.dispose();
+    await pluginReloadController.adoptPreparedRuntimeRegistry({
+      registry: await resolveExecutablePluginRuntimeRegistry({ contributes: baselineContributes, pluginIds: [] }),
+      changedPluginIds: ['acme.permission-reclaim'], runningSessionDisposition: 'retainRunningSessions',
+    });
+  });
+  expect(admitted.registry.pluginDiagnosticsByPluginId['acme.permission-reclaim'] ?? []).toEqual([]);
+  const engineRegistry = await resolveCliEngineRegistry({ runtimeRegistry: admitted.registry });
+  const profileCatalog = await engineRegistry.resolveExecutionRunProfileCatalog();
+  const manager = new ExecutionRunHostBridge({ parentProvider: 'claude', cwd: directory, sendAcp: async () => {},
+    machineId, happyHomeDir: directory, resolveExecutionRunProfileCatalog: () => ({ engineRegistry, profileCatalog }) });
+  let firstWaiting!: () => void;
+  let reclaimedWaiting!: () => void;
+  const firstObservation = new Promise<void>(resolve => { firstWaiting = resolve; });
+  const reclaimedObservation = new Promise<void>(resolve => { reclaimedWaiting = resolve; });
+  const waitForInputTurn = manager.waitForInputTurn.bind(manager);
+  let waitCount = 0;
+  vi.spyOn(manager, 'waitForInputTurn').mockImplementation((...args) => {
+    const waiting = waitForInputTurn(...args);
+    if (++waitCount === 1) firstWaiting();
+    else reclaimedWaiting();
+    return waiting;
+  });
+  const executor = createExecutionRunRpcActionExecutor({ manager, context: { sessionId: null, cwd: directory },
+    policy: resolveExecutionRunPolicy({ defaults: { maxConcurrentRuns: null, boundedTimeoutMs: null,
+      reviewBoundedTimeoutMs: null, maxTurns: null } }), isExecutionRunsEnabled: () => true });
+  let latestContext: Parameters<typeof executor.execute>[2];
+  const detachedRun: NonNullable<Parameters<typeof workflowDaemonProcess>[0]['detachedRun']> = {
+    buildActionContext: () => ({ surface: 'agent', authority: 'account_automation' }),
+    actionExecutor: { execute: (actionId, input, context) => {
+      latestContext = context;
+      return executor.execute(actionId, input, context);
+    } },
+  };
+  const interrupted = new AbortController();
+  const claim = { runId, attempt: 1, expectedRevision: 0, accountCurrentness: currentness, acceptedEnvelope };
+  const first = workflowDaemonProcess({ directory, storage, detachedRun })({ ...claim, signal: interrupted.signal });
+  void first.catch(() => undefined);
+  let reclaimed: ReturnType<ReturnType<typeof workflowDaemonProcess>> | undefined;
+  const reclaimAbort = new AbortController();
+  try {
+    if (phase === 'active') releaseProvision();
+    await Promise.race([firstObservation, first.then(result => {
+      throw new Error(`Workflow settled before exact input observation: ${JSON.stringify(result)}`);
+    })]);
+    const judge = rowFor(kit, 'judge')!;
+    const execution = openRowProgress(kit, judge).execution;
+    if (execution?.kind !== 'detached_run') throw new Error('Missing exact detached input');
+    const nativeRunId = execution.runId;
+    if (phase === 'active') await nativeOpened;
+    currentAttempt = 2;
+    interrupted.abort(new WorkflowRuntimeInterruption());
+    await expect(first).rejects.toBeInstanceOf(WorkflowRuntimeInterruption);
+    reclaimed = workflowDaemonProcess({ directory, storage, detachedRun })({ ...claim,
+      attempt: 2, expectedRevision: kit.run().revision, signal: reclaimAbort.signal });
+    void reclaimed.catch(() => undefined);
+    await Promise.race([reclaimedObservation, reclaimed.then(result => {
+      throw new Error(`Reclaimed Workflow settled before exact input observation: ${JSON.stringify(result)}`);
+    })]);
+    const context = latestContext;
+    if (!context?.actionCaller || context.actionCaller.kind !== 'workflowRun') throw new Error('Missing current Workflow context');
+    const { AgentStateRequestStore } = await import('@/agent/permissions/agentStateRequestStore');
+    const foreignStore = new AgentStateRequestStore({ logPrefix: '[foreign invocation]', target: {
+      scopeId: 'foreign-invocation', readState: () => ({}), updateState: () => { throw new Error('Foreign scope was mutated'); },
+    } });
+    for (const mismatch of [
+      { inputId: 'foreign-input', context },
+      { inputId: execution.localInputId, context: { ...context,
+        actionCaller: { ...context.actionCaller, runId: 'foreign-workflow' } } },
+      { inputId: execution.localInputId, context: { ...context, executionRunPermissionRequestStore: foreignStore } },
+    ]) {
+      await expect(executor.execute('execution.run.get', { sessionId: null, runId: nativeRunId,
+        waitForInputId: mismatch.inputId }, mismatch.context)).resolves.toMatchObject({ ok: false,
+        errorCode: 'execution_run_invalid_action_input' });
+    }
+    releaseProvision();
+    await nativeOpened;
+    const approval = nativeContext!.services.interactions.requestApproval({ kind: 'approval', title: 'Allow read-only inspection?',
+      subject: { kind: 'tool', name: 'Bash', input: { command: 'pwd' } } });
+    void approval.catch(() => undefined);
+    const requestId = await Promise.race([persistedPermission, approval.then(result => {
+      throw new Error(`Native interaction settled before its prompt persisted: ${JSON.stringify({ result, refusedWrites })}`);
+    })]);
+    expect(projectWorkflowPermissionRequests(openRowProgress(kit, rowFor(kit, 'judge')!)))
+      .toMatchObject([{ requestId, tool: 'Bash' }]);
+    await expect(manager.completePermissionRequest(nativeRunId, { requestId, approved: true })).resolves.toEqual({ ok: true });
+    await expect(approval).resolves.toMatchObject({ kind: 'approval', status: 'approved' });
+    expect(projectWorkflowPermissionRequests(openRowProgress(kit, rowFor(kit, 'judge')!))).toEqual([]);
+    finishNative();
+    await expect(reclaimed).resolves.toMatchObject({ state: 'succeeded' });
+    expect(rowFor(kit, 'judge')).toMatchObject({ id: judge.id, lifecycle: 'completed' });
+    expect(nativeOpens).toBe(1);
+    expect(refusedWrites).toEqual([]);
+  } finally {
+    releaseProvision(); interrupted.abort(new WorkflowRuntimeInterruption()); reclaimAbort.abort(new WorkflowRuntimeInterruption());
+    await manager.dispose(); await first.catch(() => undefined); await reclaimed?.catch(() => undefined);
+    vi.unstubAllEnvs(); reloadConfiguration();
   }
 });
 

@@ -803,6 +803,28 @@ describe('workflow detached Execution Run step executor', () => {
     );
   });
 
+  it.each(['native backend', 'resume backend'] as const)('rejects a reclaimed resume witness with a foreign %s', async mismatch => {
+    const providerResumeIdentity = { kind: 'provider_session.v1' as const,
+      backendTarget: { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const },
+      providerSessionId: 'late-provider-session' };
+    const response = completedRun('run-existing', 'input-existing', 'retained');
+    const onExecutionObservation = vi.fn(async () => undefined);
+    const execute = createWorkflowDetachedExecutionRunStepExecutor({
+      actionExecutor: { execute: async () => ({ ok: true, result: { run: { ...response.run,
+        backendTarget: { kind: 'builtInAgent', agentId: mismatch === 'native backend' ? 'codex' : 'claude' },
+        resumeHandle: providerResumeIdentity,
+      } } }) },
+      workDepth: 0, buildActionContext,
+      resolveSharedRunConversation: async () => null,
+      resolveProducerConversation: async () => null,
+    });
+    await expect(execute(baseParams({ onExecutionObservation, invocation: {
+      ...baseParams().invocation,
+      execution: { kind: 'detached_run', runId: 'run-existing', localInputId: 'input-existing' },
+    } }) as never)).rejects.toThrow('workflow_invocation_fact_conflict');
+    expect(onExecutionObservation).not.toHaveBeenCalled();
+  });
+
   it('ends only Workflow observation at the authored deadline without stopping the active Run', async () => {
     vi.useFakeTimers();
     try {

@@ -665,6 +665,13 @@ export function createExecutionRunRpcActionDeps(params: ExecutionRunRpcActionDep
       await params.manager.recoverRetainedRuns();
       const parsed = ExecutionRunGetRequestSchema.parse(request);
       if (!getRunInAuthoritativeScope(parsed.runId, sessionId)) return executionRunNotFound();
+      opts?.signal?.throwIfAborted();
+      if (parsed.waitForInputId && opts?.permissionRequestStore !== undefined) {
+        const store = readPermissionRequestStore(opts.permissionRequestStore);
+        if (!store || !opts.workflowRunId || !params.manager.rebindWorkflowInputPermissionRequestStore(parsed.runId, {
+          workflowRunId: opts.workflowRunId, localInputId: parsed.waitForInputId, store,
+        })) return invalidParams();
+      }
       if (parsed.waitForOutput) await params.manager.waitForOutput(parsed.runId, parsed.waitForOutput, opts?.signal);
       const observedInputTurn = parsed.waitForInputId
         ? await params.manager.waitForInputTurn(parsed.runId, parsed.waitForInputId, opts?.signal)

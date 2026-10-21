@@ -69,10 +69,10 @@ export type ExecutionRunBackendController = {
   delegatedTurn?: Readonly<{ admission: Promise<string | null>; settled: Promise<void> }>;
   /** Native evidence for the current and most recently settled input turn, never a history ledger. */
   currentInputTurn?: ExecutionRunInputTurnV1 & Readonly<{ committedResultLocalId?: string; committedPartialResultLocalId?: string }>;
-  /** Host-private interaction binding for exactly `currentInputTurn`. */
+  /** Host-private exact input binding, retained through initial provisioning before a turn exists. */
   currentInputPermissionRequestStore?: Readonly<{
     localInputId: string;
-    turnId: string;
+    turnId?: string;
     store: ExecutionRunPermissionRequestStore;
     releaseResponseTarget: () => void;
   }>;

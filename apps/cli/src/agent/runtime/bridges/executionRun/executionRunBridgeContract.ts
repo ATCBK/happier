@@ -51,6 +51,11 @@ export interface ExecutionRunHostBridgeContract {
     localInputId: string,
     signal?: AbortSignal,
   ): Promise<ExecutionRunObservedInputTurn | null>;
+  rebindWorkflowInputPermissionRequestStore(runId: string, params: Readonly<{
+    workflowRunId: string;
+    localInputId: string;
+    store: ExecutionRunPermissionRequestStore;
+  }>): boolean;
   getPublic(runId: string): ExecutionRunPublicState | null;
   listPublic(): readonly ExecutionRunPublicState[];
   listPublicForRequest(

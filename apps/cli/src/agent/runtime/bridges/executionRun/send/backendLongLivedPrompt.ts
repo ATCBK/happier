@@ -317,10 +317,12 @@ export async function sendBackendLongLivedRun(args: Readonly<{
       };
     }
     if (args.permissionRequestStore && args.handlePermissionResponseTarget) {
-      const releaseResponseTarget = args.permissionRequestStore.registerResponseTargetHandler(
-        'execution_run_host_bridge',
-        args.handlePermissionResponseTarget,
-      );
+      const pending = ctrl2.currentInputPermissionRequestStore;
+      const isProvisionedInput = pending?.turnId === undefined && pending?.localInputId === localInputId
+        && pending.store === args.permissionRequestStore;
+      if (pending && !isProvisionedInput) pending.releaseResponseTarget();
+      const releaseResponseTarget = isProvisionedInput ? pending.releaseResponseTarget
+        : args.permissionRequestStore.registerResponseTargetHandler('execution_run_host_bridge', args.handlePermissionResponseTarget);
       ctrl2.currentInputPermissionRequestStore = {
         localInputId,
         turnId,

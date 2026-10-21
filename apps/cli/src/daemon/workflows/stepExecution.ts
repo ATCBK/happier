@@ -183,6 +183,8 @@ export async function observeWorkflowDetachedExecutionRunInput(params: Readonly<
   runId: string;
   localInputId: string;
   get: (request: Readonly<{ runId: string; includeStructured: false }>) => Promise<unknown>;
+  /** Only exact-input evidence may reach the current Workflow claim's writer. */
+  onRunObserved?: (run: ReturnType<typeof ExecutionRunGetResponseSchema.parse>['run']) => Promise<void>;
 }>): Promise<WorkflowDetachedExecutionRunObservation> {
   const response = ExecutionRunGetResponseSchema.parse(await params.get({
     runId: params.runId,
@@ -204,6 +206,7 @@ export async function observeWorkflowDetachedExecutionRunInput(params: Readonly<
     if (response.run.status === 'running') return { kind: 'pending' };
     return { kind: 'outcome_uncertain', code: 'execution_run_input_not_observed' };
   }
+  await params.onRunObserved?.(response.run);
   if (turn.state === 'active') return { kind: 'pending' };
   // Host-owned terminal truth for the exact input: the run owner retired its
   // custody. This is not a claim that the provider process has exited.

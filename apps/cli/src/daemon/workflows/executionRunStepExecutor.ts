@@ -11,7 +11,7 @@ type ExecutionRunResumeHandleProviderSessionV1 = Extract<
   Readonly<{ kind: 'provider_session.v1' }>
 >;
 import { areExecutionRunBackendTargetsEqual } from '@/agent/runtime/bridges/executionRun/backendTargets';
-import type { ExecutionRunWorkflowObservation } from '@/agent/runtime/bridges/executionRun/executionRunWorkflowObservation';
+import { readExecutionRunWorkflowObservationSink, type ExecutionRunWorkflowObservation } from '@/agent/runtime/bridges/executionRun/executionRunWorkflowObservation';
 import { deriveExecutionRunIdFromActionRequestId } from '@/agent/runtime/bridges/executionRun/startExecutionRun';
 
 import type {
@@ -285,6 +285,21 @@ async function observeExactRunInput(params: Readonly<{
   const observation = await observeWorkflowDetachedExecutionRunInput({
       runId: params.runId,
       localInputId: params.localInputId,
+      onRunObserved: async (run) => {
+        const identity = run.resumeHandle;
+        if (identity?.kind !== 'provider_session.v1') return;
+        if (!areExecutionRunBackendTargetsEqual(identity.backendTarget, run.backendTarget)
+          || !areExecutionRunBackendTargetsEqual(identity.backendTarget, params.executionParams.execution.agentTarget)) {
+          throw new Error('workflow_invocation_fact_conflict');
+        }
+        // Provisioning can publish the first native identity after the old
+        // claim retired. Get owns the surviving evidence; this claim owns its
+        // persistence, without reviving the native callback's retired sink.
+        await readExecutionRunWorkflowObservationSink(params.context.executionRunWorkflowObservationSink)?.commit({
+          kind: 'provider_resume_identity', runId: params.runId, localInputId: params.localInputId,
+          providerResumeIdentity: identity,
+        });
+      },
       get: async (request) => {
         const result = await params.deps.actionExecutor.execute(
           'execution.run.get',
@@ -596,7 +611,8 @@ export function createWorkflowDetachedExecutionRunStepExecutor(
         const execution = { kind: 'detached_run' as const, runId: existing.input.runId,
           localInputId: existing.localInputId, runtimeSelection: retained.data };
         const observed = await observeExactRunInput({ deps, executionParams: params, runId: execution.runId,
-          localInputId: execution.localInputId, sessionId: null, context: await actionContextFor(deps, params), deadline });
+          localInputId: execution.localInputId, sessionId: null,
+          context: await actionContextFor(deps, params, { localInputId: execution.localInputId, runtimeSelection: retained.data }), deadline });
         if (observed.kind === 'completed') await params.onInputAccepted(execution);
         return observed;
       }
@@ -605,7 +621,9 @@ export function createWorkflowDetachedExecutionRunStepExecutor(
       }
       return await observeExactRunInput({
         deps, executionParams: params, runId: existing.runId, localInputId: existing.localInputId,
-        sessionId: null, context: await actionContextFor(deps, params), deadline,
+        sessionId: null, context: await actionContextFor(deps, params, {
+          localInputId: existing.localInputId, runtimeSelection: existing.runtimeSelection ?? {},
+        }), deadline,
       });
     }
     const permissionMode = resolveWorkflowExecutionPermissionMode(params);

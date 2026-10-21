@@ -451,6 +451,14 @@ export class AgentStateRequestStore {
         this.replayCompletedResponseTargets();
     }
 
+    /** Reclaimed detached input keeps its live response handlers and exact persistence scope. */
+    rebindPersistenceTargetFrom(next: unknown): boolean {
+        if (!(next instanceof AgentStateRequestStore) || this.session || next.session
+            || next.target.scopeId !== this.target.scopeId) return false;
+        this.target = next.target;
+        return true;
+    }
+
     private isSessionArchived(): boolean {
         return this.session?.getArchivedAtSnapshot?.() != null;
     }

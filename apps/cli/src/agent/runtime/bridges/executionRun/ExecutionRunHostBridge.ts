@@ -1657,6 +1657,29 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
     if (this.runs.get(runId)?.status !== 'running') await this.waitForTerminal(runId, { signal });
   }
 
+  rebindWorkflowInputPermissionRequestStore(runId: string, params: Readonly<{
+    workflowRunId: string;
+    localInputId: string;
+    store: ExecutionRunPermissionRequestStore;
+  }>): boolean {
+    const run = this.runs.get(runId);
+    if (!run || run.sessionId !== null) return false;
+    const controller = this.controllers.get(runId);
+    const turns = this.projectInputTurns(run, controller);
+    // A settled result remains an observation; it cannot retarget a successor input.
+    if (run.status !== 'running' || [turns?.current, turns?.last]
+      .some(turn => turn?.inputIds.includes(params.localInputId) && turn.state !== 'active')) return true;
+    if (controller?.kind !== 'backend' || controller.cancelled
+      || controller.workflowRunId !== params.workflowRunId) return false;
+    const binding = controller.currentInputPermissionRequestStore;
+    if (!binding || binding.localInputId !== params.localInputId) return false;
+    if (binding.turnId !== undefined) {
+      const turn = controller.currentInputTurn;
+      if (!turn || turn.turnId !== binding.turnId || !turn.inputIds.includes(params.localInputId)) return false;
+    } else if (!controller.initialInputPending) return false;
+    return binding.store.rebindPersistenceTargetFrom?.(params.store) === true;
+  }
+
   async waitForInputTurn(
     runId: string,
     localInputId: string,
@@ -2230,6 +2253,15 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
       if (startedController) {
         startedController.readNativeOfferedModel = resolution.readNativeOfferedModel;
         startedController.nativeModelRegistry = resolution.nativeModelRegistry;
+        if (startedController.kind === 'backend' && runInteractionStore && preparedParams.localInputId
+          && startedController.initialInputPending && !startedController.currentInputPermissionRequestStore) {
+          startedController.currentInputPermissionRequestStore = {
+            localInputId: preparedParams.localInputId,
+            store: runInteractionStore,
+            releaseResponseTarget: runInteractionStore.registerResponseTargetHandler('execution_run_host_bridge',
+              dispatch => this.handleExecutionRunPermissionResponseTargetDispatch(dispatch)),
+          };
+        }
       }
       this.emitPublicStateUpdated(started.runId);
       await this.emitLifecycleHookEvent({
