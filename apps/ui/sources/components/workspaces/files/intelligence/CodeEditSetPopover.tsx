@@ -257,6 +257,15 @@ function useEditSetCommit(params: Readonly<{
   return { apply, undo };
 }
 
+/**
+ * The fixes for the problem at the name lead (LSP `quickfix` kinds); whole-file source actions such as
+ * organizing imports follow. The server's order is kept within each group.
+ */
+function orderFixesFirst(actions: readonly LanguageIntelligenceCodeAction[]): readonly LanguageIntelligenceCodeAction[] {
+  const isFix = (action: LanguageIntelligenceCodeAction) => action.kind === 'quickfix' || Boolean(action.kind?.startsWith('quickfix.'));
+  return [...actions.filter(isFix), ...actions.filter((action) => !isFix(action))];
+}
+
 /** The name stages are the intelligence card's width (LS1); the review takes the page body. */
 const POPOVER_WIDTH = CODE_CARD_WIDTH;
 const POPOVER_MAX_HEIGHT = 560;
@@ -358,7 +367,7 @@ export function CodeEditSetPopover(
         result.actions.length && result.fileHash
           ? {
               kind: 'choosing',
-              actions: result.actions,
+              actions: orderFixesFirst(result.actions),
               fileHash: result.fileHash,
             }
           : { kind: 'note', text: t('files.pane.intelligence.noFixes') },

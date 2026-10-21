@@ -57,6 +57,8 @@ import {
 } from './codeIntelligencePresentation';
 import {
   publishCodeIntelligencePaneProducer,
+  refreshCodeIntelligencePaneProducer,
+  releaseCodeIntelligencePaneProducer,
   type CodeIntelligencePaneProducer,
 } from './codeIntelligencePaneStore';
 import type { CodeReferenceRow } from './CodeReferencesList';
@@ -661,8 +663,16 @@ export function useFilePageCodeIntelligence(
     () => (askLabel ? { label: askLabel, run: askToFix } : null),
     [askLabel, askToFix],
   );
+  // The page takes the tabs when it becomes active and keeps them while it stays open: choosing
+  // Problems in the page's own column makes the page inactive, and the tab must not vanish with it.
+  const publication = React.useRef<Readonly<{ scopeId: string; producer: CodeIntelligencePaneProducer }> | null>(null);
   React.useEffect(() => {
-    if (!controller || !input.active) return;
+    const current = publication.current;
+    const release = () => {
+      if (current) releaseCodeIntelligencePaneProducer(current.scopeId, current.producer);
+      publication.current = null;
+    };
+    if (!controller) return release();
     const producer: CodeIntelligencePaneProducer = {
       controller,
       path: input.filePath,
@@ -672,7 +682,17 @@ export function useFilePageCodeIntelligence(
       openProblem,
       ask: askModel,
     };
-    return publishCodeIntelligencePaneProducer(input.scopeId, producer);
+    const scopeId = input.scopeId;
+    if (input.active) {
+      release();
+      publishCodeIntelligencePaneProducer(scopeId, producer);
+      publication.current = { scopeId, producer };
+      return;
+    }
+    // Stepped back: refresh what it offers (its Ask follows its problems) while it still owns the tabs.
+    if (current?.scopeId === scopeId && refreshCodeIntelligencePaneProducer(scopeId, current.producer, producer))
+      publication.current = { scopeId, producer };
+    else release();
   }, [
     askModel,
     controller,
@@ -684,6 +704,11 @@ export function useFilePageCodeIntelligence(
     openProblem,
     openReference,
   ]);
+
+  React.useEffect(() => () => {
+    const current = publication.current;
+    if (current) releaseCodeIntelligencePaneProducer(current.scopeId, current.producer);
+  }, []);
 
   // ⌘P / @ from this page lists this document's symbols (the Search owner's existing holder input).
   const symbols = React.useMemo<WorkspaceSymbolSearchInput | null>(() => {

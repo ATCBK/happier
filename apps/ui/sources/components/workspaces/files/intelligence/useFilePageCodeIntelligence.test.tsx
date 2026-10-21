@@ -9,6 +9,7 @@ import {
 } from '../details/workspaceFileDetails/workspaceFileDetailsTestHelpers';
 import type { UseFilePageCodeIntelligenceInput } from './useFilePageCodeIntelligence';
 import type { LanguageIntelligenceQueryInput, LanguageIntelligenceQueryResult, LanguageIntelligenceWatchResult } from '@happier-dev/protocol/machines/languageIntelligence';
+import type { EditorDecoration, TextEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
 
 installWorkspaceFileDetailsCommonModuleMocks();
 installWorkspaceFileDetailsActionBoundary();
@@ -158,6 +159,51 @@ describe('File-page intelligence composition', () => {
         expect(events.slice(events.indexOf('code.codeActions.list') - 1)).toEqual(['sync:saved', 'code.codeActions.list']);
     });
 
+    it('delivers saved and unsaved watch diagnostics through the mounted editor decoration channel', async () => {
+        let text = 'const value = missing;';
+        let dirty = false;
+        const listeners = new Set<() => void>();
+        const liveValue = { get: () => text, subscribe: (listener: () => void) => {
+            listeners.add(listener); return () => { listeners.delete(listener); };
+        } };
+        const watches: Array<(response: LanguageIntelligenceWatchResult) => void> = [];
+        machine.sync.mockImplementation(async (_machine, request: { op: { version?: number } }) => ({
+            status: 'ok', generation: 'g1', version: request.op.version ?? 1, servers: [server],
+        }));
+        machine.watch.mockImplementation((_machine, _request, options: { signal: AbortSignal }) => new Promise((resolve, reject) => {
+            watches.push(resolve);
+            options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+        }));
+        machine.query.mockResolvedValue({ status: 'ok', kind: 'diagnostics', diagnostics: [], hasMore: false });
+        const editorRef = { current: null as TextEditorHandle | null };
+        const decorations = new Map<string, readonly EditorDecoration[]>();
+        const hook = await renderHook(() => useFilePageCodeIntelligence(input({ liveValue, getUnsaved: () => dirty,
+            editorHandleRef: editorRef })), { wrapper: PageWrapper });
+        await act(async () => { await hook.getCurrent().controller?.checkProblems(); });
+        const deliver = async (revision: number, version: number, message: string | null) => {
+            await vi.waitFor(() => expect(watches.length).toBeGreaterThan(0));
+            await act(async () => { watches.shift()!({ status: 'ok', revision, servers: [server], diagnostics: {
+                'src/a.ts': { ts: { state: 'ready', version, generation: 'g1', items: message ? [{ serverId: 'ts',
+                    path: 'src/a.ts', severity: 'error', message, range: { start: { line: 0, character: 14 }, end: { line: 0, character: 21 } } }] : [] } },
+            } }); });
+        };
+        await deliver(1, 1, 'Saved missing name');
+        // The page may check before entering Edit: ready binds the held projection to the new engine.
+        editorRef.current = { getValue: () => text, flushPendingChange: async () => {},
+            setDecorations: (layer, items) => { decorations.set(layer, items); } };
+        await act(async () => { hook.getCurrent().bindEditor(); });
+        expect(decorations.get('diagnostic')).toEqual([expect.objectContaining({ startLine: 1, startCharacter: 14, message: 'Saved missing name' })]);
+        await act(async () => {
+            text = 'const value = invalid;'; dirty = true;
+            for (const listener of listeners) listener();
+            await hook.getCurrent().controller?.syncDocument();
+        });
+        await deliver(2, 2, 'Unsaved missing name');
+        expect(decorations.get('diagnostic')).toEqual([expect.objectContaining({ message: 'Unsaved missing name' })]);
+        await deliver(3, 2, null);
+        expect(decorations.get('diagnostic')).toEqual([]);
+    });
+
     it('keeps the explanation closed for an ordinary in-workspace definition', async () => {
         machine.query.mockResolvedValue({ status: 'ok', kind: 'definition', hasMore: false, locations: [{ serverId: 'ts',
             path: 'src/definition.ts', range: { start: { line: 0, character: 0 }, end: { line: 0, character: 7 } } }] });
@@ -230,5 +276,38 @@ describe('File-page intelligence composition', () => {
             }
             expect(label).toContain('saveAndAsk');
         } finally { await hook.unmount(); dispose(); storage.setState({ reviewCommentsDraftsByWorkspaceCacheKey: previous }); }
+    });
+    it('keeps feeding the Problems tab after the page steps back for it, until the page closes', async () => {
+        let setActive: (value: boolean) => void = () => {};
+        const hook = await renderHook(() => {
+            const [active, set] = React.useState(true);
+            setActive = set;
+            useFilePageCodeIntelligence(input({ active }));
+            return useCodeIntelligencePaneProducer('intelligence-page');
+        }, { wrapper: PageWrapper });
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent()?.path).toBe('src/a.ts'));
+            // Choosing Problems in the same column makes the File page inactive; the tab must not vanish with it.
+            await act(async () => { setActive(false); });
+            expect(hook.getCurrent()?.path).toBe('src/a.ts');
+        } finally { await hook.unmount(); }
+    });
+    it('leads the fix list with the fixes for the problem, before whole-file source actions', async () => {
+        const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } };
+        const action = (title: string, kind: string) => ({ serverId: 'ts', title, kind, range, files: [], hasCommand: false });
+        machine.query.mockResolvedValue({ status: 'ok', kind: 'hover', sections: [] });
+        machine.preview.mockResolvedValue({ status: 'ok', kind: 'codeActions', fileHash: 'disk', actions: [
+            action('Organize Imports', 'source.organizeImports'), action('Sort Imports', 'source.sortImports'),
+            action('Update import from "../retry"', 'quickfix'),
+        ] });
+        const hook = await renderHook(() => useFilePageCodeIntelligence(input()), { wrapper: PageWrapper });
+        await act(async () => { await hook.getCurrent().controller?.hover({ line: 0, character: 7 }); });
+        const layer = hook.getCurrent().editSetLayer;
+        if (!layer) throw new Error('Expected the edit-set layer');
+        const screen = await renderScreen(layer);
+        await act(async () => { hook.getCurrent().menuCommands?.['code.quickFix'](); });
+        await vi.waitFor(() => expect(screen.findAllByTestId('code-fix-2').length).toBeGreaterThan(0));
+        expect(['code-fix-0', 'code-fix-1', 'code-fix-2'].map(id => screen.findAllByTestId(id)[0]?.props.title))
+            .toEqual(['Update import from "../retry"', 'Organize Imports', 'Sort Imports']);
     });
 });

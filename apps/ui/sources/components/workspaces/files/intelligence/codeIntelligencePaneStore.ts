@@ -8,7 +8,8 @@ import type { CodeReferenceRow } from './CodeReferencesList';
 /**
  * What the active File page of a pane offers its References and Problems tabs: the page's one
  * controller (P7 §3.7) and the page-owned operations. The File page is the only producer; the tabs
- * read it and exist only while a producer is registered (P7 §8.3).
+ * read it and exist only while a producer is registered (P7 §8.3). The last active page stays the
+ * producer while it is open, so choosing Problems in the page's own column keeps the tab.
  */
 export type CodeIntelligencePaneProducer = Readonly<{
   controller: CodeIntelligenceController;
@@ -33,11 +34,29 @@ export function publishCodeIntelligencePaneProducer(
 ): () => void {
   producers.set(scopeId, producer);
   notify();
-  return () => {
-    if (producers.get(scopeId) !== producer) return;
-    producers.delete(scopeId);
-    notify();
-  };
+  return () => releaseCodeIntelligencePaneProducer(scopeId, producer);
+}
+
+/** Removes a page's publication if it is still the current one. */
+export function releaseCodeIntelligencePaneProducer(scopeId: string, producer: CodeIntelligencePaneProducer): void {
+  if (producers.get(scopeId) !== producer) return;
+  producers.delete(scopeId);
+  notify();
+}
+
+/**
+ * Refreshes a page's publication while it still owns the tabs; false once another page has taken
+ * them (or none remains), so a page that stepped back never takes them back without being opened.
+ */
+export function refreshCodeIntelligencePaneProducer(
+  scopeId: string,
+  previous: CodeIntelligencePaneProducer,
+  next: CodeIntelligencePaneProducer,
+): boolean {
+  if (producers.get(scopeId) !== previous) return false;
+  producers.set(scopeId, next);
+  notify();
+  return true;
 }
 
 function subscribe(listener: () => void) {
