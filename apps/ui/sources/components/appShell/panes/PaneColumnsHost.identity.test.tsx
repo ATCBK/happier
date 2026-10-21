@@ -101,3 +101,28 @@ it('opens only a folded session drawer and forgets transient opening on leaving 
     await act(async () => controls.current?.open());
     expect(layouts.at(-1)?.mainDrawerOpen).toBe(false);
 });
+
+it('presents a main-placed right pane over the session column as the same mounted pane (lab AR1 EFv)', async () => {
+    const layouts: ReturnType<typeof useOptionalAppPaneScopeLayout>[] = [];
+    let mounts = 0;
+    const Probe = () => { layouts.push(useOptionalAppPaneScopeLayout()); return null; };
+    const People = () => { React.useEffect(() => { mounts += 1; }, []); return null; };
+    const people = <People />;
+    const host = (rightPlacement: 'side' | 'main') => <PaneColumnsHost testID="efv-columns" main={<Probe />}
+        arrangement="editor" emptyEditorPane={<div />} rightPane={people} rightOpen rightPlacement={rightPlacement} />;
+    const screen = await renderScreen(host('side'));
+    const root = screen.findByTestId('efv-columns');
+    await act(async () => root!.props.onLayout({ nativeEvent: { layout: { width: 1440, height: 800 } } }));
+    expect(screen.findByTestId('multi-pane-right-docked')).toBeTruthy();
+    expect(layouts.at(-1)?.layout.right).toBe('docked');
+
+    await screen.update(host('main'));
+    // The session column presents it; the side column gives its width back to the editor.
+    expect(screen.findByTestId('multi-pane-right-main')).toBeTruthy();
+    expect(screen.findByTestId('multi-pane-right-docked')).toBeFalsy();
+    expect(layouts.at(-1)?.layout.right).toBe('hidden');
+
+    await screen.update(host('side'));
+    expect(screen.findByTestId('multi-pane-right-docked')).toBeTruthy();
+    expect(mounts).toBe(1);
+});

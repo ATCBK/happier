@@ -1,7 +1,7 @@
 import type { DetailsOpenerRegion } from '@/components/ui/panels/paneBreakpoints';
 import { PaneRegionProvider } from './paneRegion';
 import * as React from 'react';
-import { Platform, View, useWindowDimensions } from 'react-native';
+import { Animated, Platform, View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { GlassSurface } from '@/components/ui/glass/GlassSurface';
 
@@ -24,6 +24,8 @@ import { useReportSessionCockpitActionRailRect } from '@/components/workspaceCoc
 import { PaneActionRailContext, PANE_ACTION_RAIL_WIDTH } from './PaneActionRailContext';
 import { captureArrangementTravelStart, playArrangementTravel, type ArrangementTravelStart } from './arrangement/arrangementTravel';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
+import type { RightPanePlacement } from './rightPanePlacement';
+import { motionTokens } from '@/components/ui/motion/motionTokens';
 
 /**
  * The one pane primitive: a main column plus the side columns every destination shares — the
@@ -42,6 +44,11 @@ export type PaneColumnsHostProps = Readonly<{
     bottomPane?: React.ReactNode | null;
     /** The owner's open state. A pane can be open but hidden by the layout (narrow overlay stacks). */
     rightOpen?: boolean;
+    /**
+     * `main`: the open right pane presents inside the session column, over the transcript and beside
+     * the composer (Editor first, lab AR1 EFv). The same mounted pane, laid out over main.
+     */
+    rightPlacement?: RightPanePlacement;
     detailsOpen?: boolean;
     /** A destination's selected content survives losing the optional side-panel presentation. */
     destinationOwnsDetails?: boolean;
@@ -115,12 +122,26 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
     if (Platform.OS === 'web' && committedArrangementRef.current !== arrangement && travelStartRef.current === null) {
         travelStartRef.current = captureArrangementTravelStart(hostRef.current);
     }
+    // Native has no DOM planes to travel: the sheet cross-fades instead, the web's reduced-motion form
+    // (opacity only, on the native driver), so the swap still reads as one change.
+    const nativeSheetOpacity = React.useRef(new Animated.Value(1)).current;
     React.useLayoutEffect(() => {
+        const previous = committedArrangementRef.current;
         committedArrangementRef.current = arrangement;
         const start = travelStartRef.current;
         travelStartRef.current = null;
         if (start) playArrangementTravel(hostRef.current, start, reducedMotion);
-    }, [arrangement, reducedMotion]);
+        if (Platform.OS === 'web' || previous === arrangement) return;
+        nativeSheetOpacity.setValue(0.4);
+        const fade = Animated.timing(nativeSheetOpacity, {
+            toValue: 1,
+            duration: motionTokens.overlay.panel.reducedMotionFadeMs,
+            easing: motionTokens.easing.standard,
+            useNativeDriver: true,
+        });
+        fade.start();
+        return () => fade.stop();
+    }, [arrangement, nativeSheetOpacity, reducedMotion]);
     const [mainDrawerOpen, setMainDrawerOpen] = React.useState(false);
     const mainDrawerOpenRef = React.useRef(mainDrawerOpen);
     mainDrawerOpenRef.current = mainDrawerOpen;
@@ -144,7 +165,9 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
     const rightPane = props.rightPane ?? null;
     const detailsPane = props.detailsPane ?? (mirrored ? props.emptyEditorPane ?? EMPTY_EDITOR : null);
     const bottomPane = props.bottomPane ?? null;
-    const rightOpen = props.rightOpen ?? rightPane !== null;
+    // A pane presented over the session column takes no column of its own.
+    const rightInMain = props.rightPlacement === 'main' && mirrored && rightPane !== null;
+    const rightOpen = (props.rightOpen ?? rightPane !== null) && !rightInMain;
     const detailsOpen = mirrored || (props.detailsOpen ?? detailsPane !== null);
     const bottomOpen = props.bottomOpen ?? bottomPane !== null;
     const requestedMainHidden = props.mainHidden === true && (rightOpen || detailsOpen);
@@ -503,15 +526,15 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
         [props.main],
     );
     const regionRightPane = React.useMemo(
-        () => (rightPane ? <PaneRegionProvider region="side">{rightPane}</PaneRegionProvider> : null),
-        [rightPane],
+        () => (rightPane ? <PaneRegionProvider region={rightInMain ? 'main' : 'side'}>{rightPane}</PaneRegionProvider> : null),
+        [rightInMain, rightPane],
     );
     const regionDetailsPane = React.useMemo(
         () => (detailsPane ? <PaneRegionProvider region="details">{detailsPane}</PaneRegionProvider> : null),
         [detailsPane],
     );
 
-    const columns = (
+    const columnsContent = (
         <>
             <MultiPaneHostWithBottom
                 main={regionMain}
@@ -531,6 +554,7 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
                 onResetBottomDockHeightPx={onResetBottomDockHeightPx}
                 onCloseMain={onCloseMain}
                 rightPane={regionRightPane}
+                rightInMain={rightInMain}
                 detailsPane={regionDetailsPane}
                 // A drawer beside the docked side column only quiets main (lab FB1), however Details was opened
                 // (the side list, a cold file link); a drawer alone over main shades it.
@@ -575,6 +599,11 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
                 </View>
             ) : null}
         </>
+    );
+    const columns = Platform.OS === 'web' ? columnsContent : (
+        <Animated.View style={[styles.root, mirrored ? { flexDirection: 'row-reverse' } : null, { opacity: nativeSheetOpacity }]}>
+            {columnsContent}
+        </Animated.View>
     );
 
     return (

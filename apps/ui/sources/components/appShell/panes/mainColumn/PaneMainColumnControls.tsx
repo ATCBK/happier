@@ -1,6 +1,6 @@
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
-import { View } from 'react-native';
+import { Animated, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { DETAILS_TAB_STRIP_METRICS } from '@/components/appShell/panes/details/header/detailsTabHeaderMetrics';
@@ -12,6 +12,8 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
+import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { t } from '@/text';
 
 import { usePaneRegion } from '../paneRegion';
@@ -86,7 +88,6 @@ export const PaneMainHideButton = React.memo(function PaneMainHideButton(
 export const PaneMainRestoreChip = React.memo(function PaneMainRestoreChip(
   props: Readonly<{ testID?: string }>,
 ) {
-  const { theme } = useUnistyles();
   const main = usePaneMainColumn();
   const shortcut = useKeyboardShortcutLabel('panes.main.toggle');
   const visible = main !== null && main.hidden && main.identity.name.length > 0;
@@ -106,6 +107,37 @@ export const PaneMainRestoreChip = React.memo(function PaneMainRestoreChip(
     lastAnnounced.current = state;
   }, [name, state, visible]);
   if (!visible || !main) return null;
+  return <PaneMainRestoreChipBody main={main} state={state} name={name} shortcut={shortcut} testID={props.testID} />;
+});
+
+/**
+ * The chip arrives from the edge the column left by (lab H1/H3), on the column's own `overlay.panel`
+ * travel, so the two read as one move; a fade alone under reduced motion.
+ */
+function PaneMainRestoreChipBody(props: Readonly<{
+  main: NonNullable<ReturnType<typeof usePaneMainColumn>>;
+  state: 'working' | 'attention' | undefined;
+  name: string;
+  shortcut: string | undefined;
+  testID?: string;
+}>) {
+  const { theme } = useUnistyles();
+  const { main, state, name, shortcut } = props;
+  const layout = useOptionalAppPaneScopeLayout();
+  const reducedMotion = useReducedMotionPreference();
+  const arrival = React.useRef(new Animated.Value(0)).current;
+  React.useEffect(() => {
+    const panel = motionTokens.overlay.panel;
+    const animation = Animated.timing(arrival, {
+      toValue: 1,
+      duration: reducedMotion ? panel.reducedMotionFadeMs : panel.enterMs,
+      easing: motionTokens.easing.standard,
+      useNativeDriver: false,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [arrival, reducedMotion]);
+  const fromEdgePx = layout?.arrangement === 'editor' ? 12 : -12;
   const attention = state === 'attention';
   // App pages name themselves in the show label ("Show Plugins"); say the name once.
     const showLabelNamesIt = main.labels.showLabel.includes(name);
@@ -113,6 +145,10 @@ export const PaneMainRestoreChip = React.memo(function PaneMainRestoreChip(
         ? t('panes.mainColumn.chipNeedsYouA11y', { label: main.labels.showLabel, name })
         : showLabelNamesIt ? main.labels.showLabel : t('panes.mainColumn.chipA11y', { label: main.labels.showLabel, name });
   return (
+    <Animated.View style={[styles.arrival, {
+      opacity: arrival,
+      transform: [{ translateX: reducedMotion ? 0 : arrival.interpolate({ inputRange: [0, 1], outputRange: [fromEdgePx, 0] }) }],
+    }]}>
     <HappierPressable
       testID={props.testID ?? 'pane-main-restore-chip'}
       accessibilityRole="button"
@@ -161,12 +197,14 @@ export const PaneMainRestoreChip = React.memo(function PaneMainRestoreChip(
         </View>
       ) : null}
     </HappierPressable>
+    </Animated.View>
   );
-});
+}
 
 const S = DETAILS_TAB_STRIP_METRICS;
 
 const styles = StyleSheet.create((theme) => ({
+  arrival: { flexShrink: 1, minWidth: 0 },
   // One strip tab's height and radius, so the chip sits on the strip's rhythm; a flat ink edge
   // because it is an in-flow control, not a floating surface.
   chip: {

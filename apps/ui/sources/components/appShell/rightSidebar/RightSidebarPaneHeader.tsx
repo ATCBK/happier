@@ -22,6 +22,13 @@ export function RightSidebarPaneHeader(props: Readonly<{
     onClose?: () => void;
     /** The pane's own operations (for a session pane: Add to Companion), in the band's one ⋯. */
     menuActions?: readonly ItemAction[];
+    /**
+     * Presented inside the session column (lab AR1 EFv): Back to the transcript leads the band, and
+     * the session's mark and name stand in for the session header the pane covers.
+     */
+    onBack?: () => void;
+    leading?: React.ReactNode;
+    context?: string;
     testID: string;
 }>): React.ReactElement | null {
     const tab = props.activeTabId ? props.tabs.find((candidate) => candidate.id === props.activeTabId) : undefined;
@@ -31,12 +38,18 @@ export function RightSidebarPaneHeader(props: Readonly<{
     const showMainChip = useOptionalAppPaneScopeLayout()?.effectiveDetailsOpen === false;
     if (!tab) return null;
     const title = getRightSidebarTabLabel(tab);
+    const publishedLine = published?.line ?? null;
+    const line = props.context
+        ? { ...publishedLine, segments: [props.context, ...(publishedLine?.segments ?? [])] }
+        : publishedLine;
     return (
         <PaneHeader
             testID={props.testID}
             mainRestoreChip={showMainChip}
+            onBack={props.onBack}
+            leading={props.leading}
             title={title}
-            line={published?.line ?? null}
+            line={line}
             actions={<PaneHeaderActions published={published} title={title} paneMenuActions={props.menuActions} testID={props.testID} />}
             size={props.size}
             onClose={props.onClose}

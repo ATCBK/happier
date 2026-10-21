@@ -98,6 +98,7 @@ import { EmbeddedSessionUnavailable } from "./embedded/EmbeddedSessionUnavailabl
 import { PluginSurfaceNestingBoundary } from "@/components/plugins/surfaces/pluginSurfaceNesting";
 import { Text } from "@/components/ui/text/Text";
 import { SessionRightSidebarProvider } from "@/components/sessions/panes/SessionRightPanel";
+import { PaneMainComposerAnchor } from '@/components/ui/panels/paneMainComposerAnchor';
 import { createSessionPaneSurfaceScope } from "@/components/sessions/plugins/useSessionPluginRuntime";
 import { PaneMainHideButton } from "@/components/appShell/panes/mainColumn/PaneMainColumnControls";
 import { AppPaneScopeHost } from "@/components/appShell/panes/AppPaneScopeHost";
@@ -2531,13 +2532,14 @@ function SessionViewLoadedContent({
     ) : null;
     // On a phone, an open Find seats its bar in this slot in place of the composer (Find lab F1p).
     const inputWithTranscriptSelection = transcriptSelectionToolbar || input ? (
-        <View style={{ gap: theme.space.s8 }}>
+        // A session-group tab presented in this column stops at the composer's top (lab AR1 EFv).
+        <PaneMainComposerAnchor style={{ gap: theme.space.s8 }}>
             {transcriptSelectionToolbar}
             <SessionPhoneTrackWatchCapsule sessionId={sessionId} serverId={sessionRouteServerId.trim() || null} />
             <TranscriptCodeAskControls sessionId={sessionId} serverId={sessionRouteServerId.trim() || null}
                 scopeId={pane.scopeId} active={surfaceFocused && surfacePresented} />
             <FindComposerSlotHost composer={input} />
-        </View>
+        </PaneMainComposerAnchor>
     ) : null;
 
     const openCompanionFullSurface = React.useCallback((): SessionPresentationMutationOutcome => {

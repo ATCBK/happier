@@ -26,6 +26,7 @@ import { usePaneArrangement } from './arrangement/usePaneArrangement';
 import { useOptionalAppPaneScopeLayout } from './hooks/useAppPaneScopeLayout';
 import { PaneMainColumnContext, type PaneMainColumnDescriptor, type PaneMainColumnState } from './mainColumn/usePaneMainColumn';
 import { RightSidebarActionsContext, type RightSidebarActions } from '@/components/appShell/rightSidebar/rightSidebarActions';
+import { RightPanePlacementReporterContext, type RightPanePlacement } from './rightPanePlacement';
 import { registerShellColumnActionOwner, notifyShellColumnActionOwnersChanged, type ShellColumnActionOwner } from '@/sync/ops/actions/scopeActionFamily';
 import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
 import type { ResolvedPaneLayout } from '@/components/ui/panels/paneBreakpoints';
@@ -407,6 +408,8 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Reado
         dispatch({ type: 'setMainHidden', scopeId: props.scopeId, hidden });
     }, [dispatch, props.scopeId]);
     const sideActions = React.useRef<RightSidebarActions | null>(null);
+    // The open tab's catalog owner reports where it presents (lab AR1 EFv); the columns follow it.
+    const [rightPlacement, setRightPlacement] = React.useState<RightPanePlacement>('side');
     const setSideVisible = React.useCallback((visible: boolean) => {
         dispatch({ type: visible ? 'openRight' : 'closeRight', scopeId: props.scopeId });
     }, [dispatch, props.scopeId]);
@@ -734,6 +737,7 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Reado
         // A scope without a target of its own (the App's pages) keeps the enclosing app-target binding.
         <PluginSurfaceDestinationNavigationBindingProvider binding={paneNavigationBinding ?? enclosingNavigationBinding}>
             <RightSidebarActionsContext.Provider value={sideActions}>
+            <RightPanePlacementReporterContext.Provider value={setRightPlacement}>
                 <AppPaneScopeControls
                     scopeId={props.scopeId}
                     focused={screenFocused}
@@ -749,6 +753,7 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Reado
                 >
                     {wrapScopeContent ? wrapScopeContent(content) : content}
                 </AppPaneScopeControls>
+            </RightPanePlacementReporterContext.Provider>
             </RightSidebarActionsContext.Provider>
         </PluginSurfaceDestinationNavigationBindingProvider>
     ), [effectiveDetailsOpen, enclosingNavigationBinding, paneNavigationBinding, props.arrangement, props.mainColumn, props.onMainColumnControlsChange, props.scopeId,
@@ -763,6 +768,7 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Reado
             detailsPane={detailsPane}
             bottomPane={bottomPane}
             rightOpen={rightOpen}
+            rightPlacement={rightOpen ? rightPlacement : 'side'}
             detailsOpen={effectiveDetailsOpen}
             destinationOwnsDetails={destinationOwnsDetails}
             detailsOpenedFrom={scopeState?.details.openedFrom ?? null}

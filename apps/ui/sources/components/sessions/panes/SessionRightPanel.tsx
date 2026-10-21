@@ -16,6 +16,7 @@ import { resolvePluginUiRuntimeFormFactor } from '@/components/appShell/panes/la
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { useOptionalAppPaneScopeLayout } from '@/components/appShell/panes/hooks/useAppPaneScopeLayout';
 import { usePaneMainColumn } from '@/components/appShell/panes/mainColumn/usePaneMainColumn';
+import { useReportRightPanePlacement } from '@/components/appShell/panes/rightPanePlacement';
 import { usePaneActionRail, usePaneActionRailRightPaneHiddenByDetails } from '@/components/appShell/panes/PaneActionRailContext';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
@@ -195,6 +196,8 @@ type SessionRightSidebarRuntimeProps = Readonly<{
 
 function SessionRightSidebarModelProvider(props: SessionRightPanelProps & SessionRightSidebarRuntimeProps & Readonly<{ children: React.ReactNode }>) {
     const model = useSessionRightSidebarModel(props);
+    // The columns follow the open tab's catalog placement (lab AR1 EFv): session context beside its composer.
+    useReportRightPanePlacement(model.scopeState?.right.isOpen ? model.activeTabPlacement : 'side');
     return <SessionRightSidebarContext.Provider value={model}>{props.children}</SessionRightSidebarContext.Provider>;
 }
 
@@ -313,7 +316,7 @@ function useSessionRightSidebarModel(props: SessionRightPanelProps & SessionRigh
     if (!paneLaunchScope) {
         // The wrapper above always supplies the scope. Do not create an
         // unbound Session-local input owner if that invariant is broken.
-        return null;
+        throw new Error('Session right sidebar requires its pane launch scope');
     }
     const { accountLifetime, store: paneLaunchStore } = paneLaunchScope;
     const scopedLaunchFacts = React.useMemo(() => Object.freeze({
@@ -488,6 +491,11 @@ const SessionRightPanelContent = React.memo((props: SessionRightPanelProps) => {
     const stateSize = props.presentation === 'screen' && deviceType === 'phone' ? 'phone' : 'pane';
     const { pane, scopeState, rightPanelTabs, rightTabSelection, activeTab, collaborationAddress, pluginRuntime, activePaneLaunch, activeInstanceKey, pluginBinding, availableTabIds, resolveBoardPrimaryHost, callerHostedHtmlRuntime, session, projectCheckout, openBoardItemInDetails, openBoardInDetails, openServiceInBrowser, openFileInDetails, openFileInDetailsPinned, setActiveTab } = useSessionRightSidebar();
     const closeNavigationPane = props.onRequestClose ?? pane.closeRight;
+    // Presented inside the session column (Editor first, lab AR1 EFv): a sub-page of the session, with
+    // Back to its transcript and the session's own mark and name in the band it covers.
+    const presentation = useSessionRightSidebarPresentation();
+    const inSessionColumn = presentation.placement === 'main' && props.presentation !== 'screen';
+    const sessionIdentity = usePaneMainColumn()?.identity;
     // A pane can be kept in the Companion as one link row (lab WC3); the header's ⋯ offers it.
     const paneCompanionActions = usePaneCompanionActions({
         sessionId: props.sessionId,
@@ -535,6 +543,9 @@ const SessionRightPanelContent = React.memo((props: SessionRightPanelProps) => {
                 tabs={rightPanelTabs}
                 activeTabId={activeTab}
                 menuActions={paneCompanionActions}
+                onBack={inSessionColumn ? presentation.backToTranscript : undefined}
+                leading={inSessionColumn ? sessionIdentity?.mark : undefined}
+                context={inSessionColumn ? sessionIdentity?.name : undefined}
                 testID="session-rightpanel-header"
             />
             <View style={styles.body}>

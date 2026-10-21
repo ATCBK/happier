@@ -181,6 +181,8 @@ export type PaneHeaderProps = PaneHeaderContent & Readonly<{
     lineEnd?: React.ReactNode;
     /** Shows the close button. */
     onClose?: () => void;
+    /** Leads the band with Back: the pane is a sub-page of the column it sits in (lab AR1 EFv). */
+    onBack?: () => void;
     /**
      * This pane is the hidden main column's neighbour: while main is hidden its restore chip leads
      * the band (lab ade-shell H1–H3).
@@ -211,7 +213,17 @@ export const PaneHeader = React.memo(function PaneHeader(props: PaneHeaderProps)
     const chipVisible = usePaneMainRestoreChipVisible() && props.mainRestoreChip === true;
     const hasTitle = props.title.trim().length > 0 || Boolean(props.leading) || Boolean(props.titleControl) || chipVisible;
     return (
-        <View testID={testID} style={[large ? styles.large : [styles.band, { height }], { backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]}>
+        <View testID={testID} style={[large ? styles.large : [styles.band, { height }], props.onBack ? styles.bandWithBack : null, { backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]}>
+            {props.onBack ? (
+                <IconButton
+                    testID={`${testID}.back`}
+                    iconName="caret-left"
+                    accessibilityLabel={t('panes.mainColumn.backToTranscript')}
+                    tooltip={t('panes.mainColumn.backToTranscript')}
+                    variant="plain"
+                    onPress={props.onBack}
+                />
+            ) : null}
             <View style={styles.titleBlock}>
                 {/* A host that already names the thing (a breadcrumb ending on it) passes no title: the live line stands alone. */}
                 {hasTitle ? <View style={styles.titleRow}>
@@ -271,6 +283,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingRight: HEADER_BAND_HORIZONTAL_PADDING_PX / 2,
         gap: theme.space.s2,
         backgroundColor: theme.colors.surface.base,
+    },
+    // Back takes the band's leading inset: its glyph sits where the title would start.
+    bandWithBack: {
+        paddingLeft: HEADER_BAND_HORIZONTAL_PADDING_PX / 2,
     },
     large: {
         flexDirection: 'row',
