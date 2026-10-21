@@ -1,5 +1,6 @@
 import { ProviderErrorV1Schema, createProviderErrorV1, type ProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { parseProviderContributionIdentityV1 } from '@happier-dev/protocol/providers/contribution-identity';
+import type { ProviderBrokerAdmissionFailureCodeV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
 import type {
   PluginReloadController,
@@ -20,6 +21,7 @@ import type {
 } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createProviderLaunchResourceScope } from '@/providers/lifecycle/resourceScope';
 import { providerManagedPurposeBindingError } from '@/providers/managed/resolvePurposeBindingSnapshot';
+import { logger } from '@/ui/logger';
 
 import type { ProviderConnectionServiceDeps } from './service/types';
 
@@ -61,6 +63,11 @@ function failForCoordinatorCode(
   machineId: string,
   authorizationFailure?: ProviderErrorV1,
 ): never {
+  try {
+    logger.warnLocalFile('[Provider] Managed runtime start refused', { startFailureCode: code });
+  } catch {
+    // Preserve the original closed Provider outcome if file logging fails.
+  }
   if (code === 'managed_provider_request_invalid') {
     throw createProviderErrorV1('provider_connection_invalid', { machineId });
   }
@@ -373,10 +380,19 @@ export function createManagedProviderExplicitStartCustody(input: Readonly<{
           if (!await retire(request)) {
             await Promise.resolve(projection.cleanup()).catch(() => undefined);
           }
-          return null;
+          throw createProviderErrorV1('provider_authorization_changed', { machineId: input.machineId });
         }
         return projection;
-      } catch {
+      } catch (error) {
+        const providerError = ProviderErrorV1Schema.safeParse(error);
+        try {
+          logger.warnLocalFile('[ProviderBroker] Managed source acquisition refused', {
+            reasonCode: 'resource_unavailable' satisfies ProviderBrokerAdmissionFailureCodeV1,
+            providerCode: providerError.success ? providerError.data.code : null,
+          });
+        } catch {
+          // Diagnostics cannot change the existing closed source refusal.
+        }
         return null;
       }
     },

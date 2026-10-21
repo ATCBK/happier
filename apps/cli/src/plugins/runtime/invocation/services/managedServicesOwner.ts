@@ -3394,7 +3394,8 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
         const services: ManagedServices = Object.freeze({
             dependencies,
             async supervise(spec, options) {
-                assertAcceptingSupervision('requestAuth' in spec && spec.requestAuth?.kind === 'connectedAccountConsumerAccessPath');
+                assertAcceptingSupervision('requestAuth' in spec && spec.requestAuth?.kind === 'connectedAccountConsumerAccessPath'
+                    && suppliedBindingContext.managedProvider?.sharedGateway !== undefined);
                 let scope = suppliedScope;
                 let context = suppliedBindingContext;
                 let normalizedSpec = normalizeManagedServiceSpec(spec);
@@ -3405,19 +3406,24 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                 let sharedConsumers: ManagedServiceSemanticEntry['sharedConsumers'];
                 if ('requestAuth' in normalizedSpec && normalizedSpec.requestAuth?.kind === 'connectedAccountConsumerAccessPath') {
                     const gateway = context.managedProvider?.sharedGateway;
-                    const isPhysicalOccurrenceCurrent = context.managedProvider?.isPhysicalOccurrenceCurrent;
-                    if (!gateway || !isPhysicalOccurrenceCurrent || !context.requestAuth?.qualifiedRequestAuthUses?.length || !input.sharedGatewayAccessDirectory
+                    const physicalOperationId = gateway ? sharedProviderGatewayOperationId(gateway)
+                        : scope.operationId === context.managedProvider?.operationClaimId ? scope.operationId : undefined;
+                    const isPhysicalOccurrenceCurrent = gateway
+                        ? context.managedProvider?.isPhysicalOccurrenceCurrent : scope.isOccurrenceCurrent;
+                    if (!physicalOperationId || !isPhysicalOccurrenceCurrent || !context.requestAuth?.qualifiedRequestAuthUses?.length || !input.sharedGatewayAccessDirectory
                         || input.processSupervisorHost.custodyOwner !== 'daemon'
                         || normalizedSpec.mode.kind !== 'spawn'
                         || normalizedSpec.clientAccess?.kind !== 'hostBearer'
                         || (normalizedSpec.credentialBindings?.length ?? 0) !== 0
-                        || Object.values(gateway).some(value => typeof value !== 'string' || !value || value.trim() !== value || CONTROL_CHARACTER_PATTERN.test(value))) {
+                        || (gateway && Object.values(gateway).some(value => typeof value !== 'string' || !value || value.trim() !== value || CONTROL_CHARACTER_PATTERN.test(value)))) {
                         return requestUnavailable('Shared managed Provider custody is unavailable');
                     }
                     assertScopeCurrent(scope);
                     validateCredentialBindings(normalizedSpec, requestAuth, context);
-                    const physicalOperationId = sharedProviderGatewayOperationId(gateway);
-                    scope = {
+                    // Without a saved connection, keep the existing admitted
+                    // operation scope, including its cancellation/currentness.
+                    // Consumer access does not itself imply process sharing.
+                    if (gateway) scope = {
                         occurrenceId: scope.occurrenceId,
                         ...(scope.sourceCustody ? { sourceCustody: scope.sourceCustody } : {}),
                         pluginId: scope.pluginId, contributionQualifiedId: scope.contributionQualifiedId,

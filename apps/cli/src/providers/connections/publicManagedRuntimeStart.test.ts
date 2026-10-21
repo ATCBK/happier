@@ -1,6 +1,6 @@
 import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
 import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { PluginError } from '@happier-dev/plugin-sdk';
 
 import type {
@@ -47,6 +47,82 @@ import { createRuntimeProviderModelManagementServices } from '@/providers/modelM
 import { composeProviderSettingsV1, splitProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { ProviderSettingsV1Schema } from '@happier-dev/protocol/providers/settings/v1';
 import { createAccountProviderActionExecuteV1 } from '@happier-dev/protocol/providers/connections/accountProviderActionV1';
+import { logger } from '@/ui/logger';
+
+it.each(['cold', 'activated'] as const)('acquires connected-account broker custody from a %s runtime without inventing a Provider Connection gateway', async (activation) => {
+  const diagnostic = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => undefined);
+  onTestFinished(() => diagnostic.mockRestore());
+  await withConfiguredDaemonTestHome({ prefix: 'broker-operation-consumer-' }, async ({ homeDir }) => {
+    const controller = createPluginReloadController();
+    const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'), happyHomeDir: homeDir,
+      controller, physicalGateway: true });
+    const gateway = fixture.gateway!;
+    const custody = createManagedProviderExplicitStartCustody({ machineId: fixture.machineId, happyHomeDir: homeDir, controller });
+    const request = (sessionId: string) => ({
+      identity: gateway.identity,
+      contributionKey: `${gateway.identity.pluginId}/${gateway.identity.localId}`,
+      request: { reason: 'explicitStartLocal' as const, endpointTemplateIds: ['api'] },
+      purposeBindings: gateway.purposeBindings,
+      operationClaim: { kind: 'providerBroker' as const, operation: { kind: 'session' as const, sessionId } },
+      signal: new AbortController().signal,
+      isAuthorizationCurrent: () => true,
+      revalidateAuthorization: async () => true,
+    });
+    try {
+      if (activation === 'activated') {
+        expect(await fixture.lease.registry.acquireManagedProviderRuntime?.(gateway.identity)).not.toBeNull();
+      }
+      const first = await custody.acquire(request('team-session-one'));
+      expect(first, JSON.stringify(diagnostic.mock.calls)).not.toBeNull();
+      if (!first) throw new Error('Expected operation-scoped connected-account custody');
+      expect(first.access.endpointUrl('api')).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
+      const firstPid = Number(await readFile(join(gateway.directory, 'gateway-started'), 'utf8'));
+      const second = await custody.acquire(request('team-session-two'));
+      expect(second).not.toBeNull();
+      if (!second) throw new Error('Expected independent broker operation custody');
+      const secondPid = Number(await readFile(join(gateway.directory, 'gateway-started'), 'utf8'));
+      expect(secondPid).not.toBe(firstPid);
+      expect(await custody.retire(request('team-session-one'))).toBe(true);
+      expect(await waitForProcessExit(firstPid)).toBe(true);
+      expect(first.access.endpointUrl('api')).toBeNull();
+      const response = await second.access.request({ pathAndQuery: '/v1/models', method: 'GET' });
+      expect(response.status).toBe(200);
+      await response.body?.cancel();
+      expect(process.kill(secondPid, 0)).toBe(true);
+      expect(await custody.acquire({ ...request('team-session-two'), revalidateRetainedCurrentness: async () => false })).toBeNull();
+      expect(await waitForProcessExit(secondPid)).toBe(true);
+      expect(diagnostic).toHaveBeenCalledWith(expect.any(String), {
+        reasonCode: 'resource_unavailable', providerCode: 'provider_authorization_changed',
+      });
+    } finally { await fixture.cleanup(); }
+  });
+});
+
+it('records only closed broker and Provider reasons when source custody acquisition is refused', async ({ onTestFinished }) => {
+  const diagnostic = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => undefined);
+  onTestFinished(() => diagnostic.mockRestore());
+  await withConfiguredDaemonTestHome({ prefix: 'broker-acquisition-diagnostic-' }, async ({ homeDir }) => {
+    const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'), happyHomeDir: homeDir,
+      controller: createPluginReloadController(), physicalGateway: true });
+    const gateway = fixture.gateway!;
+    const custody = createManagedProviderExplicitStartCustody({ machineId: fixture.machineId, happyHomeDir: homeDir,
+      controller: gateway.controller });
+    try {
+      expect(await custody.acquire({ identity: gateway.identity,
+        contributionKey: `${gateway.identity.pluginId}/${gateway.identity.localId}`,
+        request: { reason: 'explicitStartLocal', endpointTemplateIds: ['api'] }, purposeBindings: gateway.purposeBindings,
+        operationClaim: { kind: 'providerBroker', operation: { kind: 'session', sessionId: 'private-session-do-not-log' } },
+        signal: new AbortController().signal, isAuthorizationCurrent: () => true,
+        revalidateAuthorization: async () => { throw new Error('private-upstream-body-and-secret'); },
+      })).toBeNull();
+      expect(diagnostic).toHaveBeenCalledWith(expect.any(String), {
+        reasonCode: 'resource_unavailable', providerCode: 'provider_connection_invalid',
+      });
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('private-');
+      await expect(readFile(join(gateway.directory, 'gateway-started'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally { await fixture.cleanup(); }
+  });
+});
 
 it.each([2, 3])('preserves a transient Home failure at explicit Start purpose read %s and recovers the same connection', async failedRead => {
   await withConfiguredDaemonTestHome({ prefix: 'gateway-start-home-outage-' }, async ({ homeDir }) => {

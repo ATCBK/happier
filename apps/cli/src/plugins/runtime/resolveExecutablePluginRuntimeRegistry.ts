@@ -6152,13 +6152,14 @@ export async function resolveExecutablePluginRuntimeRegistry(
         // existing `managed_provider_runtime_unavailable` outcome. The registry
         // generation itself is already the exact SVC09 operation generation; this
         // closure only fences that admitted generation and the caller authority.
+        // Activation is demanded by acquisition, not a precondition for demand.
         const readsOperationCurrent = (): boolean => {
             try {
                 return input.isCurrent() === true
                     && (sharedProvider && isRetainedPhysicalSourceCurrent && operationSource
                         ? isRetainedPhysicalSourceCurrent(identity.pluginId, operationOccurrenceId, operationSource)
                         : isPluginConsumerCurrent(identity.pluginId)
-                            && activatedRegistry.activatedPluginIds.has(identity.pluginId));
+                            && isCurrentPluginOccurrence(identity.pluginId, operationOccurrenceId));
             } catch {
                 return false;
             }
@@ -6404,7 +6405,8 @@ export async function resolveExecutablePluginRuntimeRegistry(
             })),
         );
         const qualifiedRequestAuthUses = qualifyManagedProviderRequestAuthUses(input.identity, declaration);
-        const declaredSharingEligible = isSharedProviderAdmission(declaration, purposeBindings, qualifiedRequestAuthUses);
+        const declaredSharingEligible = input.sharedGateway !== undefined
+            && isSharedProviderAdmission(declaration, purposeBindings, qualifiedRequestAuthUses);
         const runtime = input.retained
             ? Object.freeze({
                 activationOccurrenceId:
@@ -6535,7 +6537,10 @@ export async function resolveExecutablePluginRuntimeRegistry(
         // shared consumer custody; an opt-in or placement alone is not enough.
         const sharingEligible = isSharedProviderAdmission(declaration, purposeBindings, requestAuth?.qualifiedRequestAuthUses ?? []);
         const sharedGateway = sharingEligible ? input.sharedGateway : undefined;
-        if (sharingEligible && !sharedGateway) {
+        // A Team Connected Account/Pool source has no Provider Connection.
+        // Its admitted broker operation already owns process and request-auth
+        // custody; only connection-backed callers require a shared placement.
+        if (sharingEligible && !sharedGateway && input.operationClaim?.kind !== 'providerBroker') {
             lifetime.complete();
             await operationAuthority?.cleanup().catch(() => undefined);
             return null;
