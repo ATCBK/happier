@@ -121,6 +121,13 @@ export function useWorkspaceFileDetailsLoading(input: Input) {
             setIsLoading(false);
         }
     }, [scope, filePath, diffMode, fileEntryKind, fileHasIncludedDelta, isBinaryContent, maxImagePreviewBytes, previewSlice, readAsText, includeDiff, wantsDiff, includeFile, snapshotSignature, isActive, fileKey]);
+    const readFileForSave = React.useCallback(async () => {
+        if (activeResource.current !== resourceKey) return null;
+        // Restored drafts have a byte hash, not serialization metadata. Reuse this
+        // read owner; the editor verifies the returned version before writing.
+        if (!publication.current.fileContent?.encoding) await refreshAll();
+        return activeResource.current === resourceKey ? publication.current.fileContent : null;
+    }, [refreshAll, resourceKey]);
     React.useEffect(() => {
         void refreshAll({ allowFileReuse: true });
         return () => {
@@ -157,5 +164,5 @@ export function useWorkspaceFileDetailsLoading(input: Input) {
         setTooLarge(null);
         setIsLoading(false); setIsDiffLoading(false);
     }, [resourceKey]);
-    return { fileContent, diffContent, setDiffContent, isLoading, isDiffLoading, error, fileWriteSupported, setFileWriteSupported, staleSince, lastOwnWriteHash, tooLarge, refreshAll, publishSavedFile };
+    return { fileContent, diffContent, setDiffContent, isLoading, isDiffLoading, error, fileWriteSupported, setFileWriteSupported, staleSince, lastOwnWriteHash, tooLarge, refreshAll, readFileForSave, publishSavedFile };
 }

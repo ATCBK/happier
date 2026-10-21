@@ -1,6 +1,9 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { FilesystemWriteFileInputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { acknowledgeWorkspaceFileWrites } from '@/sync/domains/workspaces/files/workspaceFileAcknowledgements';
 import { resolveWorkspaceFileViewerChoiceModel } from './resolveWorkspaceFileViewer';
 import {
@@ -15,14 +18,21 @@ installWorkspaceFileDetailsActionBoundary();
 const transport = vi.hoisted(() => ({ diff: vi.fn(), stat: vi.fn() }));
 // Remote filesystem/SCM and platform digest boundaries; the loader stays real.
 vi.mock('@/sync/ops/scm/machineScm', () => ({ machineScmDiffFile: transport.diff }));
-vi.mock('@/sync/domains/transfers/runtime/transferRuntime', () => ({ callDaemonWorkspaceStatFileRpc: transport.stat }));
+vi.mock('@/sync/domains/transfers/runtime/transferRuntime', async importOriginal => ({
+    ...await importOriginal<typeof import('@/sync/domains/transfers/runtime/transferRuntime')>(),
+    callDaemonWorkspaceStatFileRpc: transport.stat,
+}));
 vi.mock('@/config', () => ({ config: { filesPreviewMaxBytes: 1000000 } }));
-vi.mock('@/platform/digest', () => ({ digest: async () => new Uint8Array(32) }));
+vi.mock('@/platform/digest', async () => {
+    const { createHash } = await import('node:crypto');
+    return { digest: async (_algorithm: string, bytes: Uint8Array) => new Uint8Array(createHash('sha256').update(bytes).digest()) };
+});
 const patch = (text: string) => `diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+${text}\n`;
 const input = { scope: { serverId: 'server', machineId: 'machine', rootPath: '/repo' }, filePath: 'file.txt', diffMode: 'pending' as const, fileEntryKind: 'modified' as const, isActive: true, refreshFingerprint: '1' };
 const workspaceFileDetailsActionBoundary = getWorkspaceFileDetailsActionBoundary();
 // Load the loader only after the socket boundary is installed.
 const { useWorkspaceFileDetailsLoading } = await import('./useWorkspaceFileDetailsLoading');
+const { useWorkspaceFileEditorState } = await import('./useWorkspaceFileEditorState');
 const { machineWorkspaceFileReplaceApply } = await import('@/sync/ops/machineWorkspaceFileReplace');
 let current: ReturnType<typeof useWorkspaceFileDetailsLoading>;
 function Harness(props: Parameters<typeof useWorkspaceFileDetailsLoading>[0]) { current = useWorkspaceFileDetailsLoading(props); return null; }
@@ -34,6 +44,69 @@ beforeEach(async () => {
     workspaceFileDetailsActionBoundary.read.mockReset().mockResolvedValue({ success: true, content: 'bmV3Cg==' });
 });
 afterEach(cleanupWorkspaceFileDetailsActionBoundary);
+it.each(['matching bytes', 'changed bytes', 'failed read'] as const)('keeps a restored draft editable and admits Save only after its initial byte metadata: %s', async outcome => {
+    const initialBytes = '\uFEFFbase\r\n';
+    const originalHash = createHash('sha256').update(initialBytes).digest('hex');
+    const pendingRead = createDeferred<{ success: true; content: string } | { success: false; error: string }>();
+    let blocked = true;
+    let diskBytes = initialBytes;
+    const writes: ReturnType<typeof FilesystemWriteFileInputSchema.parse>[] = [];
+    workspaceFileDetailsActionBoundary.read.mockImplementation(async (request: { payload: unknown }) => {
+        const write = FilesystemWriteFileInputSchema.safeParse(request.payload);
+        if (write.success) {
+            writes.push(write.data);
+            diskBytes = Buffer.from(write.data.content, 'base64').toString('utf8');
+            return { success: true, hash: createHash('sha256').update(diskBytes).digest('hex') };
+        }
+        return blocked ? pendingRead.promise : { success: true, content: Buffer.from(diskBytes).toString('base64') };
+    });
+    let editor!: ReturnType<typeof useWorkspaceFileEditorState>;
+    function RestoredDraft() {
+        const loader = useWorkspaceFileDetailsLoading({ ...input, accountId: 'account-a', includeFile: true, includeDiff: false });
+        editor = useWorkspaceFileEditorState({ scope: input.scope, accountId: 'account-a', filePath: input.filePath, displayMode: 'file',
+            fileText: loader.fileContent?.content ?? null, fileHash: loader.fileContent?.contentHash ?? null, encoding: loader.fileContent?.encoding,
+            fileWriteSupported: loader.fileWriteSupported, setFileWriteSupported: loader.setFileWriteSupported,
+            fileEditorFeatureEnabled: true, filesEditorWebMonacoEnabled: true, filesEditorNativeCodeMirrorEnabled: true,
+            filesEditorAutoSave: false, filesEditorChangeDebounceMs: 0, mountedRef: { current: true },
+            refreshAll: loader.refreshAll, readFileForSave: loader.readFileForSave, publishSavedFile: loader.publishSavedFile,
+            persistedDraft: { accountId: 'account-a', isEditingFile: true, editorOriginalHash: originalHash, editorText: 'edited\n' },
+        });
+        return null;
+    }
+    let tree!: renderer.ReactTestRenderer;
+    let save: Promise<boolean> | undefined;
+    try {
+        await act(async () => { tree = renderer.create(<RestoredDraft />); });
+        expect(editor.editorSurfaceEnabled).toBe(true);
+        expect(editor.getEditorText()).toBe('edited\n');
+        await act(async () => { save = editor.saveFileEdits(); await Promise.resolve(); });
+        expect(writes).toEqual([]);
+        expect(editor.isEditingFile).toBe(true);
+        expect(editor.getEditorText()).toBe('edited\n');
+        blocked = false;
+        if (outcome === 'changed bytes') diskBytes = '\uFEFFanother writer\r\n';
+        await act(async () => {
+            pendingRead.resolve(outcome === 'failed read' ? { success: false, error: 'unreadable' }
+                : { success: true, content: Buffer.from(diskBytes).toString('base64') });
+            expect(await save).toBe(outcome === 'matching bytes');
+        });
+        if (outcome === 'matching bytes') {
+            expect(writes).toHaveLength(1);
+            expect(Buffer.from(writes[0]!.content, 'base64').toString('utf8')).toBe('\uFEFFedited\r\n');
+            expect(writes[0]!.expectedHash).toBe(originalHash);
+        } else {
+            expect(writes).toEqual([]);
+            expect(editor.getEditorText()).toBe('edited\n');
+            expect(editor.editorDirty).toBe(true);
+            if (outcome === 'changed bytes') expect(editor.conflict?.theirsHash).toBe(createHash('sha256').update(diskBytes).digest('hex'));
+            else expect(editor.refusal?.kind).toBe('failed');
+        }
+    } finally {
+        blocked = false;
+        pendingRead.resolve({ success: true, content: Buffer.from(diskBytes).toString('base64') });
+        await act(async () => { await save; tree?.unmount(); });
+    }
+});
 it('retains the same full after-text across a cold Changes open and View/Changes transitions', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => { tree = renderer.create(<Harness {...input} includeDiff includeFile={false} />); });

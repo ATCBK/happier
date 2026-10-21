@@ -33,7 +33,8 @@ type Input = Readonly<{
     fileWriteSupported: boolean; setFileWriteSupported(value: boolean): void;
     fileEditorFeatureEnabled: boolean; filesEditorWebMonacoEnabled: boolean; filesEditorNativeCodeMirrorEnabled: boolean;
     filesEditorAutoSave: boolean; filesEditorChangeDebounceMs: number; mountedRef: Readonly<{ current: boolean }>;
-    refreshAll(): Promise<void>; publishSavedFile?(value: { text: string; hash: string }): void;
+    refreshAll(): Promise<void>; readFileForSave?(): Promise<WorkspaceFileDetailsFileContent | null>;
+    publishSavedFile?(value: { text: string; hash: string }): void;
     persistedDraft?: WorkspaceFileEditorDraft | null; persistDraft?(draft: WorkspaceFileEditorDraft | null): void;
     panePersistenceFailed?: boolean;
     /** The writing agent's display name, for the Undo notice's words only. */
@@ -67,7 +68,8 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
     const [isEditingFile, setIsEditingFile] = React.useState(draft?.isEditingFile === true);
     const editing = React.useRef(isEditingFile);
     const initialBase: Base = { text: draft && draft.editorOriginalHash !== input.fileHash ? null : input.fileText,
-        hash: draft ? draft.editorOriginalHash : input.fileHash, encoding: input.encoding };
+        hash: draft ? draft.editorOriginalHash : input.fileHash,
+        encoding: draft && draft.editorOriginalHash !== input.fileHash ? undefined : input.encoding };
     const [base, setBase] = React.useState<Base>(initialBase);
     const baseRef = React.useRef(base);
     const text = React.useRef(draft?.editorText ?? input.fileText ?? '');
@@ -131,7 +133,8 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
     if (stateOwner !== ownerKey) {
         saving.current?.abort(); saving.current = null; autoSave.cancel(); publishDebounce.cancel(); setStateOwner(ownerKey);
         const nextBase: Base = { text: draft && draft.editorOriginalHash !== input.fileHash ? null : input.fileText,
-            hash: draft ? draft.editorOriginalHash : input.fileHash, encoding: input.encoding };
+            hash: draft ? draft.editorOriginalHash : input.fileHash,
+            encoding: draft && draft.editorOriginalHash !== input.fileHash ? undefined : input.encoding };
         baseRef.current = nextBase; setBase(nextBase); text.current = draft?.editorText ?? input.fileText ?? '';
         editing.current = draft?.isEditingFile === true; setIsEditingFile(editing.current); setEditorSeedText(text.current);
         setEditorDirty(editing.current && text.current !== nextBase.text);
@@ -178,7 +181,16 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
         // A save can normalize disk line endings without changing the editor's
         // admitted document or its undo stack. The returned raw-byte hash owns
         // that version; its later decoded read is not an external replacement.
-        if (editing.current && input.fileHash !== null && input.fileHash === baseRef.current.hash) return;
+        if (editing.current && input.fileHash !== null && input.fileHash === baseRef.current.hash) {
+            if (baseRef.current.text === null) {
+                // The first matching read completes a restored base, never the
+                // live draft or the engine's undo stack.
+                updateBase({ text: input.fileText, hash: input.fileHash, encoding: input.encoding });
+                setEditorDirty(text.current !== input.fileText);
+                persist();
+            }
+            return;
+        }
         if (supersededDisk.current?.text === input.fileText && supersededDisk.current.hash === input.fileHash) return;
         supersededDisk.current = null;
         if (!editing.current || text.current === baseRef.current.text || text.current === input.fileText) {
@@ -276,7 +288,24 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
             await editorHandleRef.current?.flushPendingChange(); if (!isCurrentSave()) return false;
             const sent = editorHandleRef.current?.getValue() ?? text.current; text.current = sent; publishDebounce.flush();
             if (!shown && (conflictNow() || sent === baseRef.current.text)) return false;
-            const encoding = shown ? shown.encoding : baseRef.current.encoding ?? latest.current.encoding;
+            if (!shown && baseRef.current.text === null && baseRef.current.hash !== null && !baseRef.current.encoding) {
+                const expectedHash = baseRef.current.hash;
+                const observed = await latest.current.readFileForSave?.();
+                if (!isCurrentSave()) return false;
+                if (!observed || observed.isBinary || observed.partial || !observed.encoding?.editable || !observed.contentHash) {
+                    updateRefusal({ kind: 'failed', message: t('files.fileReadFailed') });
+                    return false;
+                }
+                // A different disk version belongs to the existing conflict
+                // owner. Never serialize the old draft with its metadata.
+                if (observed.contentHash !== expectedHash) return false;
+                updateBase({ text: observed.content, hash: observed.contentHash, encoding: observed.encoding });
+                setEditorDirty(text.current !== observed.content);
+                persist();
+                if (sent === observed.content) return false;
+            }
+            const encoding = shown ? shown.encoding : baseRef.current.encoding
+                ?? (latest.current.fileHash === baseRef.current.hash ? latest.current.encoding : undefined);
             const normalized = encoding ? sent.replace(/\r\n|\r|\n/g, encoding.eol === 'crlf' ? '\r\n' : '\n') : sent;
             const content = restoreWorkspaceFileTextBom(normalized, encoding);
             const expectedHash = shown?.hash ?? baseRef.current.hash;
