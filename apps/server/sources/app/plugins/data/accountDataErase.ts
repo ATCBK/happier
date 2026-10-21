@@ -37,7 +37,7 @@ import {
 } from "@/app/kv/accountScopedKv";
 import { applyUserKvMutationsInTx, type KVMutation } from "@/app/kv/kvMutate";
 import { deletePublicFile, deletePrivateFile } from "@/storage/blob/files";
-import { hasPendingArtifactBlobUploadInTx, isPrivateArtifactBlobUpload } from "@/app/artifacts/artifactBlobService";
+import { hasPendingAccountPrivateFileUploadInTx, isAccountPrivateFileUpload } from "@/storage/privateFiles/accountPrivateFileCustody";
 import { afterTx, inTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { getActivePrismaRuntime } from "@/storage/prisma";
 
@@ -536,7 +536,7 @@ type AccountErasurePrivateBlobLocator = Readonly<{
 type AccountErasureBlobLocators = Readonly<{
     publicFiles: readonly AccountErasurePublicBlobLocator[];
     privatePetAssets: readonly AccountErasurePrivateBlobLocator[];
-    privateArtifactBlobs: readonly AccountErasurePrivateBlobLocator[];
+    privateFiles: readonly AccountErasurePrivateBlobLocator[];
 }>;
 
 function sameOrderedLocators<T>(
@@ -553,7 +553,7 @@ function sameAccountErasureBlobLocators(
 ): boolean {
     return sameOrderedLocators(left.publicFiles, right.publicFiles, (l, r) => l.id === r.id && l.path === r.path)
         && sameOrderedLocators(left.privatePetAssets, right.privatePetAssets, (l, r) => l.id === r.id && l.objectKey === r.objectKey)
-        && sameOrderedLocators(left.privateArtifactBlobs, right.privateArtifactBlobs, (l, r) => l.id === r.id && l.objectKey === r.objectKey);
+        && sameOrderedLocators(left.privateFiles, right.privateFiles, (l, r) => l.id === r.id && l.objectKey === r.objectKey);
 }
 
 async function captureAccountErasureBlobLocatorsInTx(
@@ -577,12 +577,12 @@ async function captureAccountErasureBlobLocatorsInTx(
         }),
     ]);
     return Object.freeze({
-        publicFiles: Object.freeze(uploadedFiles.filter(row => !isPrivateArtifactBlobUpload(row))
+        publicFiles: Object.freeze(uploadedFiles.filter(row => !isAccountPrivateFileUpload(row))
             .map(({ id, path }) => Object.freeze({ id, path }))),
         privatePetAssets: Object.freeze(privatePetAssets.map(({ id, objectKey }) => Object.freeze({ id, objectKey }))),
-        privateArtifactBlobs: Object.freeze([
+        privateFiles: Object.freeze([
             ...privateArtifactBlobs.map(({ id, storageKey }) => Object.freeze({ id, objectKey: storageKey })),
-            ...uploadedFiles.filter(isPrivateArtifactBlobUpload).map(({ id, path }) => Object.freeze({ id, objectKey: path })),
+            ...uploadedFiles.filter(isAccountPrivateFileUpload).map(({ id, path }) => Object.freeze({ id, objectKey: path })),
         ]),
     });
 }
@@ -590,14 +590,14 @@ async function captureAccountErasureBlobLocatorsInTx(
 async function deleteAccountErasureBlobLocators(
     locators: AccountErasureBlobLocators,
 ): Promise<boolean> {
-    const [publicResults, privateResults, artifactResults] = await Promise.all([
+    const [publicResults, privateResults, fileResults] = await Promise.all([
         Promise.allSettled(locators.publicFiles.map(async ({ path }) => await deletePublicFile(path))),
         Promise.allSettled(locators.privatePetAssets.map(async ({ objectKey }) => await deleteDefaultAccountPetPrivateObject(objectKey))),
-        Promise.allSettled(locators.privateArtifactBlobs.map(async ({ objectKey }) => await deletePrivateFile(objectKey))),
+        Promise.allSettled(locators.privateFiles.map(async ({ objectKey }) => await deletePrivateFile(objectKey))),
     ]);
     return publicResults.every((result) => result.status === "fulfilled")
         && privateResults.every((result) => result.status === "fulfilled")
-        && artifactResults.every((result) => result.status === 'fulfilled');
+        && fileResults.every((result) => result.status === 'fulfilled');
 }
 
 /** Cleanup discovery belongs to its domain owners, not the ordinary status census. */
@@ -752,7 +752,7 @@ export async function deleteAccountForErasure(input: Readonly<{
         // Keep the caller's authentication usable for retry while a different API
         // replica owns pending IO. The Account fence prevents a new candidate
         // from being captured between this check and the terminal disable.
-        if (await hasPendingArtifactBlobUploadInTx(tx, input.accountId)) {
+        if (await hasPendingAccountPrivateFileUploadInTx(tx, input.accountId)) {
             return { status: "rejected" as const, code: "account_erasure_blob_delete_failed" as const };
         }
 

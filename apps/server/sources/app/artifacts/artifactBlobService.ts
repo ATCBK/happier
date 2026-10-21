@@ -12,8 +12,12 @@ import { normalizePrivateFileKey } from '@/storage/privateFiles/privateFileKeys'
 import { encryptBytes, decryptBytes } from '@/modules/encrypt';
 import { readEncryptionFeatureEnv } from '@/app/features/catalog/readFeatureEnv';
 import { readArtifactForCallerInTx, readmitArtifactContentInTx } from './artifactAccessService';
-import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
+import { artifactBlobRejectedUploadPrefix, artifactBlobWritingUploadPrefix,
+    captureAccountPrivateFileUploadInTx, settleAccountPrivateFileUploadInTx,
+    isAccountPrivateFileUploadActiveInTx, deleteAccountPrivateFileUpload } from '@/storage/privateFiles/accountPrivateFileCustody';
 import { log } from '@/utils/logging/log';
+
+export { artifactBlobConversionUploadPrefix, artifactBlobWritingUploadPrefix } from '@/storage/privateFiles/accountPrivateFileCustody';
 
 const PlainBlobFileSchema = createStoredReadSchema(z.discriminatedUnion('t', [
     z.strictObject({ t: z.literal('plain'), v: z.string() }),
@@ -23,30 +27,9 @@ export type ArtifactBlobRow = Readonly<{ id: string; artifactId: string; storage
 export type PreparedArtifactBlobWrite = Readonly<{
     accountId: string; row: ArtifactBlobRow; bytes: Uint8Array; candidate: boolean;
 }>;
-const rejectedUploadPrefix = 'artifact-blob-rejected-v1:';
-export const artifactBlobConversionUploadPrefix = 'artifact-blob-conversion-v1:';
-export const artifactBlobWritingUploadPrefix = 'artifact-blob-writing-v1:';
+const rejectedUploadPrefix = artifactBlobRejectedUploadPrefix;
 export const artifactBlobRejectedUploadReuseKey = (artifactId: string) => `${rejectedUploadPrefix}${artifactId}`;
 
-/** UploadedFile is Account-owned physical file custody, including rejected private uploads. */
-export function isRejectedArtifactBlobUpload(row: Readonly<{ reuseKey: string | null }>): boolean {
-    return row.reuseKey?.startsWith(rejectedUploadPrefix) === true;
-}
-
-export function isPendingArtifactBlobUpload(row: Readonly<{ reuseKey: string | null }>): boolean {
-    return row.reuseKey?.startsWith(artifactBlobWritingUploadPrefix) === true;
-}
-
-export async function hasPendingArtifactBlobUploadInTx(tx: Tx, accountId: string): Promise<boolean> {
-    return Boolean(await tx.uploadedFile.findFirst({ where: { accountId,
-        reuseKey: { startsWith: artifactBlobWritingUploadPrefix } }, select: { id: true } }));
-}
-
-/** Account erasure must retain both rejected and actively staged private-byte custody. */
-export function isPrivateArtifactBlobUpload(row: Readonly<{ reuseKey: string | null }>): boolean {
-    return isPendingArtifactBlobUpload(row) || isRejectedArtifactBlobUpload(row)
-        || row.reuseKey?.startsWith(artifactBlobConversionUploadPrefix) === true;
-}
 const blobPath = (accountId: string, artifactId: string, blobId: string) => ['storage', 'artifact', accountId, artifactId, 'blob', blobId, 'v1'];
 export const artifactBlobCandidateStorageKey = (artifactId: string, blobId: string, uploadId: string) =>
     normalizePrivateFileKey(`artifacts/${artifactId}/${blobId}/${uploadId}`);
@@ -69,12 +52,6 @@ export async function openArtifactBlobBytes(accountId: string, row: ArtifactBlob
         : new Uint8Array(decryptBytes(blobPath(accountId, row.artifactId, row.id), privacyKit.decodeBase64(parsed.c)));
 }
 
-async function isArtifactUploadAccountActiveInTx(tx: Tx, accountId: string): Promise<boolean> {
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId, "content");
-    const account = await tx.account.findUnique({ where: { id: accountId }, select: { status: true } });
-    return fence.status === 'ready' && account?.status === 'active';
-}
-
 /** Unique candidate paths prevent rejected/replayed uploads from overwriting retained bytes. */
 export async function prepareArtifactBlobWrite(input: Readonly<{ accountId: string; artifactId: string; blob: ArtifactBlobWriteV1 }>): Promise<PreparedArtifactBlobWrite | null> {
     if (!input.blob.content) {
@@ -90,9 +67,9 @@ export async function prepareArtifactBlobWrite(input: Readonly<{ accountId: stri
     // Capture every candidate before IO, not just conversion stages. The Account
     // fence orders admission against erasure even when another API replica owns it.
     await inTx(async tx => {
-        if (!await isArtifactUploadAccountActiveInTx(tx, input.accountId)) throw new Error('Artifact upload Account is unavailable');
-        await tx.uploadedFile.create({ data: { accountId: input.accountId, path: storageKey,
-            reuseKey: `${artifactBlobWritingUploadPrefix}${input.artifactId}` } });
+        const custody = await captureAccountPrivateFileUploadInTx(tx, { accountId: input.accountId, path: storageKey,
+            reuseKey: `${artifactBlobWritingUploadPrefix}${input.artifactId}` });
+        if (!custody) throw new Error('Artifact upload Account is unavailable');
     });
     try { await writePrivateFile(storageKey, stored); }
     catch (error) { await discardArtifactBlobCandidate(prepared); throw error; }
@@ -102,13 +79,11 @@ export async function prepareArtifactBlobWrite(input: Readonly<{ accountId: stri
 /** Settle pending custody atomically with admission, or transfer it to a live conversion stage. */
 export async function completeArtifactBlobCandidateCustodyInTx(tx: Tx, prepared: PreparedArtifactBlobWrite, reuseKey?: string): Promise<void> {
     if (!prepared.candidate) return;
-    if (!await isArtifactUploadAccountActiveInTx(tx, prepared.accountId)) throw new Error('Artifact upload Account is unavailable');
-    const where = { accountId: prepared.accountId, path: prepared.row.storageKey,
-        reuseKey: `${artifactBlobWritingUploadPrefix}${prepared.row.artifactId}` };
-    const settled = reuseKey === undefined
-        ? await tx.uploadedFile.deleteMany({ where })
-        : await tx.uploadedFile.updateMany({ where, data: { reuseKey } });
-    if (settled.count !== 1) throw new Error('Artifact upload custody is unavailable');
+    const settled = await settleAccountPrivateFileUploadInTx(tx, { accountId: prepared.accountId,
+        file: { path: prepared.row.storageKey }, writingReuseKey: `${artifactBlobWritingUploadPrefix}${prepared.row.artifactId}`,
+        ...(reuseKey === undefined ? {} : { reuseKey }) });
+    if (settled === 'account_unavailable') throw new Error('Artifact upload Account is unavailable');
+    if (settled !== 'settled') throw new Error('Artifact upload custody is unavailable');
 }
 
 export async function admitArtifactBlobWriteInTx(tx: Tx, input: Readonly<{
@@ -125,7 +100,7 @@ export async function admitArtifactBlobWriteInTx(tx: Tx, input: Readonly<{
         || reference.data.sizeBytes !== prepared.bytes.byteLength || reference.data.sha256 !== sha256(prepared.bytes))) return false;
     const existing = await tx.artifactBlob.findUnique({ where: { id: input.blob.blobId } });
     if (prepared.candidate) {
-        return existing === null && await isArtifactUploadAccountActiveInTx(tx, prepared.accountId)
+        return existing === null && await isAccountPrivateFileUploadActiveInTx(tx, prepared.accountId)
             && Boolean(await tx.uploadedFile.findFirst({ where: { accountId: prepared.accountId, path: prepared.row.storageKey,
                 reuseKey: `${artifactBlobWritingUploadPrefix}${prepared.row.artifactId}` } }));
     }
@@ -169,16 +144,14 @@ export async function discardArtifactBlobCandidate(prepared: PreparedArtifactBlo
             reuseKey: artifactBlobRejectedUploadReuseKey(prepared.row.artifactId) },
         update: { reuseKey: artifactBlobRejectedUploadReuseKey(prepared.row.artifactId) },
     });
-    await deletePrivateFile(custody.path);
-    await db.uploadedFile.deleteMany({ where: { id: custody.id, accountId: prepared.accountId, path: custody.path } });
+    await deleteAccountPrivateFileUpload({ id: custody.id, accountId: prepared.accountId, path: custody.path });
 }
 
 /** Retry rejected private deletion at the next upload; Account erasure also consumes this custody. */
 export async function cleanupRejectedArtifactBlobUploads(accountId: string): Promise<void> {
     const candidates = await db.uploadedFile.findMany({ where: { accountId, reuseKey: { startsWith: rejectedUploadPrefix } } });
     for (const candidate of candidates) {
-        await deletePrivateFile(candidate.path);
-        await db.uploadedFile.deleteMany({ where: { id: candidate.id, accountId, path: candidate.path, reuseKey: candidate.reuseKey } });
+        await deleteAccountPrivateFileUpload({ id: candidate.id, accountId, path: candidate.path, reuseKey: candidate.reuseKey });
     }
 }
 
