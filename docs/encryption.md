@@ -2625,7 +2625,8 @@ resource admission path.
 ### Artifacts
 - E2EE Artifact `header` and `body` are encrypted bytes encoded as base64.
 - In 0.3 development, `Artifact.kind` is plaintext coarse metadata visible to
-  the Home (`skill`, `prompt`, `plugin_ui`, `work_board`, or `other`). The Protocol
+  the Home (the kinds in `artifacts/artifactKindV1.ts`, including the separate
+  widget layout, definition and saved-group families). The Protocol
   `deriveArtifactCoarseKindV1` function derives it from the header at the writer.
   It is an inventory search hint, not content or access authority. Names,
   bodies, and other E2EE header fields remain encrypted. Plain Accounts retain
@@ -2633,13 +2634,19 @@ resource admission path.
 - Historical rows may have null kind. The client inventory writer backfills
   only headers it already opened, through an authorized metadata-only update
   fenced by the current header version; header/body bytes and their versions
-  stay unchanged. Filtered listings report unclassified rows and readers use
-  the full inventory until classification is complete. The inventory writer also
+  stay unchanged. Filtered listings report unclassified rows; inventories with
+  predecessor content use the full inventory until classification is complete. The inventory writer also
   repairs a stored kind that no longer matches its header (for example a Board
   stored as `other` before `work_board` existed). Board listing requests
   `work_board`, using the shared full-inventory fallback while unclassified rows
   remain. An opaque header edit
   without a kind invalidates the previous hint, including edits from old clients.
+- Widget inventories request only their specific coarse kind, before opening
+  any keys or headers. These families originate in the one-way 0.3 cut, so
+  unrelated null-kind predecessor rows do not trigger a widget-wide fallback
+  scan. Existing pre-cut development widget rows stored as `other` need the
+  canonical inventory writer's classification repair before filtered discovery.
+  The coarse hint never substitutes for opened header, ownership or mode checks.
 - Plain Artifact values are base64-encoded `{ t:'plain', v }` envelopes with the
   canonical plain data-key marker.
 - Stored as `Bytes` in the DB.
