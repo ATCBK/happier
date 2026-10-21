@@ -96,6 +96,8 @@ export const ProcessDetail = React.memo(function ProcessDetail(
   const sessionId =
     props.owner?.kind === 'session' ? props.owner.sessionId : null;
   const proven = row.level === 'proven';
+  // The daemon's lineage ends with the process itself; the crumb names it once, as its own last part.
+  const parents = (row.chain ?? []).filter((link) => link.pid !== row.pid);
   return (
     <View
       testID={`machine-processes-detail-${row.ref}`}
@@ -132,7 +134,7 @@ export const ProcessDetail = React.memo(function ProcessDetail(
           ) : null}
         </View>
       </View>
-      {props.ownerTitle || (row.chain && row.chain.length > 0) ? (
+      {props.ownerTitle || parents.length > 0 ? (
         <View style={styles.chain} accessibilityRole="text">
           <Text style={styles.key}>
             {t('machineProcesses.detail.startedBy')}
@@ -140,7 +142,7 @@ export const ProcessDetail = React.memo(function ProcessDetail(
           {props.ownerTitle ? (
             <Text style={styles.chainPart}>{props.ownerTitle}</Text>
           ) : null}
-          {(row.chain ?? []).map((link) => (
+          {parents.map((link) => (
             <React.Fragment key={link.pid}>
               <Icon
                 name="caret-right"
@@ -173,6 +175,15 @@ export const ProcessDetail = React.memo(function ProcessDetail(
             </Text>
             <ProcessOwnershipPill level={row.level} />
           </View>
+          {row.evidence ? null : (
+            // The evidence arrives with the detail read, a moment after the row; until then say so rather than leave the section bare.
+            <Text
+              style={styles.quiet}
+              testID="machine-processes-evidence-loading"
+            >
+              {t('common.loading')}
+            </Text>
+          )}
           {(row.evidence ?? []).map((entry) => (
             <View
               key={entry.kind}
