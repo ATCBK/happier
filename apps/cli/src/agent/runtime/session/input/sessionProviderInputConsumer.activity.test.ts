@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import type { RuntimeActivitySnapshotTail } from '@/api/session/sessionClientPort';
@@ -183,5 +183,39 @@ describe('Session input live-work observation', () => {
 
     expect(notifications).toBe(0);
     unsubscribe();
+  });
+});
+
+describe('Session input live-work notification stability', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  it('does not re-notify the observer that only re-read an unchanged host', async () => {
+    // The daemon re-reads live work on every notification, and each Session snapshot
+    // refresh wakes the metadata observer. A read the pending drain could not prove
+    // (`known: false`) must not make the next unchanged observation look like new work.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const metadataWaiters: Array<() => void> = [];
+    const wakeMetadata = () => { for (const wake of metadataWaiters.splice(0)) wake(); };
+    const consumer = createSessionProviderInputConsumer({ messageQueue: new MessageQueue2<string>(() => 'mode'), session: {
+      waitForMetadataUpdate: signal => new Promise<boolean>(resolve => {
+        metadataWaiters.push(() => resolve(true));
+        signal?.addEventListener('abort', () => resolve(false), { once: true });
+      }),
+      getMetadataSnapshot: () => ({}), getAgentStateSnapshot: () => ({}),
+      readSubagentLiveWork: () => ({ state: 'settled', activeCount: 0 }), readRuntimeActivitySnapshotTail: idleTail,
+      getPendingQueueState: () => ({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 1 }),
+      readPendingQueueStateForLiveWork: async () => ({ known: false }),
+    } });
+    let notifications = 0;
+    const unsubscribe = consumer.subscribeLiveWork(() => {
+      notifications += 1;
+      if (notifications > 20) return;
+      vi.setSystemTime(Date.now() + 500);
+      void consumer.readLiveWork().then(wakeMetadata);
+    });
+    await consumer.readLiveWork();
+    wakeMetadata();
+    for (let turn = 0; turn < 40; turn += 1) await Promise.resolve();
+    unsubscribe();
+    expect(notifications).toBeLessThanOrEqual(1);
   });
 });

@@ -295,8 +295,12 @@ export function createSessionProviderInputConsumer<Mode, Message>(
   };
   const readLiveWorkNotificationSignature = (): string => {
     const pending = opts.session.getPendingQueueState?.();
-    return JSON.stringify(readLiveWorkFacts(hasAcceptedInputCustody() || (pending?.known && pending.pendingCount > 0)
-      ? 'active' : pending?.known ? 'settled' : 'unknown'));
+    // `settledAt` is re-stamped with the clock by any read that could not prove a settled fact
+    // (an observer's own re-read), so it is not a change. The host's committed settlement time is.
+    const { settledAt: _restamped, ...facts } = readLiveWorkFacts(hasAcceptedInputCustody() || (pending?.known && pending.pendingCount > 0)
+      ? 'active' : pending?.known ? 'settled' : 'unknown');
+    return JSON.stringify({ ...facts,
+      settlementObservedAt: opts.session.readRuntimeActivitySnapshotTail?.().settlement?.committedProjection.observedAt });
   };
 
   const runPendingMaterializationExclusive = async <Value>(
