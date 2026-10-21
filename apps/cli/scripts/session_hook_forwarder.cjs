@@ -11,6 +11,15 @@
 const http = require('http');
 const fs = require('fs');
 
+function reportFailure(stage, error) {
+    // Error messages can contain secret-file paths or hook payloads; emit only OS codes.
+    const code = typeof error?.code === 'string' && /^[A-Z0-9_]+$/.test(error.code)
+        ? ` (${error.code})`
+        : '';
+    process.stderr.write(`[happier hook] ${stage}${code}\n`);
+}
+
+
 const FORWARDING_DEADLINE_MS = 500;
 const MAX_INPUT_BYTES = 1024 * 1024;
 const MAX_QUALIFIED_INPUT_BYTES = 64 * 1024;
@@ -87,7 +96,8 @@ async function readSecret(args) {
         if (!qualifiedExternalSession) return raw.trim();
         const token = raw.endsWith('\n') ? raw.slice(0, -1) : raw;
         return QUALIFIED_SECRET_PATTERN.test(token) ? token : '';
-    } catch {
+    } catch (error) {
+        reportFailure('Cannot read hook secret file', error);
         return '';
     } finally {
         if (file) await file.close().catch(() => undefined);
@@ -172,12 +182,20 @@ process.stdin.on('end', async () => {
         headers
     }, (res) => {
         res.resume(); // Drain response
-        res.on('end', finish);
+        res.on('end', () => {
+            if (res.statusCode < 200 || res.statusCode >= 300) {
+                reportFailure(`Hook server returned HTTP ${res.statusCode}`);
+            }
+            finish();
+        });
         res.on('aborted', finish);
         res.on('error', finish);
     });
 
-    request.on('error', finish);
+    request.on('error', (error) => {
+        reportFailure('Hook request failed', error);
+        finish();
+    });
 
     request.end(body);
 });
