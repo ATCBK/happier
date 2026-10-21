@@ -22,7 +22,7 @@ describe('ReviewBar (phone review, lab rvp)', () => {
     it('P2: the completion names the file Next file opens', async () => {
         const next = vi.fn();
         const screen = await renderScreen(<ReviewBar current={0} total={1} complete={{ nextFileName: 'stageNotes.ts', onNextFile: next }} />);
-        expect(textOf(screen.tree.findByProps({ testID: 'review-bar-next-file-name' }))).toBe('stageNotes.ts');
+        expect(textOf(screen.tree.findByProps({ testID: 'review-bar-next-file-name' }))).toContain('stageNotes.ts');
         await screen.pressByTestIdAsync('review-bar-next-file');
         expect(next).toHaveBeenCalledTimes(1);
         const done = await renderScreen(<ReviewBar current={0} total={1} complete={{ nextFileName: null }} />);

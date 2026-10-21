@@ -24,7 +24,7 @@ export type ReviewStripProps<T extends string = string> = Readonly<{
   scope?: ReviewStripScope<T> | null;
   /** Quiet context beside the scope, e.g. the turn's time. */
   scopeDetail?: string | null;
-  /** Ordinal of the current change across the comparison (0 when none) and the comparison's total. */
+  /** The current change within this file (0 when none) and the file's change count. */
   current: number;
   total: number;
   onPrevious?: () => void;
@@ -33,7 +33,8 @@ export type ReviewStripProps<T extends string = string> = Readonly<{
   keepAllDisabledReason?: string | null;
   /** The file is done: the strip becomes its completion line. */
   complete?: Readonly<{
-    left: number;
+    /** The checkout's changed files not yet reviewed; other files' changes are not counted. */
+    filesLeft: number;
     nextFileName?: string | null;
     onNextFile?: () => void;
   }> | null;
@@ -45,7 +46,7 @@ export type ReviewStripProps<T extends string = string> = Readonly<{
 /**
  * The review strip under the File page header (lab ade-shell RV2): scope, "2 of 7 changes", ↑ ↓,
  * Keep all; once every change in the file is kept it reads "All changes in this file reviewed ·
- * N of M left · Next file name". One quiet line; the page supplies dividers.
+ * 3 files left · Next file name". One quiet line; the page supplies dividers.
  */
 export function ReviewStrip<T extends string>(props: ReviewStripProps<T>) {
   const { theme } = useUnistyles();
@@ -95,13 +96,14 @@ export function ReviewStrip<T extends string>(props: ReviewStripProps<T>) {
         >
           {t('hunkReview.fileReviewed')}
         </Text>
-        {props.total > 0 ? (
+        {props.complete.filesLeft > 0 ? (
           <Text
+            testID="review-strip-files-left"
             variant="meta"
             numberOfLines={1}
             style={[styles.tabular, { color: theme.colors.text.tertiary }]}
           >
-            {`· ${t('hunkReview.left', { left: props.complete.left, total: props.total })}`}
+            {`· ${t('hunkReview.filesLeft', { count: props.complete.filesLeft })}`}
           </Text>
         ) : null}
         <View style={styles.grow} />

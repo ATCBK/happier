@@ -146,8 +146,6 @@ export function useHunkReviewController(params: HunkReviewControllerParams) {
     };
     const summary = React.useMemo(() => buildHunkReviewSummary(files, marked), [files, marked]);
     const ordered = React.useMemo(() => orderHunkReviewFiles(files), [files]);
-    const fileIndex = ordered.findIndex(file => file.path === params.path);
-    const numberOffset = ordered.slice(0, Math.max(0, fileIndex)).reduce((sum, file) => sum + file.keys.length, 0);
     const currentIndex = currentKey ? units.findIndex(unit => unit.key === currentKey) : -1;
     const revealKey = revealed === 'reading' ? null
         : revealed?.path === params.path && units.some(unit => unit.key === revealed.key) ? revealed.key : units[0]?.key ?? null;
@@ -200,7 +198,13 @@ export function useHunkReviewController(params: HunkReviewControllerParams) {
             setSelection({ path: params.path, key });
             setRevealed('reading');
         },
-        strip: { ...summary, currentOrdinal: currentIndex < 0 ? 0 : numberOffset + currentIndex + 1,
+        /**
+         * The File page's review line: changes are counted within the open file; the rest of the comparison is
+         * counted in files, since another file's changes are unknown until its diff loads (a pending file is left).
+         */
+        strip: { current: currentIndex < 0 ? 0 : currentIndex + 1, total: units.length,
+            reviewed: units.filter(unit => marked.has(unit.key)).length,
+            filesLeft: ordered.filter(file => !summary.reviewedPaths.has(file.path)).length,
             canKeepAll: !marks.unavailableReason && units.some(unit => !marked.has(unit.key)),
             nextFile: nextFile?.path !== params.path ? nextFile?.path ?? null : null,
             fileComplete: units.length > 0 && units.every(unit => marked.has(unit.key)) },

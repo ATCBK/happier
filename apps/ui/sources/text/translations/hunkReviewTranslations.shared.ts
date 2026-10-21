@@ -3,7 +3,7 @@ type Line = Readonly<{ line: number }>;
 type Range = Readonly<{ start: number; end: number }>;
 type Position = Readonly<{ current: number; total: number }>;
 type RowA11y = Readonly<{ n: number; total: number; range: string }>;
-type Left = Readonly<{ left: number; total: number }>;
+type Count = Readonly<{ count: number }>;
 type Name = Readonly<{ name: string }>;
 type Machine = Readonly<{ machine: string }>;
 type Agent = Readonly<{ agent: string }>;
@@ -26,8 +26,9 @@ type Labels = Readonly<{
   nextChange: string;
   keepAll: string;
   fileReviewed: string;
-  left: (params: Left) => string;
+  filesLeft: (params: Count) => string;
   nextFile: string;
+  nextNamed: (params: Name) => string;
   scopeA11y: string;
   scopeTurn: string;
   scopeSession: string;
@@ -93,8 +94,9 @@ export const hunkReviewTranslations = {
     nextChange: 'Next change',
     keepAll: 'Keep all',
     fileReviewed: 'All changes in this file reviewed',
-    left: ({ left, total }) => `${left} of ${total} left`,
+    filesLeft: ({ count }) => (count === 1 ? '1 file left' : `${count} files left`),
     nextFile: 'Next file',
+    nextNamed: ({ name }) => `Next · ${name}`,
     scopeA11y: 'Changes to show',
     scopeTurn: 'This turn',
     scopeSession: 'This session',
@@ -161,8 +163,9 @@ export const hunkReviewTranslations = {
     nextChange: 'Modification suivante',
     keepAll: 'Tout conserver',
     fileReviewed: 'Toutes les modifications de ce fichier sont vérifiées',
-    left: ({ left, total }) => `${left} sur ${total} restantes`,
+    filesLeft: ({ count }) => (count === 1 ? '1 fichier restant' : `${count} fichiers restants`),
     nextFile: 'Fichier suivant',
+    nextNamed: ({ name }) => `Suivant · ${name}`,
     scopeA11y: 'Modifications à afficher',
     scopeTurn: 'Ce tour',
     scopeSession: 'Cette session',
@@ -230,8 +233,9 @@ export const hunkReviewTranslations = {
     nextChange: 'Nächste Änderung',
     keepAll: 'Alle behalten',
     fileReviewed: 'Alle Änderungen in dieser Datei geprüft',
-    left: ({ left, total }) => `${left} von ${total} übrig`,
+    filesLeft: ({ count }) => (count === 1 ? '1 Datei übrig' : `${count} Dateien übrig`),
     nextFile: 'Nächste Datei',
+    nextNamed: ({ name }) => `Weiter · ${name}`,
     scopeA11y: 'Angezeigte Änderungen',
     scopeTurn: 'Dieser Zug',
     scopeSession: 'Diese Sitzung',
@@ -300,8 +304,9 @@ export const hunkReviewTranslations = {
     nextChange: 'Cambio siguiente',
     keepAll: 'Conservar todo',
     fileReviewed: 'Todos los cambios de este archivo revisados',
-    left: ({ left, total }) => `quedan ${left} de ${total}`,
+    filesLeft: ({ count }) => (count === 1 ? 'queda 1 archivo' : `quedan ${count} archivos`),
     nextFile: 'Archivo siguiente',
+    nextNamed: ({ name }) => `Siguiente · ${name}`,
     scopeA11y: 'Cambios que mostrar',
     scopeTurn: 'Este turno',
     scopeSession: 'Esta sesión',
@@ -369,8 +374,9 @@ export const hunkReviewTranslations = {
     nextChange: 'Canvi següent',
     keepAll: 'Conservar-ho tot',
     fileReviewed: 'Tots els canvis d’aquest fitxer revisats',
-    left: ({ left, total }) => `en queden ${left} de ${total}`,
+    filesLeft: ({ count }) => (count === 1 ? 'en queda 1 fitxer' : `en queden ${count} fitxers`),
     nextFile: 'Fitxer següent',
+    nextNamed: ({ name }) => `Següent · ${name}`,
     scopeA11y: 'Canvis per mostrar',
     scopeTurn: 'Aquest torn',
     scopeSession: 'Aquesta sessió',
@@ -438,8 +444,9 @@ export const hunkReviewTranslations = {
     nextChange: 'Modifica successiva',
     keepAll: 'Conserva tutto',
     fileReviewed: 'Tutte le modifiche di questo file verificate',
-    left: ({ left, total }) => `ne restano ${left} di ${total}`,
+    filesLeft: ({ count }) => (count === 1 ? 'resta 1 file' : `restano ${count} file`),
     nextFile: 'File successivo',
+    nextNamed: ({ name }) => `Successivo · ${name}`,
     scopeA11y: 'Modifiche da mostrare',
     scopeTurn: 'Questo turno',
     scopeSession: 'Questa sessione',
@@ -507,8 +514,9 @@ export const hunkReviewTranslations = {
     nextChange: 'Próxima alteração',
     keepAll: 'Manter tudo',
     fileReviewed: 'Todas as alterações deste arquivo revisadas',
-    left: ({ left, total }) => `faltam ${left} de ${total}`,
+    filesLeft: ({ count }) => (count === 1 ? 'falta 1 arquivo' : `faltam ${count} arquivos`),
     nextFile: 'Próximo arquivo',
+    nextNamed: ({ name }) => `Próximo · ${name}`,
     scopeA11y: 'Alterações a mostrar',
     scopeTurn: 'Este turno',
     scopeSession: 'Esta sessão',
@@ -576,8 +584,9 @@ export const hunkReviewTranslations = {
     nextChange: 'Następna zmiana',
     keepAll: 'Zachowaj wszystko',
     fileReviewed: 'Wszystkie zmiany w tym pliku przejrzane',
-    left: ({ left, total }) => `zostało ${left} z ${total}`,
+    filesLeft: ({ count }) => (count === 1 ? 'został 1 plik' : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14) ? `zostały ${count} pliki` : `zostało ${count} plików`),
     nextFile: 'Następny plik',
+    nextNamed: ({ name }) => `Dalej · ${name}`,
     scopeA11y: 'Zmiany do pokazania',
     scopeTurn: 'Ta tura',
     scopeSession: 'Ta sesja',
@@ -645,8 +654,9 @@ export const hunkReviewTranslations = {
     nextChange: 'Следующее изменение',
     keepAll: 'Принять все',
     fileReviewed: 'Все изменения в этом файле просмотрены',
-    left: ({ left, total }) => `осталось ${left} из ${total}`,
+    filesLeft: ({ count }) => (count % 10 === 1 && count % 100 !== 11 ? `остался ${count} файл` : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14) ? `осталось ${count} файла` : `осталось ${count} файлов`),
     nextFile: 'Следующий файл',
+    nextNamed: ({ name }) => `Далее · ${name}`,
     scopeA11y: 'Какие изменения показать',
     scopeTurn: 'Этот ход',
     scopeSession: 'Этот сеанс',
@@ -713,8 +723,9 @@ export const hunkReviewTranslations = {
     nextChange: '次の変更',
     keepAll: 'すべて承認',
     fileReviewed: 'このファイルの変更をすべて確認しました',
-    left: ({ left, total }) => `残り ${left} / ${total}`,
+    filesLeft: ({ count }) => `残り ${count} ファイル`,
     nextFile: '次のファイル',
+    nextNamed: ({ name }) => `次 · ${name}`,
     scopeA11y: '表示する変更',
     scopeTurn: 'このターン',
     scopeSession: 'このセッション',
@@ -782,8 +793,9 @@ export const hunkReviewTranslations = {
     nextChange: '下一项更改',
     keepAll: '全部保留',
     fileReviewed: '此文件的所有更改均已审查',
-    left: ({ left, total }) => `还剩 ${left} / ${total}`,
+    filesLeft: ({ count }) => `还剩 ${count} 个文件`,
     nextFile: '下一个文件',
+    nextNamed: ({ name }) => `下一个 · ${name}`,
     scopeA11y: '要显示的更改',
     scopeTurn: '本轮',
     scopeSession: '本会话',
@@ -848,8 +860,9 @@ export const hunkReviewTranslations = {
     nextChange: '下一項變更',
     keepAll: '全部保留',
     fileReviewed: '此檔案的所有變更皆已審查',
-    left: ({ left, total }) => `還剩 ${left} / ${total}`,
+    filesLeft: ({ count }) => `還剩 ${count} 個檔案`,
     nextFile: '下一個檔案',
+    nextNamed: ({ name }) => `下一個 · ${name}`,
     scopeA11y: '要顯示的變更',
     scopeTurn: '本輪',
     scopeSession: '本工作階段',

@@ -51,14 +51,14 @@ export function ReviewBar(props: ReviewBarProps) {
   const body = props.complete ? (
     <View style={styles.row}>
       {nextFileName ? (
-        // Lab rvp P2: the completion says it once, quietly, and names where Next file leads.
+        // Lab rvp P2: the completion says it once, quietly, and names where Next file leads ("Next · name").
         <View style={styles.message}>
           <Text variant="label" numberOfLines={1} style={{ color: theme.colors.text.secondary }}>
             {t('hunkReview.fileReviewed')}
           </Text>
           <Text testID="review-bar-next-file-name" variant="body" emphasis="semiBold" numberOfLines={1}
             ellipsizeMode="middle" style={{ color: theme.colors.text.primary }}>
-            {nextFileName}
+            {t('hunkReview.nextNamed', { name: nextFileName })}
           </Text>
         </View>
       ) : (

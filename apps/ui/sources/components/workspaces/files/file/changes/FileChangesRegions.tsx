@@ -44,7 +44,7 @@ export function FileChangesStrip(
   const complete =
     strip.fileComplete && review.status === 'ready'
       ? {
-          left: strip.remaining,
+          filesLeft: strip.filesLeft,
           nextFileName: strip.nextFile ? baseName(strip.nextFile) : null,
           onNextFile: strip.nextFile ? review.controller.nextFile : undefined,
         }
@@ -54,7 +54,7 @@ export function FileChangesStrip(
       testID="file-changes-strip"
       compact={phone}
       scope={scope}
-      current={strip.currentOrdinal}
+      current={strip.current}
       total={review.status === 'ready' ? strip.total : 0}
       onPrevious={strip.total > 0 ? review.controller.previous : undefined}
       onNext={strip.total > 0 ? review.controller.next : undefined}
@@ -185,7 +185,7 @@ export function FileChangesBody(
       {phone && strip.total > 0 ? (
         <ReviewBar
           testID="file-review-bar"
-          current={strip.currentOrdinal}
+          current={strip.current}
           total={strip.total}
           onPrevious={review.controller.previous}
           onNext={review.controller.next}

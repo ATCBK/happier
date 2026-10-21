@@ -181,8 +181,9 @@ export function useFileChangesReview(params: FileChangesReviewParams) {
         { view: 'changes', changesScope: current, intent: 'preview' });
     },
   });
+  // The File page numbers changes within this file, as its review line counts them.
   const hunks = React.useMemo(
-    () => ({ ...controller.hunks, numberTotal: controller.strip.total }),
+    () => ({ ...controller.hunks, numberOffset: 0, numberTotal: controller.strip.total }),
     [controller.hunks, controller.strip.total],
   );
 

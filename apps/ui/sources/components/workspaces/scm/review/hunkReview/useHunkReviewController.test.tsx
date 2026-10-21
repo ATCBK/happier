@@ -107,7 +107,8 @@ describe('hunk review through the shared keyboard and Account port', () => {
             return null;
         }
         await renderScreen(<Review />);
-        expect(controller.strip.total).toBe(4);
+        // The Review list numbers rows across files; the File page counts changes within the open file.
+        expect(controller.strip).toMatchObject({ current: 1, total: 2, filesLeft: 2 });
         expect(controller.hunksForPath('a.ts').currentIndex).toBe(0);
         expect(controller.hunksForPath('b.ts')).toMatchObject({ currentIndex: null, numberOffset: 2, numberTotal: 4 });
         await act(async () => { controller.next(); });
@@ -115,6 +116,7 @@ describe('hunk review through the shared keyboard and Account port', () => {
         expect(path).toBe('b.ts');
         expect(controller.hunksForPath('a.ts').currentIndex).toBeNull();
         expect(controller.hunksForPath('b.ts').currentIndex).toBe(0);
+        expect(controller.strip).toMatchObject({ current: 1, total: 2 });
         await act(async () => { controller.keepCurrent(); controller.discardCurrent?.(); controller.askCurrent?.(); });
         const key = buildReviewUnits('b.ts', undefined, patch)[0]!.key;
         expect(keep).toHaveBeenCalledWith([key], true);
@@ -144,7 +146,7 @@ describe('hunk review through the shared keyboard and Account port', () => {
         expect(firstReveal).toBe(keys[0]);
         // Scrolling to change 3 makes it the bar's target, without asking the page to scroll to it.
         await act(async () => { controller.followReadingLine(keys[2]!); });
-        expect(controller.strip.currentOrdinal).toBe(3);
+        expect(controller.strip.current).toBe(3);
         expect(controller.currentHunk?.key).toBe(keys[2]);
         expect(controller.revealHunk).toBeNull();
         expect(navigated).not.toHaveBeenCalled();

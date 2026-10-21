@@ -25,7 +25,8 @@ describe('File page Changes: the next changed file', () => {
         await renderScreen(<Page />);
         expect(controller.strip.fileComplete).toBe(true);
         expect(controller.strip.nextFile).toBe('src/c.ts');
-        expect(controller.strip.total).toBe(1);
+        // Changes are counted within this file; the checkout's other changed files are counted as files (orchestrator r6 ruling).
+        expect(controller.strip).toMatchObject({ current: 1, total: 1, filesLeft: 2 });
         await act(async () => { controller.nextFile(); });
         expect(opened).toEqual(['src/c.ts']);
     });
