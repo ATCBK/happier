@@ -3,7 +3,7 @@ import type { Server } from 'socket.io';
 
 /** Socket.IO room discovery is a network boundary, including its timed form. */
 export function createSocketRoomDiscoveryHarness(resolveSockets: (room: string) => Promise<readonly unknown[]>): Server {
-    return { in: (room: string) => {
+    return { sockets: { sockets: new Map(), adapter: { rooms: new Map() } }, in: (room: string) => {
         const discovery = { fetchSockets: () => resolveSockets(room), timeout: (_timeoutMs: number) => discovery };
         return discovery;
     } } as unknown as Server;

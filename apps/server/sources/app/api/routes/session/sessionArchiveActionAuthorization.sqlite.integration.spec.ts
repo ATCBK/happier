@@ -170,13 +170,18 @@ async function createApp(resolveCurrentSessionMachine: () => Promise<string | nu
     return { app };
 }
 
-it.each(['session.archive', 'session.unarchive'] as const)('admits installed lifecycle signatures through the production archive route: %s', async actionId => {
+it.each([
+    ['session.archive', 'self'], ['session.archive', 'child'], ['session.unarchive', 'child'],
+] as const)('admits installed lifecycle signatures through the production archive route: %s (%s)', async (actionId, target) => {
     const fixture = await createFixture();
     const caller = await db.session.create({ data: { accountId: fixture.account.id,
         tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
     const child = await db.session.create({ data: { accountId: fixture.account.id,
         tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}', active: false,
         archivedAt: actionId === 'session.unarchive' ? new Date(123) : null } });
+    expect(await setSessionManager({ accountId: fixture.account.id, sessionId: child.id,
+        managerSessionId: caller.id, expectedManagerSessionId: null,
+        authentication: createPresentUserSessionAccessAuthentication({ env: {} }) })).toMatchObject({ ok: true });
     await db.accessKey.create({ data: { accountId: fixture.account.id, machineId: fixture.machine.id,
         sessionId: caller.id, data: 'installed-lifecycle-source' } });
     let publisher: string | null = fixture.machine.id;
@@ -189,7 +194,8 @@ it.each(['session.archive', 'session.unarchive'] as const)('admits installed lif
             sourceTurnId: 'lifecycle-turn', requestId: crypto.randomUUID(), callerPermissionMode: 'default' });
         const source = { machineId: fixture.machine.id, installationId: fixture.machine.installationId! };
         const envelope = { v: 1 as const, requestId: origin.requestId,
-            target: { kind: 'machine' as const, machineId: fixture.machine.id }, input: { sessionId: child.id } };
+            target: { kind: 'machine' as const, machineId: fixture.machine.id },
+            input: { sessionId: target === 'self' ? caller.id : child.id } };
         const installationProof = signMachineInstallationProof({ privateKey: fixture.keyPair.secretKey,
             payload: { version: 1, accountId: fixture.account.id, ...source,
                 externalActionOrigin: { homeId, actionId, requestId: origin.requestId,
@@ -211,6 +217,12 @@ it.each(['session.archive', 'session.unarchive'] as const)('admits installed lif
             } });
         };
         const operation = actionId === 'session.archive' ? 'archive' : 'unarchive';
+        if (target === 'self') {
+            await db.session.update({ where: { id: caller.id }, data: { active: true } });
+            const ownActive = await invoke(operation, caller.id);
+            expect(ownActive.statusCode, ownActive.body).toBe(409);
+            return;
+        }
         const result = await invoke(operation);
         expect(result.statusCode, result.body).toBe(200);
         const persisted = await db.session.findUniqueOrThrow({ where: { id: child.id } });

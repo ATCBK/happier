@@ -88,6 +88,7 @@ import { bindDiscussionCandidatePeopleReadV1, projectDiscussionCandidateSessionQ
 import { UsersSearchQueryV1Schema } from '@happier-dev/protocol/social/friends';
 import { SESSION_FOLLOW_RULES_ROUTE_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
 import { isMemoryWriteActionV1 } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
+import { log } from '@/utils/logging/log';
 
 export type VerifiedExternalActionPrincipal = VerifiedApiTokenPrincipal
     | (Extract<ExternalActionServerPrincipalV1, { authentication: unknown }>
@@ -705,20 +706,35 @@ function isSessionArchiveStopEffect(rootActionId: string, effectActionId: string
     return rootActionId === 'session.archive' && effectActionId === 'session.stop';
 }
 
+/** Fixed labels only: signed proofs and caller-controlled content never enter logs. */
+function refuseExternalActionExecutionRequest(phase:
+    | 'proof_shape' | 'authorization_token' | 'resolved_target' | 'original_target' | 'pending_reset_admission'
+    | 'effect_family' | 'server_identity' | 'custody_purpose' | 'custody_before_principal'
+    | 'source_before_principal' | 'machine_identity' | 'machine_admission_before_principal' | 'machine_signature'
+    | 'principal' | 'machine_admission_after_principal' | 'source_after_principal' | 'final_credential'
+    | 'final_machine_admission' | 'final_original_target' | 'final_custody'
+    | 'outer_action' | 'verification_purpose' | 'credential_action_admission',
+): null {
+    log({ module: 'external-action-authorization-refusal', phase });
+    return null;
+}
+
 async function verifyCommon(
     proof: ExternalActionExecutionRequestProof,
 ): Promise<VerifiedExternalActionExecutionRequest | null> {
     const effectActionId = ExternalActionActionIdV1Schema.safeParse(proof.effectActionId);
     const target = decodeExternalActionResolvedTargetV1(proof.encodedTarget);
-    if (!effectActionId.success || !target) return null;
+    if (!effectActionId.success || !target) return refuseExternalActionExecutionRequest('proof_shape');
 
     const binding = await auth.verifyExternalActionExecutionAuthorization(proof.authorizationToken);
-    if (!binding || !isExternalActionResolvedTargetAllowedV1({
+    if (!binding) return refuseExternalActionExecutionRequest('authorization_token');
+    if (!isExternalActionResolvedTargetAllowedV1({
         authorizedTarget: binding.target,
         resolvedTarget: target,
         selectedMachineId: binding.machineId,
-    }) || !await hasCurrentOriginalSessionActionTargetInTx(db, binding, target)) return null;
-    if (binding.actionId === 'session.pending.resetStart.set' && !binding.pendingResetStartAdmission) return null;
+    })) return refuseExternalActionExecutionRequest('resolved_target');
+    if (!await hasCurrentOriginalSessionActionTargetInTx(db, binding, target)) return refuseExternalActionExecutionRequest('original_target');
+    if (binding.actionId === 'session.pending.resetStart.set' && !binding.pendingResetStartAdmission) return refuseExternalActionExecutionRequest('pending_reset_admission');
     const resolvesPatEffect = !('authentication' in binding)
         && (binding.actionId === 'approval.request.create' || binding.actionId === 'action.invoke'
             || parseQualifiedPluginActionId(binding.actionId) !== null);
@@ -731,8 +747,8 @@ async function verifyCommon(
                 && !isWorkflowDiscussionPreparationEffect(binding.actionId, effectActionId.data)
                 && !isMemoryExposureReadEffect(binding.actionId, effectActionId.data)
                 && !isSessionArchiveStopEffect(binding.actionId, effectActionId.data)
-                && !isDocDecisionPreparationEffect(binding.actionId, effectActionId.data))) return null;
-    if (binding.serverIdentityId !== await getOrCreateServerIdentityId()) return null;
+                && !isDocDecisionPreparationEffect(binding.actionId, effectActionId.data))) return refuseExternalActionExecutionRequest('effect_family');
+    if (binding.serverIdentityId !== await getOrCreateServerIdentityId()) return refuseExternalActionExecutionRequest('server_identity');
     const currentnessBody = ExternalActionExecutionAuthorizationVerifyRequestV1Schema.safeParse(proof.body);
     const custodyTarget = currentnessBody.success ? currentnessBody.data.managedFiniteWakeTarget : undefined;
     const readCustody = custodyTarget ? async () => {
@@ -742,9 +758,9 @@ async function verifyCommon(
         });
     } : undefined;
     if (custodyTarget && (proof.method.toUpperCase() !== 'POST'
-        || proof.path !== bindExternalActionExecutionAuthorizationVerifyHttpPathV1(binding.actionId))) return null;
+        || proof.path !== bindExternalActionExecutionAuthorizationVerifyHttpPathV1(binding.actionId))) return refuseExternalActionExecutionRequest('custody_purpose');
     const custody = await readCustody?.();
-    if (custodyTarget && !custody) return null;
+    if (custodyTarget && !custody) return refuseExternalActionExecutionRequest('custody_before_principal');
     const report = proof.method.toUpperCase() === 'POST' && proof.path.split('?')[0] === '/v1/machines/managed/controller/report'
         ? ManagedControllerReportV1Schema.safeParse(proof.body) : null;
     const intentReport = proof.method.toUpperCase() === 'POST' && proof.path.split('?')[0] === '/v1/machines/managed/controller/report-intent'
@@ -760,7 +776,7 @@ async function verifyCommon(
         : intentReport?.success && await isIssuedIntentNativeFactReportInTx(db, binding, intentReport.data)
             ? { kind: 'issued-managed-intent-native-fact', report: intentReport.data }
             : isHandoffChildIssue ? { kind: 'issued-handoff-continuation' } : undefined;
-    if (!purpose && !await hasCurrentExternalActionSessionSource(binding, proof.resolveCurrentSessionMachine)) return null;
+    if (!purpose && !await hasCurrentExternalActionSessionSource(binding, proof.resolveCurrentSessionMachine)) return refuseExternalActionExecutionRequest('source_before_principal');
 
     const machine = await db.machine.findFirst({
         where: { id: binding.machineId, accountId: binding.custodianAccountId, installationId: binding.installationId },
@@ -804,24 +820,25 @@ async function verifyCommon(
         || classifyMachineAvailabilityState(machine) !== "available"
         || !machine.installationId
         || !machine.installationPublicKey
-        || !await hasCurrentExecutionMachineAdmission(binding, machine)
-        || !signatureCurrent
     ) {
-        return null;
+        return refuseExternalActionExecutionRequest('machine_identity');
     }
+    if (!await hasCurrentExecutionMachineAdmission(binding, machine)) return refuseExternalActionExecutionRequest('machine_admission_before_principal');
+    if (!signatureCurrent) return refuseExternalActionExecutionRequest('machine_signature');
 
     // Login eligibility may await a provider; publisher currentness is checked
     // afterwards, followed by the current persisted credential and admissions.
     const currentPrincipal = await verifyCurrentExternalActionPrincipalForPurpose(binding, purpose);
     const principal = currentPrincipal && projectVerifiedExternalActionBoundPrincipal(binding, currentPrincipal);
-    if (!principal || !await hasCurrentExecutionMachineAdmission(binding)) return null;
-    if (!purpose && !await hasCurrentExternalActionSessionSource(binding, proof.resolveCurrentSessionMachine)) return null;
-    if (!await readCurrentExternalActionPrincipal(binding, db, purpose)
-        || !await hasCurrentExecutionMachineAdmission(binding)
-        || !await hasCurrentOriginalSessionActionTargetInTx(db, binding, target)) return null;
+    if (!principal) return refuseExternalActionExecutionRequest('principal');
+    if (!await hasCurrentExecutionMachineAdmission(binding)) return refuseExternalActionExecutionRequest('machine_admission_after_principal');
+    if (!purpose && !await hasCurrentExternalActionSessionSource(binding, proof.resolveCurrentSessionMachine)) return refuseExternalActionExecutionRequest('source_after_principal');
+    if (!await readCurrentExternalActionPrincipal(binding, db, purpose)) return refuseExternalActionExecutionRequest('final_credential');
+    if (!await hasCurrentExecutionMachineAdmission(binding)) return refuseExternalActionExecutionRequest('final_machine_admission');
+    if (!await hasCurrentOriginalSessionActionTargetInTx(db, binding, target)) return refuseExternalActionExecutionRequest('final_original_target');
     if (readCustody) {
         const current = await readCustody();
-        if (!current || current.installationPublicKey !== custody?.installationPublicKey) return null;
+        if (!current || current.installationPublicKey !== custody?.installationPublicKey) return refuseExternalActionExecutionRequest('final_custody');
     }
     return { binding, effectActionId: effectActionId.data, target, principal, effectiveAuthority: principal.authority };
 }
@@ -2260,12 +2277,13 @@ export async function verifyExternalActionExecutionAuthorizationCurrentness(
     proof: ExternalActionExecutionRequestProof & Readonly<{ outerActionId: string }>,
 ): Promise<VerifiedExternalActionExecutionRequest | null> {
     const verified = await verifyCommon(proof);
-    if (!verified || verified.binding.actionId !== proof.outerActionId) return null;
+    if (!verified) return null;
+    if (verified.binding.actionId !== proof.outerActionId) return refuseExternalActionExecutionRequest('outer_action');
     if (
         proof.method.toUpperCase() !== "POST"
         || proof.path !== bindExternalActionExecutionAuthorizationVerifyHttpPathV1(proof.outerActionId)
     ) {
-        return null;
+        return refuseExternalActionExecutionRequest('verification_purpose');
     }
     const effect = parseExternalActionEffectAction(verified.binding, verified.effectActionId);
     const credentialAction = verified.binding.handoffContinuation
@@ -2275,6 +2293,6 @@ export async function verifyExternalActionExecutionAuthorizationCurrentness(
         authority: verified.effectiveAuthority, grant: 'grant' in verified.binding ? verified.binding.grant : null,
         // This verifies the admitted proposal, not a native effect. Human
         // execution floors remain enforced by the domain and RPC owners.
-        surface: readExternalActionSessionProposalSurface(verified.binding) }).ok) return null;
+        surface: readExternalActionSessionProposalSurface(verified.binding) }).ok) return refuseExternalActionExecutionRequest('credential_action_admission');
     return verified;
 }

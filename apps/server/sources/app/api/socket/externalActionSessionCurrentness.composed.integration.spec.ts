@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyRequest, FastifyReply } from 'fastify';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { symbols, type DestinationStream } from 'pino';
+import { logger } from '@/utils/logging/log';
 import nacl from 'tweetnacl';
 import { Server } from 'socket.io';
 import { io as ioClient } from 'socket.io-client';
@@ -36,6 +38,7 @@ import { registerExternalActionRoutes } from '../routes/actions/registerExternal
 import { registerAccountEncryptionRoutes } from '../routes/account/registerAccountEncryptionRoutes';
 import { registerAccountSettingsRoutes } from '../routes/account/registerAccountSettingsRoutes';
 import { registerSessionListingRoutes } from '../routes/session/registerSessionListingRoutes';
+import { registerSessionArchiveRoutes } from '../routes/session/registerSessionArchiveRoutes';
 import { sessionPendingRoutes } from '../routes/session/pendingRoutes';
 import { machinesRoutes } from '../routes/machines/machinesRoutes';
 import { featuresRoutes } from '../routes/features/featuresRoutes';
@@ -51,7 +54,8 @@ import { createCliActionExecutorFromCredentials } from '../../../../../cli/src/s
 import { createDaemonExternalActionTargetResolver } from '../../../../../cli/src/daemon/externalActions/daemonExternalActionTargetResolver';
 import { executeExternalAction } from '../../../../../cli/src/daemon/externalActions/executeExternalAction';
 import { verifyExternalActionExecutionAuthorizationCurrent, createExternalActionAuthorizedRequestHeaders,
-    projectExternalActionRequesterHttpAuthorization } from '../../../../../cli/src/api/externalActionExecutionAuthorization';
+    projectExternalActionRequesterHttpAuthorization,
+    prepareExternalActionRequesterAccountAuthorization } from '../../../../../cli/src/api/externalActionExecutionAuthorization';
 import { createActionSettingsProvider } from '../../../../../cli/src/settings/actionsSettingsProvider';
 import { createCliApprovalsArtifactStore } from '../../../../../cli/src/session/actions/approvals/artifactStore';
 import { runWithServerHttpBaseUrl } from '../../../../../cli/src/api/client/serverHttpBaseUrl';
@@ -77,14 +81,16 @@ describe('original external Session Action currentness composition', () => {
         { kind: 'terminal', accountMode: 'e2ee', sessionMode: 'e2ee', runConsent: 'waived', publisherGap: true },
         { kind: 'account', accountMode: 'plain', sessionMode: 'plain', runConsent: 'waived', memoryExposure: true },
         { kind: 'account', accountMode: 'e2ee', sessionMode: 'e2ee', runConsent: 'waived', memoryExposure: true },
-    ] as const)('sends through real daemon execution for $kind, $accountMode Account, $sessionMode Session, $runConsent Run consent, publisher gap $publisherGap, memory exposure $memoryExposure', async scenario => {
+        { kind: 'account', accountMode: 'e2ee', sessionMode: 'e2ee', runConsent: 'waived', selfArchive: true },
+    ] as const)('sends through real daemon execution for $kind, $accountMode Account, $sessionMode Session, $runConsent Run consent, publisher gap $publisherGap, memory exposure $memoryExposure, self archive $selfArchive', async scenario => {
         const { kind, accountMode, sessionMode, runConsent } = scenario;
         const publisherGap = 'publisherGap' in scenario && scenario.publisherGap;
         const memoryExposure = 'memoryExposure' in scenario && scenario.memoryExposure;
+        const selfArchive = 'selfArchive' in scenario && scenario.selfArchive;
         const material = { type: 'dataKey' as const, machineKey: new Uint8Array(32).fill(17) };
         const contentKey = nacl.box.keyPair.fromSecretKey(material.machineKey).publicKey;
         const signing = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(
-            memoryExposure ? accountMode === 'plain' ? 27 : 28
+            selfArchive ? 29 : memoryExposure ? accountMode === 'plain' ? 27 : 28
                 : accountMode === 'plain' ? 23 : kind === 'terminal' ? 22 : runConsent === 'ask' ? 20 : 18));
         const account = await db.account.create({ data: {
             encryptionMode: accountMode, publicKey: Buffer.from(signing.publicKey).toString('hex'),
@@ -155,6 +161,7 @@ describe('original external Session Action currentness composition', () => {
         registerAccountEncryptionRoutes(app);
         registerAccountSettingsRoutes(app);
         registerSessionListingRoutes(app);
+        registerSessionArchiveRoutes(app);
         sessionPendingRoutes(app);
         machinesRoutes(app);
         app.get('/v2/sessions/:sessionId/qa8-unbound', { preHandler: app.authenticate,
@@ -301,6 +308,52 @@ describe('original external Session Action currentness composition', () => {
             daemon.connect(); publisher.connect(); await connected; await ready;
             expect(await resolveCurrentSessionMachineFromServer({ io, presence, accountId: account.id, sessionId: session.id }))
                 .toBe(machineId);
+            if (selfArchive) {
+                const actionId = 'session.archive';
+                const requestId = randomUUID();
+                const target = { kind: 'machine' as const, machineId };
+                const authorization = await prepareExternalActionRequesterAccountAuthorization({
+                    actionId, input: { sessionId: session.id }, requestId, target, machineId,
+                    sourceMachineId: machineId, accountId: account.id, accountEncryptionMode: accountMode,
+                    tokenEpochHint: account.tokenEpoch, token, material,
+                    serverId: 'qa8-profile', serverIdentityId: homeId, serverHttpBaseUrl,
+                    installationId, privateKey: installation.secretKey,
+                    sessionActionOrigin: { v: 1, caller: { kind: 'session', sessionId: session.id,
+                        starterDepth: 0, turnDepth: 0 }, sourceTurnId: 'self-archive-turn',
+                        callerPermissionMode: 'default', requestId },
+                });
+                expect(authorization).not.toBeNull();
+                if (!authorization) throw new Error('Own Session root must pass the real publisher resolver');
+                expect((await presence.registerPublisher({ socket: publisherSocket!,
+                    binding: { accountId: account.id, machineId, sessionId: session.id },
+                    completeActivitySnapshot: { state: 'active', activeCount: 1 } })).status).toBe('registered');
+                expect((await presence.touchPublisher({ socket: publisherSocket! })).status).toBe('touched');
+                expect(await verifyExternalActionExecutionAuthorizationCurrent({ authorization, effectActionId: actionId,
+                    target, installationId, privateKey: installation.secretKey, serverHttpBaseUrl })).toBe(true);
+                const path = `/v2/sessions/${session.id}/archive`;
+                const response = await app.inject({ method: 'POST', url: path, payload: {}, headers:
+                    createExternalActionAuthorizedRequestHeaders({ authorization, effectActionId: actionId,
+                        target, installationId, privateKey: installation.secretKey, method: 'POST', path, body: {} }) });
+                expect(response.statusCode, response.body).toBe(409);
+                expect((await db.session.findUniqueOrThrow({ where: { id: session.id } })).active).toBe(true);
+                expect((await presence.closePublisher({ socket: publisherSocket! })).status).toBe('closed');
+                const records: unknown[] = [];
+                // Capture only the external logging sink; authorization and publisher resolution remain real.
+                const stream = Reflect.get(logger, symbols.streamSym) as DestinationStream;
+                const sink = vi.spyOn(stream, 'write').mockImplementation(chunk => { records.push(JSON.parse(String(chunk))); });
+                try {
+                    expect(await verifyExternalActionExecutionAuthorizationCurrent({ authorization, effectActionId: actionId,
+                        target, installationId, privateKey: installation.secretKey, serverHttpBaseUrl })).toBe(false);
+                    const refusals = records.filter(record => record && typeof record === 'object'
+                        && 'module' in record && record.module === 'external-action-authorization-refusal');
+                    expect(refusals).toEqual([expect.objectContaining({ phase: 'source_before_principal' })]);
+                    const serialized = JSON.stringify(refusals);
+                    for (const privateValue of [authorization.token, token, account.id, session.id, machineId, requestId]) {
+                        expect(serialized).not.toContain(privateValue);
+                    }
+                } finally { sink.mockRestore(); }
+                return;
+            }
             if (memoryExposure) {
                 const created = await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => createMemoryDocInLibrary({
                     store: approverStore.promptLibraryStore, randomId: randomUUID, sourceSessionRef: null,
