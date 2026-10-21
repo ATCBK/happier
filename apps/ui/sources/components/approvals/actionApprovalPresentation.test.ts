@@ -21,6 +21,37 @@ describe('the shared Action approval presentation owner', () => {
         const summary = presentActionApproval({ actionId: 'localServices.launcher.start', actionArgs }).summary;
         expect(summary).toBe('Start httpPort from qaS-studio.');
     });
+    it('names the Service a Stop or Restart confirmation acts on, with a destructive Stop', async () => {
+        const target = { kind: 'managed_service', managedServiceId: 'managed-a', machineId: 'worker',
+            declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'httpPort' } } };
+        const stopArgs = getActionSpec('localServices.actions.stopManaged').inputSchema.parse({ requestId: 'r1', target, action: 'stop_managed' });
+        const restartArgs = getActionSpec('localServices.actions.restartManaged').inputSchema.parse({ requestId: 'r2', target, action: 'restart_managed' });
+        // The request an Agent or the CLI creates carries the same Service name in its stored summary.
+        expect(buildApprovalPreviewSummary(getActionSpec('localServices.actions.stopManaged'), stopArgs)).toBe('Stop httpPort.');
+        expect(buildApprovalPreviewSummary(getActionSpec('localServices.actions.restartManaged'), restartArgs)).toBe('Restart httpPort.');
+        // The confirmation names where the Service runs through the same Machine reference reader as other Machine Actions.
+        expect(readActionApprovalSubject({ actionId: 'localServices.actions.stopManaged', actionArgs: stopArgs })).toEqual({ kind: 'machine', id: 'worker' });
+        expect(readActionApprovalSubject({ actionId: 'localServices.actions.restartManaged', actionArgs: restartArgs })).toEqual({ kind: 'machine', id: 'worker' });
+        const stop = presentActionApproval({ actionId: 'localServices.actions.stopManaged', actionArgs: stopArgs, subject: 'NLDW4-5-40-40' });
+        expect(stop).toMatchObject({ title: 'Stop httpPort?', confirmLabel: 'Stop', destructive: true });
+        expect(stop.summary).toBe('This stops httpPort on NLDW4-5-40-40 now. Anything using its address loses its connection.');
+        const restart = presentActionApproval({ actionId: 'localServices.actions.restartManaged', actionArgs: restartArgs, subject: 'NLDW4-5-40-40' });
+        expect(restart).toMatchObject({ title: 'Restart httpPort?', confirmLabel: 'Restart' });
+        expect(restart.destructive).toBeFalsy();
+        expect(restart.summary).toContain('httpPort on NLDW4-5-40-40');
+        // Without a known Machine the sentence stays true; without a declared name it says "this service".
+        expect(presentActionApproval({ actionId: 'localServices.actions.stopManaged', actionArgs: stopArgs }).summary)
+            .toBe('This stops httpPort now. Anything using its address loses its connection.');
+        const unnamed = getActionSpec('localServices.actions.stopManaged').inputSchema.parse({
+            requestId: 'r3', action: 'stop_managed', target: { kind: 'managed_service', managedServiceId: 'managed-b', machineId: 'worker' } });
+        expect(presentActionApproval({ actionId: 'localServices.actions.stopManaged', actionArgs: unnamed }).title).toBe('Stop this service?');
+        // The Action's own title (no input yet) stays the settings/catalog name.
+        expect(presentActionApproval({ actionId: 'localServices.actions.stopManaged' }).title).toBe('Stop a local service');
+        await preloadTranslations('fr');
+        setPreferredLanguageFromSettings('fr');
+        expect(presentActionApproval({ actionId: 'localServices.actions.stopManaged', actionArgs: stopArgs, subject: 'NLDW4-5-40-40' }))
+            .toMatchObject({ title: 'Arrêter httpPort ?', confirmLabel: 'Arrêter' });
+    });
     it('exposes literal reviewed file operands separately from their formatted approval description', () => {
         const actionArgs = { rootPath: '/repo', path: '/repo/ leading file ', content: 'aGVsbG8=' };
         const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,

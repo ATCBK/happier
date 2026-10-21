@@ -8,6 +8,7 @@ import { getPreferredLanguage } from '@/text/i18n';
 import type { RoleCatalogEntry } from '@/sync/domains/roles/roleCatalog';
 import { RoleActionInputSchemasV1 } from '@happier-dev/protocol/prompts/roles/roleActionsV1';
 import { readWidgetApprovalPresentationV1 } from '@happier-dev/protocol/widgets';
+import { presentLocalServiceControlApproval, readLocalServiceControlSubject } from './localServiceControlApprovalPresentation';
 
 export type ActionApprovalPresentationInput = Readonly<{
     actionId: string;
@@ -30,6 +31,8 @@ export function readActionApprovalRoleId(input: ActionApprovalPresentationInput)
 
 /** The existing Protocol reference projection owns subject identity, never a caller's id guess. */
 export function readActionApprovalSubject(input: ActionApprovalPresentationInput): ApprovalActionReference | undefined {
+    const serviceControl = readLocalServiceControlSubject(input);
+    if (serviceControl) return serviceControl;
     const references = describeApprovalActionFields({ ...input, actionArgs: input.actionArgs }).rows.flatMap(row => row.kind === 'value'
         ? [...(row.reference ? [row.reference] : []), ...(row.entries?.flatMap(entry => entry.reference ? [entry.reference] : []) ?? [])]
         : []);
@@ -40,7 +43,9 @@ export function readActionApprovalSubject(input: ActionApprovalPresentationInput
 }
 
 /** One UI copy boundary for confirmation, Inbox, page and preview; authored plugin copy stays authored. */
-export function presentActionApproval(input: ActionApprovalPresentationInput): Readonly<{ title: string | null; summary: string | null; confirmLabel: string | null }> {
+export function presentActionApproval(input: ActionApprovalPresentationInput): Readonly<{ title: string | null; summary: string | null; confirmLabel: string | null; destructive?: boolean }> {
+    const serviceControl = presentLocalServiceControlApproval({ actionId: input.actionId, actionArgs: input.actionArgs, subject: input.subject });
+    if (serviceControl) return serviceControl;
     const parsed = ActionIdSchema.safeParse(input.actionId);
     if (!parsed.success) return { title: input.authoredTitle?.trim() || null, summary: input.authoredSummary?.trim() || null, confirmLabel: null };
     const spec = getActionSpec(parsed.data);

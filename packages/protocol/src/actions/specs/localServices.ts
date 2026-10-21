@@ -7,6 +7,7 @@ import {
   LocalServiceActionResultV1Schema,
   type LocalServiceActionKindV1,
   type LocalServiceActionRequestV1,
+  type ProjectServiceDeclarationRefV1,
 } from '../../local/services/actions/v1.js';
 import { DaemonLocalServiceInventorySnapshotRequestV1Schema, DaemonLocalServiceInventorySnapshotResponseV1Schema,
   LocalServiceInventorySnapshotV1Schema } from '../../local/services/inventory/v1.js';
@@ -301,21 +302,43 @@ export const LOCAL_SERVICES_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
   'localServices.actions.terminateDetected': LocalServiceActionResultV1Schema,
 } as const satisfies Readonly<Record<LocalServicesRuntimeActionId, z.ZodMiniType>>);
 
+/** The name a person knows a declared Service by: its manifest name, or the native script it came from. */
+export function readLocalServiceDeclarationName(
+  declaration: Readonly<{ selection: ProjectServiceDeclarationRefV1['selection'] }> | undefined,
+): string | null {
+  const selection = declaration?.selection;
+  if (!selection) return null;
+  return selection.kind === 'manifest' ? selection.name : selection.source.target;
+}
+
 /**
  * The Start request in the words of the Services page: which Service, from which project. The spec
  * description stays agent-facing; a declared Start without a declaration keeps it.
  */
 export function describeLocalServiceStartApprovalSummary(input: unknown): string | null {
   const request = DaemonLocalServiceLauncherStartRequestV1Schema.safeParse(input);
-  const selection = request.success ? request.data.declaration?.selection : undefined;
-  if (!request.success || !selection) return null;
-  const service = selection.kind === 'manifest' ? selection.name : selection.source.target;
+  const service = request.success ? readLocalServiceDeclarationName(request.data.declaration) : null;
+  if (!request.success || !service) return null;
   const project = request.data.workspace?.rootPath.split(/[\\/]+/).filter(Boolean).pop();
   return project ? `Start ${service} from ${project}.` : `Start ${service}.`;
 }
 
+/** Stop and Restart name the declared Service they act on; an undeclared one keeps the Action description. */
+function describeLocalServiceControlApprovalSummary(verb: 'Stop' | 'Restart') {
+  return (input: unknown): string | null => {
+    const target = LocalServiceActionRequestV1Schema.safeParse(input);
+    const service = target.success && target.data.target.kind === 'managed_service'
+      ? readLocalServiceDeclarationName(target.data.target.declaration) : null;
+    return service ? `${verb} ${service}.` : null;
+  };
+}
+
 export const LOCAL_SERVICES_RUNTIME_ACTION_SPEC_FAMILY = Object.freeze({
-  approvalSummaries: { 'localServices.launcher.start': describeLocalServiceStartApprovalSummary },
+  approvalSummaries: {
+    'localServices.launcher.start': describeLocalServiceStartApprovalSummary,
+    'localServices.actions.stopManaged': describeLocalServiceControlApprovalSummary('Stop'),
+    'localServices.actions.restartManaged': describeLocalServiceControlApprovalSummary('Restart'),
+  },
   approvalPolicies: {
     // A person's own Start is reversible and the Services page owns its designed setup/copy review;
     // Agent, CLI and automation requests keep the approval floor. Stop and Restart keep their confirmation.

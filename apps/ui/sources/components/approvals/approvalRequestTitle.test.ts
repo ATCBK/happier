@@ -22,4 +22,15 @@ describe('resolveApprovalRequestTitle', () => {
         });
         expect(resolved.title).toBe('Release night sync');
     });
+
+    it('titles an Agent-requested Service Stop or Restart by the Service, from the summary the request stores', () => {
+        const target = { kind: 'managed_service', managedServiceId: 'managed-a', machineId: 'worker',
+            declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'httpPort' } } };
+        for (const [actionId, action, summary, title] of [
+            ['localServices.actions.stopManaged', 'stop_managed', 'Stop httpPort.', 'Stop httpPort?'],
+            ['localServices.actions.restartManaged', 'restart_managed', 'Restart httpPort.', 'Restart httpPort?'],
+        ] as const) {
+            expect(resolveApprovalRequestTitle({ storedTitle: summary, actionId, actionArgs: { requestId: 'r', target, action } }).title).toBe(title);
+        }
+    });
 });
