@@ -181,6 +181,9 @@ export const DEV_TARGET_MUTAGEN_IGNORE_PATHS = [
   '/.project/plans/**/*.pyc',
   '/.project/plans/**/*.log',
   '/.project/plans/**/*.trace',
+  // Heap and CPU profiles are large live captures written while sampling.
+  '/.project/plans/**/*.heapsnapshot',
+  '/.project/plans/**/*.cpuprofile',
   // Browser QA owners rewrite this diagnostics snapshot continuously; it races
   // every remote barrier exactly like the append-only traces above.
   '/.project/plans/**/browser-diagnostics.json',

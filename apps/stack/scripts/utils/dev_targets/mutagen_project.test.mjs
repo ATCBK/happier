@@ -181,6 +181,8 @@ test('renderMutagenProject creates one-way source replicas while retaining targe
     '/.project/plans/**/*.pyc',
     '/.project/plans/**/*.log',
     '/.project/plans/**/*.trace',
+    '/.project/plans/**/*.heapsnapshot',
+    '/.project/plans/**/*.cpuprofile',
     '/.project/plans/**/browser-diagnostics.json',
     '/.project/plans/**/.DS_Store',
   ]) {
