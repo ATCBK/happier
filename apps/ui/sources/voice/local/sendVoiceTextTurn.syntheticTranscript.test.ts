@@ -1,11 +1,12 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMachineFixture, createSessionFixture, createSessionMessagesFixture } from '@/dev/testkit';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
 import { MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
 import { serveAccountHomes, installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
 import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
@@ -209,7 +210,7 @@ describe('sendVoiceTextTurn native-session transcript ownership', () => {
     account = await serveAccountHomes({ homes: [
       { key: 'other', serverUrl: 'https://transcript-other.test', accountId: 'account-b' },
       { key: 'voice', serverUrl: 'https://transcript-voice.test', accountId: 'account-a', currentAccount: true, settings: buildAccountSettings() },
-    ], route: request => {
+    ], route: createSessionReadBatchHttpBoundary(request => {
       if (request.path === '/v1/account/profile') return request.accountId
         ? Response.json({ ...profileDefaults, id: request.accountId })
         : Response.json({}, { status: 401 });
@@ -224,6 +225,8 @@ describe('sendVoiceTextTurn native-session transcript ownership', () => {
       // through another Home's real scoped fetch.
       if (request.home === 'other') return undefined;
       const machine = createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' });
+      if (request.path === '/v1/machines/read-batch' && request.method === 'POST') return createMachineReadBatchResponseFixture(
+        request.body, id => id === machine.id ? machine : null);
       if (request.path === '/v1/machines') return Response.json([machine]);
       if (request.path === '/v1/machines/machine-1') return Response.json({ machine });
       if (/^\/v2\/sessions\/[^/]+\/pending$/.test(request.path)) {
@@ -241,7 +244,7 @@ describe('sendVoiceTextTurn native-session transcript ownership', () => {
       if (/^\/v1\/sessions\/[^/]+\/messages$/.test(request.path)) return Response.json({ messages: [], hasMore: false });
       return sessionMetadata.handle(request.url, { method: request.method,
         ...(request.body !== undefined ? { body: JSON.stringify(request.body) } : {}) }) ?? undefined;
-    } });
+    }).handle });
     disconnect = await account.restoreActiveConnection();
     const { sync } = await import('@/sync/sync');
     await sync.resumeSync('manual');
@@ -551,7 +554,9 @@ describe('sendVoiceTextTurn native-session transcript ownership', () => {
     });
 
     expect(pendingWrites('s1')).toEqual([]);
-    expect(account.requests.filter(request => request.home === 'other' && request.method === 'POST')).toEqual([]);
+    // Batch snapshots are reads even though their bounded request uses POST.
+    expect(account.requests.filter(request => request.home === 'other' && request.method === 'POST'
+      && request.path !== '/v2/sessions/read-batch')).toEqual([]);
   });
 
   it('rethrows agent-mode send failures after recording the error state', async () => {

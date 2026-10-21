@@ -18,6 +18,7 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
 import { useBundledConversationProviderSettings } from '@/voice/settings/panels/realtime/useBundledConversationProviderSettings';
 import { useRealtimeVoiceCatalog } from '@/voice/settings/panels/realtime/realtimeVoiceCatalogMenu';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 // The browser locale and native presentation SDKs are external boundaries;
 // translation, modal lifecycle, storage and provider/catalog owners stay real.
@@ -100,8 +101,13 @@ describe('Work voice source display', () => {
         activeAt: Date.now(), access: machineRow.access })]);
       const homeRequest = account.request.getMockImplementation();
       if (!homeRequest) throw new Error('Home HTTP boundary missing');
-      account.request.mockImplementation(async (input, init) => new URL(String(input)).pathname === '/v1/machines/catalog-machine'
-        ? Response.json({ machine: machineRow }) : await homeRequest(input, init));
+      account.request.mockImplementation(async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(
+          JSON.parse(String(init.body)), id => id === machineRow.id ? machineRow : null);
+        if (path === '/v1/machines/catalog-machine') return Response.json({ machine: machineRow });
+        return await homeRequest(input, init);
+      });
       await updateEffectiveHomeViewState(() => ({ version: 1, groups: [], activeTargetKind: 'server', activeTargetId: account.scope.serverId }), { scope: 'device' });
       expect(await getServerFeaturesSnapshot({ serverId: account.scope.serverId, force: true })).toMatchObject({ status: 'ready' });
       const settings = await renderHook(() => useBundledConversationProviderSettings(voice));

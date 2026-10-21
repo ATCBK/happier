@@ -21,7 +21,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { getConnectedAccountCatalogValue } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
 import { apiSocket } from '@/sync/api/session/apiSocket';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { serverScopedRpcSocketPool } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool';
 import { resetScopedMachineTransportCacheForTests } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool';
@@ -43,10 +43,14 @@ it.each(['retired-before-issue', 'cancelled-before-issue', 'retired-after-ack', 
         const setup = new Promise<void>(resolve => { releaseSetup = resolve; });
         const http = createHomeHubArtifactHttpBoundary('reset-custody');
         const connection = await restoreServerAccountForTest({ serverUrl: 'https://reset-custody.test', accountId: 'reset-custody', request: async (input, init) => {
-            if (new URL(String(input)).pathname === '/v1/machines/controller') {
+            const path = new URL(String(input)).pathname;
+            if (path === '/v1/machines/controller' || (path === '/v1/machines/read-batch' && init?.method === 'POST')) {
                 setupReady();
                 await setup;
-                return Response.json({ machine: createPlainMachineRowFixture({ id: 'controller', accountId: 'reset-custody' }) });
+                const machine = createPlainMachineRowFixture({ id: 'controller', accountId: 'reset-custody' });
+                return path === '/v1/machines/read-batch'
+                    ? createMachineReadBatchResponseFixture(init?.body, id => id === machine.id ? machine : null)
+                    : Response.json({ machine });
             }
             return http.request(input, init);
         } });

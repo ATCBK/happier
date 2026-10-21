@@ -38,6 +38,7 @@ import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/cre
 import { readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { createSessionMessagesFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
+import { buildSessionTurnsProjectionV1, type SessionTurnsProjectionV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 import type { Message } from '@happier-dev/session-core/messages';
 import type { StorageState } from '@/sync/store/types';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
@@ -56,6 +57,7 @@ vi.mock('socket.io-client', async (importOriginal) => (
 ).createSocketIoClientBoundary(importOriginal));
 const localVoiceSockets = new Set<Socket>();
 const localVoiceRemoteMessages = new Map<string, SessionMessageV1[]>();
+const localVoiceRemoteTurns = new Map<string, SessionTurnsProjectionV1>();
 installDisconnectedServerSocketBoundary((socket, serverUrl) => {
     localVoiceSockets.add(socket);
     vi.mocked(socket.connect).mockImplementation(() => {
@@ -469,6 +471,26 @@ async function publishLocalVoiceTranscriptMessage(input: Readonly<{
     });
     if (update.body.t !== 'new-message') throw new Error('Expected incoming Voice transcript message');
     localVoiceRemoteMessages.set(remoteKey, [...messages, update.body.message]);
+    await publishLocalVoiceSocketUpdate(update);
+    if (input.messageRole === 'agent') {
+        const user = messages.findLast(message => message.messageRole === 'user');
+        // Tests may also seed retained history before submitting any input.
+        if (!user) return;
+        const turnId = `turn-${user.id}`;
+        const previous = localVoiceRemoteTurns.get(remoteKey);
+        localVoiceRemoteTurns.set(remoteKey, buildSessionTurnsProjectionV1({ sessionId: input.sessionId,
+            updatedAt: createdAt, latestTurnId: turnId, turns: [
+                ...(previous?.turns.filter(turn => turn.turnId !== turnId) ?? []),
+                { turnId, status: 'completed', startedAt: user.createdAt, updatedAt: createdAt, terminalAt: createdAt,
+                    transcriptAnchors: { startUserMessageSeq: user.seq, finalAssistantMessageSeq: seq } },
+            ] }));
+        await publishLocalVoiceSocketUpdate(UpdateContainerSchema.parse({ id: `terminal-${input.id}`, seq: seq + 1, createdAt,
+            body: { t: 'update-session', id: input.sessionId, latestTurnId: turnId,
+                latestTurnStatus: 'completed', latestTurnStatusObservedAt: createdAt } }));
+    }
+}
+
+async function publishLocalVoiceSocketUpdate(update: ReturnType<typeof UpdateContainerSchema.parse>) {
     let delivered = false;
     for (const socket of localVoiceSockets) {
         const auth = socket.auth;
@@ -582,6 +604,14 @@ async function createLocalVoiceAccountHarness() {
                     }));
                     if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: 1,
                         content: { t: 'plain', v: { v: 1, definitions: [] } } });
+                    const turnsPage = /^\/v1\/sessions\/([^/]+)\/turns$/.exec(path);
+                    if (turnsPage) {
+                        const turns = localVoiceRemoteTurns.get(JSON.stringify([
+                            request.headers.get('authorization')?.replace(/^Bearer /, '') ?? '',
+                            decodeURIComponent(turnsPage[1]),
+                        ]));
+                        if (turns) return Response.json(turns);
+                    }
                     try {
                         const metadataResponse = metadataHttp.handle(input, init);
                         if (metadataResponse) {
@@ -750,6 +780,7 @@ export function registerLocalVoiceEngineHarnessHooks(options?: Readonly<{
     beforeEach(async () => {
         localVoiceHttpResponder = null;
         localVoiceRemoteMessages.clear();
+        localVoiceRemoteTurns.clear();
         localVoiceMetadataHttpObserver.mockReset();
         localVoiceRouteState.pathname = '/';
         localVoiceRouteState.segments = [];

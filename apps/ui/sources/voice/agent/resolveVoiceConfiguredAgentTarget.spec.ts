@@ -16,7 +16,7 @@ import { refreshAcpCatalog, resetAcpCatalogEngineForTests } from '@/sync/engine/
 import { resetAcpCatalogSnapshotsForTests } from '@/sync/store/settings/acpCatalogSnapshot';
 import { AcpBackendDefinitionV1Schema } from '@happier-dev/protocol/acp/catalog/settingsV1';
 import { createDeferred } from '@/dev/testkit';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createExistingSessionDirectoryPreflightResult } from '@/dev/testkit/fixtures/sessionFixtures';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { readLocalConversationVoiceSettings, voiceSettingsDefaults, writeLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
@@ -123,8 +123,11 @@ beforeEach(async () => {
   machineRpc.mockReset();
   machineRpc.mockResolvedValue({ error: 'Method not found', errorCode: 'RPC_METHOD_NOT_FOUND' });
   account = await restoreServerAccountForTest({ serverUrl: 'https://voice-resolver.example.test', accountId: 'voice-resolver-account', credentialScope: 'restored-home',
-    request: async url => {
+    request: async (url, init) => {
       const path = new URL(String(url)).pathname;
+      if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(
+        JSON.parse(String(init.body)), id => id === 'machine-1'
+          ? createPlainMachineRowFixture({ id, accountId: 'voice-resolver-account' }) : null);
       if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
       if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
       if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
