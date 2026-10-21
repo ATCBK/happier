@@ -80,6 +80,7 @@ describe('ToolCallsGroupUnitHeaderRow', () => {
 
         expect(screen.getTextContent()).toContain('session.toolCalls');
         expect(screen.getTextContent()).toContain('2');
+        expect(screen.findByTestId('transcript-tool-calls-header')?.props.accessibilityLabel).toContain('2');
         expect(screen.findAllByProps({ name: 'check-circle' }).length).toBeGreaterThan(0);
         // Done is quiet: the group's check is drawn in the ink, never the success green.
         const { lightTheme } = await import('@/theme');
@@ -293,7 +294,7 @@ describe('ToolCallsGroupUnitHeaderRow', () => {
             setExpanded,
         });
 
-        expect(collapsed.findByTestId('transcript-tool-calls-header')?.props.accessibilityState).toEqual({ expanded: false });
+        expect(collapsed.findByTestId('transcript-tool-calls-header')?.props.accessibilityState).toMatchObject({ expanded: false });
         await collapsed.pressByTestIdAsync('transcript-tool-calls-header');
         expect(setExpanded).toHaveBeenCalledWith(true);
 

@@ -7,7 +7,7 @@ import { installSessionActionFixture, installSessionActionRpcBoundary } from '@/
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 
@@ -127,7 +127,7 @@ beforeEach(async () => {
     storage.getState().applySettingsLocal({ sessionReplayEnabled: true });
     const machine = createMachineFixture({ id: 'machine_1' });
     storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [serverId]: [machine] } });
-    homes.answer(serverId, '/v1/machines/machine_1', { body: { machine: { id: machine.id, kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } } });
+    homes.answer(serverId, '/v1/machines/machine_1', { body: { machine: createPlainMachineRowFixture({ id: machine.id, accountId: 'alice' }) } });
     installSessionActionFixture({ homes, storage, serverId, session: { id: 'parent_1' } });
     outgoing.length = 0;
     hydrateChild = true;

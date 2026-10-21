@@ -12,7 +12,7 @@ import { SessionViewerProjectionV1Schema } from '@happier-dev/protocol/sessions/
 import { QUIET_SESSION_PERSONAL_ATTENTION_V1 } from '@happier-dev/protocol/sessions/personal/attention';
 import { createDeferred, createMachineFixture, createSessionFixture, createRootLayoutFeaturesResponse, flushHookEffects, renderScreen as renderScreenWithTestkit, standardCleanup } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainMachineReadHttpResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createAccountTokenForTests, createHomeGovernanceHarness, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
@@ -174,7 +174,7 @@ async function prepareControllerFixture() {
         }),
             active: machine.active, activeAt: machine.activeAt,
         }] : []);
-        if (url.pathname.startsWith('/v1/machines/')) return Response.json({ machine: createPlainMachineRowFixture({ id: url.pathname.slice('/v1/machines/'.length), accountId: serverId === HOME_A ? 'account-a' : 'account-1' }) });
+        if (url.pathname.startsWith('/v1/machines/')) return createPlainMachineReadHttpResponseFixture(url.pathname, init, serverId === HOME_A ? 'account-a' : 'account-1');
         if (url.pathname.startsWith('/v2/sessions/')) {
             if (url.pathname === '/v2/sessions/active') return Response.json({ sessions: [], hasNext: false, nextCursor: null });
             if (url.pathname === '/v2/sessions/archived') return Response.json({ sessions: fixture.sessionListRows.filter(row => row.serverId === serverId && row.session.archivedAt).map(row => wireSession(row.session.id, row.session.metadata, row.session.archivedAt, row.session.updatedAt)), hasNext: false, nextCursor: null });
@@ -1084,7 +1084,7 @@ describe('UniversalSearchController exact Home scope', () => {
         const previews = () => fixture.daemonRpc.mock.calls.filter(([call]) => call.method === RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW);
         expect(previews()).toHaveLength(0);
         await screen.pressByTestIdAsync('universal-search:replace-toggle');
-        await vi.waitFor(() => expect(previews().map(([call]) => call.payload)).toEqual([
+        await vi.waitFor(() => expect(previews().map(([call]) => call.payload), screen.getTextContent()).toEqual([
             expect.objectContaining({ query: 'routeKey', replacement: '' }),
         ]));
         await screen.pressByTestIdAsync('universal-search:replace-hide');
@@ -1115,7 +1115,7 @@ describe('UniversalSearchController exact Home scope', () => {
         } }); });
         await act(async () => { screen.changeTextByTestId('universal-search:replace-input', 'nextKey'); });
         await screen.pressByTestIdAsync('universal-search:regex');
-        await vi.waitFor(() => expect(screen.findByTestId('replace-apply')?.props.disabled).toBe(false));
+        await vi.waitFor(() => expect(screen.findByTestId('replace-apply')?.props.disabled, screen.getTextContent()).toBe(false));
         try {
             await act(async () => { selectionListProps()?.onChangeInputValue?.('('); });
             expect(screen.findByTestId('replace-apply')?.props.disabled).toBe(true);

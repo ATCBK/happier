@@ -10,7 +10,7 @@ import { PEER_MACHINE_RPC_DIRECT_PATH_V2, PeerMachineRpcDirectRequestV2Schema,
     PeerMachineRpcDirectResponseV2Schema, type PeerMachineRpcDirectRequestV2 } from '@happier-dev/protocol/machines/peer/mediation/rpc/directV2';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainMachineRowFixture, createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
@@ -63,6 +63,8 @@ describe('machineRpcWithServerScope signal (direct peer route)', () => {
         };
         boundary.setHttpResponder(async (input, init) => {
             const path = new URL(String(input)).pathname;
+            if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                id => id === machineRow.id ? machineRow : null);
             if (path === '/v1/machines') return Response.json([machineRow]);
             if (path === '/v1/machines/machine_1') return Response.json({ machine: machineRow });
             if (path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({

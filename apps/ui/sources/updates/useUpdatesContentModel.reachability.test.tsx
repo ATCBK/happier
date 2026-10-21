@@ -5,7 +5,7 @@ import { UpdatesActionOutputSchemas } from '@happier-dev/protocol/actions/update
 import { createMachineFixture, createRootLayoutFeaturesResponse, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainMachineRowFixture, createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -37,12 +37,14 @@ it('Checks updates explicitly on a request-unreachable machine through the mount
     const accountHome = await network.addHome('https://updates-retry.test', 'updates-account');
     const serverIdentityId = 'srv_updates_reachability';
     connection = await restoreServerAccountForTest({ serverUrl: accountHome.serverUrl, serverIdentityId, accountId: accountHome.accountId,
-        credentials: { token: accountHome.token }, request: async input => {
+        credentials: { token: accountHome.token }, request: async (input, init) => {
             const path = new URL(String(input)).pathname;
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse({ capabilities: { serverIdentity: { serverIdentityId } } }));
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             // The Home's own Machine row is the transport authority the capability read refreshes.
+            if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                id => createPlainMachineRowFixture({ id, accountId: accountHome.accountId }));
             if (path.startsWith('/v1/machines/')) return Response.json({ machine: createPlainMachineRowFixture({
                 id: decodeURIComponent(path.slice('/v1/machines/'.length)), accountId: accountHome.accountId }) });
             if (path === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain', v: {} } });

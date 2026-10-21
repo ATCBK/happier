@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit';
+import { createMachineFixture } from '@/dev/testkit';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { VoiceSpeechDiagnosticsConfigureRequestV1Schema, VoiceSpeechDiagnosticsSettingsV1Schema, VoiceSpeechDiagnosticsStatusResponseV1Schema,
   resolveVoiceSpeechDiagnosticsStoragePolicy } from '@happier-dev/protocol/voice/diagnostics';
 
@@ -25,9 +26,8 @@ const settings = VoiceSpeechDiagnosticsSettingsV1Schema.parse({ v: 1, enabled: f
 beforeEach(async () => {
   requests.length = 0;
   home = await serveAccountHomes({ homes: [{ key: 'diagnostics', serverUrl: 'https://diagnostics-client.test', accountId: 'account-a' }],
-    route: ({ path }) => path.startsWith('/v1/machines/')
-      ? Response.json({ machine: createPlainMachineRowFixture({ id: decodeURIComponent(path.slice('/v1/machines/'.length)), accountId: 'account-a' }) })
-      : undefined });
+      route: ({ path, method, body }) => createPlainMachineReadHttpResponseFixture(path,
+        { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, 'account-a') ?? undefined });
   disconnect = await home.restoreActiveConnection();
   const machine = createMachineFixture({ id: 'diagnostics-machine', activeAt: Date.now() });
   storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [home.homes.diagnostics!.id]: [machine] } });

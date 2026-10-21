@@ -9,6 +9,7 @@ import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
 import { createDeferred, renderHook, renderScreen } from '@/dev/testkit';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createExistingSessionDirectoryPreflightResult } from '@/dev/testkit/fixtures/sessionFixtures';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
@@ -321,6 +322,11 @@ describe('multi-Home Session creation composition', () => {
                     access: { custodian, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
                     canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
                 }));
+            }
+            if (url.endsWith('/v1/machines/read-batch') && init?.method === 'POST') {
+                const token = new Headers(init.headers).get('authorization')?.replace(/^Bearer /, '') ?? '';
+                return createMachineReadBatchResponseFixture(init.body,
+                    id => id === 'machine-b' ? createPlainMachineRowFixture({ id, accountId: parseToken(token) }) : null);
             }
             if (url.endsWith('/v1/machines/machine-b')) {
                 return Response.json({
@@ -1648,7 +1654,8 @@ describe('multi-Home Session creation composition', () => {
             // Account authoring refreshes may still read focused Home A. Only
             // target-Machine admission and the spawn must stay on exact Home B.
             expect(socketBoundary.fetches.mock.calls
-                .filter(([url]) => new URL(String(url)).pathname.startsWith('/v1/machines/machine-b'))
+                .filter(([url]) => new URL(String(url)).pathname.startsWith('/v1/machines/machine-b')
+                    || new URL(String(url)).pathname === '/v1/machines/read-batch')
                 .every(([url]) => new URL(String(url)).origin === new URL(homeB.serverUrl).origin)).toBe(true);
             expect(sessionSpawnCalls()).toHaveLength(1);
             expect(sessionSpawnCalls()[0]?.[0]).toMatchObject({

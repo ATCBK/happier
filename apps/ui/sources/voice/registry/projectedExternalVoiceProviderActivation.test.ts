@@ -1,4 +1,5 @@
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const network = await installSessionOpsNetworkBoundary();
 import { readFile } from 'node:fs/promises';
@@ -82,7 +83,7 @@ beforeEach(async () => {
   });
   const purposes = createConnectedPurposeCatalogHttpBoundary();
   account = await createPlainArtifactHomeFixture('https://projected-voice.example.test', {
-    handleRequest: async (path, init) => path.startsWith('/v1/machines/') ? Response.json({ machine: { id: decodeURIComponent(path.slice('/v1/machines/'.length)), dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } }) : await purposes.handle(new URL(path, 'https://projected-voice.example.test'), init)
+    handleRequest: async (path, init) => createPlainMachineReadHttpResponseFixture(path, init) ?? await purposes.handle(new URL(path, 'https://projected-voice.example.test'), init)
       ?? answerVoiceRealtimePreparationHttpRequest(new URL(path, 'https://projected-voice.example.test'), storage.getState().settings),
   });
   await purposes.hydrate({ serverId: account.home.id, accountId: 'artifact-account' });
@@ -1342,9 +1343,7 @@ describe('projected external Voice provider activation', () => {
     });
     await network.addHome('https://projected-voice-two.example.test', 'artifact-account');
     const replacementHome = await createPlainArtifactHomeFixture('https://projected-voice-two.example.test', {
-      handleRequest: async path => path.startsWith('/v1/machines/')
-        ? Response.json({ machine: { id: decodeURIComponent(path.slice('/v1/machines/'.length)),
-            dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } }) : null,
+      handleRequest: async (path, init) => createPlainMachineReadHttpResponseFixture(path, init),
     });
     onTestFinished(() => replacementHome.dispose());
     const { reader: replacementReader, lifetime: replacementLifetime } = createCurrentVoiceArtifactAdmission({
@@ -1417,9 +1416,7 @@ describe('projected external Voice provider activation', () => {
     onTestFinished(() => replacementHostLease.revoke());
     expect(getVoiceAdapterRegistry().get(providerId)).toBeNull();
     const returnedHome = await createPlainArtifactHomeFixture(account.home.serverUrl, {
-      handleRequest: async path => path.startsWith('/v1/machines/')
-        ? Response.json({ machine: { id: decodeURIComponent(path.slice('/v1/machines/'.length)),
-            dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } }) : null,
+      handleRequest: async (path, init) => createPlainMachineReadHttpResponseFixture(path, init),
     });
     onTestFinished(() => returnedHome.dispose());
     const reactivatedAttempts = await reconcileAppShellProjectedClientExecutables(activationInput);

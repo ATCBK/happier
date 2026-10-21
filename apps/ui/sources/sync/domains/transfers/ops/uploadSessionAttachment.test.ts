@@ -92,7 +92,7 @@ function createSessionTransport() {
 }
 
 describe('uploadSessionAttachment', () => {
-    it('uploads a folder as files under one root without applying the file limit to the whole folder', async () => {
+    it.each(['web', 'native'] as const)('uploads a %s folder through the same owner without applying the file limit to the whole folder', async (kind) => {
         const transport = createSessionTransport();
         const paths: string[] = [];
         transport.call.mockImplementation(async (method, raw) => {
@@ -101,6 +101,7 @@ describe('uploadSessionAttachment', () => {
                 expect(request).toMatchObject({ uploadLocation: 'workspace', workspaceRelativeDir: '.happier/uploads',
                     vcsIgnoreStrategy: 'git_info_exclude', vcsIgnoreWritesEnabled: true });
                 paths.push(String(request.relativePath));
+                if (request.relativePath === 'draft-folder/project') expect(request.directoryEntries).toEqual(['empty']);
                 return { success: true, uploadId: 'folder-upload', chunkSizeBytes: 8,
                     recipientPublicKeyBase64: createTransferRecipientKeyPair().recipientPublicKeyBase64 };
             }
@@ -112,9 +113,11 @@ describe('uploadSessionAttachment', () => {
         const request = {
             sessionId: 's1', transferContext: transport.transferContext, messageLocalId: 'm1',
             config: { ...config, maxFileBytes: 5 },
-            file: { kind: 'folder', name: 'project', mimeType: 'inode/directory', entries: [
-                { relativePath: 'a.txt', source: { kind: 'web', file: webFile() } },
-                { relativePath: 'nested/b.txt', source: { kind: 'web', file: webFile() } },
+            file: { kind: 'folder', name: 'project', mimeType: 'inode/directory', directories: ['empty'], entries: [
+                { relativePath: 'a.txt', source: kind === 'web' ? { kind: 'web', file: webFile() }
+                    : { kind: 'native', uri: 'file:///cache/a.txt', name: 'a.txt', sizeBytes: 5, mimeType: 'text/plain' } },
+                { relativePath: 'nested/b.txt', source: kind === 'web' ? { kind: 'web', file: webFile() }
+                    : { kind: 'native', uri: 'file:///cache/b.txt', name: 'b.txt', sizeBytes: 5, mimeType: 'text/plain' } },
             ] },
             attachmentId: 'draft-folder',
         } satisfies Parameters<typeof sessionAttachmentsUploadFile>[0];

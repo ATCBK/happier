@@ -18,6 +18,7 @@ import { serverScopedRpcSocketPool } from '@/sync/runtime/orchestration/serverSc
 import { resetScopedMachineTransportCacheForTests } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool';
 import { clearMachineRequestReachabilityForTest } from '@/sync/domains/machines/reachability/machineReachability';
 import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const credential = vi.hoisted(() => ({ token: '' }));
 // Only persisted device credentials are substituted; HTTP, Socket.IO, Action admission and resource logic are real.
@@ -57,10 +58,17 @@ async function preflightHome(options: Readonly<{ holdLost?: boolean; inventory?:
         availableModes: [{ id: 'project-review', name: 'Project review' }] });
     const configObservation = AgentConfigOptionsProbeObservationSchema.parse({ source: 'dynamic',
         configOptions: [{ id: 'sandbox', name: 'Sandbox', type: 'boolean', currentValue: 'true' }] });
-    const http = createServer((request, response) => {
+    const http = createServer(async (request, response) => {
         response.setHeader('content-type', 'application/json');
         const path = request.url?.split('?')[0];
         if (path === '/health' || path === '/v1/auth/ping') response.end('{}');
+        else if (path === '/v1/machines/read-batch' && request.method === 'POST') {
+            const chunks: Buffer[] = [];
+            for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            const reply = createMachineReadBatchResponseFixture(Buffer.concat(chunks).toString('utf8'),
+                id => createPlainMachineRowFixture({ id, accountId: 'inventory-account' }));
+            response.end(await reply.text());
+        }
         else if (path?.startsWith('/v1/machines/')) response.end(JSON.stringify({ machine: {
             id: path.slice('/v1/machines/'.length), dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } }));
         else if (path === '/v1/account/encryption') response.end(JSON.stringify({ mode: 'plain', updatedAt: 1 }));

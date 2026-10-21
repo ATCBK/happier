@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import {
     API_TOKEN_FULL_GRANT_V1, ApprovalRequestSchema, ARTIFACT_PLAIN_DATA_KEY_MARKER, DEFAULT_SESSION_CAPABILITIES,
     MACHINE_PLAIN_DATA_KEY_MARKER, buildApprovalRequestArtifactHeaderV1, encodePlainArtifactStoredContent,
@@ -121,6 +122,7 @@ async function invitationApproval(actionId: 'teams.invitations.create' | 'teams.
         installationId: 'installation-1', installationPublicKey: encodeBase64(installation.publicKey, 'base64'),
         revokedAt: null, replacedByMachineId: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER }] });
     homes.answer(homeId, '/v1/machines/machine-exact', { body: { machine: {
+        ...createPlainMachineRowFixture({ id: target.machineId, accountId: 'account-a' }),
         id: target.machineId, kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
     } } });
     if (!signed) {
@@ -437,6 +439,7 @@ describe('createDefaultActionExecutor approvals', () => {
             revokedAt: null, replacedByMachineId: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER };
         homes.answer(homeId, '/v1/machines', { body: [machineRow] });
         homes.answer(homeId, '/v1/machines/machine-exact', { body: { machine: {
+            ...createPlainMachineRowFixture({ id: machineId, accountId: 'account-a' }),
             id: machineId, kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
         } } });
         if (currentInventory !== 'none') {
@@ -1321,6 +1324,7 @@ describe('createDefaultActionExecutor approvals', () => {
     });
     it('routes V2 replay by the current profile while carrying stable Home and immutable origin evidence', async () => {
         homes.answer(homeId, '/v1/machines/machine-exact', { body: { machine: {
+            ...createPlainMachineRowFixture({ id: 'machine-exact', accountId: 'account-a' }),
             id: 'machine-exact', kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
         } } });
         const { replayApprovedApprovalRequestAtExactDaemon } = await import('./defaultActionExecutor');
@@ -1329,10 +1333,11 @@ describe('createDefaultActionExecutor approvals', () => {
         } });
         expect(outgoing).toMatchObject([{ method: 'machine-exact:' + RPC_METHODS.APPROVAL_REQUEST_REPLAY_APPROVED,
             timeoutMs: null, params: { artifactId: 'approval-cross-device' } }]);
-        expect(homes.requestsFor('/v1/machines/machine-exact')[0]?.serverId).toBe(homeId);
+        expect(homes.requestsFor('/v1/machines/read-batch')[0]?.serverId).toBe(homeId);
     });
     it.each(['cli', 'ui'] as const)('replays an approved daemon-retained plugin install without issuing a second decision Action (%s)', async surface => {
         homes.answer(homeId, '/v1/machines/machine-exact', { body: { machine: {
+            ...createPlainMachineRowFixture({ id: 'machine-exact', accountId: 'account-a' }),
             id: 'machine-exact', kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
         } } });
         const pendingReview = {

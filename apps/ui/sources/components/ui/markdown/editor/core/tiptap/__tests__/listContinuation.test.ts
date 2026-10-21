@@ -13,7 +13,7 @@ import {
 } from '../listContinuation';
 
 /**
- * Ported from Orca's `rich-markdown-list-continuation.test.ts` (and the
+ * Ported from upstream's `rich-markdown-list-continuation.test.ts` (and the
  * list-specific cases of `rich-markdown-key-handler.test.ts`). The behavior is
  * verified against a REAL headless `@tiptap/core` editor (no mocks) using JSON
  * doc seeds so the input shape is independent of any markdown parser quirks.
@@ -58,7 +58,7 @@ describe('listContinuation', () => {
                     { type: 'paragraph' },
                     // Trailing block our schema appends to keep a cursor-target
                     // after replacing the only top-level node (orderedList ->
-                    // two paragraphs). Not present in Orca because their schema
+                    // two paragraphs). Not present in upstream because their schema
                     // doesn't require it; behaviorally inert.
                     { type: 'paragraph' },
                 ],
@@ -137,7 +137,7 @@ describe('listContinuation', () => {
                         ],
                     },
                     // Trailing cursor-target our schema appends after a top-level
-                    // orderedList. Behaviorally inert; absent in Orca's schema.
+                    // orderedList. Behaviorally inert; absent in upstream's schema.
                     { type: 'paragraph' },
                 ],
             });
@@ -218,7 +218,7 @@ describe('listContinuation', () => {
                         ],
                     },
                     // Trailing cursor-target our schema appends after a top-level
-                    // orderedList. Behaviorally inert; absent in Orca's schema.
+                    // orderedList. Behaviorally inert; absent in upstream's schema.
                     { type: 'paragraph' },
                 ],
             });

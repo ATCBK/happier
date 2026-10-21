@@ -1,4 +1,6 @@
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
+import { createPlainMachineRowFixture } from '../fixtures/machineFixtures';
+import { MachineReadBatchResponseV1Schema } from '@happier-dev/protocol/machines/machineReadBatchV1';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from './homeGovernanceHarness';
 import { initializeRealAppRuntimeForTests } from './realAppRuntimeHarness';
 import { ChangesResponseSchema, CurrentCursorResponseSchema } from '@happier-dev/protocol/changes';
@@ -6,6 +8,48 @@ import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from
 
 const homes = createHomeGovernanceHarness();
 afterEach(async () => { await homes.reset(); });
+
+it('serves strict selected Machine batches from the same seeded rows without synthetic HTTP reads', async () => {
+    const serverUrl = 'https://governance-machines.test';
+    const serverId = await homes.addHome({ name: 'Machines', serverUrl, accountId: 'owner' });
+    const first = createPlainMachineRowFixture({ id: 'first', accountId: 'owner' });
+    const held = createPlainMachineRowFixture({ id: 'held', accountId: 'owner' });
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    homes.answer(serverId, '/v1/machines/first', { body: { machine: first } });
+    homes.answer(serverId, '/v1/machines/held', { body: { machine: held }, respondAfter: gate });
+    homes.answer(serverId, '/v1/machines/absent', { status: 404, body: { error: 'not_found' } });
+    const request = (machineIds: string[]) => homes.request(`${serverUrl}/v1/machines/read-batch`, {
+        method: 'POST', body: JSON.stringify({ machineIds }),
+    });
+    const settled = vi.fn();
+    const pending = request(['first', 'absent', 'held']).then(response => { settled(); return response; });
+    await Promise.resolve();
+    try {
+        expect(settled).not.toHaveBeenCalled();
+        release();
+        const reply = await pending;
+        expect(reply.status).toBe(200);
+        expect(MachineReadBatchResponseV1Schema.parse(await reply.json())).toMatchObject({ results: [
+            { machineId: 'first', status: 'found', machine: first },
+            { machineId: 'absent', status: 'not_found' },
+            { machineId: 'held', status: 'found', machine: held },
+        ] });
+        expect(homes.requests.map(row => row.path)).toEqual(['/v1/machines/read-batch']);
+        homes.answer(serverId, '/v1/machines/first', { status: 401, body: { error: 'invalid_token' } });
+        const denied = await request(['first', 'absent']);
+        expect(denied.status).toBe(401);
+        expect(await denied.json()).toEqual({ error: 'invalid_token' });
+        homes.answer(serverId, '/v1/machines/first', { dispatchThenFail: true });
+        await expect(request(['first'])).rejects.toBeInstanceOf(TypeError);
+        homes.answer(serverId, '/v1/machines/first', { body: { machine: { id: 'first' } } });
+        await expect(request(['first'])).rejects.toMatchObject({ name: '$ZodError' });
+        homes.answer(serverId, 'POST /v1/machines/read-batch', { status: 403, body: { error: 'present_user_required' } });
+        const explicit = await request(['held']);
+        expect(explicit.status).toBe(403);
+        expect(await explicit.json()).toEqual({ error: 'present_user_required' });
+    } finally { release(); await pending; }
+});
 
 it('publishes committed Artifact changes to the same Account cursor used by warm inventories', async () => {
     installHomeGovernanceBoundaries(homes);

@@ -3,7 +3,8 @@ import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionO
 
 const network = await installSessionOpsNetworkBoundary();
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FeaturesResponseSchema, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
+import { FeaturesResponseSchema } from '@happier-dev/protocol';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createHash } from 'node:crypto';
 import {
   DaemonVoiceInferenceSttUploadInitResponseSchema, DaemonVoiceInferenceSttUploadChunkResponseSchema,
@@ -41,9 +42,7 @@ beforeEach(async () => {
     } }, capabilities: { machines: { liveStream: { serverRouted: {
       caps: MachineLiveStreamRelayCapsV1Schema.parse({}), disabledReason: null,
     } } } } }),
-    handleRequest: async path => path.startsWith('/v1/machines/') ? Response.json({ machine: {
-      id: decodeURIComponent(path.slice('/v1/machines/'.length)), dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-    } }) : null,
+    handleRequest: async (path, init) => createPlainMachineReadHttpResponseFixture(path, init),
   });
   const machine = createMachineFixture({ id: 'captured-machine', activeAt: Date.now() });
   storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [account.home.id]: [machine] } });

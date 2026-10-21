@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IrohError } from '@happier-dev/iroh-native';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { createSocketIoBoundaryStub } from '@/dev/testkit/mocks/socketIo';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import {
     adoptHomeProfile,
     getActiveServerSnapshot,
@@ -20,7 +22,7 @@ import { disposeIrohHomeTunnelRuntime, getIrohHomeTunnelRuntime } from '@/sync/r
 import type { IrohNativeLifecycleModule } from '@/sync/runtime/nativeIrohTunnels/supervisor';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { createServerRequestWithServerScope } from './createServerRequestWithServerScope';
-import { resetScopedSessionDataKeyCacheForTests } from './resolveScopedSessionDataKey';
+import { resetSessionByIdHttpReadsForTests } from '@/sync/engine/sessions/sessionByIdHttp';
 import { resolveServerAccountRequestContext, ServerScopedTransportUnavailableError } from './resolveServerAccountRequestContext';
 import { machineRpcWithServerScope } from './serverScopedMachineRpc';
 import { resetScopedMachineTransportCacheForTests } from './serverScopedRpcPool';
@@ -91,7 +93,7 @@ describe('scoped transport authority for non-focused Iroh Homes', () => {
         process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = `iroh_${crypto.randomUUID()}`;
         resetServerProfilesRuntimeForTests();
         resetServerFeaturesClientForTests();
-        resetScopedSessionDataKeyCacheForTests();
+        resetSessionByIdHttpReadsForTests();
         resetScopedMachineTransportCacheForTests();
         setServerReachabilityNetworkAllowed(true);
         ensureHomeTunnel.mockReset();
@@ -122,7 +124,7 @@ describe('scoped transport authority for non-focused Iroh Homes', () => {
         await serverScopedRpcSocketPool.stopAll();
         await disposeIrohHomeTunnelRuntime();
         await resetServerReachabilitySupervisors();
-        resetScopedSessionDataKeyCacheForTests();
+        resetSessionByIdHttpReadsForTests();
         resetScopedMachineTransportCacheForTests();
         resetServerFeaturesClientForTests();
         resetServerProfilesRuntimeForTests();
@@ -183,13 +185,21 @@ describe('scoped transport authority for non-focused Iroh Homes', () => {
 
     it('serves scoped session RPC for a non-focused Iroh-only Home through the verified loopback origin', async () => {
         await prepareHome();
-        operationFetch.mockImplementation(async (url) => {
-            if (url === `${LEASE_RUNTIME_ORIGIN}/v2/sessions/session-1`) return jsonResponse({ session: {
+        const sessionBoundary = createSessionReadBatchHttpBoundary(request => {
+            if (request.path === '/v2/sessions/session-1') return jsonResponse({ session: {
                 id: 'session-1', seq: 1, createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
                 archivedAt: null, metadata: 'metadata', metadataVersion: 1, agentState: null,
                 agentStateVersion: 0, pendingCount: 0, pendingVersion: 0, encryptionMode: 'plain', dataEncryptionKey: null,
             } });
-            throw new Error(`Unexpected session request: ${url}`);
+            return undefined;
+        });
+        operationFetch.mockImplementation(async (url, init) => {
+            const target = new URL(url);
+            const response = await sessionBoundary.handle({ home: HOME_B_ID, accountId: 'account-b',
+                url: target, path: target.pathname, method: init?.method ?? 'GET', headers: new Headers(init?.headers),
+                signal: init?.signal, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+            if (!response) throw new Error(`Unexpected session request: ${url}`);
+            return response;
         });
         const { socket } = createSocketIoBoundaryStub();
         socket.emitWithAck.mockResolvedValue({ ok: true, result: { watched: true } });
@@ -276,7 +286,8 @@ describe('scoped transport authority for non-focused Iroh Homes', () => {
         await prepareHome();
         const { socket } = createSocketIoBoundaryStub();
         ioSpy.mockReturnValue(socket);
-        operationFetch.mockImplementation(async (url) => {
+        operationFetch.mockImplementation(async (url, init) => {
+            if (url === `${LEASE_RUNTIME_ORIGIN}/v1/machines/read-batch` && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body, () => null);
             if (url === `${LEASE_RUNTIME_ORIGIN}/v1/machines/machine-1`) return jsonResponse({ machine: null });
             throw new Error(`Unexpected machine request: ${url}`);
         });

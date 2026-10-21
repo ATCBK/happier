@@ -2,7 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
@@ -70,7 +70,7 @@ describe('sessionScm (rpc timeouts)', () => {
 
         harness.answer(serverId, '/v1/auth/ping', { body: { ok: true } });
         harness.answer(serverId, '/v1/machines/m1', {
-            body: { machine: { id: 'm1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } },
+            body: { machine: createPlainMachineRowFixture({ id: 'm1', accountId: 'scm-account' }) },
         });
         // Hold the clock boundary still so the remaining RPC budget is exact.
         vi.spyOn(Date, 'now').mockReturnValue(1_000);

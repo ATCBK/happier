@@ -10,7 +10,7 @@ import { createMarkdownEditorExtensions } from '../createMarkdownEditorExtension
 import { normalizeSoftBreaks } from '../normalizeSoftBreaks';
 
 /**
- * Ported from Orca's `rich-markdown-normalize.test.ts` +
+ * Ported from upstream's `rich-markdown-normalize.test.ts` +
  * `markdown-dirty-state.test.ts` + the soft-break cases in
  * `rich-markdown-cut.test.ts`. The behavior is verified against a REAL headless
  * `@tiptap/core` editor (no mocks) so the assertions reflect what the web
@@ -20,7 +20,7 @@ import { normalizeSoftBreaks } from '../normalizeSoftBreaks';
  * production surfaces use (including `@tiptap/markdown`, raw-HTML atoms, etc.).
  * Note: the `NormalizeSoftBreaks` extension already runs `onCreate`, so the
  * "after init" state of an editor seeded with `contentType: 'markdown'` is
- * ALREADY normalized — these tests construct editors via the same path Orca
+ * ALREADY normalized — these tests construct editors via the same path upstream
  * does and call `normalizeSoftBreaks` directly so we can observe the function
  * in isolation.
  */

@@ -26,6 +26,25 @@ afterEach(async () => {
 });
 
 describe('MultiTextInput native composer boundary', () => {
+    it('delivers native folder sources and their source-text drop offset without changing text', async () => {
+        const { MultiTextInput } = await import('./MultiTextInput');
+        const dropped = vi.fn();
+        const changed = vi.fn();
+        const source = { kind: 'folder', name: 'Design', mimeType: 'inode/directory', directories: ['empty'], entries: [
+            { relativePath: 'icons/a.svg', source: { kind: 'native', uri: 'file:///cache/a.svg', name: 'a.svg', sizeBytes: 3, mimeType: 'image/svg+xml' } },
+        ] } as const;
+        const screen = await renderScreen(<MultiTextInput value="Before after" onChangeText={changed} onAttachmentsDropped={dropped} />);
+        const view = screen.tree.findByType('HappierComposerInput');
+        expect(view.props.acceptsAttachmentDrops).toBe(true);
+        await act(async () => view.props.onAttachmentDrop({ nativeEvent: { sources: [source], offset: 7 } }));
+        expect(dropped).toHaveBeenCalledWith({ sources: [source], offset: 7 });
+        expect(changed).not.toHaveBeenCalled();
+        await screen.update(<MultiTextInput value="Before after" editable={false} onChangeText={changed} onAttachmentsDropped={dropped} />);
+        expect(screen.tree.findByType('HappierComposerInput').props.acceptsAttachmentDrops).toBe(false);
+        await screen.update(<MultiTextInput value="Before after" attachmentDropScope="other-session" onChangeText={changed} onAttachmentsDropped={dropped} />);
+        await act(async () => screen.tree.findByType('HappierComposerInput').props.onAttachmentDrop({ nativeEvent: { sources: [source], offset: 7, scope: 'old-session' } }));
+        expect(dropped).toHaveBeenCalledOnce();
+    });
     it('opens a reference through its host binding and a decoration through the shared external URL owner', async () => {
         const { MultiTextInput } = await import('./MultiTextInput');
         const token = formatInlineReferenceTokenV1({ ref: 'session:auth', label: 'Auth' });

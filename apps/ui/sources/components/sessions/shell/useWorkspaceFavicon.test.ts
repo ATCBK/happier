@@ -12,6 +12,7 @@ import { serverScopedRpcSocketPool } from '@/sync/runtime/orchestration/serverSc
 import { resetScopedMachineTransportCacheForTests } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool';
 import { clearWorkspaceFaviconCacheForTests } from '@/sync/ops/workspaceFavicon';
 import { useWorkspaceFavicon } from './useWorkspaceFavicon';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const credentials = vi.hoisted(() => ({ token: '' }));
 // Credential persistence is the device boundary; cache, hook, RPC and Socket.IO are real.
@@ -32,9 +33,15 @@ afterEach(async () => {
 });
 
 it('keeps a shared favicon read for remaining views, cancels the last view, and retries without losing cached results', async () => {
-    const http = createServer((request, response) => {
+    const http = createServer(async (request, response) => {
         response.setHeader('content-type', 'application/json');
         if (request.url === '/health' || request.url === '/v1/auth/ping') response.end('{}');
+        else if (request.url === '/v1/machines/read-batch' && request.method === 'POST') {
+            const chunks: Buffer[] = [];
+            for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            response.end(await createMachineReadBatchResponseFixture(Buffer.concat(chunks).toString('utf8'),
+                id => id === 'favicon-machine' ? createPlainMachineRowFixture({ id, accountId: 'favicon-account' }) : null).text());
+        }
         else if (request.url === '/v1/machines/favicon-machine') response.end(JSON.stringify({ machine: {
             id: 'favicon-machine', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
         } }));

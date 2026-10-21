@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createExpoFileSystemFileMock } from '@/dev/testkit/mocks/expoFileSystem';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createMachineFixture, createPlainMachineRowFixture, createRootLayoutFeaturesResponse } from '@/dev/testkit';
 import type { RecordedAudioTranscriptionRequest } from '@/voice/runtime/input/recordedAudioTranscriptionController';
 import { DaemonVoiceSpeechTranscribeUploadFinalizeResponseSchema, DaemonVoiceSpeechTranscribeResponseSchema } from '@happier-dev/protocol/daemon/voiceSpeech';
@@ -143,7 +144,9 @@ beforeEach(async ({ task }) => {
             maxFrameBytes: 16000, maxDurationMs: 60000, maxTotalBytes: 1000000,
             maxConcurrentStreamsPerAccount: 2, maxConcurrentStreamsPerSocket: 1, maxConcurrentStreamsPerMachine: 1 }) };
     speechHome = await createPlainArtifactHomeFixture(serverUrl, { serverFeatures: features,
-        handleRequest: async path => {
+        handleRequest: async (path, init) => {
+            const read = createPlainMachineReadHttpResponseFixture(path, init);
+            if (read) return read;
             if (path.startsWith('/v1/machines/')) {
                 const id = decodeURIComponent(path.slice('/v1/machines/'.length).split('/')[0]!);
                 const row = createPlainMachineRowFixture({ id, accountId: 'artifact-account' });

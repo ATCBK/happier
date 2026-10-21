@@ -1,4 +1,5 @@
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import React from 'react';
 import 'fake-indexeddb/auto';
 import { DEFAULT_SESSION_CAPABILITIES } from '@happier-dev/protocol';
@@ -170,6 +171,8 @@ async function prepareDaemonAudioQa(allowedPorts: number[] = []) {
     if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
     if (path === '/v2/account/settings') return Response.json({ version: 1,
       content: { t: 'plain', v: storage.getState().settings } });
+    if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+      id => createPlainMachineRowFixture({ id, accountId: 'voice-qa-account' }));
     if (path.startsWith('/v1/machines/')) return Response.json({ machine: createPlainMachineRowFixture({
       id: decodeURIComponent(path.slice('/v1/machines/'.length)), accountId: 'voice-qa-account',
     }) });

@@ -12,7 +12,8 @@ const { createTransferRecipientKeyPair } = await import("@/sync/domains/transfer
 import { DaemonVoiceSpeechTranscribeUploadInitResponseSchema, DaemonVoiceSpeechTranscribeUploadChunkResponseSchema,
     DaemonVoiceSpeechTranscribeUploadFinalizeResponseSchema, DaemonVoiceSpeechTranscribeResponseSchema,
 } from '@happier-dev/protocol/daemon/voiceSpeech';
-import { VoiceProviderContributionSchema, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
+import { VoiceProviderContributionSchema } from '@happier-dev/protocol';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const { createPluginUiExecutableModuleHost } = await import("@/components/plugins/reactNative/executableModuleHost");
 const { EMPTY_PLUGIN_UI_PROJECTION } = await import("@/sync/domains/plugins/ui/projection");
@@ -52,9 +53,7 @@ beforeEach(async () => {
     } }, capabilities: { machines: { liveStream: { serverRouted: {
       caps: MachineLiveStreamRelayCapsV1Schema.parse({}), disabledReason: null,
     } } } } }),
-        handleRequest: async path => path.startsWith('/v1/machines/') ? Response.json({ machine: {
-            id: decodeURIComponent(path.slice('/v1/machines/'.length)), dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-        } }) : null,
+        handleRequest: async (path, init) => createPlainMachineReadHttpResponseFixture(path, init),
     });
     network.setRpcResponder(async request => await machineRpc(request));
     const machines = ['machine-selected', 'machine-attempt', 'machine-other'].map(id => createMachineFixture({ id, activeAt: Date.now() }));

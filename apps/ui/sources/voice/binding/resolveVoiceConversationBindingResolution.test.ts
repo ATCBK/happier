@@ -6,6 +6,7 @@ import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixt
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { BuiltinVoiceAdapterAssembly } from '@/voice/adapters/registerBuiltinVoiceAdapters';
@@ -97,6 +98,8 @@ describe('ensureVoiceConversationBindingResolution', () => {
       if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: localSettings() }, version: 1 });
       if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } } });
       if (path === '/v1/machines') return Response.json(machineRows);
+      if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+        id => machineRows.find(row => row.id === id) ?? null);
       if (path.startsWith('/v1/machines/') && !path.endsWith('/access'))
         return Response.json({ machine: machineRows.find(row => row.id === decodeURIComponent(path.split('/')[3]!)) });
       if (path === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });

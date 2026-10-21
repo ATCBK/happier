@@ -20,6 +20,7 @@ import { EncryptionCache } from '@/sync/encryption/encryptionCache';
 import { Encryption } from '@/sync/encryption/encryption';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit';
 import { FeatureGatesSchema } from '@happier-dev/protocol/features/payload/featureGatesSchema';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import {
     clearMachineRequestReachabilityForTest,
     readMachineRequestReachabilityObservation,
@@ -157,10 +158,13 @@ function mockScopedMachineFetch(machine: Readonly<{
     installationId?: string;
     installationPublicKey?: string;
 }>, accountMode: 'e2ee' | 'plain' = 'e2ee'): void {
-    runtimeFetchWithServerReachabilitySpy.mockImplementation(async ({ url }: { url: string }) => ({
+    runtimeFetchWithServerReachabilitySpy.mockImplementation(async ({ url, init }: { url: string; init?: RequestInit }) => ({
         ok: true,
         status: 200,
-        json: async () => url.includes('/v1/account/encryption') ? { mode: accountMode, updatedAt: 1 } : { machine },
+        json: async () => url.includes('/v1/account/encryption') ? { mode: accountMode, updatedAt: 1 }
+            : url.includes('/v1/machines/read-batch') ? await createMachineReadBatchResponseFixture(init?.body,
+                id => id === machine.id ? { metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0, ...machine } : null).json()
+            : { machine },
     }));
 }
 

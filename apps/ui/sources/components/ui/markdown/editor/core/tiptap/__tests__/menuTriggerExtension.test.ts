@@ -12,7 +12,7 @@ import type { MenuTriggerKeyDownEvent, MenuTriggerState } from '../menuTriggerEx
 /**
  * Lane F: the `MenuTriggerExtension` detects a slash trigger at the caret
  * position, computes a caret rect, and emits `MenuTriggerState | null` via the
- * `onMenuTriggerChange` callback. It mirrors Orca's `syncSlashMenu` as a
+ * `onMenuTriggerChange` callback. It mirrors upstream's `syncSlashMenu` as a
  * TipTap Extension.
  *
  * We use a REAL headless `@tiptap/core` Editor mounted on a jsdom element.

@@ -5,11 +5,69 @@ import { createProjectedAgentLocalAuthPlugin } from '@/agents/catalog/localAuth/
 
 import {
     adaptDaemonContributionRegistryProjectionToMergedProjectionInputs,
+    publishDaemonMergedProjectionInputs,
     mapV2EditableSettingsGroup,
     resolvePluginProjectionEditableSettingsGroup,
 } from './daemonContributionRegistryProjectionAdapters';
 
 describe('daemon contribution registry projection adapters', () => {
+    it('retains unchanged ready maps when a projection without pluginUi changes only delivery generation', () => {
+        const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 20,
+            actionsById: { 'acme.review/refresh': { id: 'refresh', pluginId: 'acme.review', occurrenceId: 'review-current',
+                title: 'Refresh', scopes: ['session'], surfaces: ['plugin'], execution: { target: 'daemon' }, dangerLevel: 'writesRemote' } },
+        });
+        const first = publishDaemonMergedProjectionInputs({ projection });
+        const changed = publishDaemonMergedProjectionInputs({ projection: { ...projection, generation: 21 } }, first);
+        expect(changed.pluginUiProjection.generation).toBe(21);
+        expect(changed.pluginUiProjection.actionsById).toBe(first.pluginUiProjection.actionsById);
+        expect(changed.pluginUiProjection.composerAttachmentsById).toBe(first.pluginUiProjection.composerAttachmentsById);
+    });
+
+    it('owns immutable adapted rows without freezing or retaining aliases to the raw V2 input', () => {
+        const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 19,
+            installedPackagesById: { 'acme.review': { id: 'acme.review', displayName: 'Review', enabled: true,
+                source: { kind: 'local', locator: '/plugins/review' } } },
+            actionsById: { 'acme.review/refresh': { id: 'refresh', pluginId: 'acme.review', occurrenceId: 'review-current',
+                title: 'Refresh', scopes: ['session'], surfaces: ['plugin'], execution: { target: 'daemon' }, dangerLevel: 'writesRemote',
+                inputHints: { title: 'Refresh', submitLabel: 'Refresh', fields: [{ path: 'reason', title: 'Reason', widget: 'textarea', required: true }] } } },
+        });
+        const published = publishDaemonMergedProjectionInputs({ projection });
+        const row = published.pluginProjectionById['acme.review']!;
+        const hint = projection.actionsById['acme.review/refresh']!.inputHints?.fields?.[0];
+        if (!hint) throw new Error('Expected authored form field');
+        expect(published.pluginProjectionV2).toBe(projection);
+        expect(Reflect.set(projection.installedPackagesById['acme.review']!.source, 'locator', '/plugins/changed')).toBe(true);
+        expect(Reflect.set(hint, 'title', 'Changed')).toBe(true);
+        expect(row.installedPackage?.source.locator).toBe('/plugins/review');
+        expect(row.actions[0]?.localizedPresentation?.inputHints?.fields?.[0]?.title).toBe('Reason');
+        expect(Object.isFrozen(row)).toBe(true);
+        expect(Object.isFrozen(row.actions)).toBe(true);
+        expect(Object.isFrozen(row.actions[0]?.localizedPresentation?.inputHints?.fields?.[0])).toBe(true);
+        const changed = publishDaemonMergedProjectionInputs({ projection }, published);
+        expect(changed).not.toBe(published);
+        expect(changed.pluginProjectionV2).toBe(projection);
+        expect(changed.pluginProjectionById['acme.review']?.installedPackage?.source.locator).toBe('/plugins/changed');
+        expect(changed.pluginProjectionById['acme.review']?.actions[0]?.localizedPresentation?.inputHints?.fields?.[0]?.title).toBe('Changed');
+        expect(row.installedPackage?.source.locator).toBe('/plugins/review');
+    });
+
+    it('keeps same-generation selected replies response-local instead of borrowing omitted full-projection rows', () => {
+        const full = publishDaemonMergedProjectionInputs({ projection: PluginProjectionV2Schema.parse({
+            v: 2, generation: 17,
+            familiesById: { pluginUi: { family: 'pluginUi', entriesById: {
+                'translations:acme.review': { id: 'translations:acme.review', pluginId: 'acme.review',
+                    occurrenceId: 'review-occurrence',
+                    contributionKind: 'translations', locales: ['en'], bundles: { en: { title: 'Review' } } },
+            } } },
+        }) });
+        const selectedProjection = PluginProjectionV2Schema.parse({ v: 2, generation: 17 });
+        const selected = publishDaemonMergedProjectionInputs({ projection: selectedProjection }, full);
+        expect(selected.pluginProjectionV2).toBe(selectedProjection);
+        expect(selected.pluginUiProjection.translationsByPluginId).toEqual({});
+        expect(full.pluginUiProjection.translationsByPluginId['acme.review']).toBeDefined();
+        expect(selected.pluginUiProjection).not.toBe(full.pluginUiProjection);
+    });
+
     it('retains pathless contextual Resources without turning their ids into filenames', () => {
         const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1,
             installedPackagesById: { 'acme.review': { id: 'acme.review', displayName: 'Review', enabled: true,

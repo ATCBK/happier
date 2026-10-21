@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { standardCleanup } from '@/dev/testkit';
 import { createSessionFilesViewFixture, fileViewSnapshot, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from './sessionFilesViewTestkit';
 import { createSessionFileNativeTransferBoundary } from '../sessionFileNativeTransferTestkit';
@@ -11,12 +11,14 @@ let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
 let transfer: ReturnType<typeof createSessionFileNativeTransferBoundary>;
 const filePath = 'bin.dat';
 
-beforeAll(prepareSessionFilesViewTestkit);
+// Load the real shared graph at collection, outside the File journey's operation budget.
+await prepareSessionFilesViewTestkit();
 beforeEach(async () => {
     standardCleanup();
     transfer = createSessionFileNativeTransferBoundary({ bytes: new Uint8Array([0, 1, 0, 2]), name: filePath });
     fixture = await createSessionFilesViewFixture({
-        machineCarrierOrigin: 'http://127.0.0.1:48126',
+        serverIdentityId: 'srv_binary_file_details',
+        machineCarrierOrigin: transfer.origin,
         request: transfer.request,
         rpc: (request) => request.method === 'statFile'
             ? { success: true, exists: true, kind: 'file', sizeBytes: 4 }
@@ -66,7 +68,7 @@ describe('SessionFileDetailsView (binary)', () => {
         expect(fixture.requests).toEqual(expect.arrayContaining([expect.objectContaining({
             targetId: 'm1',
             method: getActionSpec('daemon.filesystem.download').bindings?.rpcMethod,
-            payload: expect.objectContaining({ input: expect.objectContaining({ rootPath: '/workspace', path: '/workspace/' + filePath, asZip: false }) }),
+            payload: expect.objectContaining({ rootPath: '/workspace', path: '/workspace/' + filePath, asZip: false }),
         })]));
     });
 });

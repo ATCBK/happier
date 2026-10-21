@@ -454,6 +454,7 @@ describe('SessionItem context menu press suppression', () => {
         const screen = await renderScreen(
             <SessionItem
                 session={session}
+                serverId={account.home.id}
                 selected={false}
                 isFirst={true}
                 isLast={true}
@@ -461,7 +462,7 @@ describe('SessionItem context menu press suppression', () => {
                 variant="default"
                 compact={false}
                 dragEnabled
-                nativeContextMenuOpen={false}
+                nativeContextMenuOpen={true}
                 onNativeContextMenuOpenChange={onNativeContextMenuOpenChange}
             />,
         );
@@ -470,6 +471,8 @@ describe('SessionItem context menu press suppression', () => {
         if (!itemPressable) throw new Error('expected carryable session pressable');
         expect(itemPressable.props.onLongPress).toEqual(expect.any(Function));
         expect(onNativeContextMenuOpenChange).not.toHaveBeenCalled();
+        const menu = screen.tree.root.findAllByType('ContextMenu' as React.ElementType)[0];
+        expect(menu?.props.items).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'entity.mentionInComposer' })]));
     });
 
     it('suppresses the post-carry row press after a whole-row desktop carry', async () => {

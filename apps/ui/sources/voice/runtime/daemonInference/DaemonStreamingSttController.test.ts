@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MACHINE_PLAIN_DATA_KEY_MARKER, MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol';
+import { MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 import {
   DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
@@ -118,9 +119,7 @@ beforeEach(async () => {
   await network.addHome('https://streaming-stt.example.test', 'streaming-account');
   account = await createPlainArtifactHomeFixture('https://streaming-stt.example.test', {
     serverFeatures: features,
-    handleRequest: async path => path.startsWith('/v1/machines/') ? Response.json({ machine: {
-      id: decodeURIComponent(path.slice('/v1/machines/'.length)), dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-    } }) : null,
+    handleRequest: async (path, init) => createPlainMachineReadHttpResponseFixture(path, init),
   });
   const machine = createMachineFixture({ id: 'streaming-machine', activeAt: Date.now() });
   storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [account.home.id]: [machine] } });

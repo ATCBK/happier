@@ -1,6 +1,6 @@
 import { MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
-import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const network = await installSessionOpsNetworkBoundary();
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -66,9 +66,7 @@ describe('DaemonVoiceInferenceClient', () => {
     } }, capabilities: { machines: { liveStream: { serverRouted: {
       caps: MachineLiveStreamRelayCapsV1Schema.parse({}), disabledReason: null,
     } } } } }),
-      handleRequest: async path => path.startsWith('/v1/machines/') ? Response.json({ machine: {
-        id: decodeURIComponent(path.slice('/v1/machines/'.length)), dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-      } }) : null,
+      handleRequest: async (path, init) => createPlainMachineReadHttpResponseFixture(path, init),
     });
     network.setRpcResponder(async request => await machineRpcWithServerScopeMock(request));
     storage.getState().applySettingsLocal({ experiments: true, featureToggles: {

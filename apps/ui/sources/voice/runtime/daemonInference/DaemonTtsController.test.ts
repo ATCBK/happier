@@ -1,5 +1,5 @@
 import { MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol';
-import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 
 const network = await installSessionOpsNetworkBoundary();
@@ -133,9 +133,7 @@ beforeEach(async () => {
     } }, capabilities: { machines: { liveStream: { serverRouted: {
       caps: MachineLiveStreamRelayCapsV1Schema.parse({}), disabledReason: null,
     } } } } }),
-        handleRequest: async path => path.startsWith('/v1/machines/') ? Response.json({ machine: {
-            id: decodeURIComponent(path.slice('/v1/machines/'.length)), dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-        } }) : null,
+        handleRequest: async (path, init) => createPlainMachineReadHttpResponseFixture(path, init),
     });
     network.setRpcResponder(async request => await daemonRpc(request));
     const machine = createMachineFixture({ id: 'tts-machine', activeAt: Date.now() });

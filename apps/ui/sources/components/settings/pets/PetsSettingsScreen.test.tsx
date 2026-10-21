@@ -17,7 +17,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, type ReactTestInstance } from 'react-test-renderer';
 
 import { createPassThroughModule } from '@/dev/testkit/mocks/components';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import type { LocalPetSourceMetadata } from '@/sync/domains/pets/localPetSourceTypes';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { StorageState } from '@/sync/store/types';
@@ -740,10 +740,16 @@ describe('PetsSettingsScreen', () => {
         const token = `header.${Buffer.from(JSON.stringify({ sub: 'pet-discovery-account' })).toString('base64url')}.signature`;
         const credentialBoundary = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
         const httpPaths: string[] = [];
-        const http = createServer((request, response) => {
+        const http = createServer(async (request, response) => {
             httpPaths.push(request.url ?? '');
             response.setHeader('content-type', 'application/json');
             if (request.url === '/health' || request.url === '/v1/auth/ping') response.end('{}');
+            else if (request.url === '/v1/machines/read-batch' && request.method === 'POST') {
+                const chunks: Buffer[] = [];
+                for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+                response.end(await createMachineReadBatchResponseFixture(Buffer.concat(chunks).toString('utf8'),
+                    id => id === 'machine-pets' ? createPlainMachineRowFixture({ id, accountId: 'pet-discovery-account' }) : null).text());
+            }
             else if (request.url === '/v1/machines/machine-pets') response.end(JSON.stringify({ machine: {
                 id: 'machine-pets', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
             } }));

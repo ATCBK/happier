@@ -64,6 +64,7 @@ export function buildServerFeaturesResponse(overrides: FixtureOverrides = {}): F
 
     return {
         features: {
+            account: FeatureGatesSchema.shape.account.parse(undefined),
             teams: FeatureGatesSchema.shape.teams.parse(undefined),
             bugReports: { enabled: true },
             providers: {

@@ -1,4 +1,5 @@
 import React from 'react';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 // Keep browser persistence owners real above IndexedDB's environment boundary.
 import 'fake-indexeddb/auto';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
@@ -215,6 +216,8 @@ async function serveMachineHome(input: string | URL | Request, init?: RequestIni
             ...Object.assign({}, createMachineFixture().metadata, { host: '' }, machine.metadata),
         })), daemonState: null }));
     if (path === '/v1/machines') return Response.json(publishedMachines);
+    if (path === '/v1/machines/read-batch' && method === 'POST') return createMachineReadBatchResponseFixture(body,
+        id => publishedMachines.find(machine => machine.id === id) ?? null);
     if (path === '/v1/machines/machine-1/revoke' && method === 'POST') {
         if (machineState.revokeFailure) return Response.json({ error: machineState.revokeFailure.error }, { status: machineState.revokeFailure.status });
         if (machineState.currentMachine.revokedAt) return Response.json({ error: 'machine_revoked' }, { status: 410 });

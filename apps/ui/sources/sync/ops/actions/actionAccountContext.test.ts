@@ -15,6 +15,7 @@ import { ed25519, x25519 } from '@noble/curves/ed25519';
 import { computeContentPublicKeyFingerprint, openEncryptedDataKeyEnvelopeV1, signAccountContentKeyBindingV1 } from '@happier-dev/protocol';
 import { ArtifactRecipientKeyEnvelopeCommitInputV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 
 let homes: Awaited<ReturnType<typeof serveAccountHomes>>;
 let accountMode: 'plain' | 'e2ee';
@@ -79,6 +80,47 @@ describe('captureActionAccountContext encryption authority', () => {
 });
 
 describe('captureLazyActionAccountContext encryption on demand', () => {
+    it('withdraws retired Account borrowers before a held neutral Artifact read responds', async () => {
+        const started = createDeferred<AbortSignal>();
+        const release = createDeferred<void>();
+        const artifactId = '11111111-1111-4111-8111-111111111111';
+        let reads = 0;
+        network.mockImplementation(async (url, init) => {
+            if (url.pathname === '/v1/features') return Response.json({ features: {}, capabilities: { accountStoredContentCompatibility: {
+                v: 1, minimumProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
+                currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, declarationTransport: 'http-header-and-socket-auth-v1',
+            } } });
+            if (url.pathname !== `/v1/artifacts/${artifactId}`) return homes.fetch(url, init);
+            reads++;
+            if (!init?.signal) throw new Error('Expected physical read cancellation');
+            started.resolve(init.signal);
+            await release.promise;
+            return Response.json({ id: artifactId, ownerAccountId: 'account-a', access: 'owner', encryptionMode: 'plain',
+                dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, publicAudience: 'none',
+                header: encodePlainArtifactStoredContent({ title: 'Private' }), body: encodePlainArtifactStoredContent({ body: 'Private' }),
+                headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+        });
+        const first = await captureLazyActionAccountContext(homes.homes.a!.id);
+        const sibling = await captureLazyActionAccountContext(homes.homes.a!.id);
+        let pending: Promise<PromiseSettledResult<unknown>[]> | undefined;
+        try {
+            await Promise.all([first.resolveAccountMode(), sibling.resolveAccountMode()]);
+            let settled = false;
+            pending = Promise.allSettled([first.readArtifact(artifactId), sibling.readArtifact(artifactId)]);
+            void pending.then(() => { settled = true; });
+            const physicalSignal = await started.promise;
+            retireActiveServerAccountScopeLifetime();
+            await vi.waitFor(() => expect(settled).toBe(true));
+            expect(physicalSignal.aborted).toBe(true);
+            expect(reads).toBe(1);
+            expect((await pending).every(result => result.status === 'rejected')).toBe(true);
+        } finally {
+            release.resolve();
+            await pending;
+            first.dispose(); sibling.dispose();
+        }
+    });
+
     it('reads a fresh recipient audience after a committed grant while an earlier read is still pending', async () => {
         const encryption = await Encryption.create(new Uint8Array(32).fill(7));
         const dataKey = new Uint8Array(32).fill(52);

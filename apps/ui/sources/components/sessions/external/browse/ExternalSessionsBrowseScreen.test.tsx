@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import * as React from 'react';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -464,11 +465,9 @@ describe('ExternalSessionsBrowseScreen', () => {
             { key: 'foregroundOther', serverUrl: 'https://browse-consent-foreground.test', accountId: 'foreground-account' },
             { key: 'other', serverUrl: 'https://browse-screen-b.test', accountId: 'browse-account' },
             { key: 'focused', serverUrl: 'https://browse-screen-a.test', accountId: 'browse-account' },
-        ], route: request => request.path.startsWith('/v1/machines/')
-            ? Response.json({ machine: createPlainMachineRowFixture({
-                id: request.path.slice('/v1/machines/'.length), accountId: request.accountId ?? 'browse-account',
-            }) })
-            : undefined });
+        ], route: request => createPlainMachineReadHttpResponseFixture(request.path,
+            { method: request.method, ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }) },
+            request.accountId ?? 'browse-account') ?? undefined });
         for (const boundary of socketBoundaries()) {
             boundary.socket.emitWithAck.mockClear();
             boundary.socket.emit.mockClear();

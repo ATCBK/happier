@@ -1,9 +1,10 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createMachineFixture, createPlainMachineRowFixture, registerStandardCleanupTarget, renderScreen, renderHook, standardCleanup, type RenderScreenResult } from '@/dev/testkit';
+import { createMachineFixture, registerStandardCleanupTarget, renderScreen, renderHook, standardCleanup, type RenderScreenResult } from '@/dev/testkit';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { VoiceSpeechDiagnosticsConfigureRequestV1Schema, VoiceSpeechDiagnosticsRevokeCaptureRequestV1Schema, VoiceSpeechDiagnosticsSettingsV1Schema, VoiceSpeechDiagnosticsStatusResponseV1Schema,
   resolveVoiceSpeechDiagnosticsStoragePolicy, type VoiceSpeechDiagnosticsSettingsV1 } from '@happier-dev/protocol/voice/diagnostics';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -174,9 +175,8 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
   afterEach(async () => { standardCleanup(); await disconnect?.(); await home?.dispose(); vi.restoreAllMocks(); });
   beforeEach(async () => {
     home = await serveAccountHomes({ homes: [{ key: 'diagnostics', serverUrl: 'https://diagnostics-settings.test', accountId: 'account-a' }],
-      route: ({ path }) => path.startsWith('/v1/machines/')
-        ? Response.json({ machine: createPlainMachineRowFixture({ id: decodeURIComponent(path.slice('/v1/machines/'.length)), accountId: 'account-a' }) })
-        : undefined });
+      route: ({ path, method, body }) => createPlainMachineReadHttpResponseFixture(path,
+        { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, 'account-a') ?? undefined });
     disconnect = await home.restoreActiveConnection();
     modalScreen = await renderScreen(React.createElement(ModalProvider, { children: null }));
     resetVoiceSessionStoreForTests();

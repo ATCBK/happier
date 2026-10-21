@@ -14,7 +14,7 @@ import { ExternalSessionCandidateMatchV1Schema, ExternalSessionsCandidatesListRe
     ExternalSessionsCandidatesListResponseSchema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
 import { createDeferred, PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE, standardCleanup } from '@/dev/testkit';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainMachineRowFixture, createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installSessionActionFixture, installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -46,6 +46,9 @@ beforeEach(async () => {
     requests.length = 0;
     serverId = await homes.addHome({ name: 'FSP Action Home', serverUrl: 'https://fsp-actions.test', accountId: 'fsp-account' });
     const machine = createPlainMachineRowFixture({ id: 'fsp-machine', accountId: 'fsp-account' });
+    homes.answer(serverId, 'POST /v1/machines/read-batch', { select: async input => ({
+        body: await createMachineReadBatchResponseFixture(input, id => id === machine.id ? machine : null).json(),
+    }) });
     homes.answer(serverId, '/v1/machines/fsp-machine', { body: { machine } });
     homes.answer(serverId, '/v1/machines', { body: [machine] });
     connection = await restoreServerAccountForTest({ serverUrl: 'https://fsp-actions.test', accountId: 'fsp-account', request: homes.request });

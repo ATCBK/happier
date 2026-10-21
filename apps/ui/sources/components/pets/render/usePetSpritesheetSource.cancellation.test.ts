@@ -12,6 +12,7 @@ import { serverScopedRpcSocketPool } from '@/sync/runtime/orchestration/serverSc
 import { resetScopedMachineTransportCacheForTests } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool';
 import type { SelectedPetPackageSource } from '@/components/pets/source/resolveSelectedPetPackage';
 import { usePetSpritesheetSourceResult } from './usePetSpritesheetSource';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const credentials = vi.hoisted(() => ({ token: '' }));
 // Only credential persistence is substituted; the hook, RPC owner, codec and sockets stay real.
@@ -31,9 +32,15 @@ afterEach(async () => {
 });
 
 it('cancels unanswered pet previews on source replacement and unmount, then loads a fresh preview', async () => {
-    const http = createServer((request, response) => {
+    const http = createServer(async (request, response) => {
         response.setHeader('content-type', 'application/json');
         if (request.url === '/health' || request.url === '/v1/auth/ping') response.end('{}');
+        else if (request.url === '/v1/machines/read-batch' && request.method === 'POST') {
+            const chunks: Buffer[] = [];
+            for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            response.end(await createMachineReadBatchResponseFixture(Buffer.concat(chunks).toString('utf8'),
+                id => id === 'pet-machine' ? createPlainMachineRowFixture({ id, accountId: 'pet-preview-account' }) : null).text());
+        }
         else if (request.url === '/v1/machines/pet-machine') response.end(JSON.stringify({ machine: {
             id: 'pet-machine', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
         } }));

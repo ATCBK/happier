@@ -38,11 +38,12 @@ import 'fake-indexeddb/auto';
 import { ActionsSettingsV1Schema, type ActionSettingsActionId } from '@happier-dev/protocol/actions/actionSettings';
 import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { MachinePublishedRowV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
 import { sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListResponseV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 
 import type { Machine } from '@/sync/domains/state/storageTypes';
-import { createMachineFixture } from '../fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '../fixtures/machineFixtures';
 import { createEmptyAccountBootstrapHttpResponse } from '../fixtures/accountBootstrapHttpBoundary';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance, type AddHomeOptions, type HomeGovernanceHarness, type HomeDomainAnswer } from './homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from './serverAccountConnectionHarness';
@@ -85,7 +86,7 @@ export function installProviderConnectionsCatalogHttpBoundary(input: Readonly<{
             return input.reply?.(mutation) ?? { body: { status: 'updated', revision, cursor: revision } };
         },
     });
-    return { get catalog() { return catalog; }, get revision() { return revision; }, get writes() { return writes; } };
+    return { get catalog(): ProviderConnectionsCatalogV1 { return catalog; }, get revision() { return revision; }, get writes() { return writes; } };
 }
 
 type ProviderRpcResponse =
@@ -545,13 +546,20 @@ export function createProviderSettingsAccountHarness() {
         const profile = profiles.getServerProfileById(profiles.resolveServerProfileScopeIdForIdentifier(targetServerId));
         const homeRecord = profile ? home.findByServerUrl(profile.serverUrl) : null;
         if (!homeRecord?.token) throw new Error('Provider Machine publication requires a credentialed Home');
-        home.answer(targetServerId, '/v1/machines', { body: machines.map(machine => ({
+        const accountId = parseToken(homeRecord.token);
+        const machineRows = machines.map(machine => MachinePublishedRowV1Schema.parse({
+            ...createPlainMachineRowFixture({ id: machine.id, accountId }),
             ...machine, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, storageMode: 'plain',
             metadata: encodePlainMachineStoredContent(machine.metadata),
             daemonState: encodePlainMachineStoredContent(machine.daemonState),
-        })) });
-        for (const machine of machines) home.answer(targetServerId, `/v1/machines/${encodeURIComponent(machine.id)}`, {
-            body: { machine: { id: machine.id, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } },
+        }));
+        home.answer(targetServerId, '/v1/machines', { body: machineRows });
+        home.answer(targetServerId, 'POST /v1/machines/read-batch', {
+            select: async input => ({ body: await createMachineReadBatchResponseFixture(input,
+                id => machineRows.find(machine => machine.id === id) ?? null).json() }),
+        });
+        for (const machine of machineRows) home.answer(targetServerId, `/v1/machines/${encodeURIComponent(machine.id)}`, {
+            body: { machine },
         });
         await fetchAndApplyMachines({ credentials: { token: homeRecord.token }, expectedAccountMode: 'plain', encryption: null,
             // This fixture publishes a complete HTTP census, including an authoritative empty list.
@@ -585,7 +593,7 @@ export function createProviderSettingsAccountHarness() {
     return {
         home,
         get serverId() { return serverId; },
-        catalogMutations,
+        catalogMutations: catalogMutations as ProviderConnectionsRowMutationV1[],
         readCatalogRow() { return catalogRow; },
         interceptCatalogMutation(interceptor: NonNullable<typeof catalogMutationInterceptor>) {
             catalogMutationInterceptor = interceptor;

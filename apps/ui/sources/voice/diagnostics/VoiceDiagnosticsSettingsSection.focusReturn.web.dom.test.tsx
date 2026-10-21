@@ -13,9 +13,10 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { VoiceSettings } from '@/sync/domains/settings/voiceSettings';
-import { createMachineFixture, createPlainMachineRowFixture, createDeferred } from '@/dev/testkit';
+import { createMachineFixture, createDeferred } from '@/dev/testkit';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installBrowserStorageLockBoundary } from '@/dev/testkit/harness/browserStorageLockBoundary';
 import { VoiceSpeechDiagnosticsConfigureRequestV1Schema, VoiceSpeechDiagnosticsRevokeCaptureRequestV1Schema, VoiceSpeechDiagnosticsStatusResponseV1Schema, resolveVoiceSpeechDiagnosticsStoragePolicy } from '@happier-dev/protocol/voice/diagnostics';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -150,9 +151,8 @@ describe('VoiceDiagnosticsSettingsSection web focus return', () => {
     });
     home = await serveAccountHomes({ homes: [{ key: 'diagnostics', serverUrl: 'https://diagnostics-focus.test', accountId: 'account-a',
       settings: { voice: boundary.voice } }],
-      route: ({ path }) => path.startsWith('/v1/machines/')
-        ? Response.json({ machine: createPlainMachineRowFixture({ id: decodeURIComponent(path.slice('/v1/machines/'.length)), accountId: 'account-a' }) })
-        : undefined });
+      route: ({ path, method, body }) => createPlainMachineReadHttpResponseFixture(path,
+        { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, 'account-a') ?? undefined });
     disconnect = await home.restoreActiveConnection();
     resetVoiceSessionStoreForTests();
     boundary.sessionId = 'focused-diagnostics-session';

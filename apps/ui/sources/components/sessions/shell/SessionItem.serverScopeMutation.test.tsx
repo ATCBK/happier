@@ -1,4 +1,5 @@
 import React from 'react';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { act } from 'react-test-renderer';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -118,6 +119,8 @@ async function renderScreen(element: React.ReactElement<ModelBackedSessionItemTe
             if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             if (url.pathname === '/v1/features' || url.pathname === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
             if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            if (url.pathname === '/v1/machines/read-batch' && method === 'POST') return createMachineReadBatchResponseFixture(init?.body,
+                id => id === 'machine-row' ? createPlainMachineRowFixture({ id, accountId: 'row-account' }) : null);
             if (url.pathname.startsWith('/v1/machines/')) return Response.json({ machine: { id: 'machine-row', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
             if (method === 'POST' && (url.pathname.endsWith('/archive') || url.pathname.endsWith('/read-state'))) {
                 mutationRequests.push({ url: url.href, method, token: new Headers(init?.headers).get('authorization'), body: init?.body ? JSON.parse(String(init.body)) : null });

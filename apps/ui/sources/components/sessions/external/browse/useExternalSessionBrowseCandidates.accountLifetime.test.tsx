@@ -1,4 +1,5 @@
 import { act } from 'react-test-renderer';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeferred, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
@@ -56,9 +57,9 @@ describe('useExternalSessionBrowseCandidates Account lifetime', () => {
         home = await serveExternalSessionBrowseHome({ homes: [
             { key: 'foreign', serverUrl: 'https://foreign-lifetime.test', accountId: 'foreign-account' },
             { key: 'foreground', serverUrl: 'https://account-lifetime.test', accountId: 'account-a' },
-        ], route: request => request.path.startsWith('/v1/machines/')
-            ? Response.json({ machine: createPlainMachineRowFixture({ id: request.path.slice('/v1/machines/'.length),
-                accountId: request.home === 'foreign' ? 'foreign-account' : 'account-a' }) }) : undefined });
+        ], route: request => createPlainMachineReadHttpResponseFixture(request.path,
+            { method: request.method, ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }) },
+            request.home === 'foreign' ? 'foreign-account' : 'account-a') ?? undefined });
         network.setRpcResponder(async call => {
             if (call.method !== RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST) throw new Error(`Unexpected Browse RPC ${call.method}`);
             const selected = Object.values(home.homes).find(profile => profile.serverUrl === call.serverUrl);

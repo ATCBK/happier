@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import {
   DirectRouteGrantRequestV2Schema, MACHINE_PLAIN_DATA_KEY_MARKER,
   MachineLiveStreamRelayCapsV1Schema, PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
@@ -271,7 +272,10 @@ describe('DaemonSpeechStreamProductionTunnelTransport real producers', () => {
         if (path === '/v2/account/settings') return Response.json({ version: 0,
           content: encryptedSettings ? { t: 'encrypted', c: encryptedSettings } : { t: 'plain', v: {} } });
         if (path.endsWith('/route-grants')) return await mint(input, init);
-        if (!e2eeKind && path.startsWith('/v1/machines/')) return Response.json({ machine: { id: 'machine-1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
+        if (!e2eeKind) {
+          const machine = createPlainMachineReadHttpResponseFixture(path, init);
+          if (machine) return machine;
+        }
         return null;
       } });
     await vi.waitFor(() => expect(storage.getState().profile.id).toBe('artifact-account'));

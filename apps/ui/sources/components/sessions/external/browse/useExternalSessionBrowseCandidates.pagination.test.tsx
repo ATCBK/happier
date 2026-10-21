@@ -1,4 +1,5 @@
 import { act } from 'react-test-renderer';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeferred, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
@@ -90,9 +91,8 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
         candidatesListSpy.mockReset();
         home = await serveExternalSessionBrowseHome({
             homes: [{ key: 'browse', serverUrl: 'https://browse-pagination.test', accountId: 'browse-account' }],
-            route: request => request.path.startsWith('/v1/machines/')
-                ? Response.json({ machine: createPlainMachineRowFixture({ id: request.path.slice('/v1/machines/'.length), accountId: 'browse-account' }) })
-                : undefined,
+            route: request => createPlainMachineReadHttpResponseFixture(request.path,
+                { method: request.method, ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }) }, 'browse-account') ?? undefined,
         });
         network.setRpcResponder(async call => {
             if (call.method !== RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST) throw new Error(`Unexpected Browse RPC ${call.method}`);

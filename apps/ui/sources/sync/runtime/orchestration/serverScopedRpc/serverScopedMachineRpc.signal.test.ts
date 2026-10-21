@@ -8,6 +8,7 @@ import { machineRpcWithServerScope } from './serverScopedMachineRpc';
 import { resetScopedMachineTransportCacheForTests } from './serverScopedRpcPool';
 import { serverScopedRpcSocketPool } from './serverScopedRpcSocketPool';
 import { machineWorkspaceFileReplaceApply } from '@/sync/ops/machineWorkspaceFileReplace';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const HOME_URL = 'https://signal-home.example.test';
 const TOKEN = `hdr.${btoa(JSON.stringify({ sub: 'signal-account' }))}.sig`;
@@ -46,9 +47,13 @@ describe('machineRpcWithServerScope signal', () => {
         serverId = profile.id;
         boundary = createSocketIoBoundaryStub();
         ioSpy.mockReturnValue(boundary.socket);
-        runtimeFetchSpy.mockImplementation(async (input: unknown) => {
+        runtimeFetchSpy.mockImplementation(async (input: unknown, init?: RequestInit) => {
             if (new URL(String(input)).pathname === '/v1/account/encryption') {
                 return Response.json({ mode: 'plain', updatedAt: 1 });
+            }
+            if (new URL(String(input)).pathname === '/v1/machines/read-batch' && init?.method === 'POST') {
+                return createMachineReadBatchResponseFixture(init.body,
+                    id => id === 'machine-1' ? createPlainMachineRowFixture({ id, accountId: 'signal-account' }) : null);
             }
             return Response.json({
                 machine: { id: 'machine-1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER },

@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import nacl from 'tweetnacl';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
-import type { ServerFetch } from '@/sync/http/client';
+import { createServerFetchAtEndpoint, type ServerFetch } from '@/sync/http/client';
 import { encodeBase64StoredJsonContentEnvelope } from '@/sync/encryption/base64StoredJsonContent';
 import { createAccountKvJsonTransport } from './accountKvJsonTransport';
 import { Encryption } from '@/sync/encryption/encryption';
 import { encodeBase64 } from '@/encryption/base64';
 import { legacyAccountKvVectors } from '../../../../../../packages/protocol/src/crypto/fixtures/accountKvLegacyV0';
+import { createAccountKvHttpFixture } from '@/dev/testkit/fixtures/accountKvHttpFixture';
+import { getVitestNodeBuiltin } from '@/dev/vitestNodeBuiltins';
+import { createSocketAccountEncryptionObservation } from '@/sync/api/account/apiAccountEncryptionMode';
+import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
 import {
     createAccountScopedCryptoMaterialSnapshotV1,
     convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1,
@@ -39,6 +45,96 @@ describe('Account KV JSON transport', () => {
             encryption: mounted.encryption,
         };
     }
+
+    async function observedKvBoundary(accountCredentials: AuthCredentials, initial: AccountEncryptionCurrentnessResponse) {
+        const kv = createAccountKvHttpFixture();
+        const { createServer } = getVitestNodeBuiltin<typeof import('node:http')>('node:http');
+        let fact = initial;
+        let currentnessReads = 0;
+        const server = createServer((request, response) => {
+            if (request.url === '/v1/account/encryption/currentness') {
+                currentnessReads++;
+                response.setHeader('Content-Type', 'application/json');
+                response.end(JSON.stringify(fact));
+                return;
+            }
+            void kv.handle(request, response).then(handled => {
+                if (!handled) { response.statusCode = 404; response.end(); }
+            }).catch((error: unknown) => response.destroy(error instanceof Error ? error : undefined));
+        });
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+        const address = server.address();
+        if (!address || typeof address === 'string') throw new Error('KV fixture did not bind');
+        const endpointUrl = `http://127.0.0.1:${address.port}`;
+        setRuntimeFetch((input, init) => fetch(input, init));
+        const freshRequest = createServerFetchAtEndpoint({ endpointUrl, credentials: accountCredentials });
+        const observation = createSocketAccountEncryptionObservation({
+            credentials: accountCredentials, endpointUrl, runtimeOrigin: endpointUrl,
+            homeCarrierEndpointId: null, request: freshRequest, isCurrent: () => true,
+        });
+        observation.connected();
+        await observation.binding.read();
+        const request = createServerFetchAtEndpoint({ endpointUrl, credentials: accountCredentials,
+            accountEncryptionObservation: observation.binding });
+        return {
+            kv, request, readCount: () => currentnessReads,
+            commitModeWithoutPush: (next: AccountEncryptionCurrentnessResponse) => { fact = next; },
+            seed: async (rowKey: string, value: string) => {
+                const response = await fetch(`${endpointUrl}/v1/kv`, { method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mutations: [{ key: rowKey, value, version: -1 }] }) });
+                expect(response.status).toBe(200);
+            },
+            close: async () => {
+                observation.dispose();
+                resetRuntimeFetch();
+                server.closeAllConnections();
+                await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+            },
+        };
+    }
+
+    it('borrows one owned identity for repeated current-format KV reads while explicit writes remain fresh', async () => {
+        const boundary = await observedKvBoundary(credentials, { ...currentness, mode: 'plain' });
+        try {
+            await boundary.seed(key, plain({ tabs: ['remote'] }));
+            const transport = createAccountKvJsonTransport({ key, credentials, request: boundary.request,
+                encryption: null, shouldContinue: () => true });
+            for (let index = 0; index < 3; index++) {
+                await expect(transport.read()).resolves.toEqual({ value: { tabs: ['remote'] }, version: 0 });
+            }
+            expect(boundary.readCount()).toBe(1);
+            await expect(transport.compareAndSet({ tabs: ['local'] }, 0)).resolves.toEqual({ success: true, version: 1 });
+            expect(boundary.readCount()).toBe(2);
+        } finally { await boundary.close(); }
+    });
+
+    it('refuses a legacy re-seal after private opening when a committed mode change has no socket publication yet', async () => {
+        const account = await encryptedAccount();
+        const fixture = legacyAccountKvVectors[0];
+        const boundary = await observedKvBoundary(account.credentials, { ...account.currentness, mode: 'e2ee' });
+        const open = nacl.secretbox.open;
+        // This external crypto boundary still performs real authentication. Home
+        // commits after the plaintext opens, before the lazy writer can seal it.
+        const opened = vi.spyOn(nacl.secretbox, 'open').mockImplementation((...args) => {
+            const plaintext = open(...args);
+            if (plaintext) boundary.commitModeWithoutPush({ ...currentness, mode: 'plain', version: 2, updatedAt: 2 });
+            return plaintext;
+        });
+        try {
+            await boundary.seed(fixture.key, fixture.encoded);
+            const transport = createAccountKvJsonTransport({ key: fixture.key, credentials: account.credentials,
+                request: boundary.request, encryption: account.encryption, shouldContinue: () => true });
+            await expect(transport.read()).rejects.toMatchObject({ code: 'account_stored_json_mode_mismatch' });
+            expect(opened).toHaveBeenCalled();
+            expect(boundary.kv.read(fixture.key)).toEqual({ key: fixture.key, value: fixture.encoded, version: 0 });
+            expect(boundary.kv.readRequests().filter(request => request.method === 'POST')).toHaveLength(1);
+            expect(boundary.readCount()).toBe(2);
+        } finally {
+            opened.mockRestore();
+            await boundary.close();
+        }
+    });
 
     it('round-trips E2EE reads and CAS writes with the mounted real Account cipher', async () => {
         const account = await encryptedAccount();

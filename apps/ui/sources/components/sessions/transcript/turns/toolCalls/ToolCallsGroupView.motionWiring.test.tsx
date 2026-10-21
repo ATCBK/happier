@@ -66,10 +66,10 @@ describe('ToolCallsGroupView (real motion and row owners)', () => {
         const iconNames = () => screen.findAllByType(Icon).map(node => node.props.name);
         expect(iconNames()).toContain('stack-simple');
         expect(iconNames()).not.toContain('caret-up');
-        expect(screen.findByTestId('transcript-tool-calls-header')?.props.accessibilityState).toEqual({ expanded: false });
+        expect(screen.findByTestId('transcript-tool-calls-header')?.props.accessibilityState).toMatchObject({ expanded: false });
         await screen.pressByTestIdAsync('transcript-tool-calls-header');
         expect(iconNames()).toContain('caret-up');
-        expect(screen.findByTestId('transcript-tool-calls-header')?.props.accessibilityState).toEqual({ expanded: true });
+        expect(screen.findByTestId('transcript-tool-calls-header')?.props.accessibilityState).toMatchObject({ expanded: true });
         await screen.pressByTestIdAsync('transcript-tool-calls-header');
         expect(iconNames()).not.toContain('caret-up');
         expect(screen.findAllByType(ToolTimelineRow)).toHaveLength(0);

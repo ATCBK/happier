@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { installSessionOpsNetworkBoundary, type SessionOpsRpcRequest } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const boundary = await installSessionOpsNetworkBoundary();
 const { socketRpcCodec, readRpcRequestDisposition } = await import('@happier-dev/sync-client');
@@ -32,6 +33,7 @@ const cipher = encryption.getMachineEncryption('machine-1');
 if (!cipher) throw new Error('Expected initialized Machine encryption');
 const content = { mode: 'e2ee' as const, cipher };
 let home: Awaited<ReturnType<typeof boundary.addHome>>;
+const publishedMachine = { id: 'machine-1', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0, dataEncryptionKey: null };
 
 async function decodeRequest(request: SessionOpsRpcRequest) {
     return await socketRpcCodec.decodeRequestParams(content, request.payload, `${request.targetId}:${request.method}`);
@@ -46,6 +48,8 @@ async function enableDirectRoute(method: string) {
     getStorage().setState({ machines: { [machine.id]: machine }, machineListByServerId: { [home.id]: [machine] } });
     boundary.setHttpResponder(async (input, init) => {
         const url = new URL(String(input));
+        if (url.pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+            id => id === publishedMachine.id ? publishedMachine : null);
         if (url.pathname === '/v1/features') return Response.json({ features: { machines: {
             enabled: true, rpc: { enabled: true, directPeer: { enabled: true } },
         } }, capabilities: {} });
@@ -83,8 +87,10 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
                 token: createAccountTokenForTests('account-a'), secret: Buffer.from(secret).toString('base64url'),
             },
         });
-        boundary.setHttpResponder(async (input) => {
+        boundary.setHttpResponder(async (input, init) => {
             const url = new URL(String(input));
+            if (url.pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                id => id === publishedMachine.id ? publishedMachine : null);
             return url.pathname === '/v1/machines/machine-1'
                 ? Response.json({ machine: { id: 'machine-1', dataEncryptionKey: null } })
                 : null;
@@ -435,8 +441,10 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
         const featuresReply = createDeferred<void>();
         const issued = createDeferred<void>();
         const rpcReply = createDeferred<void>();
-        boundary.setHttpResponder(async (input) => {
+        boundary.setHttpResponder(async (input, init) => {
             const url = new URL(String(input));
+            if (url.pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                id => id === publishedMachine.id ? publishedMachine : null);
             if (url.pathname === '/v1/features') {
                 featuresRequested.resolve();
                 await featuresReply.promise;
@@ -477,11 +485,13 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
     it('proves saved Workflow admission was not sent when Machine setup exhausts its budget', async () => {
         const machineRequested = createDeferred<void>();
         const machineReply = createDeferred<void>();
-        boundary.setHttpResponder(async (input) => {
+        boundary.setHttpResponder(async (input, init) => {
             const url = new URL(String(input));
-            if (url.pathname !== '/v1/machines/machine-1') return null;
+            if (url.pathname !== '/v1/machines/machine-1' && url.pathname !== '/v1/machines/read-batch') return null;
             machineRequested.resolve();
             await machineReply.promise;
+            if (url.pathname === '/v1/machines/read-batch') return createMachineReadBatchResponseFixture(init?.body,
+                id => id === publishedMachine.id ? publishedMachine : null);
             return Response.json({ machine: { id: 'machine-1', dataEncryptionKey: null } });
         });
         vi.useFakeTimers();
@@ -517,10 +527,13 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
     it('keeps a connected Machine reachable when real Session spawn setup exhausts its budget', async () => {
         const machineRequested = createDeferred<void>();
         const machineReply = createDeferred<void>();
-        boundary.setHttpResponder(async input => {
-            if (new URL(String(input)).pathname !== '/v1/machines/machine-1') return null;
+        boundary.setHttpResponder(async (input, init) => {
+            const path = new URL(String(input)).pathname;
+            if (path !== '/v1/machines/machine-1' && path !== '/v1/machines/read-batch') return null;
             machineRequested.resolve();
             await machineReply.promise;
+            if (path === '/v1/machines/read-batch') return createMachineReadBatchResponseFixture(init?.body,
+                id => id === publishedMachine.id ? publishedMachine : null);
             return Response.json({ machine: { id: 'machine-1', dataEncryptionKey: null } });
         });
         const { dispatchSessionSpawnNewToMachine } = await import('@/sync/ops/actions/sessionSpawnNewAction');

@@ -31,6 +31,8 @@ import { createPersonalFollowOccurrenceDispatcher } from '@/notifications/activi
 import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit';
 import { seedTestServerProfile } from '@/testkit/serverProfiles';
 import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
+import { acquireRequesterAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentnessObservation';
+import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 
 describe('released tracked-target compatibility', () => {
   it('qualifies bare ids to the fixed Home and preserves notification preferences', async () => {
@@ -82,6 +84,93 @@ describe('Follow HTTP family adapter', () => {
   let restore = () => {};
   beforeEach(() => { app = fastify(); restore = installAxiosFastifyAdapter({ app, origin: 'http://follow.test' }); });
   afterEach(async () => { restore(); await app.close(); });
+  const createRuleAuthorityFixture = async () => {
+    // This composed slice uses real HTTP and the existing real Socket.IO harness.
+    restore();
+    const channel = await createRequesterCurrentnessSocketHarness();
+    const accountId = 'follow-authority-account';
+    const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+    const encryption = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
+    const fingerprint = convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(
+      createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material: encryption }).contentPublicKeyFingerprint);
+    const receiver = { kind: 'account' as const };
+    const definition = { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1({ homeServerIds: ['private-home'] }),
+      policy: { preset: 'quiet' as const } };
+    const rule = { ruleId: 'admitted-rule', receiver, version: 1, inception: { createdAt: 7, accountChangeCursor: 4 }, sources: [],
+      content: sealSessionFollowRuleContentV1({ ruleId: 'admitted-rule', receiver, definition, mode: 'e2ee', material: encryption }) };
+    let mode: 'plain' | 'e2ee' = 'e2ee';
+    let revoked = false;
+    let reads = 0;
+    let holdRules = false;
+    let ruleRequested!: () => void;
+    let releaseRules!: () => void;
+    const requested = new Promise<void>(resolve => { ruleRequested = resolve; });
+    const released = new Promise<void>(resolve => { releaseRules = resolve; });
+    app.get('/v1/account/encryption/currentness', async (_request, reply) => {
+      reads++;
+      return revoked ? reply.code(401).send({ error: 'unauthorized' }) : createAccountEncryptionCurrentnessFixture({
+        mode, contentKeyFingerprint: mode === 'e2ee' ? fingerprint : null,
+      });
+    });
+    app.get('/v2/account/session-follow-rules', async () => {
+      if (holdRules) { ruleRequested(); await released; }
+      return { rules: [rule] };
+    });
+    app.put('/v2/account/session-follow-rules/:ruleId', async request => {
+      const body = SetSessionFollowRuleRequestV1Schema.parse(request.body);
+      expect(body.content.t).toBe(mode === 'plain' ? 'plain' : 'encrypted');
+      return { rule: { ruleId: 'authored-rule', receiver: body.receiver, content: body.content, version: 1 } };
+    });
+    const serverHttpBaseUrl = await app.listen({ port: 0, host: '127.0.0.1' });
+    const holder = acquireRequesterAccountEncryptionCurrentness({ accountId, token, serverBaseUrl: serverHttpBaseUrl });
+    const deps = createSessionFollowActionDeps({ token, credentials: { token, encryption }, serverId: 'home', serverHttpBaseUrl });
+    return {
+      channel, requested, releaseRules, receiver, definition, deps,
+      warm: () => holder.read(),
+      read: () => deps.readSessionFollowRules!({ context: {}, serverId: 'home' }),
+      reads: () => reads,
+      hold: () => { holdRules = true; },
+      change(change: 'mode' | 'epoch') { if (change === 'epoch') revoked = true; else mode = 'plain'; },
+      async close() { releaseRules(); await holder.dispose(); await channel.close(); },
+    };
+  };
+  it('borrows warm Follow rule identity while freshly admitting each opened census', async () => {
+    const f = await createRuleAuthorityFixture();
+    try {
+      await f.warm();
+      for (let read = 0; read < 2; read++) await expect(f.read()).resolves.toMatchObject({ kind: 'complete',
+        rules: [{ ruleId: 'admitted-rule', definition: f.definition }] });
+      expect(f.reads()).toBe(3);
+    } finally { await f.close(); }
+  });
+  it.each([
+    ['mode', false], ['epoch', false], ['mode', true], ['epoch', true],
+  ] as const)('withholds Follow rules after committed %s before socket delivery (gap=%s)', async (change, gap) => {
+    const f = await createRuleAuthorityFixture();
+    try {
+      await f.warm();
+      f.hold();
+      const read = f.read();
+      await f.requested;
+      f.change(change);
+      if (gap) await f.channel.disconnect();
+      else expect(f.channel.clients.every(client => client.connected)).toBe(true);
+      f.releaseRules();
+      await expect(read).resolves.toEqual({ kind: 'unavailable' });
+    } finally { await f.close(); }
+  });
+  it('freshly admits Follow rule sealing after a mode change before socket delivery', async () => {
+    const f = await createRuleAuthorityFixture();
+    try {
+      await f.warm();
+      f.change('mode');
+      await expect(f.deps.sessionFollowAction!({ context: {}, actionId: 'follow.set', serverId: 'home', input: {
+        receiver: f.receiver, source: { kind: 'rule', ruleId: 'authored-rule' }, expectedVersion: -1,
+        ruleDefinition: { v: 1, enabled: true, filter: f.definition.filter }, policy: f.definition.policy,
+      } })).resolves.toMatchObject({ rule: { ruleId: 'authored-rule', definition: f.definition } });
+      expect(f.reads()).toBe(2);
+    } finally { await f.close(); }
+  });
   it('qualifies portable tracked-target reads through the saved profile Home', async () => {
     await withConfiguredDaemonTestHome({ prefix: 'tracked-portable-home-' }, async () => {
       const profileId = 'stack_agent-qa-coord-n1__id_default';

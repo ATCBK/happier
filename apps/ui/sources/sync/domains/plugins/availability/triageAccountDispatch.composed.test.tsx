@@ -122,6 +122,7 @@ const { GITHUB_TRIAGE_SOURCE_DESCRIPTOR_V1, GITHUB_TRIAGE_CONTRIBUTION_LOCAL_ID_
 const { encodeGithubTriageConfiguration, GITHUB_TRIAGE_ACCOUNT_SCOPE_V1 } = await import('../../../../../../../packages/plugins/scm-github/src/triage/configuration');
 const { GITHUB_TEST_ACCOUNT } = await import('../../../../../../../packages/plugins/scm-github/src/triage/testkit/githubTriage.test-support');
 const { GITHUB_PLUGIN_ID } = await import('../../../../../../../packages/plugins/scm-github/src/observations/githubProviderContracts');
+const { Modal } = await import('@/modal');
 const kvMutationsSchema = z.strictObject({ mutations: z.array(z.strictObject({
     key: z.string(), value: z.nullable(z.string()), version: z.number(),
 })) });
@@ -131,9 +132,13 @@ afterEach(async () => {
     await account.reset();
     storage.setState(storage.getInitialState(), true);
     packaged.machineRpc.mockClear();
+    vi.mocked(Modal.show).mockClear();
 });
 
-it.each([false, true])('reads actual Triage personal tasks through Account dispatch with unavailable optional Machine=%s', async withMachine => {
+it.each(['mixed sources', 'personal CRUD', 'unavailable optional Machine'] as const)(
+    'runs actual Triage through the UI Account dispatcher: %s', async scenario => {
+    const withMachine = scenario === 'unavailable optional Machine';
+    const withGithub = scenario === 'mixed sources';
     const machineId = 'optional-unavailable-machine';
     await account.restore({ machines: withMachine ? [createMachineFixture({ id: machineId, active: false, activeAt: 0 })] : [], serverIdentityId: 'srv_triage_account_dispatch',
         features: createRootLayoutFeaturesResponse({ features: { plugins: { enabled: true,
@@ -150,7 +155,7 @@ it.each([false, true])('reads actual Triage personal tasks through Account dispa
         source: INTERNAL_TASK_SOURCE_V1, declaredPurpose: 'tasks', request: { kind: 'create', draft: INTERNAL_TASK_DRAFT_V1 },
         nowMs: 1, mintSourceInstanceId: () => '11111111-1111-4111-8111-111111111111' });
     expect(configured.kind).toBe('active');
-    if (!withMachine) {
+    if (withGithub) {
         expect((await administerConfiguredSourceInstance({ collections: corpus.collections,
             source: { pluginId: GITHUB_PLUGIN_ID, localId: GITHUB_TRIAGE_CONTRIBUTION_LOCAL_ID_V1 },
             declaredPurpose: GITHUB_TRIAGE_SOURCE_DESCRIPTOR_V1.purpose,
@@ -238,19 +243,6 @@ it.each([false, true])('reads actual Triage personal tasks through Account dispa
         const projection = readCurrentAppShellPluginUiProjection()!;
         const action = projection.actionsById['happier.triage/sources/read-configured-v1']!;
         const origin = readPluginUiAccountExecutableOrigin(action)!;
-        const decisions: Promise<unknown>[] = [];
-        const executeHostAction = scopedHomeActionExecutor(lifetime.scope, {
-            onBlockingApprovalPending: ({ artifactId }) => {
-                // The real UI decision front door records the simulated user's
-                // approval; the original host invocation retains result custody.
-                decisions.push(scopedHomeActionExecutor(lifetime.scope)('approval.request.decide',
-                    { artifactId, decision: 'approve' }, { surface: 'ui', authority: 'present_user',
-                        actionCaller: { kind: 'host' }, serverId: lifetime.scope.serverId,
-                        expectedAccountId: lifetime.scope.accountId }).then(result => {
-                    expect(result).toMatchObject({ ok: true });
-                }));
-            },
-        });
         const controller = createBoundPluginSurfaceController({ facts: {
             pluginId: 'happier.triage', contributionId: 'tasks', surfaceId: 'surfacePlacement:happier.triage:tasks',
             placement: 'browserSurface', platform: 'web', channel: 'internal', serverId: lifetime.scope.serverId,
@@ -261,43 +253,43 @@ it.each([false, true])('reads actual Triage personal tasks through Account dispa
                 readCurrentAppShellPluginUiProjection()?.actionsById,
             )(identity),
             interactionEnabled: true, daemonInteractionEnabled: false,
-        }, binding: { executeHostAction } });
+        }, binding: { executeHostAction: scopedHomeActionExecutor(lifetime.scope) } });
+        const dispatch = controller.dispatchAction;
         try {
-            expect(await controller.dispatchAction('sources/read-configured-v1', { v: 1 })).toMatchObject({ kind: 'read', instances: [{ lifecycle: 'active' }] });
-            const result = await controller.dispatchAction('tasks/list-v1', { v: 1,
-                sources: { kind: 'allConfigured' }, limit: 10, order: 'newest', tasks: { completedSinceMs: 0 } });
-            expect(result).toMatchObject({ window: { rows: [{ entryRef: { entryId: 'personal-task' } }] } });
-            if (!withMachine) expect(result).toMatchObject({ configuredSources: expect.arrayContaining([
-                expect.objectContaining({ sourceInstanceId: '11111111-1111-4111-8111-111111111111' }),
-                expect.objectContaining({ sourceInstanceId: '22222222-2222-4222-8222-222222222222' }),
-            ]), window: { lanes: expect.arrayContaining([
-                expect.objectContaining({ source: { pluginId: GITHUB_PLUGIN_ID, localId: GITHUB_TRIAGE_CONTRIBUTION_LOCAL_ID_V1 },
-                    health: { kind: 'unavailable', error: { code: 'plugin_action_machine_required' } } }),
-            ]) } });
-            if (!withMachine) {
-                const created = TriageTaskWriteResultV1Schema.parse(await controller.dispatchAction('tasks/create-v1', {
+            if (scenario !== 'personal CRUD') {
+                expect(await dispatch('sources/read-configured-v1', { v: 1 })).toMatchObject({ kind: 'read', instances: [{ lifecycle: 'active' }] });
+                const result = await dispatch('tasks/list-v1', { v: 1,
+                    sources: { kind: 'allConfigured' }, limit: 10, order: 'newest', tasks: { completedSinceMs: 0 } });
+                expect(result).toMatchObject({ window: { rows: [{ entryRef: { entryId: 'personal-task' } }] } });
+                if (withGithub) expect(result).toMatchObject({ configuredSources: expect.arrayContaining([
+                    expect.objectContaining({ sourceInstanceId: '11111111-1111-4111-8111-111111111111' }),
+                    expect.objectContaining({ sourceInstanceId: '22222222-2222-4222-8222-222222222222' }),
+                ]), window: { lanes: expect.arrayContaining([
+                    expect.objectContaining({ source: { pluginId: GITHUB_PLUGIN_ID, localId: GITHUB_TRIAGE_CONTRIBUTION_LOCAL_ID_V1 },
+                        health: expect.objectContaining({ kind: 'unavailable',
+                            error: expect.objectContaining({ code: 'plugin_action_machine_required' }) }) }),
+                ]) } });
+            } else {
+                const created = TriageTaskWriteResultV1Schema.parse(await dispatch('tasks/create-v1', {
                     v: 1, source: INTERNAL_TASK_SOURCE_V1, sourceInstanceId: '11111111-1111-4111-8111-111111111111',
                     kindId: 'task', fields: { title: 'Created through Account UI' },
                 }));
                 expect(created.kind).toBe('applied');
                 if (created.kind !== 'applied') throw new Error('Account UI create did not apply');
+                expect(created.observation.snapshot.title).toBe('Created through Account UI');
                 const entryRef = { source: INTERNAL_TASK_SOURCE_V1, ...created.observation.localRef };
                 const address = { v: 1, sourceInstanceId: '11111111-1111-4111-8111-111111111111', entryRef };
-                expect(await controller.dispatchAction('entries/reobserve-v1', address)).toMatchObject({ kind: 'observed',
-                    observation: { outcome: { snapshot: { title: 'Created through Account UI' } } } });
-                expect(await controller.dispatchAction('tasks/edit-v1', { ...address,
-                    fields: { title: 'Edited through Account UI' } })).toMatchObject({ kind: 'applied' });
-                expect(await controller.dispatchAction('tasks/transition-v1', { ...address,
-                    transitionId: 'completed' })).toMatchObject({ kind: 'applied' });
-                expect(await controller.dispatchAction('entries/reobserve-v1', address)).toMatchObject({ kind: 'observed',
+                expect(await dispatch('tasks/edit-v1', { ...address,
+                    fields: { title: 'Edited through Account UI' } })).toMatchObject({ kind: 'applied',
+                        observation: { snapshot: { title: 'Edited through Account UI' } } });
+                expect(await dispatch('tasks/transition-v1', { ...address,
+                    transitionId: 'completed' })).toMatchObject({ kind: 'applied',
+                        observation: { snapshot: { state: { presentation: 'resolved' } } } });
+                expect(await dispatch('entries/reobserve-v1', address)).toMatchObject({ kind: 'observed',
                     observation: { outcome: { snapshot: { title: 'Edited through Account UI', state: { presentation: 'resolved' } } } } });
-                await Promise.all(decisions);
-                expect(decisions.length).toBeGreaterThan(0);
+                expect(vi.mocked(Modal.show).mock.calls.filter(([config]) =>
+                    config.chrome?.testID === 'app-shell-transient-interaction-dialog')).toHaveLength(3);
                 expect([...todoRows.keys()].filter(key => key !== 'todo.index')).toHaveLength(2);
-                expect(await controller.dispatchAction('tasks/list-v1', { v: 1,
-                    sources: { kind: 'allConfigured' }, limit: 10, order: 'newest', tasks: { completedSinceMs: 0 },
-                    query: 'Edited through Account UI' })).toMatchObject({ window: { rows: [{ entryRef,
-                    observation: { outcome: { snapshot: { state: { presentation: 'resolved' } } } } }] } });
             }
             if (!withMachine) expect(packaged.machineRpc).not.toHaveBeenCalled();
         } finally { controller.dispose(); }

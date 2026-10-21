@@ -243,11 +243,11 @@ describe('shared workspace filesystem Action admission', () => {
                 filesystem.fileBytes = new TextEncoder().encode('The next README');
                 filesystem.readGate = null;
                 await hook.rerender({ path: 'nested/README.md' });
-                await vi.waitFor(() => expect(hook.getCurrent()).toEqual({ kind: 'ready', text: 'The next README' }));
+                await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ kind: 'ready', text: 'The next README', viewer: { kind: 'markdown' } }));
             }
             finishRead();
             await act(async () => { await new Promise<void>(resolve => setImmediate(resolve)); });
-            if (retirement === 'replace') expect(hook.getCurrent()).toEqual({ kind: 'ready', text: 'The next README' });
+            if (retirement === 'replace') expect(hook.getCurrent()).toMatchObject({ kind: 'ready', text: 'The next README', viewer: { kind: 'markdown' } });
         } finally {
             finishRead();
             await hook.unmount();

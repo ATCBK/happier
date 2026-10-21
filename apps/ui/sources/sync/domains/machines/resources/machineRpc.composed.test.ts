@@ -8,7 +8,7 @@ import { socketRpcCodec } from '@happier-dev/sync-client';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { MachineVitalsGetInputV1Schema, MachineVitalsSnapshotV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsRpcV1';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainMachineRowFixture, createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { MachineGuardViewV1Schema } from '@happier-dev/protocol/machines/guard/guardRpcV1';
 import { MachineVitalsHistoryV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1';
@@ -56,8 +56,12 @@ async function withMachineHome(run: (home: Readonly<{
             response.setHeader('content-type', 'application/json'); response.end('{}'); return;
         }
         try {
+            const chunks: Buffer[] = [];
+            for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            const body = chunks.length ? Buffer.concat(chunks).toString('utf8') : undefined;
             const answer = await homes.request(new URL(request.url ?? '/', serverUrl), {
                 method: request.method, headers: request.headers.authorization ? { Authorization: request.headers.authorization } : {},
+                ...(body === undefined ? {} : { body }),
             });
             response.writeHead(answer.status, { 'content-type': 'application/json' }); response.end(await answer.text());
         } catch (error) {
@@ -72,6 +76,9 @@ async function withMachineHome(run: (home: Readonly<{
     serverUrl = `http://127.0.0.1:${address.port}`;
     const serverId = await homes.addHome({ name: 'Resources seam', serverUrl, accountId: 'owner', currentAccount: true });
     const machine = createPlainMachineRowFixture({ id: 'shared-machine', accountId: 'owner' });
+    homes.answer(serverId, 'POST /v1/machines/read-batch', { select: async input => ({
+        body: await createMachineReadBatchResponseFixture(input, id => id === machine.id ? machine : null).json(),
+    }) });
     homes.answer(serverId, '/v1/machines/shared-machine', { body: { machine } });
     const calls: MachineCall[] = [];
     const cancellations: string[] = [];

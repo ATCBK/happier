@@ -4,9 +4,10 @@ import { VoiceSpeechDiagnosticsConfigureRequestV1Schema, VoiceSpeechDiagnosticsS
 import { getPersistenceStorage } from '@/sync/domains/state/persistenceStorage';
 import { serverAccountScopedStorageKey } from '@/sync/domains/scope/serverAccountScope';
 import { addPersistedVoiceDiagnosticsMachineRevocation, readPersistedVoiceDiagnosticsMachineRevocations } from './revocationObligationPersistence';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit';
+import { createMachineFixture } from '@/dev/testkit';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const configure = vi.hoisted(() => vi.fn());
 vi.mock('socket.io-client', async (importOriginal) => (
@@ -65,9 +66,8 @@ afterEach(async () => {
 describe('voice diagnostics revocation reload continuity', () => {
   beforeEach(async () => {
     home = await serveAccountHomes({ homes: [{ key: 'diagnostics', serverUrl: 'https://diagnostics.test', accountId: 'account-a' }],
-      route: ({ path }) => path.startsWith('/v1/machines/')
-        ? Response.json({ machine: createPlainMachineRowFixture({ id: decodeURIComponent(path.slice('/v1/machines/'.length)), accountId: 'account-a' }) })
-        : undefined });
+      route: ({ path, method, body }) => createPlainMachineReadHttpResponseFixture(path,
+        { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, 'account-a') ?? undefined });
     disconnect = await home.restoreActiveConnection();
     scope = { serverId: home.homes.diagnostics!.id, accountId: 'account-a' };
     const machine = createMachineFixture({ id: 'machine-former', activeAt: Date.now() });

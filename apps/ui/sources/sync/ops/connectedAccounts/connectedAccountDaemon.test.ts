@@ -7,6 +7,7 @@ import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { setActionApprovalOverride } from '@happier-dev/protocol/actions/actionSettings';
 
 const homes = createHomeGovernanceHarness();
@@ -24,7 +25,7 @@ installDisconnectedServerSocketBoundary((socket) => {
 });
 const service = { pluginId: 'acme.accounts', localId: 'work' } as const;
 const beginConnect = { operation: 'beginConnect', service, modeId: 'manual' } as const;
-const machineRow = { machine: { id: 'machine-1', kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } };
+const machineRow = { machine: createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' }) };
 let serverId: string;
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
 let syncBridge: Awaited<ReturnType<typeof import('@/dev/testkit/harness/syncSingletonLoader')['loadSyncSingletonForTests']>>;
@@ -131,15 +132,13 @@ describe('connected-account daemon machine RPC', () => {
             .resolves.toEqual({ status: 'awaitingManual', attemptId: 'attempt-1' });
         expect(outgoing).toMatchObject([{ method: 'machine-1:daemon.connectedAccounts.authentication.command',
             params: { v: 1, machineId: 'machine-1', command: beginConnect } }]);
-        expect(homes.requestsFor('/v1/machines/machine-1')[0]?.serverId).toBe(serverId);
+        expect(homes.requestsFor('/v1/machines/read-batch')[0]?.serverId).toBe(serverId);
     });
     it('completes the MCP callback on its exact pending machine through the real Action and socket owners', async () => {
         await waiveCallbackApproval();
         const { completeMcpOAuthCallback } = await import('./mcpOAuthCallback');
         const { MCP_OAUTH_CALLBACK_URL_V1 } = await import('@happier-dev/protocol/mcp/oauth/mcpOAuthClientIdentityV1');
-        homes.answer(serverId, '/v1/machines/machine-2', { body: { machine: {
-            id: 'machine-2', kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-        } } });
+        homes.answer(serverId, '/v1/machines/machine-2', { body: { machine: createPlainMachineRowFixture({ id: 'machine-2', accountId: 'account-a' }) } });
         const attempt = { attemptId: 'attempt.with.dots', kind: 'oauth', modeId: 'oauth', intent: 'connect',
             phase: 'awaitingOAuth', createdAtMs: 1, expiresAtMs: 100 };
         answers.push(

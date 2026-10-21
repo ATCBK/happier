@@ -59,6 +59,8 @@ describe('session resume and fork routing through the Home and Account boundary'
         boundary.setHttpResponder(async (input, init) => {
             const path = new URL(String(input)).pathname;
             if (path === '/v1/machines') return Response.json([...censusMachineIds].map((id) => machineFixtures.createPlainMachineRowFixture({ id, accountId: home.accountId })));
+            if (path === '/v1/machines/read-batch' && init?.method === 'POST') return machineFixtures.createMachineReadBatchResponseFixture(init.body,
+                id => censusMachineIds.has(id) ? machineFixtures.createPlainMachineRowFixture({ id, accountId: home.accountId }) : null);
             if (path.startsWith('/v1/machines/')) {
                 const id = decodeURIComponent(path.slice('/v1/machines/'.length));
                 return censusMachineIds.has(id)

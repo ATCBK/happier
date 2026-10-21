@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import 'fake-indexeddb/auto';
 import { resolveCompactAppDestinations } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { act } from 'react-test-renderer';
@@ -452,6 +453,8 @@ beforeEach(async () => {
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
         if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
+        if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+            id => createPlainMachineRowFixture({ id, accountId: 'account-a' }));
         if (path.startsWith('/v1/machines/')) return Response.json({ machine: createPlainMachineRowFixture({
             id: decodeURIComponent(path.slice('/v1/machines/'.length)), accountId: 'account-a',
         }) });

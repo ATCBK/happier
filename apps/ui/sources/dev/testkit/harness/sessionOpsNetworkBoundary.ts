@@ -25,7 +25,7 @@ export type SessionOpsSocketAckRequest = Readonly<{
 }>;
 
 type SessionOpsHttpResponder = (...args: Parameters<RuntimeFetch>) => Promise<Response | null>;
-type SessionOpsSocketOptions = Readonly<{ auth?: { token?: string }; transports?: unknown }>;
+type SessionOpsSocketOptions = Readonly<{ auth?: { token?: string; clientPurpose?: unknown }; transports?: unknown }>;
 type SessionOpsSocketBoundary = ReturnType<typeof import('../mocks/socketIo').createSocketIoBoundaryStub> & Readonly<{
     serverUrl: string;
     token: string | undefined;
@@ -107,7 +107,7 @@ export async function installSessionOpsNetworkBoundary() {
     const { upsertServerProfile, adoptHomeProfile } = await import('@/sync/domains/server/serverProfiles');
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-    const { createPlainMachineRowFixture } = await import('../fixtures/machineFixtures');
+    const { createPlainMachineRowFixture, createMachineReadBatchResponseFixture } = await import('../fixtures/machineFixtures');
     const { createAccountTokenForTests } = await import('./homeGovernanceHarness');
     const { createAccountSettingsHttpBoundary } = await import('./actionHomesHttpHarness');
     const { canonicalizeServerUrl } = await import('@/sync/domains/server/url/serverUrlCanonical');
@@ -154,6 +154,8 @@ export async function installSessionOpsNetworkBoundary() {
         if (url.pathname === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
         const accountId = homes.get(url.origin)?.accountId;
         if (!accountId) throw new Error(`Test Home Account is unavailable: ${url.origin}`);
+        if (url.pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+            id => createPlainMachineRowFixture({ id, accountId }));
         if (url.pathname === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'machine-1', accountId })]);
         if (url.pathname.startsWith('/v1/machines/')) return Response.json({ machine: createPlainMachineRowFixture({
             id: decodeURIComponent(url.pathname.slice('/v1/machines/'.length)), accountId,

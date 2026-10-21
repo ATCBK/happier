@@ -1,4 +1,5 @@
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const network = await installSessionOpsNetworkBoundary();
 import { readFile } from 'node:fs/promises';
@@ -80,7 +81,7 @@ beforeEach(async () => {
   network.setRpcResponder(async request => await mediatedCredentialMachineRpc(request));
   preparationPurposes = createConnectedPurposeCatalogHttpBoundary();
   const response = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
-  preparationHome = await createPlainArtifactHomeFixture('https://voice-preparation.example', { handleRequest: async (path, init) => path.startsWith('/v1/machines/') ? Response.json({ machine: { id: decodeURIComponent(path.slice('/v1/machines/'.length)), dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } }) :
+  preparationHome = await createPlainArtifactHomeFixture('https://voice-preparation.example', { handleRequest: async (path, init) => createPlainMachineReadHttpResponseFixture(path, init) ??
     await preparationPurposes.handle(new URL(path, 'https://voice-preparation.example'), init)
       ?? (path === '/v2/account/settings' ? response({ version: 1, content: { t: 'plain', v: {} } })
       : path === PROMPT_LIBRARY_ROWS_ROUTE_V1 ? response({ status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({

@@ -71,6 +71,7 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
 import { buildKeepGoingTriggerAddRequest } from '@/components/sessions/workState/sessionGoalContinuation';
@@ -494,15 +495,22 @@ describe('UI Workflow Action front door', () => {
         try {
             await loadSyncSingletonForTests();
             connection = await h.restoreAccount(request);
-            runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
-                if (new URL(String(url)).pathname === `/v2/sessions/${sessionId}`) {
-                    sessionReads.push(String(url));
+            const sessionBoundary = createSessionReadBatchHttpBoundary(async request => {
+                if (request.path === `/v2/sessions/${sessionId}`) {
+                    sessionReads.push(request.url.toString());
                     if (cached === 'not_found') return json({ error: 'Session not found' }, 404);
                     if (cached === 'retired') await TokenStorage.setCredentialsForServerUrl(h.home.serverUrl,
                         { serverId: h.account.serverId }, { token: 'replacement-account' });
                     return json({ session: wire });
                 }
-                return request(url, init);
+                return undefined;
+            });
+            runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+                const target = new URL(String(url));
+                if (target.pathname !== '/v2/sessions/read-batch' && target.pathname !== `/v2/sessions/${sessionId}`) return request(url, init);
+                return await sessionBoundary.handle({ home: h.account.serverId, accountId, url: target,
+                    path: target.pathname, method: init?.method ?? 'GET', headers: new Headers(init?.headers),
+                    signal: init?.signal, body: init?.body ? JSON.parse(String(init.body)) : undefined }) ?? request(url, init);
             });
             expect(getActiveServerSnapshot().serverId).toBe(h.account.serverId);
             storage.setState({ endpointStatus: 'online', profileScope: { serverId: h.account.serverId, accountId } });
@@ -868,8 +876,8 @@ describe('UI Workflow Action front door', () => {
             await loadSyncSingletonForTests();
             connection = await h.restoreAccount(request);
             let retainedSessionReads = 0;
-            runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
-                if (new URL(String(url)).pathname === '/v2/sessions/session-old') {
+            const sessionBoundary = createSessionReadBatchHttpBoundary(request => {
+                if (request.path === '/v2/sessions/session-old') {
                     retainedSessionReads += 1;
                     return json({ session: {
                     id: 'session-old', seq: 1, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
@@ -877,7 +885,14 @@ describe('UI Workflow Action front door', () => {
                     agentState: null, agentStateVersion: 1, dataEncryptionKey: encryptedKey, share: null,
                     } });
                 }
-                return request(url, init);
+                return undefined;
+            });
+            runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+                const target = new URL(String(url));
+                if (target.pathname !== '/v2/sessions/read-batch' && target.pathname !== '/v2/sessions/session-old') return request(url, init);
+                return await sessionBoundary.handle({ home: h.account.serverId, accountId, url: target,
+                    path: target.pathname, method: init?.method ?? 'GET', headers: new Headers(init?.headers),
+                    signal: init?.signal, body: init?.body ? JSON.parse(String(init.body)) : undefined }) ?? request(url, init);
             });
             storage.setState({ endpointStatus: 'online', profileScope: { serverId: h.account.serverId, accountId }, sessions: {
                 'session-old': createSessionFixture({ id: 'session-old', encryptionMode: 'e2ee', active: false, metadata: {

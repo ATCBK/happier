@@ -2,11 +2,45 @@ import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { FetchedMachineRow } from '@/sync/engine/machines/syncMachines';
 import { AccessibleMachineAccessV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
-import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { PluginProjectionV2Schema, type PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { MachineAgentInventoryItemSchema, type CapabilitiesDetectResponse } from '@happier-dev/protocol/capabilities';
+import { MachineReadBatchRequestV1Schema, MachineReadBatchResponseV1Schema } from '@happier-dev/protocol/machines/machineReadBatchV1';
+
+/** Current HTTP batch wire, backed by the same explicit external rows as exact reads. */
+export function createMachineReadBatchResponseFixture(body: unknown, readMachine: (machineId: string) => unknown | null): Response {
+    const input = MachineReadBatchRequestV1Schema.parse(typeof body === 'string' ? JSON.parse(body) : body);
+    return Response.json(MachineReadBatchResponseV1Schema.parse({ results: input.machineIds.map(machineId => {
+        const machine = readMachine(machineId);
+        return machine === null ? { machineId, status: 'not_found' } : { machineId, status: 'found', machine };
+    }) }));
+}
+
+/** Plain transport fixtures intentionally admit any requested Machine ID for this Account. */
+export function createPlainMachineReadHttpResponseFixture(path: string, init?: RequestInit, accountId = 'artifact-account'): Response | null {
+    const read = (id: string) => createPlainMachineRowFixture({ id, accountId });
+    if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body, read);
+    const exact = /^\/v1\/machines\/([^/]+)$/.exec(path);
+    if (exact && (init?.method ?? 'GET') === 'GET') return Response.json({ machine: read(decodeURIComponent(exact[1]!)) });
+    return null;
+}
+
+export type ReadyMachineAgentInventoryFixture = {
+    projection: PluginProjectionV2;
+    capabilities: {
+        protocolVersion: 1;
+        results: Record<string, {
+            ok: true;
+            checkedAt: number;
+            data: ReturnType<typeof MachineAgentInventoryItemSchema.parse> & {
+                isLoggedIn: boolean;
+                authStatus: { state: string; checkedAt: number };
+            };
+        }>;
+    };
+};
 
 /** Daemon declarations and native probe facts; catalog/admission projections stay real. */
-export function createReadyMachineAgentInventoryFixture(agents: readonly Readonly<{ agentId: string; title: string }>[]) {
+export function createReadyMachineAgentInventoryFixture(agents: readonly Readonly<{ agentId: string; title: string }>[]): ReadyMachineAgentInventoryFixture {
     const items = agents.map(agent => MachineAgentInventoryItemSchema.parse({ ...agent,
         installed: true, version: '1.0.0', latestVersion: null, update: { supported: false, command: null },
         signIn: { status: 'signedIn', loginSupport: 'status_only' }, platform: { supported: true },
