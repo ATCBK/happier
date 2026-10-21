@@ -30,6 +30,7 @@ import type {
 import {
   useFileBlame,
   type FileBlameScope,
+  type UseFileBlameInput,
 } from '@/sync/domains/session/changes/hooks/useFileBlame';
 import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
 import { t } from '@/text';
@@ -449,6 +450,9 @@ export type FileBlameRegionInput = Readonly<{
   content: Readonly<{ text: string; hash: string }> | null;
   enabled: boolean;
   readBlame: boolean;
+  revision?: UseFileBlameInput['revision'];
+  refreshContent?: UseFileBlameInput['refreshContent'];
+  editor?: TextEditorHandle | null;
   /** The Session whose File page this is; its turns attribute uncommitted lines. Project pages pass null. */
   sessionAddress: SessionAddress | null;
   /** Phone: the 22 px glyph column and a run sheet. */
