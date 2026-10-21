@@ -41,6 +41,8 @@ export type PdfViewerProps = Readonly<{
   position?: PdfViewPosition | null;
   onPositionChange?: (position: PdfViewPosition) => void;
   onPageInfo?: (info: PdfPageInfo) => void;
+  /** Whether the viewer's own Find bar is showing, reported like page info (the phone toolbar steps aside). */
+  onFindOpenChange?: (open: boolean) => void;
   /** The floating page pill; phones show the page in their bottom toolbar instead. */
   showPagePill?: boolean;
   /** `stage`: pages stand on the Media stage's own backdrop in a reading column (lab MS1f). */

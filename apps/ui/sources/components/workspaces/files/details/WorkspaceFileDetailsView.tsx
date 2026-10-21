@@ -1326,15 +1326,20 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         // Only a mounted key row carries Save: both editor bodies (code and Markdown) mount it in Edit (B1-PE-03).
         keyRowCarriesSave: editorAccessory !== null && displayMode === 'file' && isEditorSelected,
     });
-    // The phone's bottom toolbar steps aside while something else holds the bottom edge: the editor's key row
-    // (ED1p) or the review bar in Changes (rvp P1). The header then carries the view choice and Done itself.
-    const phoneToolbar = phonePage && !isEditorSelected
-        && !(displayMode === 'diff' && changesReview.controller.strip.total > 0);
     // A PDF (lab FV5): the viewer owns its pages, scale and Find; the page remembers zoom and place per file
     // and shows the facts the viewer reports (page count, the phone's "3 of 14").
     const pdfBody = displayMode === 'file' && fileContent?.isBinary === true && fileViewer.kind === 'pdf';
     const [pdfPageInfo, setPdfPageInfo] = React.useState<Readonly<{ path: string; info: PdfPageInfo }> | null>(null);
     const shownPdfPageInfo = pdfPageInfo?.path === filePath ? pdfPageInfo.info : null;
+    // The file whose PDF Find bar is showing, as its viewer reports it (the viewer owns Find).
+    const [pdfFindOpenPath, setPdfFindOpenPath] = React.useState<string | null>(null);
+    // The phone's bottom toolbar steps aside while something else holds the bottom edge: the editor's key row
+    // (ED1p), the review bar in Changes (rvp P1) or the PDF's Find bar. The header then carries the view choice
+    // and Done itself.
+    const pdfFindHoldsBottom = pdfBody && pdfFindOpenPath === filePath;
+    const phoneToolbar = phonePage && !isEditorSelected
+        && !(displayMode === 'diff' && changesReview.controller.strip.total > 0)
+        && !pdfFindHoldsBottom;
     const pdfZoom = fileView.pdfZoom ?? 'fit-width';
     const pdfPosition = fileView.pdfPosition ?? null;
     const pdfControl = React.useMemo(() => ({
@@ -1343,6 +1348,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         position: pdfPosition,
         onPositionChange: (position: PdfViewPosition) => patchFileView({ pdfPosition: position }),
         onPageInfo: (info: PdfPageInfo) => setPdfPageInfo({ path: filePath, info }),
+        onFindOpenChange: (open: boolean) => setPdfFindOpenPath(current => open ? filePath : current === filePath ? null : current),
         // Phones show the page in the bottom toolbar, so only one thing floats.
         showPagePill: !phonePage,
     }), [filePath, patchFileView, pdfPosition, pdfZoom, phonePage]);
@@ -1551,7 +1557,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                     ) : null}
                     edit={pageEditControl}
                     menuActions={menuActions}
-                    toolbarBelow={phoneToolbar}
+                    // PDF Find only borrows the toolbar's edge, so the header stays as it was (lab FV5fp: ⋯ only).
+                    toolbarBelow={phoneToolbar || (phonePage && !isEditorSelected && pdfFindHoldsBottom)}
                     displayMode={displayMode}
                     onDisplayMode={onDisplayMode}
                     diffMode={diffMode}

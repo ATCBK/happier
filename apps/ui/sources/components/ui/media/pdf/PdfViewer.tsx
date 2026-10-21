@@ -208,6 +208,10 @@ function PdfViewerDocument(props: PdfViewerProps & Readonly<{
   });
   const shown = find.snapshot.open && props.isActive;
   const presence = useFindBarPresence(shown);
+  const { onFindOpenChange } = props;
+  React.useEffect(() => {
+    onFindOpenChange?.(shown);
+  }, [onFindOpenChange, shown]);
   const failed =
     state.status === 'error'
       ? state

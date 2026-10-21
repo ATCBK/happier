@@ -99,4 +99,25 @@ describe('PDF File page header (lab files FV5)', () => {
             expect(header().props.summaryFacts).toEqual(expect.arrayContaining(['14 pages']));
         } finally { await act(async () => { await screen.unmount(); }); }
     });
+    it('on a phone, the floating toolbar steps aside while the viewer reports its Find open', async () => {
+        const { SurfaceStateSizeProvider } = await import('@/components/ui/surfaces/surfaceStateSize');
+        const screen = await fixture.render(<ModalProvider><SurfaceStateSizeProvider size="phone">
+            <WorkspaceFileDetailsView scopeId="project:pdf-header" scope={fixture.scope} filePath={filePath} sessionIdForAugmentation={null} />
+        </SurfaceStateSizeProvider></ModalProvider>);
+        try {
+            await vi.waitFor(() => expect(screen.findAllByType(FileViewerBody)).toHaveLength(1));
+            const body = () => screen.findByType(FileViewerBody);
+            const toolbar = () => screen.findAllHostsByTestId('file-page-toolbar');
+            await act(async () => { body().props.pdf?.onPageInfo?.({ page: 1, total: 3 }); });
+            expect(toolbar().length).toBeGreaterThan(0);
+            const header = () => screen.findByType(FilePageHeader);
+            expect(header().props.toolbarBelow).toBe(true);
+            await act(async () => { body().props.pdf?.onFindOpenChange?.(true); });
+            expect(toolbar()).toHaveLength(0);
+            // The header does not take the toolbar's controls while Find only borrows the bottom edge.
+            expect(header().props.toolbarBelow).toBe(true);
+            await act(async () => { body().props.pdf?.onFindOpenChange?.(false); });
+            expect(toolbar().length).toBeGreaterThan(0);
+        } finally { await act(async () => { await screen.unmount(); }); }
+    });
 });

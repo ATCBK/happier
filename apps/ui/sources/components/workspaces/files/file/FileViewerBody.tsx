@@ -50,6 +50,7 @@ export type FileViewerBodyProps = Readonly<{
     position?: PdfViewPosition | null;
     onPositionChange?: (position: PdfViewPosition) => void;
     onPageInfo?: (info: PdfPageInfo) => void;
+    onFindOpenChange?: (open: boolean) => void;
     showPagePill?: boolean;
   }>;
   testID?: string;
