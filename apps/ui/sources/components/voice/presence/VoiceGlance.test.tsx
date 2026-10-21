@@ -95,6 +95,22 @@ afterEach(async () => {
 });
 
 describe('VoiceGlance', () => {
+    it('keeps the full failure caption readable and selectable', async () => {
+        const detail = 'The selected speech provider could not start. Check the account key and its restrictions before trying again.';
+        const voice = {
+            ...attempt(),
+            ...resolveVoiceAttemptControl({ surfaceState: 'error', tone: 'error', status: 'error',
+                sessionId: 'voice-1', canStop: false, muted: false, capturing: false,
+                startAdmitted: true, hasRecovery: true }),
+            captionLabel: detail,
+        };
+        screen = await renderScreen(<VoiceGlance model={surface(voice, { canBargeIn: false })} presentation="companion" />);
+        expect(screen.getTextContent()).toContain(detail);
+        expect(screen.findAllByProps({ children: detail }).some(node =>
+            node.props.selectable === true && node.props.numberOfLines === undefined,
+        )).toBe(true);
+    });
+
     it.each(['connecting', 'permission_required', 'error'] as const)('does not show a running-call clock in the %s header', async (surfaceState) => {
         vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
         vi.setSystemTime(200_000);

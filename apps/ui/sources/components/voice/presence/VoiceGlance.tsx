@@ -130,7 +130,7 @@ const VoiceGlanceBody = React.memo(function VoiceGlanceBody(props: Readonly<{
                 <VoiceMark voice={voice} size={sheet ? 64 : 44} />
                 <View style={styles.heroText}>
                     <VoiceStatusLine voice={voice} size="hero" />
-                    {caption ? <Text style={sheet ? styles.captionSheet : styles.caption} numberOfLines={2}>{caption}</Text> : null}
+                    {caption ? <Text style={sheet ? styles.captionSheet : styles.caption} selectable>{caption}</Text> : null}
                 </View>
             </View>
             {showTurns ? <VoiceGlanceTurns turns={turns} sheet={sheet} /> : null}
