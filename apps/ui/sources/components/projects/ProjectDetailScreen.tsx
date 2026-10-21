@@ -9,6 +9,7 @@ import { useLocalSetting, useWorkspaceRefs } from '@/sync/domains/state/storage'
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { readProjectSelectionPreference, resolveProjectSelectionPreferenceKeys, writeProjectSelectionPreference } from '@/sync/domains/settings/projectSelectionPersistence';
 import { useDeviceType } from '@/utils/platform/responsive';
+import { SurfaceStateSizeProvider, useSurfaceStateCardSize } from '@/components/ui/surfaces/surfaceStateSize';
 import { AppPaneScopeHost } from '@/components/appShell/panes/AppPaneScopeHost';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import type { PluginSurfaceOpenHandler } from '@/components/plugins/surfaces/openPluginSurface';
@@ -64,6 +65,7 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
 }>) => {
     const { theme } = useUnistyles();
     const deviceType = useDeviceType();
+    const enclosingStateSize = useSurfaceStateCardSize();
     const multiPaneEnabled = useLocalSetting('uiMultiPanePanelsEnabled') !== false;
     const lastActiveRootPathByWorkspaceRefId = useLocalSetting('projectLastActiveRootPathByWorkspaceRefId');
     const lastActiveWorktreeIdByWorkspaceRefId = useLocalSetting('projectLastActiveWorktreeIdByWorkspaceRefId');
@@ -344,6 +346,9 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
                                         />
                                     </ProjectPhoneAtmosphereHeader>
                                 ) : null}
+                                {/* A phone's page cockpit is a phone host: its pages (the File page's key row and toolbar,
+                                    state cards) take the phone composition, as the Session cockpit does. */}
+                                <SurfaceStateSizeProvider size={deviceType === 'phone' ? 'phone' : enclosingStateSize}>
                                 <ProjectCockpitShell
                                     scopeId={scopeId}
                                     workspaceRef={workspaceRef}
@@ -355,6 +360,7 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
                                     isFocused={props.isFocused !== false}
                                     onSelectRootPath={handleSelectRootPath}
                                 />
+                                </SurfaceStateSizeProvider>
                                 </PopoverScope>
                             </View>
                         </PageColumnProvider>
