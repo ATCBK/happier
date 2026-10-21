@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { computePluginUiArtifactFileSetSha256DigestV1 } from '@happier-dev/protocol/plugins/ui';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -44,6 +44,7 @@ type FixtureOverrides = Readonly<{
   artifactDigest?: string;
   artifactEntryPath?: string;
   artifactExportNames?: readonly string[];
+  uiArtifactBytes?: Uint8Array;
   includeUiRenderer?: boolean;
   includeVoiceProvider?: boolean;
   voiceProviderPlatforms?: readonly ('web' | 'ios' | 'android')[];
@@ -81,7 +82,7 @@ async function createCandidateFixture(overrides: FixtureOverrides = {}): Promise
   const uiEntryPath = overrides.artifactEntryPath ?? (artifactTier === 'reactNative'
     ? `react-native/${artifactId}/entry.cjs.bundle`
     : `hosted-web/${artifactId}/index.html`);
-  const uiBytes = artifactTier === 'reactNative'
+  const uiBytes = overrides.uiArtifactBytes ? Buffer.from(overrides.uiArtifactBytes) : artifactTier === 'reactNative'
     ? Buffer.from(`module.exports = { ${(overrides.artifactExportNames ?? ['activate'])
       .map((name) => `${JSON.stringify(name)}: () => {}`).join(', ')} };\n`)
     : Buffer.from('<!doctype html><div id="root"></div>\n');
@@ -430,6 +431,50 @@ describe('stageDownloadedNpmArtifactCandidate', () => {
       ok: true,
       candidate: { generatedUiArtifacts: { artifactIds: ['client-actions'] } },
     });
+  });
+
+  it('admits a compiled Account-only Action artifact while refusing export and digest drift', async () => {
+    const { compileUniversalPluginUiCommonJs } = await import('../../../../../../packages/plugin-sdk/src/ui/build/universalCommonJsCompiler');
+    const { readWorkspacePackages, packageNameOfSpecifier, resolveWorkspaceSource } = await import('../../../../../../packages/cli-common/sourceRuntimeEntries.mjs');
+    const { manifest } = await import('../../../../../../packages/plugin-sdk/fixtures/account-actions/src/index');
+    const projectRoot = resolve(import.meta.dirname, '../../../../../../packages/plugin-sdk/fixtures/account-actions');
+    const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+      exports: Record<string, string>;
+    };
+    const packages = await readWorkspacePackages(resolve(import.meta.dirname, '../../../../../..'));
+    const compiled = await compileUniversalPluginUiCommonJs({ projectRoot,
+      entryPath: resolve(projectRoot, packageJson.exports['./happier-plugin-ui/account-runtime']!),
+      artifactId: 'account-runtime', requestedExports: ['activate'], exportConditions: ['happier-source'],
+      resolveSourceImport: specifier => packages.has(packageNameOfSpecifier(specifier))
+        ? resolveWorkspaceSource(packages, specifier, { conditions: ['react-native', 'browser'] }) : undefined,
+    });
+    const digest = computePluginUiArtifactFileSetSha256DigestV1([
+      { relativePath: compiled.relativePath, bytes: compiled.bytes },
+    ]);
+    for (const [kind, exportNames, artifactDigest, expected] of [
+      ['exact', compiled.exports, digest, { ok: true }],
+      ['wrong export', ['otherActivate'], digest, { ok: false, rejection: { code: 'ui_artifact_identity_mismatch' } }],
+      ['wrong digest', compiled.exports, `sha256:${'a'.repeat(64)}`, { ok: false, rejection: { code: 'ui_artifact_digest_mismatch' } }],
+    ] as const) {
+      const fixture = await createCandidateFixture({ includeUiRenderer: false,
+        packageVersion: manifest.version, pluginManifestBody: JSON.stringify(manifest),
+        artifactContributionId: compiled.artifactId, artifactTier: 'reactNative', uiArtifactBytes: compiled.bytes,
+        extraEntries: [{ name: 'package/dist/index.js', body: 'export function activate() {}\n' }],
+        uiArtifactsBody: JSON.stringify({ version: 2, entries: [{ artifactId: compiled.artifactId, tier: 'reactNative',
+          entry: compiled.relativePath, files: [uiArtifactFile(compiled.relativePath, compiled.bytes)],
+          digest: artifactDigest, builtWith: { bundler: 'esbuild', version: compiled.esbuildVersion },
+          executable: { exports: exportNames }, hostUiApiRange: '^1.0.0' }] }),
+      });
+      const result = await stageDownloadedNpmArtifactCandidate({
+        candidate: { ...fixture.candidate, source: { ...fixture.candidate.source, version: manifest.version } },
+        stagingParentPath: fixture.stagingParentPath,
+      });
+      expect(result, `${kind}: ${result.ok ? 'admitted' : JSON.stringify(result.rejection)}`).toMatchObject(expected);
+      if (result.ok) {
+        expect(result.candidate.generatedUiArtifacts.artifactIds).toEqual(['account-runtime']);
+        await cleanupStagedNpmArtifactCandidate(result.candidate);
+      }
+    }
   });
 
   it('rejects a client Action artifact that does not expose its declared export', async () => {

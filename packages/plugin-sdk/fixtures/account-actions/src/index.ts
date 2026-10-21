@@ -7,6 +7,7 @@ const execution = { target: 'account', account: { artifactId: 'account-runtime',
 
 const plugin = definePlugin({
     id: 'acme.account-actions', version: '1.0.0',
+    entrypoints: { daemon: './dist/index.js' },
     // KV handlers require this plugin's Account storage grant.
     hostAccess: { required: [{
         id: 'account-storage', capability: 'storage.account',

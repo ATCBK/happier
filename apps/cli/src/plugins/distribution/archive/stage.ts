@@ -321,12 +321,17 @@ function expectedUiArtifacts(manifest: CanonicalPluginManifest): ReadonlyMap<str
     });
   }
   for (const action of manifest.contributes.actions) {
-    if (action.execution.target !== 'client') continue;
+    const executable = action.execution.target === 'client'
+      ? action.execution.client
+      : action.execution.target === 'account'
+        ? action.execution.account
+        : undefined;
+    if (!executable) continue;
     claim({
-      id: action.execution.client.artifactId,
+      id: executable.artifactId,
       tier: 'reactNative',
       expectedExecutable: Object.freeze({
-        exportName: action.execution.client.exportName,
+        exportName: executable.exportName,
       }),
     });
   }
