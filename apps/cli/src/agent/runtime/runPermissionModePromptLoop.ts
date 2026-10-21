@@ -1614,8 +1614,19 @@ export async function runPermissionModePromptLoop(opts: {
                 ...(localId ? { contextOnlyWorkerLocalId: localId } : {}),
               } : {}),
             }) ?? null;
+        const withdrawnFollowLocalInputIds = preparedHostContext?.withdrawnFollowLocalInputIds;
         if (!hostContextOnly && preparedHostContext?.recheckAdmission
           && !await preparedHostContext.recheckAdmission(dispatchAbortSignal)) preparedHostContext = null;
+        const withdrawnFollowFailure = { code: 'session_follow_original_withdrawn',
+          message: 'The followed Run permission request is no longer outstanding', retryable: false };
+        for (const follow of message.message.followDeliveries ?? []) {
+          if (!withdrawnFollowLocalInputIds?.includes(follow.localInputId) || follow.localInputId === localId) continue;
+          await observePreTurnFailureSettlement({ session: opts.session, error: withdrawnFollowFailure,
+            message: { text: '', localId: follow.localInputId, userMessageSeq: follow.userMessageSeq } });
+          opts.messageQueue.discardMatching(prompt => prompt.localId === follow.localInputId
+            && Boolean(prompt.followDeliveries?.some(item => item.localInputId === follow.localInputId)));
+        }
+        if (localId && withdrawnFollowLocalInputIds?.includes(localId)) throw new PreTurnPromptFailure(withdrawnFollowFailure);
         if (message.message.followDeliveries?.some(delivery => delivery.localInputId === message.message.localId)
           && !preparedHostContext?.representedFollowLocalInputIds?.includes(localId ?? '')) {
           throw new PreTurnPromptFailure({ code: 'session_follow_context_unavailable',

@@ -374,7 +374,8 @@ export function registerExecutionRunRpcHandlers(
       if (!run || run.sessionId !== parsed.data.sessionId || run.status !== 'running' && !run.terminalOccurrenceId)
         return { ok: false, error: 'Execution run not found', errorCode: 'execution_run_not_found' };
       return ExecutionRunFollowFrontierResponseSchema.parse({ sessionId: parsed.data.sessionId, runId: run.runId,
-        status: run.status, terminalEventId: run.status === 'running' ? null : run.terminalOccurrenceId });
+        status: run.status, terminalEventId: run.status === 'running' ? null : run.terminalOccurrenceId,
+        ...(run.status === 'running' && run.attention ? { attention: run.attention } : {}) });
     });
 
   rpc.registerHandler(

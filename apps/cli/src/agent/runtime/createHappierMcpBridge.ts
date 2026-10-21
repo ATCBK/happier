@@ -75,6 +75,7 @@ export async function createHappierMcpBridge(
     commandMode?: 'direct-script' | 'current-process'
     sessionCredentials?: StoredCredentials | null
     credentials?: StoredCredentials | null
+    isCredentialCurrent?: () => boolean | Promise<boolean>
     authorityScope?: 'account' | 'session'
     sessionList?: ActionExecutorDeps['sessionList']
     accountSettings?: AccountSettings | null
@@ -101,6 +102,7 @@ export async function createHappierMcpBridgeWithOptions(
     commandMode?: 'direct-script' | 'current-process'
     sessionCredentials?: StoredCredentials | null
     credentials?: StoredCredentials | null
+    isCredentialCurrent?: () => boolean | Promise<boolean>
     authorityScope?: 'account' | 'session'
     sessionList?: ActionExecutorDeps['sessionList']
     accountSettings?: AccountSettings | null
@@ -122,6 +124,7 @@ export async function createHappierMcpBridgeWithOptions(
   const happierMcpServer = await startHappyServer(session, {
     sessionCredentials: opts.sessionCredentials ?? opts.credentials ?? null,
     credentials: opts.credentials ?? null,
+    isCredentialCurrent: opts.isCredentialCurrent,
     authorityScope: opts.authorityScope ?? 'account',
     ...(opts.sessionList ? { sessionList: opts.sessionList } : {}),
     accountSettings: opts.accountSettings ?? null,

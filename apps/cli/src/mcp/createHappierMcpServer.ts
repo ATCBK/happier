@@ -145,6 +145,8 @@ export function createHappierMcpServer(
     sessionCredentials?: StoredCredentials | null;
     /** Account-scoped Action authority. Existing callers default this from credentials. */
     credentials?: StoredCredentials | null;
+    /** Currentness of the admitted Account custody, including requester Sessions. */
+    isCredentialCurrent?: () => boolean | Promise<boolean>;
     authorityScope?: 'account' | 'session';
     sessionList?: ActionExecutorDeps['sessionList'];
     actionsSettingsProvider?: RuntimeActionSettingsProvider;
@@ -175,9 +177,9 @@ export function createHappierMcpServer(
   const credentials = opts?.authorityScope === 'session' ? null : opts?.credentials ?? null;
   const sessionCredentials = opts?.sessionCredentials ?? opts?.credentials ?? null;
   const { serverId, serverUrl: serverHttpBaseUrl } = client.getServerBinding();
-  const isCredentialCurrent = async () => credentials !== null && sameStoredCredentials(
-    credentials, await readStoredCredentialsForServerId(serverId).catch(() => null),
-  );
+  const isCredentialCurrent = async () => credentials !== null && (opts?.isCredentialCurrent
+    ? await opts.isCredentialCurrent()
+    : sameStoredCredentials(credentials, await readStoredCredentialsForServerId(serverId).catch(() => null)));
   const serverFeaturesSnapshot = client.getServerFeaturesSnapshot?.();
   const serverIdentityId = serverFeaturesSnapshot?.status === 'ready'
     ? normalizeServerIdentityIdCapability(
@@ -349,10 +351,7 @@ export function createHappierMcpServer(
     ? createAccountServerActionDeps({
         token: credentials.token,
         credentials,
-        isCredentialCurrent: async () => sameStoredCredentials(
-          credentials,
-          await readStoredCredentialsForServerId(serverId).catch(() => null),
-        ),
+        isCredentialCurrent,
         serverId,
         serverHttpBaseUrl,
         ...(serverIdentityId ? { serverIdentityId } : {}),
@@ -428,10 +427,7 @@ export function createHappierMcpServer(
             ...createSessionFollowActionDeps({
               token: credentials.token,
               credentials,
-              isCredentialCurrent: async () => sameStoredCredentials(
-                credentials,
-                await readStoredCredentialsForServerId(serverId).catch(() => null),
-              ),
+              isCredentialCurrent,
               serverId,
               serverHttpBaseUrl,
               ...(serverIdentityId ? { serverIdentityId } : {}),

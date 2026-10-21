@@ -32,6 +32,7 @@ import { resolveExecutionRunLifecycle } from '@/agent/runtime/bridges/executionR
 import { projectExecutionRunPublicState } from '@/agent/runtime/bridges/executionRun/publicState';
 import { RequesterWorkAttributionV1Schema, type RequesterWorkAttributionV1 } from './lifecycle/requesterWorkAttribution';
 import { notifyDaemonSessionActivityChanged } from './controlClient';
+import { resolveExecutionRunFollowOccurrenceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 
 const liveWorkListeners = new Set<() => void>();
 function notifyExecutionRunLiveWorkChanged(): void {
@@ -254,22 +255,22 @@ export async function readRetainedExecutionRunRecord(runId: string): Promise<Ret
   return prior;
 }
 
-async function writeRetainedExecutionRunRecord(record: RetainedExecutionRunRecord): Promise<void> {
+async function writeRetainedExecutionRunRecord(record: RetainedExecutionRunRecord, attentionChanged = false): Promise<void> {
   const storage = await readOrCreateDeviceLocalSecretStorage({ path: configuration.deviceLocalSecretKeyFile });
   await writeProtectedLocalStateFileAtomic(retainedStatePath(record.state.runId), storage.sealJson({
     purpose: 'execution_run_state', value: RetainedExecutionRunRecordSchema.parse(record),
   }), { authority: 'owned' });
   notifyExecutionRunLiveWorkChanged();
   const state = record.state;
-  if (state.sessionId && state.terminalOccurrenceId
-    && (state.status === 'succeeded' || state.status === 'failed' || state.status === 'cancelled')) {
+  if (state.sessionId && (state.terminalOccurrenceId || attentionChanged)) {
     // A hint never owns delivery or terminal state. Read-after-write routing
     // re-enters the retained original, current Follow and Pending owners.
-    void notifyDaemonSessionActivityChanged(state.sessionId, {
-      original: { source: { kind: 'execution_run', sessionId: state.sessionId, runId: state.runId },
-        terminalEventId: state.terminalOccurrenceId },
-      event: { kind: state.status === 'succeeded' ? 'finished' : 'failed_or_stopped' },
-    }).catch(error => logger.debug('[executionRunRegistry] Follow occurrence remains in retained Run custody', error));
+    const occurrence = resolveExecutionRunFollowOccurrenceV1({ ...state, sessionId: state.sessionId,
+      terminalEventId: state.terminalOccurrenceId ?? null });
+    // Empty attention re-enters the same source range read, withdrawing an
+    // outstanding original without inventing a terminal event or another log.
+    void notifyDaemonSessionActivityChanged(state.sessionId, occurrence ?? undefined)
+      .catch(error => logger.debug('[executionRunRegistry] Follow occurrence remains in retained Run custody', error));
   }
 }
 
@@ -294,7 +295,7 @@ export async function retainExecutionRunState(state: ExecutionRunState, terminal
       ...(attribution ? { requesterWorkAttributionV1: RequesterWorkAttributionV1Schema.parse(attribution) } : {}),
       ...(identity?.processStartTimeMs !== undefined ? { ownerProcessStartTimeMs: identity.processStartTimeMs } : {}),
       state: projectRetainedExecutionRunState(state), ...(pendingEventId ? { terminalEventId: pendingEventId } : {}),
-    });
+    }, JSON.stringify(current?.state.attention?.requests ?? []) !== JSON.stringify(state.attention?.requests ?? []));
   });
 }
 

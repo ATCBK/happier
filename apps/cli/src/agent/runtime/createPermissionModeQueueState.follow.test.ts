@@ -100,7 +100,9 @@ describe('protected Follow queue to host context', () => {
   it.each(['represented', 'account-receipt', 'two-originals', 'selected-prefix-gap', 'selected-prefix-one-fits', 'omitted', 'wake', 'withdrawn', 'local-command',
     'request-live-after-version-change', 'request-live-encrypted', 'request-answered', 'request-replaced',
     'request-other-turn', 'request-withdrawn', 'request-sidechain', 'request-answered-at-dispatch', 'run-execution', 'run-workflow',
-    'run-execution-quiet', 'run-workflow-quiet', 'run-execution-withdrawn'] as const)('keeps exact accepted-input custody when Follow is %s', async (scenario) => {
+    'run-execution-quiet', 'run-workflow-quiet', 'run-execution-withdrawn', 'run-execution-permission',
+    'run-execution-permission-withdrawn', 'run-execution-permission-withdrawn-at-dispatch',
+    'run-execution-permission-withdrawn-quiet'] as const)('keeps exact accepted-input custody when Follow is %s', async (scenario) => {
     const observePendingSessionFollow = vi.fn<ApiSessionClient['observePendingSessionFollow']>(async () => ({
       ok: true, v: 1, sessionId: 'destination', publisherGeneration: '1', currentSourceSessionIds: [], observations: [],
     }));
@@ -118,13 +120,18 @@ describe('protected Follow queue to host context', () => {
     });
     const requestScenario = scenario.startsWith('request-');
     const runScenario = scenario.startsWith('run-');
+    const runPermission = scenario.startsWith('run-execution-permission');
+    let runPermissionCleared = scenario === 'run-execution-permission-withdrawn' || scenario === 'run-execution-permission-withdrawn-quiet';
     const refused = scenario === 'withdrawn' || scenario === 'run-execution-withdrawn' || scenario === 'request-answered' || scenario === 'request-replaced'
       || scenario === 'request-other-turn' || scenario === 'request-withdrawn' || scenario === 'request-sidechain'
-      || scenario === 'request-answered-at-dispatch';
+      || scenario === 'request-answered-at-dispatch' || scenario === 'run-execution-permission-withdrawn'
+      || scenario === 'run-execution-permission-withdrawn-at-dispatch';
     const standalone = scenario === 'wake' || scenario === 'withdrawn' || requestScenario || runScenario && !scenario.endsWith('-quiet');
     const follow = runScenario ? harness.emitDelivery(SessionFollowInputV1Schema.parse({ v: 1, delivery: scenario.endsWith('-quiet') ? 'next_turn' : 'wake',
-      original: scenario.startsWith('run-execution') ? { source: { kind: 'execution_run', sessionId: 'source', runId: 'run-original' }, terminalEventId: 'terminal-original' }
-        : { source: { kind: 'workflow_run', runId: 'run-original' }, revision: 4 }, event: { kind: 'failed_or_stopped' } }))
+      original: runPermission ? { source: { kind: 'execution_run', sessionId: 'source', runId: 'run-original' }, permissionRequests: [{ requestId: 'run-permission', createdAt: 1 }] }
+        : scenario.startsWith('run-execution') ? { source: { kind: 'execution_run', sessionId: 'source', runId: 'run-original' }, terminalEventId: 'terminal-original' }
+        : { source: { kind: 'workflow_run', runId: 'run-original' }, revision: 4 },
+      event: runPermission ? { kind: 'needs_you', type: 'approval' } : { kind: 'failed_or_stopped' } }))
       : requestScenario ? harness.emitDelivery(SessionFollowInputV1Schema.parse({ v: 1, delivery: 'wake',
       original: { sourceSessionId: 'source', sourceRequests: { agentStateVersion: 4,
         requests: [{ requestId: 'question', createdAt: 3, turnId: 'source-turn' }] } },
@@ -136,7 +143,7 @@ describe('protected Follow queue to host context', () => {
       observations: scenario === 'withdrawn' || scenario === 'run-execution-withdrawn' ? [] : [...[{ localInputId: 'follow-input', delivery: follow },
         ...(second ? [{ localInputId: 'follow-second', delivery: second }] : [])].map(({ localInputId, delivery }) => {
         if ('source' in delivery.original) return { kind: 'admitted_run_input' as const, localInputId,
-          destinationSessionId: 'destination', delivery };
+          destinationSessionId: 'destination', delivery, ...(runPermissionCleared ? { disposition: 'withdrawn' as const } : {}) };
         if (!('sourceMessage' in delivery.original)) return { kind: 'admitted_input' as const, localInputId,
           sourceSessionId: 'source', destinationSessionId: 'destination', delivery,
           delivered: { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 3, turn: null },
@@ -234,6 +241,7 @@ describe('protected Follow queue to host context', () => {
           prepareHostContext: async ({ signal, followDeliveries }) => {
             const prepared = await reconcile({ signal, followDeliveries });
             if (scenario === 'request-answered-at-dispatch') requestAnsweredAfterPreparation = true;
+            if (scenario === 'run-execution-permission-withdrawn-at-dispatch') runPermissionCleared = true;
             return prepared;
           },
         },
@@ -247,7 +255,8 @@ describe('protected Follow queue to host context', () => {
       expect(resets).toHaveLength(scenario === 'local-command' ? 1 : 0);
       if (refused) {
         expect(settlements).toContainEqual(expect.objectContaining({ kind: 'rejected_before_effect', localId: 'follow-input',
-          reason: 'provider_unavailable_before_acceptance', retryable: true }));
+          reason: runPermissionCleared ? 'provider_rejected_before_acceptance' : 'provider_unavailable_before_acceptance',
+          retryable: !runPermissionCleared }));
         expect(acknowledgeSessionFollow).not.toHaveBeenCalled();
       } else if (scenario === 'omitted' || scenario === 'local-command' || scenario === 'selected-prefix-gap') {
         if (scenario === 'omitted' || scenario === 'selected-prefix-gap') {
@@ -269,6 +278,14 @@ describe('protected Follow queue to host context', () => {
         await vi.waitFor(() => expect(acknowledgeSessionFollow.mock.calls.map(([ack]) => ({ localInputId: 'localInputId' in ack ? ack.localInputId : null,
           consumedSeq: 'consumed' in ack ? ack.consumed.transcriptSeq : null }))).toEqual([{ localInputId: 'follow-input', consumedSeq: 4 }]));
       } else {
+        if (scenario === 'run-execution-permission-withdrawn-quiet') {
+          expect(sends[0].prompt).not.toContain('run-original');
+          expect(settlements).toContainEqual(expect.objectContaining({ kind: 'rejected_before_effect', localId: 'follow-input',
+            reason: 'provider_rejected_before_acceptance', retryable: false }));
+          expect(acknowledgeSessionFollow).not.toHaveBeenCalled();
+          expect(harness.messageQueue.queue).toEqual([]);
+          return;
+        }
         if (runScenario) expect(sends[0].prompt).toContain('run-original');
         else if (!requestScenario) expect(sends[0].prompt).toContain('retained source update');
         expect(sends[0].meta?.localIds).toEqual(standalone ? ['follow-input'] : ['human-input']);

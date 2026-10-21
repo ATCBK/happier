@@ -46,7 +46,7 @@ export type RuntimePermissionResponseOutcome = Readonly<{ delivered: true }>
 
 export type ExecutionRunHostRuntime = Readonly<{
     /** Host projection from the current permission store, never plugin-authored state. */
-    readPendingPermissionRequestIds?: () => readonly string[];
+    readPendingPermissionRequests?: () => readonly Readonly<{ requestId: string; createdAt?: number }>[];
     permissionCapability?: ExecutionRunPermissionCapability;
     /**
      * Present only when this exact runtime is the retained Agent Session adapter.

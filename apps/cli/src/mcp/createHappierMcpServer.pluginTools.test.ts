@@ -12,9 +12,17 @@ import { reloadConfiguration } from '@/configuration';
 import { writeStoredCredentialsForServerId } from '@/persistence';
 import type { HappyMcpSessionClient } from './startHappyServer';
 import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
+import { resolveRunnerMcpServers } from './runtime/resolveRunnerMcpServers';
+import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/savedSecretOperationContext';
+import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { accountSettingsParse } from '@happier-dev/protocol';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 const boundary = vi.hoisted(() => ({
-  daemonPost: vi.fn(async () => ({ matched: true, result: { ok: true, result: { completed: true } } })),
+  daemonPost: vi.fn(async (path: string) => path === '/plugins/catalog/read'
+    ? { kind: 'available', plugins: [], tools: [] }
+    : { matched: true, result: { ok: true, result: { completed: true } } }),
 }));
 // Daemon HTTP is the only substituted system boundary; the MCP SDK,
 // registration, Action bridge, executor and control-client parser remain real.
@@ -22,7 +30,8 @@ vi.mock('@/daemon/controlHttp', () => ({ daemonPost: boundary.daemonPost }));
 afterEach(() => boundary.daemonPost.mockClear());
 
 import { createHappierMcpServer } from './createHappierMcpServer';
-import { filterPluginToolsForActiveAgentComposition } from './startHappyServer';
+import { filterPluginToolsForActiveAgentComposition, registerHappierSessionAgentToolRpc } from './startHappyServer';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { PLUGIN_ACTION_EXECUTE_PATH } from '@/plugins/daemon/controlRoutes';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
@@ -41,6 +50,71 @@ function sessionClient(sessionId: string): HappyMcpSessionClient {
 }
 
 describe('createHappierMcpServer plugin tools', () => {
+  it('discovers and invokes Account Actions with current requester custody through the native MCP bridge', async () => {
+    await withTempDir('happier-requester-discovery-', async homeDir => {
+      const originalEnv = process.env;
+      process.env = { ...originalEnv, HAPPIER_HOME_DIR: homeDir, HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1' };
+      reloadConfiguration();
+      const app = fastify();
+      const endpoint = 'http://requester-discovery.test';
+      const features = registerAccountHomeHttp(app, { accountId: 'requester-owner', serverId: 'requester-home' });
+      const { pluginId } = await registerAuthoredAccountActionRelease(app, 'requester-owner');
+      await app.ready();
+      const restore = installAxiosFastifyAdapter({ app, origin: endpoint });
+      const credentials = { token: 'requester-custody', encryption: null, credentialProvenance: 'stored_session' as const };
+      let current = true;
+      const snapshot = { source: 'network' as const, settings: accountSettingsParse({}), rawSettings: {},
+        settingsVersion: 0, loadedAtMs: 1, settingsSecretsReadKeys: [],
+        scopeKey: runWithServerHttpBaseUrl(endpoint, () => resolveAccountSettingsScopeKeyForToken(credentials.token)),
+        mcpServerCatalog: { status: 'ready' as const, authority: 'active' as const, revision: 0, diagnostics: [],
+          catalog: { v: 1 as const, servers: [], bindings: [] } } };
+      const operationContext = runWithServerHttpBaseUrl(endpoint, () => createInvocationSavedSecretOperationContextV1({ credentials, snapshot,
+        serverHttpBaseUrl: endpoint, isCurrent: async () => current }));
+      const session = { ...sessionClient('requester-session'),
+        getServerBinding: () => ({ serverId: 'requester-home', serverUrl: endpoint }),
+        getServerFeaturesSnapshot: () => ({ status: 'ready' as const, provenance: 'authenticated' as const, features }),
+        enqueueSessionEventCommitted: async () => ({ persisted: true as const, delivered: true as const }) };
+      const client = new Client({ name: 'requester-discovery', version: '1' });
+      let bridge: Awaited<ReturnType<typeof resolveRunnerMcpServers>> | undefined;
+      try {
+        // No profile credential exists: the admitted requester context owns currentness.
+        bridge = await resolveRunnerMcpServers({ session, credentials, accountCredentials: credentials,
+          accountSettings: snapshot.settings, accountSettingsSnapshot: snapshot, operationContext,
+          machineId: 'requester-machine', directory: homeDir, env: {}, tmpDir: null });
+        if (!('url' in bridge.happierMcpServer)) throw new Error('Expected native MCP bridge');
+        await client.connect(new StreamableHTTPClientTransport(new URL(String(bridge.happierMcpServer.url))));
+        const search = CallToolResultSchema.parse(await client.callTool({ name: 'action_spec_search', arguments: { query: 'Echo personal' } }));
+        expect(search.isError, JSON.stringify(search)).toBe(false);
+        expect(search.structuredContent).toMatchObject({ actionSpecs: expect.arrayContaining([
+          expect.objectContaining({ id: `${pluginId}/actions/echo`, executionPlacement: 'account' }),
+        ]) });
+        registerHappierSessionAgentToolRpc(session, { credentials, accountSettings: snapshot.settings,
+          isCredentialCurrent: operationContext.isCurrent });
+        const rpcSearch = () => session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_AGENT_TOOL_CALL_V1,
+          { toolName: 'action_spec_search', args: { query: 'Echo personal' } });
+        expect(await rpcSearch()).toMatchObject({ ok: true, result: { actionSpecs: expect.arrayContaining([
+          expect.objectContaining({ id: `${pluginId}/actions/echo` }),
+        ]) } });
+        const invoke = () => client.callTool({ name: 'action_execute', arguments: {
+          actionId: 'action.invoke', input: { action: { pluginId, localId: 'echo' }, input: { key: 'requester' } },
+        } });
+        const invoked = CallToolResultSchema.parse(await invoke());
+        expect(invoked.isError, JSON.stringify(invoked)).toBe(false);
+        expect(invoked.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'text',
+          text: expect.stringContaining('requester') })]));
+        current = false;
+        const retired = CallToolResultSchema.parse(await invoke());
+        expect(retired.isError, JSON.stringify(retired)).toBe(true);
+        expect(retired.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'text',
+          text: expect.stringContaining('plugin_action_generation_retired') })]));
+        expect(await rpcSearch()).toMatchObject({ ok: false, errorCode: 'plugin_action_generation_retired' });
+      } finally {
+        await client.close(); bridge?.happierMcpServer.stop(); restore(); await app.close();
+        process.env = originalEnv; reloadConfiguration();
+      }
+    });
+  });
+
   it('executes an authored Account Action from the native Agent tool entry without a Machine', async () => {
     await withTempDir('happier-agent-account-', async homeDir => {
       const originalEnv = process.env;

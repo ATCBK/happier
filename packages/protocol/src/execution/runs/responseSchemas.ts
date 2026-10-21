@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
+import { ExecutionRunPermissionRequestIdentitySchema } from './runPrimitives.js';
 
 import { BackendTargetRefSchema } from '../../backends/targets/backendTargetRef.js';
 import {
@@ -174,6 +175,14 @@ const ExecutionRunInputTurnsV1Schema = lazyZodSchema(() => z.strictObject({
   last: z.optional(ExecutionRunInputTurnV1Schema),
 }));
 
+export const ExecutionRunPermissionAttentionSchema = lazyZodSchema(() => z.strictObject({
+  kind: z.literal('permission_required'),
+  requestIds: z.array(z.string().check(z.minLength(1))).check(z.minLength(1)),
+  requests: z.optional(z.array(ExecutionRunPermissionRequestIdentitySchema).check(z.minLength(1))),
+}).check(z.refine(value => value.requests === undefined || value.requests.length === value.requestIds.length
+  && new Set(value.requestIds).size === value.requestIds.length
+  && new Set(value.requests.map(request => request.requestId)).size === value.requests.length
+  && value.requests.every(request => value.requestIds.includes(request.requestId)), { message: 'Permission occurrence identities must match request ids' })));
 export const ExecutionRunPublicStateSchema = lazyZodSchema(() => z.looseObject({
   runId: z.string().check(z.minLength(1)),
   /** Retained host launch provenance, never authored execution input. */
@@ -202,10 +211,7 @@ export const ExecutionRunPublicStateSchema = lazyZodSchema(() => z.looseObject({
    */
   interaction: z.optional(ExecutionRunInteractionV1Schema),
   /** Current permission-store evidence for this exact live Run occurrence. */
-  attention: z.optional(z.strictObject({
-    kind: z.literal('permission_required'),
-    requestIds: z.array(z.string().check(z.minLength(1))).check(z.minLength(1)),
-  })),
+  attention: z.optional(ExecutionRunPermissionAttentionSchema),
   /** Canonical host lifecycle; clients must not infer recovery from status or resumeHandle. */
   lifecycle: z.optional(ExecutionRunLifecycleV1Schema),
   availableActionIds: z.optional(z.array(z.string().check(z.minLength(1)))),
@@ -263,6 +269,7 @@ export const ExecutionRunFollowFrontierResponseSchema = lazyZodSchema(() => z.st
   sessionId: z.string().check(z.minLength(1)),
   status: ExecutionRunStatusSchema,
   terminalEventId: z.nullable(z.string().check(z.minLength(1))),
+  attention: z.optional(ExecutionRunPermissionAttentionSchema),
 }));
 export type ExecutionRunFollowFrontierResponse = z.infer<typeof ExecutionRunFollowFrontierResponseSchema>;
 

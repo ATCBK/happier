@@ -5,7 +5,7 @@ import { BackendTargetRefSchema } from '@happier-dev/protocol/backends/targets/b
 import { ConnectedServiceBindingsV2Schema } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { ExecutionRunClassSchema, ExecutionRunIntentSchema, ExecutionRunIoModeSchema, ExecutionRunRetentionPolicySchema } from '@happier-dev/protocol/execution/runs/runPrimitives';
 import { ExecutionRunDisplaySchema, ExecutionRunLaunchOriginSchema, ExecutionRunResumeHandleSchema, ExecutionRunVoiceAgentIntentInputV1Schema } from '@happier-dev/protocol/execution/runs/startRequest';
-import { ExecutionRunStatusSchema, ExecutionRunInputTurnV1Schema, ExecutionRunErrorSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { ExecutionRunStatusSchema, ExecutionRunInputTurnV1Schema, ExecutionRunErrorSchema, ExecutionRunPermissionAttentionSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { PluginSourceCustodyV1Schema } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import { PortableRuntimeDescriptorV1Schema } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
 import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
@@ -44,6 +44,7 @@ const RetainedRunStateSchema = z.strictObject({
   })),
   status: ExecutionRunStatusSchema, startedAtMs: z.number().check(z.int(), z.nonnegative()), finishedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
   terminalOccurrenceId: z.optional(z.string().check(z.minLength(1))),
+  attention: z.optional(ExecutionRunPermissionAttentionSchema),
   error: z.optional(z.strictObject(ExecutionRunErrorSchema.shape)),
   summary: z.optional(z.string()), structuredMeta: z.optional(z.pipe(z.strictObject({ kind: z.string(), payload: z.unknown() }), z.transform((value) => ({ kind: value.kind, payload: value.payload })))),
   latestToolResult: z.optional(z.unknown()),

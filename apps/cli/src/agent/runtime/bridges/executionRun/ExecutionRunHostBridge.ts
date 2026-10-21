@@ -1425,14 +1425,14 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
     const retainedRuntime = releaseRequester ? withExecutionRunHostRuntimeCleanup(runtime, releaseRequester) : runtime;
     // Preserve runtime accessors and the host's pending-permission projection.
     return Object.create(retainedRuntime, {
-      readPendingPermissionRequestIds: { value: () => {
+      readPendingPermissionRequests: { value: () => {
         const controller = opts.runId ? this.controllers.get(opts.runId) : null;
         if (!controller || controller.kind !== 'backend' || controller.cancelled
           || controller.controllerOccurrenceId !== opts.controllerOccurrenceId) return [];
         return (readPermissionStore()?.listOutstandingRequests?.() ?? []).filter((request) => {
           const target = readExecutionRunParentSessionPermissionResponseTarget(request.responseTarget);
           return target !== null && target.runId === opts.runId && target.controllerOccurrenceId === controller.controllerOccurrenceId;
-        }).map((request) => request.requestId);
+        }).map(request => ({ requestId: request.requestId, createdAt: request.createdAt }));
       } },
     }) as ExecutionRunHostRuntime;
   }
@@ -1555,7 +1555,7 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
     const runtimeId = run.retentionPolicy === 'resumable' ? readBackendResumableRuntimeId(controller ?? null, run.resumeHandle) : null;
     const inputTurns = this.projectInputTurns(run, controller);
     return {
-      ...run, ...(inputTurns ? { inputTurns } : {}),
+      ...run, attention: this.readPermissionAttention(run, controller), ...(inputTurns ? { inputTurns } : {}),
       ...(runtimeId ? { resumeHandle: { kind: 'provider_session.v1' as const, backendTarget: readBackendTargetRefV2(run.backendTarget), providerSessionId: runtimeId } } : {}),
     };
   }
@@ -1706,12 +1706,20 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
     });
   }
 
+  private readPermissionAttention(run: ExecutionRunState, controller: ExecutionRunController | null | undefined): ExecutionRunPublicState['attention'] {
+    const pending = run.status === 'running' && controller?.kind === 'backend'
+      ? [...controller.backend.readPendingPermissionRequests?.() ?? []].sort((left, right) => left.requestId < right.requestId ? -1 : left.requestId > right.requestId ? 1 : 0) : [];
+    const requests = pending.flatMap(request => typeof request.createdAt === 'number' && Number.isSafeInteger(request.createdAt) && request.createdAt >= 0
+      ? [{ requestId: request.requestId, createdAt: request.createdAt }] : []);
+    return pending.length ? { kind: 'permission_required', requestIds: pending.map(request => request.requestId),
+      ...(requests.length === pending.length ? { requests } : {}) } : undefined;
+  }
+
   private buildPublicState(run: ExecutionRunState): ExecutionRunPublicState {
     const ctrl = this.controllers.get(run.runId) ?? null;
     const inputTurns = this.projectInputTurns(run, ctrl ?? undefined);
     const availableActionIds = getExecutionRunAvailableActionIds(run, ctrl, this.readRunProfileCatalog(run.runId));
-    const requestIds = run.status === 'running' && ctrl?.kind === 'backend'
-      ? ctrl.backend.readPendingPermissionRequestIds?.() ?? [] : [];
+    const attention = this.readPermissionAttention(run, ctrl);
     return {
       ...projectExecutionRunPublicState(
         { ...run, ...(inputTurns ? { inputTurns } : {}) },
@@ -1719,7 +1727,7 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
         ctrl?.kind === 'voice_agent' ? this.voiceAgentManager.isTurnInFlight(ctrl.voiceAgentId) : undefined,
       ),
       ...(availableActionIds.length > 0 ? { availableActionIds: [...availableActionIds] } : {}),
-      ...(requestIds.length > 0 ? { attention: { kind: 'permission_required' as const, requestIds: [...requestIds] } } : {}),
+      ...(attention ? { attention } : {}),
     };
   }
 

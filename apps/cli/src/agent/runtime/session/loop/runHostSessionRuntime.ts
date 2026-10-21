@@ -2076,6 +2076,7 @@ export async function runHostSessionRuntime(
     return {
       updates: follow?.updates ?? [],
       ...(follow?.representedFollowLocalInputIds ? { representedFollowLocalInputIds: follow.representedFollowLocalInputIds } : {}),
+      ...(follow?.withdrawnFollowLocalInputIds ? { withdrawnFollowLocalInputIds: follow.withdrawnFollowLocalInputIds } : {}),
       workerUpdates: [...workerItems.map((item) => item.update), ...(follow?.workerUpdates ?? [])],
       workerUpdateEvents,
       commitWorkerUpdateEvents: () => commitWorkerUpdateEvents(workerUpdateEvents),
@@ -2679,9 +2680,11 @@ export async function runHostSessionRuntime(
     getActiveAgentCompositionToolSelection: () => activeAgentCompositionToolSelection,
   });
   if (agentToolsDelivery !== 'unsupported') {
+    const accountOperation = readSessionOpenAccountOperation();
     registerHappierSessionAgentToolRpc(runnerMcpSession, {
       sessionCredentials: runtimeAuthority.sessionCredentials,
       credentials: runtimeAuthority.accountCredentials,
+      isCredentialCurrent: accountOperation?.isCurrent,
       authorityScope: runtimeAuthority.scope,
       accountSettings: effectiveRunnerMcpAccountSettings,
       // An explicit Session-scoped authority is also the live settings

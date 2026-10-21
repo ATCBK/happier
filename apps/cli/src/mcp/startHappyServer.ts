@@ -114,6 +114,7 @@ export type HappyMcpSessionClient = {
 type HappySessionToolRuntimeOptions = Readonly<{
     sessionCredentials?: StoredCredentials | null;
     credentials?: StoredCredentials | null;
+    isCredentialCurrent?: () => boolean | Promise<boolean>;
     authorityScope?: 'account' | 'session';
     sessionList?: ActionExecutorDeps['sessionList'];
     actionsSettingsProvider?: RuntimeActionSettingsProvider;
@@ -225,6 +226,7 @@ export function registerHappierSessionAgentToolRpc(
             const runtime = createHappierMcpServer(client, {
                 sessionCredentials: opts?.sessionCredentials ?? opts?.credentials ?? null,
                 credentials: opts?.credentials ?? null,
+                isCredentialCurrent: opts?.isCredentialCurrent,
                 authorityScope: opts?.authorityScope ?? 'account',
                 ...(opts?.sessionList ? { sessionList: opts.sessionList } : {}),
                 actionsSettingsProvider: actionSettingsProvider,
@@ -373,6 +375,7 @@ export async function startHappyServer(
         const { mcp } = createHappierMcpServer(client, {
             sessionCredentials: opts?.sessionCredentials ?? opts?.credentials ?? null,
             credentials: opts?.credentials ?? null,
+            isCredentialCurrent: opts?.isCredentialCurrent,
             authorityScope: opts?.authorityScope ?? 'account',
             ...(opts?.sessionList ? { sessionList: opts.sessionList } : {}),
             actionsSettingsProvider: actionSettingsProvider,

@@ -18,6 +18,7 @@ import type {
   SecretReferenceOverlayV1,
   TeamCredentialProviderModelSelectionV1,
   ExecutionRunError,
+  ExecutionRunPublicState,
   ReviewCommentPrincipalHeaderV1,
 } from '@happier-dev/protocol';
 import type { PermissionIntent } from '@happier-dev/agents';
@@ -146,6 +147,8 @@ export type ExecutionRunManagerStartParams = Readonly<{
   notifyParentOnCompletion?: boolean;
   /** Captured at creation by the owning Account host; never accepted from Run request input. */
   runReportPolicy?: FollowPolicyV1;
+  /** Permission-store projection for the retained content-free Follow frontier; never resume authority. */
+  attention?: ExecutionRunPublicState['attention'];
   profileId?: string | null;
   profileSourceCustody?: import('@happier-dev/protocol').PluginSourceCustodyV1 | null;
   // Internal runtime override for bounded-run timeouts. Not part of the public RPC contract.

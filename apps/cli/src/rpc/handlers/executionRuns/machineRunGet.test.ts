@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
-import { ExecutionRunGetRequestSchema, ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { ExecutionRunGetRequestSchema, ExecutionRunGetResponseSchema, ExecutionRunFollowFrontierResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
@@ -96,6 +96,14 @@ describe('Machine Run get through the shared registered handler', () => {
         const frontier = await invoke(SESSION_RPC_METHODS.EXECUTION_RUN_FOLLOW_FRONTIER,
             { sessionId: 'hosting-session', runId: 'active-session-run' });
         expect(frontier).toEqual({ sessionId: 'hosting-session', runId: 'active-session-run', status: 'running', terminalEventId: null });
+        await retainExecutionRunState({ ...run, runId: 'active-session-run', sessionId: 'hosting-session', status: 'running',
+            finishedAtMs: undefined, attention: { kind: 'permission_required', requestIds: ['run-permission'], requests: [{ requestId: 'run-permission', createdAt: 1 }] } });
+        expect(ExecutionRunFollowFrontierResponseSchema.parse(await invoke(SESSION_RPC_METHODS.EXECUTION_RUN_FOLLOW_FRONTIER,
+            { sessionId: 'hosting-session', runId: 'active-session-run' })))
+            .toMatchObject({ status: 'running', terminalEventId: null, attention: { kind: 'permission_required', requestIds: ['run-permission'] } });
+        await retainExecutionRunState({ ...run, runId: 'active-session-run', sessionId: 'hosting-session', status: 'running', finishedAtMs: undefined });
+        expect(ExecutionRunFollowFrontierResponseSchema.parse(await invoke(SESSION_RPC_METHODS.EXECUTION_RUN_FOLLOW_FRONTIER,
+            { sessionId: 'hosting-session', runId: 'active-session-run' }))).not.toHaveProperty('attention');
         expect(await invoke(SESSION_RPC_METHODS.EXECUTION_RUN_FOLLOW_FRONTIER,
             { sessionId: 'hosting-session', runId: 'session-run' }))
             .toEqual({ sessionId: 'hosting-session', runId: 'session-run', status: 'succeeded', terminalEventId: 'terminal-original' });

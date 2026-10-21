@@ -403,6 +403,7 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
     commandMode: params.commandMode,
     sessionCredentials: params.credentials,
     credentials: accountCredentials,
+    ...(operationContext ? { isCredentialCurrent: operationContext.isCurrent } : {}),
     authorityScope: accountCredentials ? 'account' : 'session',
     ...(params.sessionList ? { sessionList: params.sessionList } : {}),
     accountSettings,

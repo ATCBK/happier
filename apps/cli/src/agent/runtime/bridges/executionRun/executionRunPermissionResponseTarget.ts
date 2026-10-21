@@ -14,7 +14,7 @@ import { logger } from '@/ui/logger';
 export type { ExecutionRunParentSessionPermissionResponseTarget };
 
 export type ExecutionRunPermissionRequestStore = Readonly<{
-  listOutstandingRequests?(): readonly Readonly<{ requestId: string; responseTarget?: AgentStateRequestResponseTarget }>[];
+  listOutstandingRequests?(): readonly Readonly<{ requestId: string; createdAt?: number; responseTarget?: AgentStateRequestResponseTarget }>[];
   readOutstandingRequest?(requestId: string): Readonly<{
     responseTarget?: AgentStateRequestResponseTarget;
   }> | null;

@@ -1,6 +1,10 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
+export const ExecutionRunPermissionRequestIdentitySchema = lazyZodSchema(() => z.strictObject({
+  requestId: z.string().check(z.minLength(1)), createdAt: z.number().check(z.int(), z.nonnegative()),
+}));
+
 export const ExecutionRunIntentSchema = lazyZodSchema(() => z.enum([
   'review',
   'plan',
