@@ -20,6 +20,8 @@ export type SessionViewConnectionStatus = Readonly<{
     providerBindingAction?: SessionViewProviderBindingAction;
     /** The pending queue's one recovery, when its waiting state won the line. */
     pendingQueueAction?: SessionViewPendingQueueAction;
+    /** An inactive Session can resume even when there is no queued input. */
+    inactiveAction?: 'resume';
 }>;
 
 export type SessionViewPendingQueueAction = 'resume' | 'retry' | 'process_when_online' | 'keep_queued';
@@ -54,6 +56,8 @@ export function resolveSessionViewConnectionStatus(input: Readonly<{
     restartingText: string;
     switchFailedText: string;
     inactiveStatusText: string | null;
+    /** Current write, native-resume and reachable-machine facts from the Session owner. */
+    inactiveResumeAvailable?: boolean;
     /** Why the Session is inactive and what to do, read on the line rather than in a card beside it. */
     inactiveDetail?: string | null;
     sessionStatusResuming: boolean;
@@ -149,6 +153,8 @@ export function resolveSessionViewConnectionStatus(input: Readonly<{
         // and resuming speaks alone: the resume is what delivers the queue.
         text: queueCountText && !restartActive && !input.sessionStatusResuming ? `${statusText} · ${queueCountText}` : statusText,
         ...(showsInactive && input.inactiveDetail ? { detail: input.inactiveDetail } : {}),
+        ...(!restartActive && !input.sessionStatusResuming && !sessionNeedsPersonNow && input.inactiveResumeAvailable
+            ? { inactiveAction: 'resume' as const } : {}),
         color: input.sessionStatusColor,
         dotColor: input.sessionStatusDotColor,
         isPulsing: restartPending

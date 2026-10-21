@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { resolveSessionViewConnectionStatus } from './resolveSessionViewConnectionStatus';
+import { canResumeOrContinueSessionWithOptions } from '@/agents/runtime/resumeCapabilities';
+import { getInactiveSessionUiState } from '@/components/sessions/model/inactiveSessionUi';
+import { resolvePendingActivationBanner } from '@/components/sessions/pending/resolvePendingActivationBanner';
+import { writeSessionExplicitStopV1ToMetadata, resolveSessionAutoResumeAdmissionV1 } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
 
 const baseInput = {
     connectedServicesRestartState: null,
@@ -16,11 +20,55 @@ const baseInput = {
 } as const;
 
 describe('resolveSessionViewConnectionStatus', () => {
+    it.each([
+        { state: 'person stopped', active: false, reachable: true, canWrite: true, resumable: true, expected: 'resume' },
+        { state: 'active', active: true, reachable: true, canWrite: true, resumable: true, expected: undefined },
+        { state: 'not resumable', active: false, reachable: true, canWrite: true, resumable: false, expected: undefined },
+        { state: 'machine unreachable', active: false, reachable: false, canWrite: true, resumable: true, expected: undefined },
+        { state: 'read only', active: false, reachable: true, canWrite: false, resumable: true, expected: undefined },
+    ])('selects the existing person Resume for an empty stopped queue, preserving $state eligibility', (scenario) => {
+        const metadata = writeSessionExplicitStopV1ToMetadata(
+            { flavor: scenario.resumable ? 'codex' : 'unknown-agent',
+                ...(scenario.resumable ? { codexSessionId: 'native-session-1' } : {}) },
+            { v: 1, cause: 'explicit_stop', requestId: 'person-stop-1', requestedAtMs: 1000 },
+        );
+        // The persisted CLI/UI Stop shape still holds automatic starts. Recovery selection must
+        // offer the existing person action without clearing it or fabricating queued input.
+        expect(resolveSessionAutoResumeAdmissionV1({ metadata, machineAvailable: true, authorityAvailable: true }))
+            .toBe('held_by_person');
+        const isResumable = canResumeOrContinueSessionWithOptions(metadata);
+        expect(isResumable).toBe(scenario.resumable);
+        const inactive = getInactiveSessionUiState({
+            isSessionActive: scenario.active, isResumable, isMachineOnline: scenario.reachable,
+        });
+        const pending = resolvePendingActivationBanner({
+            active: scenario.active, activeAt: 0, machineReachable: scenario.reachable,
+            canWrite: scenario.canWrite, pendingMessages: [],
+        });
+        expect(pending).toBeNull();
+        const recoveryEligibility = {
+            inactiveResumeAvailable: !scenario.active && isResumable && scenario.reachable && scenario.canWrite,
+        };
+        const status = resolveSessionViewConnectionStatus({
+            ...baseInput,
+            ...recoveryEligibility,
+            sessionStatusState: scenario.active ? 'ready' : 'disconnected',
+            sessionUnservable: !scenario.active,
+            inactiveStatusText: inactive.inactiveStatusTextKey,
+            pendingQueue: { line: null, countText: null },
+        });
+        expect(status).toMatchObject({ text: inactive.inactiveStatusTextKey ?? 'ready' });
+        if (scenario.expected) expect(status).toHaveProperty('inactiveAction', scenario.expected);
+        else expect(status).not.toHaveProperty('inactiveAction');
+        expect(metadata.sessionExplicitStopV1.requestId).toBe('person-stop-1');
+    });
+
     it.each(['restarting', 'pending_confirmation'] as const)(
         'prioritizes non-terminal connected-service restart state %s as the main status',
         (status) => {
             expect(resolveSessionViewConnectionStatus({
                 ...baseInput,
+                inactiveResumeAvailable: true,
                 connectedServicesRestartState: {
                     status,
                     attemptId: 'manual-auth-switch:1',
@@ -39,6 +87,7 @@ describe('resolveSessionViewConnectionStatus', () => {
     it('shows failed restart state only when positive failure evidence reaches the shared state', () => {
         expect(resolveSessionViewConnectionStatus({
             ...baseInput,
+            inactiveResumeAvailable: true,
             connectedServicesRestartState: {
                 status: 'failed',
                 attemptId: 'manual-auth-switch:1',
@@ -58,6 +107,7 @@ describe('resolveSessionViewConnectionStatus', () => {
         expect(resolveSessionViewConnectionStatus({
             ...baseInput,
             inactiveStatusText: 'inactive',
+            inactiveResumeAvailable: true,
             sessionStatusResuming: true,
             sessionStatusText: 'resuming',
             sessionStatusPulsing: true,
@@ -115,6 +165,7 @@ describe('resolveSessionViewConnectionStatus', () => {
             expect(resolveSessionViewConnectionStatus({
                 ...baseInput,
                 inactiveStatusText: 'inactive',
+                inactiveResumeAvailable: true,
                 providerBinding,
             })).toEqual({
                 text: 'Provider settings changed',
@@ -162,12 +213,15 @@ describe('resolveSessionViewConnectionStatus', () => {
         it.each(['permission_required', 'action_required'] as const)(
             'yields to a request that needs the person now (%s)',
             (state) => {
-                expect(resolveSessionViewConnectionStatus({
+                const status = resolveSessionViewConnectionStatus({
                     ...baseInput,
+                    inactiveResumeAvailable: true,
                     sessionStatusState: state,
                     sessionStatusText: 'Permission required',
                     providerBinding,
-                })?.text).toBe('Permission required');
+                });
+                expect(status?.text).toBe('Permission required');
+                expect(status).not.toHaveProperty('inactiveAction');
             },
         );
 
@@ -202,6 +256,7 @@ describe('resolveSessionViewConnectionStatus', () => {
                 expect(resolveSessionViewConnectionStatus({
                     ...baseInput,
                     inactiveStatusText: 'Inactive (resumable)',
+                    inactiveResumeAvailable: true,
                     pendingQueue: { line: queuedLine, countText: '1 queued' },
                 })).toEqual({
                     text: 'Message queued',
@@ -309,6 +364,7 @@ describe('resolveSessionViewConnectionStatus', () => {
             expect(resolveSessionViewConnectionStatus({
                 ...baseInput,
                 providerBinding,
+                inactiveResumeAvailable: true,
                 guard: {
                     state: { kind: 'stopped', text: 'Stopped by the machine guard', placeholder: 'Send to wake it' },
                     attentionColor: 'attention-color',

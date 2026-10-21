@@ -249,9 +249,11 @@ inherited source root. Without a person input, the exact Run occurrence's
 deterministic destination input is the root. Actual native starts count through
 the existing Pending/check-in owner; quiet delivery and personal Inbox
 acceptance are not starts.
-Account Execution Run receivers remain terminal-only: their existing personal
-progress field cannot represent permission originals. They refuse that unsupported
-attention path rather than acknowledge a delivery they cannot retain.
+Account Execution Run receivers retain the canonical permission-occurrence key
+on their existing private Follow row, independently of the terminal cursor.
+The key includes each request's id and creation time, so an id reused for a new
+request is distinct. Acceptance revalidates the exact current source; a cleared
+or replaced permission cannot consume progress or admit an outward effect.
 For supported Account occurrences, the captured authorized Account daemon uses the same
 dispatcher and the existing private Inbox
 notice and personal Follow progress. Only acceptance of that notice advances
@@ -843,6 +845,14 @@ when busy, and retain the existing hold when person-stopped. Quiet queues only
 selected unaddressed/informational events without waking; Custom/off suppresses
 those events. The existing receiver admission, Pending custody and source mute
 still apply; changing the Follow level does not opt out of a direct ask.
+
+In development source, the Session recovery control offers the existing person
+Resume action for an inactive, natively resumable Session when its Machine is
+reachable and the viewer retains write access, even with no Pending rows. It
+does not substitute Ask Happier merely because the queue is empty. Rendering
+that action does not clear a person Stop or start work; the explicit click uses
+the ordinary present-user Session resume owner. Higher-priority queue, guard,
+Provider-binding and restart recovery retain their existing precedence.
 
 Answer policy belongs to the existing executable participant row. The
 `discussion.participant.policy.set` Action changes that row; invitation defaults

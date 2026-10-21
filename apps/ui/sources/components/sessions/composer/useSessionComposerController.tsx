@@ -5496,6 +5496,8 @@ export function useSessionComposerController({
             restartingText: t('connectedServices.authSwitch.status.restarting'),
             switchFailedText: t('connectedServices.authSwitch.switchFailed'),
             inactiveStatusText,
+            inactiveResumeAvailable: !isSessionActive && isResumable && isMachineReachable
+                && hasWriteAccess && !sessionMachineAccessRemoved,
             // The inactive cause's explanation rides the line while the composer shows it.
             inactiveDetail: shouldShowInput ? bottomNotice?.body ?? null : null,
             sessionStatusResuming,
@@ -5520,6 +5522,11 @@ export function useSessionComposerController({
             theme.colors.text.tertiary,
             connectedServicesRestartState,
             inactiveStatusText,
+            isSessionActive,
+            isResumable,
+            isMachineReachable,
+            hasWriteAccess,
+            sessionMachineAccessRemoved,
             shouldShowInput,
             bottomNotice?.body,
             sessionStatus.isPulsing,
@@ -6259,7 +6266,12 @@ export function useSessionComposerController({
                                     label: t(`session.pendingActivation.actions.${connectionStatus.pendingQueueAction === 'keep_queued' ? 'keepQueued' : connectionStatus.pendingQueueAction}`),
                                     onPress: () => fireAndForget(handlePendingQueueAction(connectionStatus.pendingQueueAction!), { tag: 'SessionView.pendingQueueAction' }),
                                 } }
-                                : askHappierConnectionStatus ?? connectionStatus
+                                : connectionStatus.inactiveAction === 'resume'
+                                    ? { ...connectionStatus, action: {
+                                        label: t('session.pendingActivation.actions.resume'),
+                                        onPress: () => fireAndForget(handleResumeSession(), { tag: 'SessionView.resume' }),
+                                    } }
+                                    : askHappierConnectionStatus ?? connectionStatus
                     : undefined}
                 // Stable wrapper (handleAgentInputSend) so AgentInput's memo holds;
                 // the assignment refreshes the latest-send ref with this render's

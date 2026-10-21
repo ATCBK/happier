@@ -89,6 +89,7 @@ import type { AttachmentDraft } from '@/components/sessions/attachments/attachme
 import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 import { SessionAttachmentUploadInitRequestV1Schema } from '@happier-dev/protocol/transfers/sessions/sessionAttachmentUploadInitRequestV1';
 import { SessionAttachmentHandleV1Schema } from '@happier-dev/protocol/transfers/sessions/sessionAttachmentHandleV1';
+import { writeSessionExplicitStopV1ToMetadata } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 (globalThis as any).__DEV__ = false;
@@ -2227,6 +2228,30 @@ describe('SessionView (direct sessions)', () => {
     const screen = await renderSessionViewAndSettle();
 
     expect(screen.findByTestId('session-agent-input')).not.toBeNull();
+  });
+
+  it('binds empty-queue person Resume to the existing present-user Session open action', async () => {
+    // This shell harness inherits presentation/reachability stubs. The companion real-owner
+    // selection test proves those policies; this case only proves the actual composer binding.
+    storageState.sessions.s1 = createSessionFixture({
+      ...storageState.sessions.s1,
+      active: false,
+      metadata: writeSessionExplicitStopV1ToMetadata({
+        machineId: 'machine-1', host: 'happy-host', path: '/tmp',
+        flavor: 'codex', codexSessionId: 'native-session-1',
+      }, { v: 1, cause: 'explicit_stop', requestId: 'person-stop-1', requestedAtMs: 1000 }),
+    });
+    const screen = await renderSessionViewAndSettle();
+    const action = findAgentInput(screen).props.connectionStatus?.action;
+    expect(action?.label).toBe((await import('@/text')).t('session.pendingActivation.actions.resume'));
+    expect(storage.getState().sessionPending.s1?.messages ?? []).toEqual([]);
+    expect(storage.getState().sessions.s1.metadata?.sessionExplicitStopV1).toMatchObject({ requestId: 'person-stop-1' });
+    await act(async () => { await action.onPress(); });
+    await waitForHomeGovernance(() => expect(actionExecuteSpy).toHaveBeenCalledWith(
+      'session.open',
+      expect.objectContaining({ sessionId: 's1', serverId: 'server-route-1', intent: 'resume' }),
+      expect.objectContaining({ authority: 'present_user', actionCaller: { kind: 'host' } }),
+    ));
   });
 
   it('surfaces generic usage-limit recovery actions and status for provider runtime issues', async () => {
