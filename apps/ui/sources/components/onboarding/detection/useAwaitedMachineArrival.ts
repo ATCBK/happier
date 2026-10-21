@@ -33,6 +33,8 @@ export type AwaitedMachineArrivalSnapshot =
     | Readonly<{ status: 'waiting'; machine?: undefined; isOnline: false }>
     | Readonly<{ status: 'arrived'; machine: Machine; isOnline: true }>;
 
+const WAITING_SNAPSHOT: AwaitedMachineArrivalSnapshot = { status: 'waiting', machine: undefined, isOnline: false };
+
 function normalizeServerScope(raw: string | null | undefined): string {
     return String(raw ?? '').trim();
 }
@@ -152,8 +154,10 @@ export function useAwaitedMachineArrival(input: AwaitedMachineArrivalInput = {})
     }, [onBaselineCaptured, persistedBaseline, snapshot]);
 
     const arrived = snapshot ? resolveArrival(machines, snapshot, presenceById) : null;
-    if (!arrived) {
-        return { status: 'waiting', machine: undefined, isOnline: false };
-    }
-    return { status: 'arrived', machine: arrived, isOnline: true };
+    // Equal answers keep one identity so a change in an unrelated Home's list does not
+    // re-render the wait's consumers.
+    return React.useMemo<AwaitedMachineArrivalSnapshot>(
+        () => arrived ? { status: 'arrived', machine: arrived, isOnline: true } : WAITING_SNAPSHOT,
+        [arrived],
+    );
 }
