@@ -50,6 +50,7 @@ import type {
 
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
+import { waitForObservation } from '@/api/client/accountEncryptionCurrentnessObservation';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { readStoredCredentials, type Credentials, type StoredCredentials } from '@/persistence';
 import {
@@ -650,6 +651,14 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
     };
 
     const createBoundRequestContext = (lifecycle: BoundAccountDataLifecycle) => {
+        // This context belongs to one captured invocation/candidate lifetime,
+        // not the registry. Retain only pending identity reads, never settled
+        // facts or the exact Collection/Account cursor witnesses read elsewhere.
+        const pendingEncryptionIdentityReads = new Map<string, {
+            operation: Promise<AccountEncryptionCurrentnessResponse>;
+            controller: AbortController;
+            readers: number;
+        }>();
         const assertCurrentAccount = async (
             credentials: StoredCredentials,
             operationSignal?: AbortSignal,
@@ -688,8 +697,36 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
         }>> => {
             const signal = signalFor(operationSignal);
             try {
-                const currentness = await runTracedExternalActionInnerStage('collection.encryption.currentness', () =>
-                    resolveAccountEncryptionCurrentness(current, signal));
+                const currentness = await runTracedExternalActionInnerStage('collection.encryption.currentness', async () => {
+                    const key = JSON.stringify([current.token, resolveBaseUrl(), currentAccountScopeKey()]);
+                    let pending = pendingEncryptionIdentityReads.get(key);
+                    if (!pending) {
+                        const controller = new AbortController();
+                        pending = {
+                            operation: resolveAccountEncryptionCurrentness(current,
+                                composeOperationSignal(lifecycle.signal, controller.signal)),
+                            controller,
+                            readers: 0,
+                        };
+                        pendingEncryptionIdentityReads.set(key, pending);
+                        const captured = pending;
+                        const settled = () => {
+                            if (pendingEncryptionIdentityReads.get(key) === captured) pendingEncryptionIdentityReads.delete(key);
+                        };
+                        void pending.operation.then(settled, settled);
+                    }
+                    pending.readers++;
+                    try {
+                        // The existing observation owner supplies independent
+                        // reader cancellation; this creates no new observation.
+                        return await waitForObservation(pending.operation, signal);
+                    } finally {
+                        if (--pending.readers === 0) {
+                            if (pendingEncryptionIdentityReads.get(key) === pending) pendingEncryptionIdentityReads.delete(key);
+                            pending.controller.abort();
+                        }
+                    }
+                });
                 await assertCurrentAccount(current, operationSignal);
                 if (currentness.mode === 'plain') {
                     return Object.freeze({ mode: 'plain', material: null });

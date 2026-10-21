@@ -235,6 +235,136 @@ function bindHost(params: Readonly<{
 }
 
 describe('Account plugin Data storage host', () => {
+    describe('in-flight encryption identity admission', () => {
+        function createHost() {
+            let credentials: StoredCredentials = plainCredentials;
+            let baseUrl = 'https://data.example.test';
+            const post = vi.fn(async (url: string) => ({ status: 200, data: url.endsWith('/query')
+                ? { rows: [], changeCursor: 17 }
+                : { row: null, absenceEpoch: 0 } }));
+            const host = createAccountPluginDataStorageHost({
+                contracts: [admitted], readCredentials: async () => credentials,
+                isCurrentAccount: () => true, resolveAccountScopeKey: () => ACCOUNT_SCOPE_KEY,
+                resolveBaseUrl: () => baseUrl,
+                // Only the HTTP boundaries are substituted: currentness parsing,
+                // credential/material admission and the bound Data owner are real.
+                http: { get: async () => ({ status: 200, data: { status: 'absent' } }), post },
+            });
+            const bind = (signal = new AbortController().signal) => {
+                const account = host.bind({ pluginId: PLUGIN_ID, occurrenceId: '1', signal,
+                    isOccurrenceCurrent: () => true });
+                if (!account) throw new Error('Expected Account Data binding');
+                return account;
+            };
+            return { bind, post, setCredentials: (next: StoredCredentials) => { credentials = next; },
+                setBaseUrl: (next: string) => { baseUrl = next; } };
+        }
+
+        it('shares overlapping identity acquisitions in one invocation, retaining each Collection cursor read and later freshness', async () => {
+            let release!: () => void;
+            const gate = new Promise<void>(resolve => { release = resolve; });
+            let currentness: AccountEncryptionCurrentnessResponse = currentnessFor(plainCredentials);
+            const get = vi.spyOn(axios, 'get').mockImplementation(async () => {
+                await gate;
+                return { status: 200, data: currentness };
+            });
+            try {
+                const { bind, post } = createHost();
+                const collection = bind().collection(collectionDefinition);
+                const reads = [collection.get('first'), collection.get('second'),
+                    collection.query({ index: 'by-status', prefix: [], order: 'asc' })];
+                await vi.waitFor(() => expect(get).toHaveBeenCalled());
+                release();
+                expect(await Promise.all(reads)).toEqual([null, null, { rows: [], changeCursor: 17 }]);
+                expect(get).toHaveBeenCalledTimes(1);
+                expect(post).toHaveBeenCalledTimes(3);
+
+                // A later operation must observe a mode change, not a settled fact.
+                currentness = currentnessFor(encryptedCredentials);
+                await expect(collection.get('later')).rejects.toMatchObject({ code: 'plugin_account_storage_unavailable' });
+                expect(get).toHaveBeenCalledTimes(2);
+                expect(post).toHaveBeenCalledTimes(3);
+            } finally { release(); get.mockRestore(); }
+        });
+
+        it.each(['invocation', 'credential', 'Home'] as const)('does not share a pending identity read across a distinct %s', async (changed) => {
+            let release!: () => void;
+            const gate = new Promise<void>(resolve => { release = resolve; });
+            const get = vi.spyOn(axios, 'get').mockImplementation(async () => {
+                await gate;
+                return { status: 200, data: currentnessFor(plainCredentials) };
+            });
+            try {
+                const host = createHost();
+                const first = host.bind();
+                const pending = first.collection(collectionDefinition).get('first');
+                await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+                if (changed === 'credential') host.setCredentials({ ...plainCredentials, token: 'different-credential' });
+                if (changed === 'Home') host.setBaseUrl('https://other.example.test');
+                const second = (changed === 'invocation' ? host.bind() : first).collection(collectionDefinition).get('second');
+                await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+                release();
+                await expect(Promise.all([pending, second])).resolves.toEqual([null, null]);
+            } finally { release(); get.mockRestore(); }
+        });
+
+        it('cancels one equivalent reader independently and retires the shared transport when its last reader leaves', async () => {
+            let release!: () => void;
+            let gate = new Promise<void>(resolve => { release = resolve; });
+            const get = vi.spyOn(axios, 'get').mockImplementation(async () => {
+                await gate;
+                return { status: 200, data: currentnessFor(plainCredentials) };
+            });
+            try {
+                const { bind, post } = createHost();
+                const collection = bind().collection(collectionDefinition);
+                const first = new AbortController(), second = new AbortController();
+                const cancelled = collection.get('first', { signal: first.signal }).catch((error: unknown) => error);
+                const retained = collection.get('second', { signal: second.signal });
+                await vi.waitFor(() => expect(get).toHaveBeenCalled());
+                first.abort();
+                expect(await cancelled).toMatchObject({ code: 'plugin_collection_cancelled' });
+                expect(get.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+                release();
+                await expect(retained).resolves.toBeNull();
+                expect(get).toHaveBeenCalledTimes(1);
+                expect(post).toHaveBeenCalledTimes(1);
+
+                gate = new Promise<void>(resolve => { release = resolve; });
+                const last = new AbortController();
+                const fresh = collection.get('last', { signal: last.signal }).catch((error: unknown) => error);
+                await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+                last.abort();
+                expect(await fresh).toMatchObject({ code: 'plugin_collection_cancelled' });
+                expect(get.mock.calls[1]?.[1]?.signal?.aborted).toBe(true);
+            } finally { release(); get.mockRestore(); }
+        });
+
+        it('does not retain a failed shared identity read for the next operation', async () => {
+            let release!: () => void;
+            const gate = new Promise<void>(resolve => { release = resolve; });
+            let failed = true;
+            const get = vi.spyOn(axios, 'get').mockImplementation(async () => {
+                await gate;
+                if (failed) throw new Error('HTTP currentness unavailable');
+                return { status: 200, data: currentnessFor(plainCredentials) };
+            });
+            try {
+                const { bind, post } = createHost();
+                const collection = bind().collection(collectionDefinition);
+                const reads = [collection.get('first'), collection.get('second')].map(read => read.catch((error: unknown) => error));
+                await vi.waitFor(() => expect(get).toHaveBeenCalled());
+                release();
+                for (const result of await Promise.all(reads)) expect(result).toMatchObject({ code: 'plugin_account_storage_unavailable' });
+                expect(get).toHaveBeenCalledTimes(1);
+                expect(post).not.toHaveBeenCalled();
+                failed = false;
+                await expect(collection.get('recovered')).resolves.toBeNull();
+                expect(get).toHaveBeenCalledTimes(2);
+            } finally { release(); get.mockRestore(); }
+        });
+    });
+
     it('keeps its real encryption preflight pending beyond the Connected Services deadline', async () => {
         vi.useFakeTimers();
         const get = vi.spyOn(axios, 'get').mockImplementation(async (_url, config) => new Promise((resolve, reject) => {
