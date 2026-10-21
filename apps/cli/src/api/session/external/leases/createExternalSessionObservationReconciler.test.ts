@@ -94,6 +94,43 @@ afterEach(() => {
 });
 
 describe('createExternalSessionObservationReconciler', () => {
+    it('filters accounting file changes to each demand and stops delivery on disposal', async () => {
+        const fileCallbacks = new Map<string, (file: string) => void>();
+        const received: string[] = [];
+        const reconciler = createExternalSessionObservationReconciler({
+            acquireObserver: async () => ({ dispose() {} }),
+            watchFile: (file, changed) => {
+                fileCallbacks.set(file, changed);
+                return () => {};
+            },
+        });
+        const first = await reconciler.registerAccountingSource({
+            resource: resource(), source: { kind: 'first' }, changeObservation: 'watch_file_changes',
+            watchFileChanges: { files: ['/fixture/first.jsonl', '/fixture/shared.jsonl'] },
+            onChange: ({ changedFile }) => { received.push(`first:${changedFile}`); },
+        });
+        const second = await reconciler.registerAccountingSource({
+            resource: resource(), source: { kind: 'second' }, changeObservation: 'watch_file_changes',
+            watchFileChanges: { files: ['/fixture/second.jsonl', '/fixture/shared.jsonl'] },
+            onChange: ({ changedFile }) => { received.push(`second:${changedFile}`); },
+        });
+        try {
+            fileCallbacks.get('/fixture/first.jsonl')!('/fixture/first.jsonl');
+            fileCallbacks.get('/fixture/shared.jsonl')!('/fixture/shared.jsonl');
+            await first.dispose();
+            fileCallbacks.get('/fixture/first.jsonl')!('/fixture/first.jsonl');
+            fileCallbacks.get('/fixture/shared.jsonl')!('/fixture/shared.jsonl');
+            expect(received).toEqual([
+                'first:/fixture/first.jsonl',
+                'first:/fixture/shared.jsonl',
+                'second:/fixture/shared.jsonl',
+                'second:/fixture/shared.jsonl',
+            ]);
+        } finally {
+            await second.dispose();
+            await reconciler.dispose();
+        }
+    });
     it('routes an accounting-only managed source refresh without inventing a Session link', async () => {
         let observerInput: Parameters<NonNullable<Parameters<typeof createExternalSessionObservationReconciler>[0]['acquireObserver']>>[0] | undefined;
         let attached = false;

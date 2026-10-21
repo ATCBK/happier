@@ -66,7 +66,11 @@ export type ExternalSessionAccountingSourceDemand = Readonly<{
     }>): void;
 }>;
 
-type AccountingRecord = { active: boolean; demand: ExternalSessionAccountingSourceDemand };
+type AccountingRecord = {
+    active: boolean;
+    demand: ExternalSessionAccountingSourceDemand;
+    watchedFiles: ReadonlySet<string>;
+};
 
 type LinkRedescription = Readonly<{
     resource: ExternalSessionObservationResourceIdentity;
@@ -340,7 +344,7 @@ export function createExternalSessionObservationReconciler(
         if (disposed || !resource.active || resourcesByKey.get(resource.key) !== resource) return;
         for (const record of resource.accounting) {
             if (!record.active) continue;
-            if (input.changedFile && !record.demand.watchFileChanges?.files.includes(input.changedFile)) continue;
+            if (input.changedFile && !record.watchedFiles.has(input.changedFile)) continue;
             try {
                 record.demand.onChange(input);
             } catch {
@@ -454,7 +458,7 @@ export function createExternalSessionObservationReconciler(
         }
         for (const record of resource.accounting) {
             if (!record.active || record.demand.changeObservation !== 'watch_file_changes') continue;
-            for (const file of record.demand.watchFileChanges?.files ?? []) desired.add(file);
+            for (const file of record.watchedFiles) desired.add(file);
         }
         return desired;
     };
@@ -1644,7 +1648,11 @@ export function createExternalSessionObservationReconciler(
             }
             const resource = getOrCreateResource(input.resource, input.changeObservation);
             if (!resource || !resource.active) throw new Error('External accounting observation resource is unavailable');
-            const record: AccountingRecord = { active: true, demand: input };
+            const record: AccountingRecord = {
+                active: true,
+                demand: input,
+                watchedFiles: new Set(input.watchFileChanges?.files),
+            };
             resource.accounting.add(record);
             const release = async (): Promise<void> => {
                 if (!record.active) return;
