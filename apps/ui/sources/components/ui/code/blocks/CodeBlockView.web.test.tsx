@@ -1,5 +1,4 @@
 import React from 'react';
-import type { ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createThemeFixture, flushHookEffects, renderScreen } from '@/dev/testkit';
 import { installCodeBlockCommonModuleMocks } from './codeBlockTestHelpers';
@@ -171,16 +170,28 @@ describe('CodeBlockView (web)', () => {
 
         const { CodeBlockView } = await import('./CodeBlockView.web');
 
-        let tree!: ReactTestRenderer;
-        tree = (await renderScreen(<CodeBlockView
+        const screen = await renderScreen(<CodeBlockView
                     code={'const x = 1;'}
                     language={'typescript'}
                     showCopyButton={false}
                     wrap={true}
-                />)).tree;
+                />);
         await flushReactAsyncWork();
 
         expect(createHighlighterSpy).toHaveBeenCalledTimes(0);
-        expect(JSON.stringify(tree.toJSON())).toContain('const x = 1;');
+        expect(screen.getTextContent()).toContain('const x = 1;');
+    });
+    it('wraps a plain command only between its words, so a flag never splits across lines', async () => {
+        storage.setState({ settings: { ...storage.getState().settings, filesDiffSyntaxHighlightingMode: 'off' } });
+        const { CodeBlockView } = await import('./CodeBlockView.web');
+
+        const screen = await renderScreen(<CodeBlockView code={'$ python3 -u --bind 127.0.0.1'} showHeaderRow={false} wrap />);
+        await flushReactAsyncWork();
+
+        const unit = screen.findAllByType('Text').find((node) => node.props.children === '--bind');
+        expect(unit).toBeDefined();
+        const style = ([] as any[]).concat(unit!.props.style).flat();
+        expect(style.some((entry: any) => entry?.display === 'inline-block')).toBe(true);
+        expect(JSON.stringify(screen.tree.toJSON())).toContain('127.0.0.1');
     });
 });

@@ -16,6 +16,20 @@ import { FindHighlightedText, sliceFindRanges } from '@/components/ui/text/FindH
 import type { CodeBlockViewProps } from './codeBlockViewTypes';
 import { CodeBlockViewFrame } from './CodeBlockViewFrame';
 
+// A browser also breaks a line after a hyphen, which splits `--bind` into `-` and `-bind`. Each word is
+// one unbreakable unit, so a wrapped command breaks only at whitespace; a word wider than the block still folds.
+const wholeWordStyle = { display: 'inline-block', maxWidth: '100%', overflowWrap: 'anywhere' } as unknown as TextStyle;
+
+function WholeWords(props: Readonly<{ text: string; selectable: boolean }>) {
+    return (
+        <>
+            {props.text.split(/(\s+)/).map((part, index) => (part && !/^\s/.test(part)
+                ? <Text key={index} useDefaultTypography={false} selectable={props.selectable} style={wholeWordStyle}>{part}</Text>
+                : part))}
+        </>
+    );
+}
+
 export const CodeBlockView = React.memo<CodeBlockViewProps>(({
     code,
     language = null,
@@ -163,7 +177,7 @@ export const CodeBlockView = React.memo<CodeBlockViewProps>(({
                 webWhitespaceStyle,
             ]}
         >
-            {findRanges?.length ? <FindHighlightedText text={code} ranges={findRanges} selectable={selectable} /> : code}
+            {findRanges?.length ? <FindHighlightedText text={code} ranges={findRanges} selectable={selectable} /> : wrap ? <WholeWords text={code} selectable={selectable} /> : code}
         </Text>
     );
 
