@@ -240,7 +240,11 @@ it.each(['serving', 'resolving', 'explicitStart', 'withdrawn', 'withdrawnResolvi
             if (!current) throw new Error('Expected current explicit Start retirement owner');
             leases.push(current);
             expect(await current.registry.retireManagedProviderExplicitStart?.({ identity: fixture.identity,
-                machineId: 'machine', sharedGateway: explicitBinding })).toBe(true);
+                // Equal claim fields can arrive in a different insertion order.
+                machineId: 'machine', sharedGateway: {
+                    consumerId: explicitBinding.consumerId, machineId: explicitBinding.machineId,
+                    connectionId: explicitBinding.connectionId, accountId: explicitBinding.accountId, homeId: explicitBinding.homeId,
+                } })).toBe(true);
             await current.release();
         }
         expect(await waitForProcessExit(pid)).toBe(true);

@@ -6023,6 +6023,13 @@ export async function resolveExecutablePluginRuntimeRegistry(
         return catalogParsers?.isCurrent() === true ? catalogParsers : null;
     }
 
+    function canonicalSharedManagedProviderGatewayBinding(gateway: SharedManagedProviderGatewayBinding): SharedManagedProviderGatewayBinding {
+        // Acquisition and retirement construct these fields independently.
+        // Object insertion order must not change the existing semantic claim.
+        return { homeId: gateway.homeId, accountId: gateway.accountId,
+            connectionId: gateway.connectionId, machineId: gateway.machineId, consumerId: gateway.consumerId };
+    }
+
     function createExplicitManagedProviderOperationClaimId(
         identity: PluginContributionRef,
         machineId: string,
@@ -6035,7 +6042,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 normalizedMachineId,
                 identity.pluginId,
                 identity.localId,
-                ...(sharedGateway ? [sharedGateway] : []),
+                ...(sharedGateway ? [canonicalSharedManagedProviderGatewayBinding(sharedGateway)] : []),
             ])
             : null;
     }
@@ -6086,7 +6093,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
             operationIdentity,
             input.identity.pluginId,
             input.identity.localId,
-            ...(input.sharedGateway ? [input.sharedGateway] : []),
+            ...(input.sharedGateway ? [canonicalSharedManagedProviderGatewayBinding(input.sharedGateway)] : []),
         ]);
     }
 
