@@ -478,6 +478,7 @@ export const ProviderIdentityItems = React.memo((props: ProviderIdentityItemsPro
                         }}
                     rows={1}
                     lines={2}
+                    accessibilityLabel={t('common.loading')}
                 />
             ) : null}
             {rows.map(({ provider, connectAvailable, management }) => (
