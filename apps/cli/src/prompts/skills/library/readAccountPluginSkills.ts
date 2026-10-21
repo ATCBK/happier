@@ -22,7 +22,7 @@ export type AccountPluginSkillRead = Readonly<{
   serverHttpBaseUrl?: string;
   signal?: AbortSignal;
   skillIds?: readonly string[];
-  /** Discovery may omit unavailable sources; selected reads and GC require complete coverage. */
+  /** Discovery may omit unavailable sources; selected reads require complete coverage. */
   availableOnly?: boolean;
   isCurrent?: () => boolean | Promise<boolean>;
 }>;

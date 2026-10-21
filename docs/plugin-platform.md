@@ -1356,8 +1356,10 @@ description, trust or cost. The UI data hook retains these diagnostics alongside
 last-known healthy items through a failed refresh. Found joins native scans only
 to readable library content: a refused item supplies no membership or masking
 fact and does not withdraw unrelated native skills. A
-failed or incomplete inventory still withholds the whole catalog, and GC never
-sweeps after any unreadable content.
+failed or incomplete Artifact inventory still withholds the whole catalog and
+blocks GC, as does unreadable Artifact-library content. GC retains first-party
+content and live Session/Run pins; unpinned plugin delivery caches are evictable
+without complete Account-wide plugin coverage (see [runtime ownership](runtime-core.md)).
 Name reads require a Session and resolve against its current delivered identities
 and digests. UI and remote CLI name reads reach that Session's owner through the
 existing Session Action RPC; an explicit `skillId` without a Session reads the

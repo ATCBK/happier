@@ -175,7 +175,7 @@ describe('Account plugin skill sources', () => {
       knownUnrelated = true;
       expect(await readAvailable()).toContainEqual(expect.objectContaining({ skillId }));
       knownUnrelated = false;
-      // Full coverage is still mandatory for GC; an addressed read does not
+      // An unqualified strict read needs full coverage; an addressed read does not
       // require an unrelated plugin's declarations or contact its Machine.
       await expect(read()).rejects.toMatchObject({ code: 'skill_content_unavailable' });
       await expect(runWithServerHttpBaseUrl(base, () => readAccountPluginSkills({ credentials,

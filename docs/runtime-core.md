@@ -1296,9 +1296,13 @@ writes `<happierHome>/skills`: immutable digest-addressed bundles feed absolute
 POSIX session links or Windows copies, with `session.json` retaining the digest
 roots for both Sessions and their Runs. Runner exit releases the folder after
 the existing replacement check; daemon re-adoption removes abandoned folders
-only with a reliable live inventory. GC runs at those lifecycle boundaries and
-skips sweeping if the library or any session manifest is unreadable. Supporting
-files retain executable bits; native skill roots remain read-only inputs.
+only with a reliable live inventory. GC runs at those lifecycle boundaries,
+marking the complete Artifact-library inventory, first-party content and every
+live Session/Run digest. Unknown Artifact-library inventory or an unreadable
+session manifest blocks sweeping. Unpinned plugin delivery caches are evictable
+without complete plugin-skill coverage from every Account Machine: each new
+delivery rereads the plugin's canonical content before materialization.
+Supporting files retain executable bits; native skill roots remain read-only inputs.
 Remote library marks are read before entering the store mutation queue; the
 current Session/Run roots and sweep remain serialized, so a slow GC read does
 not prevent another Session's content from being materialized.

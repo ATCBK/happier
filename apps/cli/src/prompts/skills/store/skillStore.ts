@@ -116,6 +116,8 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
     const collect = async (libraryDigests: readonly string[]): Promise<void> => {
         const roots = await readRoots();
         if (!roots.reliable) return;
+        // Artifact-library and first-party marks augment every live Session/Run pin.
+        // Plugin delivery rereads canonical content; no plugin inventory is needed here.
         const marked = new Set(roots.paths);
         try { for (const digest of libraryDigests) marked.add(cacheDirectory(digest)); }
         catch { return; }
