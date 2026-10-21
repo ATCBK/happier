@@ -36,6 +36,7 @@ export {
   readSubAgentToolResultStatus,
   isGenericSubAgentToolName,
   isSubAgentTranscriptToolName,
+  readSubAgentToolSidechainId,
   type LegacySubAgentToolNameAlias,
   type GenericSubAgentToolNameAlias,
 } from './subAgentFamilies.js';

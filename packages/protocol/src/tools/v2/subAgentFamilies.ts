@@ -47,6 +47,17 @@ function readSubAgentToolResultRecord(value: unknown): Record<string, unknown> |
         : null;
 }
 
+export function readSubAgentToolSidechainId(tool: Readonly<{ id?: unknown; input?: unknown; result?: unknown }>, toolName: string): string | null {
+    const readId = (value: unknown) => typeof value === 'string' && value.trim() ? value : null;
+    if (isSubAgentTranscriptToolName(toolName)) {
+        const input = readSubAgentToolResultRecord(tool.input);
+        const result = readSubAgentToolResultRecord(tool.result);
+        const id = readId(result?.sidechainId) ?? readId(input?.sidechainId) ?? readId(input?.callId);
+        if (id) return id;
+    }
+    return typeof tool.id === 'string' ? tool.id.trim() || null : null;
+}
+
 /** Read the status carried by a native sub-agent result or its transcript wrapper. */
 export function readSubAgentToolResultStatus(value: unknown): string | null {
     const record = readSubAgentToolResultRecord(value);
