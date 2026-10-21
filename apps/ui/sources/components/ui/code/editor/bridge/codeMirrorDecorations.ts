@@ -5,19 +5,31 @@ import type { EditorDecoration, EditorDecorationLayer } from '../codeEditorTypes
 type DecorationApi = Pick<typeof State, 'StateField' | 'StateEffect' | 'RangeSet' | 'RangeValue' | 'MapMode'>
     & Pick<typeof View, 'gutter' | 'GutterMarker' | 'Decoration' | 'EditorView'>;
 type LayerItems = Readonly<{ layer: EditorDecorationLayer; items: readonly EditorDecoration[] }>;
+type RemovedItem = Readonly<{ layer: EditorDecorationLayer; id: string }>;
+type TrackedDecoration = State.RangeValue & Readonly<{ item: EditorDecoration }>;
+type DecorationLayers = Readonly<Record<EditorDecorationLayer, State.RangeSet<TrackedDecoration>>>;
+
+export type CodeMirrorDecorations = Readonly<{
+    set: State.StateEffectType<LayerItems>;
+    remove: State.StateEffectType<RemovedItem>;
+    field: State.StateField<DecorationLayers>;
+    items: (state: State.EditorState, layer: EditorDecorationLayer) => EditorDecoration[];
+    navigate: (editor: View.EditorView, direction: 1 | -1) => boolean;
+    extensions: State.Extension[];
+}>;
 
 /** The bundle producer includes this same implementation in the native WebView. */
-export function createCodeMirrorDecorations(api: DecorationApi, press?: (layer: EditorDecorationLayer, item: EditorDecoration) => void) {
+export function createCodeMirrorDecorations(api: DecorationApi, press?: (layer: EditorDecorationLayer, item: EditorDecoration) => void): CodeMirrorDecorations {
     const layers = ['change', 'diagnostic', 'blame'] as const;
     const set = api.StateEffect.define<LayerItems>();
-    const remove = api.StateEffect.define<Readonly<{ layer: EditorDecorationLayer; id: string }>>();
+    const remove = api.StateEffect.define<RemovedItem>();
     class Tracked extends api.RangeValue {
         override startSide = 1;
         override endSide = 1;
         override mapMode = api.MapMode.Simple;
         constructor(readonly item: EditorDecoration) { super(); }
     }
-    const field = api.StateField.define<Readonly<Record<EditorDecorationLayer, State.RangeSet<Tracked>>>>({
+    const field = api.StateField.define<DecorationLayers>({
         create: () => ({ change: api.RangeSet.empty, diagnostic: api.RangeSet.empty, blame: api.RangeSet.empty }),
         update(value, transaction) {
             let next = value;
