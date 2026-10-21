@@ -75,6 +75,17 @@ still builds the full catalog. Workflow materialization retains that full demand
 because it consumes Action availability and occurrence metadata as well as Agents.
 This describes source behavior, not a loaded-runtime performance result.
 
+The daemon's existing generation-scoped build cache retains these selected
+registry projections separately from full replies. It shares output-equivalent
+host contexts, but full replies still distinguish locale, Host UI API and
+effective renderer availability. Current source, brand and applied-policy facts
+must match before reuse; changed facts replace the previous body for that
+context. Full construction prepares SCM before capturing those facts. After
+asynchronous miss preparation, execution origins are read again and the same
+prepared snapshot supplies both the cache witness and response. Skill
+content remains a fresh filesystem read, not a generation-cached payload. This
+does not introduce a fleet-wide declaration cache or share Machine authority.
+
 In 0.3 development, `definePlugin` projects an Agent's
 `connectedAccountLaunch.stateSharingDescriptor` into
 `capabilities.providerStateSharing`. This cold declaration carries configuration
