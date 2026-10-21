@@ -16,7 +16,7 @@ function settlesChangedEstablishedIdentity(params: Readonly<{
 }>): boolean {
     if (!params.current || !params.incoming) return false;
     return (["accountId", "email"] as const).some((key) =>
-        params.current?.[key] !== undefined
+        params.current?.[key] != null
         && hasOwn(params.incoming ?? {}, key)
         && params.incoming?.[key] !== params.current[key],
     );
@@ -37,6 +37,7 @@ function mergeProviderIdentity(
     return {
         ...(accountId !== undefined ? { accountId } : {}),
         ...(email !== undefined ? { email } : {}),
+        ...(incoming.organizationId !== undefined ? { organizationId: incoming.organizationId } : {}),
     };
 }
 

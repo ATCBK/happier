@@ -618,6 +618,26 @@ describe("qualified Connected Account credential repository", () => {
         })).resolves.toEqual({ id: row.id });
     });
 
+    it('admits fresh provider attestation after a credential was connected with unknown identity', async () => {
+        const account = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' } });
+        const ref = { service, accountId: 'initially-unproven' };
+        const created = await mutateQualifiedConnectedServiceCredential({ accountId: account.id, ref,
+            expectedCredentialRevision: null, authenticationModeId: 'api-key',
+            content: { t: 'plain', v: { token: 'current-token' } },
+            metadata: { scopes: [], providerIdentity: { accountId: null, email: null, organizationId: null } },
+        });
+        if (created.status !== 'written') throw new Error('Expected initially unknown credential');
+        const identity = { accountId: 'attested-provider-user', email: 'attested@example.test', organizationId: 'org-attested' };
+        await expect(mutateQualifiedConnectedServiceCredential({ accountId: account.id, ref,
+            expectedCredentialRevision: created.credentialRevision, expectedConfigurationRevision: null,
+            authenticationModeId: 'api-key', content: { t: 'plain', v: { token: 'current-token' } },
+            metadata: { scopes: [], providerIdentity: identity },
+        })).resolves.toMatchObject({ status: 'written' });
+        await expect(readQualifiedConnectedServiceCredential({ accountId: account.id, ref })).resolves.toMatchObject({
+            status: 'resolved', credential: { metadata: { providerIdentity: identity } },
+        });
+    });
+
     it("rejects a reconnect that changes the stable provider identity", async () => {
         const account = await db.account.create({
             data: { publicKey: null, encryptionMode: "plain" },
@@ -632,23 +652,36 @@ describe("qualified Connected Account credential repository", () => {
             content: { t: "plain", v: { token: "first" } },
             metadata: {
                 ...metadata,
-                providerIdentity: { accountId: "provider-account-1" },
+                providerIdentity: { accountId: "provider-account-1", organizationId: "org-a" },
             },
         });
         if (created.status !== "written") throw new Error("Expected credential create");
 
+        for (const providerIdentity of [
+            { accountId: "provider-account-2" },
+            { accountId: null, email: null, organizationId: null },
+        ]) {
+            await expect(mutateQualifiedConnectedServiceCredential({
+                accountId: account.id,
+                ref,
+                expectedCredentialRevision: created.credentialRevision,
+                expectedConfigurationRevision: null,
+                authenticationModeId: "api-key",
+                content: { t: "plain", v: { token: "second" } },
+                metadata: { ...metadata, providerIdentity },
+            })).resolves.toEqual({ status: "provider_identity_mismatch" });
+        }
         await expect(mutateQualifiedConnectedServiceCredential({
-            accountId: account.id,
-            ref,
-            expectedCredentialRevision: created.credentialRevision,
-            expectedConfigurationRevision: null,
-            authenticationModeId: "api-key",
-            content: { t: "plain", v: { token: "second" } },
-            metadata: {
-                ...metadata,
-                providerIdentity: { accountId: "provider-account-2" },
-            },
-        })).resolves.toEqual({ status: "provider_identity_mismatch" });
+            accountId: account.id, ref, expectedCredentialRevision: created.credentialRevision,
+            expectedConfigurationRevision: null, authenticationModeId: "setup-token",
+            content: { t: "plain", v: { token: "replacement" } },
+            metadata: { ...metadata, providerIdentity: { accountId: null, email: null, organizationId: null } },
+        })).resolves.toEqual({ status: "authentication_mode_mismatch" });
+        await expect(readQualifiedConnectedServiceCredential({ accountId: account.id, ref })).resolves.toMatchObject({
+            status: "resolved", credential: { credentialRevision: created.credentialRevision,
+                content: { t: "plain", v: { token: "first" } },
+                metadata: { providerIdentity: { accountId: "provider-account-1", organizationId: "org-a" } } },
+        });
     });
 
     it("fails closed for incomplete sidecars and account-mode drift on reads", async () => {

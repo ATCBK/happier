@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { QualifiedConnectedAccountCredentialMetadataV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
 
 import { resolveQualifiedConnectedAccountStoredMetadata } from "./credentialStoredMetadataAdapter";
 
@@ -22,6 +23,7 @@ describe("qualified Connected Account stored metadata adapter", () => {
                 kind: "oauth",
                 providerEmail: "operator@example.com",
                 providerAccountId: "provider-account-1",
+                providerOrganizationId: "org-predecessor",
                 health: {
                     v: 1,
                     status: "needs_reauth",
@@ -36,6 +38,7 @@ describe("qualified Connected Account stored metadata adapter", () => {
                     providerIdentity: {
                         email: "operator@example.com",
                         accountId: "provider-account-1",
+                        organizationId: "org-predecessor",
                     },
                     scopes: [],
                 },
@@ -49,6 +52,7 @@ describe("qualified Connected Account stored metadata adapter", () => {
                 kind: "oauth",
                 providerEmail: "operator@example.com",
                 providerAccountId: "provider-account-1",
+                providerOrganizationId: "org-predecessor",
                 health: {
                     v: 1,
                     status: "needs_reauth",
@@ -63,6 +67,7 @@ describe("qualified Connected Account stored metadata adapter", () => {
                     providerIdentity: {
                         email: "operator@example.com",
                         accountId: "provider-account-1",
+                        organizationId: "org-predecessor",
                     },
                     scopes: [],
                 },
@@ -100,7 +105,7 @@ describe("qualified Connected Account stored metadata adapter", () => {
         });
     });
 
-    it("preserves strict V4 metadata and fails closed on malformed V4", () => {
+    it("keeps V4 writes strict while projecting stored fields and rejecting malformed known values", () => {
         const metadata = {
             v: 4,
             storage: "stored_envelope_v1",
@@ -128,17 +133,13 @@ describe("qualified Connected Account stored metadata adapter", () => {
             status: "refreshing",
             presentation: metadata.values,
         });
-        expect(() =>
-            resolveQualifiedConnectedAccountStoredMetadata({
-                rowId: "v4-row",
-                metadata: {
-                    ...metadata,
-                    values: {
-                        ...metadata.values,
-                        accessToken: "must-not-be-clear",
-                    },
-                },
-            }),
-        ).toThrow();
+        const valuesWithUnknownSecret = { ...metadata.values, accessToken: "must-not-be-clear" };
+        expect(QualifiedConnectedAccountCredentialMetadataV4Schema.safeParse(valuesWithUnknownSecret).success).toBe(false);
+        expect(resolveQualifiedConnectedAccountStoredMetadata({ rowId: "v4-row",
+            metadata: { ...metadata, values: valuesWithUnknownSecret },
+        }).presentation).toEqual(metadata.values);
+        expect(() => resolveQualifiedConnectedAccountStoredMetadata({ rowId: "v4-row",
+            metadata: { ...metadata, values: { ...metadata.values, scopes: [123] } },
+        })).toThrow();
     });
 });

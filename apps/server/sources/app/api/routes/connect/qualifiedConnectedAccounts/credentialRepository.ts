@@ -1041,6 +1041,14 @@ async function mutateQualifiedConnectedServiceCredentialWithPreparedInTx(
             configurationRevision: latest?.configurationRevision ?? null,
         };
     }
+    const previousIdentity = currentProjection?.presentation.providerIdentity;
+    const nextIdentity = metadataSettlement.metadata.providerIdentity;
+    if ((previousIdentity?.accountId ?? null) !== (nextIdentity?.accountId ?? null)
+        || (previousIdentity?.organizationId ?? null) !== (nextIdentity?.organizationId ?? null)) {
+        await tx.connectedServiceUsageSource.deleteMany({
+            where: { accountId: params.accountId, credentialId: current.id },
+        });
+    }
     await recheckAdmission();
     return {
         status: "written",

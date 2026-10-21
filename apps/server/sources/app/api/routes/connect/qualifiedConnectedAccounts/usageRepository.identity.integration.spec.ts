@@ -34,6 +34,7 @@ import { projectProviderAccountUsageSnapshotToLegacyQuota } from "./legacyUsageT
 import {
     listQualifiedUsageSourcesForRecord,
     readQualifiedConnectedAccountUsageRecord,
+    readExactQualifiedConnectedServiceUsageSource,
     readQualifiedConnectedAccountQuota,
     readQualifiedProviderAccountUsageHistory,
     requestQualifiedConnectedAccountQuotaRefresh,
@@ -129,6 +130,103 @@ describe("qualified Connected Account usage stored identity", () => {
             staleAfterMs: snapshot.staleAfterMs,
         };
     }
+
+    it('does not link historical account-scoped usage after the credential has an attested organization', async () => {
+        const account = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' } });
+        const ref = { service, accountId: 'attested-organization' };
+        const credential = await mutateQualifiedConnectedServiceCredential({ accountId: account.id, ref,
+            expectedCredentialRevision: null, authenticationModeId: 'api-key',
+            content: { t: 'plain', v: { token: 'org-token' } },
+            metadata: { scopes: [], providerIdentity: { accountId: providerAccountId, organizationId: 'org-a' } },
+        });
+        if (credential.status !== 'written') throw new Error('Expected credential create');
+        const write = buildUsageWrite(account.id, { credentialRevision: credential.credentialRevision,
+            source: { ref, bindingKind: 'account' }, fetchedAt: Date.now(), planLabel: 'legacy account scope' });
+        await expect(writeQualifiedProviderAccountUsageRecord(write)).rejects.toMatchObject({ kind: 'mismatch' });
+        expect(await readQualifiedConnectedAccountUsageRecord({ accountId: account.id, ref })).toBeNull();
+    });
+
+    it.each(['org-b', undefined] as const)('unlinks all usage aliases when the same provider user changes organization context to %s', async organizationId => {
+        const account = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' } });
+        const ref = { service, accountId: 'organization-context' };
+        const created = await mutateQualifiedConnectedServiceCredential({ accountId: account.id, ref,
+            expectedCredentialRevision: null, authenticationModeId: 'api-key',
+            content: { t: 'plain', v: { token: 'org-a-token' } },
+            metadata: { scopes: [], providerIdentity: { accountId: providerAccountId, organizationId: 'org-a' } },
+        });
+        if (created.status !== 'written') throw new Error('Expected credential create');
+        const groupRef = { service, groupId: 'organization-context-group' };
+        const group = await createQualifiedConnectedAccountGroup({ accountId: account.id, service, group: { groupId: groupRef.groupId } });
+        if (group.status !== 'written') throw new Error('Expected group create');
+        const member = await createQualifiedConnectedAccountGroupMember({ accountId: account.id, mutation: { group: groupRef,
+            connectedAccountId: ref.accountId, expectedGeneration: group.group.generation,
+            expectedRuntimeStateRevision: group.group.runtimeStateRevision } });
+        if (member.status !== 'written') throw new Error('Expected group member create');
+        const recordKey = createProviderAccountUsageRecordKey({ accountSubjectId: providerAccountId, quotaScope: 'organization', quotaScopeId: 'org-a' });
+        const snapshot = createUsageSnapshot({ fetchedAt: Date.now(), recordKey });
+        const write = { accountId: account.id, expectedCredentialRevision: created.credentialRevision,
+            expectedConfigurationRevision: null, recordId: snapshot.recordId, recordKey, payloadMode: 'plain_json_v1' as const,
+            status: 'ok' as const, snapshot, fetchedAt: snapshot.fetchedAtMs, staleAfterMs: snapshot.staleAfterMs };
+        const otherRef = { service, accountId: 'other-organization-context' };
+        const otherCredential = await mutateQualifiedConnectedServiceCredential({ accountId: account.id, ref: otherRef,
+            expectedCredentialRevision: null, authenticationModeId: 'api-key',
+            content: { t: 'plain', v: { token: 'other-org-a-token' } },
+            metadata: { scopes: [], providerIdentity: { accountId: providerAccountId, organizationId: 'org-a' } },
+        });
+        if (otherCredential.status !== 'written') throw new Error('Expected independent credential create');
+        await writeQualifiedProviderAccountUsageRecord({ ...write, expectedCredentialRevision: otherCredential.credentialRevision,
+            source: { ref: otherRef, bindingKind: 'account' } });
+        await writeQualifiedProviderAccountUsageRecord({ ...write, source: { ref, bindingKind: 'account' } });
+        await writeQualifiedProviderAccountUsageRecord({ ...write, source: { ref, bindingKind: 'group_member', groupId: groupRef.groupId,
+            groupGeneration: member.group.generation } });
+        expect(await db.connectedServiceUsageSource.count({ where: { accountId: account.id } })).toBe(3);
+        const sameContext = await mutateQualifiedConnectedServiceCredential({ accountId: account.id, ref,
+            expectedCredentialRevision: created.credentialRevision, expectedConfigurationRevision: null, authenticationModeId: 'api-key',
+            content: { t: 'plain', v: { token: 'rotated-org-a-token' } },
+            metadata: { scopes: [], providerIdentity: { accountId: providerAccountId, organizationId: 'org-a' } },
+        });
+        if (sameContext.status !== 'written') throw new Error('Expected same context refresh');
+        expect(await db.connectedServiceUsageSource.count({ where: { accountId: account.id } })).toBe(3);
+        const changed = await mutateQualifiedConnectedServiceCredential({ accountId: account.id, ref,
+            expectedCredentialRevision: sameContext.credentialRevision, expectedConfigurationRevision: null, authenticationModeId: 'api-key',
+            content: { t: 'plain', v: { token: 'new-context-token' } },
+            metadata: { scopes: [], providerIdentity: { accountId: providerAccountId, ...(organizationId ? { organizationId } : {}) } },
+        });
+        expect(changed.status).toBe('written');
+        expect(await db.connectedServiceUsageSource.count({ where: { accountId: account.id } })).toBe(1);
+        expect(await readQualifiedConnectedAccountUsageRecord({ accountId: account.id, ref })).toBeNull();
+        expect(await readQualifiedConnectedAccountUsageRecord({ accountId: account.id, ref: otherRef }))
+            .toMatchObject({ recordId: snapshot.recordId, snapshot: { recordKey: { quotaScopeId: 'org-a' } } });
+        if (changed.status !== 'written') throw new Error('Expected context replacement');
+        const oldContextWrite = writeQualifiedProviderAccountUsageRecord({ ...write,
+            expectedCredentialRevision: changed.credentialRevision, source: { ref, bindingKind: 'account' } });
+        if (organizationId) await expect(oldContextWrite).rejects.toMatchObject({ kind: 'mismatch' });
+        else await expect(oldContextWrite).resolves.toMatchObject({ sourceOutcome: { status: 'skipped', reason: 'ownership_unproven' } });
+        expect(await db.connectedServiceUsageSource.count({ where: { accountId: account.id } })).toBe(1);
+        expect(await db.providerAccountUsageRecord.count({ where: { accountId: account.id, recordId: snapshot.recordId } })).toBe(1);
+    });
+
+    it.each(['org-b', undefined] as const)('hides retained organization sources when current public context is %s before another observation succeeds', async organizationId => {
+        const account = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' } });
+        const { credential, ref } = await createCredential(account.id);
+        const row = await db.serviceAccountToken.findFirstOrThrow({ where: { accountId: account.id } });
+        const stored = row.metadata;
+        if (!stored || typeof stored !== 'object' || Array.isArray(stored)) throw new Error('Expected stored metadata');
+        // Retained rows are a real storage boundary; model a previously admitted source alongside a newer public identity.
+        await db.serviceAccountToken.update({ where: { id: row.id }, data: { metadata: { ...stored,
+            values: { scopes: [], providerIdentity: { accountId: providerAccountId, organizationId: 'org-a' } } } } });
+        const recordKey = createProviderAccountUsageRecordKey({ accountSubjectId: providerAccountId, quotaScope: 'organization', quotaScopeId: 'org-a' });
+        const snapshot = createUsageSnapshot({ fetchedAt: Date.now(), recordKey });
+        await writeQualifiedProviderAccountUsageRecord({ accountId: account.id, source: { ref, bindingKind: 'account' },
+            expectedCredentialRevision: credential.credentialRevision, expectedConfigurationRevision: null,
+            recordId: snapshot.recordId, recordKey, payloadMode: 'plain_json_v1', status: 'ok', snapshot,
+            fetchedAt: snapshot.fetchedAtMs, staleAfterMs: snapshot.staleAfterMs });
+        await db.serviceAccountToken.update({ where: { id: row.id }, data: { metadata: { ...stored,
+            values: { scopes: [], providerIdentity: { accountId: providerAccountId, ...(organizationId ? { organizationId } : {}) } } } } });
+        expect(await readExactQualifiedConnectedServiceUsageSource({ accountId: account.id, source: { ref, bindingKind: 'account' } })).toBeNull();
+        expect(await readQualifiedConnectedAccountUsageRecord({ accountId: account.id, ref })).toBeNull();
+        expect(await listQualifiedUsageSourcesForRecord({ accountId: account.id, recordId: snapshot.recordId })).toEqual([]);
+    });
 
     it.each(['page', 'witness'] as const)('releases the history transaction before validating captured %s payloads', async kind => {
         const account = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' }, select: { id: true } });

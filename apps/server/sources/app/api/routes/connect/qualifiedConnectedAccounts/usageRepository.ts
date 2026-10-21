@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
-import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
+import { isProviderAccountUsageOrganizationContextMatch } from '@happier-dev/protocol/connect/accountUsage';
+import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema, ProviderAccountUsageRecordKeyV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { QualifiedConnectedAccountRefSchema, type QualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import { projectProviderAccountUsageSnapshotToQualifiedConnectedAccountQuotaSnapshotV4, type QualifiedConnectedServiceUsageSourceResolutionV4, type QualifiedConnectedServiceUsageSourceV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { QualifiedConnectedServiceUsageSourceV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
@@ -225,6 +226,8 @@ async function resolveQualifiedCredential(
         credential,
         providerAccountId:
             metadata.presentation.providerIdentity?.accountId ?? null,
+        providerOrganizationId:
+            metadata.presentation.providerIdentity?.organizationId ?? null,
     };
 }
 
@@ -397,19 +400,24 @@ async function resolveQualifiedUsageBinding(
             source: { ...source, groupGeneration },
             credential: binding.credential,
             providerAccountId: binding.providerAccountId,
+            providerOrganizationId: binding.providerOrganizationId,
         };
     }
     return {
         source,
         credential: binding.credential,
         providerAccountId: binding.providerAccountId,
+        providerOrganizationId: binding.providerOrganizationId,
     };
 }
 
 function assertQualifiedUsageOwnership(params: Readonly<{
     providerAccountId: string | null;
+    providerOrganizationId: string | null;
     recordAccountSubjectId: string;
     recordSubjectKind: string;
+    recordQuotaScope: string;
+    recordQuotaScopeId: string | null;
 }>): void {
     if (
         params.providerAccountId === null
@@ -424,6 +432,18 @@ function assertQualifiedUsageOwnership(params: Readonly<{
         throw new ConnectedServiceUsageSourceOwnershipError(
             "Qualified Connected Account does not match provider usage account",
             "mismatch",
+        );
+    }
+    if ((params.providerOrganizationId !== null || params.recordQuotaScope === 'organization')
+        && !isProviderAccountUsageOrganizationContextMatch({
+        accountSubjectId: params.recordAccountSubjectId,
+        subjectKind: params.recordSubjectKind,
+        quotaScope: ProviderAccountUsageRecordKeyV1Schema.shape.quotaScope.parse(params.recordQuotaScope),
+        ...(params.recordQuotaScopeId ? { quotaScopeId: params.recordQuotaScopeId } : {}),
+    }, { providerAccountId: params.providerAccountId, providerOrganizationId: params.providerOrganizationId })) {
+        throw new ConnectedServiceUsageSourceOwnershipError(
+            'Qualified Connected Account does not match the provider usage organization context',
+            params.providerOrganizationId !== null ? 'mismatch' : 'unproven',
         );
     }
 }
@@ -602,6 +622,8 @@ async function readExactQualifiedConnectedServiceUsageSourceWithCredentialAdmiss
                     select: {
                         accountSubjectId: true,
                         subjectKind: true,
+                        quotaScope: true,
+                        quotaScopeId: true,
                         fetchedAt: true,
                         staleAfterMs: true,
                     },
@@ -609,8 +631,11 @@ async function readExactQualifiedConnectedServiceUsageSourceWithCredentialAdmiss
             if (!record) return null;
             assertQualifiedUsageOwnership({
                 providerAccountId: binding.providerAccountId,
+                providerOrganizationId: binding.providerOrganizationId,
                 recordAccountSubjectId: record.accountSubjectId,
                 recordSubjectKind: record.subjectKind,
+                recordQuotaScope: record.quotaScope,
+                recordQuotaScopeId: record.quotaScopeId,
             });
             return {
                 source: mapQualifiedSourceRow(row),
@@ -629,7 +654,6 @@ async function readExactQualifiedConnectedServiceUsageSourceWithCredentialAdmiss
         }
         if (
             error instanceof ConnectedServiceUsageSourceOwnershipError
-            && error.kind === "unproven"
         ) {
             return null;
         }
@@ -681,6 +705,8 @@ async function upsertQualifiedSourceInTx(
         select: {
             accountSubjectId: true,
             subjectKind: true,
+            quotaScope: true,
+            quotaScopeId: true,
         },
     });
     if (!record) {
@@ -690,8 +716,11 @@ async function upsertQualifiedSourceInTx(
     }
     assertQualifiedUsageOwnership({
         providerAccountId: binding.providerAccountId,
+        providerOrganizationId: binding.providerOrganizationId,
         recordAccountSubjectId: record.accountSubjectId,
         recordSubjectKind: record.subjectKind,
+        recordQuotaScope: record.quotaScope,
+        recordQuotaScopeId: record.quotaScopeId,
     });
     const sourceKey = buildQualifiedUsageSourceKey(binding.source);
     const source = binding.source;
@@ -1268,7 +1297,11 @@ async function listQualifiedUsageSourcesForRecordInStorage(
                     qualifiedServiceDigest: true,
                     connectedAccountId: true,
                     qualifiedIdentityDigest: true,
+                    metadata: true,
                 },
+            },
+            providerAccountUsageRecord: {
+                select: { accountSubjectId: true, subjectKind: true, quotaScope: true, quotaScopeId: true },
             },
         },
         orderBy: [
@@ -1279,9 +1312,27 @@ async function listQualifiedUsageSourcesForRecordInStorage(
     });
     // Every source the record is linked through. Sources are derived from the
     // credential and group lists — one per account binding plus one per group
-    // membership — so they carry no capacity of their own, and this reader also
+    // membership — and must still match that credential's current provider context.
+    // Sources carry no capacity of their own, and this reader also
     // decides whether the record's DELETE and refresh routes can see it at all.
-    return rows.map(mapQualifiedSourceRow);
+    return rows.flatMap(row => {
+        const source = mapQualifiedSourceRow(row);
+        const metadata = resolveQualifiedConnectedAccountStoredMetadata({ rowId: row.credential.id, metadata: row.credential.metadata });
+        try {
+            assertQualifiedUsageOwnership({
+                providerAccountId: metadata.presentation.providerIdentity?.accountId ?? null,
+                providerOrganizationId: metadata.presentation.providerIdentity?.organizationId ?? null,
+                recordAccountSubjectId: row.providerAccountUsageRecord.accountSubjectId,
+                recordSubjectKind: row.providerAccountUsageRecord.subjectKind,
+                recordQuotaScope: row.providerAccountUsageRecord.quotaScope,
+                recordQuotaScopeId: row.providerAccountUsageRecord.quotaScopeId,
+            });
+        } catch (error) {
+            if (error instanceof ConnectedServiceUsageSourceOwnershipError) return [];
+            throw error;
+        }
+        return [source];
+    });
 }
 
 export async function listQualifiedUsageSourcesForRecord(
@@ -1487,6 +1538,8 @@ async function readFirstQualifiedSourceForRef(
                         select: {
                             accountSubjectId: true,
                             subjectKind: true,
+                            quotaScope: true,
+                            quotaScopeId: true,
                             fetchedAt: true,
                             staleAfterMs: true,
                         },
@@ -1503,13 +1556,15 @@ async function readFirstQualifiedSourceForRef(
                 try {
                     assertQualifiedUsageOwnership({
                         providerAccountId: binding.providerAccountId,
+                        providerOrganizationId: binding.providerOrganizationId,
                         recordAccountSubjectId: record.accountSubjectId,
                         recordSubjectKind: record.subjectKind,
+                        recordQuotaScope: record.quotaScope,
+                        recordQuotaScopeId: record.quotaScopeId,
                     });
                 } catch (error) {
                     if (
                         error instanceof ConnectedServiceUsageSourceOwnershipError
-                        && error.kind === "unproven"
                     ) {
                         continue;
                     }
@@ -1535,7 +1590,6 @@ async function readFirstQualifiedSourceForRef(
         }
         if (
             error instanceof ConnectedServiceUsageSourceOwnershipError
-            && error.kind === "unproven"
         ) {
             return null;
         }

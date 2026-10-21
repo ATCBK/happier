@@ -66,10 +66,12 @@ function resolveStoredCredentialRevisionSemantics(
 function legacyPresentation(metadata: Readonly<{
     providerEmail?: string | null;
     providerAccountId?: string | null;
+    providerOrganizationId?: string | null;
 }>): QualifiedConnectedAccountCredentialMetadataV4 {
     const hasProviderIdentity =
         metadata.providerEmail !== undefined
-        || metadata.providerAccountId !== undefined;
+        || metadata.providerAccountId !== undefined
+        || metadata.providerOrganizationId !== undefined;
     return {
         ...(hasProviderIdentity
             ? {
@@ -79,6 +81,9 @@ function legacyPresentation(metadata: Readonly<{
                         : {}),
                     ...(metadata.providerAccountId !== undefined
                         ? { accountId: metadata.providerAccountId }
+                        : {}),
+                    ...(metadata.providerOrganizationId !== undefined
+                        ? { organizationId: metadata.providerOrganizationId }
                         : {}),
                 },
             }
