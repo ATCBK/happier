@@ -1184,20 +1184,17 @@ async function executeClientContributedAction(
                 const accountCapability = accountOrigin && accountLifetime ? createPluginSurfaceAccountActionServices({
                     pluginId: current.action.pluginId, occurrenceId: current.registration.occurrenceId,
                     sourceCustody: accountOrigin.sourceCustody, accountLifetime, signal, isCurrent: current.isCurrent,
+                    ...(input.contributedAction ? { machine: {
+                        machineId: input.contributedAction.machineId,
+                        serverId: input.contributedAction.serverId,
+                    } } : {}),
                     execute: async (action, value, options) => {
-                        if (typeof action !== 'string' && !input.contributedAction) {
-                            const declaration = readPluginAccountAvailability(accountLifetime.scope).readCurrentAccountExecution(action.pluginId);
-                            const selectedAction = declaration.kind === 'available'
-                                ? declaration.manifest.contributes.actions?.find(candidate => candidate.id === action.localId) : null;
-                            if (selectedAction?.execution.target === 'daemon') throw createPluginActionHandlerNotStartedError({
-                                code: 'plugin_action_machine_required', message: 'This Action requires a selected online Machine',
-                            });
-                        }
-                        const outcome = await dispatchPluginSurfaceAction({
+                        const nestedInput: DispatchPluginSurfaceActionInput = {
                             callerPluginId: current.action.pluginId, callerSourceCustody: accountOrigin.sourceCustody,
                             action, input: value,
                             ...(input.hostAction ? { hostAction: input.hostAction } : {}),
                             ...(input.contributedAction ? { contributedAction: input.contributedAction } : {}),
+                            ...(input.isContributedActionAvailable ? { isContributedActionAvailable: input.isContributedActionAvailable } : {}),
                             clientAction: current.binding, pluginUiProjection: input.pluginUiProjection,
                             resolveContributedAction: input.resolveContributedAction,
                             invocationSurface: 'plugin', originSurface, invocation: clientActionInvocation(current),
@@ -1206,7 +1203,18 @@ async function executeClientContributedAction(
                                 expectedContributorOccurrenceId: options.expectedContributorOccurrenceId,
                             }),
                             isCurrent: () => current.isCurrent() && options.isCurrent(),
-                        });
+                        };
+                        const nestedIdentity = resolveContributedActionIdentity(nestedInput);
+                        if (nestedIdentity && !nestedInput.contributedAction) {
+                            const projected = resolveProjectedContributedAction(nestedInput, nestedIdentity);
+                            const declaration = readPluginAccountAvailability(accountLifetime.scope).readCurrentAccountExecution(nestedIdentity.pluginId);
+                            const selectedAction = projected ?? (declaration.kind === 'available'
+                                ? declaration.manifest.contributes.actions?.find(candidate => candidate.id === nestedIdentity.localId) : null);
+                            if (selectedAction?.execution.target === 'daemon') throw createPluginActionHandlerNotStartedError({
+                                code: 'plugin_action_machine_required', message: 'This Action requires a selected online Machine',
+                            });
+                        }
+                        const outcome = await dispatchPluginSurfaceAction(nestedInput);
                         if (!outcome.ok) throw pluginActionDispatchFailureError(outcome);
                         return outcome.result;
                     },

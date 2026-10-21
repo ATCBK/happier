@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createPluginUiHostApiClient } from '@happier-dev/plugin-sdk/ui/client';
-import { PluginError, isPluginError } from '@happier-dev/plugin-sdk';
+import { PluginError, isPluginError, definePlugin } from '@happier-dev/plugin-sdk';
+import { defineContributionProtocol } from '@happier-dev/plugin-sdk/contributions';
+import { ingestPluginManifestV2 } from '@happier-dev/protocol/plugins/manifest';
 import type { PluginUiHostApi, SurfaceContext } from '@happier-dev/plugin-sdk/ui';
 import {
     buildQualifiedPluginContributionKey,
@@ -83,6 +85,8 @@ import {
 import { createBoundPluginSurfaceController } from './boundPluginSurfaceController';
 import { createPluginSurfaceStoredImageOwner } from './pluginSurfaceStoredImage';
 import { dispatchPluginResolvedSemanticCommand } from './dispatchPluginResolvedSemanticCommand';
+import { dispatchPluginAppPageHeaderAction } from '@/components/appShell/plugins/pluginAppPageHeaderActions';
+import type { PluginAppPage } from '@/components/appShell/plugins/pluginAppPages';
 import { getPluginUiEphemeralSharedScope } from './pluginUiEphemeralSharedScope';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getStorage } from '@/sync/domains/state/storageStore';
@@ -107,6 +111,7 @@ import { createPluginSurfaceContextFixture } from '@/dev/testkit/fixtures/plugin
 import { externalAuthoringPlugin, readExternalDoc, commentOnExternalDoc, proposeExternalDocEdit,
     requestExternalDocAcceptance, requestExternalDocDecline } from '../../../../../../packages/plugin-ui/fixtures/external-authoring/src/index';
 import { manifest as authoredAccountManifest, activate as activateAuthoredAccount } from '../../../../../../packages/plugin-sdk/fixtures/account-actions/src/index';
+import { readPluginAccountAvailability, replacePluginAccountAvailabilityProjection, clearPluginAccountAvailabilityProjection } from '@/sync/domains/plugins/availability/projection';
 
 // The dispatcher and serializer stay real. The server-scoped RPC is the
 // system boundary that terminates this UI-side transport path.
@@ -367,6 +372,7 @@ function createClientActionActivation(input: Readonly<{
     artifactGraph?: PluginUiArtifactsManifestEntryV2;
     accountPlacement?: boolean;
     authoredAccount?: boolean;
+    accountManifest?: typeof authoredAccountManifest;
     accountAvailability?: { when: { fact: 'session.exists'; operator: 'equals'; value: boolean } };
 }>) {
     const pluginId = input.authoredAccount ? authoredAccountManifest.id : input.pluginId ?? CALLER_PLUGIN_ID;
@@ -405,14 +411,14 @@ function createClientActionActivation(input: Readonly<{
         custodyId: input.occurrenceId ?? `occurrence-${pluginId}`,
         sourceCustody: { kind: 'account_release', pluginId, version: pluginVersion, archiveDigestSha256: `sha256:${'a'.repeat(64)}` },
     } : undefined;
-    const accountDeclaration = input.authoredAccount ? authoredAccountManifest : input.accountPlacement ? {
+    const accountDeclaration = input.accountManifest ?? (input.authoredAccount ? authoredAccountManifest : input.accountPlacement ? {
         schemaVersion: 2, id: pluginId, version: '1.2.3', displayName: 'Account author fixture', runtime: { apiVersion: 1 },
         contributes: { actions: [{ id: action.id, title: action.title, scopes: action.scopes, surfaces: action.surfaces,
             execution: action.execution, dangerLevel: action.dangerLevel, placementBindings: action.placementBindings,
             ...(action.confirmation ? { confirmation: action.confirmation } : {}), inputSchema: input.inputSchema ?? {},
             ...(input.accountAvailability ? { availability: input.accountAvailability } : {}),
             ...(input.outputSchema ? { resultSchema: input.outputSchema } : {}) }] },
-    } : undefined;
+    } : undefined);
     const projectedAction = Object.freeze({
         ...action,
         occurrenceId: input.occurrenceId ?? `occurrence-${pluginId}`,
@@ -644,7 +650,7 @@ describe('Account Action placement through the executable dispatcher', () => {
         } finally { await activation.composition.unload(); accountLifetime.retire(); }
     });
 
-    it('uses the selected Machine only for a nested provider Action from the Account semantic entry', async () => {
+    it.each(['semantic', 'page-header'] as const)('uses the selected Machine only for a nested provider Action from the Account %s entry', async (entry) => {
         const accountLifetime = clientAccountLifetime();
         const sourceId = 'acme.provider-source';
         const provider = PluginProjectedActionV2Schema.parse({ ...resolveDaemonTargetAction({ pluginId: sourceId, localId: 'list' }), surfaces: ['plugin'] });
@@ -654,17 +660,107 @@ describe('Account Action placement through the executable dispatcher', () => {
         await activation.composition.unload();
         try {
             await activation.composition.reconcile([activation.activation]);
-            expect(await dispatchPluginResolvedSemanticCommand({
-                projection: { ...activation.projection, actionsById: { ...activation.projection.actionsById, [`${sourceId}/list`]: provider } },
-                callerPluginId: CALLER_PLUGIN_ID, command: { kind: 'executeAction', action: { pluginId: CALLER_PLUGIN_ID, localId: activation.action.id }, input: {} },
+            const projection = { ...activation.projection, actionsById: { ...activation.projection.actionsById, [`${sourceId}/list`]: provider } };
+            const command = { kind: 'executeAction' as const, action: { pluginId: CALLER_PLUGIN_ID, localId: activation.action.id }, input: {} };
+            const outcome = entry === 'semantic' ? await dispatchPluginResolvedSemanticCommand({
+                projection, callerPluginId: CALLER_PLUGIN_ID, command,
                 scopedLaunchFacts: { serverId: 'server-client-action', machineId: 'provider-machine', interactionEnabled: true },
                 execute: machine, accountLifetime, scopeIsCurrent: () => accountLifetime.isCurrent(),
-            })).toEqual({ ok: true, result: { rows: ['provider'] } });
+            }) : await dispatchPluginAppPageHeaderAction({
+                action: { id: 'read-provider', title: 'Read provider', command },
+                page: { pluginId: CALLER_PLUGIN_ID } as PluginAppPage,
+                projection, resolveContributedAction: identity => projection.actionsById[`${identity.pluginId}/${identity.localId}`] ?? null,
+                actionAuthority: { serverId: 'server-client-action', machineId: 'provider-machine',
+                    occurrenceId: activation.action.occurrenceId, executionOrigin: null, accountLifetime },
+                execute: machine, openSurface: async () => ({ ok: true }), isCurrent: () => accountLifetime.isCurrent(),
+            });
+            expect(outcome).toEqual({ ok: true, result: { rows: ['provider'] } });
             expect(machine).toHaveBeenCalledOnce();
             expect(machine.mock.calls[0]?.[1]).toMatchObject({ qualifiedActionId: `${sourceId}/list`, invocation: { kind: 'clientPluginAction', clientActionBinding: {
                 pluginId: CALLER_PLUGIN_ID, sourceCustody: { kind: 'account_release' },
             } } });
         } finally { await activation.composition.unload(); accountLifetime.retire(); }
+    });
+
+    it.each([true, false])('admits a Machine source through the Account dispatcher with Machine available=%s', async (machineAvailable) => {
+        const accountLifetime = clientAccountLifetime();
+        const schema = defineProtocolObject({ key: defineProtocolString() }, { policy: 'closed' });
+        const protocol = defineContributionProtocol({ id: 'source', version: 1, operations: {
+            inspect: { required: true, input: { kind: 'protocolDefined', schema }, resultSchema: schema,
+                action: { surfaces: ['plugin'], dangerLevel: 'safe' } },
+        } });
+        const target = definePlugin({ id: CALLER_PLUGIN_ID, version: '1.2.3',
+            contributionPoints: { sources: protocol.point() }, actions: {
+                'refresh-index': { title: 'Read source', scopes: ['global'], surfaces: ['ui'], dangerLevel: 'safe',
+                    execution: { target: 'account', account: { artifactId: CLIENT_ACTION_TARGET.artifactId, exportName: CLIENT_ACTION_TARGET.exportName } },
+                    run: async () => null },
+            } });
+        const source = definePlugin({ id: 'acme.machine-source', version: '1.0.0', actions: {
+            inspect: { title: 'Read', surfaces: ['plugin'], dangerLevel: 'safe', execution: { target: 'daemon' },
+                inputSchema: schema, resultSchema: schema, run: async value => value },
+        }, contributesTo: { [CALLER_PLUGIN_ID]: { sources: {
+            external: protocol.contribute({ operations: { inspect: protocol.operations.inspect.bind('inspect') } }),
+        } } } });
+        const parsedTarget = ingestPluginManifestV2(target.manifest);
+        const parsedSource = ingestPluginManifestV2(source.manifest);
+        if (!parsedTarget.ok || !parsedSource.ok) throw new Error('Public manifests must be admitted');
+        replacePluginAccountAvailabilityProjection({ scope: accountLifetime.scope, snapshot: {
+            availabilityCursor: 1, materializations: [], snapshots: [], intentReads: [parsedTarget.manifest, parsedSource.manifest].map(manifest => ({ pluginId: manifest.id, response: {
+                availabilityCursor: 1, hostingCapability: { enabled: false }, packageAssets: [], uiArtifacts: [],
+                intent: { pluginId: manifest.id, desiredVersion: manifest.version, enabled: true,
+                    offlineUiHosting: 'disabled', writableCollections: [], revision: 'one' },
+                release: { ref: { pluginId: manifest.id, version: manifest.version },
+                    archiveDigestSha256: `sha256:${'a'.repeat(64)}`, normalizedManifest: manifest,
+                    collectionContracts: [], uiSlots: [], packageAssetArchive: { archiveDigestSha256: `sha256:${'b'.repeat(64)}`, resources: [] } },
+            } })),
+        } });
+        const selected = readPluginAccountAvailability(accountLifetime.scope).readCurrentAccountExecution(CALLER_PLUGIN_ID);
+        if (selected.kind !== 'available') throw new Error('Expected current Account target');
+        const activation = createClientActionActivation({ accountPlacement: true, accountLifetime,
+            accountManifest: target.manifest, occurrenceId: selected.custodyId, accountHandler: async (_value, context) => {
+                const observation = context.services.targetedContributions.observeForSelf(target.contributionPoints.sources, { onInvalidated() {} });
+                try {
+                    const snapshot = await observation.readCurrent();
+                    expect(snapshot.contributions).toHaveLength(1);
+                    try {
+                        return await context.services.actions.executeAdmittedTargetedOperation(snapshot.contributions[0]!.operations.inspect, { key: 'source read' });
+                    } catch (error) {
+                        if (!machineAvailable && isPluginError(error)) return { code: error.code };
+                        throw error;
+                    }
+                } finally { observation.dispose(); }
+            } });
+        const provider = PluginProjectedActionV2Schema.parse({ ...resolveDaemonTargetAction({ pluginId: source.manifest.id, localId: 'inspect' }),
+            occurrenceId: 'machine-source-current', surfaces: ['plugin'] });
+        const requests: ReturnType<typeof DaemonPluginStructuredMessageActionExecuteRequestSchema.parse>[] = [];
+        machineRpcWithServerScopeMock.mockImplementation(async (request: { method: string; payload: unknown; onIssued?: () => void }) => {
+            if (request.method === RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ) return {
+                status: 'sourceDeclarations', pluginId: CALLER_PLUGIN_ID, sourceDeclarations: [{ occurrenceId: provider.occurrenceId,
+                    sourceCustody: { kind: 'development', registeredRootId: 'machine-source-root' },
+                    manifest: { id: parsedSource.manifest.id, contributes: { actions: parsedSource.manifest.contributes.actions,
+                        pluginContributionPoints: [], targetedPluginContributions: parsedSource.manifest.contributes.targetedPluginContributions,
+                        ui: { renderers: [] } } } }],
+            };
+            if (request.method !== RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE) throw new Error('Unexpected Machine request');
+            request.onIssued?.();
+            requests.push(DaemonPluginStructuredMessageActionExecuteRequestSchema.parse(request.payload));
+            return { ok: true, result: { key: 'source read' } };
+        });
+        await activation.composition.unload();
+        try {
+            await activation.composition.reconcile([activation.activation]);
+            const projection = { ...activation.projection, actionsById: { ...activation.projection.actionsById, [`${source.manifest.id}/inspect`]: provider } };
+            expect(await dispatchPluginResolvedSemanticCommand({ projection, callerPluginId: CALLER_PLUGIN_ID,
+                command: { kind: 'executeAction', action: { pluginId: CALLER_PLUGIN_ID, localId: activation.action.id }, input: {} },
+                scopedLaunchFacts: { serverId: 'server-client-action', machineId: machineAvailable ? 'provider-machine' : null, interactionEnabled: true },
+                accountLifetime, scopeIsCurrent: () => accountLifetime.isCurrent(),
+            })).toEqual({ ok: true, result: machineAvailable ? { key: 'source read' } : { code: 'plugin_action_machine_required' } });
+            expect(requests).toHaveLength(machineAvailable ? 1 : 0);
+            if (machineAvailable) expect(requests[0]).toMatchObject({ machineId: 'provider-machine', qualifiedActionId: `${source.manifest.id}/inspect`,
+                expectedContributorOccurrenceId: provider.occurrenceId, executionSurface: 'ui' });
+        } finally {
+            await activation.composition.unload(); accountLifetime.retire(); clearPluginAccountAvailabilityProjection();
+        }
     });
 
     it('uses current invocation facts for a session-conditioned Account Action', async () => {
