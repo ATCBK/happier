@@ -15,6 +15,7 @@ export function isExecutionRunCommittedAssistantResult(body: ACPMessageData, opt
 /** Result identity is captured at the incumbent native transcript writer, never by a result scanner. */
 export async function observeExecutionRunCommittedReply(args: Readonly<{
     controller: ExecutionRunBackendController;
+    runId: string;
     session: NativeAgentSessionInteractionHostBinding['session'];
     sidechainId: string;
     body: ACPMessageData;
@@ -30,22 +31,18 @@ export async function observeExecutionRunCommittedReply(args: Readonly<{
         if (body.type === 'message' && !isExecutionRunCommittedAssistantResult(body, options)) return;
         const { committedResultLocalId: _previousResult, ...facts } = turn;
         const updated = { ...facts, ...(body.type === 'message' && body.message.trim().length > 0
-            ? { committedResultLocalId: options.localId } : {}) };
+            ? { committedResultLocalId: options.localId, committedPartialResultLocalId: options.localId } : {}) };
         if (controller.currentInputTurn?.turnId === turnId) controller.currentInputTurn = updated;
         else if (controller.lastInputTurn?.turnId === turnId) controller.lastInputTurn = updated;
         return;
     }
     if (body.type !== 'task_complete' && body.type !== 'turn_failed' && body.type !== 'turn_cancelled') return;
-    let outcome: SessionMessageReplyOutcomeV1 | undefined = { kind: body.type === 'turn_failed' ? 'failed'
+    const outcome: SessionMessageReplyOutcomeV1 = { kind: body.type === 'turn_failed' ? 'failed'
         : body.type === 'turn_cancelled' ? 'cancelled' : 'terminal_no_result' };
-    if (body.type === 'task_complete' && turn.committedResultLocalId) {
-        const committed = await session.readCommittedTranscriptMessageByLocalId?.(turn.committedResultLocalId);
-        if (!args.isCurrent()) return;
-        // The stable local id is only a lookup key. Only Home's actual immutable row id can fulfill the ask.
-        outcome = committed?.type === 'found' && committed.message.sidechainId === args.sidechainId
-            ? { kind: 'answer', result: { sessionId: session.sessionId, messageId: committed.message.id } } : undefined;
-    }
-    await fulfillExecutionRunInputReply({ session, turnId, inputIds: turn.inputIds, outcome, isCurrent: args.isCurrent });
+    const localId = body.type === 'task_complete' ? turn.committedResultLocalId
+        : body.type === 'turn_cancelled' ? turn.committedPartialResultLocalId : undefined;
+    await fulfillExecutionRunInputReply({ session, turnId, inputIds: turn.inputIds, outcome,
+        ...(localId ? { nativeResult: { runId: args.runId, sidechainId: args.sidechainId, localId } } : {}), isCurrent: args.isCurrent });
 }
 
 /** Shared by committed native terminal evidence and the host's authoritative Stop. */
@@ -54,14 +51,27 @@ export async function fulfillExecutionRunInputReply(args: Readonly<{
     turnId: string;
     inputIds: readonly string[];
     outcome: SessionMessageReplyOutcomeV1 | undefined;
+    nativeResult?: Readonly<{ runId: string; sidechainId: string; localId: string }>;
     isCurrent(): boolean;
 }>): Promise<void> {
-    const { session, turnId, outcome } = args;
+    const { session, turnId, nativeResult } = args;
+    let outcome = args.outcome;
+    if (nativeResult) {
+        if (!args.isCurrent()) return;
+        const committed = await session.readCommittedTranscriptMessageByLocalId?.(nativeResult.localId);
+        if (!args.isCurrent()) return;
+        // A local id is only a lookup key. Keep an unreadable/uncommitted result
+        // pending rather than replacing a known partial with bare cancellation.
+        outcome = committed?.type === 'found' && committed.message.sidechainId === nativeResult.sidechainId
+            && committed.message.localId === nativeResult.localId
+            ? { kind: args.outcome?.kind === 'cancelled' ? 'cancelled' : 'answer',
+                result: { sessionId: session.sessionId, messageId: committed.message.id } } : undefined;
+    }
     for (const localId of args.inputIds) {
         if (!args.isCurrent()) return;
         try {
             if (outcome) await session.mutateSessionMessageReply?.({ requestSessionId: session.sessionId, requestLocalId: localId,
-                operation: { kind: 'fulfill', turnId, outcome } });
+                operation: { kind: 'fulfill', turnId, outcome, ...(nativeResult ? { nativeResult } : {}) } });
         } finally {
             if (args.isCurrent()) await session.releaseSessionMessageReplySourceTurn?.({ sourceTurnId: turnId, sourceInputId: localId });
         }

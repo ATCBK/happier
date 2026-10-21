@@ -63,7 +63,7 @@ export type ExecutionRunInputTurnsProjectionV1 = Readonly<{
     last?: ExecutionRunInputTurnV1;
 }>;
 
-export function projectExecutionRunInputTurn({ committedResultLocalId: _localId, ...turn }:
+export function projectExecutionRunInputTurn({ committedResultLocalId: _localId, committedPartialResultLocalId: _partialLocalId, ...turn }:
     NonNullable<ExecutionRunBackendController['currentInputTurn']>): ExecutionRunInputTurnV1 {
     return turn;
 }

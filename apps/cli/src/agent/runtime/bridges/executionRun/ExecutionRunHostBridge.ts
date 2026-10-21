@@ -679,7 +679,7 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
             } } : runScopedOpts;
             const result = await projected(provider, body, publicationOptions);
             if (result.persisted && (!requiresDeliveredResult || result.delivered)) await observeExecutionRunCommittedReply({
-              controller, session: parentSession, sidechainId, body, options: runScopedOpts,
+              controller, runId, session: parentSession, sidechainId, body, options: runScopedOpts,
               isCurrent: () => isExecutionRunControllerCurrent({ runId, controller, controllers: this.controllers }),
             });
             return result;
@@ -1847,7 +1847,9 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
         && session && this.runs.get(runId)?.sessionId === session.sessionId) {
         try {
           await fulfillExecutionRunInputReply({ session, turnId: stoppedTurn.turnId, inputIds: stoppedTurn.inputIds,
-            outcome: { kind: 'cancelled' }, isCurrent: () => this.controllers.get(runId) === controller });
+            outcome: { kind: 'cancelled' }, ...(stoppedTurn.committedPartialResultLocalId ? {
+              nativeResult: { runId, sidechainId: this.runs.get(runId)!.sidechainId, localId: stoppedTurn.committedPartialResultLocalId },
+            } : {}), isCurrent: () => this.controllers.get(runId) === controller });
         } catch {
           // Original custody remains pending and observable if publication is unavailable.
           logger.warn('[EXECUTION RUN] Cancelled input reply publication unavailable', { runId });

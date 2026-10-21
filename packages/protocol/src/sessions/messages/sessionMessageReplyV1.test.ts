@@ -1,5 +1,14 @@
 import { expect, it } from 'vitest';
-import { SessionMessageReplyOutcomeV1Schema, SessionMessageReplyResolvedOutcomeV1Schema } from './sessionMessageReplyV1.js';
+import { SessionMessageReplyOperationV1Schema, SessionMessageReplyOutcomeV1Schema, SessionMessageReplyResolvedOutcomeV1Schema } from './sessionMessageReplyV1.js';
+
+it('admits a closed native committed-result binding on the existing fulfillment operation', () => {
+  const operation = { kind: 'fulfill', turnId: 'turn', outcome: { kind: 'cancelled', result: { sessionId: 'session', messageId: 'committed' } },
+    nativeResult: { runId: 'run', sidechainId: 'sidechain', localId: 'native-row' } };
+  expect(SessionMessageReplyOperationV1Schema.parse(operation)).toEqual(operation);
+  expect(SessionMessageReplyOperationV1Schema.safeParse({ ...operation,
+    nativeResult: { ...operation.nativeResult, partialText: 'private' } }).success).toBe(false);
+  expect(SessionMessageReplyOperationV1Schema.safeParse({ ...operation, outcome: { kind: 'cancelled' } }).success).toBe(false);
+});
 
 it('keeps stopped partial content out of custody and exposes it only in a resolved result', () => {
   const result = { sessionId: 'participant', messageId: 'partial-row' };

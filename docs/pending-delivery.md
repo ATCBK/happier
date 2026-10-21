@@ -139,10 +139,19 @@ and `inline` or `release`; the current source Session delegates to its existing
 reply mutation. It cannot author an outcome or choose another return destination.
 
 Native Run Stop settles the exact admitted turn as cancelled using the host's
-existing terminal fact, even after its native transcript writer retires. Native
-Run stopped-partial publication remains unimplemented: the current server cannot
-prove a native output row's exact turn from its encrypted metadata, so Stop
-continues to publish cancellation without a partial result reference. A crash
+existing terminal fact, even after its native transcript writer retires. The
+host retains the exact committed partial's local id with that native input turn,
+including when a later tool call leaves no final answer. On cancellation it
+resolves that id to the actual committed message reference through the existing
+transcript reader. Its fulfillment mutation carries a content-free native
+binding: Run id, sidechain and committed local id. The current publisher and
+accepted-turn checks remain mandatory; the reply owner checks the binding
+against the original input's Run/sidechain and exact committed row after that
+input. Encrypted metadata is never treated as server-readable proof. Only the
+reference enters reply custody; the authorized reader resolves partial text.
+An unavailable committed reference leaves fulfillment pending, while a turn
+with no committed partial keeps bare cancellation. C3/C4 retain attribution and
+publication ownership. A crash
 between a native terminal transcript commit and the reply-custody callback can
 still leave the ask pending. Current Machine return recovery reads only fulfilled
 original custody and cannot author outcomes; re-asking remains the recovery for

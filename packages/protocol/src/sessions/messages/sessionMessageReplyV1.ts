@@ -121,8 +121,12 @@ export type SessionMessageReplyAccountMutationV1 = z.infer<typeof SessionMessage
 export const SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1 = 'session-message-reply-mutate-v1' as const;
 export const SessionMessageReplyOperationV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('fulfill'), turnId: TurnIdSchema,
+    /** Current host native-turn witness; the Home rechecks the original Run and committed row. */
+    nativeResult: z.optional(z.strictObject({ runId: ParticipantExecutionRunRecipientRoutingIdentityV1Schema.shape.runId,
+      sidechainId: z.string().check(z.minLength(1)), localId: PendingLocalIdSchema })),
     outcome: SessionMessageReplyOutcomeV1Schema.check(z.refine(outcome => outcome.kind !== 'declined',
-      'Declining a private draft requires the present-person review operation')) }),
+      'Declining a private draft requires the present-person review operation')) }).check(
+        z.refine(value => !value.nativeResult || 'result' in value.outcome, 'Native result binding requires a committed result')),
   z.strictObject({ kind: z.literal('inline') }),
   z.strictObject({ kind: z.literal('release') }),
   z.strictObject({ kind: z.literal('returned'), returnedInputLocalId: PendingLocalIdSchema }),

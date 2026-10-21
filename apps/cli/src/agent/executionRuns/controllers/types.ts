@@ -68,7 +68,7 @@ export type ExecutionRunBackendController = {
   /** A child borrowing this retained conversation holds this controller's turn until settlement. */
   delegatedTurn?: Readonly<{ admission: Promise<string | null>; settled: Promise<void> }>;
   /** Native evidence for the current and most recently settled input turn, never a history ledger. */
-  currentInputTurn?: ExecutionRunInputTurnV1 & Readonly<{ committedResultLocalId?: string }>;
+  currentInputTurn?: ExecutionRunInputTurnV1 & Readonly<{ committedResultLocalId?: string; committedPartialResultLocalId?: string }>;
   /** Host-private interaction binding for exactly `currentInputTurn`. */
   currentInputPermissionRequestStore?: Readonly<{
     localInputId: string;
@@ -84,7 +84,7 @@ export type ExecutionRunBackendController = {
   workflowScope?: ExecutionRunManagerStartParams['workflowScope'];
   /** The first provider-emitted resume identity won over any provisional runtime address. */
   providerResumeIdentityObserved?: boolean;
-  lastInputTurn?: ExecutionRunInputTurnV1 & Readonly<{ committedResultLocalId?: string }>;
+  lastInputTurn?: ExecutionRunInputTurnV1 & Readonly<{ committedResultLocalId?: string; committedPartialResultLocalId?: string }>;
   /** Stable exact-result observation occurrence for this controller lifetime. */
   inputTurnOccurrenceId?: string;
   /**

@@ -20,6 +20,7 @@ import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSu
 import type { RegisterExecutionRunOccurrence } from './runOccurrenceWitness';
 import { projectRuntimeTranscriptEvent } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
 import { createKeyedStreamedTranscriptBridge } from '@/api/session/createKeyedStreamedTranscriptBridge';
+import { SessionMessageReplyMutationV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 
 const TEST_BACKEND_ID = `${'test'}.${'agent'}` as never;
 
@@ -46,7 +47,7 @@ type RuntimeEvent = Parameters<NonNullable<ExecutionRunBackendController['backen
  * are boundaries.
  */
 function composeRetainedRun(admissionFailure?: 'rejected' | 'outcomeUnknown', onPublicStateUpdated?: (run: ExecutionRunPublicState) => void,
-    replyTransportUnavailable = false) {
+    replyTransportUnavailable = false, committedResultSidechainId = 'sidechain-1') {
     const admittedParts: { text: string; localId: string }[] = [];
     const replyMutations: unknown[] = [];
     const releasedSourceTurns: unknown[] = [];
@@ -116,10 +117,12 @@ function composeRetainedRun(admissionFailure?: 'rejected' | 'outcomeUnknown', on
                 enqueueAgentMessageCommitted: vi.fn(async () => ({ persisted: true, delivered: true })),
                 readCommittedTranscriptMessageByLocalId: async (localId: string) => {
                     committedResultLookups.push(localId);
-                    return { type: 'found', message: { id: `committed:${localId}`, localId, sidechainId: 'sidechain-1',
+                    return { type: 'found', message: { id: `committed:${localId}`, localId, sidechainId: committedResultSidechainId,
                         seq: 1, createdAt: 1, updatedAt: 1, content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'Committed result' } } } } };
                 },
                 mutateSessionMessageReply: async (input: unknown) => {
+                    SessionMessageReplyMutationV1Schema.parse({ v: 1, sessionId: 'session-1',
+                        ...(typeof input === 'object' && input !== null ? input : {}) });
                     replyMutations.push(input);
                     if (replyTransportUnavailable) throw new Error('reply transport unavailable');
                     return { v: 1, ok: true };
@@ -226,6 +229,7 @@ describe('ExecutionRunHostBridge retained exact input observation', () => {
             expect(committedResultLookups).toEqual(['native-answer']);
             expect(replyMutations).toEqual([{ requestSessionId: 'session-1', requestLocalId: 'original-ask', operation: {
                 kind: 'fulfill', turnId: 'native-turn', outcome: { kind: 'answer', result: { sessionId: 'session-1', messageId: 'committed:native-answer' } },
+                nativeResult: { runId: 'run-1', sidechainId: 'sidechain-1', localId: 'native-answer' },
             } }]);
             expect(releasedSourceTurns).toEqual([{ sourceTurnId: 'native-turn', sourceInputId: 'original-ask' }]);
             expect(internals.runs.get('run-1')?.status).toBe('running');
@@ -250,7 +254,7 @@ describe('ExecutionRunHostBridge retained exact input observation', () => {
             expect(replyMutations).toEqual([{ requestSessionId: 'session-1', requestLocalId: 'streamed-ask', operation: {
                 kind: 'fulfill', turnId: 'streamed-turn', outcome: { kind: 'answer', result: {
                     sessionId: 'session-1', messageId: `committed:${committedResultLookups[0]}`,
-                } },
+                } }, nativeResult: { runId: 'run-1', sidechainId: 'sidechain-1', localId: committedResultLookups[0] },
             } }]);
         } finally { stream.clear(); await attachment.release(); }
     });
@@ -260,7 +264,7 @@ describe('ExecutionRunHostBridge retained exact input observation', () => {
         try {
             await acceptInput('original-ask', 'native-turn');
             const transcript = internals.createSessionOwnedRunScope('run-1')!.projectRunTranscriptSession();
-            await transcript.enqueueAgentMessageCommitted('test.agent', { type: 'message', message: 'Intermediate output' }, {
+            await transcript.enqueueAgentMessageCommitted('test.agent', { type: 'message', message: type === 'turn_cancelled' ? '' : 'Intermediate output' }, {
                 localId: 'intermediate-output', meta: { runtimeTurnId: 'native-turn', runtimeEventKind: 'transcript-message-committed' },
                 provenance: { kind: 'non_dependent', source: 'external' },
             });
@@ -280,6 +284,31 @@ describe('ExecutionRunHostBridge retained exact input observation', () => {
         } finally { await attachment.release(); }
     });
 
+    it.each(['native', 'stop'] as const)('retains the exact committed partial across a later tool call on %s cancellation', async cancellation => {
+        const { manager, internals, attachment, acceptInput, replyMutations, committedResultLookups } = composeRetainedRun();
+        try {
+            await acceptInput('stopped-input', 'stopped-native-turn');
+            const transcript = internals.createSessionOwnedRunScope('run-1')!.projectRunTranscriptSession();
+            await projectRuntimeTranscriptEvent({ session: transcript, provider: 'test.agent', event: {
+                kind: 'transcript-message-committed', sessionId: 'session-1', sequence: 2, emittedAtMs: 2,
+                turnId: 'stopped-native-turn', messageId: 'partial-answer', role: 'assistant', text: 'Work so far',
+            } });
+            await transcript.enqueueAgentMessageCommitted('test.agent', { type: 'tool-call', id: 'tool', callId: 'tool', name: 'Read', input: {} }, {
+                localId: 'tool', meta: { runtimeTurnId: 'stopped-native-turn' }, provenance: { kind: 'non_dependent', source: 'external' },
+            });
+            if (cancellation === 'stop') expect(await manager.stop('run-1')).toMatchObject({ ok: true });
+            else await transcript.enqueueAgentMessageCommitted('test.agent', { type: 'turn_cancelled', id: 'stopped-native-turn' }, {
+                localId: 'cancelled', meta: { runtimeTurnId: 'stopped-native-turn' }, provenance: { kind: 'non_dependent', source: 'external' },
+            });
+            expect(committedResultLookups).toEqual(['partial-answer']);
+            expect(replyMutations).toEqual([{ requestSessionId: 'session-1', requestLocalId: 'stopped-input', operation: {
+                kind: 'fulfill', turnId: 'stopped-native-turn', outcome: { kind: 'cancelled', result: {
+                    sessionId: 'session-1', messageId: 'committed:partial-answer',
+                } }, nativeResult: { runId: 'run-1', sidechainId: 'sidechain-1', localId: 'partial-answer' },
+            } }]);
+        } finally { await attachment.release(); }
+    });
+
     it.each([false, true])('releases the original source native turn when Stop retires its transcript writer (transport unavailable: %s)', async unavailable => {
         const { manager, internals, attachment, acceptInput, replyMutations, releasedSourceTurns } = composeRetainedRun(undefined, undefined, unavailable);
         try {
@@ -290,6 +319,21 @@ describe('ExecutionRunHostBridge retained exact input observation', () => {
             } }]);
             expect(releasedSourceTurns).toEqual([{ sourceTurnId: 'stopped-native-turn', sourceInputId: 'stopped-input' }]);
             expect(internals.runs.get('run-1')?.status).toBe('cancelled');
+        } finally { await attachment.release(); }
+    });
+
+    it('leaves a stopped partial pending when its exact committed lookup returns another sidechain', async () => {
+        const { manager, internals, attachment, acceptInput, replyMutations, committedResultLookups } = composeRetainedRun(undefined, undefined, false, 'other-sidechain');
+        try {
+            await acceptInput('stopped-input', 'stopped-native-turn');
+            const transcript = internals.createSessionOwnedRunScope('run-1')!.projectRunTranscriptSession();
+            await projectRuntimeTranscriptEvent({ session: transcript, provider: 'test.agent', event: {
+                kind: 'transcript-message-committed', sessionId: 'session-1', sequence: 2, emittedAtMs: 2,
+                turnId: 'stopped-native-turn', messageId: 'partial-answer', role: 'assistant', text: 'Work so far',
+            } });
+            expect(await manager.stop('run-1')).toMatchObject({ ok: true });
+            expect(committedResultLookups).toEqual(['partial-answer']);
+            expect(replyMutations).toEqual([]);
         } finally { await attachment.release(); }
     });
 

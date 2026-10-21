@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { SessionMessageReplyProgressV1Schema, deriveSessionMessageReplyReturnLocalIdV1, deriveSessionMessageReplyAnswerLocalIdV1, type SessionMessageReplyAdmissionV1, type SessionMessageReplyMutationV1,
     type SessionMessageReplyMutationResultV1, type SessionMessageReplyOutcomeV1, type SessionMessageReplyProgressV1,
-    type SessionMessageReplyReadResultV1, type SessionMessageReplyPendingPageV1,
+    type SessionMessageReplyReadResultV1, type SessionMessageReplyPendingPageV1, type SessionMessageReplyOperationV1,
     type SessionMessageReplyMachineMutationV1, type SessionMessageReplyMachinePendingPageV1,
     type SessionMessageReplySourceTurnReleaseV1, type SessionMessageReplySourceTurnReleaseResultV1, type SessionMessageReplyAccountMutationV1,
     SessionMessageReplyPendingHintV1Schema, type SessionMessageDiscussionReplyReturnV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
@@ -503,12 +503,19 @@ export async function mutateSessionMessageReplyForAccountInTx(tx: Tx, params: Re
 }
 
 async function isCommittedResultInTx(tx: Tx, original: Original, turnId: string, messageId: string,
-    status: 'completed' | 'cancelled' = 'completed'): Promise<boolean> {
+    status: 'completed' | 'cancelled' = 'completed',
+    nativeResult?: Extract<SessionMessageReplyOperationV1, { kind: 'fulfill' }>['nativeResult']): Promise<boolean> {
+    if (nativeResult && (!original.targetExecutionRunId || !original.sidechainId || original.messageSeq === undefined
+        || original.targetExecutionRunId !== nativeResult.runId || original.sidechainId !== nativeResult.sidechainId)) return false;
     const publication = await loadSessionTranscriptPublication(tx, original.sessionId);
     const result = await tx.sessionMessage.findFirst({ where: buildSessionMessagePublicationWhere({
         where: { id: messageId, sessionId: original.sessionId, sidechainId: original.sidechainId, messageRole: { in: ['agent', 'assistant'] } }, publication,
     }), select: { localId: true, seq: true } });
     if (!result) return false;
+    // The current host owns native turn evidence. Its exact committed-row
+    // witness is admitted only for this original's accepted Run/sidechain;
+    // neither encrypted metadata nor a later row in the parent proves it.
+    if (nativeResult) return result.localId === nativeResult.localId && result.seq > original.messageSeq!;
     if (result.localId === deriveSessionMessageReplyAnswerLocalIdV1({ sessionId: original.sessionId, localId: original.localId, acceptedTurnId: turnId })) return true;
     // Only the ordinary terminal owner can prove a primary final. A Run's
     // encrypted native marker is not readable server evidence for an unrelated row.
@@ -585,7 +592,7 @@ export async function mutateSessionMessageReplyInTx(tx: Tx, params: Readonly<{
             if (outcome.result.sessionId !== mutation.requestSessionId
                 || original.targetExecutionRunId !== null && original.sidechainId === null
                 || !await isCommittedResultInTx(tx, original, operation.turnId, outcome.result.messageId,
-                    outcome.kind === 'cancelled' ? 'cancelled' : 'completed')) return { v: 1, ok: false, error: 'conflict' };
+                    outcome.kind === 'cancelled' ? 'cancelled' : 'completed', operation.nativeResult)) return { v: 1, ok: false, error: 'conflict' };
         } else if (outcome.kind === 'answer') {
             // Native resource publications are fulfilled in their own committed transaction,
             // where that owner proves actor, addressing and access before calling the hook.
