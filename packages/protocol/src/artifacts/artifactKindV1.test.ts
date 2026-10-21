@@ -8,6 +8,9 @@ describe('Artifact coarse kind', () => {
     expect(deriveArtifactCoarseKindV1({ kind: 'prompt_doc.v2' })).toBe('prompt');
     expect(deriveArtifactCoarseKindV1({ kind: 'plugin.ui.archive' })).toBe('plugin_ui');
     expect(deriveArtifactCoarseKindV1({ kind: 'work-board.v1', v: 1, title: 'private' })).toBe('work_board');
+    expect(deriveArtifactCoarseKindV1({ kind: 'widget-area-layout.v1', title: 'private' })).toBe('widget_area_layout');
+    expect(deriveArtifactCoarseKindV1({ kind: 'widget-definition.v1', title: 'private' })).toBe('widget_definition');
+    expect(deriveArtifactCoarseKindV1({ kind: 'widget-layout-fragment.v1', title: 'private' })).toBe('widget_layout_fragment');
     expect(deriveArtifactCoarseKindV1({ kind: 'memory_doc.v1' })).toBe('other');
     expect(deriveArtifactCoarseKindV1({ kind: 'future.unknown' })).toBe('other');
     expect(deriveArtifactCoarseKindV1({})).toBe('other');

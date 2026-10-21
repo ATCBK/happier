@@ -16,6 +16,26 @@ function boundary() {
 }
 
 describe('personal widget areas at the Account Artifact owner', () => {
+    it('pages only layout headers and retains personal presets and named views', async () => {
+        const b = boundary();
+        const presets = [{ id: 'overview', name: 'Overview', items: [] }];
+        const owner = createWidgetAreaLayoutArtifactPortV1(b.dashboardTransport, { surface, presets, isCurrent: () => true });
+        const preset = (await owner.list())[0]!;
+        await owner.rename({ surface: preset.surface, expectedRevision: null, name: 'Mine' });
+        await owner.create({ layoutId: 'notes', name: 'Notes' });
+        const rows = [...b.rows.values()];
+        const cursors: (string | undefined)[] = [];
+        const filtered = createWidgetAreaLayoutArtifactPortV1({ ...b.dashboardTransport, list: async options => {
+            // Persistence boundary refuses an Account-wide read: unrelated keys must never reach the opener.
+            expect(options).toMatchObject({ coarseKind: 'widget_area_layout' });
+            cursors.push(options.cursor);
+            const row = rows[options.cursor ? 1 : 0]!;
+            return { items: [{ artifactId: row.artifactId, header: row.header, ...row.revision,
+                ownerAccountId: 'one', access: 'owner' }], ...(!options.cursor ? { nextCursor: 'second' } : {}) };
+        } }, { surface, presets, isCurrent: () => true });
+        expect((await filtered.list()).map(row => row.name)).toEqual(['Mine', 'Notes']);
+        expect(cursors).toEqual([undefined, 'second']);
+    });
     it('reads personalized preset bodies together so one slow preset does not serialize the inventory', async () => {
         const b = boundary();
         const core: WidgetSurfaceRefV1 = { ...surface, owner: { kind: 'corePage', pageId: 'usage', area: 'main' } };

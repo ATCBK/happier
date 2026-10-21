@@ -422,7 +422,7 @@ export function createWidgetAreaLayoutArtifactPortV1(transport: WidgetAreaLayout
         do {
             check(signal);
             // The existing Artifact page maximum, not a dashboard count limit.
-            const page = await transport.list({ limit: 500, ...(cursor ? { cursor } : {}), signal }); check(signal);
+            const page = await transport.list({ limit: 500, coarseKind: 'widget_area_layout', ...(cursor ? { cursor } : {}), signal }); check(signal);
             await Promise.all(page.items.map(async item => {
                 if (item.ownerAccountId !== scope.accountId || item.access !== 'owner') return;
                 const header = readWidgetSurfaceArtifactHeaderV1(item);

@@ -84,7 +84,7 @@ export function createWidgetLayoutFragmentArtifactPortV1(transport: WidgetDefini
             do {
                 check(signal);
                 // Reuse the existing Artifact page maximum without limiting the saved-group inventory.
-                const page = await transport.list({ limit: 500, ...(cursor ? { cursor } : {}), signal });
+                const page = await transport.list({ limit: 500, coarseKind: 'widget_layout_fragment', ...(cursor ? { cursor } : {}), signal });
                 check(signal);
                 for (const item of page.items) {
                     if (item.ownerAccountId !== options.accountId) continue;

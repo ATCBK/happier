@@ -5,9 +5,23 @@ const skill = { artifactId: 'skill', header: { kind: 'prompt_bundle.v2', bundleS
 const legacy = { ...skill, artifactId: 'legacy', updatedAt: 2 };
 const prompt = { artifactId: 'prompt', header: { kind: 'prompt_doc.v2' }, createdAt: 1, updatedAt: 1 };
 type PageOptions = Readonly<{ cursor?: string; coarseKind?: string }>;
-const encodeCursor = (row: typeof skill | typeof prompt) => row.artifactId;
+const encodeCursor = (row: Readonly<{ artifactId: string }>) => row.artifactId;
 
 describe('Artifact coarse selection', () => {
+  it.each([
+    ['widget_area_layout', 'widget-area-layout.v1'], ['widget_definition', 'widget-definition.v1'],
+    ['widget_layout_fragment', 'widget-layout-fragment.v1'],
+  ] as const)('keeps %s reads filtered when unrelated predecessor rows are unclassified', async (coarseKind, kind) => {
+    const requests: PageOptions[] = [];
+    const layout = { ...skill, artifactId: 'widget', header: { kind } };
+    const page = await listArtifactHeadersV1({ options: { coarseKind }, encodeCursor,
+      readPage: async options => {
+        requests.push(options ?? {});
+        return options?.coarseKind ? { items: [layout], hasUnclassified: true } : { items: [layout, prompt] };
+      } });
+    expect(page.items.map(row => row.artifactId)).toEqual(['widget']);
+    expect(requests).toEqual([{ limit: 500, coarseKind }]);
+  });
   it('reads only filtered pages when classification is complete', async () => {
     const requests: PageOptions[] = [];
     const page = await listArtifactHeadersV1({ options: { coarseKind: 'skill' }, encodeCursor,

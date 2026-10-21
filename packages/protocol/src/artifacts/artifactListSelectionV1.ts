@@ -38,7 +38,12 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
       ...(coarseKind ? { coarseKind } : {}),
       ...(options.includeBody && !params.readBodies ? { includeBody: true } : {}), ...(options.signal ? { signal: options.signal } : {}) });
     options.signal?.throwIfAborted();
-    if (coarseKind && page.hasUnclassified === true) {
+    // Widget families originate in the one-way 0.3 cut: their writers always
+    // classify them. Unclassified predecessor documents cannot be widgets.
+    // Reclassifying pre-cut development rows belongs to the existing inventory
+    // writer, never a widget read that opens every unrelated Account key.
+    const widgetKind = coarseKind === 'widget_area_layout' || coarseKind === 'widget_definition' || coarseKind === 'widget_layout_fragment';
+    if (coarseKind && page.hasUnclassified === true && !widgetKind) {
       // Unknown membership is not an empty library. Restart from the complete
       // inventory; no classifier or backfill at a consumer can prove absence.
       coarseKind = undefined;

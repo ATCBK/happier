@@ -75,7 +75,10 @@ describe('Account widget definition Artifact owner', () => {
         const b = boundary();
         const port = createWidgetDefinitionArtifactPortV1(b.transport, { accountId: 'owner' });
         await port.create(original());
-        const listed = createWidgetDefinitionArtifactPortV1({ ...b.transport, read: async () => {
+        const listed = createWidgetDefinitionArtifactPortV1({ ...b.transport, list: async options => {
+            expect(options).toMatchObject({ coarseKind: 'widget_definition' });
+            return b.transport.list(options);
+        }, read: async () => {
             throw new Error('list_must_not_open_bodies');
         } }, { accountId: 'owner' });
         expect(await listed.list()).toEqual([{ artifactId: 'definition', name: 'Checks', bodyKind: 'declarative',

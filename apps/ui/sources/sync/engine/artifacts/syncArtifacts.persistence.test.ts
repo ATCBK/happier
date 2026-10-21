@@ -97,6 +97,7 @@ describe('device-persisted Artifact inventory through the real writer and store'
         const rows: Artifact[] = [head('known'), { ...head('unclassified'), kind: null },
             { ...head('board'), kind: 'other', header: encodePlainArtifactStoredContent({ kind: 'work-board.v1', title: 'Board' }) },
             { ...head('locked'), kind: null, encryptionMode: 'e2ee', dataEncryptionKey: 'unavailable-key', header: 'ciphertext' }];
+        rows.push({ ...head('layout'), kind: 'other', header: encodePlainArtifactStoredContent({ kind: 'widget-area-layout.v1', title: 'My view' }) });
         const before = rows.map(row => ({ ...row }));
         const writes: unknown[] = [];
         const request = async (path: string, init?: RequestInit) => {
@@ -114,6 +115,7 @@ describe('device-persisted Artifact inventory through the real writer and store'
         await vi.waitFor(() => expect(writes).toEqual(expect.arrayContaining([
             { path: '/v1/artifacts/unclassified', write: { kind: 'prompt', expectedHeaderVersion: 1 } },
             { path: '/v1/artifacts/board', write: { kind: 'work_board', expectedHeaderVersion: 1 } },
+            { path: '/v1/artifacts/layout', write: { kind: 'widget_area_layout', expectedHeaderVersion: 1 } },
         ])));
         expect(first.store.getState().artifacts.locked?.isDecrypted).toBe(false);
         expect(rows.map(({ kind: _kind, ...row }) => row)).toEqual(before.map(({ kind: _kind, ...row }) => row));
@@ -121,7 +123,7 @@ describe('device-persisted Artifact inventory through the real writer and store'
         // already-correct rows nor makes unreadable ciphertext classification guesses.
         const next = await load(request, { scope: { ...scope, serverId: 'fresh-inventory' } });
         await next.completion;
-        expect(writes).toHaveLength(2);
+        expect(writes).toHaveLength(3);
         expect(next.store.getState().artifacts.board?.kind).toBe('work_board');
     });
 

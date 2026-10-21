@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import type { WorkBoardArtifactTransportV1, WorkBoardArtifactV1 } from '../boards/workBoardArtifactV1.js';
+import type { ArtifactCoarseKindV1 } from '../artifacts/artifactKindV1.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
@@ -11,7 +12,7 @@ export const WIDGET_DEFINITION_ARTIFACT_KIND_V1 = 'widget-definition.v1';
 export type WidgetDefinitionArtifactV1 = WorkBoardArtifactV1 & Readonly<{ ownerAccountId: string }>;
 export type WidgetDefinitionArtifactTransportV1 = Pick<WorkBoardArtifactTransportV1, 'create' | 'update' | 'delete'> & Readonly<{
     read(artifactId: string, options?: Readonly<{ signal?: AbortSignal }>): Promise<WidgetDefinitionArtifactV1 | null>;
-    list(options: Readonly<{ limit: number; cursor?: string; signal?: AbortSignal }>): Promise<Readonly<{
+    list(options: Readonly<{ limit: number; cursor?: string; coarseKind?: ArtifactCoarseKindV1; signal?: AbortSignal }>): Promise<Readonly<{
         items: readonly Readonly<{ artifactId: string; ownerAccountId: string; header: Readonly<Record<string, unknown>>; headerVersion: number }>[];
         nextCursor?: string;
     }>>;
@@ -122,7 +123,7 @@ export function createWidgetDefinitionArtifactPortV1(transport: WidgetDefinition
             do {
                 check(signal);
                 // Existing Artifact page maximum: paging does not cap definition inventory.
-                const page = await transport.list({ limit: 500, ...(cursor ? { cursor } : {}), signal });
+                const page = await transport.list({ limit: 500, coarseKind: 'widget_definition', ...(cursor ? { cursor } : {}), signal });
                 check(signal);
                 for (const item of page.items) {
                     const summary = readOwnedSummary(item.artifactId, item.ownerAccountId, item.header);

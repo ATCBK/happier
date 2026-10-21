@@ -8,6 +8,13 @@ const row = { id: 'skill', ownerAccountId: 'account', access: 'owner', encryptio
     dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, seq: 0, createdAt: 1, updatedAt: 1 } as const;
 
 describe('Artifact coarse-kind transport', () => {
+    it.each(['widget_area_layout', 'widget_definition', 'widget_layout_fragment'] as const)('reads only %s headers through the existing filtered endpoint', async coarseKind => {
+        const paths: string[] = [];
+        const page = await fetchArtifactListPage({ token: 't' }, { coarseKind, limit: 500, retry: 'none',
+            request: async path => { paths.push(path); return Response.json({ items: [{ ...row, kind: coarseKind }], hasUnclassified: true }); } });
+        expect(paths).toEqual([`/v1/artifacts?limit=500&kind=${coarseKind}`]);
+        expect(page).toMatchObject({ items: [{ kind: coarseKind }], hasUnclassified: true });
+    });
     it('sends coarse kind for queries, writes and binary uploads', async () => {
         const paths: string[] = [];
         const writes: Record<string, unknown>[] = [];

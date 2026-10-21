@@ -125,7 +125,7 @@ Writes without kind remain accepted by the current Home. Historical rows have nu
 an opaque header edit without kind invalidates its previous classification. New
 writers derive the coarse hint through Protocol's `deriveArtifactCoarseKindV1`.
 The filtered response reports readable unclassified rows, and the shared
-`listArtifactHeadersV1` owner restarts a full scan while any remain. Header
+`listArtifactHeadersV1` owner restarts a full scan for predecessor families while any remain. Header
 decryption, content validation and access remain authoritative. After publishing
 the inventory, `syncArtifacts.ts` best-effort repairs null or stale hints from
 headers it already opened, using the metadata-only write fenced by that header's
@@ -137,7 +137,14 @@ The new nullable column and Account/kind index require an additive migration
 before loading the new server Prisma projection. Migration deployment and shared
 Prisma client generation belong to the environment owner; source validation may
 generate private clients for disposable test databases without changing live
-clients. Full scans remain necessary for inventories with unclassified rows.
+clients. Full scans remain necessary for predecessor inventories with unclassified rows.
+
+Widget layouts, definitions and saved groups have separate coarse kinds and
+originate in 0.3. Their readers remain filtered even when unrelated predecessor
+rows are unclassified. Pre-cut development widgets stored as `other` are repaired
+by the existing opened-header inventory writer before filtered discovery. This
+is an undeployed direct cut, with no legacy-server adapter or schema migration;
+the nullable string column and existing kind index already store these hints.
 
 ## Map the seam
 

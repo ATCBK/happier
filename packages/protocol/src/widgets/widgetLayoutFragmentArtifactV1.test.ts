@@ -23,6 +23,15 @@ function boundary() {
 }
 
 describe('Account widget layout fragment Artifact owner', () => {
+    it('lists saved groups through the filtered Artifact inventory', async () => {
+        const b = boundary();
+        await createWidgetLayoutFragmentArtifactPortV1(b.transport, { accountId: 'owner' }).create(original());
+        const owner = createWidgetLayoutFragmentArtifactPortV1({ ...b.transport, list: async options => {
+            expect(options).toMatchObject({ coarseKind: 'widget_layout_fragment' });
+            return b.transport.list(options);
+        } }, { accountId: 'owner' });
+        expect(await owner.list()).toMatchObject([{ artifactId: 'saved-group', name: 'Project checks' }]);
+    });
     it('refuses publication of copied groups containing private group context, hidden child pins or inline Resource literals', () => {
         const surface = { serverId: 'home', accountId: 'owner', owner: { kind: 'project', projectId: 'project' } } as const;
         const group = instantiateWidgetLayoutFragmentGroupV1(original().group, { groupId: 'group', childIds: ['child'] });
