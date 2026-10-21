@@ -48,7 +48,7 @@ describe('client to daemon RPC reply delivery across Redis adapter nodes', () =>
         return { source, target, targetSocket, method };
     }
 
-    it('delivers binding status and preserves the Home timeout code through the real client codec', async () => {
+    it.each(['Home', 'daemon'] as const)('delivers binding status and preserves the %s timeout code through the real client codec', async origin => {
         const { source, target, targetSocket, method: fixtureMethod } = await fixture(0);
         const machineId = fixtureMethod.slice(0, fixtureMethod.indexOf(':'));
         const rpcMethod = RPC_METHODS.DAEMON_PROVIDERS_BINDING_STATUS;
@@ -59,19 +59,26 @@ describe('client to daemon RPC reply delivery across Redis adapter nodes', () =>
         const pending = new Promise<void>(resolve => { release = resolve; });
         let hold = true;
         const manager = new RpcHandlerManager({ scopePrefix: machineId, encryptionMode: 'plain', logger() {} });
-        manager.registerHandler(rpcMethod, async () => {
-            if (hold) await pending;
+        manager.registerHandler(rpcMethod, async (_input, context) => {
+            if (hold && origin === 'daemon') await new Promise<void>((_resolve, reject) => {
+                if (!context) throw new Error('Missing handler lifetime');
+                if (context.signal.aborted) reject(context.signal.reason);
+                else context.signal.addEventListener('abort', () => reject(context.signal.reason), { once: true });
+            });
+            else if (hold) await pending;
             return { status: 'current' };
         });
         target.on(SOCKET_RPC_EVENTS.REQUEST, async (request: SocketRpcRequestPayload, acknowledge: (value: unknown) => void) => {
-            acknowledge(await manager.handleRequest(request));
+            // Control the daemon deadline independently of the Home ACK clock so
+            // this case proves the inner error survives, without a timer race.
+            acknowledge(await manager.handleRequest(origin === 'daemon' && hold ? { ...request, timeoutMs: 1 } : request));
         });
         const relay = (socket: Socket) => socket.on(SOCKET_RPC_EVENTS.CALL,
             async (request: SocketRpcRequestPayload, acknowledge: (value: unknown) => void) => {
                 // The Home deadline is the controlled transport boundary; the
                 // client stays alive to consume its actual error envelope.
                 acknowledge(await forwardRpcCall({ io: source.io, targetUserId: 'account-one',
-                    method: request.method, callParams: request.params, timeoutMs: hold ? 10 : null, callerSocketId: socket.id }));
+                    method: request.method, callParams: request.params, timeoutMs: hold && origin === 'Home' ? 10 : null, callerSocketId: socket.id }));
             });
         source.io.on('connection', relay);
         const ui = connect(`http://127.0.0.1:${source.port}`, {
@@ -82,7 +89,11 @@ describe('client to daemon RPC reply delivery across Redis adapter nodes', () =>
             method: rpcMethod, params: {}, content: { mode: 'plain' }, timeoutMs: null });
         try {
             await new Promise<void>(resolve => ui.once('connect', resolve));
-            expect(await call().catch((error: unknown) => error)).toMatchObject({ rpcErrorCode: 'MACHINE_RPC_TIMEOUT' });
+            if (origin === 'Home') {
+                expect(await call().catch((error: unknown) => error)).toMatchObject({ rpcErrorCode: 'MACHINE_RPC_TIMEOUT' });
+            } else {
+                await expect(call()).resolves.toEqual({ error: 'RPC request timed out', errorCode: 'MACHINE_RPC_TIMEOUT' });
+            }
             hold = false;
             release();
             await expect(call()).resolves.toEqual({ status: 'current' });

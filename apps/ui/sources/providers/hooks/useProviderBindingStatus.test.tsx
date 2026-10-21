@@ -7,6 +7,7 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { createProviderErrorV1, ProviderConnectionIdSchema } from '@happier-dev/protocol';
+import { MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@happier-dev/protocol/rpcErrors';
 import { presentSessionProviderBinding } from '@/providers/session/presentation';
 
 const describeProviderBindingStatus = vi.hoisted(() => vi.fn());
@@ -60,6 +61,21 @@ describe('useProviderBindingStatus', () => {
             { machineId: 'machine-a', agentTargetKey: selection.ref.agentTargetKey, selection, launchBinding },
             expect.objectContaining({ serverId: 'srv_binding_peer', accountId: 'peer-session', machineId: 'machine-a', method: 'daemon.providers.binding.status' }),
         );
+    });
+
+    it('presents a typed daemon deadline as unanswered and clears it after a successful retry', async () => {
+        describeProviderBindingStatus.mockResolvedValueOnce({
+            error: 'RPC request timed out', errorCode: MACHINE_RPC_TIMEOUT_ERROR_CODE,
+        }).mockResolvedValueOnce({ status: 'current' });
+        const rendered = await renderHook(useBindingPresentation);
+        expect(rendered.getCurrent()).toMatchObject({ loading: false,
+            error: { code: 'agent_timeout', retryable: true, action: 'retry' },
+            banner: { kind: 'status-error', action: 'retry', errorPresentation: {
+                titleKey: 'settingsProviders.errors.machineTimeoutTitle',
+            } },
+        });
+        await act(async () => { await rendered.getCurrent().refresh(); });
+        expect(rendered.getCurrent()).toMatchObject({ status: { status: 'current' }, error: null, banner: null });
     });
 
     it.each([false, true])('retains the typed failure until retry settles (persistent failure: %s)', async persistent => {
