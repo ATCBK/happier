@@ -1060,6 +1060,25 @@ export class ApiClient {
     };
     const request = async (method: 'GET' | 'POST', path: string, body?: unknown, signal?: AbortSignal) => {
       await assertCurrent();
+      if (method === 'POST') {
+        // Observe authority after asynchronous custody/preparation and before
+        // transmitting the revision-fenced proposal. A refusal here is known
+        // to be unsent, so it must not enter unknown-outcome reconciliation.
+        try {
+          const currentMode = options?.request
+            ? await readAccountEncryptionModeOnce({ request: () => options.request!({
+                method: 'GET', path: '/v1/account/encryption', ...(signal ? { signal } : {}),
+              }) })
+            : null;
+          const mode = currentMode
+            ? currentMode.kind === 'resolved' ? currentMode.mode : 'unknown'
+            : await this.getAccountEncryptionMode({ usage: 'fresh-authority', signal });
+          if (mode !== accountMode) throw new MachineContentKeyPreparationErrorV1('machine_unavailable');
+          signal?.throwIfAborted();
+        } catch {
+          throw new MachineContentKeyPreparationErrorV1('machine_unavailable');
+        }
+      }
       const response = options?.request
         ? await options.request({ method, path, ...(body === undefined ? {} : { body }), ...(signal ? { signal } : {}) })
         : method === 'GET'
@@ -1076,6 +1095,7 @@ export class ApiClient {
     };
     options?.signal?.throwIfAborted();
     const boundAccountMode = options?.request ? await readAccountEncryptionModeOnce({
+      usage: 'identity',
       ...(options.serverHttpBaseUrl ? { scope: { token: this.credential.token, serverBaseUrl: options.serverHttpBaseUrl, signal: options.signal } } : {}),
       request: () => request('GET', '/v1/account/encryption', undefined, options.signal),
     }) : null;
@@ -1355,6 +1375,8 @@ export class ApiClient {
         typeof opts.timeoutMs === 'number' && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
           ? Math.floor(opts.timeoutMs)
           : 60_000;
+      const currentMode = await this.getAccountEncryptionMode({ usage: 'fresh-authority', throwOnTransportError: true });
+      if (currentMode !== accountMode) throw new MachineContentKeyUnavailableError(opts.machineId);
       const response = await axios.post(
         machinesUrl,
         {

@@ -1,4 +1,5 @@
 import fastify from 'fastify';
+import axios from 'axios';
 import { expect, it, onTestFinished } from 'vitest';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { acquireRequesterAccountEncryptionCurrentness } from './client/accountEncryptionCurrentnessObservation';
@@ -7,6 +8,7 @@ import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requ
 import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
 import { encodeBase64, encrypt } from './encryption';
 import { ApiClient } from './api';
+import { readHttpStatus } from './client/httpStatusError';
 
 async function fixture(initialMode: 'plain' | 'e2ee' = 'e2ee') {
   const app = fastify();
@@ -45,7 +47,7 @@ async function fixture(initialMode: 'plain' | 'e2ee' = 'e2ee') {
   await holder.read();
   const api = await ApiClient.create({ token, encryption: initialMode === 'plain' ? null : { type: 'legacy', secret } });
   return {
-    api, metadata, channel,
+    api, metadata, channel, serverBaseUrl,
     run: <T>(action: () => T) => runWithServerHttpBaseUrl(serverBaseUrl, action),
     afterMachine(action: () => void) { afterMachine = action; },
     change(change: 'mode' | 'epoch') { if (change === 'mode') mode = initialMode === 'plain' ? 'e2ee' : 'plain'; else revoked = true; },
@@ -59,15 +61,35 @@ it('keeps ordinary Machine opening on the connected observed identity', async ()
   expect(f.counts()).toEqual({ identityReads: 1, modeReads: 0, writes: 0 });
 });
 
+it('keeps final Machine transition authority on the captured request transport', async () => {
+  const f = await fixture();
+  f.afterMachine(() => f.change('mode'));
+  const paths: string[] = [];
+  const result: unknown = await runWithServerHttpBaseUrl('http://unrelated-home.invalid', () => f.api.prepareMachineContentKey('machine', {
+    serverHttpBaseUrl: f.serverBaseUrl,
+    request: async request => {
+      paths.push(`${request.method} ${request.path}`);
+      return axios.request({ method: request.method, url: `${f.serverBaseUrl}${request.path}`, data: request.body,
+        headers: { 'X-Captured-Authority': 'signed' }, signal: request.signal });
+    },
+  })).catch((error: unknown) => error);
+  expect(result).toMatchObject({ code: 'machine_content_key_unavailable' });
+  expect(f.counts()).toEqual({ identityReads: 1, modeReads: 1, writes: 0 });
+  expect(paths).toEqual(['GET /v1/machines/machine', 'GET /v1/account/encryption']);
+});
+
 it.each([
   ['registration', 'plain', 'mode'], ['registration', 'e2ee', 'mode'], ['registration', 'e2ee', 'epoch'],
   ['transition', 'e2ee', 'mode'], ['transition', 'e2ee', 'epoch'],
 ] as const)('freshly refuses Machine %s from %s after committed %s before socket delivery', async (operation, mode, change) => {
   const f = await fixture(mode);
   f.afterMachine(() => f.change(change));
-  await expect(f.run(() => operation === 'registration'
+  const result: unknown = await f.run(() => operation === 'registration'
     ? f.api.getOrCreateMachine({ machineId: 'machine', metadata: f.metadata })
-    : f.api.prepareMachineContentKey('machine'))).rejects.toMatchObject({ code: 'machine_content_key_unavailable' });
+    : f.api.prepareMachineContentKey('machine')).catch((error: unknown) => error);
   expect(f.channel.clients.every(client => client.connected)).toBe(true);
+  expect(f.counts().writes).toBe(0);
+  if (operation === 'registration' && change === 'epoch') expect(readHttpStatus(result)).toBe(401);
+  else expect(result).toMatchObject({ code: 'machine_content_key_unavailable' });
   expect(f.counts()).toEqual({ identityReads: 1, modeReads: 1, writes: 0 });
 });
