@@ -2995,6 +2995,10 @@ purpose and personal target. UI and CLI admission read the selected Machine's
 installed Resource declaration and the existing target resolver; the persisted
 choice remains a preference, not a permission grant. All writes retain the
 ordinary purpose catalog revision check and predecessor-carrier retirement.
+In development source, edits to an active purpose or configuration catalog read
+its admitted row without waiting for retained Settings-history maintenance.
+An absent row still enters the existing catalog initialization path; ordinary
+catalog observation continues to own source and history cleanup.
 
 The development Protocol contract separates personal Account/group labels from a pool's
 definition name: `accounts.rename` and `labels.set/reset` share the presentation-row writer,
