@@ -18,6 +18,7 @@ import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/j
 import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 import { resolveRequiredRecipientContractApprovalDigestV1 } from '@happier-dev/protocol/plugins/recipientContractV1';
 import type { VoiceCredentialSourceSelection } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
+import type { VoiceProviderContribution } from '@happier-dev/protocol/plugins/contributions/voice';
 import {
   resolvePluginProjectionEditableSettingsGroup,
   type PluginProjectionEditableSettingField,
@@ -70,17 +71,20 @@ import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegi
 import {
   parseLocalVoiceSttSettings,
   parseLocalVoiceTtsSettings,
-  resolveLocalVoiceAdapterSettings,
+  resolveLocalVoiceAdapterSettingsFromVoice,
 } from '@/voice/local/localVoiceSettings';
 import {
   isVoiceProviderSettingsProjectionCurrent,
   projectVoiceProviderCredentialReadiness,
   projectVoiceProviderSettings,
+  type VoiceProviderRegistryEntry,
 } from '@/voice/registry/providerRegistry';
 import {
   projectSelectedUnavailableVoiceProvider,
   projectVoiceProviderSelectionRows,
   selectVoiceProviderOption,
+  type VoiceProviderSelectionRow,
+  type SelectedUnavailableVoiceProvider,
 } from '@/voice/registry/providerSelection';
 import {
   isVoiceRoleSelectableForConfiguration,
@@ -90,6 +94,7 @@ import {
   projectHostedModeAvailabilityReadiness,
   resolveVoiceProviderCredentialFact,
   type VoiceRoleReadiness,
+  type VoiceRoleReadinessFacts,
 } from '@/voice/registry/readiness';
 export { resolveVoiceProviderCredentialFact } from '@/voice/registry/readiness';
 import {
@@ -249,6 +254,25 @@ function createVoiceProviderReadinessCheckKey(input: Readonly<{
   });
 }
 
+type VoiceReadinessSelectionRow = {
+  -readonly [K in keyof VoiceProviderSelectionRow]: VoiceProviderSelectionRow[K];
+} & {
+  readiness: VoiceRoleReadiness;
+  selectable: boolean;
+  detail: string | undefined;
+  need: string | undefined;
+  short: string | null;
+  projectedCredential: ReturnType<typeof projectVoiceProviderCredentialReadiness>;
+  projectedCredentialGuidance: string | null;
+  readinessFacts: Required<VoiceRoleReadinessFacts>;
+  sourceSelection: (VoiceCredentialSourceSelection & Readonly<{
+    connectedAccountEligibility: VoiceConnectedAccountTargetEligibility;
+  }>) | null;
+  credentialSourceKind: VoiceProviderCredentialSourceKind | null;
+};
+
+type ConversationDeclaration = Extract<VoiceProviderContribution, { kind: 'conversation' }>;
+
 /** Read-only projection until a returned user operation is invoked; the gallery and hub share it. */
 export function useVoiceConversationsReadinessModel(props: {
   voice: VoiceSettings;
@@ -262,7 +286,48 @@ export function useVoiceConversationsReadinessModel(props: {
   executionMachineSelectionKind?: 'resolved' | 'selected_unreachable' | 'none';
   popoverBoundaryRef?: React.RefObject<any> | null;
   onRecoveryAction?: (action: VoiceRoleReadiness['recoveryAction']) => void;
-}) {
+}): {
+  serviceTiles: VoiceServiceTile[];
+  isOff: boolean;
+  select: (next: VoiceSettings) => void;
+  selectService: (providerId: string) => void;
+  voice: VoiceSettings;
+  visibleRows: VoiceReadinessSelectionRow[];
+  selectedServiceBillingRows: VoiceReadinessSelectionRow[];
+  selectedProviderReadiness: VoiceRoleReadiness | null;
+  isCheckingPassiveSetup: boolean;
+  checkProviderReadiness: () => void;
+  showCheckedReadiness: boolean;
+  checkedReadinessRecoveryHandler: ((action: VoiceRoleReadiness['recoveryAction']) => void) | null;
+  checkedProviderResult: CheckedVoiceProviderReadinessResult | null;
+  checkedReadinessRecoveryAction: VoiceRoleReadiness['recoveryAction'];
+  checkedReadinessRevision: React.RefObject<number>;
+  checkedReadiness: CheckedVoiceProviderReadinessState | null;
+  selectedExternalRow: VoiceReadinessSelectionRow | undefined;
+  selectedExternalDeclaration: ConversationDeclaration | null;
+  selectedExternalCredentials: NonNullable<ConversationDeclaration['credentials']> | null;
+  selectedExternalContribution: Readonly<{ pluginId: string; localId: string }> | null;
+  selectedExternalHasSavedSecret: boolean;
+  selectedExternalHasConnectedAccount: boolean;
+  selectedExternalCredentialAccessIsRaw: boolean;
+  selectedExternalRawReviewGrants: ReturnType<typeof resolveSelectedVoiceCredentialRawGrants>[number][];
+  selectedExternalCredentialSlot: VoiceProviderRegistryEntry['accountCredentialSlot'];
+  selectedExternalConnectedRawReviewEligible: boolean;
+  selectedDeclarativeSettings: VoiceProviderRegistryEntry['providerSettings'];
+  selectedDeclarativeSettingsSource: Exclude<VoiceProviderRegistryEntry['source'], { kind: 'built_in' }> | null;
+  declarativeSettingsGroup: ResolvedPluginProjectionEditableSettingsGroup | null;
+  selectedDeclarativeConfig: Readonly<Record<string, unknown>> | null;
+  selectedDeclarativeSettingsRow: VoiceReadinessSelectionRow | undefined;
+  localizePluginText: ReturnType<typeof useProjectedPluginLocalizedTextResolver>;
+  writeExternalSetting: (fieldId: string, value: unknown) => void;
+  selectedProviderRow: VoiceReadinessSelectionRow | null;
+  selectedUnavailableProvider: SelectedUnavailableVoiceProvider | null;
+  localAdapterSettings: ReturnType<typeof resolveLocalVoiceAdapterSettingsFromVoice>;
+  selectedSpeechProviderIds: string[];
+  selectedReadinessCheckKey: string | null;
+  selectedLocalThinkReadiness: ReturnType<typeof projectLocalConversationReadinessFacts>['thinkReadiness'];
+  selectedLocalSpeechReadiness: ReturnType<typeof projectLocalConversationReadinessFacts>['speechReadiness'] | null;
+} {
   React.useSyncExternalStore(
     registry.subscribe ?? (() => () => {}),
     registry.getRevision ?? (() => 0),
@@ -302,8 +367,9 @@ export function useVoiceConversationsReadinessModel(props: {
   const executionMachineSelectedId = props.executionMachineSelectedId
     ?? props.executionMachineId
     ?? null;
-  const localAdapterSettings = resolveLocalVoiceAdapterSettings({ voice });
-  const configuredAgent = localAdapterSettings.config.conversationMode === 'agent'
+  const localAdapterSettings = resolveLocalVoiceAdapterSettingsFromVoice(voice);
+  const configuredAgent = localAdapterSettings.adapterId === 'local_conversation'
+    && localAdapterSettings.config.conversationMode === 'agent'
     && localAdapterSettings.config.agent.agentSource === 'agent'
     ? localAdapterSettings.config.agent : null;
   const readAgentCatalog = React.useCallback(() => getAcpCatalogSnapshot(settingsScope), [settingsScope]);

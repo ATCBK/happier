@@ -87,7 +87,8 @@ describe('Connected metadata raw read ownership', () => {
         let secondRead: Promise<unknown> | undefined;
         try {
             await Promise.all([first.resolveAccountEncryption(), second.resolveAccountEncryption()]);
-            firstRead = readConnectedMetadataCatalogInContext(first, abort.signal, undefined, false).catch(error => error);
+            // No per-call signal: the Action invocation still owns this borrower's cancellation.
+            firstRead = readConnectedMetadataCatalogInContext(first, undefined, undefined, false).catch(error => error);
             secondRead = readConnectedMetadataCatalogInContext(second, undefined, undefined, false);
             await vi.waitFor(() => expect(home.requestsFor(CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1).length).toBeGreaterThan(0));
             await flushHookEffects();
@@ -103,6 +104,36 @@ describe('Connected metadata raw read ownership', () => {
             held.resolve();
             await Promise.allSettled([firstRead, secondRead]);
             first.dispose(); second.dispose(); await home.reset();
+        }
+    });
+
+    it('retires a held raw transport on Account replacement without an explicit read signal', async () => {
+        const home = createHomeGovernanceHarness();
+        installHomeGovernanceBoundaries(home);
+        setRuntimeFetch(home.request);
+        const serverId = await home.addHome({ name: 'Metadata retirement', serverUrl: 'https://metadata-read-retirement.test',
+            accountId: 'metadata-original', currentAccount: true });
+        const held = createDeferred<void>();
+        const signals: (AbortSignal | null | undefined)[] = [];
+        for (const route of [CONNECTED_PRESENTATION_ROWS_ROUTE_V1, CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1]) {
+            home.answer(serverId, `GET ${route}`, { select: (_input, request) => {
+                signals.push(request.signal);
+                return { respondAfter: held.promise, body: { status: 'deleted', revision: 3 } };
+            } });
+        }
+        const { captureLazyActionAccountContext } = await import('./actionAccountContext');
+        const { readConnectedMetadataCatalogInContext } = await import('@/sync/api/account/apiConnectedMetadataCatalog');
+        const account = await captureLazyActionAccountContext(serverId);
+        let reading: Promise<unknown> | undefined;
+        try {
+            reading = readConnectedMetadataCatalogInContext(account, undefined, undefined, false).catch(error => error);
+            await vi.waitFor(() => expect(signals).toHaveLength(2));
+            await home.switchAccount(serverId, 'metadata-replacement');
+            await vi.waitFor(() => expect(signals.every(signal => signal?.aborted)).toBe(true));
+            // The server has not answered; settlement must come from retirement.
+            await expect(reading).resolves.toBeInstanceOf(Error);
+        } finally {
+            held.resolve(); await Promise.allSettled([reading]); account.dispose(); await home.reset();
         }
     });
 

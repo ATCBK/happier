@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildProviderAccountUsageRecordId, type ProviderAccountUsageSnapshotV1 } from './providerAccountUsagePrimitives.js';
-import { deriveProviderAccountUsageEarlierWindowCurves, deriveProviderAccountUsagePace, readProviderAccountUsageWindowComparabilityReason } from './deriveProviderAccountUsagePace.js';
+import { deriveProviderAccountUsageEarlierWindowCurves, deriveProviderAccountUsagePace, deriveProviderAccountUsageUnusedCapacity,
+  getProviderAccountUsageDerivationInterval, hasProviderAccountUsageWitnessedReset, readProviderAccountUsageWindowComparabilityReason } from './deriveProviderAccountUsagePace.js';
 
 function snapshot(at = 250): ProviderAccountUsageSnapshotV1 {
   const recordKey = { providerId: 'test', accountSubjectId: 'account', subjectKind: 'account' as const, quotaScope: 'account' as const };
@@ -8,6 +9,49 @@ function snapshot(at = 250): ProviderAccountUsageSnapshotV1 {
 }
 
 describe('accepted provider usage pace', () => {
+  it('rejects ordinary same-window observations before deriving pace or comparing entitlement', () => {
+    let entitlementReads = 0;
+    const observations = Array.from({ length: 100 }, (_, index) => {
+      const value = snapshot(index + 1);
+      // Transparent input instrumentation, not a mock of the pace/reset owner.
+      Object.defineProperty(value, 'planLabel', { get() { entitlementReads++; return null; } });
+      return value;
+    });
+    for (let index = 1; index < observations.length; index++) {
+      expect(hasProviderAccountUsageWitnessedReset({ previous: observations[index - 1]!, current: observations[index]!,
+        meterId: 'weekly', nowMs: index + 1 })).toBe(false);
+    }
+    expect(entitlementReads).toBe(0);
+    const previous = snapshot(900);
+    const current = snapshot(1000);
+    current.meters[0]!.resetsAt = 2000;
+    current.meters[0]!.used = 0;
+    expect(hasProviderAccountUsageWitnessedReset({ previous, current, meterId: 'weekly', nowMs: 1000 })).toBe(true);
+    current.planLabel = 'replaced entitlement';
+    expect(hasProviderAccountUsageWitnessedReset({ previous, current, meterId: 'weekly', nowMs: 1000 })).toBe(false);
+  });
+
+  it('bounds derivation reuse by observed freshness and every ended historical window, including retired meters', () => {
+    const current = snapshot();
+    const earlier = snapshot(200);
+    Object.assign(earlier.meters[0]!, { meterId: 'retired', resetsAt: 600, windowDurationMs: 600 });
+    const history = [earlier];
+    expect(getProviderAccountUsageDerivationInterval({ current, history, nowMs: 300 })).toEqual({ fromMs: 250, untilMs: 600 });
+    const at = (nowMs: number) => ({ pace: deriveProviderAccountUsagePace({ snapshot: current, meterId: 'weekly', history, nowMs }),
+      unused: deriveProviderAccountUsageUnusedCapacity({ history, nowMs }) });
+    expect(at(599.9)).toEqual(at(300));
+    expect(at(600).unused.windows).toHaveLength(1);
+    expect(getProviderAccountUsageDerivationInterval({ current, history, nowMs: 600 })).toEqual({ fromMs: 600, untilMs: 1000 });
+    expect(at(1000).pace).toEqual({ status: 'unavailable', reason: 'outside_window' });
+    expect(getProviderAccountUsageDerivationInterval({ current, history, nowMs: 1000 })).toEqual({ fromMs: 1000, untilMs: 1250 });
+    expect(at(1250).pace).toEqual({ status: 'unavailable', reason: 'stale' });
+    expect(getProviderAccountUsageDerivationInterval({ current, history, nowMs: 1250 })).toEqual({ fromMs: 1250, untilMs: Infinity });
+    expect(getProviderAccountUsageDerivationInterval({ current, history, nowMs: 200 })).toEqual({ fromMs: 0, untilMs: 250 });
+    expect(at(200).pace).toEqual({ status: 'unavailable', reason: 'stale' });
+    expect(getProviderAccountUsageDerivationInterval({ current: null, history, nowMs: 300 })).toEqual({ fromMs: 0, untilMs: 600 });
+    for (const nowMs of [-1, NaN, Infinity]) expect(getProviderAccountUsageDerivationInterval({ current, history, nowMs })).toBeNull();
+  });
+
   it('publishes the qualified observed curve and witnessed linear depletion through the pace owner', () => {
     const previous = snapshot(100); previous.meters[0]!.used = 10;
     const future = snapshot(300); future.meters[0]!.used = 70;
