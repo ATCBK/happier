@@ -731,6 +731,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
   projectDefinitionAction?: ActionExecutorDeps['projectDefinitionAction'];
   filesystemActionExecute?: ActionExecutorDeps['filesystemActionExecute'];
   workspaceFilesReplace?: ActionExecutorDeps['workspaceFilesReplace'];
+  workspaceFilesReplacePreview?: ActionExecutorDeps['workspaceFilesReplacePreview'];
   languageIntelligenceApply?: ActionExecutorDeps['languageIntelligenceApply'];
   skillMachineActionExecute?: ActionExecutorDeps['skillMachineActionExecute'];
   workflowAcceptedAuthorizationCurrentness?: Parameters<typeof createCliActionExecutor>[0]['workflowAcceptedAuthorizationCurrentness'];
@@ -1017,6 +1018,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       ...(params.projectDefinitionAction ? { projectDefinitionAction: params.projectDefinitionAction } : {}),
       ...(params.filesystemActionExecute ? { filesystemActionExecute: params.filesystemActionExecute } : {}),
       ...(params.workspaceFilesReplace ? { workspaceFilesReplace: params.workspaceFilesReplace } : {}),
+      ...(params.workspaceFilesReplacePreview ? { workspaceFilesReplacePreview: params.workspaceFilesReplacePreview } : {}),
       ...(params.languageIntelligenceApply ? { languageIntelligenceApply: params.languageIntelligenceApply } : {}),
       ...(params.skillMachineActionExecute ? { skillMachineActionExecute: params.skillMachineActionExecute } : {}),
       serverId: approvalServerId,

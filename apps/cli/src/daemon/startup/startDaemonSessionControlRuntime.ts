@@ -15711,6 +15711,7 @@ export async function startDaemonSessionControlRuntime(
                   params.serverId,
                 ),
               workspaceFilesReplace: apiMachineForSessions.createWorkspaceFileReplaceActionExecutor(params.serverId),
+              workspaceFilesReplacePreview: apiMachineForSessions.createWorkspaceFileReplacePreviewActionExecutor(params.serverId),
               languageIntelligenceApply: apiMachineForSessions.createLanguageIntelligenceApplyActionExecutor(params.serverId),
               skillMachineActionExecute: apiMachineForSessions.createMachineSkillActionExecutor({ credentials,
                 ...(requesterAccountContext ? { operationContext: requesterAccountContext.savedSecretOperationContext } : {}) }),

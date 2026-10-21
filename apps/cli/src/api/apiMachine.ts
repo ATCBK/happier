@@ -96,7 +96,7 @@ import { resolveWorkspaceSyncTransportAddress } from '@happier-dev/protocol/work
 import { readWorkspaceSyncChildMachineFacts } from '@/workspaces/sync/workspaceSyncTargetAuthority';
 import type { WorkspaceSyncTargetPhaseDescriptor } from '@/workspaces/sync/workspaceSyncTargetAuthority';
 import { registerSessionHandlers } from '@/rpc/handlers/registerSessionHandlers';
-import { applyWorkspaceFileReplace } from '@/rpc/handlers/workspaceFileReplace';
+import { applyWorkspaceFileReplace, previewWorkspaceFileReplace } from '@/rpc/handlers/workspaceFileReplace';
 import { registerLanguageIntelligenceHandlers } from '@/rpc/handlers/languageIntelligence';
 import { authorizeFilesystemPath } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemPathAuthorization';
 import { registerAutomationReplyHandoffRpcHandler } from '@/rpc/handlers/automationReplyHandoff';
@@ -1954,6 +1954,20 @@ export class ApiMachineClient {
                     : { setupReadiness: { kind: 'unknown' as const, code: 'project_setup_requester_review_unavailable' } };
             } } : {}),
         });
+    }
+
+    /** Preview reads locally after admission rather than re-entering its registered RPC. */
+    createWorkspaceFileReplacePreviewActionExecutor(serverId: string): NonNullable<ActionExecutorDeps['workspaceFilesReplacePreview']> {
+        return async ({ machineId, ...request }, context) => {
+            const target = context.externalActionTarget;
+            if (!this.externalActionIngressOwner || this.projectionSchedulingClosed
+                || context.serverId !== serverId || machineId !== this.machine.id
+                || target?.kind !== 'machine' || target.machineId !== machineId) {
+                return { ok: false, errorCode: 'target_unavailable', error: 'Workspace replacement target is unavailable' };
+            }
+            return previewWorkspaceFileReplace(request, this.machineRpcWorkingDirectory, this.filesystemAccessPolicy,
+                context.signal ? { signal: context.signal } : undefined);
+        };
     }
 
     /** Replacement and Undo share this native effect after canonical Action admission. */

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import * as filesystem from 'node:fs/promises';
 import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createActionExecutor } from '@happier-dev/protocol';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
@@ -12,6 +12,7 @@ import { buildWorkspaceFileRestoreOperation } from '@happier-dev/protocol/machin
 import { DaemonWorkspaceFileReplacePreviewResponseSchema, DaemonWorkspaceFileReplaceApplyResponseSchema, WORKSPACE_FILE_SEARCH_MAX_RESPONSE_UTF8_BYTES } from '@happier-dev/protocol/machines/workspaceFiles';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import type { RpcHandler } from '@/api/rpc/types';
+import type { RpcActionExecutor } from './_actionDispatchAdapter';
 import { applyWorkspaceFileReplace, previewWorkspaceFileReplace, registerWorkspaceFileReplaceHandlers } from './workspaceFileReplace';
 import { registerSessionHandlers } from './registerSessionHandlers';
 import { ApiMachineClient } from '@/api/apiMachine';
@@ -75,13 +76,20 @@ describe('registered workspace replace transport', () => {
       approvalsWaitForDecision: async ({ request }) => ({ decision: 'reject', request }),
       isActionApprovalRequired: (id, context, input) => isApprovalRequiredByActionsSettings(id, settings, context, undefined, undefined, input),
     });
+    // As in production, the receiving credential factory binds the Home; Action input does not.
+    const receivingExecutor: RpcActionExecutor = {
+      execute: (id, input, context) => executor.execute(id, input, { ...context, serverId: 'home' }),
+    };
     handlers.clear();
     dispose = registerSessionHandlers({ registerHandler: (id, handler) => { handlers.set(id, handler); } }, root, {
-      workspaceFileReplaceActionExecutor: executor, workspaceFileReplaceMachineId: 'machine',
+      workspaceFileReplaceActionExecutor: receivingExecutor, workspaceFileReplaceMachineId: 'machine',
     }).dispose;
     const outcome = await handlers.get(RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW)!({ rootPath: root, ...matcher }, {
-      signal: new AbortController().signal, localActionContext: { surface, authority: surface === 'ui' ? 'present_user' : 'account_automation',
-        serverId: 'home', runtimeAccountId: 'account', actionRequestId: 'preview-request' },
+      signal: new AbortController().signal,
+      machineAdmission: { actorAccountId: 'account', custodianAccountId: 'account', machineId: 'machine',
+        installationId: 'installation', role: 'manage', encryptionMode: 'plain' },
+      verifyMachineAdmissionCurrent: async () => true,
+      localActionContext: { surface, authority: surface === 'ui' ? 'present_user' : 'account_automation', actionRequestId: 'preview-request' },
     });
     expect(outcome).toMatchObject(surface === 'ui'
       ? { kind: 'approval_request_created', actionId: 'workspace.files.replace.preview', artifactId: 'preview-approval' }
@@ -190,7 +198,9 @@ describe('registered workspace replace transport', () => {
     // operation owner cancels between files and retains the resulting inverse.
     vi.mocked(filesystem.writeFile).mockImplementation(async (path, data, options) => {
       await write(path, data, options);
-      if (!cancellation) cancellation = await runtime.handlers.cancel({ operationId: 'replace-operation' });
+      // ApiMachine also publishes metadata outside this workspace; only a staged file write is the cancellation boundary.
+      if (!cancellation && typeof path === 'string' && dirname(path) === root)
+        cancellation = await runtime.handlers.cancel({ operationId: 'replace-operation' });
     });
     try {
       expect(await executor.execute('workspace.files.replace.preview', { machineId: 'machine', rootPath: root, ...matcher },

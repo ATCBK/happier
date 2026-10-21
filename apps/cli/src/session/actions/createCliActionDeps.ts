@@ -6995,7 +6995,8 @@ export function createCliActionDeps(params: Readonly<{
     workspaceFilesReplacePreview: async ({ machineId, ...request }, context) => {
       if (!params.credentials && params.machineActionDirectTargetTransport?.machineId !== machineId) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       const invoke = async () => DaemonWorkspaceFileReplacePreviewResponseSchema.parse(await callMachineAction({
-        machineId, serverId: context.serverId ?? undefined, method: RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW, request,
+        machineId, serverId: context.serverId ?? undefined, method: RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW,
+        request: { machineId, ...request }, context, effectActionId: 'workspace.files.replace.preview',
         ...(context.signal ? { signal: context.signal } : {}),
       }));
       return await (params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, invoke) : invoke());

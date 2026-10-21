@@ -8372,8 +8372,8 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     title: 'Preview replacement in workspace files',
     description: 'Review matching text and raw file hashes before applying a single-line replacement. Continue with the returned cursor when hasMore is true.',
     sideEffectClass: 'read', safety: 'safe', placements: [],
-    bindings: { mcpToolName: 'workspace_files_replace_preview' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    bindings: { mcpToolName: 'workspace_files_replace_preview', rpcMethod: RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: true },
     inputSchema: WorkspaceFilesReplacePreviewActionInputSchema,
     outputSchema: DaemonWorkspaceFileReplacePreviewResponseSchema,
     inputHints: { fields: [

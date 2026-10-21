@@ -4,6 +4,7 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 import { ActionOperationSnapshotV1Schema, ACTION_OPERATION_RPC_METHODS_V1, ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
 import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { DaemonWorkspaceFileReplacePreviewRequestSchema } from '@happier-dev/protocol/machines/workspaceFiles';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { subscribeAcknowledgedWorkspaceFileWrites } from '@/sync/domains/workspaces/files/workspaceFileAcknowledgements';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
@@ -84,6 +85,8 @@ describe('workspace replace admitted Account carrier', () => {
         expect(await machineWorkspaceFileReplacePreview('machine', previewInput, { serverId, accountId: 'alice' })).toEqual(previewReceipt);
         expect(homes.artifacts(serverId).list()).toHaveLength(0);
         expect(rpc.call).toHaveBeenCalledTimes(1);
+        expect(DaemonWorkspaceFileReplacePreviewRequestSchema.safeParse(rpc.call.mock.lastCall?.[0]?.payload).success).toBe(true);
+        expect(rpc.call.mock.lastCall?.[0]?.payload).toEqual(previewInput);
     });
 
     it('honors an explicit UI Ask override before replacement preview reads the Machine', async () => {
