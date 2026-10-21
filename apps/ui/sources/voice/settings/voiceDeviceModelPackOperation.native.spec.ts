@@ -88,7 +88,7 @@ describe('native device model operations through the real installer', () => {
             await act(async () => { await hook.getCurrent().prepareModel(); });
             expect(hook.getCurrent().modelStatus).toBe('error');
             const reason = t('settingsVoice.local.modelPackDownload.insufficientStorage', {
-                required: formatHappierDataBytes(1), available: formatHappierDataBytes(0),
+                required: formatHappierDataBytes(1, { kind: 'storage' }), available: formatHappierDataBytes(0, { kind: 'storage' }),
             });
             expect(nativeDialogs.alert.mock.calls.some(call => String(call[1]).includes(reason))).toBe(true);
             expect(filesystem.files.has(modelUri())).toBe(false);

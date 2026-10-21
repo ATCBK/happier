@@ -19,8 +19,8 @@ export type ModelPackRowStatus = 'idle' | 'downloading' | 'ready' | 'error';
 export function describeModelPackInstallError(error: unknown): string {
     if (error instanceof ModelPackInsufficientDiskSpaceError) {
         return t('settingsVoice.local.modelPackDownload.insufficientStorage', {
-            required: formatHappierDataBytes(error.requiredBytes),
-            available: formatHappierDataBytes(error.availableBytes),
+            required: formatHappierDataBytes(error.requiredBytes, { kind: 'storage' }),
+            available: formatHappierDataBytes(error.availableBytes, { kind: 'storage' }),
         });
     }
     return error instanceof Error ? error.message : String(error);

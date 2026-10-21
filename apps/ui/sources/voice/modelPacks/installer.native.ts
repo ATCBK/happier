@@ -8,6 +8,7 @@ import { forgetSpeakerCountForAssetsDir } from '@/voice/kokoro/runtime/kokoroSpe
 import { getFetch, getFs } from './installer/fs.native';
 import {
   createExpoModelPackInstallerHost,
+  excludeDirectoryFromBackup,
   getExpoModelPackPartialBytes,
   reconcileExpoModelPackPromotion,
   removeExpoModelPackWithHost,
@@ -116,10 +117,16 @@ export async function ensureModelPackInstalled(
 
 /** A settings observer can reconnect to the installer-owned work after its previous screen unmounted. */
 export async function findRunningModelPackInstall(
-  opts: { packId: string },
+  opts: { packId: string; kind?: ModelPackKind },
   overrides: InstallerOverrides = {},
-) {
-  return findRunningExpoModelPackInstall(await getFs(overrides), normalizePackId(opts.packId));
+): Promise<ReturnType<typeof findRunningExpoModelPackInstall>> {
+  const packId = normalizePackId(opts.packId);
+  const running = findRunningExpoModelPackInstall(await getFs(overrides), packId);
+  return running ? { follow: async (observer: Parameters<typeof running.follow>[0]) => {
+    const result = await running.follow(observer);
+    assertManifestFor(result.manifest, packId, opts.kind);
+    return result;
+  } } : null;
 }
 
 async function installPackWithLease(
@@ -150,6 +157,7 @@ async function installPackWithLease(
     const installedManifest = await readInstalledManifest(meta);
     if (installedManifest) {
       assertManifestFor(installedManifest, id, opts.kind);
+      await excludeDirectoryFromBackup(rootDir.uri, getExcludeFromBackup(overrides));
       if (opts.updatePolicy !== 'manual_update_if_available') {
         return { packDirUri: rootDir.uri, manifest: installedManifest };
       }

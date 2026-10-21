@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   checkModelPackUpdateAvailable,
@@ -147,7 +147,7 @@ describe('modelPacks installer (native) atomicity', () => {
     ))).toEqual([]);
   });
 
-  it('does not race removal against an active install for the same pack', async () => {
+  it('cancels an active install and waits for native transfer termination before removing the pack', async () => {
     const { fs, files } = createMemFs();
     const packId = 'remove-race';
     const bytes = new Uint8Array([3, 1, 4, 1]);
@@ -162,27 +162,18 @@ describe('modelPacks installer (native) atomicity', () => {
     const downloadPaused = new Promise<void>((resolve) => { releaseDownload = resolve; });
     let markDownloadStarted!: () => void;
     const downloadStarted = new Promise<void>((resolve) => { markDownloadStarted = resolve; });
-    let delivered = false;
-    const fetchImpl = async (url: string) => {
-      if (url.includes('manifest.json')) {
-        return { ok: true, status: 200, json: async () => manifest } as any;
-      }
-      return {
-        ok: true,
-        status: 200,
-        headers: { get: () => String(bytes.length) },
-        body: {
-          getReader: () => ({
-            read: async () => {
-              if (delivered) return { done: true, value: undefined };
-              delivered = true;
-              markDownloadStarted();
-              await downloadPaused;
-              return { done: false, value: bytes };
-            },
-          }),
+    let transferSignal: AbortSignal | null = null;
+    const fetchImpl: typeof fetch = async (url, init) => {
+      if (String(url).includes('manifest.json')) return Response.json(manifest);
+      transferSignal = init?.signal ?? null;
+      return new Response(new ReadableStream<Uint8Array>({
+        async start(controller) {
+          markDownloadStarted();
+          await downloadPaused;
+          controller.enqueue(bytes);
+          controller.close();
         },
-      } as any;
+      }));
     };
     const install = ensureModelPackInstalled({
       packId,
@@ -191,16 +182,17 @@ describe('modelPacks installer (native) atomicity', () => {
       manifestUrl: 'https://example.com/manifest.json',
       timeoutMs: 5000,
       signal: new AbortController().signal,
-    }, { download: createMemNativeDownload(fs, fetchImpl as any), fs, fetch: fetchImpl as any });
+    }, { download: createMemNativeDownload(fs, fetchImpl), fs, fetch: fetchImpl });
+    const installOutcome = install.catch((error: unknown) => error);
     await downloadStarted;
 
-    await expect(removeModelPack({ packId }, { fs }))
-      .rejects.toThrow('model_pack_install_already_in_progress');
+    let removalSettled = false;
+    const removal = removeModelPack({ packId }, { fs }).then(() => { removalSettled = true; });
+    await vi.waitFor(() => expect((transferSignal as AbortSignal | null)?.aborted).toBe(true));
+    expect(removalSettled).toBe(false);
     releaseDownload();
-    await install;
-    expect(sha256Hex(files.get(`file:///docs/happier/voice/modelPacks/${packId}/model.onnx`)!)).toBe(sha256Hex(bytes));
-
-    await removeModelPack({ packId }, { fs });
+    await removal;
+    expect(await installOutcome).toMatchObject({ message: 'aborted' });
     expect(files.has(`file:///docs/happier/voice/modelPacks/${packId}/model.onnx`)).toBe(false);
   });
 

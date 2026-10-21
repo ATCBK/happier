@@ -4,14 +4,16 @@ import { Modal } from '@/modal';
 import { t } from '@/text';
 import type { ModelPackRowStatus } from '@/voice/settings/panels/modelPack/modelPackTransferRows';
 import { isModelPackCancellation } from '@/voice/modelPacks/installer/network';
-import { getModelPackInstallSummary } from '@/voice/modelPacks/installer.native';
+import { findRunningModelPackInstall, getModelPackInstallSummary } from '@/voice/modelPacks/installer.native';
 import { invokeVoiceDeviceModelPackOperation } from '@/voice/settings/voiceDeviceModelPackOperation.native';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { describeModelPackInstallError } from '@/voice/settings/panels/modelPack/modelPackTransferRows';
 import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
 import { createVoiceModelCancellationCommand } from '@/voice/settings/voiceModelCancellation';
 import { useCurrentUiContextMountedCommand } from '@/components/appShell/currentUiContext/CurrentUiContextCommands';
 
 type ModelStatus = ModelPackRowStatus;
+type RunningInstall = NonNullable<Awaited<ReturnType<typeof findRunningModelPackInstall>>>;
 
 /** Native STT and TTS share settings state; consent and installer admission live in the operation owner. */
 export function useLocalNeuralModelPackState(params: {
@@ -66,23 +68,20 @@ export function useLocalNeuralModelPackState(params: {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      prepareAbortRef.current?.abort();
+      const controller = prepareAbortRef.current;
+      if (!controller) return;
+      // The installer owns admitted downloads. Pending consent or runtime-only preparation still
+      // belongs to this view; account retirement and a changed committed selection always cancel.
+      void findRunningModelPackInstall({ packId: selectionRef.current.packId }).then((running) => {
+        if (!running) controller.abort();
+      }).catch((error: unknown) => {
+        console.warn('[modelPacks] Failed to detach native model pack view', error);
+        controller.abort();
+      });
     };
   }, []);
 
-  React.useEffect(() => {
-    prepareAbortRef.current?.abort();
-    prepareAbortRef.current = null;
-    setCancellationCommand(null);
-    setModelStatus('idle');
-    setDownloadProgress(null);
-    setInstalled(false);
-    setInstallSummary(null);
-    setUpdateCheckedRemote(null);
-    void refreshInstallState();
-  }, [refreshInstallState]);
-
-  const runOperation = React.useCallback(async (operation: 'prepare' | 'remove' | 'update') => {
+  const runOperation = React.useCallback(async (operation: 'prepare' | 'remove' | 'update', following?: RunningInstall) => {
     if (!isCurrent() || prepareAbortRef.current) return;
     const controller = new AbortController();
     const accountLifetime = captureActiveServerAccountScopeCurrentness();
@@ -103,7 +102,13 @@ export function useLocalNeuralModelPackState(params: {
     setCancellationCommand(command);
     let checkedUpdateAvailable: boolean | null = null;
     try {
-      const result = await invokeVoiceDeviceModelPackOperation({
+      if (following) {
+        setModelStatus('downloading');
+        setDownloadProgress(null);
+      }
+      const result = following ? await following.follow({ signal: controller.signal,
+        onProgress: progress => { if (current()) setDownloadProgress(progress); },
+      }).then(() => ({ status: 'completed' as const })) : await invokeVoiceDeviceModelPackOperation({
         operation, packId: params.packId, role, manifestUrl: params.manifestUrl,
         signal: controller.signal, isCurrent: current,
         onDownloadStarted: () => {
@@ -154,7 +159,7 @@ export function useLocalNeuralModelPackState(params: {
       const summary = await refreshInstallState();
       if (!isCurrent() || !accountLifetime.isCurrent()) return;
       setModelStatus(operation === 'update' && summary?.installed ? 'ready' : 'error');
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describeModelPackInstallError(error);
       if (operation === 'update') {
         await Modal.alert(
           t(role === 'stt_sherpa' ? 'settingsVoice.local.localNeuralStt.alerts.updateFailedTitle' : 'settingsVoice.local.kokoro.alerts.updateFailedTitle'),
@@ -178,6 +183,26 @@ export function useLocalNeuralModelPackState(params: {
       }
     }
   }, [installed, isCurrent, params.manifestUrl, params.packId, refreshInstallState, role]);
+
+  const runOperationRef = React.useRef(runOperation);
+  React.useLayoutEffect(() => { runOperationRef.current = runOperation; }, [runOperation]);
+  React.useEffect(() => {
+    prepareAbortRef.current?.abort();
+    prepareAbortRef.current = null;
+    setCancellationCommand(null);
+    setModelStatus('idle');
+    setDownloadProgress(null);
+    setInstalled(false);
+    setInstallSummary(null);
+    setUpdateCheckedRemote(null);
+    fireAndForget((async () => {
+      if (!isCurrent()) return;
+      const running = await findRunningModelPackInstall({ packId: params.packId, kind: role });
+      if (!isCurrent()) return;
+      if (running) await runOperationRef.current('prepare', running);
+      else await refreshInstallState();
+    })(), { tag: 'useLocalNeuralModelPackState.followRunningInstall' });
+  }, [isCurrent, params.packId, refreshInstallState, role]);
 
   const prepareModel = React.useCallback(() => runOperation('prepare'), [runOperation]);
   const cancelPrepare = React.useCallback(() => { prepareAbortRef.current?.abort(); }, []);

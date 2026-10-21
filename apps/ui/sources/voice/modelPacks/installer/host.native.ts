@@ -128,15 +128,19 @@ export async function runExpoModelPackInstall(opts: InstallObserver & {
   }
   throwIfAborted(opts.signal);
   const lease = acquireOperationLease(opts.fs, opts.packId);
-  const install: RunningInstall = { identity: opts.identity, controller: new AbortController(),
-    promise: Promise.resolve(null as never), listeners: new Set(), lastProgress: null };
+  const install: RunningInstall = {
+    identity: opts.identity,
+    controller: new AbortController(),
+    listeners: new Set(),
+    lastProgress: null,
+    promise: Promise.resolve().then(() => opts.run({ lease, signal: install.controller.signal,
+      onProgress: progress => {
+        install.lastProgress = progress;
+        for (const listener of install.listeners) listener(progress);
+      },
+    })).finally(lease.release),
+  };
   activeOperations.set(key, { token: lease.token, install });
-  install.promise = Promise.resolve().then(() => opts.run({ lease, signal: install.controller.signal,
-    onProgress: progress => {
-      install.lastProgress = progress;
-      for (const listener of install.listeners) listener(progress);
-    },
-  })).finally(lease.release);
   return followInstall(install, opts);
 }
 
@@ -241,7 +245,7 @@ function assertStagingFitsOnDisk(fs: InstallerFs, directory: ExpoFsDirectory, pl
   if (requiredBytes > available) throw new ModelPackInsufficientDiskSpaceError(requiredBytes, available);
 }
 
-async function excludeDirectoryFromBackup(
+export async function excludeDirectoryFromBackup(
   directoryUri: string,
   exclude?: (directoryUri: string) => Promise<void>,
 ): Promise<void> {
@@ -335,8 +339,9 @@ function createDownloadOpener(
     if (!request.packId) throw new Error('model_pack_download_packid_missing');
     // The pack lease owns directory cleanup; each concurrent transfer owns one native file.
     const temporaryDir = getPackSiblingDir(fs, request.packId, DOWNLOADS_SUFFIX);
+    const temporaryDirectoryExisted = temporaryDir.exists;
     tryMkdir(temporaryDir);
-    await excludeDirectoryFromBackup(temporaryDir.uri, excludeFromBackup);
+    if (!temporaryDirectoryExisted) await excludeDirectoryFromBackup(temporaryDir.uri, excludeFromBackup);
     const temporaryFile = new fs.File(temporaryDir, randomUUID());
     let chunks: ReturnType<typeof readFileChunks> | undefined;
     let closed = false;

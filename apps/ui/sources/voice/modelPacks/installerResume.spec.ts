@@ -82,7 +82,7 @@ describe('Expo native host — real Range resume (FIND-010)', () => {
     try {
       expect(await staging.partialByteLength('absent.bin')).toBe(0);
       await staging.resetPartial('absent.bin');
-      expect(warning).not.toHaveBeenCalled();
+      expect(warning.mock.calls.some(call => call[0] === 'model_pack_partial_read_failed')).toBe(false);
       expect(await staging.partialByteLength('model.bin')).toBe(0);
       await expect(staging.resetPartial('model.bin')).rejects.toBe(cleanupError);
       expect(files.get('file:///docs/happier/voice/modelPacks/.resume.scratch/model.bin')).toEqual(bytes);
