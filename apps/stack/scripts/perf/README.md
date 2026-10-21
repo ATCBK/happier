@@ -81,7 +81,9 @@ cannot establish equality. Network transfer bytes include protocol overhead.
 
 Server query counts are Prisma operation attempts from existing `db.*` latency
 spans, not PostgreSQL physical-query counts (one Prisma operation may emit
-multiple SQL statements). Server spans correlate by diagnostic request ID.
+multiple SQL statements). `db.transaction.*` phases are counted separately,
+not added to those operation attempts; total DB phase records remain available.
+Server spans correlate by diagnostic request ID.
 UI/server correlation uses returned request IDs where present, otherwise the
 time window. Daemon diagnostics expose control completions, external Action
 stages and latency spans; these are distinguished from browser RPC calls and
@@ -97,6 +99,58 @@ be reconstructed from time-only lines. Missing sources produce explicit gaps
 and an `INCOMPLETE` bundle with exit 2. A failed phase writes `failure.json` and
 exits 1. No partial run supplies timing evidence. The caller still owns browser
 SIGINT/cleanup after either result.
+
+Round-4 collector details:
+
+- Failed steps finalize available CPU/network/React/store/socket evidence and
+  write a `FAILED`, ineligible bundle plus the original phase in `failure.json`.
+  Failed bundles enter neither comparison means nor percentiles. Disconnected
+  sources are recorded, not replaced by zero counters.
+- `cleanup.json` separates setup/cleanup CDP phase/kind failures from saved-window
+  status. Raw browser errors remain suppressed. SIGINT keeps the observer alive
+  through finalization. After failure/abort, cleanup reloads the owned page with
+  a temporary timing override and records actual fresh-document OFF/OFF, or an
+  explicit failure. Removing injection alone cannot turn an initialized store OFF.
+- Periodic counts summaries use the existing emitter's `nativeLoggingHook`
+  branch and one CDP binding: export Babel removes `console.info`. Console echoes
+  are not counted. Every emitted delta is summed once, including identical
+  deltas; the terminal flush is only the remainder and retains the end marker.
+  No product telemetry change or new export is needed for this delivery repair.
+- Network starts are bracket-filtered. Records retain safe Chromium failure
+  codes/cancellation/blocking/CORS identifiers, actual returned request ID,
+  request/send/header/response/completion times and TTFB. Pending-at-end requests
+  stay pending there even if they complete during finalization. Observed bytes
+  are separate from bytes completed within the window; no extra grace timeout
+  is added. `observedThroughMs` is the observation cutoff, not capture end.
+  Route classes exclude fixed `active`/`metadata-upgrades` Session paths from
+  exact-row comparisons. Equal fingerprints do not prove equal authority/waste.
+- Prefixed multiline server traces retain scalar `transactionClass`, status/code
+  and SQLSTATE; Session IDs, error messages, parameters, SQL and nested bags stay
+  excluded. Browser IDs join only equal returned server request IDs. Missing
+  relay mappings are not invented from proximity or independent UUIDs.
+- Server/daemon collection starts a continuous source-side `tail -F` observer
+  before capture through the existing configured executor/control-stdin owner.
+  It reuses the same safe parser as standalone snapshots and sends projected
+  records only, never raw log lines. Closing the observer drains and confirms
+  its owned tails before map loading. Large maps and slow remote command setup
+  must not push log reads past the debug log's short rotation horizon. Process
+  samples use this same observer channel. The existing Pino emitter timestamp
+  takes precedence over the later Stack tee receipt timestamp.
+- `--viewport=390x844` (or a declaration's `viewport` object) sets and verifies
+  CSS dimensions before capture and after each step. Observations are recorded
+  even without a declaration. A declaration's `readiness` describes its actual
+  ready selector; the default Home selector means shell presence only. Journey
+  lanes still own hydration, fixture and full-membership scroll assertions.
+- `sameWindowProcessSamples` records interior endpoints after capture begins and
+  before it ends; wider outer brackets remain separately labeled. Sampling adds
+  automation overhead. Shared process samples include all clients, not per-lane
+  CPU/RSS, peaks or allocated DB backends. Suppressed pings cannot establish
+  poll rates; missing operation/constructor counts remain unavailable.
+- Current bundles use schema 3. Comparisons keep schema versions separate as
+  well as journey/cache/UI/instrumentation mode: legacy unbracketed requests,
+  terminal-only telemetry and delayed rotating-log reads cannot be silently
+  pooled with corrected captures. Fixed/exact Session route-class metrics are
+  included in comparisons; a missing legacy metric stays unavailable.
 
 Other lanes add small JSON journey files with `id`, `intent`, `prepare` and
 `steps`. Operations are `open` (optional path), `home`, `idle` (milliseconds),

@@ -19,15 +19,38 @@ export function requestFingerprint(request, salt) {
   ])).digest('hex');
 }
 
-export function summarizeNetwork(requests) {
+export function networkRouteClass(endpoint, method = 'GET') {
+  const path = new URL(endpoint, 'http://relative.invalid').pathname;
+  if (/^\/v[12]\/sessions\/[^/]+$/.test(path)) {
+    const segment = path.split('/').at(-1);
+    // Fixed siblings registered by the current Session route owners, not rows.
+    if (['active', 'metadata-upgrades', 'archived', 'lookup-by-tags', 'access-candidates', 'access-grants',
+      'access-context', 'query', 'responsibility', 'read-batch'].includes(segment)) return 'session-fixed-route';
+    return method === 'GET' ? 'session-exact' : 'other';
+  }
+  if (method === 'GET' && /^\/v1\/machines\/[^/]+$/.test(path)) return 'machine-exact';
+  return 'other';
+}
+
+export function summarizeNetwork(input, { startMs = -Infinity, endMs = Infinity } = {}) {
+  const requests = input.filter(request => request.startMs >= startMs && request.startMs <= endMs);
   const endpoints = new Map();
   const active = new Map();
+  const dispositions = { completed: 0, failed: 0, canceled: 0, pendingAtEnd: 0, completedAfterWindow: 0 };
+  const routeClasses = {};
   let duplicateCandidates = 0;
   for (const request of [...requests].sort((a, b) => a.startMs - b.startMs)) {
+    const routeClass = networkRouteClass(request.endpoint, request.method);
+    routeClasses[routeClass] = (routeClasses[routeClass] ?? 0) + 1;
+    if (request.endMs === undefined || request.endMs > endMs) dispositions.pendingAtEnd++;
+    else if (request.canceled) dispositions.canceled++;
+    else if (request.failed) dispositions.failed++;
+    else dispositions.completed++;
+    if (request.endMs > endMs) dispositions.completedAfterWindow++;
     const key = `${request.method} ${request.endpoint}`;
     const row = endpoints.get(key) ?? { endpoint: request.endpoint, method: request.method, count: 0, encodedBytes: 0, failed: 0, duplicateCandidates: 0 };
     row.count++;
-    row.encodedBytes += request.encodedBytes ?? 0;
+    row.encodedBytes += request.endMs <= endMs ? request.encodedBytes ?? 0 : 0;
     row.failed += Number(Boolean(request.failed));
     // Missing POST bodies cannot establish request equality. CDP can omit large
     // or multipart bodies; do not call these duplicates from the URL alone.
@@ -41,8 +64,10 @@ export function summarizeNetwork(requests) {
     }
     endpoints.set(key, row);
   }
-  return { requests: requests.length, duplicateCandidates,
-    encodedBytes: requests.reduce((sum, request) => sum + (request.encodedBytes ?? 0), 0),
+  const encodedBytesCompletedWithinWindow = requests.reduce((sum, request) => sum + (request.endMs <= endMs ? request.encodedBytes ?? 0 : 0), 0);
+  return { requests: requests.length, duplicateCandidates, dispositions, routeClasses,
+    encodedBytes: encodedBytesCompletedWithinWindow, encodedBytesCompletedWithinWindow,
+    encodedBytesObserved: requests.reduce((sum, request) => sum + (request.encodedBytes ?? 0), 0),
     endpoints: [...endpoints.values()].sort((a, b) => b.count - a.count) };
 }
 
@@ -86,17 +111,35 @@ export function summarizeProfile(profile, symbols = new Map()) {
 export const frameKey = frame => JSON.stringify([frame.scriptId, frame.url, frame.lineNumber, frame.columnNumber, frame.functionName]);
 
 const logFields = new Set(['phase', 'module', 'elapsedMs', 'durationMs', 'responseTime', 'requestId', 'reqId', 'spanId',
-  'parentSpanId', 'method', 'rpcMethod', 'route', 'statusCode', 'status', 'stage', 'actionId', 'code', 'url']);
+  'parentSpanId', 'method', 'rpcMethod', 'route', 'statusCode', 'status', 'stage', 'actionId', 'code', 'url',
+  'transactionClass', 'sqlState']);
+
+const stripLogPrefix = raw => raw.replace(/\x1b\[[0-9;]*m/g, '').replace(/^\[server\]\s*\[[^\]]+\]\s*/, '');
+export const isLogRecordStart = raw => {
+  const line = stripLogPrefix(raw);
+  return /^\{.*"(?:time|timestamp)"\s*:/.test(line) || /^\[\d\d:\d\d:/.test(line)
+    || /\[\d{4}-\d\d-\d\dT[^\]]+\].*\b(?:INFO|WARN|ERROR|DEBUG|FATAL)(?:\([^)]*\))?:/.test(raw);
+};
+
+const projectLogField = (key, value) => {
+  if (!logFields.has(key) || !['string', 'number', 'boolean'].includes(typeof value)) return undefined;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (key === 'url' || key === 'route') return typeof value === 'string' ? safeUrl(value) : undefined;
+  return value;
+};
 
 export function parseLogRecords(text, { date, timezoneOffsetMinutes = 0 } = {}) {
   const records = [];
   let pretty;
   const flush = () => { if (pretty) records.push(pretty); pretty = undefined; };
-  const project = record => Object.fromEntries(Object.entries(record).filter(([key]) => logFields.has(key) || key === 'atMs'));
+  const project = record => Object.fromEntries(Object.entries(record).flatMap(([key, value]) => {
+    const safe = key === 'atMs' ? value : projectLogField(key, value);
+    return safe === undefined ? [] : [[key, safe]];
+  }));
   for (const raw of text.split('\n')) {
     const line = raw.replace(/\x1b\[[0-9;]*m/g, '');
     const iso = line.match(/\[(\d{4}-\d\d-\d\dT[^\]]+)\]/)?.[1];
-    const clock = line.match(/^\[(\d\d:\d\d:\d\d(?:\.\d+)?)\]/)?.[1];
+    const clock = stripLogPrefix(line).match(/^\[(\d\d:\d\d:\d\d(?:\.\d+)?)\]/)?.[1];
     const brace = line.indexOf('{');
     if (brace >= 0) {
       try {
@@ -115,15 +158,20 @@ export function parseLogRecords(text, { date, timezoneOffsetMinutes = 0 } = {}) 
         }
       } catch { /* A pretty-printed object's opening brace is handled below. */ }
     }
-    if (iso && /(?:INFO|WARN|ERROR|DEBUG|FATAL):/.test(line)) {
+    if ((iso || date && clock) && /(?:INFO|WARN|ERROR|DEBUG|FATAL)(?:\([^)]*\))?:/.test(line)) {
       flush();
-      pretty = { atMs: Date.parse(iso) };
+      // pino-pretty's canonical messageFormat retains the numeric emitter time.
+      // The Stack prefix is a later tee receipt, sometimes delayed under load.
+      const emittedAt = line.match(/\|\s*\[(\d+)\]\s*$/)?.[1];
+      pretty = { atMs: emittedAt ? Number(emittedAt) : iso ? Date.parse(iso) : Date.parse(`${date}T${clock}Z`) + timezoneOffsetMinutes * 60000 };
       if (line.includes('[web-latency]')) pretty.module = 'web-latency';
     } else if (pretty) {
       const match = line.replace(/^\[server\] \[[^\]]+\]\s*/, '').trim().match(/^"?([\w]+)"?:\s*(.*?)(?:,)?$/);
       if (!match || !logFields.has(match[1])) continue;
-      try { pretty[match[1]] = JSON.parse(match[2].replace(/,$/, '')); } catch { continue; }
-      if (match[1] === 'url') pretty.url = safeUrl(pretty.url);
+      try {
+        const value = projectLogField(match[1], JSON.parse(match[2].replace(/,$/, '')));
+        if (value !== undefined) pretty[match[1]] = value;
+      } catch { continue; }
     }
   }
   flush();
@@ -133,10 +181,21 @@ export function parseLogRecords(text, { date, timezoneOffsetMinutes = 0 } = {}) 
 export function summarizeLogs(input, { startMs, endMs, date } = {}) {
   const records = (typeof input === 'string' ? parseLogRecords(input, { date }) : input)
     .filter(record => record.atMs >= startMs && record.atMs <= endMs);
-  const queries = records.filter(record => record.role !== 'daemon' && record.module === 'web-latency' && record.phase?.startsWith('db.'));
+  const dbPhases = records.filter(record => record.role !== 'daemon' && record.module === 'web-latency' && record.phase?.startsWith('db.'));
+  const isTransactionPhase = record => record.phase === 'db.transaction' || record.phase.startsWith('db.transaction.');
+  const transactions = dbPhases.filter(isTransactionPhase);
+  const queries = dbPhases.filter(record => !isTransactionPhase(record));
+  const byRequest = new Map();
+  for (const record of dbPhases) if (record.requestId) {
+    const row = byRequest.get(record.requestId) ?? { dbAttempts: 0, transactionPhases: 0 };
+    if (isTransactionPhase(record)) row.transactionPhases++;
+    else row.dbAttempts++;
+    byRequest.set(record.requestId, row);
+  }
   const http = records.filter(record => record.role !== 'daemon' && record.module === 'web-latency' && record.phase?.startsWith('http.'))
-    .map(record => ({ ...record, dbAttempts: queries.filter(query => query.requestId && query.requestId === record.requestId).length }));
-  return { records, http, db: { attempts: queries.length, correlated: queries.filter(query => Boolean(query.requestId)).length },
+    .map(record => ({ ...record, ...(byRequest.get(record.requestId) ?? { dbAttempts: 0, transactionPhases: 0 }) }));
+  return { records, http, db: { phaseRecords: dbPhases.length, transactionPhaseRecords: transactions.length,
+    attempts: queries.length, correlated: queries.filter(query => Boolean(query.requestId)).length },
     daemon: records.filter(record => ['daemon-control', 'external-action-stage'].includes(record.module)) };
 }
 
@@ -146,7 +205,9 @@ function percentile(values, fraction) {
 }
 
 export function compareRuns(before, after) {
-  const key = run => JSON.stringify([run.journey, run.cache, run.uiMode, run.captureMode ?? 'unknown']);
+  before = before.filter(run => run.status !== 'FAILED' && run.eligible !== false);
+  after = after.filter(run => run.status !== 'FAILED' && run.eligible !== false);
+  const key = run => JSON.stringify([run.journey, run.cache, run.uiMode, run.captureMode ?? 'unknown', run.version ?? 'legacy-unknown']);
   return [...new Set([...before, ...after].map(key))].map(group => {
     const left = before.filter(run => key(run) === group);
     const right = after.filter(run => key(run) === group);
@@ -156,7 +217,7 @@ export function compareRuns(before, after) {
     const timing = runs => runs.length >= 5 && runs.every(run => run.uiMode === 'export' && run.status === 'CAPTURED'
       && run.captureMode === 'timing' && run.instrumentation?.storeTelemetry === false && run.instrumentation?.fiberHook === false)
       ? { p50Ms: percentile(runs.map(run => run.durationMs), .5), p95Ms: percentile(runs.map(run => run.durationMs), .95) } : null;
-    return { journey: JSON.parse(group)[0], cache: JSON.parse(group)[1], uiMode: JSON.parse(group)[2], captureMode: JSON.parse(group)[3],
+    return { journey: JSON.parse(group)[0], cache: JSON.parse(group)[1], uiMode: JSON.parse(group)[2], captureMode: JSON.parse(group)[3], version: JSON.parse(group)[4],
       beforeRuns: left.length, afterRuns: right.length, beforeTiming: timing(left), afterTiming: timing(right),
       counts: Object.fromEntries([...metrics].map(metric => {
         const a = mean(left, metric), b = mean(right, metric);

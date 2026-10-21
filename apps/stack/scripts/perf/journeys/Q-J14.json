@@ -1,0 +1,20 @@
+{
+  "id": "Q-J14",
+  "intent": "Own exact PERF-Q-before approval only: Inbox → review → Approve → Executed. Public CLI created e54e9bc9-aba3-48b3-b7ac-2b7603004ac5 for artifact.create of e3f469dc-4000-4000-8000-000000000051, title perf-Q-before-j14, text PERF-Q-before harmless approval effect. Verify durable receipt and this exact effect separately; never choose an unrelated row.",
+  "prepare": [
+    { "op": "open" },
+    { "op": "home" },
+    { "op": "idle", "ms": 90000 }
+  ],
+  "steps": [
+    { "op": "browser", "args": ["click", "[data-testid=\"app-rail:inbox\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"inbox.popover.open\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"inbox.content\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"inbox.approval.e54e9bc9-aba3-48b3-b7ac-2b7603004ac5\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"inbox.approval.e54e9bc9-aba3-48b3-b7ac-2b7603004ac5\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"approvals.header\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"approvals.approve\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"approvals.approve\"]"] },
+    { "op": "browser", "args": ["wait", "--fn", "(() => { const s=document.querySelector('[data-testid=\"approvals.status\"]'); return Boolean(s && /\\bExecuted\\b/.test(s.textContent) && !document.querySelector('[data-testid=\"approvals.approve\"]')); })()"] }
+  ]
+}

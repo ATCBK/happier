@@ -11,12 +11,21 @@ function stackFrames(stack) {
 
 export async function startCapture(options) {
   if (!['timing', 'counts'].includes(options.captureMode)) throw new Error('Explicit captureMode=timing|counts required');
-  const cdp = await connectPage(options.cdp, options.pageId, options.signal);
+  let cdp;
+  try { cdp = await connectPage(options.cdp, options.pageId, options.signal); }
+  catch {
+    const error = new Error('CDP setup.connect failed; discovery/transport details suppressed');
+    error.captureDiagnostics = { setup: { phase: 'setup.connect', kind: 'discovery-or-transport' }, cleanup: { status: 'NOT_CONNECTED' } };
+    throw error;
+  }
   const salt = randomBytes(32).toString('hex');
   const requests = [], sockets = [], telemetry = [], scripts = new Map();
   const inFlight = new Map();
-  let recording = false, profileStarted = false, offsetMs;
-  let startMs;
+  let recording = false, profileStarted = false, offsetMs, identifier, finished;
+  let startMs, phase = 'setup.connect';
+  const diagnostic = (error, failedPhase) => ({ phase: failedPhase,
+    kind: /timeout|timed out/i.test(error.message) ? 'timeout' : /closed|disconnect|socket/i.test(error.message) ? 'transport-closed' : 'protocol-or-evaluation' });
+  const step = async (name, operation) => { phase = name; return await operation(); };
   const at = timestamp => timestamp * 1000 + (offsetMs ?? 0);
   cdp.on('Debugger.scriptParsed', event => scripts.set(event.scriptId, { url: event.url, sourceMapURL: event.sourceMapURL }));
   cdp.on('Network.requestWillBeSent', event => {
@@ -28,29 +37,46 @@ export async function startCapture(options) {
       prior.status = event.redirectResponse.status;
     }
     const row = { id: `${event.requestId}:${requests.length}`, requestId: event.requestId,
-      endpoint: safeUrl(event.request.url), method: event.request.method, startMs: at(event.timestamp),
+      endpoint: safeUrl(event.request.url), method: event.request.method, startMs: at(event.timestamp), requestStartMs: at(event.timestamp),
       fingerprint: requestFingerprint(event.request, salt),
       bodyUnknown: Boolean(event.request.hasPostData && !event.request.postData),
       requestBodyBytes: event.request.postData === undefined ? null : Buffer.byteLength(event.request.postData),
-      initiator: { type: event.initiator.type, stack: stackFrames(event.initiator.stack) } };
+      initiator: { type: event.initiator?.type, stack: stackFrames(event.initiator?.stack) } };
     requests.push(row); inFlight.set(event.requestId, row);
   });
   cdp.on('Network.responseReceived', event => {
     const row = inFlight.get(event.requestId);
-    if (!row || !recording) return;
+    if (!row) return;
     row.status = event.response.status;
     row.fromCache = Boolean(event.response.fromDiskCache || event.response.fromServiceWorker);
     row.mimeType = event.response.mimeType;
+    row.responseReceivedMs = at(event.timestamp);
+    const timing = event.response.timing;
+    if (timing && timing.requestTime >= 0) {
+      row.requestStartMs = at(timing.requestTime);
+      if (timing.sendStart >= 0) row.sendStartMs = at(timing.requestTime) + timing.sendStart;
+      if (timing.receiveHeadersStart >= 0) row.responseHeadersMs = at(timing.requestTime) + timing.receiveHeadersStart;
+    }
+    row.ttfbMs = (row.responseHeadersMs ?? row.responseReceivedMs) - row.requestStartMs;
+    row.ttfbBasis = row.responseHeadersMs === undefined ? 'responseReceived.timestamp (headers timing unavailable)' : 'response.timing.receiveHeadersStart';
+    if (row.sendStartMs !== undefined) row.sendToHeadersMs = (row.responseHeadersMs ?? row.responseReceivedMs) - row.sendStartMs;
     const header = Object.entries(event.response.headers).find(([key]) => key.toLowerCase() === 'x-request-id');
     if (header && /^[a-zA-Z0-9._:-]+$/.test(String(header[1]))) row.serverRequestId = header[1];
   });
   cdp.on('Network.loadingFinished', event => {
     const row = inFlight.get(event.requestId);
-    if (row && recording) { row.endMs = at(event.timestamp); row.encodedBytes = event.encodedDataLength; inFlight.delete(event.requestId); }
+    if (row) { row.endMs = at(event.timestamp); row.encodedBytes = event.encodedDataLength; inFlight.delete(event.requestId); }
   });
   cdp.on('Network.loadingFailed', event => {
     const row = inFlight.get(event.requestId);
-    if (row && recording) { row.endMs = at(event.timestamp); row.failed = true; inFlight.delete(event.requestId); }
+    if (row) {
+      row.endMs = at(event.timestamp); row.failed = true; row.canceled = typeof event.canceled === 'boolean' ? event.canceled : null;
+      // CDP errorText can contain arbitrary content; retain only Chromium's code.
+      row.failureCode = /^net::ERR_[A-Z0-9_]+$/.test(event.errorText) ? event.errorText : 'unclassified';
+      if (/^[a-zA-Z0-9_-]+$/.test(event.blockedReason ?? '')) row.blockedReason = event.blockedReason;
+      if (/^[a-zA-Z0-9_-]+$/.test(event.corsErrorStatus?.corsError ?? '')) row.corsError = event.corsErrorStatus.corsError;
+      inFlight.delete(event.requestId);
+    }
   });
   for (const direction of ['Sent', 'Received']) cdp.on(`Network.webSocketFrame${direction}`, event => {
     if (!recording) return;
@@ -66,27 +92,62 @@ export async function startCapture(options) {
       bytes: opcode === 2 ? Buffer.byteLength(payloadData, 'base64') : Buffer.byteLength(payloadData),
       event: name ?? 'protocol-or-binary', ...(rpcMethod ? { rpcMethod } : {}) });
   });
-  cdp.on('Runtime.consoleAPICalled', event => {
-    if (!recording) return;
-    const values = event.args.map(arg => arg.value).filter(value => typeof value === 'string');
-    if (!values[0]?.startsWith('[sync-perf]')) return;
-    try { const summary = JSON.parse(values[1] ?? values[0].slice('[sync-perf]'.length).trim()); telemetry.push(summary); } catch {}
+  cdp.on('Runtime.bindingCalled', event => {
+    if (!recording || event.name !== '__happierPerfTelemetry') return;
+    try { telemetry.push(JSON.parse(event.payload)); } catch {}
   });
   const evaluate = async expression => {
     const result = await cdp.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
     if (result.exceptionDetails) throw new Error('Browser probe evaluation failed (details suppressed)');
     return result.result.value;
   };
+  const close = async ({ attestOff = false } = {}) => {
+    const operations = [], errors = [];
+    const attempt = async (name, operation) => {
+      try { const result = await operation(); operations.push({ phase: name, status: 'ok' }); return result; }
+      catch (error) { const result = diagnostic(error, name); errors.push(result); operations.push({ ...result, status: 'failed' }); }
+    };
+    let off;
+    try {
+      if (profileStarted) await attempt('cleanup.Profiler.stop', async () => { await cdp.send('Profiler.stop', {}, { timeout: 60000 }); profileStarted = false; });
+      await attempt('cleanup.Network.setCacheDisabled', () => cdp.send('Network.setCacheDisabled', { cacheDisabled: false }));
+      if (identifier) await attempt('cleanup.Page.removeScript', () => cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier }));
+      await attempt('cleanup.probe.stop', () => evaluate('globalThis.__happierPerfProbe?.stop(); delete globalThis.__HAPPIER_PERF_CAPTURE_MODE__'));
+      await attempt('cleanup.Runtime.removeBinding', () => cdp.send('Runtime.removeBinding', { name: '__happierPerfTelemetry' }));
+      if (attestOff) {
+        // A counts-mode instance cannot be turned OFF by removing injection:
+        // its constructor already ran. Attest a fresh document instead.
+        let offIdentifier;
+        try {
+          const added = await attempt('cleanup.OFF.addScript', () => cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+            source: `globalThis.__HAPPIER_PERF_CAPTURE_MODE__ = "timing"; globalThis.__HAPPIER_PERF_OFF_DOCUMENT__ = ${JSON.stringify(salt)};` }));
+          offIdentifier = added?.identifier;
+          await attempt('cleanup.OFF.reload', () => cdp.send('Page.reload'));
+          off = await attempt('cleanup.OFF.attest', () => evaluate(`new Promise(resolve => { const check = () => {
+            const api = globalThis.__HAPPIER_SYNC_PERFORMANCE__;
+            if (globalThis.__HAPPIER_PERF_OFF_DOCUMENT__ === ${JSON.stringify(salt)} && api?.isEnabled) resolve({ atMs: Date.now(), storeTelemetry: api.isEnabled(), fiberHook: Boolean(globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__), viewport: { width: innerWidth, height: innerHeight } });
+            else requestAnimationFrame(check);
+          }; check(); })`));
+        } finally {
+          if (offIdentifier) await attempt('cleanup.OFF.removeScript', () => cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: offIdentifier }));
+          await attempt('cleanup.OFF.removeOverride', () => evaluate('delete globalThis.__HAPPIER_PERF_CAPTURE_MODE__; delete globalThis.__HAPPIER_PERF_OFF_DOCUMENT__'));
+        }
+      }
+    } finally { recording = false; cdp.close(); }
+    return { status: errors.length || attestOff && (off?.storeTelemetry !== false || off?.fiberHook !== false) ? 'CLEANUP_FAILED' : 'CLEANED', operations, errors,
+      ...(attestOff ? { freshDocumentOffAttestation: off ?? null } : {}) };
+  };
   try {
-    for (const domain of ['Page', 'Network', 'Runtime', 'Debugger', 'Profiler', 'Performance']) await cdp.send(`${domain}.enable`);
-    const { metrics } = await cdp.send('Performance.getMetrics');
+    for (const domain of ['Page', 'Network', 'Runtime', 'Debugger', 'Profiler', 'Performance']) await step(`setup.${domain}.enable`, () => cdp.send(`${domain}.enable`));
+    await step('setup.Runtime.addBinding', () => cdp.send('Runtime.addBinding', { name: '__happierPerfTelemetry' }));
+    const { metrics } = await step('setup.Performance.getMetrics', () => cdp.send('Performance.getMetrics'));
     const timestamp = metrics.find(metric => metric.name === 'Timestamp')?.value;
-    if (typeof timestamp === 'number') offsetMs = await evaluate('Date.now()') - timestamp * 1000;
+    if (typeof timestamp === 'number') offsetMs = await step('setup.clock', () => evaluate('Date.now()')) - timestamp * 1000;
     const probe = `globalThis.__HAPPIER_PERF_CAPTURE_MODE__ = ${JSON.stringify(options.captureMode)};\n` + await readFile(new URL('./browser-probe.js', import.meta.url), 'utf8');
-    const { identifier } = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: probe });
+    ({ identifier } = await step('setup.Page.addScript', () => cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: probe })));
     // Install on an already loaded J13 page too, then reload through the journey
     // preparation so React sees the hook before its renderer initializes.
-    await evaluate(probe);
+    await step('setup.probe.install', () => evaluate(probe));
     return { cdp, evaluate,
       async begin() {
         await evaluate('globalThis.__happierPerfProbe.reset()');
@@ -95,16 +156,28 @@ export async function startCapture(options) {
         startMs = Date.now(); recording = true;
         await cdp.send('Profiler.start'); profileStarted = true;
       },
-      async finish() {
+      async finish({ onWindowEnd } = {}) {
+        if (finished) return finished;
         const endMs = Date.now();
-        const probeData = await evaluate('globalThis.__happierPerfProbe.collect()');
-        if (probeData.telemetry) telemetry.push(probeData.telemetry);
-        const { profile } = await cdp.send('Profiler.stop', {}, { timeout: 60000 }); profileStarted = false; recording = false;
-        const pageUrl = await evaluate('location.href');
-        const symbols = new Map(), sourceMaps = new Map(), mapFailures = [];
+        const errors = [];
+        const available = async (name, operation) => {
+          try { return await operation(); } catch (error) { errors.push(diagnostic(error, name)); return null; }
+        };
+        const probeData = await available('finish.probe.collect', () => evaluate('globalThis.__happierPerfProbe.collect()'));
+        if (probeData?.telemetry) telemetry.push(probeData.telemetry);
+        const stopped = profileStarted ? await available('finish.Profiler.stop', () => cdp.send('Profiler.stop', {}, { timeout: 60000 })) : null;
+        if (stopped) profileStarted = false;
+        recording = false;
+        const profile = stopped?.profile;
+        const pageUrl = await available('finish.page.attest', () => evaluate('location.href'));
+        // Read rotating server evidence before potentially large source maps.
+        // This callback is outside the capture bracket/profile, not a wait for
+        // new work or a synthetic extension of the measured interval.
+        if (onWindowEnd) await available('finish.window-evidence', () => onWindowEnd({ startMs, endMs }));
+        const symbols = new Map(), sourceMaps = new Map(), mapFailures = [], mapResponses = [];
         // Attribution happens after capture, so reading maps does not inflate
         // journey network or CPU counts. No Metro-only symbolication dependency.
-        for (const node of profile.nodes) {
+        for (const node of profile?.nodes ?? []) {
           const frame = node.callFrame;
           const script = scripts.get(frame.scriptId);
           if (!script?.sourceMapURL) continue;
@@ -118,6 +191,7 @@ export async function startCapture(options) {
                 const response = await fetch(mapUrl, { credentials: 'omit', signal: options.signal });
                 if (!response.ok) throw new Error('map unavailable');
                 json = await response.json();
+                mapResponses.push({ script: safeUrl(script.url), map: safeUrl(mapUrl.href), status: response.status });
               }
               sourceMaps.set(frame.scriptId, new SourceMap(json));
             } catch { sourceMaps.set(frame.scriptId, null); mapFailures.push({ scriptId: frame.scriptId, url: safeUrl(script.url) }); }
@@ -126,25 +200,27 @@ export async function startCapture(options) {
           if (mapped?.originalSource) symbols.set(frameKey(frame), { source: mapped.originalSource.split(/[?#]/)[0],
             name: mapped.name ?? frame.functionName, line: mapped.originalLine, column: mapped.originalColumn });
         }
-        for (const node of profile.nodes) node.callFrame.url = safeUrl(node.callFrame.url);
+        for (const node of profile?.nodes ?? []) node.callFrame.url = safeUrl(node.callFrame.url);
         // Keys above use original URLs; transfer mappings after URL redaction.
         const cleanSymbols = new Map();
         for (const [key, value] of symbols) { const parts = JSON.parse(key); parts[1] = safeUrl(parts[1]); cleanSymbols.set(JSON.stringify(parts), value); }
-        return { startMs, endMs, durationMs: endMs - startMs, profile, cpu: summarizeProfile(profile, cleanSymbols),
-          network: { ...summarizeNetwork(requests), records: requests }, sockets, telemetry,
+        const windowRequests = requests.filter(row => row.startMs >= startMs && row.startMs <= endMs).map(row => ({ ...row,
+          pendingAtEnd: row.endMs === undefined || row.endMs > endMs, completedAfterWindow: row.endMs > endMs }));
+        const windowSockets = sockets.filter(row => row.atMs >= startMs && row.atMs <= endMs);
+        return finished = { startMs, endMs, durationMs: endMs - startMs, profile: profile ?? null, cpu: profile ? summarizeProfile(profile, cleanSymbols) : null,
+          network: { ...summarizeNetwork(windowRequests, { startMs, endMs }), records: windowRequests, observedThroughMs: Date.now() }, sockets: windowSockets, telemetry,
           react: probeData, observedUi: { url: safeUrl(pageUrl), scripts: [...new Set([...scripts.values()].map(script => safeUrl(script.url)).filter(Boolean))] },
-          attribution: { sourceMaps: sourceMaps.size, mappedFrames: symbols.size, mapFailures },
-          socketEventsPerSecond: sockets.length * 1000 / (endMs - startMs) };
+          attribution: { sourceMaps: [...sourceMaps.values()].filter(Boolean).length, attemptedSourceMaps: sourceMaps.size,
+            mappedFrames: symbols.size, mapResponses, mapFailures },
+          collectionErrors: errors, socketEventsPerSecond: windowSockets.length * 1000 / (endMs - startMs) };
       },
-      async close() {
-        try {
-          if (profileStarted) await cdp.send('Profiler.stop', {}, { timeout: 60000 });
-          await cdp.send('Network.setCacheDisabled', { cacheDisabled: false });
-          await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
-          await evaluate('globalThis.__happierPerfProbe?.stop()');
-          await evaluate('delete globalThis.__HAPPIER_PERF_CAPTURE_MODE__');
-        } finally { cdp.close(); }
-      },
+      close,
     };
-  } catch (error) { cdp.close(); throw error; }
+  } catch (error) {
+    const setup = diagnostic(error, phase);
+    const cleanup = await close();
+    const failure = new Error(`CDP ${setup.phase} failed (${setup.kind}; details suppressed)`);
+    failure.captureDiagnostics = { setup, cleanup };
+    throw failure;
+  }
 }

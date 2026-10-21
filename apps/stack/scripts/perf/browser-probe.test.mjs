@@ -3,6 +3,38 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { safeUrl, requestFingerprint, summarizeNetwork, compareRuns } from './analysis.mjs';
+import { createSyncPerformanceTelemetry, emitSyncPerformanceSummaryToConsole, installSyncPerformanceTelemetryGlobal } from '../../../ui/sources/sync/runtime/syncPerformanceTelemetry.ts';
+import { summarizeSyncPerformanceSummaries } from '../../../ui/scripts/syncPerformanceTelemetryReport.mjs';
+
+test('periodic producer summaries and terminal remainder aggregate exactly once even when flushes are identical', async () => {
+  const storage = { getItem: () => null, setItem() {}, removeItem() {} };
+  const delivered = [];
+  const context = vm.createContext({ __HAPPIER_PERF_CAPTURE_MODE__: 'counts',
+    __happierPerfTelemetry: payload => delivered.push(JSON.parse(payload)),
+    performance: { now: () => 1 }, PerformanceObserver: { supportedEntryTypes: [] }, localStorage: storage, sessionStorage: storage });
+  const priorHook = globalThis.nativeLoggingHook, priorApi = globalThis.__HAPPIER_SYNC_PERFORMANCE__;
+  let now = 0;
+  const telemetry = createSyncPerformanceTelemetry({ enabled: true, now: () => now, flushIntervalMs: 1000, emitSummary: emitSyncPerformanceSummaryToConsole });
+  installSyncPerformanceTelemetryGlobal(telemetry);
+  context.__HAPPIER_SYNC_PERFORMANCE__ = globalThis.__HAPPIER_SYNC_PERFORMANCE__;
+  try {
+    vm.runInContext(await readFile(new URL('./browser-probe.js', import.meta.url), 'utf8'), context);
+    globalThis.nativeLoggingHook = context.nativeLoggingHook;
+    context.__happierPerfProbe.reset();
+    now = 1000; telemetry.count('sync.store.storage.notify');
+    now = 2000; telemetry.count('sync.store.storage.notify');
+    now = 2001; telemetry.count('sync.store.storage.notify');
+    const terminal = context.__happierPerfProbe.collect();
+    const result = summarizeSyncPerformanceSummaries([...delivered, ...(terminal.telemetry ? [terminal.telemetry] : [])]);
+    assert.equal(result.events.find(event => event.name === 'sync.store.storage.notify').count, 3);
+    assert.equal(result.events.find(event => event.name === 'sync.performance.scenario.perf-capture-end').count, 1);
+    assert.ok(delivered.length >= 2, 'periodic flushed summaries must survive production console removal');
+  } finally {
+    context.__happierPerfProbe?.stop(); telemetry.reset();
+    if (priorHook === undefined) delete globalThis.nativeLoggingHook; else globalThis.nativeLoggingHook = priorHook;
+    if (priorApi === undefined) delete globalThis.__HAPPIER_SYNC_PERFORMANCE__; else globalThis.__HAPPIER_SYNC_PERFORMANCE__ = priorApi;
+  }
+});
 
 test('timing mode never installs a fiber hook and requests disabled store telemetry across documents', async () => {
   const local = new Map(), session = new Map();

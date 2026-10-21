@@ -1,0 +1,7 @@
+{
+  "id": "Q-M1-J2-early",
+  "intent": "M1 early Home continuation: immediately after the cold J1 shell capture on the same owned page, observe five minutes with its unchanged visible Capacity and saved tabs. No document reload or extra settling delay. Hydrated inventory is a separately recorded boundary, not implied by shell presence.",
+  "readiness": "Existing Home shell after J1; ordinary hydration must be recorded independently.",
+  "prepare": [{ "op": "home" }],
+  "steps": [{ "op": "idle", "ms": 300000 }]
+}

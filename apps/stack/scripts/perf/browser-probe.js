@@ -9,6 +9,13 @@
     : type && typeof type === 'object' ? type.displayName || name(type.render || type.type) : 'Anonymous';
   const empty = () => ({ commits: 0, renders: 0, components: Object.create(null), hookMs: 0, longTasks: [] });
   let data = empty();
+  // Use the emitter's existing native hook path: production removes console.info.
+  // One binding delivery per emitted event; do not also collect console echoes.
+  const previousLoggingHook = globalThis.nativeLoggingHook;
+  if (counts && typeof globalThis.__happierPerfTelemetry === 'function') globalThis.nativeLoggingHook = function (message, level) {
+    if (typeof message === 'string' && message.startsWith('[sync-perf] ')) globalThis.__happierPerfTelemetry(message.slice('[sync-perf] '.length));
+    else previousLoggingHook?.(message, level);
+  };
   const previous = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   const hook = previous ?? { supportsFiber: true, renderers: new Map(),
     inject(renderer) { const id = this.renderers.size + 1; this.renderers.set(id, renderer); return id; },
@@ -63,6 +70,10 @@
       observer?.disconnect();
       if (counts) hook.onCommitFiberRoot = commit;
       if (counts && !previous) delete globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+      if (counts && typeof globalThis.__happierPerfTelemetry === 'function') {
+        if (previousLoggingHook === undefined) delete globalThis.nativeLoggingHook;
+        else globalThis.nativeLoggingHook = previousLoggingHook;
+      }
       try { if (original === null) localStorage.removeItem(storageKey); else if (original !== undefined) localStorage.setItem(storageKey, original); sessionStorage.removeItem(savedKey); } catch {}
       delete globalThis.__happierPerfProbe;
     },

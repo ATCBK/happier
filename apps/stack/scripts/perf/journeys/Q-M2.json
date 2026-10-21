@@ -1,0 +1,17 @@
+{
+  "id": "Q-M2",
+  "intent": "Serial M2 ordinary Machine census to the exact agent-qa-perf Machine and one real Processes pane; preserve truthful inventory, control readiness, and Workflow background demand. No resource policy or process mutation.",
+  "readiness": "Ordinary Machine-list row, exact perf Machine detail, then real process rows or the admitted empty sample; loading/error/older/offline states do not qualify.",
+  "prepare": [{ "op": "open" }, { "op": "home" }],
+  "steps": [
+    { "op": "open", "path": "/machines" },
+    { "op": "browser", "args": ["wait", "[data-testid=\"machines.index.header\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"machines.index.view:list\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"machines.index.row.machine:srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN:620a8bc8-99ec-461a-87f7-2b980ac7a68c\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"machines.index.row.machine:srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN:620a8bc8-99ec-461a-87f7-2b980ac7a68c\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"machine-page-tabs\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"machine-page-tab:processes\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"machine-processes-table\"], [data-testid=\"machine-processes-nothing\"]"] },
+    { "op": "browser", "args": ["wait", "--fn", "!document.querySelector('[data-testid=\"machine-processes-loading\"], [data-testid=\"machine-processes-error\"], [data-testid=\"machine-processes-older\"], [data-testid=\"machine-processes-offline\"]')"] }
+  ]
+}

@@ -78,13 +78,25 @@ test('capture composes CDP events, safe network records, telemetry and mapped CP
           : message.params.expression.includes('.collect()') ? { commits: 2, renders: 3, components: {}, longTasks: [], renderers: [{ version: '19' }], telemetryAvailable: true,
             telemetry: { events: [{ name: 'sync.store.storage.notify', count: 2 }] } } : undefined } };
         if (message.method === 'Profiler.start') {
-          send({ method: 'Network.requestWillBeSent', params: { requestId: 'n', wallTime: epoch / 1000, timestamp: 10,
+          const timestamp = 10 + (Date.now() - epoch) / 1000;
+          send({ method: 'Network.requestWillBeSent', params: { requestId: 'n', wallTime: Date.now() / 1000, timestamp,
             request: { method: 'GET', url: 'http://app.test/v1/data?key=never-save' }, initiator: { type: 'script', stack: { callFrames: [] } } } });
-          send({ method: 'Network.loadingFinished', params: { requestId: 'n', timestamp: 10.01, encodedDataLength: 25 } });
-          send({ method: 'Network.webSocketFrameReceived', params: { timestamp: 10.02, response: { opcode: 1, payloadData: '42["update",{"token":"never-save"}]' } } });
+          send({ method: 'Network.responseReceived', params: { requestId: 'n', timestamp, response: { status: 200, headers: { 'x-request-id': 'returned-id' },
+            timing: { requestTime: timestamp, sendStart: 0, receiveHeadersStart: 0 } } } });
+          send({ method: 'Network.loadingFinished', params: { requestId: 'n', timestamp, encodedDataLength: 25 } });
+          for (const [requestId, delta] of [['canceled', 0], ['unknown-failure', 0], ['late', 0], ['outside', 1000]]) send({ method: 'Network.requestWillBeSent', params: {
+            requestId, wallTime: Date.now() / 1000 + delta, timestamp: timestamp + delta, request: { method: 'GET', url: 'http://app.test/v1/data' }, initiator: { type: 'script' } } });
+          send({ method: 'Network.loadingFailed', params: { requestId: 'canceled', timestamp, canceled: true, errorText: 'net::ERR_ABORTED' } });
+          send({ method: 'Network.loadingFailed', params: { requestId: 'unknown-failure', timestamp, errorText: 'never-save private URL or diagnostic' } });
+          send({ method: 'Runtime.bindingCalled', params: { name: '__happierPerfTelemetry', payload: '{"events":[{"name":"sync.store.storage.notify","count":3}]}' } });
+          send({ method: 'Runtime.bindingCalled', params: { name: '__happierPerfTelemetry', payload: '{"events":[{"name":"sync.store.storage.notify","count":3}]}' } });
+          send({ method: 'Network.webSocketFrameReceived', params: { timestamp, response: { opcode: 1, payloadData: '42["update",{"token":"never-save"}]' } } });
         }
-        if (message.method === 'Profiler.stop') result.profile = { startTime: 0, endTime: 1000,
+        if (message.method === 'Profiler.stop') {
+          send({ method: 'Network.loadingFinished', params: { requestId: 'late', timestamp: 1010, encodedDataLength: 50 } });
+          result.profile = { startTime: 0, endTime: 1000,
           nodes: [{ id: 1, callFrame: { scriptId: '1', url: 'http://app.test/bundle.js', functionName: 'a', lineNumber: 0, columnNumber: 0 } }], samples: [1], timeDeltas: [1000] };
+        }
         send({ id: message.id, result });
       }
     });
@@ -94,8 +106,18 @@ test('capture composes CDP events, safe network records, telemetry and mapped CP
   try {
     await capture.begin();
     const result = await capture.finish();
-    assert.equal(result.network.requests, 1);
+    assert.equal(result.network.requests, 4);
     assert.equal(result.network.encodedBytes, 25);
+    assert.equal(result.network.encodedBytesObserved, 75);
+    assert.equal(result.network.dispositions.canceled, 1);
+    assert.equal(result.network.dispositions.completedAfterWindow, 1);
+    assert.equal(result.network.records.find(row => row.requestId === 'canceled').failureCode, 'net::ERR_ABORTED');
+    assert.equal(result.network.records.find(row => row.requestId === 'n').sendToHeadersMs, 0);
+    assert.equal(result.network.records.find(row => row.requestId === 'n').ttfbBasis, 'response.timing.receiveHeadersStart');
+    assert.equal(result.network.records.find(row => row.requestId === 'unknown-failure').canceled, null, 'missing cancellation flag is unknown, not false');
+    assert.equal(result.network.records.find(row => row.requestId === 'unknown-failure').failureCode, 'unclassified');
+    assert.equal(result.network.records.find(row => row.requestId === 'n').serverRequestId, 'returned-id');
+    assert.equal(result.telemetry.reduce((sum, summary) => sum + summary.events[0].count, 0), 8);
     assert.equal(result.sockets[0].event, 'update');
     assert.equal(result.react.commits, 2);
     assert.equal(result.cpu.functions[0].name, 'realOwner');
