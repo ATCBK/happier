@@ -64,7 +64,7 @@ export type PortableMachineAdministrationTargetResolution<T extends MachineWithI
         profile: ServerProfile;
     }>;
 
-/** Raw inventory qualification shared by presentation facts and fresh invocation admission. */
+/** Raw scoped membership shared by presentation and fresh invocation admission. */
 export function readLiveMachineInventoryRows<T extends MachineWithId>(params: Readonly<{
     activeServerId: string;
     activeMachines: readonly T[];
@@ -72,6 +72,8 @@ export function readLiveMachineInventoryRows<T extends MachineWithId>(params: Re
     machineListStatusByServerId: Readonly<Record<string, 'idle' | 'loading' | 'signedOut' | 'error' | undefined>>;
     profile: ServerProfile;
     serverIdentityId: string;
+    /** Presentation may retain opened content while a newer hint is pending; never grants fresh invocation authority. */
+    retainOpenedContent?: boolean;
 }>): ReadonlySet<T> {
     const inventory = resolveServerScopedMachineInventory({
         ...params,
@@ -86,7 +88,10 @@ export function readLiveMachineInventoryRows<T extends MachineWithId>(params: Re
     // an older row or a socket-only presence shell absent from the current list.
     // A refresh may retain the previous idle list status while newer content is
     // pending, so the row's readiness is required for both list states.
-    return new Set((inventory.machines ?? []).filter(machine => readMachineInventoryRowReadiness(machine) === 'available'));
+    return new Set((inventory.machines ?? []).filter(machine => (
+        readMachineInventoryRowReadiness(machine) === 'available'
+        || (params.retainOpenedContent === true && machine.availability?.kind === 'available' && machine.metadata != null)
+    )));
 }
 
 /** The same ordered Home keys drive inventory reads and their subscription signatures. */

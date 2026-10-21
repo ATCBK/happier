@@ -8,6 +8,7 @@ import { isMachineInventorySettled, readMachineInventoryStatus, resolveAllProfil
 import { primeServerFeaturesSnapshot, deleteServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from './reachability/machineReachability';
+import { readLiveMachineInventoryRows } from './resolveServerScopedMachines';
 
 function machine(input: Readonly<{
     id: string;
@@ -116,6 +117,31 @@ describe('resolveAllProfileMachineInventorySnapshots', () => {
         const locked = { ...row, availability: { kind: 'locked' as const, reason: 'encryption_material_unavailable' as const } };
         expect(resolveAllProfileMachineInventorySnapshots({ ...base, activeMachines: [locked],
             machineListByServerId: { 'local-a': [locked] } })[0]).toMatchObject({ executionEligibleMachineIds: [] });
+    });
+
+    it.each(['idle', 'loading'] as const)('retains opened Machine eligibility through pending content while %s without admitting fresh execution', (status) => {
+        const row = { ...machine({ id: 'opening-row', active: true }), activeAt: Date.now(), daemonStateVersion: 1,
+            keyBasis: { dataEncryptionKey: 'same-key', metadataVersion: 1, daemonStateVersion: 2 } };
+        const base = { profiles: [profiles[0]], activeServerId: 'local-a', activeMachines: [row],
+            machineListByServerId: { 'local-a': [row] }, machineListStatusByServerId: { 'local-a': status },
+            accountScopesByServerId, loadWarmEntries: () => ({}) };
+        const target = { serverIdentityId: 'srv_server_a', machineId: row.id };
+        const snapshots = resolveAllProfileMachineInventorySnapshots(base);
+        expect(snapshots[0]).toMatchObject({ executionEligibleMachineIds: [row.id], executionPendingMachineIds: [row.id] });
+        expect(resolveFleetMachineRejection({ ...target, machineSnapshots: snapshots })).toBeNull();
+        expect(readLiveMachineInventoryRows({ ...base, profile: profiles[0], serverIdentityId: target.serverIdentityId }).size).toBe(0);
+        // Pending content never masks a real loss of admission or presence.
+        for (const refused of [
+            { ...row, metadata: null },
+            { ...row, availability: undefined },
+            { ...row, availability: { kind: 'locked' as const, reason: 'decryption_failed' as const } },
+            { ...row, active: false, activeAt: 0 },
+            { ...row, revokedAt: 1 },
+            { ...row, replacedByMachineId: 'replacement' },
+        ]) {
+            expect(resolveAllProfileMachineInventorySnapshots({ ...base, activeMachines: [refused],
+                machineListByServerId: { 'local-a': [refused] } })[0]).toMatchObject({ executionEligibleMachineIds: [] });
+        }
     });
 
     it('keeps a machine with current presence selectable while its list refresh is in flight, and rejects it once the read failed', () => {

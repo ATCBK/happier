@@ -35,7 +35,7 @@ export type ServerMachineInventorySnapshotV1 =
         settled?: true;
         /** Current inventory read state; absence is an unobserved, still pending read. */
         inventoryStatus?: MachineInventoryStatus;
-        /** Ephemeral fresh-admission facts, not authority for a later invocation. */
+        /** Eligibility of the last opened live content for presentation, never fresh invocation authority. */
         executionEligibleMachineIds?: readonly string[];
         /** Online rows still opening content, including after a list read settles. */
         executionPendingMachineIds?: readonly string[];
@@ -225,6 +225,7 @@ export function resolveAllProfileMachineInventorySnapshots(params: Readonly<{
                 machineListStatusByServerId: params.machineListStatusByServerId,
                 profile,
                 serverIdentityId,
+                retainOpenedContent: true,
             });
             snapshots.push(Object.freeze({
                 kind: 'resolved',
