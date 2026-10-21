@@ -13,6 +13,8 @@ import { registerScmHandlers } from '@/rpc/handlers/scm';
 import axios from 'axios';
 import tweetnacl from 'tweetnacl';
 import { verifyMachineRpcAdmissionCurrent } from '@/api/machine/machineRpcAuthorization';
+import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
+import type { Socket } from 'socket.io-client';
 
 describe('RPC completion diagnostics', () => {
     it.each([
@@ -32,15 +34,58 @@ describe('RPC completion diagnostics', () => {
         } else expect(completed).not.toHaveProperty('goalControlFailure');
         expect(JSON.stringify(logger.mock.calls)).not.toContain('never-log');
     });
-    it('preserves request cancellation during Home admission instead of reporting a currentness refusal', async () => {
+    it.each(['deadline', 'cancel', 'disconnect'] as const)('settles held Home admission on its existing %s while unrelated RPCs complete', async lifetime => {
         const logger = vi.fn();
         const key = tweetnacl.sign.keyPair();
-        // Only the HTTP boundary waits for the real manager-owned cancellation signal.
-        const network = vi.spyOn(axios, 'post').mockImplementation((_url, _body, config) => new Promise((_resolve, reject) => {
-            const cancel = () => reject(new axios.CanceledError());
-            if (config?.signal?.aborted) cancel();
-            else config?.signal?.addEventListener?.('abort', cancel, { once: true });
-        }));
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        let entered = false;
+        // A transport can finish after cancellation; internal admission remains real.
+        const network = vi.spyOn(axios, 'post').mockImplementation(async () => {
+            entered = true;
+            await held;
+            return { status: 200, data: { v: 1, ok: true } };
+        });
+        const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger,
+            authorizeRequest: request => authorizeMachineRpcRequest(request, {
+                machineId: 'machine', resolveCustodianAccountId: async () => 'owner', resolveInstallationId: () => 'installation',
+                verifyMachineAdmission: input => verifyMachineRpcAdmissionCurrent({ ...input,
+                    privateKey: key.secretKey, daemonToken: 'test-token', serverHttpBaseUrl: 'https://home.invalid' }),
+            }) });
+        let dispatched = false;
+        rpc.registerHandler('demo', () => { dispatched = true; });
+        rpc.registerHandler('health', () => ({ ok: true }));
+        const socket = createApiSessionSocketStub({ connected: true });
+        // Canonical Socket.IO boundary stub exposes the manager's consumed subset.
+        rpc.onSocketConnect(socket as unknown as Socket);
+        let result: unknown;
+        const request = rpc.handleRequest({ method: 'machine:demo', params: {}, requestId: 'held-admission',
+            ...(lifetime === 'deadline' ? { timeoutMs: 100 } : {}),
+            machineAdmission: { actorAccountId: 'owner', custodianAccountId: 'owner', machineId: 'machine',
+                installationId: 'installation', role: 'manage', encryptionMode: 'plain' } })
+            .then(value => { result = value; });
+        try {
+            await vi.waitFor(() => expect(entered).toBe(true));
+            expect(await rpc.handleRequest({ method: 'machine:health', params: {} })).toEqual({ ok: true });
+            if (lifetime === 'cancel') socket.trigger('rpc-cancel', { requestId: 'held-admission' });
+            if (lifetime === 'disconnect') rpc.onSocketDisconnect();
+            await vi.waitFor(() => expect(result).toBeDefined());
+            expect(result).toEqual({ error: lifetime === 'deadline' ? 'RPC request timed out'
+                : lifetime === 'cancel' ? 'RPC request cancelled by caller' : 'RPC target transport disconnected' });
+            expect(dispatched).toBe(false);
+            expect(logger).toHaveBeenLastCalledWith('[RPC] Request completed', expect.objectContaining({
+                ...(lifetime === 'deadline' ? { outcomeCode: 'RPC_REQUEST_TIMEOUT' } : {}),
+                failedPhase: 'authorize_request', cancelled: true,
+                phaseDurationsMs: expect.objectContaining({ authorize_request: expect.any(Number) }),
+            }));
+            expect(rpc.getInFlightRequestCount()).toBe(0);
+        } finally { release(); await request; network.mockRestore(); }
+        expect(dispatched).toBe(false);
+    });
+    it('answers a failed Home verification with its typed refusal and admission phase', async () => {
+        const logger = vi.fn();
+        const key = tweetnacl.sign.keyPair();
+        const network = vi.spyOn(axios, 'post').mockResolvedValue({ status: 503, data: {} });
         const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger,
             authorizeRequest: request => authorizeMachineRpcRequest(request, {
                 machineId: 'machine', resolveCustodianAccountId: async () => 'owner', resolveInstallationId: () => 'installation',
@@ -50,13 +95,14 @@ describe('RPC completion diagnostics', () => {
         let dispatched = false;
         rpc.registerHandler('demo', () => { dispatched = true; });
         try {
-            expect(await rpc.handleRequest({ method: 'machine:demo', params: {}, timeoutMs: 1,
+            expect(await rpc.handleRequest({ method: 'machine:demo', params: {},
                 machineAdmission: { actorAccountId: 'owner', custodianAccountId: 'owner', machineId: 'machine',
                     installationId: 'installation', role: 'manage', encryptionMode: 'plain' } }))
-                .toEqual({ error: 'RPC request timed out' });
+                .toEqual({ error: 'Forbidden', errorCode: RPC_ERROR_CODES.FORBIDDEN });
             expect(dispatched).toBe(false);
             expect(logger).toHaveBeenLastCalledWith('[RPC] Request completed', expect.objectContaining({
-                outcomeCode: 'RPC_REQUEST_TIMEOUT', failedPhase: 'authorize_request', cancelled: true,
+                outcomeCode: RPC_ERROR_CODES.FORBIDDEN, admissionPredicate: 'machine_currentness',
+                failedPhase: 'authorize_request', cancelled: false,
                 phaseDurationsMs: expect.objectContaining({ authorize_request: expect.any(Number) }),
             }));
         } finally { network.mockRestore(); }

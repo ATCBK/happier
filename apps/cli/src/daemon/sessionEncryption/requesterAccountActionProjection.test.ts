@@ -65,6 +65,50 @@ function bootstrap(credentials: StoredCredentials, isCurrent = async () => true)
 }
 
 describe('admitted requester Action projection', () => {
+  it('cancels the held Settings HTTP read when finite requester admission is aborted', async () => {
+    let settingsStarted!: () => void;
+    const requested = new Promise<void>(resolve => { settingsStarted = resolve; });
+    let releaseSettings: (() => void) | undefined;
+    let settingsClosed = false;
+    const home = createServer((request, response) => {
+      response.setHeader('Content-Type', 'application/json');
+      if (request.url === '/v1/account/profile') response.end(JSON.stringify({ id: 'bob' }));
+      else if (request.url === '/v1/account/encryption/currentness') response.end(JSON.stringify({ mode: 'plain',
+        version: 1, settingsVersion: 1, updatedAt: 1, signingKeyFingerprint: null, contentKeyFingerprint: null }));
+      else if (request.url === '/v2/account/settings') {
+        // A real Axios request owns this TCP response; no private body is released before abort.
+        response.once('close', () => { settingsClosed = true; });
+        response.flushHeaders();
+        releaseSettings = () => { response.end(JSON.stringify({ content: { t: 'plain', v: {} }, version: 1 })); };
+        settingsStarted();
+      } else { response.statusCode = 404; response.end('{}'); }
+    });
+    await new Promise<void>(resolve => home.listen(0, '127.0.0.1', resolve));
+    const address = home.address();
+    if (!address || typeof address === 'string') throw new Error('Missing finite requester Home address');
+    const caller = new AbortController();
+    const custody: { cleanup?: () => Promise<void> } = {};
+    const admission = requesterAccountOwner.admitRequesterAccountActionContext({
+      authorization: { ...authorization, binding: { ...authorization.binding, accountEncryptionMode: 'plain' } },
+      credentials: { token: 'bob', encryption: null }, serverId: 'home-profile', serverIdentityId: 'stable-home',
+      serverHttpBaseUrl: `http://127.0.0.1:${address.port}`, signal: caller.signal, isCurrent: async () => true,
+    }).then(result => { custody.cleanup = result?.dispose; return { admitted: result !== null }; },
+      () => ({ admitted: false }));
+    try {
+      await Promise.race([requested, admission.then(() => { throw new Error('Admission ended before the held Settings request'); })]);
+      caller.abort();
+      await vi.waitFor(() => expect(settingsClosed).toBe(true));
+      await expect(admission).resolves.toEqual({ admitted: false });
+    } finally {
+      caller.abort();
+      releaseSettings?.();
+      await admission;
+      await custody.cleanup?.();
+      home.closeAllConnections();
+      await new Promise<void>((resolve, reject) => home.close(error => error ? reject(error) : resolve()));
+    }
+  });
+
   it('opens the immutable opinion root and proves the creator-bound current model slot for public spawn and read-only preflight', async () => {
     const launch = { executionTarget: { serverId: 'home-profile', machineId: 'model-machine' },
       directory: { kind: 'path', path: '/reviewed' },

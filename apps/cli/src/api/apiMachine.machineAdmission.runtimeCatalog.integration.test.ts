@@ -11,7 +11,7 @@ import { SOCKET_RPC_EVENTS, WorkspaceSyncSourceRoutingV1Schema, WorkspaceSyncSou
 import { HandoffTargetReplacementPreflightV1Schema, WorkspaceSyncHandoffSourcePhaseRequestV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
-import { authorizeMachineRpcRequest, verifyMachineRpcAdmissionCurrent } from '@/api/machine/machineRpcAuthorization';
+import { authorizeMachineRpcRequest, verifyMachineRpcAdmissionCurrent, type MachineRpcAdmissionBoundary } from '@/api/machine/machineRpcAuthorization';
 import { buildActionExecutorContextForRpc } from '@/rpc/handlers/_actionDispatchAdapter';
 import { createWorkspaceSyncTargetContent } from '@/api/rpc/workspaceSyncTargetContent';
 import { configuration, reloadConfiguration } from '@/configuration';
@@ -100,6 +100,47 @@ async function enqueueMachineAdmissionWithCancellation(
 }
 
 describe('ApiMachineClient machine admission transport', () => {
+  it.each(['profile', 'currentness'] as const)('lets an admission joiner cancel without cancelling shared Account identity acquisition (%s)', async phase => {
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let entered = false;
+    // Hold only the Home HTTP boundary; use the actual installed admission reader.
+    const network = vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (String(url).endsWith('/v1/account/profile')) {
+        if (phase === 'profile') { entered = true; await held; }
+        return { status: 200, data: { id: 'owner' } };
+      }
+      expect(String(url)).toContain('/v1/account/encryption/currentness');
+      entered = true;
+      await held;
+      return { status: 200, data: { mode: 'plain', version: 1, updatedAt: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null } };
+    });
+    socketIo.mockImplementation(() => createApiSessionSocketStub());
+    const token = phase === 'profile' ? 'opaque-daemon-token'
+      : `test.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
+    const client = new ApiMachineClient(token, createMachine('plain'));
+    const boundary: MachineRpcAdmissionBoundary = Reflect.get(client, 'machineRpcAdmissionBoundary');
+    const owner = boundary.resolveCustodianAccountId();
+    const cancellation = new AbortController();
+    let joined = false;
+    let joinedError: unknown;
+    try {
+      await vi.waitFor(() => expect(entered).toBe(true));
+      const joiner = boundary.resolveCustodianAccountId(cancellation.signal).then(
+        () => { joined = true; }, error => { joined = true; joinedError = error; });
+      const reason = new Error('admission reader retired');
+      cancellation.abort(reason);
+      await vi.waitFor(() => expect(joined).toBe(true));
+      expect(joinedError).toBe(reason);
+      release();
+      expect(await owner).toBe('owner');
+      await joiner;
+      expect(await boundary.resolveCustodianAccountId()).toBe('owner');
+      expect(network.mock.calls.filter(([url]) => String(url).endsWith('/v1/account/profile'))).toHaveLength(1);
+    } finally { release(); await owner; await client.shutdown(); network.mockRestore(); }
+  });
+
   it('does not republish an unchanged activity projection, but publishes its next semantic edge', async () => {
     const machine = { ...createMachine(), daemonState: { status: 'running' as const,
       managedActivity: { kind: 'busy' as const, reasons: ['finite' as const] } }, daemonStateVersion: 4 };

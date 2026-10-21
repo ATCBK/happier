@@ -22,6 +22,14 @@ import { resolveCliAccountStorageContext } from '@/api/client/accountKvJsonTrans
 import { logger } from '@/ui/logger';
 import { buildSessionFollowChangeHintV1 } from '@happier-dev/protocol/sessions/follow/changes';
 import type { ChangeEntry } from '@happier-dev/protocol/changes';
+import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
+import { createCliReviewCommentActionExecutorFromCredentials } from '@/agent/reviews/comments/executor';
+import { ReviewCommentPrepareMutationRequestV1Schema, ReviewCommentPublicationTransportRequestV1Schema,
+    splitReviewCommentV1, type ReviewCommentV1 } from '@happier-dev/protocol';
+import { createProviderAccountUsagePersistenceScheduler } from '@/daemon/connectedServices/accountUsage/persistence';
+import { buildProviderAccountUsageRecordId, openSealedProviderAccountUsageSnapshot,
+    type ProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol';
+import { QualifiedProviderAccountUsageWriteV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 
 const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-root', binding: {
     accountId: 'bob', custodianAccountId: 'bob', authentication: { kind: 'account', tokenEpoch: 1 },
@@ -32,6 +40,163 @@ const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: '
 afterEach(() => vi.restoreAllMocks());
 
 describe('requester Account currentness over the installed socket wiring', () => {
+    it.each([
+        ['reviews.comments.claimPublicationDispatch', 'mode-change'],
+        ['reviews.comments.create', 'mode-change'],
+        ['reviews.comments.claimPublicationDispatch', 'revoked'],
+    ] as const)(
+        'refuses %s publication sealing after %s while its warm socket identity stays unchanged', async (actionId, change) => {
+        const channel = await createRequesterCurrentnessSocketHarness();
+        const fact = { mode: 'plain' as const, version: 1, updatedAt: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null };
+        const get = vi.spyOn(axios, 'get').mockImplementation(async (url: string) => url.endsWith('/currentness')
+            ? { status: 200, data: fact } : change === 'revoked'
+                ? { status: 403, data: { error: 'not_authenticated' } }
+                : { status: 200, data: { mode: 'e2ee', updatedAt: 2 } });
+        const post = vi.spyOn(axios, 'post').mockImplementation(async (_url, body) => {
+            const request = ReviewCommentPublicationTransportRequestV1Schema.parse(body);
+            return { status: 200, data: { disposition: 'dispatch', dispatchToken: 'dispatch',
+                publicationPlanId: request.publicationPlanId, entries: request.entries,
+                verdict: request.verdict, instructions: { entries: request.entries.map(() => 'dispatch'), verdict: 'dispatch' },
+                priorResult: null } };
+        });
+        const scope = { accountId: 'bob', token: 'bob', serverBaseUrl: 'https://home.example' };
+        const observation = acquireRequesterAccountEncryptionCurrentness(scope);
+        try {
+            await observation.read();
+            const executor = createCliReviewCommentActionExecutorFromCredentials({
+                credentials: { token: scope.token, encryption: { type: 'legacy', secret: new Uint8Array(32).fill(7) } },
+                resolveAccountId: () => scope.accountId,
+            });
+            const failure = await runWithServerHttpBaseUrl(scope.serverBaseUrl, () => executor(actionId,
+                actionId === 'reviews.comments.create' ? { projectId: 'project', anchor: { kind: 'file', filePath: 'PRIVATE-file' },
+                    snapshot: { kind: 'none', capturedAt: 1 }, body: 'PRIVATE-body', clientMutationId: 'mutation' } : {
+                target: { providerId: 'PRIVATE-provider', configuredAccountId: 'PRIVATE-account',
+                    entryRef: { sourceId: 'PRIVATE-source', kindId: 'PRIVATE-kind', collisionScope: 'PRIVATE-scope', entryId: 'PRIVATE-entry' },
+                    subtarget: null }, baseRevision: null, headRevision: null, entries: [], verdict: { kind: 'comment', body: 'PRIVATE-body' },
+            })).then(() => null, error => error);
+            expect(post).not.toHaveBeenCalled();
+            expect(failure).toMatchObject({ code: change === 'revoked'
+                ? 'review_comment_encryption_mode_unavailable' : 'review_comment_encryption_mode_mismatch' });
+            expect(get.mock.calls.filter(([url]) => String(url).endsWith('/account/encryption'))).toHaveLength(1);
+            expect(await observation.read()).toMatchObject({ mode: 'plain' });
+        } finally { await observation.dispose(); await channel.close(); }
+    });
+
+    it('refuses a stale encrypted Review commit when Account mode changes during prepare before its socket push', async () => {
+        const channel = await createRequesterCurrentnessSocketHarness();
+        const fact = { mode: 'e2ee' as const, version: 1, updatedAt: 1,
+            signingKeyFingerprint: 'signing-key', contentKeyFingerprint: 'content-key' };
+        let mode = fact.mode as 'plain' | 'e2ee';
+        const get = vi.spyOn(axios, 'get').mockImplementation(async (url: string) => ({ status: 200,
+            data: url.endsWith('/currentness') ? fact : { mode, updatedAt: 2 } }));
+        const input = { projectId: 'project', anchor: { kind: 'file' as const, filePath: 'PRIVATE-file' },
+            snapshot: { kind: 'none' as const, capturedAt: 1 }, body: 'PRIVATE-body', clientMutationId: 'mutation' };
+        const comment: ReviewCommentV1 = { v: 1, id: 'comment', accountId: 'bob', projectId: input.projectId,
+            anchor: input.anchor, snapshot: input.snapshot, body: input.body, bodyVersion: 1, edits: [],
+            author: { kind: 'user', userId: 'bob' }, state: 'open', flags: {}, dispositions: {}, threadId: 'comment',
+            evidence: [], transitions: [], createdAt: 100, updatedAt: 100, serverRevision: 1 };
+        const structural = splitReviewCommentV1(comment).structural;
+        const post = vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+            if (!String(url).endsWith('/mutations/prepare')) return { status: 200, data: {} };
+            const request = ReviewCommentPrepareMutationRequestV1Schema.parse(body);
+            // The mutation prepared under E2EE, then the authoritative transition
+            // committed. Its Account socket notification is deliberately held.
+            mode = 'plain';
+            return { status: 200, data: { v: 1, receipt: 'receipt', request, records: [{ structural,
+                event: { eventId: 'event', commentId: structural.id, accountId: 'bob', projectId: input.projectId,
+                    eventKind: 'created', actor: structural.author, createdAt: 100, serverRevision: 1,
+                    event: { clientMutationId: input.clientMutationId } } }], replayed: false, failed: [] } };
+        });
+        const scope = { accountId: 'bob', token: 'bob', serverBaseUrl: 'https://home.example' };
+        const observation = acquireRequesterAccountEncryptionCurrentness(scope);
+        try {
+            await observation.read();
+            const executor = createCliReviewCommentActionExecutorFromCredentials({
+                credentials: { token: scope.token, encryption: { type: 'legacy', secret: new Uint8Array(32).fill(7) } },
+                resolveAccountId: () => scope.accountId,
+            });
+            const failure = await runWithServerHttpBaseUrl(scope.serverBaseUrl, () => executor('reviews.comments.create', input))
+                .then(() => null, error => error);
+            expect(post.mock.calls.map(([url]) => String(url).split('/comments/')[1])).toEqual(['mutations/prepare']);
+            expect(failure).toMatchObject({ code: 'review_comment_encryption_mode_mismatch' });
+            expect(get.mock.calls.filter(([url]) => String(url).endsWith('/account/encryption'))).toHaveLength(1);
+            expect(await observation.read()).toMatchObject({ mode: 'e2ee' });
+        } finally { await observation.dispose(); await channel.close(); }
+    });
+
+    it('seals provider Usage under fresh Account mode before its held socket identity advances', async () => {
+        const channel = await createRequesterCurrentnessSocketHarness();
+        const fact = { mode: 'plain' as const, version: 1, updatedAt: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null };
+        const get = vi.spyOn(axios, 'get').mockImplementation(async (url: string) => ({ status: 200,
+            data: url.endsWith('/currentness') ? fact : { mode: 'e2ee', updatedAt: 2 } }));
+        const post = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { success: true, source: { status: 'linked' } } });
+        const scope = { accountId: 'bob', token: 'bob', serverBaseUrl: 'https://home.example' };
+        const observation = acquireRequesterAccountEncryptionCurrentness(scope);
+        const encryption = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
+        const recordKey = { providerId: 'codex', accountSubjectId: 'PRIVATE-subject', subjectKind: 'account' as const, quotaScope: 'account' as const };
+        const snapshot: ProviderAccountUsageSnapshotV1 = { v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+            providerId: 'codex', accountSubject: { kind: 'providerSubject', id: 'PRIVATE-subject' }, observedAtMs: 1_000,
+            fetchedAtMs: 1_000, staleAfterMs: 300_000, source: 'runtimeSignal', confidence: 'confirmed', state: 'loaded_data', meters: [] };
+        const scheduler = createProviderAccountUsagePersistenceScheduler({
+            api: new ConnectedServiceCredentialHttpClient({ token: scope.token }), credentials: { token: scope.token, encryption },
+            now: () => 1_500, randomBytes: length => new Uint8Array(length).fill(6),
+        });
+        try {
+            await observation.read();
+            await runWithServerHttpBaseUrl(scope.serverBaseUrl, async () => {
+                await scheduler.recordInBandSnapshot(snapshot, { targets: [{ source: { ref: {
+                    service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' }, bindingKind: 'account' },
+                    expectedCredentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS', expectedConfigurationRevision: 'cfg-current' }] });
+                await scheduler.flush(1_000);
+            });
+            expect(post).toHaveBeenCalledTimes(1);
+            const write = QualifiedProviderAccountUsageWriteV4Schema.parse(post.mock.calls[0]?.[1]);
+            expect(write).toMatchObject({ payloadMode: 'sealed_account_scoped_v1' });
+            if (write.payloadMode !== 'sealed_account_scoped_v1') throw new Error('Expected sealed Usage');
+            expect(openSealedProviderAccountUsageSnapshot({ material: encryption, sealed: write.sealedPayload })).toEqual(snapshot);
+            expect(write).not.toHaveProperty('snapshot');
+            expect(get.mock.calls.filter(([url]) => String(url).endsWith('/account/encryption'))).toHaveLength(1);
+            expect(await observation.read()).toMatchObject({ mode: 'plain' });
+        } finally { scheduler.dispose(); await observation.dispose(); await channel.close(); }
+    });
+
+    it('does not whole-parse unrelated feed traffic in the installed Account adapter', async () => {
+        const channel = await createRequesterCurrentnessSocketHarness();
+        const fact = { mode: 'plain' as const, version: 1, updatedAt: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null };
+        vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: fact });
+        const observation = acquireRequesterAccountEncryptionCurrentness({ accountId: 'bob', token: 'bob',
+            serverBaseUrl: 'https://home.example' });
+        // Pass-through instrumentation: every admitted packet still uses the
+        // real strict schema; only unnecessary whole-feed validation is counted.
+        const validation = vi.spyOn(UpdateContainerSchema, 'safeParse');
+        const flush = () => Promise.all([...channel.server.sockets.sockets.values()].map(socket =>
+            new Promise<void>(resolve => socket.emit('fx56-delivered', resolve))));
+        try {
+            await observation.read();
+            for (let index = 0; index < 100; index++) {
+                for (const body of [
+                    { t: 'update-account', id: 'foreign', encryptionCurrentness: fact },
+                    { t: 'update-account', id: 'bob', name: 'Changed profile' },
+                    { t: 'update-session', id: 'session' },
+                ]) channel.server.emit('update', { id: 'feed', seq: index, createdAt: 2, body });
+            }
+            await flush();
+            expect(observation.isCurrent(fact)).toBe(true);
+            expect(validation).toHaveBeenCalledTimes(0);
+            const encrypted = { ...fact, mode: 'e2ee' as const, version: 2, updatedAt: 2,
+                contentKeyFingerprint: 'content-key' };
+            await channel.push('bob', encrypted);
+            expect(observation.isCurrent(encrypted)).toBe(true);
+            expect(validation).toHaveBeenCalledTimes(1);
+            await channel.pushInvalidCurrentness('bob');
+            expect(observation.isCurrent(encrypted)).toBe(false);
+            expect(validation).toHaveBeenCalledTimes(2);
+        } finally { validation.mockRestore(); await observation.dispose(); await channel.close(); }
+    });
+
     it('does not grant an unregistered credential the synchronous identity fence of another holder', async () => {
         const channel = await createRequesterCurrentnessSocketHarness();
         const fact = { mode: 'plain' as const, version: 1, updatedAt: 1,
