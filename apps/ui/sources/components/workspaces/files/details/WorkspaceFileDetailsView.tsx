@@ -19,6 +19,7 @@ import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreferenc
 import { useWorkspaceFileLiveMoment } from './workspaceFileDetails/useWorkspaceFileLiveMoment';
 import { FileErrorState, FileLoadingState } from '@/components/workspaces/files/file/FileScreenState';
 import { FileViewerBody } from '@/components/workspaces/files/file/FileViewerBody';
+import type { ImageWellInfo } from '@/components/ui/media/ImageWell';
 import { CheckoutUnreachableState, useCheckoutReachability } from '@/components/workspaces/reachability/checkoutReachability';
 import { FileContentPanel, resolveFileCodeGeometry } from '@/components/workspaces/files/file/FileContentPanel';
 import { FileChangesSection, type FileChangesDiffSurface } from '@/components/workspaces/files/file/changes/FileChangesRegions';
@@ -803,7 +804,9 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     }, [lineSelectionCanStart]);
 
     const language = getFileLanguageFromPath(filePath);
-    const fileViewer = resolveFileViewerKind({ path: filePath, mimeType: fileContent?.binaryMime, isBinaryContent: fileEntry?.stats.isBinary });
+    // Binary bytes under a text-looking name (`firmware.bin`) are a binary file, not a "Text file" (FV2b).
+    const fileViewer = resolveFileViewerKind({ path: filePath, mimeType: fileContent?.binaryMime,
+        isBinaryContent: fileEntry?.stats.isBinary === true || fileContent?.isBinary === true });
     const markdownPreviewAvailable = fileContent?.isBinary !== true
         && fileViewer.kind === 'markdown'
         && typeof fileContent?.content === 'string';
@@ -995,7 +998,10 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         kind: fileViewer.kind,
         hasRenderableDiff: changesOffered, deleted: fileEntry?.kind === 'deleted',
         partial: Boolean(fileContent?.partial),
-        hasText: (fileContent?.isBinary === false && typeof fileContent.content === 'string') || persistedDraft?.isEditingFile === true,
+        // Changes opened first holds only the text diff; the file is text all the same, so Edit is offered there
+        // and opens at the change in focus once the file's text arrives (P4-R10).
+        hasText: (fileContent?.isBinary === false && typeof fileContent.content === 'string') || persistedDraft?.isEditingFile === true
+            || (typeof diffContent === 'string' && diffContent.length > 0 && fileEntry?.stats.isBinary !== true && fileContent?.isBinary !== true),
         writeSupported: fileWriteSupported || persistedDraft?.isEditingFile === true,
         editorAvailable: editorSurfaceEnabled,
     });
@@ -1274,17 +1280,23 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     const fatalError = Boolean(error) && !previewTooLarge && !diffContent && !fileContent;
 
     // One preview identity for the body and the Media stage it opens (P2 §3.3): the stage reuses these bytes.
+    // SVG is held text on this page. Its stage consumes those same bytes through the preview owner,
+    // rather than starting a second workspace download when the person expands the picture.
+    const svgPreviewBytes = React.useMemo(() => fileViewer.kind === 'svg' && heldText !== null
+        ? new TextEncoder().encode(heldText) : null, [fileViewer.kind, heldText]);
     const viewerPreviewIdentity = scope ? buildWorkspacePreviewIdentity(scope, filePath, fileContent?.binarySizeBytes,
-        JSON.stringify([snapshotSignature ?? lineSelectionFingerprint ?? null, fileContent?.binaryPreviewRevision ?? null])) : null;
+        fileViewer.kind === 'svg' ? fileContent?.contentHash ?? null
+            : JSON.stringify([snapshotSignature ?? lineSelectionFingerprint ?? null, fileContent?.binaryPreviewRevision ?? null])) : null;
     const viewerPreviewInput = React.useMemo<UseFilePreviewSourceInput>(() => ({
-        source: scope ? { kind: 'workspace', scope, filePath } : { kind: 'uri', uri: '' },
-        enabled: Boolean(scope) && fileViewer.previewable && fileViewer.kind !== 'svg',
+        source: svgPreviewBytes ? { kind: 'bytes', bytes: svgPreviewBytes, name: filePath }
+            : scope ? { kind: 'workspace', scope, filePath } : { kind: 'uri', uri: '' },
+        enabled: fileViewer.previewable && (svgPreviewBytes !== null || (Boolean(scope) && fileViewer.kind !== 'svg')),
         ...viewerPreviewIdentity,
         mimeType: fileViewer.mimeType,
         sizeBytes: fileContent?.binarySizeBytes ?? null,
         // Video admission is the transfer's own; every other kind uses the image-preview budget.
         ...(fileViewer.kind === 'video' ? { maxBytes: null } : {}),
-    }), [scope, filePath, fileViewer.previewable, fileViewer.kind, fileViewer.mimeType, viewerPreviewIdentity?.cacheScopeId, viewerPreviewIdentity?.cacheKey, fileContent?.binarySizeBytes]);
+    }), [scope, filePath, fileViewer.previewable, fileViewer.kind, fileViewer.mimeType, svgPreviewBytes, viewerPreviewIdentity?.cacheScopeId, viewerPreviewIdentity?.cacheKey, fileContent?.binarySizeBytes]);
 
     // Blame (P8 U5): a region the page places. Its run column rides the reading surface's leading lane in
     // View and Changes; the card and its one note sit beside it.
@@ -1302,6 +1314,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
 
 
     const isBinaryFile = fileContent?.isBinary === true;
+    const [imageInfo, setImageInfo] = React.useState<Readonly<{ path: string; info: ImageWellInfo }> | null>(null);
+    const onImageInfo = React.useCallback((info: ImageWellInfo) => setImageInfo({ path: filePath, info }), [filePath]);
     const deleted = fileEntry?.kind === 'deleted';
     // The header's facts (details lab 2): how the file changed and by how much, or, for an unchanged
     // file, that nothing changed and how long it is; a partial view says which part it holds.
@@ -1310,12 +1324,25 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         ? { added: fileStatusForHeaderActions.linesAdded, removed: fileStatusForHeaderActions.linesRemoved }
         : null;
     const partial = fileContent?.partial ?? null;
+    // Media: size and kind are written once, here in the meta row, never under the picture (lab FV4–FV6, delta 3).
+    // A plain binary file says what it is on its identity card instead (FV2b).
+    const shownImageInfo = imageInfo?.path === filePath ? imageInfo.info : null;
+    const mediaFacts = isBinaryFile && fileViewer.kind !== 'binary' ? [
+        ...(shownImageInfo ? [`${shownImageInfo.width} × ${shownImageInfo.height}`] : []),
+        t(fileViewer.labelKey as never) as string,
+        ...(typeof fileContent?.binarySizeBytes === 'number' ? [formatFilePageBytes(fileContent.binarySizeBytes)] : []),
+        ...(shownImageInfo && shownImageInfo.displayScale > 1 ? [t('files.viewer.shownAt', { scale: shownImageInfo.displayScale })] : []),
+    ] : null;
+    // Text with no language says so, so an unhighlighted body reads as a fact rather than a fault (lab FV2t).
+    const plainTextFact = (language === null || language === 'text') && typeof fileContent?.content === 'string' && !isBinaryFile && !mediaFacts
+        ? [t('files.pane.page.plainText')] : [];
     const headerSummaryFacts = partial
-        ? [t('files.pane.page.partialFact', { slice: formatFilePageBytes(partial.length), size: formatFilePageBytes(partial.totalBytes) })]
+        ? [t('files.pane.page.partialFact', { slice: formatFilePageBytes(partial.length), size: formatFilePageBytes(partial.totalBytes) }), ...plainTextFact]
         : tooLarge && !fileContent ? [formatFilePageBytes(tooLarge.sizeBytes)]
+        : mediaFacts ? mediaFacts
         : !fileEntry && !hasPendingDelta && !hasIncludedDelta && typeof fileContent?.content === 'string' && !isBinaryFile
             // "No changes" only once source control has answered; until then the line says only what is known.
-            ? [...(scmSnapshot ? [t('detailsSurface.file.noChanges')] : []), t('detailsSurface.file.lines', { count: countTextLines(fileContent.content) })]
+            ? [...(scmSnapshot ? [t('detailsSurface.file.noChanges')] : []), t('detailsSurface.file.lines', { count: countTextLines(fileContent.content) }), ...plainTextFact]
             : null;
     // Offline or behind: the content we hold stays at full strength under one line (FV1o, OR-1); editing
     // is never blocked. One cause, one line: a page above that already says it is not repeated here.
@@ -1556,16 +1583,18 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                             savedText={fileContent?.isBinary ? undefined : fileContent?.content} sessionId={sessionId || null} active={isActive} />
                     ) : null}
                     </>
-                ) : (displayMode === 'file' && isBinaryFile) ? (
+                ) : (displayMode === 'file' && isBinaryFile) || (displayMode === 'markdown' && fileViewer.kind === 'svg' && heldText !== null) ? (
                     <FileViewerBody
                         viewer={fileViewer}
                         title={filePath.split(/[\\/]/).at(-1) || filePath}
                         source={viewerPreviewInput}
+                        svgText={fileViewer.kind === 'svg' ? heldText : null}
                         sizeBytes={fileContent?.binarySizeBytes ?? null}
                         isActive={isActive}
                         findSurfaceId={findSurfaceId}
                         onDownload={() => { void share.download(); }}
                         {...(share.openInDefaultApp ? { onOpenInDefaultApp: share.openInDefaultApp } : {})}
+                        onImageInfo={onImageInfo}
                         testID="file-viewer-body"
                     />
                 ) : displayMode === 'diff' && scope ? (

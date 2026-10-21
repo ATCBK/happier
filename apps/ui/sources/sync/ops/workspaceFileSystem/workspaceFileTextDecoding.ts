@@ -30,7 +30,8 @@ export async function decodeWorkspaceFileText(base64: string): Promise<Workspace
     try {
         text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
     } catch {
-        return { kind: 'notUtf8', hash };
+        // Not UTF-8: a legacy-encoded text file (shown read-only) or a binary file (NULs, control bytes).
+        return isBinaryContent(new TextDecoder('utf-8').decode(bytes)) ? { kind: 'binary' } : { kind: 'notUtf8', hash };
     }
     if (isBinaryContent(text)) return { kind: 'binary' };
     const hasBom = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;

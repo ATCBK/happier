@@ -394,9 +394,11 @@ export function MediaPlayerBody(props: MediaPlayerBodyProps) {
       title={t('surfaceState.opening', { name: props.title })}
     />
   );
+  // A failed or unplayable file is a page state (lab FV6e): it stands on the page, not inside the player's frame.
+  const failed = Boolean(playbackError) || preview.status === 'error';
   return (
     <View testID={props.testID} style={styles.page}>
-      {props.kind === 'video' ? (
+      {failed ? body : props.kind === 'video' ? (
         <View style={styles.videoColumn}>
           <View style={styles.videoWell}>{body}</View>
           {downloading}

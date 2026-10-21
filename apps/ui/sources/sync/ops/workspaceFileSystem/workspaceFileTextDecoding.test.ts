@@ -18,6 +18,13 @@ describe('held workspace text byte reconstruction', () => {
             encoding: { hasBom: decoded.hasBom, editable: true } })).toEqual(original);
     });
 
+    it('classifies non-UTF8 bytes with NULs and control bytes as binary, and Latin-1 text as non-UTF8 text', async () => {
+        const firmware = new Uint8Array([0x7f, 0x48, 0x50, 0x4b, 0x01, 0x00, 0xff, 0xfe, 0x00, 0x02, 0x9c, 0x03, 0x00, 0x11]);
+        expect((await decodeWorkspaceFileText(encodeBase64(firmware, 'base64'))).kind).toBe('binary');
+        const latin1 = new Uint8Array([0x63, 0x61, 0x66, 0xe9, 0x0a]); // "café\n" in ISO-8859-1
+        expect((await decodeWorkspaceFileText(encodeBase64(latin1, 'base64'))).kind).toBe('notUtf8');
+    });
+
     it('refuses partial, non-UTF8 and unproven display text rather than changing the file bytes', async () => {
         const encoding = { hasBom: false, editable: true };
         expect(reconstructWorkspaceFileTextBytes({ text: 'head', complete: false, encoding })).toBeNull();

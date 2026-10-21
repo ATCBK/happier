@@ -193,7 +193,7 @@ export async function refreshWorkspaceFileDetails(input: Readonly<{
 
                 const decodedContent = await decodeWorkspaceFileText(encodedContent);
                 if (decodedContent.kind === 'binary') {
-                    fileContent = { content: '', isBinary: true, contentHash: null, binaryMime: resolveFileViewerKind({ path: input.filePath, isBinaryContent: true }).mimeType };
+                    fileContent = { content: '', isBinary: true, contentHash: null, binaryMime: resolveFileViewerKind({ path: input.filePath, isBinaryContent: true }).mimeType, binarySizeBytes: statSizeBytes };
                     return {
                         status: 'ready',
                         error: null,

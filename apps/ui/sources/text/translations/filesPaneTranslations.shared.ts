@@ -74,6 +74,8 @@ export type FilesPaneTranslations = Readonly<{
         showingFirst: (params: Readonly<{ slice: string; size: string }>) => string;
         showingLast: (params: Readonly<{ slice: string; size: string }>) => string;
         partialFact: (params: Readonly<{ slice: string; size: string }>) => string;
+        /** The kind fact for text with no language: why it reads unhighlighted (lab FV2t). */
+        plainText: string;
         fromMachine: (params: Readonly<{ machine: string }>) => string;
     }>;
     /** P7 language features on the File page: the card, the state note, Problems and References. */
@@ -193,6 +195,7 @@ export const filesPaneTranslationsEnglish = { en: {
             showingFirst: ({ slice, size }) => "Showing the first " + slice + " of " + size,
             showingLast: ({ slice, size }) => "Showing the last " + slice + " of " + size,
             partialFact: ({ slice, size }) => slice + " of " + size,
+            plainText: "Plain text",
             fromMachine: ({ machine }) => "from " + machine,
         },
         intelligence: {

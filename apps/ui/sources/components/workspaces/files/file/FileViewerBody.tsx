@@ -68,7 +68,8 @@ function BinaryIdentity(props: FileViewerBodyProps) {
     <View style={styles.page} testID={props.testID}>
       <SurfaceStateCard
         testID={props.testID ? `${props.testID}-identity` : 'file-binary-identity'}
-        kind="unavailable"
+        // Not a failure: the file is what it is, and Download is the one thing to do with it (primary, P2 §3.8).
+        kind="empty"
         size="pane"
         icon={<FileIcon fileName={props.title} size={40} appearance="line" />}
         title={props.title}
