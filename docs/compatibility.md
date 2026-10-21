@@ -3084,6 +3084,16 @@ read-epoch projection, not a second operation owner, parser, or promise of mixed
 explicitly retired; unrelated operations and retained operation results are
 unchanged.
 
+In 0.3 development source, declared Service Start publishes its source-qualified
+`projectService` reference with purpose `start` through this same V2 owner.
+Copying, preparation and native launch remain phases of that Start; a complete
+binding read may be unavailable until native establishment settles. Mounted
+Service rows retain the operation's progress during that interval and invalidate
+their existing native readers on settlement. Finite setup retains its separate
+review/output custody. V1 continues omitting the service reference; the Start
+request and native result formats are unchanged. This is a development V2
+extension, not a new observation channel or a released mixed-version guarantee.
+
 While the shared Action executor holds a blocking Ask, current operation progress
 uses `waiting_for_approval` and carries the existing `approval_request_created`
 reference in `progress.approval`. The reference identifies the Inbox Ask; it grants
