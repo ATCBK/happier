@@ -6,6 +6,7 @@ import { db } from '@/storage/db';
 import { inTx } from '@/storage/inTx';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 import { createSignedAccountContentBinding } from '@/testkit/accountEncryption';
+import { observePrismaReads } from '@/testkit/observePrismaReads';
 import * as access from './machineAccess';
 import { ACTION_OPERATION_RPC_METHODS_V1, ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -257,6 +258,58 @@ describe('Machine current access (real SQLite)', () => {
         expect(await access.resolveMachineAdmission({ actorAccountId: recipient.id, machineId: f.machine.id })).toEqual({ kind: 'denied', code: 'recipient_key_pending' });
         await db.machine.update({ where: { id: f.machine.id }, data: { dataEncryptionKey: new Uint8Array(sealEncryptedDataKeyEnvelopeV1({ dataKey: tweetnacl.randomBytes(32), recipientPublicKey: f.owner.keys.publicKey, randomBytes: tweetnacl.randomBytes })) } });
         expect(await inTx(tx => access.commitMachineRecipientKeyEnvelopesInTx(tx, input))).toEqual({ kind: 'refused', code: 'machine_key_changed' });
+    });
+
+    it('set-acquires recipient material while preserving exception paging and all-before-write refusal', async () => {
+        const f = await fixture('e2ee');
+        const recipients = (await Promise.all(Array.from({ length: 5 }, () => account('e2ee')))).sort((a, b) => a.id.localeCompare(b.id));
+        await db.machineAccountGrant.createMany({ data: recipients.map(recipient => ({ machineId: f.machine.id,
+            accountId: recipient.id, accessLevel: 'view', createdByAccountId: f.owner.id })) });
+        const actor = { actorAccountId: f.owner.id, machineId: f.machine.id };
+        const read = (cursor?: string, state: 'all' | 'action_required' = 'action_required') => inTx(async tx => {
+            const observed = observePrismaReads(tx, ['account', 'machineKeyEnvelope']);
+            const value = await access.readMachineRecipientCensusInTx(observed.tx, { ...actor, query: { limit: 2, state, ...(cursor ? { cursor } : {}) } });
+            if ('kind' in value) throw new Error(value.code);
+            return { value, reads: observed.reads };
+        });
+        const first = await read();
+        expect(first.value.recipients.map(row => row.recipientAccountId)).toEqual(recipients.slice(0, 2).map(row => row.id));
+        const second = await read(first.value.nextCursor!);
+        const third = await read(second.value.nextCursor!);
+        expect([...first.value.recipients, ...second.value.recipients, ...third.value.recipients].map(row => row.recipientAccountId))
+            .toEqual(recipients.map(row => row.id));
+        expect(third.value.nextCursor).toBeNull();
+        const entries = recipients.map(recipient => ({ recipientAccountId: recipient.id,
+            encryptedDataKey: encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey: f.key,
+                recipientPublicKey: recipient.keys.publicKey, randomBytes: tweetnacl.randomBytes })),
+            recipientContentPublicKeyFingerprint: computeContentPublicKeyFingerprint(recipient.keys.publicKey) }));
+        const input = { ...actor, expectedMachineOwnerEnvelopeFingerprint: first.value.machineOwnerEnvelopeFingerprint!,
+            expectedCallerDataEncryptionKey: first.value.callerDataEncryptionKey!, expectedMetadataVersion: first.value.content.metadataVersion,
+            expectedDaemonStateVersion: first.value.content.daemonStateVersion, recipientKeyEnvelopes: entries };
+        const committed = await inTx(async tx => {
+            const observed = observePrismaReads(tx, ['account']);
+            const value = await access.commitMachineRecipientKeyEnvelopesInTx(observed.tx, input);
+            return { value, reads: observed.reads };
+        });
+        expect(committed.value).toEqual({ appliedRecipientAccountIds: recipients.map(row => row.id), skippedRecipientAccountIds: [] });
+        const healthy = await read();
+        expect(healthy.value).toMatchObject({ recipients: [], nextCursor: null });
+        const all = await read(undefined, 'all');
+        expect(all.value.recipients.map(row => row.encryptedDataKey)).toEqual(entries.slice(0, 2).map(row => row.encryptedDataKey));
+        // A later stale binding must prevent even earlier valid entries from being written.
+        await db.machineKeyEnvelope.deleteMany({ where: { machineId: f.machine.id } });
+        await db.account.update({ where: { id: recipients[4].id }, data: createSignedAccountContentBinding() });
+        expect(await inTx(tx => access.commitMachineRecipientKeyEnvelopesInTx(tx, input)))
+            .toEqual({ kind: 'refused', code: 'recipient_binding_changed' });
+        expect(await db.machineKeyEnvelope.count({ where: { machineId: f.machine.id } })).toBe(0);
+        await db.machineAccountGrant.delete({ where: { machineId_accountId: { machineId: f.machine.id, accountId: recipients[4].id } } });
+        expect(await inTx(tx => access.commitMachineRecipientKeyEnvelopesInTx(tx, input)))
+            .toEqual({ kind: 'refused', code: 'access_denied' });
+        expect(await db.machineKeyEnvelope.count({ where: { machineId: f.machine.id } })).toBe(0);
+        expect({ first: first.reads, healthy: healthy.reads, commit: committed.reads }).toEqual({
+            first: ['account.findMany', 'machineKeyEnvelope.findMany'],
+            healthy: ['account.findMany', 'machineKeyEnvelope.findMany'], commit: ['account.findMany'],
+        });
     });
 
     it('preserves mixed Team member compatibility and key recoverability while allowing grant level edits', async () => {

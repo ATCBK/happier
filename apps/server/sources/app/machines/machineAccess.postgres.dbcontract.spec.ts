@@ -213,14 +213,20 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('M
         const recipientKeys = tweetnacl.box.keyPair();
         const owner = await db.account.create({ data: { encryptionMode: 'e2ee', ...createSignedAccountContentBinding(ownerKeys.publicKey) } });
         const recipient = await db.account.create({ data: { encryptionMode: 'e2ee', ...createSignedAccountContentBinding(recipientKeys.publicKey) } });
+        const earlierKeys = tweetnacl.box.keyPair();
+        const earlier = await db.account.create({ data: { id: `a-${randomUUID()}`, encryptionMode: 'e2ee',
+            ...createSignedAccountContentBinding(earlierKeys.publicKey) } });
         const dataKey = tweetnacl.randomBytes(32);
         const machine = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id, installationId: randomUUID(),
             metadata: 'opaque', dataEncryptionKey: new Uint8Array(sealEncryptedDataKeyEnvelopeV1({ dataKey,
                 recipientPublicKey: ownerKeys.publicKey, randomBytes: tweetnacl.randomBytes })) } });
         await db.machineAccountGrant.create({ data: { machineId: machine.id, accountId: recipient.id,
             accessLevel: 'view', createdByAccountId: owner.id } });
+        await db.machineAccountGrant.create({ data: { machineId: machine.id, accountId: earlier.id,
+            accessLevel: 'view', createdByAccountId: owner.id } });
         const census = await inTx(tx => readMachineRecipientCensusInTx(tx, { machineId: machine.id, actorAccountId: owner.id }));
         if ('kind' in census) throw new Error(census.code);
+        expect(census.recipients.map(row => row.recipientAccountId)).toEqual([earlier.id, recipient.id].sort());
         const restore = beforePublicationFence(async () => {
             if (change === 'content') await db.machine.update({ where: { id: machine.id }, data: { metadataVersion: { increment: 1 } } });
             else if (change === 'recipient') await db.account.update({ where: { id: recipient.id }, data: createSignedAccountContentBinding() });
@@ -233,7 +239,11 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('M
                         expectedMachineOwnerEnvelopeFingerprint: census.machineOwnerEnvelopeFingerprint,
                         expectedCallerDataEncryptionKey: census.callerDataEncryptionKey,
                         expectedMetadataVersion: census.content.metadataVersion, expectedDaemonStateVersion: census.content.daemonStateVersion,
-                        recipientKeyEnvelopes: [{ recipientAccountId: recipient.id,
+                        recipientKeyEnvelopes: [{ recipientAccountId: earlier.id,
+                            encryptedDataKey: encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey,
+                                recipientPublicKey: earlierKeys.publicKey, randomBytes: tweetnacl.randomBytes })),
+                            recipientContentPublicKeyFingerprint: computeContentPublicKeyFingerprint(earlierKeys.publicKey) },
+                        { recipientAccountId: recipient.id,
                             encryptedDataKey: encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey,
                                 recipientPublicKey: recipientKeys.publicKey, randomBytes: tweetnacl.randomBytes })),
                             recipientContentPublicKeyFingerprint: computeContentPublicKeyFingerprint(recipientKeys.publicKey) }],

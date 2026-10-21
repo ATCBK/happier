@@ -1,12 +1,14 @@
 import Fastify from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { randomUUID } from 'node:crypto';
+import * as privacyKit from 'privacy-kit';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { auth } from '@/app/auth/auth';
 import { enforceLoginEligibility } from '@/app/auth/enforceLoginEligibility';
 import { db, withSqliteReadSnapshot } from '@/storage/db';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
+import { encryptString } from '@/modules/encrypt';
 
 import { enableAuthentication } from './enableAuthentication';
 
@@ -36,6 +38,31 @@ describe('authenticated request Account currentness', () => {
         const token = await auth.createToken(account.id, undefined, { kind: 'account', authority: 'present_user' });
         return { account, token };
     }
+
+    it('does not open unrelated Home secrets just to read the auth diagnostic flag', async () => {
+        await db.homeSettings.create({ data: {
+            id: 'home',
+            revision: 1,
+            values: { HAPPIER_AUTH_DECORATOR_DIAGNOSTIC_LOGS: true },
+            encryptedSecrets: new TextEncoder().encode(JSON.stringify({
+                HAPPIER_AUTH_EMAIL_SMTP_PASSWORD: privacyKit.encodeBase64(encryptString(
+                    ['storage', 'HomeSettings', 'home', 'secrets', 'HAPPIER_AUTH_EMAIL_SMTP_PASSWORD', 'v1'],
+                    'fixture-home-password',
+                )),
+            })),
+        } });
+        // Observe the real external cryptography API without replacing its implementation.
+        const opens = vi.spyOn(privacyKit.KeyTree.prototype, 'symmetricDecryptString');
+        try {
+            const response = await app.inject({ method: 'GET', url: '/private' });
+            expect(response.statusCode).toBe(401);
+            expect(response.json()).toEqual({ error: 'Missing authorization header' });
+            expect(opens).not.toHaveBeenCalled();
+        } finally {
+            opens.mockRestore();
+            await db.homeSettings.deleteMany({});
+        }
+    });
 
     it('uses one fresh Account read per authenticated request, including a hot cryptographic cache', async () => {
         const { token } = await credential();

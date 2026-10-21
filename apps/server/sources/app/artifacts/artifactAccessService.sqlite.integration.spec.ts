@@ -15,7 +15,8 @@ import { auth } from "@/app/auth/auth";
 import { artifactUpdateHandler } from "@/app/api/socket/artifactUpdateHandler";
 import { createFakeSocket, getSocketHandler } from "@/app/api/testkit/socketHarness";
 import { deleteArtifact, migrateArtifactAccountEncryptionInTx, updateArtifactTx } from "./artifactWriteService";
-import { readArtifactHeaderForCallerInTx } from './artifactAccessService';
+import { applyArtifactRecipientKeyEnvelopesInTx, readArtifactHeaderForCallerInTx } from './artifactAccessService';
+import { observePrismaReads } from '@/testkit/observePrismaReads';
 import { withSqliteReadSnapshot } from '@/storage/prisma';
 import { buildWidgetSurfaceArtifactHeaderV1, buildWidgetSurfaceArtifactIdV1, readWidgetSurfaceArtifactHeaderV1 } from '@happier-dev/protocol/widgets';
 
@@ -680,6 +681,47 @@ describe("Artifact document grants (real SQLite)", () => {
         });
     });
 
+    it('set-acquires Resource recipients and grants while preserving current-binding skips and input order', async () => {
+        const owner = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: 'e2ee' } });
+        const recipients = await Promise.all(Array.from({ length: 3 }, () => db.account.create({
+            data: { ...createSignedAccountContentBinding(), encryptionMode: 'e2ee' },
+        })));
+        const plain = await plainAccount();
+        const key = tweetnacl.randomBytes(32);
+        const wrap = (publicKey: Uint8Array) => new Uint8Array(sealEncryptedDataKeyEnvelopeV1({
+            dataKey: key, recipientPublicKey: publicKey, randomBytes: tweetnacl.randomBytes,
+        }));
+        const artifact = await db.artifact.create({ data: { id: crypto.randomUUID(), accountId: owner.id,
+            header: new TextEncoder().encode('opaque header'), body: new TextEncoder().encode('opaque body'),
+            dataEncryptionKey: wrap(owner.contentPublicKey!) } });
+        const team = await db.team.create({ data: { name: 'Recipient acquisition' } });
+        await db.artifactTeamGrant.create({ data: { artifactId: artifact.id, teamId: team.id, accessLevel: 'view', createdByAccountId: owner.id } });
+        await db.teamMembership.createMany({ data: recipients.map(recipient => ({ teamId: team.id, accountId: recipient.id, role: 'member' })) });
+        // Overlapping direct/Team grants must keep the valid recipient admitted once.
+        await db.artifactAccountGrant.createMany({ data: [recipients[0], plain].map(recipient => ({
+            artifactId: artifact.id, accountId: recipient.id, accessLevel: 'edit', createdByAccountId: owner.id,
+        })) });
+        const entries = [...recipients, plain, owner].map(recipient => ({ recipientAccountId: recipient.id,
+            encryptedDataKey: privacyKit.encodeBase64(wrap(recipient.contentPublicKey ?? owner.contentPublicKey!)),
+            recipientContentPublicKeyFingerprint: recipient.contentPublicKey ? computeContentPublicKeyFingerprint(recipient.contentPublicKey) : 'unavailable' }));
+        await db.account.update({ where: { id: recipients[1].id }, data: createSignedAccountContentBinding() });
+        await db.teamMembership.deleteMany({ where: { teamId: team.id, accountId: recipients[2].id } });
+        const apply = (recipientKeyEnvelopes: typeof entries) => inTx(async tx => {
+            const observed = observePrismaReads(tx, ['account', 'artifact']);
+            const value = await applyArtifactRecipientKeyEnvelopesInTx(observed.tx, { artifactId: artifact.id, recipientKeyEnvelopes });
+            return { value, reads: observed.reads };
+        });
+        const single = await apply(entries.slice(0, 1));
+        const multiple = await apply(entries);
+        expect(single.value).toEqual({ appliedRecipientAccountIds: [recipients[0].id], skippedRecipientAccountIds: [] });
+        expect(multiple.value).toEqual({ appliedRecipientAccountIds: [recipients[0].id],
+            skippedRecipientAccountIds: [recipients[1].id, recipients[2].id, plain.id, owner.id] });
+        expect(await db.artifactKeyEnvelope.findMany({ where: { artifactId: artifact.id }, select: { recipientAccountId: true } }))
+            .toEqual([{ recipientAccountId: recipients[0].id }]);
+        expect(single.reads).toEqual(['account.findMany', 'artifact.findFirst']);
+        expect(multiple.reads).toEqual(single.reads);
+    });
+
     it("recipient preparation rechecks keys and memberships and never projects the owner's envelope to a grantee", async () => {
         const owner = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: "e2ee" } });
         const editor = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: "e2ee" } });
@@ -735,6 +777,14 @@ describe("Artifact document grants (real SQLite)", () => {
             expect(removed.json()).toEqual({ appliedRecipientAccountIds: [], skippedRecipientAccountIds: [late.id] });
             expect(await db.artifactKeyEnvelope.count({ where: { artifactId: artifact.id, recipientAccountId: late.id } })).toBe(0);
             await db.account.update({ where: { id: editor.id }, data: { ...createSignedAccountContentBinding() } });
+            const rebound = await app.inject({ method: 'POST', url: commitUrl, headers, payload: {
+                artifactId: artifact.id, expectedDataEncryptionKey: privacyKit.encodeBase64(ownerKey), recipientKeyEnvelopes: [{
+                    recipientAccountId: editor.id, encryptedDataKey: editorKey,
+                    recipientContentPublicKeyFingerprint: editorRow.contentPublicKeyFingerprint,
+                }],
+            } });
+            expect(rebound.statusCode, rebound.body).toBe(200);
+            expect(rebound.json()).toEqual({ appliedRecipientAccountIds: [], skippedRecipientAccountIds: [editor.id] });
             expect((await app.inject({ method: "GET", url: `/v1/artifacts/${artifact.id}`, headers: { "x-test-user-id": editor.id } })).statusCode).toBe(409);
             expect(await inTx(tx => updateArtifactTx(tx, { actorUserId: editor.id, artifactId: artifact.id,
                 body: { bytes: editedCiphertext, expectedVersion: 2 } })))
