@@ -22,8 +22,34 @@ import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { createMachineSharedProviderGatewayResolver } from '@/daemon/machine/bootstrapMachineSyncRuntime';
 import { createRuntimeProviderServices } from '@/providers/probe/runtimeServices';
 import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
+import { logger } from '@/ui/logger';
 
 afterEach(() => { resetActiveAccountSettingsSnapshotForTests(); vi.restoreAllMocks(); });
+
+it('reports missing packaged Agent factory activation as internal failure in both projection and launch', async () => {
+  const fixture = await createManagedRunLaunchFixture({ activateAgent: false, sessionRunnerFactoryModule: './missingFactory.mjs' });
+  const diagnostic = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+  try {
+    const services = createRuntimeProviderModelManagementServices({ machineId: fixture.machineId,
+      getAccountSettingsSnapshot: () => fixture.snapshot, featureGate: { isEnabled: () => true },
+      acquireRuntimeLease: async () => fixture.lease,
+      modelSettingsMutation: async (): Promise<never> => { throw new Error('No mutation during projection'); } });
+    await expect(services.projectModels({ machineId: fixture.machineId, agentTargetKey: fixture.agentTargetKey }))
+      .resolves.toMatchObject({ status: 'error', error: { code: 'agent_error' } });
+    expect(diagnostic).toHaveBeenCalledWith('[PROVIDER] Unexpected failure', expect.objectContaining({
+      operation: 'model_projection', errorType: 'Error',
+      sourceLocations: expect.arrayContaining([expect.stringMatching(/adapter\.ts:\d+:\d+/)]),
+    }));
+    const result = await createRuntimeProviderSpawnAuthorizationAttempt({
+      selection: { v: 1, updatedAt: 1, ref: { agentTargetKey: fixture.agentTargetKey,
+        providerConnectionId: ProviderConnectionIdSchema.parse('run-gateway'), modelId: 'model-a' } },
+      machineId: fixture.machineId, agentId: fixture.agentId, agentTargetKey: fixture.agentTargetKey,
+      lease: fixture.lease, getAccountSettingsSnapshot: () => fixture.snapshot,
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: 'agent_error' } });
+    expect(fixture.lease.registry.agentRuntimesByAgentId.has(fixture.agentId)).toBe(false);
+  } finally { await fixture.cleanup(); }
+});
 
 it('admits a cold peer catalog through the real hub projection before optional history cleanup', () => withConfiguredDaemonTestHome({ prefix: 'cold-peer-catalog-' }, async ({ homeDir }) => {
   const fixture = await createManagedRunLaunchFixture({ physicalGateway: true, probeCatalog: true,

@@ -10,6 +10,7 @@ import {
 import type { ProviderSpawnAuthorizationAttempt } from '../spawn/authorize';
 import type { ProviderSpawnAuthorization } from '../spawn/resolve';
 import { isSessionControlEnvKey } from '@/session/runtime/control/sessionControlEnvironment';
+import { logProviderUnexpectedFailure } from '@/providers/diagnostics';
 
 type ProviderLaunchPrerequisiteContext = Readonly<{
   agentTargetKey: string;
@@ -252,13 +253,14 @@ export async function prepareDirectProviderLaunch(input: Readonly<{
       cleanupOnExit,
     };
   } catch (error) {
-    await scope.release();
     const providerError = ProviderErrorV1Schema.safeParse(error);
+    if (!providerError.success) logProviderUnexpectedFailure('launch', error);
+    await scope.release();
     if (providerError.success) return { ok: false, error: providerError.data };
     const connectionId = input.selection?.ref.providerConnectionId ?? undefined;
     return {
       ok: false,
-      error: createProviderErrorV1('provider_agent_runtime_unsupported', {
+      error: createProviderErrorV1('agent_error', {
         ...(connectionId ? { connectionId } : {}),
         ...(input.machineId ? { machineId: input.machineId } : {}),
       }),

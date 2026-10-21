@@ -9,6 +9,7 @@ import {
 
 import { prepareDirectProviderLaunch } from './prepareDirectLaunch';
 import { createProviderRedactionLease } from '@/providers/spawn/redaction';
+import { logger } from '@/ui/logger';
 
 const connectionId = ProviderConnectionIdSchema.parse('pc_direct');
 const bindingMetadata: SessionProviderBindingMetadataV1 = {
@@ -30,6 +31,32 @@ const bindingMetadata: SessionProviderBindingMetadataV1 = {
 };
 
 describe('direct Provider launch lifecycle', () => {
+  it('reports an unexpected resource failure as an internal Agent error with content-free diagnostics', async () => {
+    const diagnostic = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+    // Resource disposal is an OS/process boundary; no Provider domain logic is replaced.
+    const failure = new ReferenceError('private-credential-value');
+    let disposalFailed = false;
+    try {
+      const result = await prepareDirectProviderLaunch({
+        backendTarget: { kind: 'backend', sourceKind: 'built_in', backendId: 'codex' },
+        machineId: 'machine-a', agentId: 'codex',
+        scope: { kind: 'session', sessionId: 'session-a' },
+        previousBinding: null, confirmation: null, connectedServices: null, featureEnabled: true,
+      }, {
+        initialResources: [() => {
+          if (!disposalFailed) { disposalFailed = true; throw failure; }
+        }],
+        resolvePrerequisites: async () => { throw new Error('Native launch has no Provider prerequisites'); },
+        createAuthorizationAttempt: async () => { throw new Error('Native launch has no Provider authorization'); },
+      });
+      expect(result).toEqual({ ok: false, error: createProviderErrorV1('agent_error', { machineId: 'machine-a' }) });
+      expect(diagnostic).toHaveBeenCalledWith('[PROVIDER] Unexpected failure', expect.objectContaining({
+        operation: 'launch', errorType: 'ReferenceError',
+        sourceLocations: expect.arrayContaining([expect.stringMatching(/prepareDirectLaunch\.test\.ts:\d+:\d+/)]),
+      }));
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('private-credential-value');
+    } finally { diagnostic.mockRestore(); }
+  });
   it('returns the managed-daemon discriminant before prerequisites or endpoint materialization', async () => {
     const cleanupOnFailure = vi.fn();
     const resolvePrerequisites = vi.fn(async () => ({ ok: true as const }));

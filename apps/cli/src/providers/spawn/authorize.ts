@@ -639,13 +639,21 @@ export async function createRuntimeProviderSpawnAuthorizationAttempt(input: Read
     }
     throw error;
   }
-  if (activationResults.some((result) => (
+  const activationFailures = activationResults.filter((result) => (
     result.diagnostics.length > 0
     && !input.lease.registry.activatedPluginIds.has(result.pluginId)
-  ))) {
+  ));
+  if (activationFailures.length > 0) {
+    logger.warnLocalFile('[PROVIDER] Agent activation refused', {
+      agentId: input.agentId,
+      failures: activationFailures.map(result => ({
+        pluginId: result.pluginId,
+        diagnosticCodes: result.diagnostics.map(diagnostic => diagnostic.code),
+      })),
+    });
     return {
       ok: false,
-      error: createProviderErrorV1('provider_agent_runtime_unsupported', {
+      error: createProviderErrorV1('agent_error', {
         connectionId: input.selection.ref.providerConnectionId ?? undefined,
         machineId: input.machineId,
       }),

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { logProviderUnexpectedFailure } from '@/providers/diagnostics';
 
 import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
 import { createProviderErrorV1, ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
@@ -348,7 +349,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
     loadNow: service.loadNow,
     cancelNow: service.cancelNow,
   });
-  const projectModels = async (
+  const projectModelsFromCurrentSource = async (
     request: DaemonProviderModelProjectionRequestV1,
     accountContext?: RuntimeProviderAccountModelProjectionContext,
     signal?: AbortSignal,
@@ -1067,6 +1068,17 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       throw error;
     } finally {
       await lease.release();
+    }
+  };
+
+  const projectModels: typeof projectModelsFromCurrentSource = async (request, accountContext, signal, observeSnapshot) => {
+    try {
+      return await projectModelsFromCurrentSource(request, accountContext, signal, observeSnapshot);
+    } catch (error) {
+      const typed = ProviderErrorV1Schema.safeParse(error);
+      if (typed.success) return { status: 'error', error: typed.data };
+      logProviderUnexpectedFailure('model_projection', error);
+      return { status: 'error', error: createProviderErrorV1('agent_error', { machineId: request.machineId }) };
     }
   };
 

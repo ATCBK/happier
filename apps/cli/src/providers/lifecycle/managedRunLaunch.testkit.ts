@@ -21,6 +21,8 @@ import { createSharedGatewayRegistryTestkit } from '@/plugins/runtime/sharedGate
 export async function createManagedRunLaunchFixture(input: Readonly<{ directory?: string; happyHomeDir?: string; controller?: PluginReloadController; remote?: boolean; probeCatalog?: boolean; physicalGateway?: boolean; materializationUrl?: string; signedOutAgentCli?: boolean;
   catalogModels?: Parameters<typeof createSharedGatewayRegistryTestkit>[0]['catalogModels'];
   includeBundledDeclarations?: boolean;
+  activateAgent?: boolean;
+  sessionRunnerFactoryModule?: string;
   holdResponseForInput?: string;
   upstreamUrl?: string;
   readUpstreamAnswer?: boolean;
@@ -144,7 +146,7 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
   export function activate(api) {
     ${gateway ? '' : "api.providers.register('gateway', { async start() { throw new Error('Worker must not start a managed Provider'); } });"}
     api.agents.register('agent', fixtureAgentRuntimeFactory, {
-      sessionRunnerFactory: { module: './agentRuntime.mjs', export: 'fixtureAgentRuntimeFactory', runtimeApiVersion: 1 },
+      sessionRunnerFactory: { module: ${JSON.stringify(input.sessionRunnerFactoryModule ?? './agentRuntime.mjs')}, export: 'fixtureAgentRuntimeFactory', runtimeApiVersion: 1 },
       providerBinding: { v: 1, adapterVersion: 1,
       prepare() { return { v: 1, materialization: 'spawnEnv' }; },
       async materialize(input) { if (input.credential.kind !== 'apiKey') throw new Error('Expected consumer bearer');
@@ -171,9 +173,11 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
   const lease = await controller.acquireRuntimeRegistry({ resolveRuntimeRegistry: async () =>
     gateway ? await gateway.createRegistry(new Set()) : await resolveExecutablePluginRuntimeRegistry({ happyHomeDir, contributes, generationAuthority }) });
   const registry = lease.registry;
-  const activated = await registry.activateContributionsOnDemand([{ pluginId, family: 'agents', localId: 'agent' }]);
-  if (!registry.activatedPluginIds.has(pluginId)) throw new Error(`Managed Run fixture activation refused: ${JSON.stringify(activated)}`);
-  if (!registry.agentRuntimesByAgentId.has(agentId)) throw new Error(`Managed Run Agent registration refused: ${JSON.stringify(activated)}`);
+  if (input.activateAgent !== false) {
+    const activated = await registry.activateContributionsOnDemand([{ pluginId, family: 'agents', localId: 'agent' }]);
+    if (!registry.activatedPluginIds.has(pluginId)) throw new Error(`Managed Run fixture activation refused: ${JSON.stringify(activated)}`);
+    if (!registry.agentRuntimesByAgentId.has(agentId)) throw new Error(`Managed Run Agent registration refused: ${JSON.stringify(activated)}`);
+  }
   const base = ProviderSettingsV1Schema.parse({ ...DEFAULT_PROVIDER_SETTINGS_V1, connections: [{
     v: 1, id: 'run-gateway', source: { kind: 'contribution', contributionKey: `${gateway?.pluginId ?? pluginId}/gateway` }, deployment: { kind: 'managedLocal' },
     ...(gateway ? { purposeBindingDefaults: { upstream: gateway.purposeBindings.bindings[0]!.target } } : {}),

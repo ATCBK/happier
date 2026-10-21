@@ -980,6 +980,16 @@ At launch, Happier persists the structured model selection plus exact non-secret
 
 In the development Session-creation Action path, a daemon Provider rejection retains its validated `ProviderErrorV1` in the `spawn_failed` result, including the Provider's retryability. The ordinary New Session composer uses that result for its existing inline recovery controls. Recovery stays bound to the original launch context; changing the Home, Machine, or Provider selection must not retry the previous request against the new target.
 
+In 0.3 development, unexpected launch preparation, Agent activation and model
+projection failures use the existing `agent_error` result. They do not establish
+that the Agent lacks Provider runtime support. The daemon's local file records
+`[PROVIDER] Unexpected failure` with the operation, exception class and source
+coordinates, or `[PROVIDER] Agent activation refused` with plugin identities and
+diagnostic codes. These records omit exception messages, causes, absolute paths
+and request/credential content; validated Provider refusals retain their own code.
+The shared `[RPC] Request completed` record also retains a structured error
+result's bounded code; an unclassified error result is never logged as success.
+
 Agent plugins own model-switch policy. A same-session switch may be permitted only when the adapter can apply the new provider/model safely. Otherwise the UI offers restart/fork semantics. Resume and fork re-resolve the exact stored connection and refuse actionably when it was deleted, disabled, changed incompatibly, or lost its required grant/secret.
 
 Deleting a connection creates a tombstone. Existing running child processes are not retroactively rewritten, but new spawn, resume, fork, probe, or model-switch operations must not resolve the deleted connection. Secret access is revoked for future operations.

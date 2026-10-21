@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
+import { logger } from '@/ui/logger';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -67,6 +68,22 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   resetActiveAccountSettingsSnapshotForTests();
   await Promise.all(temporaryPaths.splice(0).map(path => rm(path, { recursive: true, force: true })));
+});
+
+it('returns a typed projection failure and content-free cause when the credential file boundary throws', async () => {
+  setActiveAccountSettingsSnapshot({ ...providerSnapshot(DEFAULT_PROVIDER_SETTINGS_V1),
+    scopeKey: resolveAccountSettingsScopeKeyForToken('projection-account'), providerConnectionsCatalog: undefined });
+  vi.spyOn(persistence, 'readStoredCredentials').mockRejectedValue(new ReferenceError('private-credential-value'));
+  const diagnostic = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+  const services = createRuntimeProviderModelManagementServices({ machineId: 'machine-a',
+    featureGate: { isEnabled: () => true },
+    modelSettingsMutation: async (): Promise<never> => { throw new Error('No mutation during projection'); } });
+  await expect(services.projectModels({ machineId: 'machine-a', agentTargetKey: 'agent:happier.agent.codex/codex' }))
+    .resolves.toMatchObject({ status: 'error', error: { code: 'agent_error', machineId: 'machine-a' } });
+  expect(diagnostic).toHaveBeenCalledWith('[PROVIDER] Unexpected failure', expect.objectContaining({
+    operation: 'model_projection', errorType: 'ReferenceError', sourceLocations: expect.any(Array),
+  }));
+  expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('private-credential-value');
 });
 
 it('settles steady source-any eligibility across three Agents without replaying catalog observation behind history', async () => {
