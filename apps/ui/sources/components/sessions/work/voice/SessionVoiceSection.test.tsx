@@ -125,7 +125,7 @@ describe('Work voice source display', () => {
     } finally { await account.dispose(); }
   });
 
-  it('says the voice as the section\'s description line, never as a row title, and names the search for the provider\'s voices', async () => {
+  it('says the voice as the one row\'s description, never as a row title, and names the search for the provider\'s voices', async () => {
     const voice = voiceSettingsParse({ providerId: 'happier.voice.openai/realtime-openai' });
     const account = await createVoiceSettingsAccountTestHarness(settingsParse({
       experiments: true, featureToggles: { voice: true }, voiceSettingsV1: voice,
@@ -136,9 +136,9 @@ describe('Work voice source display', () => {
       const screen = await renderScreen(<SessionVoiceSection session={createSessionFixture({ serverId: account.scope.serverId })} serverId={account.scope.serverId} />);
       await vi.waitFor(() => expect(screen.findAllByType(DropdownMenu)).toHaveLength(1));
       const picker = screen.findByType(DropdownMenu);
-      // The field alone is the trigger; the line sits right under the section heading as its description.
+      // One row: the line is the row's description beside the field, with no title band above it.
       expect(picker.props.itemTrigger.title).toBe('');
-      expect(picker.props.itemTrigger.subtitle).toBeUndefined();
+      expect(picker.props.itemTrigger.subtitle).toBe(t('sessionVoice.idleVoice', { voice: 'Marin' }));
       expect(screen.getTextContent()).toContain(t('sessionVoice.idleVoice', { voice: 'Marin' }));
       expect(typeof picker.props.searchPlaceholder).toBe('string');
       expect(picker.props.searchPlaceholder).not.toBe('');

@@ -13,7 +13,7 @@ import { happierPageTextMetrics, joinHappierFacts } from '@happier-dev/plugin-ui
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 
-import { WorkSection, WorkSectionDescription, WorkSectionEmptyLine } from '@/components/sessions/work/WorkSection';
+import { WorkSection, WorkSectionEmptyLine } from '@/components/sessions/work/WorkSection';
 import {
   DropdownMenu,
   type DropdownMenuItem,
@@ -330,9 +330,6 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
 
   return (
     <>
-      {/* The line says whose voice the conversation uses, right under the heading like every section's
-          description; the field beneath it shows the choice. */}
-      <WorkSectionDescription testID="session-work-voice.line">{line}</WorkSectionDescription>
       <DropdownMenu
         testID="session-work-voice.picker"
         open={open}
@@ -362,7 +359,10 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
         itemTrigger={{
           // The field alone: "Sage · OpenAI", "Follow account settings · Marin", or just "Follow account
           // settings" while the account's own voice has no name to show.
+          // One row: the line says whose voice the conversation uses, the field beside it shows the choice
+          // (below it on a phone), so there is no title band and no blank gap between them.
           title: '',
+          subtitle: line,
           showSelectedSubtitle: false,
           detailFormatter: () => !selectedName ? null
             : chosenId ? joinHappierFacts(selectedName, providerLabel)
@@ -378,6 +378,8 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
             invalid: resolution.kind === 'unavailable',
           },
           itemProps: {
+            subtitleTestID: 'session-work-voice.line',
+            subtitleLines: 0,
             accessibilityLabel: t('sessionVoice.pickerA11y', {
               name: getSessionName(session, serverId),
             }),
