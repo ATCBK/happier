@@ -16,8 +16,13 @@ import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSe
 // Parse the real broker producer with the exact plugin-open consumer, not a
 // test copy of the Codex engine-config schema. No production private import.
 import { parseCodexProviderBindingEngineConfigV1 } from '../../../../../packages/plugins/codex/src/agent/providerBinding/runtimeConfig';
+import { configuration } from '@/configuration';
+import { createAgentRuntimeDaemonServiceAuthorityPath, publishAgentRuntimeDaemonServiceAuthority,
+  removeAgentRuntimeDaemonServiceAuthorityIfOwned } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
+import { openCurrentRunnerTeamCredentialProviderBinding } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceAuthorityClient';
+import { readSessionPreparationFailureDiagnostic } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 
-const boundary = vi.hoisted(() => ({ control: null as Parameters<typeof startDaemonControlServer>[0] | null }));
+const boundary = vi.hoisted(() => ({ control: null as Parameters<typeof startDaemonControlServer>[0] | null, port: 0 }));
 // Keep the real control app/dispatcher; only its OS listener uses an ephemeral port.
 vi.mock('@/daemon/controlServer', async importOriginal => {
   const actual = await importOriginal<typeof import('@/daemon/controlServer')>();
@@ -27,12 +32,14 @@ vi.mock('@/daemon/controlServer', async importOriginal => {
     await app.listen({ host: '127.0.0.1', port: 0 });
     const address = app.server.address();
     if (!address || typeof address === 'string') throw new Error('Missing private listener');
+    boundary.port = address.port;
     return { port: address.port, stop: () => app.close() };
   } };
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); boundary.control = null; });
 
-it('opens the real Codex Team binder with the tracked recipient catalog, never custodian consent', async () => {
+it.each(['ready', 'missing declaration', 'non-204'] as const)(
+  'opens the real Codex Team binder with the tracked recipient catalog, never custodian consent (%s)', async metadata => {
   let h: Awaited<ReturnType<typeof createInstalledProjectAgentDaemonFixture>>;
   let model: TeamCredentialProviderModelCatalogEntryV1;
   let brokerOpens = 0;
@@ -104,16 +111,36 @@ it('opens the real Codex Team binder with the tracked recipient catalog, never c
   });
   const fetchBoundary = vi.mocked(fetch).getMockImplementation()!;
   vi.mocked(fetch).mockImplementation(async (url, options) => new URL(String(url)).pathname === PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH
-    ? new Response(null, { status: 204, headers: { [PROVIDER_BROKER_ENDPOINT_PATH_HEADER]: '/v1' } })
+    ? new Response(null, { status: metadata === 'non-204' ? 403 : 204,
+      headers: metadata === 'missing declaration' ? {} : { [PROVIDER_BROKER_ENDPOINT_PATH_HEADER]: '/v1' } })
     : fetchBoundary(url, options));
   const open = () => h.dispatch({ kind: 'provider_broker.binding.open', requestId: 'recipient-team-open',
     resourceId: 'resource', expectedResourceRevision: 2, agentTargetKey, modelId: model.descriptor.id });
-  const opened = await open();
-  expect(opened).toMatchObject({ ok: true, result: { kind: 'provider_broker.binding', status: 'opened',
+  const path = await createAgentRuntimeDaemonServiceAuthorityPath({ happyHomeDir: configuration.happyHomeDir,
+    publicReleaseRing: configuration.publicReleaseRing });
+  const authority = { happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
+    path, sessionId: h.sessionId, runner: h.runner, retainedAgent: h.retainedAgent };
+  const published = await publishAgentRuntimeDaemonServiceAuthority({ ...authority,
+    httpPort: boundary.port, capability: 'A'.repeat(43), readPluginHardRevocationRevision: async () => 0 });
+  h.tracked.agentRuntimeDaemonServiceAuthorityFilePath = path;
+  h.tracked.agentRuntimeDaemonServiceCapabilityHash = published.capabilityDigest;
+  const openThroughRunner = () => openCurrentRunnerTeamCredentialProviderBinding({ authority, operation: {
+    kind: 'provider_broker.binding.open', resourceId: 'resource', expectedResourceRevision: 2,
+    agentTargetKey, modelId: model.descriptor.id } });
+  try {
+  if (metadata !== 'ready') {
+    const refused = await openThroughRunner().then(() => null, (error: unknown) => error);
+    expect(refused).toMatchObject({ code: 'provider_endpoint_unavailable', message: 'provider_endpoint_unavailable' });
+    expect(readSessionPreparationFailureDiagnostic(refused)).toEqual({
+      originalCode: 'provider_endpoint_unavailable', reason: 'unknown', contextSource: 'unknown' });
+    expect(brokerOpens).toBe(1);
+    return;
+  }
+  const opened = await openThroughRunner();
+  expect(opened).toMatchObject({ kind: 'provider_broker.binding', status: 'opened',
     providerBinding: { source: { kind: 'team_resource', resourceId: 'resource', resourceRevision: 2 }, model: model.descriptor,
-      upstream: { protocol: 'openai-responses', normalizedUrl: 'http://127.0.0.1:43123/v1', credential: 'apiKey' } } } });
-  if (!opened.ok || opened.result.kind !== 'provider_broker.binding') throw new Error('Expected admitted broker binding');
-  const config = parseCodexProviderBindingEngineConfigV1(opened.result.providerBinding);
+      upstream: { protocol: 'openai-responses', normalizedUrl: 'http://127.0.0.1:43123/v1', credential: 'apiKey' } } });
+  const config = parseCodexProviderBindingEngineConfigV1(opened.providerBinding);
   if (!config) throw new Error('Expected Codex engine config');
   expect(config.config[`model_providers.${config.modelProvider}`]).toMatchObject({
     env_http_headers: { 'x-happier-machine-local-capability': 'HAPPIER_CODEX_PROVIDER_API_KEY' },
@@ -124,4 +151,8 @@ it('opens the real Codex Team binder with the tracked recipient catalog, never c
   h.f.retire();
   await expect(open()).rejects.toThrow('requester_session_not_current');
   expect(brokerOpens).toBe(1);
+  } finally {
+    await removeAgentRuntimeDaemonServiceAuthorityIfOwned({ happyHomeDir: configuration.happyHomeDir,
+      publicReleaseRing: configuration.publicReleaseRing, path, capabilityDigest: published.capabilityDigest });
+  }
 });
