@@ -386,6 +386,9 @@ export function assertMountedTargetedContributionProjection(params: Readonly<{
   if (parsed.data.status === 'unavailable') {
     throw new Error(`targeted_projection_unavailable:${parsed.data.code}`);
   }
+  if (parsed.data.status === 'sourceDeclarations') {
+    throw new Error('targeted_projection_source_declarations_only');
+  }
 
   const targeted = parsed.data.targetedContributions;
   if (!targeted) throw new Error('targeted_projection_public_snapshot_missing');
@@ -496,12 +499,16 @@ export function assertMountedTargetedContributionProjection(params: Readonly<{
   ) {
     throw new Error('targeted_surface_selected_react_native_renderer_invalid');
   }
+  const executionOrigin = mount.executionOrigin;
+  if (!('materializationRef' in executionOrigin)) {
+    throw new Error('targeted_surface_execution_origin_not_materialized');
+  }
   if (
-    mount.executionOrigin.materializationRef.machineId !== params.machineId
-    || mount.executionOrigin.materializationRef.pluginId
+    executionOrigin.materializationRef.machineId !== params.machineId
+    || executionOrigin.materializationRef.pluginId
       !== PACKED_TARGETED_CONTRIBUTION_FIXTURE.contributorPluginId
-    || mount.executionOrigin.materializationRef.materializationId.trim().length === 0
-    || mount.executionOrigin.serverIdentityId.trim().length === 0
+    || executionOrigin.materializationRef.materializationId.trim().length === 0
+    || executionOrigin.serverIdentityId.trim().length === 0
   ) {
     throw new Error('targeted_surface_execution_origin_invalid');
   }

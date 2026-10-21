@@ -117,6 +117,14 @@ import { resolveRequesterLaunchAdmissionFailure } from '../lifecycle/requesterWo
 import type { RequesterSessionRuntimeContext } from '../sessionEncryption/requesterSessionCredentials';
 import { resolveSessionMemoryCeilingBytes } from '../platform/linux/sessionMemoryCeiling';
 import { readRequesterHomeWithinActionLifetime } from '../sessionEncryption/requesterCurrentness';
+import { ConnectedServiceBindingsV2Schema } from '@happier-dev/protocol/connect/connected-service-bindings';
+
+/** `SpawnSessionOptions.connectedServices` is wire-typed; read its team-resource selection through the canonical schema. */
+function hasTeamResourceConnectedServiceBinding(connectedServices: unknown): boolean {
+    const parsed = ConnectedServiceBindingsV2Schema.safeParse(connectedServices);
+    return parsed.success
+        && Object.values(parsed.data.bindingsByServiceId).some(binding => binding.source === 'team_resource');
+}
 
 type SpawnCredentials = NonNullable<Parameters<typeof resolveSpawnBackendIdentity>[0]['credentials']>;
 type SpawnApi = Parameters<typeof resolveConnectedServiceAuthForSpawn>[0]['api'];
@@ -552,7 +560,7 @@ export async function executeSpawnSessionRequest(
             let teamModelRow: NormalizedSessionTeamCredentialLaunch['teamModelRow'] = null;
             const hasTeamSelection = options.teamCredentialBindings?.some(binding => (
                 binding.slot.kind === 'provider_model' && binding.resourceId !== null
-            )) || Object.values(prepared.connectedServices?.bindingsByServiceId ?? {}).some(binding => binding.source === 'team_resource');
+            )) || hasTeamResourceConnectedServiceBinding(prepared.connectedServices);
             if (hasTeamSelection) {
                 const homeDomainAction = createAccountServerActionDeps({
                     token: params.credentials.token, credentials: params.credentials,

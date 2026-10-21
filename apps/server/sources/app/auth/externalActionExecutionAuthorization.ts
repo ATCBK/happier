@@ -295,7 +295,7 @@ async function isRetainedDiscussionPublicationSourceCurrentInTx(reader: Tx,
     const retained = await readSessionMessageReplyInTx(reader, { accountId: binding.accountId,
         sessionId: source.sourceSessionId, localId: source.sourceInputId,
         authentication: { env: process.env, authority: 'account_automation', tokenEpoch: binding.authentication.tokenEpoch,
-            ...(binding.authentication.evidence ? { authenticationEvidence: binding.authentication.evidence } : {}) } });
+            authenticationEvidence: binding.authentication.evidence } });
     return retained.status === 'available' && retained.progress.mode === 'return' && !retained.progress.workflow
         && retained.progress.acceptedTurnId === source.sourceTurnId
         && sameStrictJsonValue(retained.progress.discussion, source.discussionAddressing);

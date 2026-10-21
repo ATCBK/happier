@@ -97,7 +97,7 @@ export function createLoopbackReadinessProbe(params: Readonly<{
       if (authResponse.status >= 500) {
         return {
           status: 'retry_later',
-          ...readRetryLaterHints(AxiosHeaders.from(authResponse.headers)),
+          ...readRetryLaterHints(AxiosHeaders.from(authResponse.headers as Parameters<typeof AxiosHeaders.from>[0])),
           errorMessage: `Authenticated probe returned ${authResponse.status}`,
         };
       }

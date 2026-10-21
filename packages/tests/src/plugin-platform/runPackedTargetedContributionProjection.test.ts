@@ -73,11 +73,12 @@ function createPackedTargetedClientApi(
   registrations: Pick<PluginClientApi, 'actions' | 'voiceProviders'>,
 ): PluginClientApi {
   // This public plugin host boundary captures registrations while keeping the
-  // author module and its provider codec real. This fixture declares no drag/drop families.
+  // author module and its provider codec real. This fixture declares no drag/drop or work-items families.
   return {
     ...registrations,
     dragSources: { register() { assert.fail('unexpected packed drag source registration'); } },
     dropTargets: { register() { assert.fail('unexpected packed drop target registration'); } },
+    workItems: { register() { assert.fail('unexpected packed work items registration'); } },
   };
 }
 
