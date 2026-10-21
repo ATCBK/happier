@@ -26,7 +26,7 @@ export async function resolveCuaExecutable(context: Pick<PluginInvocationContext
     const status = await context.services.managedServices.dependencies.status(CUA_DEPENDENCY_ID, { signal: context.signal });
     // Only a status that says the CLI is absent is "not installed"; a failed status read says nothing about it.
     if (status.state === 'missing' || status.state === 'unsupported') throw new Error('cua_native_unavailable');
-    if (status.state === 'failed' || !status.executable) throw new Error('cua_native_status_unreadable');
+    if ((status.state !== 'ready' && status.state !== 'updateAvailable') || !status.executable) throw new Error('cua_native_status_unreadable');
     if (!atLeast(status.version, CUA_CLI_MINIMUM_VERSION)) throw new Error('cua_native_outdated');
     return status.executable;
 }
