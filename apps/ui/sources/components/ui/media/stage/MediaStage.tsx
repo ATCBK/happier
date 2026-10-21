@@ -44,6 +44,7 @@ import type { MediaPlayerBodyProps } from '@/components/workspaces/files/file/Me
 import type { PdfViewerProps } from '../pdf/PdfViewerStates';
 import type { PdfZoom } from '../pdf/pdfZoom';
 
+import { ImageWellCheckerboard, useImageBacking } from '../ImageWell';
 import { MediaPicture, type MediaPictureSize } from '../MediaPicture';
 import { useFilePreviewSource, type FilePreviewSourceState } from '../useFilePreviewSource';
 import { useWheelZoom } from '../zoom/useWheelZoom';
@@ -187,6 +188,10 @@ const StageViewer = React.forwardRef<ViewerHandle, StageViewerProps>(
       () => ({ width: props.viewport.width, height: props.viewport.height }),
       [props.viewport.width, props.viewport.height],
     );
+    // The picture keeps its well's backing (checkerboard for alpha, or the chosen Background), so a
+    // dark transparent image stays visible on the dark stage exactly as it was on the page.
+    const backing = useImageBacking(item.kind === 'svg' ? 'svg' : 'image', item.alphaCapable === true);
+    const pictureSize = size ? fitSize(size, viewportSize) : null;
     const { onSize, onZoomChange, onPage, onDismiss, onTap } = props;
     const index = props.index;
     const reportPreview = React.useCallback((state: FilePreviewSourceState) => props.onPreviewChange(index, state), [index, props.onPreviewChange]);
@@ -393,19 +398,20 @@ const StageViewer = React.forwardRef<ViewerHandle, StageViewerProps>(
                         else if (event.nativeEvent.actionName === 'fit') zoom.fit();
                       }}
                     >
-                      <MediaPicture
-                        kind={item.kind === 'svg' ? 'svg' : 'image'}
-                        uri={preview.uri}
-                        size={
-                          size
-                            ? fitSize(size, viewportSize)
-                            : null
-                        }
-                        onIntrinsicSize={handleIntrinsicSize}
-                        onError={setFailed}
-                        fullResolution={fullResolution}
-                        testID="media-stage-image"
-                      />
+                      <View style={[pictureSize, backing.paper ? { backgroundColor: backing.paper } : null]}>
+                        {backing.checkerboard && pictureSize ? (
+                          <ImageWellCheckerboard color={theme.colors.text.primary} testID="media-stage-image-checkerboard" />
+                        ) : null}
+                        <MediaPicture
+                          kind={item.kind === 'svg' ? 'svg' : 'image'}
+                          uri={preview.uri}
+                          size={pictureSize}
+                          onIntrinsicSize={handleIntrinsicSize}
+                          onError={setFailed}
+                          fullResolution={fullResolution}
+                          testID="media-stage-image"
+                        />
+                      </View>
                     </Animated.View>
                   ) : unavailable ? (
                     <SurfaceStateCard

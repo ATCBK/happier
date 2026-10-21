@@ -136,6 +136,7 @@ export function FileViewerBody(props: FileViewerBodyProps) {
             title: props.title,
             source: props.source,
             sizeBytes: props.sizeBytes ?? null,
+            alphaCapable: viewer.alphaCapable,
             // Documents have no picture rect to fly from; the stage fades them in.
             ...(stageKind === 'image' || stageKind === 'svg' ? { originRef } : {}),
             ...(props.openFile ? { openFile: props.openFile } : {}),
@@ -151,6 +152,7 @@ export function FileViewerBody(props: FileViewerBodyProps) {
     props.source,
     props.title,
     stageKind,
+    viewer.alphaCapable,
   ]);
   React.useImperativeHandle<FileViewerStageHandle | null, FileViewerStageHandle | null>(props.stageRef, () => (openInStage ? { open: openInStage } : null), [openInStage]);
 

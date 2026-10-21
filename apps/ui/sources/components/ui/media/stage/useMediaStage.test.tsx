@@ -61,6 +61,20 @@ describe('canonical media stage opener', () => {
             expect(screen.findByTestId('media-stage-immersive-exit')).toBeFalsy();
         } finally { await screen.unmount(); }
     });
+    it('draws a transparent picture on the same checkerboard as its well, only for alpha-capable items', async () => {
+        const { openMediaStage } = await import('./useMediaStage');
+        for (const [item, boards] of [
+            [{ kind: 'image', title: 'logo.png', alphaCapable: true, source: { enabled: true, source: { kind: 'uri', uri: 'blob:logo-alpha' } } }, 1],
+            [{ kind: 'image', title: 'photo.jpg', source: { enabled: true, source: { kind: 'uri', uri: 'blob:photo' } } }, 0],
+        ] as const) {
+            const screen = await renderScreen(<InjectedAuthProvider credentials={null}><ModalProvider><></></ModalProvider></InjectedAuthProvider>);
+            try {
+                await act(async () => { openMediaStage([item]); });
+                await act(async () => screen.findByTestId('media-stage-image')!.props.onLoad({ source: { width: 100, height: 100 } }));
+                expect(screen.findAllHostsByTestId('media-stage-image-checkerboard')).toHaveLength(boards);
+            } finally { await screen.unmount(); }
+        }
+    });
     it('closes on an accessibility escape through the existing modal owner', async () => {
         const { openMediaStage } = await import('./useMediaStage');
         const screen = await renderScreen(<InjectedAuthProvider credentials={null}><ModalProvider><></></ModalProvider></InjectedAuthProvider>);

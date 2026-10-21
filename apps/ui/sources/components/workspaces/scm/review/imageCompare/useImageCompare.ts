@@ -69,10 +69,10 @@ export function useImageCompare(input: Readonly<{
         : projectImageComparePreview(captured ? capturedAfter
             : liveAfter.status === 'error' ? { ...liveAfter, sizeBytes: live?.sizeBytes ?? null } : liveAfter);
     const kind = viewer.kind === 'svg' ? 'svg' as const : 'image' as const;
-    const beforeItem: MediaStageItem = { kind: beforeViewer.kind === 'svg' ? 'svg' : 'image', title: input.beforeTitle ?? input.filePath, source: before.previewInput,
+    const beforeItem: MediaStageItem = { kind: beforeViewer.kind === 'svg' ? 'svg' : 'image', title: input.beforeTitle ?? input.filePath, source: before.previewInput, alphaCapable: beforeViewer.alphaCapable,
         ...('sizeBytes' in before ? { sizeBytes: before.sizeBytes } : {}), ...(input.openFile ? { openFile: input.openFile } : {}) };
     const afterInput = captured ? capturedAfter.previewInput : liveAfterInput;
-    const afterItem: MediaStageItem = { kind, title: input.afterTitle ?? input.filePath, source: afterInput,
+    const afterItem: MediaStageItem = { kind, title: input.afterTitle ?? input.filePath, source: afterInput, alphaCapable: viewer.alphaCapable,
         ...(afterPreview.status === 'loaded' ? { sizeBytes: afterPreview.sizeBytes } : {}), ...(input.openFile ? { openFile: input.openFile } : {}) };
     const model = buildImageCompareModel({ changeKind, before: beforePreview, after: afterPreview, beforeItem, afterItem });
     return { ...model, retry, beforePreviewInput: before.previewInput, afterPreviewInput: afterInput,

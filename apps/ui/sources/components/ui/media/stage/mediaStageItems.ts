@@ -7,6 +7,8 @@ export type MediaStageItem = Readonly<{
     title: string;
     source: UseFilePreviewSourceInput;
     sizeBytes?: number | null;
+    /** From the classifier (`alphaCapable`): the picture sits on its well's checkerboard or Background. */
+    alphaCapable?: boolean;
     originRef?: React.RefObject<View | null>;
     openFile?: () => void;
 }>;

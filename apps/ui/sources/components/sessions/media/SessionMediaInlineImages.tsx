@@ -8,6 +8,7 @@ import { t } from '@/text';
 import { Text } from '@/components/ui/text/Text';
 import { useFilePreviewSource, type UseFilePreviewSourceInput } from '@/components/ui/media/useFilePreviewSource';
 import type { MediaStageItem } from '@/components/ui/media/stage/mediaStageItems';
+import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import { useMediaStage } from '@/components/ui/media/stage/useMediaStage';
 import { Icon } from '@/components/ui/icons/Icon';
 import {
@@ -374,6 +375,7 @@ export const SessionMediaInlineImages = React.memo(function SessionMediaInlineIm
                         ? inlineVideoPreviewInput(media, props.sessionId)
                         : inlineImagePreviewInput(media, props.sessionId, props.workspaceScope),
                     sizeBytes: media.sizeBytes ?? null,
+                    alphaCapable: !isInlineVideo(media) && resolveFileViewerKind({ path: media.path, mimeType: media.mimeType }).alphaCapable,
                     ...(openFile ? { openFile } : {}),
                 },
                 stageIndex,

@@ -70,6 +70,28 @@ export function useImageWellBackground(
   return [value, set] as const;
 }
 
+/**
+ * What sits behind a picture wherever it is shown (well, Media stage): the manual `⋯ > Background`
+ * paper, or the ink checkerboard for alpha-capable kinds (lab FV4a; O-P2-1: no automatic paper).
+ */
+export function useImageBacking(
+  kind: ImageWellKind,
+  alphaCapable: boolean,
+): Readonly<{ paper: string | null; checkerboard: boolean }> {
+  const { theme } = useUnistyles();
+  const background =
+    useLocalSetting('filesImageBackgroundByKind')[kind] ?? 'checkerboard';
+  return {
+    paper:
+      background === 'light'
+        ? theme.colors.overlay.mediaPaper
+        : background === 'dark'
+          ? theme.colors.overlay.stageImmersive
+          : null,
+    checkerboard: alphaCapable && background === 'checkerboard',
+  };
+}
+
 /** The web picture of held SVG text: one `image/svg+xml` Blob URL, revoked by this hook (P2-I3, I4). */
 function useSvgTextObjectUrl(text: string | null): string | null {
   const [uri, setUri] = React.useState<string | null>(null);
@@ -86,9 +108,10 @@ function useSvgTextObjectUrl(text: string | null): string | null {
 }
 
 /** The transparency board of every image well; image compare layers draw on the same one. */
-export function ImageWellCheckerboard(props: Readonly<{ color: string }>) {
+export function ImageWellCheckerboard(props: Readonly<{ color: string; testID?: string }>) {
   return (
     <Svg
+      {...(props.testID ? { testID: props.testID } : {})}
       width="100%"
       height="100%"
       style={StyleSheet.absoluteFill}
@@ -133,8 +156,7 @@ function ImageWellPicture(
     Readonly<{ well: MediaPictureSize | null; onRetry: () => void }>,
 ) {
   const { theme } = useUnistyles();
-  const background =
-    useLocalSetting('filesImageBackgroundByKind')[props.kind] ?? 'checkerboard';
+  const backing = useImageBacking(props.kind, props.alphaCapable);
   const heldSvg = props.kind === 'svg' && props.svgText != null;
   const preview = useFilePreviewSource({
     ...props.source,
@@ -201,12 +223,7 @@ function ImageWellPicture(
 
   const pictureSize =
     fit && fit.scale > 0 ? { width: fit.width, height: fit.height } : null;
-  const paper =
-    background === 'light'
-      ? theme.colors.overlay.mediaPaper
-      : background === 'dark'
-        ? theme.colors.overlay.stageImmersive
-        : null;
+  const { paper } = backing;
   const picture = (
     <View
       ref={props.originRef}
@@ -218,7 +235,7 @@ function ImageWellPicture(
         { borderColor: theme.colors.border.default },
       ]}
     >
-      {props.alphaCapable && background === 'checkerboard' && pictureSize ? (
+      {backing.checkerboard && pictureSize ? (
         <ImageWellCheckerboard color={theme.colors.text.primary} />
       ) : null}
       <MediaPicture

@@ -121,13 +121,13 @@ export function MarkdownImageBlock(
       const entrySource = imageSource(entry, props.scope, remoteLoaded);
       if (!entrySource) continue;
       if (entry === image) index = items.length;
-      const entryKind =
-        entry.source.kind === 'workspace' &&
-        resolveFileViewerKind({ path: entry.source.path }).kind === 'svg'
-          ? 'svg'
-          : 'image';
+      const entryViewer =
+        entry.source.kind === 'workspace'
+          ? resolveFileViewerKind({ path: entry.source.path })
+          : null;
       items.push({
-        kind: entryKind,
+        kind: entryViewer?.kind === 'svg' ? 'svg' : 'image',
+        alphaCapable: entryViewer?.alphaCapable ?? false,
         title: imageTitle(entry),
         source: entrySource,
         ...(entry === image ? { originRef } : {}),
