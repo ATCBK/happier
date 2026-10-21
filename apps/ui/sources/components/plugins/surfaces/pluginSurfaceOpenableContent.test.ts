@@ -61,7 +61,7 @@ function request(method: string, payload: unknown) {
 
 describe('plugin surface openable content', () => {
     beforeEach(async () => {
-        TARGET.serverId = await prepareWorkspaceFileDetailsActionBoundary();
+        TARGET.serverId = await prepareWorkspaceFileDetailsActionBoundary(TARGET.machineId);
         workspaceStatFileMock.mockReset();
         workspaceReadFileMock.mockReset();
         randomUUIDMock.mockClear();
@@ -279,7 +279,9 @@ describe('plugin surface openable content', () => {
         });
         expect(workspaceReadFileMock).toHaveBeenCalledWith(expect.objectContaining({
             machineId: TARGET.machineId,
-            serverId: TARGET.serverId,
+            // The admitted Account Action reaches the Machine through the Home's server id, derived from its URL.
+            serverId: 'workspace-file-details.test',
+            method: 'daemon.filesystem.readFile',
             payload: { rootPath: TARGET.rootPath, path: '/private/repository/notes/README.MD' },
         }));
     });

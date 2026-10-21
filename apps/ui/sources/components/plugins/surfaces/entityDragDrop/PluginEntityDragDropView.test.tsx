@@ -56,12 +56,12 @@ describe('mounted plugin entity presentation', () => {
         const screen = await renderScreen(tree(true));
         screens.push(screen);
         await act(async () => { screen.findByType(DropdownMenu).props.onOpenChange(true); });
-        expect(screen.findByType(DropdownMenu).props.items).toHaveLength(1);
+        expect(screen.findByType(DropdownMenu).props.items.filter((item: { disabled?: boolean }) => !item.disabled)).toHaveLength(1);
         await screen.update(tree(false));
-        expect(screen.findByType(DropdownMenu).props.items).toHaveLength(0);
+        expect(screen.findByType(DropdownMenu).props.items).toEqual([expect.objectContaining({ disabled: true })]);
         expect(f.writes()).toBe(0);
         await screen.update(tree(true));
-        expect(screen.findByType(DropdownMenu).props.items).toHaveLength(1);
+        expect(screen.findByType(DropdownMenu).props.items.filter((item: { disabled?: boolean }) => !item.disabled)).toHaveLength(1);
         await act(async () => { screen.findByType(DropdownMenu).props.onSelect('0'); });
         expect(f.writes()).toBe(1);
         await act(async () => { f.binding.dispose(); });

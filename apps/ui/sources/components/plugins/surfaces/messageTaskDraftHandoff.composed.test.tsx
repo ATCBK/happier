@@ -75,15 +75,15 @@ describe('message Action → Tasks draft through the host shared scope', () => {
                     provenanceCategory: 'owner' }),
             })).resolves.toEqual({ status: 'applied' });
             mounted = await renderScreen(<Destination binding={0} />);
-            expect(mounted.getTextContent()).toContain('Where?');
+            expect(mounted.getTextContent()).toContain('Where does it belong?');
             await mounted.update(<Destination binding={1} />);
-            expect(mounted.getTextContent()).toContain('Where?');
+            expect(mounted.getTextContent()).toContain('Where does it belong?');
             expect(mounted.getTextContent()).not.toContain('This task draft is no longer available');
-            const close = mounted.findAll(node => node.props.accessibilityLabel === 'Close'
+            const close = mounted.findAll(node => node.props.testID === 'triage-shell-detail-region:back'
                 && typeof node.props.onPress === 'function')[0];
             expect(close).toBeDefined();
             await act(async () => { close!.props.onPress(); });
-            expect(mounted.getTextContent()).not.toContain('Where?');
+            expect(mounted.getTextContent()).not.toContain('Where does it belong?');
             await mounted.update(<Destination binding={0} />);
             expect(mounted.getTextContent()).not.toContain('This task draft is no longer available');
             await mounted.unmount();

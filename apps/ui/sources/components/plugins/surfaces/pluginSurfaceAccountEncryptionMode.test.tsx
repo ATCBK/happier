@@ -69,12 +69,31 @@ describe('usePluginSurfaceAccountEncryptionMode', () => {
             isCurrent: input.isCurrent,
         }), { initialProps: { isCurrent: retiredControllerIsCurrent } });
 
-        expect(hook.getCurrent()).toEqual({ status: 'loading' });
+        expect(hook.getCurrent()).toEqual({ status: 'unavailable' });
         expect(home.requestsFor(modePath)).toEqual([]);
         await hook.rerender({ isCurrent: successorControllerIsCurrent });
         await waitForHomeGovernance(() => expect(hook.getCurrent()).toEqual({ status: 'ready', mode: 'plain' }));
         expect(home.requestsFor(modePath)).toHaveLength(1);
         await hook.unmount();
+    });
+
+    it('starts disclosure on a stable currentness callback becoming ready without a cache refresh', async () => {
+        const account = await currentAccount('account-a');
+        let current = false;
+        const isCurrent = () => current;
+        const hook = await renderHook(() => usePluginSurfaceAccountEncryptionMode({
+            accountLifetime: account.lifetime, credentials: account.credentials, isCurrent,
+        }));
+        try {
+            expect(home.requestsFor(modePath)).toEqual([]);
+            current = true;
+            await hook.rerender();
+            await waitForHomeGovernance(() => expect(hook.getCurrent()).toEqual({ status: 'ready', mode: 'plain' }));
+            expect(home.requestsFor(modePath)).toHaveLength(1);
+            current = false;
+            await hook.rerender();
+            expect(hook.getCurrent()).toEqual({ status: 'unavailable' });
+        } finally { await hook.unmount(); }
     });
 
     it('withholds stale Account A and invalidated snapshots until the current Account mode resolves', async () => {

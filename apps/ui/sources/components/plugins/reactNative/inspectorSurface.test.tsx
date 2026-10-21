@@ -249,19 +249,15 @@ describe('inspector renderSurface (real source, mounted)', () => {
         const pluginRow = await findPressableByTestId(renderer!, 'inspector-plugin-acme.example');
         expect(findByTestId(renderer!, 'inspector-reload-all')).toHaveLength(0);
         expect(pluginRow.props).toMatchObject({
-            accessibilityRole: 'option',
+            accessibilityRole: 'button',
             accessibilityLabel: 'acme.example',
         });
 
-        await act(async () => {
-            (pluginRow.props as { onPress: () => void }).onPress();
-            await Promise.resolve();
-        });
-
-        const reloadButton = await findPressableByTestId(renderer!, 'inspector-reload-selected-acme.example');
+        // Each row owns its own Reload; there is no selection step and no bulk reload.
+        const reloadButton = await findPressableByTestId(renderer!, 'inspector-reload-acme.example');
         expect(reloadButton.props).toMatchObject({
-            testID: 'inspector-reload-selected-acme.example',
-            title: 'Reload acme.example',
+            testID: 'inspector-reload-acme.example',
+            accessibilityLabel: 'Reload acme.example',
         });
         await act(async () => {
             (reloadButton.props as { onPress: () => void }).onPress();

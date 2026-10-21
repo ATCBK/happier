@@ -1,6 +1,7 @@
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineProtocolObject } from '@happier-dev/plugin-sdk/protocol';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 
 import { flushHookEffects, renderHook } from '@/dev/testkit';
 
@@ -52,6 +53,9 @@ function mount(occurrenceId: string) {
     };
 }
 
+// Load the shared publication graph outside an individual hook-case deadline.
+const { loadDaemonMergedProjectionCacheEntry, clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+
 describe('useMountedTargetedContributions', () => {
     beforeEach(async () => {
         targetedReadMock.mockReset();
@@ -89,6 +93,32 @@ describe('useMountedTargetedContributions', () => {
         expect(targetedReadMock).toHaveBeenCalledWith('machine-1', expect.objectContaining({ serverId: 'server-1', pluginId: 'acme.triage' }));
         // The mount never asks for the machine-wide projection itself.
         expect(describeMock).not.toHaveBeenCalled();
+    });
+
+    it('publishes exact ready model inputs with the target and updates them from the existing machine publisher', async () => {
+        clearDaemonMergedProjectionCacheForTests();
+        const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 41 });
+        describeMock.mockResolvedValue({ supported: true, projection });
+        const input = { machineId: 'machine-published', serverId: 'server-1', accountLifetime: activeAccountLifetime.value };
+        const first = await loadDaemonMergedProjectionCacheEntry(input);
+        if (first?.kind !== 'ready') throw new Error('Expected admitted machine projection');
+        targetedReadMock.mockResolvedValue({ supported: true, targetedContributions: snapshot('occurrence-a'), targetedSurfaceMounts: [mount('occurrence-a')] });
+        const { useMountedTargetedContributions } = await import('./mountedTargetedContributions');
+        const rendered = await renderHook(() => useMountedTargetedContributions({
+            machineId: input.machineId, serverId: input.serverId, pluginId: 'acme.triage', mountedOccurrenceId: 'occurrence-a', enabled: true,
+        }));
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        expect(rendered.getCurrent().projectionInputs).toBe(first.inputs);
+        expect(rendered.getCurrent().pluginUiProjection).toBe(first.inputs.pluginUiProjection);
+        const prepared = rendered.getCurrent().preparedTargetedSurfaceMounts;
+        describeMock.mockResolvedValue({ supported: true, projection: PluginProjectionV2Schema.parse({ v: 2, generation: 42 }) });
+        let next: Awaited<ReturnType<typeof loadDaemonMergedProjectionCacheEntry>> = null;
+        await act(async () => { next = await loadDaemonMergedProjectionCacheEntry(input); });
+        if (next!?.kind !== 'ready') throw new Error('Expected refreshed machine projection');
+        expect(rendered.getCurrent().projectionInputs).toBe(next!.inputs);
+        expect(rendered.getCurrent().pluginUiProjection).toBe(next!.inputs.pluginUiProjection);
+        expect(rendered.getCurrent().preparedTargetedSurfaceMounts).toBe(prepared);
+        expect(targetedReadMock).toHaveBeenCalledTimes(1);
     });
 
     it('follows a reloaded occurrence: asks the machine projection to refresh once instead of failing', async () => {

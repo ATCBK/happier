@@ -34,7 +34,8 @@ describe('declarative shared-presentation ownership', () => {
         const source = readFileSync(new URL('../surfaces/DeclarativePluginSurface.tsx', import.meta.url), 'utf8');
 
         expect(source).toContain("from '@happier-dev/plugin-ui/presentation'");
-        expect(source).toContain('<HappierField');
+        // Field chrome is the shared settings row owner (plugin-ui setting-row presentation), not a local copy.
+        expect(source).toContain('<SchemaFieldRow');
         expect(source).toContain('<HappierTextField');
         expect(source).toContain('<HappierToggle');
         expect(source).toContain('<HappierSelect');
