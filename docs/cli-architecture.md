@@ -933,7 +933,11 @@ starting a separate preparation Action.
 In 0.3 development source, a proven failure of that original startup fails the
 step and settles its failed parent when the authored failure policy stops the
 run. Reclaim preserves the same failure; it does not leave an inputless startup
-interrupted for input reattachment. Existing authored collection policies and
+interrupted for input reattachment. A host-proven unavailable native mode records
+refusal through the existing runner-open attestation and fails that same startup
+operation while the runner can still serve late-input refusals. The Workflow
+does not offer an original input or start another Session for that failed leaf.
+Existing authored collection policies and
 recovery of already-admitted inputs keep their own semantics. Operation discovery,
 Get, Wait and Cancel on the executing daemon use its installed exact-Machine
 transport. An operation retained on another Machine still routes to that original
@@ -1752,6 +1756,14 @@ Existing-Run Actions preserve their admitted causal permission witness and curre
 caller ceiling through the same private direct transport as start. That private
 context cannot fall through to a public Machine transport that cannot carry it.
 
+In 0.3 development, the native Run error sanitizer records Axios request
+failures before discarding their private transport objects. File diagnostics
+retain the Run id, method, origin, redacted route, HTTP status and an identifier
+domain code when present. The shared URL redactor removes credentials, query
+values and token-shaped path segments; headers and request/response bodies are
+not copied. This host boundary serves installed and bundled Agents, and does
+not retry a rejected request or change the public error shape.
+
 HB-4's development causal-loop work is partial, not a completed guarantee.
 The server's `automationTriggerCauseChain.ts` reads retained Run causes, exact
 Workflow turn origins and Session-birth origins before lifecycle trigger-budget
@@ -1837,12 +1849,15 @@ to replace a replay's stored graph.
 In 0.3 development, a lost Machine reply to `workflow.run.start` is an unknown
 admission outcome, not a refusal. The shared UI start controller reads the exact
 caller-allocated Run UUID through `workflow.run.get`; an admitted Run opens
-without resending Start. If it is not yet visible, the composer stays **Still
-starting…** and rereads only on the existing Account Run invalidation feed.
-Absence cannot prove rejection while the original request may still commit.
-An explicit transport `notSent` witness remains a typed, retryable failure.
-The Account lifetime fences reads, projection and navigation; server-side
-admission remains idempotent for the same Run UUID.
+without resending Start. If the exact read returns `run_not_found`, the controller
+rejoins Start with the same Run UUID and the immutable reviewed input and target.
+Absence does not prove rejection while the original request may still commit;
+canonical admission deduplicates both deliveries. If the read or rejoin remains
+unconfirmed, active progress ends with an unresolved-outcome message. A later
+press retains the same request rather than allocating a replacement Run.
+An explicit transport `notSent` witness remains a typed, retryable failure when
+no earlier admission is unresolved. The Account lifetime retires retained inputs
+and fences reads, projection and navigation.
 
 In current 0.3 development source, Workflow cancellation ends authored work
 even when a child's launch or stop outcome remains unknown. The canonical

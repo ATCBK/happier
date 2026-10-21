@@ -92,7 +92,11 @@ with `auth_enrollment_timeout` or `auth_request_expired` and a request to Retry
 setup; late consent cannot authorize the expired request. Finite `auth wait`
 failures project a credential-free code through the buffered enrollment error,
 including local expiry and argument/state validation. These are development
-source changes. Transient Home HTTP, network and timeout failures are classified
+source changes. Buffered auth failures also retain the auth phase, HTTP status
+and known Home database availability code through the shared diagnostic
+allowlist. Arbitrary server error values, response bodies and native output
+remain excluded from that cause projection. Transient Home HTTP, network and
+timeout failures are classified
 as `AUTH_WAIT_HOME_UNAVAILABLE`; the wait does not replay the one-shot claim.
 After a successful claim, buffered and streaming enrollment retain that response
 and retry transient authenticated Home observations and Machine registration
@@ -104,7 +108,14 @@ preserve the HTTP status or transport failure for the shared recovery policy.
 During managed enrollment, the controller's repeatable `controller/current`
 observations use that same Home retry policy and the remote recipe's existing
 deadline and polling cadence. Native effects, submission and report mutations
-are not replayed. If Home remains unavailable after that lifetime, Create or
+are not replayed. Native installation starts this existing budget before
+`ssh.installCli`, and sign-in consumes its remaining time rather than renewing
+it. If the budget expires during installation before sign-in starts, the
+operation fails with its Home diagnostic and the retained machine supports
+Retry install. Connection-loss Prisma errors (`P1001`, `P1002`, `P1017`) use
+the server's existing `503 database_connection_unavailable` classification;
+that availability result does not establish rollback or permit transaction replay.
+If Home remains unavailable after sign-in starts and the lifetime ends, Create or
 bootstrap Retry retains `action_outcome_unknown` as an `outcome_uncertain`
 operation rather than claiming the guest failed; enrollment may already have
 committed. This controller-side recovery requires a controller refresh.
@@ -116,7 +127,11 @@ diagnostic envelope. An invalid envelope identifies the first failed check
 (`parse`, `v`, `ok`, `kind`, or `code`) without copying rejected values. Safe
 unrecognised error codes remain reportable data; they do not need a controller
 allowlist. The recipe retains the exit without exposing native output or
-inferring an authentication cause. Controller and guest CLI reloads
+inferring an authentication cause. When native execution ends before a usable
+finite response, the existing terminal failure retains the validated termination
+kind, exit status when observed, truncation flags and allowlisted diagnostic
+code. Native stdout, stderr, diagnostic messages and signal values are excluded;
+no HTTP cause is inferred from termination alone. Controller and guest CLI reloads
 are required; the server's
 terminal-request TTL policy is unchanged.
 
