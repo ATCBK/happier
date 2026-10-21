@@ -8,6 +8,11 @@
     { "op": "browser", "args": ["click", "[data-testid=\"agent-input-machine-chip\"]"] },
     { "op": "browser", "args": ["wait", "[data-testid=\"new-session-machine-option:620a8bc8-99ec-461a-87f7-2b980ac7a68c\"]"] },
     { "op": "browser", "args": ["click", "[data-testid=\"new-session-machine-option:620a8bc8-99ec-461a-87f7-2b980ac7a68c\"]"] },
+    { "op": "browser", "args": ["wait", "--fn", "!document.querySelector('[data-testid^=\"new-session-machine-option:\"]')"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"agent-input-machine-chip\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"new-session-machine-option:620a8bc8-99ec-461a-87f7-2b980ac7a68c\"][aria-selected=\"true\"]"] },
+    { "op": "browser", "args": ["press", "Escape"] },
+    { "op": "browser", "args": ["wait", "--fn", "!document.querySelector('[data-testid^=\"new-session-machine-option:\"]')"] },
     { "op": "browser", "args": ["fill", "[data-testid=\"new-session-composer-input\"]", "perf-B2 transcript fixture. Performance measurement only: do not use tools, read files, run commands, or change anything. Reply with 240 numbered short lines about counting, one sentence per line. Finish with PERF-B2-FIXTURE-DONE on its own line."] },
     { "op": "browser", "args": ["wait", "--fn", "(() => { const e=document.querySelector('[data-testid=\"new-session-composer-send\"]'); return !!e && !e.disabled && e.getAttribute('aria-disabled')!=='true'; })()"] }
   ],
