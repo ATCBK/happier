@@ -1,3 +1,6 @@
+import { CODE_INTELLIGENCE_ACTION_SPECS } from '../actions/codeIntelligenceActionFamily.js';
+import { createHappierActionToolNameIndex, readHappierActionId } from '../actions/happierActionToolResult.js';
+
 export type ToolMutationClassification =
     | 'read_only'
     | 'single_path'
@@ -71,10 +74,16 @@ const toolMutationClassificationByName: Readonly<Record<string, ToolMutationClas
     subagentrun: 'container',
     task: 'container',
 };
+const codeActionNames = createHappierActionToolNameIndex(CODE_INTELLIGENCE_ACTION_SPECS.map(spec => ({
+    actionId: spec.id, name: spec.bindings.mcpToolName,
+})));
 
 export function resolveToolMutationClassification(toolName: string): ToolMutationClassification | null {
     const normalizedToolName = normalizeToolName(toolName);
     if (!normalizedToolName) return null;
+    const codeAction = readHappierActionId(normalizedToolName, codeActionNames);
+    if (codeAction) return codeAction === 'code.rename.apply' || codeAction === 'code.file.rename.apply'
+        || codeAction === 'code.codeAction.apply' ? 'patch' : 'read_only';
     return toolMutationClassificationByName[normalizedToolName] ?? null;
 }
 

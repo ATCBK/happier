@@ -91,6 +91,42 @@ describe('deriveLiveFileWrites', () => {
 });
 
 describe('deriveSettledFileWrites', () => {
+    it('resolves known Action paths against the Action root before workspace containment', () => {
+        const input = { machineId: 'm1', rootPath: '/repo-other', path: 'src/one.ts', files: [
+            { path: 'src/one.ts', renameTo: 'src/two.ts', expectedHash: 'a'.repeat(64), edits: [] },
+        ] };
+        const message = call('outside-action', 'mcp__happier__code_file_rename_apply', input);
+        expect(deriveLiveFileWrites([message], options).size).toBe(0);
+        message.tool.state = 'completed';
+        message.tool.result = { ok: true, results: [{ path: 'src/one.ts', renameTo: 'src/two.ts', status: 'replaced' }] };
+        expect(deriveSettledFileWrites([message], options).size).toBe(0);
+        input.rootPath = 'C:\\Repo';
+        expect(deriveSettledFileWrites([message], { workspaceRoot: 'c:/repo' }).get('outside-action')?.paths)
+            .toEqual(['src/one.ts', 'src/two.ts']);
+    });
+
+    it.each(['code_rename_apply', 'code_file_rename_apply', 'code_code_action_apply'])('settles only committed semantic Action receipts, including command edits and both rename paths (%s)', (name) => {
+        const input = { machineId: 'm1', rootPath: '/repo', path: 'src/one.ts', files: [
+            { path: 'src/one.ts', renameTo: 'src/two.ts', expectedHash: 'a'.repeat(64), edits: [] },
+            { path: 'src/failed.ts', expectedHash: 'b'.repeat(64), edits: [] },
+        ] };
+        const message = call('semantic', `mcp__happier__${name}`, input, 'completed');
+        const receipt = { content: [{ type: 'text', text: JSON.stringify({ ok: true, results: [
+            { path: 'src/one.ts', renameTo: 'src/two.ts', status: 'replaced' },
+            { path: 'src/failed.ts', status: 'failed', reason: 'hash changed' },
+            { path: 'src/importer.ts', status: 'replaced' },
+            { path: 'src/importer.ts', status: 'replaced' },
+        ] }) }] };
+        message.tool.result = receipt;
+        expect(deriveSettledFileWrites([message], options).get('semantic')?.paths)
+            .toEqual(['src/one.ts', 'src/two.ts', 'src/importer.ts']);
+        message.tool.result = { ok: false, code: 'failed' };
+        expect(deriveSettledFileWrites([message], options).size).toBe(0);
+        message.tool.result = receipt;
+        message.tool.name = `mcp__other__${name}`;
+        expect(deriveSettledFileWrites([message], options).size).toBe(0);
+    });
+
     it('keeps completed and error path evidence independent of the active-session presence gate', () => {
         const settled = deriveSettledFileWrites([
             call('done', 'Write', { path: 'done.ts' }, 'completed'),
