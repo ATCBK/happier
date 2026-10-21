@@ -13,6 +13,14 @@ import type { AttachmentDraft } from '@/components/sessions/attachments/attachme
 import type { MultiTextInputHandle } from '@/components/ui/forms/MultiTextInput';
 import type { ComposerStructuredInputMention } from './structuredInputMentions';
 import { scanInlineReferenceTokensV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
+import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
+import { AttachmentFilePicker } from '@/components/sessions/attachments/AttachmentFilePicker.web';
+import { createEphemeralComposerDocumentOwner } from '@/components/sessions/composer/composerDocumentOwner';
+import { projectComposerDocumentSnapshot } from '@/components/sessions/composer/composerSnapshotProjection';
+import * as composerPresentation from '@/components/sessions/presentation/sessionComposerPresentationTargets';
+import { executeComposerIngressAction } from '@/sync/ops/actions/composerIngressActionRuntime';
+import { storage } from '@/sync/domains/state/storage';
+import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // jsdom has no browser hit-test API. A point outside the editor falls back to its caret.
@@ -87,6 +95,56 @@ vi.unmock('color');
 vi.unmock('@/components/ui/icons/Icon');
 
 const mounted: Array<{ root: ReturnType<typeof createRoot>; container: HTMLElement }> = [];
+const pickerScope = { serverId: 'picker-home', accountId: 'picker-account' };
+const pickerComposerRef = { kind: 'newSession', instanceId: 'picker-composer' } as const;
+
+function PickerComposerHarness({ inputRef, onDrafts }: Readonly<{
+    inputRef: React.RefObject<MultiTextInputHandle | null>;
+    onDrafts: (drafts: readonly AttachmentDraft[]) => void;
+}>) {
+    const [owner] = React.useState(() => createEphemeralComposerDocumentOwner({ ref: pickerComposerRef,
+        capabilities: { text: true, references: true, attachments: true, submit: true },
+        initialDocument: { text: 'Before after', structuredInputMentions: [], composerAttachments: [] } }));
+    const document = React.useSyncExternalStore(owner.observe, () => owner.read().document);
+    const selection = React.useRef({ start: 7, end: 7 });
+    const intake = { enabled: true, maxFileBytes: 1024,
+        onPickedDrafts: (drafts: readonly AttachmentDraft[]) => {
+            composerPresentation.insertMountedComposerAttachmentReferences({ ref: pickerComposerRef, scope: pickerScope, drafts });
+        } };
+    const attachments = useAttachmentDraftManager(intake);
+    React.useEffect(() => { onDrafts(attachments.drafts); }, [attachments.drafts, onDrafts]);
+    React.useEffect(() => composerPresentation.registerComposerPresentationTarget(pickerComposerRef, {
+        readScope: () => pickerScope,
+        readRevision: () => owner.read().revision,
+        replace: (text, expectedRevision) => {
+            if (owner.read().revision === expectedRevision) owner.replaceDocument({ ...owner.read().document, text });
+            return owner.read().revision;
+        },
+        readSnapshot: () => projectComposerDocumentSnapshot({ owner, attachmentCatalog: { entriesById: null }, presentation: {
+            layout: 'wrap', focused: true, editable: true, submittable: true, submitting: false, running: false,
+            selection: selection.current,
+        } }),
+        commitDocument: ({ expectedRevision, mutation }) => {
+            const result = owner.apply(expectedRevision, mutation);
+            if (result.status === 'applied' && mutation.selection) selection.current = mutation.selection;
+            return result;
+        },
+        openAttachmentPicker: () => { attachments.filePickerRef.current?.openFiles(); return true; },
+    }), [attachments.filePickerRef, owner]);
+    return <>
+        <button data-testid="pick-attachments" onClick={() => attachments.filePickerRef.current?.openFiles()}>Attach</button>
+        <AttachmentFilePicker ref={attachments.filePickerRef} onAttachmentsPicked={attachments.addPickedAttachments} />
+        <AgentInput ref={inputRef} value={document.text}
+            inputPersistence={{ restoreToken: 'picker-caret', initialSelection: selection.current,
+                onSelectionChangePersist: next => { selection.current = next; } }}
+            onChangeText={text => owner.replaceDocument({ ...owner.read().document, text })}
+            structuredInputMentions={document.structuredInputMentions}
+            onStructuredInputMentionsChange={structuredInputMentions => owner.replaceDocument({ ...owner.read().document, structuredInputMentions })}
+            placeholder="Message" onSend={() => {}} autocompleteKinds={[]} autocompleteSuggestions={async () => []}
+            onAttachmentsAdded={attachments.addWebFiles} hasSendableAttachments={attachments.hasSendableAttachments}
+            attachmentRowItems={projectAgentInputAttachmentRowItems({ transferAttachments: attachments.agentInputAttachments })} />
+    </>;
+}
 
 function UploadComposerHarness({ inputRef, onDrafts }: Readonly<{
     inputRef: React.RefObject<MultiTextInputHandle | null>;
@@ -145,6 +203,62 @@ async function renderAgentInput(onAttachmentsAdded: NonNullable<React.ComponentP
 }
 
 describe('AgentInput (attachments drag overlay)', () => {
+    it.each(['attach', 'action'] as const)('inserts two picked images at the middle caret through %s with their actual tray ids', async entry => {
+        const priorScope = storage.getState().profileScope;
+        const priorRuntime = getAppliedActiveServerSnapshot();
+        const priorAvailable = isAppliedActiveServerRuntimeAvailable();
+        const originalCreate = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
+        const originalRevoke = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL');
+        // Browser-only object URLs enable the real image tray projection in jsdom.
+        Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: (file: File) => `blob:${file.name}` });
+        Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: () => {} });
+        storage.setState({ profileScope: pickerScope });
+        publishAppliedActiveServerSnapshot({ serverId: pickerScope.serverId, serverUrl: 'https://picker.example.test', generation: priorRuntime.generation + 1 });
+        try {
+            const container = document.createElement('div');
+            document.body.appendChild(container);
+            const root = createRoot(container);
+            mounted.push({ root, container });
+            const inputRef = React.createRef<MultiTextInputHandle>();
+            let drafts: readonly AttachmentDraft[] = [];
+            const onDrafts = (next: readonly AttachmentDraft[]) => { drafts = next; };
+            await act(async () => { root.render(<PickerComposerHarness inputRef={inputRef} onDrafts={onDrafts} />); });
+            await act(async () => { inputRef.current?.setSelection({ start: 7, end: 7 }); });
+            const picker = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+            let opened = false;
+            picker.addEventListener('click', () => { opened = true; });
+            await act(async () => {
+                if (entry === 'attach') container.querySelector<HTMLButtonElement>('[data-testid="pick-attachments"]')!.click();
+                else {
+                    const executor = createActionExecutor({ composerIngress: executeComposerIngressAction,
+                        isActionApprovalRequired: () => false } as unknown as ActionExecutorDeps);
+                    expect(await executor.execute('composer.attachments.pick', { scope: pickerScope, ref: pickerComposerRef }, {
+                        surface: 'agent', authority: 'account_automation', serverId: pickerScope.serverId, runtimeAccountId: pickerScope.accountId,
+                    })).toMatchObject({ ok: true, result: { status: 'opened' } });
+                }
+            });
+            expect(opened).toBe(true);
+            const files = [new File(['one'], 'one.png', { type: 'image/png' }), new File(['two'], 'two.png', { type: 'image/png' })];
+            Object.defineProperty(picker, 'files', { configurable: true, value: files });
+            await act(async () => { picker.dispatchEvent(new Event('change', { bubbles: true })); });
+            expect(drafts).toHaveLength(2);
+            const text = inputRef.current?.getText() ?? '';
+            const tokens = scanInlineReferenceTokensV1(text);
+            expect(tokens.map(token => token.ref)).toEqual(drafts.map(draft => `attachment:${draft.id}`));
+            expect(tokens[0]?.start).toBe(7);
+            expect(text.slice(tokens[1]!.end)).toBe(' after');
+            expect(Array.from(container.querySelectorAll('[data-happier-ref-label]'), node => node.textContent)).toEqual(['Image #1', 'Image #2']);
+        } finally {
+            await act(async () => { mounted.at(-1)?.root.unmount(); });
+            storage.setState({ profileScope: priorScope });
+            publishAppliedActiveServerSnapshot(priorRuntime, priorAvailable);
+            if (originalCreate) Object.defineProperty(URL, 'createObjectURL', originalCreate);
+            else Reflect.deleteProperty(URL, 'createObjectURL');
+            if (originalRevoke) Object.defineProperty(URL, 'revokeObjectURL', originalRevoke);
+            else Reflect.deleteProperty(URL, 'revokeObjectURL');
+        }
+    });
+
     it('pastes an OS image into the real tray and inserts its numbered chip at the caret', async () => {
         const originalCreate = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
         const originalRevoke = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL');

@@ -169,7 +169,9 @@ export function ComposerEntityDropTarget(props: Readonly<{
         },
     });
     const snapshot = useEntityDropTargetState(runtime, props.id);
-    return snapshot?.phase === 'carrying' && snapshot.admission?.status === 'allowed'
+    // Files carried from the computer light the composer like an admitted in-app carry (lab D3).
+    const externalFilesLit = props.externalFilesActive === true && props.editable && props.presented;
+    return (snapshot?.phase === 'carrying' && snapshot.admission?.status === 'allowed') || externalFilesLit
         // The outline takes the composer's own corner, so it lies exactly on the panel.
         ? <TreeDropOutline visual={{ kind: 'outline', targetId: props.id }} testID="composer-entity-drop-outline" radius={theme.parts.composer.radius} weight="container"
             style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, pointerEvents: 'none' }} /> : null;

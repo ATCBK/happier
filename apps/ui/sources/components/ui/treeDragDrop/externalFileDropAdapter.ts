@@ -60,6 +60,10 @@ let bindingCount = 0;
 let cancelled = false;
 let detachCancellation: (() => void) | null = null;
 export type ExternalFileDragPointer = Readonly<{ x: number; y: number }> | null;
+/** What the active drag carries, as far as the browser reveals it before release (kinds and types, never names). */
+export type ExternalFileDragItems = Readonly<{ files: number; images: number }> | null;
+let carried: ExternalFileDragItems = null;
+export const readExternalFileDragItems = (): ExternalFileDragItems => carried;
 let pointer: ExternalFileDragPointer = null;
 const pointerListeners = new Set<() => void>();
 
@@ -80,17 +84,33 @@ function projectEventPointer(event: WebFileDragEvent) {
     if (typeof x === 'number' && typeof y === 'number' && Number.isFinite(x) && Number.isFinite(y)) projectPointer({ x, y });
 }
 
+function projectCarriedItems(event: WebFileDragEvent) {
+    const items = (event.dataTransfer as { items?: ArrayLike<Readonly<{ kind?: string; type?: string }>> } | null | undefined)?.items;
+    if (!items) return;
+    let files = 0;
+    let images = 0;
+    for (let index = 0; index < items.length; index += 1) {
+        const item = items[index];
+        if (item?.kind !== 'file') continue;
+        files += 1;
+        if (item.type?.startsWith('image/')) images += 1;
+    }
+    carried = { files, images };
+}
+
 function retire() {
     const previous = active;
     active = null;
     depth = 0;
+    carried = null;
     projectPointer(null);
     previous?.read().onFileDragActiveChange?.(false);
 }
 
-function activate(binding: Binding) {
+function activate(binding: Binding, event: WebFileDragEvent) {
     if (active === binding) return;
     retire();
+    projectCarriedItems(event);
     active = binding;
     binding.read().onFileDragActiveChange?.(true);
 }
@@ -147,7 +167,7 @@ export function createExternalFileDropBinding(read: () => ExternalFileDropTarget
                 if (!claim(binding, event)) return;
                 cancelled = false;
                 if (!read().enabled) { retire(); return; }
-                activate(binding);
+                activate(binding, event);
                 projectEventPointer(event);
                 depth += 1;
             },
@@ -171,7 +191,7 @@ export function createExternalFileDropBinding(read: () => ExternalFileDropTarget
                     retire();
                     return;
                 }
-                activate(binding);
+                activate(binding, event);
                 projectEventPointer(event);
                 if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
             },

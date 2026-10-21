@@ -229,7 +229,7 @@ import type { AcpConfigOptionOverridesV1, ComposerRefV1 } from '@happier-dev/pro
 import { composerRefV1Key } from '@happier-dev/protocol/plugins/ui/composerRef';
 import { useWebFileDropZone } from '@/hooks/ui/useWebFileDropZone';
 import { WebDropTargetView } from '@/components/workspaces/files/repositoryTree/WebDropTargetView';
-import type { WebFileDragEvent } from '@/components/ui/treeDragDrop/externalFileDropAdapter';
+import { readExternalFileDragItems, type WebFileDragEvent } from '@/components/ui/treeDragDrop/externalFileDropAdapter';
 import { useEntityDragDropRuntime, useEntityDropDomBinding, readWindowBounds, measureWindowBounds,
     type TreeDropMeasurableRef, type WindowBounds } from '@/components/ui/treeDragDrop';
 import { ExternalFileDropOutcomePill } from '@/components/ui/treeDragDrop/ui/ExternalFileDropOutcomePill';
@@ -249,6 +249,7 @@ import type {
     AgentInputStatusBadge as AgentInputStatusBadgeDescriptor,
 } from './agentInputContracts';
 import { projectAgentInputAttachmentRowItems, readAgentInputImageNumbers } from './agentInputContracts';
+import { describeComposerFileDropOutcome } from '@/components/sessions/composer/composerFileDropOutcome';
 import type { AgentInputSendIntentOptions, AgentInputSendOptions } from './agentInputSendOptions';
 import type { AgentInputChipPickerOption } from './components/AgentInputChipPickerTypes';
 import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
@@ -3899,7 +3900,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 >
                     {fileDragActive && typeof props.onAttachmentsAdded === 'function' ? (
                         <ExternalFileDropOutcomePill testID="agent-input-drop-overlay"
-                            outcome={{ glyph: 'attach', tone: 'allowed', title: t('entityDragDrop.composer.mentionHere'), detail: props.attachmentDropHint ?? t('entityDragDrop.composer.attachAndMention') }} />
+                            outcome={{ glyph: 'attach', tone: 'allowed', ...describeComposerFileDropOutcome({
+                                carried: readExternalFileDragItems(),
+                                nextImageNumber: readAgentInputImageNumbers(attachmentRowItems).size + 1,
+                                ...(props.attachmentDropHint ? { hint: props.attachmentDropHint } : {}),
+                            }) }} />
                     ) : null}
                     {Platform.OS === 'web' ? (
                         <>
