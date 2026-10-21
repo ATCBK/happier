@@ -11,7 +11,7 @@ import { workStatusWordStyle } from '@/components/work/status/workStatusTreatmen
 import { t } from '@/text';
 import { useSessionListRuntimeDeadlineNowMs } from '@/hooks/session/sessionListRuntimeClock';
 import { formatRelativeTimeShort, readRelativeTimeShortRefreshAtMs } from '@/utils/time/formatShortRelativeTime';
-import { formatScheduledRunQualifier, formatTriggerLastOutcome, readNextScheduledRunRefreshAtMs, type ScheduledRunQualifierTime } from './formatTriggerSummary';
+import { formatNextScheduledRunAccessibilityLabel, formatScheduledRunQualifier, formatTriggerLastOutcome, readNextScheduledRunRefreshAtMs, type ScheduledRunQualifierTime } from './formatTriggerSummary';
 import type { WorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
 import { HAPPIER_COLLECTION_LIST_METRICS, HappierTriggerRow, type HappierTriggerRowHost } from '@happier-dev/plugin-ui/presentation';
 
@@ -108,7 +108,9 @@ export const TriggerRow = React.memo(function TriggerRow(props: TriggerRowProps)
         ? { ...props.outcome, text: formatTriggerLastOutcome(formatRelativeTimeShort(relativeAge.atMs, nowMs), relativeAge.state) }
         : props.outcome;
     return <HappierTriggerRow testID={props.testID} title={props.title} qualifier={lead}
-        qualifierAccessibilityLabel={props.qualifierAccessibilityLabel} outcome={outcome}
+        qualifierAccessibilityLabel={qualifierTime && props.qualifierAccessibilityLabel
+            ? formatNextScheduledRunAccessibilityLabel(qualifierTime.atMs, props.enabled, nowMs)
+            : props.qualifierAccessibilityLabel} outcome={outcome}
         enabled={props.enabled} attention={Boolean(props.attention)} toggleDisabled={props.toggleDisabled}
         toggleLabel={t(props.enabled ? 'workflows.triggers.row.turnOff' : 'workflows.triggers.row.turnOn', { name: props.title })}
         onToggle={props.onToggle} onPress={props.onPress} presentation={props.presentation} multiline={props.multiline}

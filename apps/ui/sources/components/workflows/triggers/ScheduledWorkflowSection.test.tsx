@@ -1,7 +1,9 @@
 import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storageStore';
+import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { WorkflowTriggerSetV1Schema } from '@happier-dev/protocol';
 import { ScheduledWorkflowGroup, ScheduledWorkflowSectionView } from './ScheduledWorkflowSection';
 import { projectScheduledWorkflowRows } from './scheduledWorkflowRows';
@@ -12,6 +14,27 @@ vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createT
 afterEach(async () => { await standardCleanup(); vi.useRealTimers(); });
 
 describe('Scheduled Work rows', () => {
+    it('names a destination through its Account Home even when another Home has the same Session id', async () => {
+        const previous = storage.getState();
+        try {
+            const session = createSessionFixture({ id: 'session-one', serverId: 'schedule-home', metadata: {
+                name: 'Release review', host: 'review-box', path: '/release' } });
+            storage.setState({ profileScope: { serverId: 'schedule-home', accountId: 'owner' }, sessions: {},
+                sessionListRowsByServerId: {
+                    'schedule-home': { [session.id]: buildSessionListRenderableFromSession(session) },
+                    'other-home': { [session.id]: buildSessionListRenderableFromSession({ ...session, serverId: 'other-home',
+                        metadata: { name: 'Other review', host: 'other', path: '/other' } }) },
+                } });
+            const set = WorkflowTriggerSetV1Schema.parse({ automationId: 'habit', revision: 1, enabled: true, health: 'available',
+                destinations: { targetSessionIds: [session.id], usesOriginSession: false, unresolvedWorkflowRefs: [], leaves: [] },
+                triggers: [{ id: 'timer', revision: 1, enabled: true, kind: 'schedule', nextRunAt: Date.now() + 120_000,
+                    createdAt: 1, updatedAt: 1, triggerDefinitionEnvelope: null,
+                    schedule: { kind: 'interval', everyMs: 60_000, scheduleExpr: null, timezone: null } }] });
+            const screen = await renderScreen(<ScheduledWorkflowSectionView rows={projectScheduledWorkflowRows([set])} onOpen={() => {}} />);
+            expect(screen.findByTestId('scheduled-workflow:habit:timer-destination:session-one')?.props.accessibilityLabel).toBe('Release review');
+            expect(screen.getTextContent()).not.toContain('message.sessionReferenceUnavailable');
+        } finally { await act(async () => { storage.setState(previous); }); }
+    });
     it('refreshes the occurrence at its rounded display boundary without a data update', async () => {
         vi.useFakeTimers();
         const now = new Date(2026, 9, 10, 10).getTime();
@@ -28,6 +51,11 @@ describe('Scheduled Work rows', () => {
         await act(async () => { vi.advanceTimersByTime(30_001); });
         expect(screen.getTextContent()).toContain('nextMinutes(count=1)');
         expect(vi.getTimerCount()).toBe(1);
+        await act(async () => { vi.advanceTimersByTime(90_000); });
+        expect(screen.findByTestId('scheduled-workflow:habit:timer-next')?.props.children).toBe('automations.list.nextRunPending');
+        expect(screen.findByTestId('scheduled-workflow:habit:timer')?.props.accessibilityLabel).toContain('automations.list.nextRunPending');
+        expect(screen.findByTestId('scheduled-workflow:habit:timer')?.props.accessibilityLabel).not.toContain('workflows.triggers.row.nextRun(');
+        expect(vi.getTimerCount()).toBe(0);
     });
     it('keeps the occurrence next run separate from step context in both Account and Writes-here rows', async () => {
         // Lab lane12-final `b-habit T`: the quiet line says which step writes here; when is the row's meta.

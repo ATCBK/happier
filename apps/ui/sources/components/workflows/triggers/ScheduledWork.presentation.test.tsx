@@ -176,7 +176,8 @@ it.each(variants)('captures D6 source surfaces beside their existing Work-row re
     const theme = capture.dark ? darkTheme : lightTheme;
     const home = await upsertServerProfile({ serverUrl: 'https://hb2b-capture.test' });
     storage.setState({ profileScope: { serverId: home.id, accountId: 'account-1' }, sessions: {
-        destination: createSessionFixture({ id: 'destination', metadata: { ...createSessionFixture().metadata!, name: 'Release workspace' } }),
+        destination: createSessionFixture({ id: 'destination', serverId: home.id,
+            metadata: { ...createSessionFixture().metadata!, name: 'Release workspace' } }),
     } });
     const run = createWorkflowRunSummaryFixture({ id: 'daily-run', state: 'running',
         stepProgress: { completed: 1, total: 3, destinations: [{ sourceKey: '$root', blockId: 'notes', sessionIds: ['destination'],

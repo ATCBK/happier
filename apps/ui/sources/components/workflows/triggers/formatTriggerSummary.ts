@@ -2,7 +2,6 @@ import type { AutomationSessionLifecycleEvent, AutomationRunLifecycleTrigger } f
 
 import { getPreferredLanguage, t } from '@/text';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
-import { formatRelativeTimeShort, readRelativeTimeShortRefreshAtMs } from '@/utils/time/formatShortRelativeTime';
 
 import { formatClockTime, parseSimpleSchedule } from './triggerSchedule';
 
@@ -16,7 +15,7 @@ function scheduledRunTimeUnits(nextRunAt: number, nowMs: number) {
 
 /** Scheduler-owned occurrence time, shared by habits and upcoming Work rows. */
 export function formatNextScheduledRun(nextRunAt: number | null, enabled = true, nowMs = Date.now()): string {
-    if (nextRunAt === null) return t(enabled ? 'automations.list.nextRunPending' : 'automations.list.noNextRun');
+    if (nextRunAt === null || nextRunAt <= nowMs) return t(enabled ? 'automations.list.nextRunPending' : 'automations.list.noNextRun');
     return t('workflows.triggers.row.nextRun', { time: formatNextScheduledRunTime(nextRunAt, enabled, nowMs) });
 }
 
@@ -25,24 +24,25 @@ export function formatNextScheduledRun(nextRunAt: number | null, enabled = true,
  * position already says "next"; without an occurrence it is the same pending/none sentence.
  */
 export function formatNextScheduledRunTime(nextRunAt: number | null, enabled = true, nowMs = Date.now()): string {
-    if (nextRunAt === null) return t(enabled ? 'automations.list.nextRunPending' : 'automations.list.noNextRun');
+    // A retained occurrence is not a future promise once it is due. Only the scheduler can
+    // publish its successor; elapsed-age wording would describe a different fact (a past Run).
+    if (nextRunAt === null || nextRunAt <= nowMs) return t(enabled ? 'automations.list.nextRunPending' : 'automations.list.noNextRun');
     const { days, minutes } = scheduledRunTimeUnits(nextRunAt, nowMs);
     return days > 0
         ? t('workflows.triggers.row.nextDays', { count: days })
-        : minutes <= 0 ? formatRelativeTimeShort(nextRunAt, nowMs)
-            : minutes < 60 ? t('workflows.triggers.row.nextMinutes', { count: minutes })
-                : t('workflows.triggers.row.nextHours', { count: Math.round(minutes / 60) });
+        : minutes < 60 ? t('workflows.triggers.row.nextMinutes', { count: Math.max(1, minutes) })
+            : t('workflows.triggers.row.nextHours', { count: Math.round(minutes / 60) });
 }
 
-/** The occurrence label's actual calendar, rounded-minute/hour, or elapsed-age boundary. */
+/** The occurrence label's actual calendar, rounded-minute/hour, or due boundary. */
 export function readNextScheduledRunRefreshAtMs(nextRunAt: number | null, nowMs: number): number | null {
-    if (nextRunAt === null || !Number.isFinite(nextRunAt) || !Number.isFinite(nowMs)) return null;
+    if (nextRunAt === null || !Number.isFinite(nextRunAt) || !Number.isFinite(nowMs) || nextRunAt <= nowMs) return null;
     const { days, minutes } = scheduledRunTimeUnits(nextRunAt, nowMs);
     if (days > 0) {
         const now = new Date(nowMs);
         return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
     }
-    if (minutes <= 0) return readRelativeTimeShortRefreshAtMs(nextRunAt, nowMs);
+    if (minutes <= 1) return nextRunAt;
     const nextMinutes = minutes < 60 ? minutes - 1 : Math.max(59, Math.round(minutes / 60) * 60 - 31);
     // Math.round retains the upper value at a half minute: the lower label starts one ms later.
     return nextRunAt - (nextMinutes + 0.5) * MINUTE_MS + 1;
@@ -62,8 +62,8 @@ export function formatTriggerLastOutcome(age: string, state?: string): string {
 }
 
 /** Exact scheduler time for spoken labels, alongside the compact visible occurrence. */
-export function formatNextScheduledRunAccessibilityLabel(nextRunAt: number | null, enabled = true): string {
-    return nextRunAt === null ? formatNextScheduledRun(null, enabled)
+export function formatNextScheduledRunAccessibilityLabel(nextRunAt: number | null, enabled = true, nowMs = Date.now()): string {
+    return nextRunAt === null || nextRunAt <= nowMs ? formatNextScheduledRun(null, enabled, nowMs)
         : t('workflows.triggers.row.nextRun', { time: formatWithCachedDateTimeFormatter(nextRunAt, getPreferredLanguage(),
             { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit',
                 second: '2-digit', timeZoneName: 'short' }) });

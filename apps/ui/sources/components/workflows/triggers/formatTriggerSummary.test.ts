@@ -22,8 +22,16 @@ function interval(everyMs: number) {
 }
 
 describe('formatTriggerSummary', () => {
+    it('waits for a scheduler projection instead of presenting a retained past occurrence as the next run', () => {
+        const now = new Date(2026, 9, 20, 10).getTime();
+        expect(formatNextScheduledRun(now - 7 * 86_400_000, true, now)).toBe('automations.list.nextRunPending');
+        expect(formatNextScheduledRun(now, true, now)).toBe('automations.list.nextRunPending');
+        expect(formatNextScheduledRunAccessibilityLabel(now - 1, true, now)).toBe('automations.list.nextRunPending');
+        expect(readNextScheduledRunRefreshAtMs(now - 1, now)).toBeNull();
+        expect(formatNextScheduledRun(now + 3 * 3_600_000, true, now)).toContain('nextHours(count=3)');
+    });
     it.each([[2 * 60_000, 30_001], [3 * 3_600_000, 30 * 60_000 + 30_001],
-        [60 * 60_000, 30_001], [10_000, 70_000], [-90_000, 30_000]])(
+        [60 * 60_000, 30_001], [10_000, 10_000]])(
         'refreshes an occurrence %sms away only when its displayed value changes', (delta, delay) => {
             const now = new Date(2026, 9, 10, 10).getTime();
             const at = now + delta;
@@ -48,7 +56,7 @@ describe('formatTriggerSummary', () => {
         const clock = new Intl.DateTimeFormat(locale, { hour: 'numeric', minute: '2-digit' }).format(next);
         expect(formatClockTime({ hour: 9, minute: 5 })).toBe(clock);
         expect(formatTriggerSummary(cron('5 9 * * *'))).toContain(clock);
-        expect(formatNextScheduledRunAccessibilityLabel(next)).toContain(new Intl.DateTimeFormat(locale,
+        expect(formatNextScheduledRunAccessibilityLabel(next, true, now)).toContain(new Intl.DateTimeFormat(locale,
             { hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(next));
         expect(parseClockTime('09:05')).toEqual({ hour: 9, minute: 5 });
     });
@@ -68,8 +76,8 @@ describe('formatTriggerSummary', () => {
         const later = now + 3 * 3_600_000;
         expect(formatNextScheduledRun(later, true, now)).toContain('nextHours(count=3)');
         expect(formatNextScheduledRun(new Date(2026, 9, 9, 9).getTime(), true, now)).toContain('nextDays(count=1)');
-        expect(formatNextScheduledRunAccessibilityLabel(later)).toContain('2026');
-        expect(formatNextScheduledRunAccessibilityLabel(later)).toContain('9:00');
+        expect(formatNextScheduledRunAccessibilityLabel(later, true, now)).toContain('2026');
+        expect(formatNextScheduledRunAccessibilityLabel(later, true, now)).toContain('9:00');
         expect(formatNextScheduledRun(null)).toBe('automations.list.nextRunPending');
         expect(formatNextScheduledRun(null, false)).toBe('automations.list.noNextRun');
     });

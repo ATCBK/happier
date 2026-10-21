@@ -159,7 +159,7 @@ const ScheduledRow = React.memo(function ScheduledRow(props: Readonly<{
         return stepTitle === title.trim() ? [] : [t('sessionWork.scheduled.step', { ordinal: leaf.ordinal, title: stepTitle })];
     }) ?? [];
     const label = [title, formatNextScheduledRun(row.trigger.nextRunAt, enabled, nowMs), ...steps, formatTriggerSummary(row.trigger),
-        formatNextScheduledRunAccessibilityLabel(row.trigger.nextRunAt)].join('. ');
+        formatNextScheduledRunAccessibilityLabel(row.trigger.nextRunAt, enabled, nowMs)].join('. ');
     // One occurrence row for both hosts. The next run is the trailing meta, in the column where Runs
     // show their state word; the quiet line says which step writes where and on what schedule.
     // In a Session's "Writes here" the row sits beside the Runs that already write there, so it leads
@@ -190,10 +190,10 @@ const ScheduledRow = React.memo(function ScheduledRow(props: Readonly<{
 });
 
 const DestinationChip = React.memo(function DestinationChip(props: Readonly<{ sessionId: string; rowKey: string }>) {
-    const session = useSessionDisplayNameSource(props.sessionId);
     const scope = useActiveServerAccountScope();
+    const session = useSessionDisplayNameSource(props.sessionId, scope?.serverId);
     const router = useRouter();
-    const label = session ? getSessionName(session) : t('message.sessionReferenceUnavailable');
+    const label = session ? getSessionName(session, scope?.serverId) : t('message.sessionReferenceUnavailable');
     return <HappierPressable testID={`scheduled-workflow:${props.rowKey}-destination:${props.sessionId}`}
         accessibilityRole="link" accessibilityLabel={label} style={styles.destination}
         onPress={() => router.push({ pathname: '/session/[id]', params: { id: props.sessionId,

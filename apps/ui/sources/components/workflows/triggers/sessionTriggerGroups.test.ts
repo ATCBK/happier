@@ -72,7 +72,7 @@ describe('projectSessionTriggerGroups', () => {
     });
     it('shows the scheduler-owned next occurrence on a current habit', () => {
         const groups = projectSessionTriggerGroups({
-            sets: [set('habit', { target: inline(['Daily digest']), triggers: [{ ...daily('daily', '0 9 * * 1-5'), nextRunAt: 1000 }] })],
+            sets: [set('habit', { target: inline(['Daily digest']), triggers: [{ ...daily('daily', '0 9 * * 1-5'), nextRunAt: Date.now() + 3_600_000 }] })],
             lastRunAtByAutomationId: {}, resolveWorkflowTitle: () => null, formatAge: String,
         });
         expect(groups[0]?.rows[0]?.qualifier).toContain('workflows.triggers.row.nextRun');
@@ -117,7 +117,7 @@ describe('projectSessionTriggerGroups', () => {
         const groups = projectSessionTriggerGroups({
             sets: [set('legacy', { legacy: { editable: false, reason: 'created_in_0_2', placements: [
                 { machineId: 'm1', directory: '/repo' }, { machineId: 'm2', directory: '/repo' },
-            ] }, target: inline(['Review release\nInclude the changelog']), triggers: [{ ...daily('old', '0 9 * * *'), nextRunAt: 1000 }] }),
+            ] }, target: inline(['Review release\nInclude the changelog']), triggers: [{ ...daily('old', '0 9 * * *'), nextRunAt: Date.now() + 3_600_000 }] }),
             set('locked', { legacy: { editable: false, reason: 'created_in_0_2' }, health: 'source_unavailable', triggers: [daily('locked', '0 9 * * *')] })],
             lastRunAtByAutomationId: {}, resolveWorkflowTitle: () => null, resolveMachineTitle: (id) => id === 'm1' ? 'Laptop' : null, formatAge: String,
         });
