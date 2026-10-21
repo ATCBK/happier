@@ -852,7 +852,9 @@ function publishPluginUiProjectionPresentations(
         const prior = previous?.[key]?.[PLUGIN_UI_PROJECTION_PRESENTATION];
         // Retained bytes keep the same wire shape, while this owner's ready
         // presentation cannot retain mutable aliases supplied to save/hydrate.
-        const projection = projectNativeJsonValueForTransport(entry.projection) as PluginProjectionV2;
+        const projectionSnapshot: unknown = projectNativeJsonValueForTransport(entry.projection);
+        // The storage schema admitted this V2 shape before its immutable copy.
+        const projection = projectionSnapshot as PluginProjectionV2;
         const normalized = preparePluginUiProjectionOrigins(normalizePluginUiProjection(projection, platform,
             prior?.platform === platform ? prior.model ?? undefined : undefined));
         const model = Object.values(normalized).some(value => value !== null && typeof value === 'object' && Object.keys(value).length > 0)

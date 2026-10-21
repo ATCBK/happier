@@ -52,7 +52,7 @@ function readStringBundle(value: unknown): Readonly<Record<string, string>> | nu
  * the target keeps authority over its own keys.
  */
 export function resolvePluginUiTranslationBundle(params: Readonly<{
-    projection: PluginUiProjectionModel | null | undefined;
+    projection: Pick<PluginUiProjectionModel, 'translationsByPluginId'> | null | undefined;
     pluginId: string;
     locale?: string | null;
     /** Only contributors from this mount's admitted targeted snapshot. */

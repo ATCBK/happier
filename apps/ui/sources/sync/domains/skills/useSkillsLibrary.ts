@@ -21,7 +21,7 @@ import {
   areServerAccountScopesEqual,
   type ServerAccountScope,
 } from '@/sync/domains/scope/serverAccountScope';
-import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { useAppShellPluginUiDeclarationProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { uiPluginSkillSourceRevisionV1 } from '@/sync/ops/actions/pluginSkillActionDeps';
 
 export type SkillsLibraryStatus = 'loading' | 'ready' | 'unavailable';
@@ -159,7 +159,7 @@ export function useSkillsLibrary(
   const rules = usePromptLibraryCatalogValue('skill-rules', scope);
   const usage = usePromptLibraryCatalogValue('skill-usage', scope);
   const folders = usePromptLibraryCatalogValue('folders', scope);
-  const { pluginUiProjection } = useAppShellPluginUiProjection();
+  const pluginUiProjection = useAppShellPluginUiDeclarationProjection();
   const pluginRevision = uiPluginSkillSourceRevisionV1(
     areServerAccountScopesEqual(scope, activeScope) ? pluginUiProjection : null,
   );

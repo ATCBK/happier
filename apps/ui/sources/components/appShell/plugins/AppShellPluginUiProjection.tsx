@@ -47,9 +47,6 @@ import {
 } from '@/sync/domains/scope/activeServerAccountScope';
 import { retireIdlePluginUiEphemeralSharedValuesExcept } from '@/components/plugins/surfaces/pluginUiEphemeralSharedScope';
 import {
-    selectPluginDestinationSurfacePlacements,
-} from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
-import {
     PluginSurfaceDestinationNavigationBindingProvider,
     PluginSurfacePaneLaunchScope,
     usePluginSurfaceDestinationNavigationBinding,
@@ -256,10 +253,12 @@ export async function settleAppShellPluginRuntimeUpdate(input: Readonly<{
 export function AppShellPluginUiProjectionValueProvider(props: Readonly<{
     value: AppShellPluginUiProjectionValue;
     declarationReady?: boolean;
-    publication?: Pick<AppShellPluginUiProjectionPublication, 'getSnapshot'>;
+    publication?: Pick<AppShellPluginUiProjectionPublication, 'getSnapshot' | 'subscribe'>;
     children: React.ReactNode;
 }>): React.ReactElement {
-    const lifetime = captureActiveServerAccountScopeLifetime();
+    // A retained value still belongs to its original Account, even if a
+    // render after withdrawal can already capture another active lifetime.
+    const lifetime = props.value.accountLifetime;
     // Standalone composition/specimens use the same descriptive candidate
     // publisher. The real AppShell supplies its already-published fact map.
     const [standaloneCandidates] = React.useState(createPluginUiExecutionOriginCandidatePublication);
@@ -277,12 +276,15 @@ export function AppShellPluginUiProjectionValueProvider(props: Readonly<{
             standaloneCandidates.publish(props.value.pluginUiProjection, [],
                 Object.keys(props.value.pluginUiProjection?.installedPackagesById ?? {}));
         }
-        const read = (input?: AppShellPluginUiProjectionRead) => lifetime?.isCurrent()
-            && (!input || areServerAccountScopesEqual(input.scope, lifetime.scope))
-            && (input?.declarationsOnly || (props.publication
-                ? props.publication.getSnapshot().accountUiProjection !== null || props.publication.getSnapshot().projectionUnion.phase === 'current'
-                : props.value.phase === 'current'))
-            ? props.publication?.getSnapshot().pluginUiProjection ?? (props.publication ? null : props.value.pluginUiProjection) : null;
+        const read = (input?: AppShellPluginUiProjectionRead) => {
+            if (!lifetime?.isCurrent() || (input && !areServerAccountScopesEqual(input.scope, lifetime.scope))) return null;
+            if (!props.publication) return input?.declarationsOnly || props.value.phase === 'current'
+                ? props.value.pluginUiProjection : null;
+            const snapshot = props.publication.getSnapshot();
+            if (snapshot.accountLifetime !== lifetime) return null;
+            return input?.declarationsOnly || snapshot.accountUiProjection !== null || snapshot.projectionUnion.phase === 'current'
+                ? snapshot.pluginUiProjection : null;
+        };
         const readCandidates = (pluginId: string, input?: AppShellPluginUiProjectionRead) => {
             if (!lifetime?.isCurrent() || (input && !areServerAccountScopesEqual(input.scope, lifetime.scope))) return null;
             if (!props.publication) return standaloneCandidates.getSnapshot().get(pluginId) ?? null;
@@ -290,7 +292,7 @@ export function AppShellPluginUiProjectionValueProvider(props: Readonly<{
             return snapshot.accountLifetime === props.value.accountLifetime
                 ? snapshot.candidateFactsByPluginId.get(pluginId) ?? null : null;
         };
-        return publishCommittedAppShellPluginUiProjection(read, readCandidates);
+        return publishCommittedAppShellPluginUiProjection(read, readCandidates, props.publication?.subscribe);
     }, [lifetime, props.publication, props.value, standaloneCandidates]);
     return (
         <AppShellPluginUiDeclarationProjectionContext.Provider value={declarationSources}>
@@ -351,7 +353,7 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
     const {
         accountUiProjection, executionOriginPluginIds, projectionTargets,
         currentnessForActiveAccountByMachineId, projectionUnion, pluginUiProjection,
-        candidateFactsByPluginId, connectedAccountResolution,
+        candidateFactsByPluginId, connectedAccountResolution, destinationSurfacePlacements, settingsPages,
     } = derived;
     const publishMachineProjectionCurrentness = projectionPublication.publishMachineCurrentness;
     const publishPluginExecutionOrigin = React.useCallback((
@@ -545,12 +547,8 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
         ? settledClientExecutableActivation.state
         : ESTABLISHING_CLIENT_EXECUTABLE_ACTIVATION;
     const appNavigationBinding = usePluginSurfaceDestinationNavigationBindingForScope({
-        placements: pluginUiProjection
-            ? selectPluginDestinationSurfacePlacements(pluginUiProjection)
-            : [],
-        settingsPages: pluginUiProjection
-            ? Object.values(pluginUiProjection.settingsPagesById)
-            : [],
+        placements: destinationSurfacePlacements,
+        settingsPages,
         targetKind: 'app',
         accountLifetime,
     });

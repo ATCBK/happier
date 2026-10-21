@@ -15,7 +15,7 @@ import { createDeferred, createPlainAccountEncryptionCurrentnessFixture } from '
 import { createPluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/reader';
 import { readPluginAccountAvailability } from '@/sync/domains/plugins/availability/projection';
 import { sync } from '@/sync/sync';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { createPluginUiAccountStorageScope, createPluginUiDataClient } from './pluginUiDataClient';
 import { publishActivePluginCollectionChanges, resetActivePluginCollectionChanges } from './pluginCollectionChangeWatch';
 import { recordAccountStoredContentServerRequirements } from '@/sync/http/accountStoredContentCompatibility';
@@ -80,8 +80,14 @@ async function withRowReadClient(
     run: (client: ActivePluginCollectionClientV1, home: Awaited<ReturnType<typeof serveAccountHomes>>) => Promise<void>,
 ) {
     const home = await serveAccountHomes({ homes: [{ key: 'home', serverUrl: 'https://collection-row-reads.test', accountId: 'alice' }],
-        route: request => request.path === '/v1/plugins/data/contract'
-            ? Response.json({ access: 'writable', contract: rowReadContract }) : route(request),
+        route: request => {
+            if (request.path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({ features: {},
+                capabilities: { accountStoredContentCompatibility: { v: 1, minimumProtocolVersion: 2,
+                    currentProtocolVersion: 3, declarationTransport: 'http-header-and-socket-auth-v1' } },
+            }));
+            return request.path === '/v1/plugins/data/contract'
+                ? Response.json({ access: 'writable', contract: rowReadContract }) : route(request);
+        },
     });
     try {
         recordAccountStoredContentServerRequirements({ serverUrl: home.homes.home!.serverUrl,
@@ -158,6 +164,27 @@ describe('Collection raw read acquisition after caller admission', () => {
                     await firstAdmission.operation.release();
                     await secondAdmission.operation.release();
                 }
+            });
+        } finally { release.resolve(); }
+    });
+
+    it('settles an Account-retired reader before its held HTTP response without an explicit caller signal', async () => {
+        const release = createDeferred<void>();
+        const entered = createDeferred<void>();
+        try {
+            await withRowReadClient(async request => {
+                if (request.path !== '/v1/plugins/data/get') return undefined;
+                entered.resolve();
+                await release.promise;
+                return Response.json({ row: null, absenceEpoch: 2 });
+            }, async (client, home) => {
+                const pending = client.get('same');
+                try {
+                    await entered.promise;
+                    retireActiveServerAccountScopeLifetime();
+                    await expect(pending).resolves.toMatchObject({ status: 'unavailable', reason: 'account-scope-changed' });
+                    expect(home.requests.find(request => request.path === '/v1/plugins/data/get')?.signal?.aborted).toBe(true);
+                } finally { release.resolve(); await pending; }
             });
         } finally { release.resolve(); }
     });
@@ -466,6 +493,10 @@ describe('mounted Collection contract acquisition through real Home authority', 
         let contractReads = 0;
         const home = await serveAccountHomes({ homes: [{ key: 'home', serverUrl: 'https://collection-writer-admission.test', accountId: 'alice' }],
             route: async request => {
+                if (request.path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({ features: {},
+                    capabilities: { accountStoredContentCompatibility: { v: 1, minimumProtocolVersion: 2,
+                        currentProtocolVersion: 3, declarationTransport: 'http-header-and-socket-auth-v1' } },
+                }));
                 if (request.path === '/v1/plugins/data/contract') {
                     if (++contractReads === 1) {
                         entered.resolve();
@@ -516,7 +547,7 @@ describe('mounted Collection contract acquisition through real Home authority', 
             const outcome = await written.then(value => ({ status: 'written', value }), error => ({ status: 'refused', error,
                 contractReads, paths: home.requests.map(request => request.path) }));
             expect(outcome).toEqual({ status: 'written', value: mutation === 'batch'
-                ? { status: 'updated', results: [{ rowId: 'later', revision: 2, deleted: false }] }
+                ? { status: 'updated', changeCursor: 9, results: [{ rowId: 'later', revision: 2, deleted: false }] }
                 : { rowId: 'later',
                 ...(mutation === 'put' ? { revision: 2, value: { id: 'later' } }
                     : mutation === 'delete' ? { revision: 2, deleted: true } : { forgotten: true }) } });

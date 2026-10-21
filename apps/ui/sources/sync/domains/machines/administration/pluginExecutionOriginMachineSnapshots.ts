@@ -170,6 +170,41 @@ function sameSelectionInputs(left: ExecutionOriginMachineSnapshotInputs, right: 
         && a?.availabilityNotLoaded === b?.availabilityNotLoaded && a?.localStatus === b?.localStatus;
 }
 
+function sameCandidateRows(left: readonly PluginExecutionOriginCandidateV1[], right: readonly PluginExecutionOriginCandidateV1[]) {
+    return left.length === right.length && left.every((candidate, index) => candidate === right[index]);
+}
+
+/** A changed classifier must run, but equal descriptive results must not republish themselves. */
+function retainDescriptiveCandidates(previous: readonly PluginExecutionOriginCandidateV1[] | undefined,
+    proposed: readonly PluginExecutionOriginCandidateV1[]) {
+    if (!previous) return proposed;
+    const retained = proposed.map((candidate, index) => {
+        const old = previous[index];
+        if (!old) return candidate;
+        const sameFact = 'materialization' in old && 'materialization' in candidate
+            ? old.materialization === candidate.materialization : 'source' in old && 'source' in candidate && old.source === candidate.source;
+        return sameFact && old.releaseContent === candidate.releaseContent && old.validation.kind === candidate.validation.kind
+            && (old.validation.kind !== 'rejected' || candidate.validation.kind === 'rejected' && old.validation.reason === candidate.validation.reason)
+            ? old : candidate;
+    });
+    return sameCandidateRows(previous, retained) ? previous : Object.freeze(retained);
+}
+
+function retainDescriptiveState(previous: PluginMachineExecutionOriginStateV1 | undefined, next: PluginMachineExecutionOriginStateV1) {
+    if (!previous || previous.kind !== next.kind) return next;
+    if (previous.kind === 'selected' && next.kind === 'selected') return previous.candidate === next.candidate
+        && previous.selectionSource === next.selectionSource && arePluginMachineExecutionOriginsEqual(previous.origin, next.origin) ? previous : next;
+    if (previous.kind === 'selected' || next.kind === 'selected' || !sameCandidateRows(previous.candidates, next.candidates)) return next;
+    if (previous.kind === 'selectionRequired' && next.kind === 'selectionRequired') return previous;
+    if (previous.kind === 'conflict' && next.kind === 'conflict') return previous.reasons.length === next.reasons.length
+        && previous.reasons.every((reason, index) => reason === next.reasons[index]) ? previous : next;
+    if (previous.kind === 'unavailable' && next.kind === 'unavailable') return sameTarget(previous.storedTarget, next.storedTarget)
+        && (previous.storedOrigin === next.storedOrigin || previous.storedOrigin !== null && next.storedOrigin !== null
+            && arePluginMachineExecutionOriginsEqual(previous.storedOrigin, next.storedOrigin))
+        && previous.reasons.length === next.reasons.length && previous.reasons.every((reason, index) => reason === next.reasons[index]) ? previous : next;
+    return next;
+}
+
 /** The existing inventory producer publishes on source changes; snapshot reads never derive. */
 export function createExecutionOriginMachineSnapshotPublication(dependencies: PublicationDependencies) {
     const contexts = new Map<string, Context>();
@@ -190,11 +225,11 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
         if (sibling?.description) { demand.description = sibling.description; return sibling.description.value; }
         const previous = demand.description;
         const candidates = previous && previous.eligibilityKey === eligibilityKey && sameCandidateInputs(previous.inputs, demand.inputs)
-            ? previous.value.candidates : combinePluginMachineExecutionOriginCandidates(buildPluginMachineExecutionOriginCandidates({
+            ? previous.value.candidates : retainDescriptiveCandidates(previous?.value.candidates, combinePluginMachineExecutionOriginCandidates(buildPluginMachineExecutionOriginCandidates({
                 pluginId: demand.inputs.pluginId, materializations: demand.inputs.materializations, classifyRelease: spec.classifyRelease,
                 machineSnapshots: inventory.snapshots, readMachineFact: inventory.readMachineFact, machineRejections: spec.machineRejections,
             }), buildPluginMachineSourceExecutionOriginCandidates({ pluginId: demand.inputs.pluginId, sources: demand.inputs.sources,
-                machineSnapshots: inventory.snapshots, readMachineFact: inventory.readMachineFact }));
+                machineSnapshots: inventory.snapshots, readMachineFact: inventory.readMachineFact })));
         const rememberedTarget = storedTarget ?? (spec.storedOrigin && {
             serverIdentityId: spec.storedOrigin.serverIdentityId,
             machineId: getPluginMachineExecutionOriginRef(spec.storedOrigin).machineId,
@@ -208,9 +243,7 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
             ...readPluginExecutionOriginAutomaticHints(demand.inputs.pluginId, candidates, inventory.snapshots),
             inventoryPending: inventory.pendingHomes.has(rememberedTarget?.serverIdentityId ?? spec.homeServerIdentityId ?? ''),
         });
-        const old = previous?.value.state;
-        const state = old?.kind === 'selected' && resolved.kind === 'selected' && old.candidate === resolved.candidate
-            && old.selectionSource === resolved.selectionSource && arePluginMachineExecutionOriginsEqual(old.origin, resolved.origin) ? old : resolved;
+        const state = retainDescriptiveState(previous?.value.state, resolved);
         const readinessHome = state.kind === 'selected' ? state.origin.serverIdentityId
             : rememberedTarget?.serverIdentityId ?? spec.homeServerIdentityId;
         const establishingTarget = state.kind === 'selected' ? { serverIdentityId: state.origin.serverIdentityId,

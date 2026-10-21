@@ -64,16 +64,19 @@ function projection(entries: Record<string, Readonly<{ id: string }> & Record<st
 }
 
 describe('connectedAccountDescriptorProjection', () => {
-  it('prepares declaration content once for agreement and diagnostics', () => {
+  it('compares declarations directly without serializing cold agreement or diagnostics', () => {
     const entry = descriptor({ diagnostics: ['machine_refused'] });
+    const source = readConnectedAccountDescriptorProjection(projection({ account: entry }));
     const stringify = vi.spyOn(JSON, 'stringify');
     try {
       const merged = mergeConnectedAccountDescriptorProjections([{ kind: 'ready', descriptors: [entry] }]);
       const declarationSerializations = stringify.mock.calls.filter(([value]) => (
         typeof value === 'object' && value !== null && 'authentication' in value
       ));
-      expect(declarationSerializations).toHaveLength(1);
+      expect(declarationSerializations).toHaveLength(0);
       expect(merged.descriptors?.[0]?.diagnostics).toEqual(['machine_refused']);
+      createConnectedAccountDescriptorProjectionPublication().publish([source]);
+      expect(stringify).not.toHaveBeenCalled();
     } finally {
       stringify.mockRestore();
     }
@@ -93,6 +96,27 @@ describe('connectedAccountDescriptorProjection', () => {
     } finally {
       stringify.mockRestore();
     }
+  });
+
+  it('agrees on structural declaration values and orders actual variants independently of supplier order', () => {
+    const left = descriptor({ title: 'A account', diagnostics: ['machine-a'] });
+    const mode = left.authentication.modes[0]!;
+    if (mode.kind !== 'manual') throw new Error('expected manual authentication');
+    const right = descriptor({ title: 'A account', diagnostics: ['machine-b'], authentication: {
+      ...left.authentication, modes: [{ ...mode, fields: [{ ...mode.fields[0]!, schema: { minLength: 1, type: 'string' } }] }],
+    } });
+    mode.fields[0]!.schema = { type: 'string', minLength: 1 };
+    const different = descriptor({ title: 'Z account' });
+    const resolve = (entries: readonly ConnectedAccountUiProjectionEntryV1[]) => mergeConnectedAccountDescriptorProjections(
+      entries.map(entry => ({ kind: 'ready', descriptors: [entry] })),
+    );
+    expect(resolve([left, right])).toMatchObject({ kind: 'ready', descriptors: [{ diagnostics: ['machine-a', 'machine-b'] }] });
+    const forward = resolve([left, right, different]);
+    const reverse = resolve([different, right, left]);
+    expect(forward.kind).toBe('conflict');
+    expect(forward.descriptors?.map(entry => entry.title)).toEqual(['A account', 'Z account']);
+    expect(reverse.descriptors?.map(entry => entry.title)).toEqual(['A account', 'Z account']);
+    expect(reverse.conflicts).toEqual(forward.conflicts);
   });
 
   it('does not trust arbitrary frozen inputs or retain mutable descriptors as snapshots', () => {

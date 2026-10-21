@@ -210,11 +210,30 @@ export function preparePluginUiProjectionOrigins(model: PluginUiProjectionModel)
 
 /** Reconcile only at publication; private proofs never adopt unproven facts. */
 export function retainPluginUiProjectionValue(previous: unknown, next: unknown): unknown {
+    // Contribution rows share immutable supply/origin subgraphs. Reconcile each
+    // pair once within this publication, without retaining prior inputs later.
+    const retainedPairs = new WeakMap<object, WeakMap<object, unknown>>();
+    const retain = (old: unknown, value: unknown): unknown => {
+        if (old === value) return old;
+        if (!old || typeof old !== 'object' || !value || typeof value !== 'object') {
+            return retainPluginUiProjectionNode(old, value, retain);
+        }
+        let values = retainedPairs.get(old);
+        if (values?.has(value)) return values.get(value);
+        const retained = retainPluginUiProjectionNode(old, value, retain);
+        if (!values) { values = new WeakMap(); retainedPairs.set(old, values); }
+        values.set(value, retained);
+        return retained;
+    };
+    return retain(previous, next);
+}
+
+function retainPluginUiProjectionNode(previous: unknown, next: unknown, retain: (previous: unknown, next: unknown) => unknown): unknown {
     if (previous === next) return previous;
     if (Array.isArray(next)) {
         if (isParsedContributionSupplies(next) && (!Array.isArray(previous) || !isParsedContributionSupplies(previous))) return next;
         const old = Array.isArray(previous) ? previous : [];
-        const retained = next.map((value, index) => retainPluginUiProjectionValue(old[index], value));
+        const retained = next.map((value, index) => retain(old[index], value));
         if (Array.isArray(previous) && old.length === retained.length && retained.every((value, index) => value === old[index])) return previous;
         if (retained.every((value, index) => value === next[index])) return next;
         return isParsedContributionSupplies(next) ? proveParsedContributionSupplies(retained as PluginUiContributionSupplyV1[]) : Object.freeze(retained);
@@ -232,7 +251,7 @@ export function retainPluginUiProjectionValue(previous: unknown, next: unknown):
     // Spread preserves authored own __proto__ data properties and key order.
     const retained: Record<string, unknown> = { ...record };
     for (const key of keys) {
-        const value = retainPluginUiProjectionValue(old?.[key], record[key]);
+        const value = retain(old?.[key], record[key]);
         retained[key] = value;
         if (!old || value !== old[key]) samePrevious = false;
         if (value !== record[key]) sameNext = false;

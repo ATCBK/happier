@@ -111,14 +111,10 @@ function connectedAccountDescriptorIdentity(entry: ConnectedAccountUiProjectionE
   return `${entry.pluginId ?? 'first_party'}\u0000${entry.id}`;
 }
 
-function descriptorFingerprint(entry: ConnectedAccountUiProjectionEntryV1): string {
-  // Diagnostics describe one machine's runtime, not the Account declaration.
-  // In particular, an External Sessions refusal cannot change its auth modes.
-  const { diagnostics, ...declaration } = entry;
-  return JSON.stringify(declaration);
-}
-
-type PreparedDescriptor = Readonly<{ descriptor: ConnectedAccountUiProjectionEntryV1; fingerprint: string }>;
+type PreparedDescriptor = Readonly<{
+  descriptor: ConnectedAccountUiProjectionEntryV1;
+  declaration: Omit<ConnectedAccountUiProjectionEntryV1, 'diagnostics'>;
+}>;
 type PreparedDescriptorVariants = { admitted?: PreparedDescriptor; descriptive?: PreparedDescriptor };
 type PrepareDescriptor = (entry: ConnectedAccountUiProjectionEntryV1, descriptiveOnly: boolean) => PreparedDescriptor;
 
@@ -128,7 +124,9 @@ function prepareDescriptor(entry: ConnectedAccountUiProjectionEntryV1, descripti
   const descriptor = descriptiveOnly && entry.availability.state === 'available'
     ? { ...declaration, availability: { state: 'blocked' as const, reason: 'execution_origin_unavailable' } }
     : occurrenceId === undefined ? entry : declaration;
-  return { descriptor, fingerprint: descriptorFingerprint(descriptor) };
+  // Diagnostics describe one machine's runtime, not the Account declaration.
+  const { diagnostics, ...content } = descriptor;
+  return { descriptor, declaration: content };
 }
 
 /** Current descriptive source publications only; execution admission remains with its live owner. */
@@ -284,26 +282,29 @@ function unionReadyConnectedAccountDescriptorProjections(
     return descriptiveOnly || supply.selectable ? [{ selectable: true, value: prepare(supply.value, descriptiveOnly) }] : [];
   });
   const { variantsByIdentity, conflictingIdentities } = resolveFleetSupplyAgreement({ supplies: visibleSupplies,
-    identity: value => connectedAccountDescriptorIdentity(value.descriptor), content: value => value.fingerprint });
+    identity: value => connectedAccountDescriptorIdentity(value.descriptor),
+    sameContent: (left, right) => equalFact(left.declaration, right.declaration) });
 
   // Preserve every answering supplier's diagnostics without making them a
   // competing declaration. Excluded execution supplies cannot alter this view.
-  const diagnosticsByFingerprint = new Map<string, Set<string>>();
+  const diagnosticsByVariant = new Map<PreparedDescriptor, Set<string>>();
   for (const supply of visibleSupplies) {
     if (!supply.selectable) continue;
-    const fingerprint = supply.value.fingerprint;
-    const diagnostics = diagnosticsByFingerprint.get(fingerprint) ?? new Set<string>();
+    if (supply.value.descriptor.diagnostics.length === 0) continue;
+    const variants = variantsByIdentity.get(connectedAccountDescriptorIdentity(supply.value.descriptor))!;
+    const variant = [...variants.values()].find(value => equalFact(value.declaration, supply.value.declaration))!;
+    const diagnostics = diagnosticsByVariant.get(variant) ?? new Set<string>();
     for (const diagnostic of supply.value.descriptor.diagnostics) diagnostics.add(diagnostic);
-    diagnosticsByFingerprint.set(fingerprint, diagnostics);
+    diagnosticsByVariant.set(variant, diagnostics);
   }
 
   const descriptors = [...variantsByIdentity.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
-    .flatMap(([, variants]) => [...variants.entries()]
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([fingerprint, prepared]) => {
+    .flatMap(([, variants]) => [...variants.values()]
+      .sort((left, right) => compareFact(left.declaration, right.declaration))
+      .map((prepared) => {
         const entry = prepared.descriptor;
-        const diagnostics = [...diagnosticsByFingerprint.get(fingerprint)!].sort();
+        const diagnostics = [...diagnosticsByVariant.get(prepared) ?? []].sort();
         return equalFacts(entry.diagnostics, diagnostics) ? entry : { ...entry, diagnostics };
       }));
 
@@ -341,9 +342,37 @@ function equalFact(left: unknown, right: unknown): boolean {
     || Array.isArray(left) || Array.isArray(right)) return false;
   const leftEntries = Object.entries(left).filter(([, value]) => value !== undefined);
   const rightEntries = Object.entries(right).filter(([, value]) => value !== undefined);
-  return leftEntries.length === rightEntries.length && leftEntries.every(([key, value], index) => (
-    key === rightEntries[index]?.[0] && equalFact(value, rightEntries[index]?.[1])
+  return leftEntries.length === rightEntries.length && leftEntries.every(([key, value]) => (
+    Object.prototype.hasOwnProperty.call(right, key) && equalFact(value, (right as Record<string, unknown>)[key])
   ));
+}
+
+/** Deterministic presentation order for divergent declarations, without serialized identities. */
+function compareFact(left: unknown, right: unknown): number {
+  if (equalFact(left, right)) return 0;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    for (let index = 0; index < Math.min(left.length, right.length); index += 1) {
+      const difference = compareFact(left[index], right[index]);
+      if (difference !== 0) return difference;
+    }
+    return left.length - right.length;
+  }
+  if (Array.isArray(left) !== Array.isArray(right)) return Array.isArray(left) ? -1 : 1;
+  if (left !== null && right !== null && typeof left === 'object' && typeof right === 'object') {
+    const entries = (value: object) => Object.entries(value).filter(([, child]) => child !== undefined)
+      .sort(([a], [b]) => compareFact(a, b));
+    const leftEntries = entries(left);
+    const rightEntries = entries(right);
+    for (let index = 0; index < Math.min(leftEntries.length, rightEntries.length); index += 1) {
+      const [key, value] = leftEntries[index]!;
+      const [otherKey, otherValue] = rightEntries[index]!;
+      const difference = compareFact(key, otherKey) || compareFact(value, otherValue);
+      if (difference !== 0) return difference;
+    }
+    return leftEntries.length - rightEntries.length;
+  }
+  if (typeof left !== typeof right) return typeof left < typeof right ? -1 : 1;
+  return String(left) < String(right) ? -1 : 1;
 }
 
 export function advanceConnectedAccountDescriptorProjectionState(

@@ -46,6 +46,33 @@ function fixture() {
 }
 
 describe('execution-origin Machine publication', () => {
+    it('retains equal descriptive output when a custom classifier callback changes and publishes actual classification changes', () => {
+        const { inputs, connect, home, machine } = fixture();
+        const materialization = { serverIdentityId: home.serverIdentityId, machineId: machine.id, pluginId: inputs.pluginId,
+            materializationId: 'portable', version: '1.0.0', sourceClass: 'registryPackage' as const, portableRelease: true,
+            enabled: true, trustState: 'trusted' as const, observedAt: 1, uiArtifacts: [] };
+        const classifyRelease = () => ({ releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } });
+        const selection = { availabilityRevision: {}, classifyRelease, storedOrigin: null, homeServerIdentityId: home.serverIdentityId };
+        const current = { ...inputs, sources: [], materializations: [materialization], selection };
+        const connection = connect(current);
+        const admitted = connection.getSnapshot();
+        expect(admitted).toMatchObject({ selection: { state: { kind: 'selected' } } });
+        connection.updateInputs({ ...current, selection: { ...selection, classifyRelease: () => classifyRelease() } });
+        expect(connection.getSnapshot()).toBe(admitted);
+        connection.updateInputs({ ...current, selection: { ...selection, classifyRelease: () => ({ releaseContent: 'conflict' as const,
+            validation: { kind: 'rejected' as const, reason: 'content_conflict' as const } }) } });
+        const refused = connection.getSnapshot();
+        expect(refused).toMatchObject({ selection: { state: { kind: 'unavailable', reasons: ['content_conflict'] } } });
+        connection.updateInputs({ ...current, selection: { ...selection, classifyRelease: () => ({ releaseContent: 'conflict' as const,
+            validation: { kind: 'rejected' as const, reason: 'content_conflict' as const } }) } });
+        expect(connection.getSnapshot()).toBe(refused);
+        const emptyInputs = { ...current, materializations: [] };
+        const empty = connect(emptyInputs);
+        const emptySnapshot = empty.getSnapshot();
+        empty.updateInputs({ ...emptyInputs, selection: { ...selection, classifyRelease: () => classifyRelease() } });
+        expect(empty.getSnapshot()).toBe(emptySnapshot);
+    });
+
     it('publishes shared descriptive candidates and election once, outside snapshot reads', () => {
         const { inputs, connect, source, home, machine } = fixture();
         const build = vi.spyOn(origins, 'buildPluginMachineExecutionOriginCandidates');

@@ -44,9 +44,8 @@ export function useMachineAgentAuthentication(input: Readonly<{
         // A lost Machine projection leaves last-known authentication intact; it does not select native.
         if (!projection.inputs) return {};
         const agents = Object.entries(projection.inputs?.pluginProjectionV2?.agentsById ?? {});
-        const resolution = mergeConnectedAccountDescriptorProjections([
-            projection.inputs.connectedAccountProjection,
-        ]);
+        const descriptors = projection.inputs.connectedAccountProjection;
+        const resolution = mergeConnectedAccountDescriptorProjections(descriptors ? [descriptors] : []);
         const entries = resolution.kind === 'error' ? [] : projectConnectedServiceRegistryEntries({
             scopeKey: lifetime ? JSON.stringify(lifetime.scope) : '', status: resolution.kind,
             descriptors: resolution.descriptors, conflicts: resolution.conflicts, errorReason: null,

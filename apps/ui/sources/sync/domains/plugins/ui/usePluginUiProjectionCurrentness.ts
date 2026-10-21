@@ -17,7 +17,6 @@ import {
     type PluginUiProjectionModel,
 } from '@/sync/domains/plugins/ui/projection';
 import {
-    forgetPluginUiProjectionAdmissionSnapshot,
     pluginUiProjectionAdmissionTargetKey,
     readPluginUiProjectionAdmissionSnapshot,
 } from '@/sync/domains/plugins/ui/projectionWarmCache';
@@ -424,14 +423,8 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
                     return;
                 }
                 if (entry.kind === 'unsupported') {
-                    // The daemon itself answered that this machine does not
-                    // serve the projection. That answer must survive a restart,
-                    // so the retained snapshot is retired here rather than
-                    // being restored by the next fresh process.
-                    forgetPluginUiProjectionAdmissionSnapshot({
-                        scope: accountLifetime?.scope ?? null,
-                        targetKey,
-                    });
+                    // The full acquisition owner already retired this exact
+                    // machine's retained admission before publishing unsupported.
                     setLoadedProjection((previous) => {
                         if (
                             previous.targetKey !== targetKey

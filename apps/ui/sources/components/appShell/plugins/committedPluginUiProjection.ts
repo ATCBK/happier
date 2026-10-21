@@ -7,8 +7,12 @@ export type AppShellPluginUiProjectionRead = Readonly<{ scope: ServerAccountScop
 // The app shell's committed plugin UI projection, readable outside React (Actions, settings normalization).
 // AppShellPluginUiProjectionValueProvider publishes it. This module imports nothing at runtime, so declaration
 // and Action modules can read the projection without importing the app shell.
-let readCommitted: ((input?: AppShellPluginUiProjectionRead) => PluginUiProjectionModel | null) | null = null;
-let readCommittedCandidates: ((pluginId: string, input?: AppShellPluginUiProjectionRead) => PluginUiExecutionOriginCandidateFacts | null) | null = null;
+type CommittedProjectionBinding = Readonly<{
+    read(input?: AppShellPluginUiProjectionRead): PluginUiProjectionModel | null;
+    readCandidates?: (pluginId: string, input?: AppShellPluginUiProjectionRead) => PluginUiExecutionOriginCandidateFacts | null;
+    disposeSource(): void;
+}>;
+let committed: CommittedProjectionBinding | null = null;
 const listeners = new Set<() => void>();
 const EMPTY_CANDIDATES: PluginUiExecutionOriginCandidateFacts = Object.freeze({
     establishingTargets: Object.freeze([]), sourceCandidates: Object.freeze([]),
@@ -17,7 +21,7 @@ const EMPTY_CANDIDATES: PluginUiExecutionOriginCandidateFacts = Object.freeze({
 
 /** Descriptive facts only: the invocation owner still re-admits their exact origin on every access. */
 export function readCurrentAppShellPluginUiExecutionOriginCandidates(pluginId: string, input?: AppShellPluginUiProjectionRead): PluginUiExecutionOriginCandidateFacts {
-    return readCommittedCandidates?.(pluginId, input) ?? EMPTY_CANDIDATES;
+    return committed?.readCandidates?.(pluginId, input) ?? EMPTY_CANDIDATES;
 }
 
 export function subscribeCommittedAppShellPluginUiProjection(listener: () => void): () => void {
@@ -26,21 +30,32 @@ export function subscribeCommittedAppShellPluginUiProjection(listener: () => voi
 }
 
 export function readCurrentAppShellPluginUiProjection(input?: AppShellPluginUiProjectionRead): PluginUiProjectionModel | null {
-    return readCommitted?.(input) ?? null;
+    return committed?.read(input) ?? null;
 }
 
 /** Publishes the committed reader; the returned cleanup clears it only if it is still the current one. */
 export function publishCommittedAppShellPluginUiProjection(
     read: (input?: AppShellPluginUiProjectionRead) => PluginUiProjectionModel | null,
     readCandidates?: (pluginId: string, input?: AppShellPluginUiProjectionRead) => PluginUiExecutionOriginCandidateFacts | null,
+    subscribe?: (listener: () => void) => () => void,
 ): () => void {
-    readCommitted = read;
-    readCommittedCandidates = readCandidates ?? null;
+    let unsubscribe: (() => void) | undefined;
+    const binding: CommittedProjectionBinding = {
+        read,
+        readCandidates,
+        disposeSource() { unsubscribe?.(); unsubscribe = undefined; },
+    };
+    committed?.disposeSource();
+    committed = binding;
+    unsubscribe = subscribe?.(() => {
+        if (committed !== binding) return;
+        for (const listener of listeners) listener();
+    });
     for (const listener of listeners) listener();
     return () => {
-        if (readCommitted !== read) return;
-        readCommitted = null;
-        readCommittedCandidates = null;
+        binding.disposeSource();
+        if (committed !== binding) return;
+        committed = null;
         for (const listener of listeners) listener();
     };
 }

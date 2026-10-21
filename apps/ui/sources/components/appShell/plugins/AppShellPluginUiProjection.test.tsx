@@ -1022,7 +1022,28 @@ describe('AppShellPluginUiProjectionProvider', () => {
             } });
         });
         await flushHookEffects({ cycles: 5 });
+        const afterCursor = readPluginAccountAvailability(scope).readMaterializations();
+        if (afterCursor.kind !== 'available') throw new Error('Fixture Availability must remain admitted');
         console.info('R-C AppShell cursor-only Availability publication', {
+            sourceTraversals: sourceTraversals() - settledTraversals,
+            materializationIdentity: afterCursor.materializations[0] === admission.materializations[0],
+            manifestIdentity: afterCursor.materializations[0]?.declaredManifest === admission.materializations[0]?.declaredManifest,
+            uiArtifactsIdentity: afterCursor.materializations[0]?.uiArtifacts === admission.materializations[0]?.uiArtifacts,
+            declaredUiEntriesIdentity: afterCursor.materializations[0]?.declaredUiEntries === admission.materializations[0]?.declaredUiEntries,
+        });
+        expect(sourceTraversals()).toBe(settledTraversals);
+        await act(async () => {
+            replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+                availabilityCursor: admission.availabilityCursor + 2,
+                intentReads: admission.intentReads,
+                materializations: admission.materializations.map(materialization => ({
+                    ...materialization, observedAt: materialization.observedAt + 1,
+                })),
+                snapshots: admission.snapshots,
+            } });
+        });
+        await flushHookEffects({ cycles: 5 });
+        console.info('R-C AppShell observation-only materialization publication', {
             sourceTraversals: sourceTraversals() - settledTraversals });
         expect(sourceTraversals()).toBe(settledTraversals);
         // A choice report changes the union's selected stamp, but not its
@@ -2975,13 +2996,16 @@ describe('AppShellPluginUiProjectionProvider', () => {
     });
 
     it('binds the union of strict machine projections to app pages and Settings before selection across heartbeats', async () => {
+        const bootstrapStarted = performance.now();
         const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
         await loadSyncSingletonForTests();
+        console.info('R-C strict Machine union bootstrap', { stage: 'sync-ready', elapsedMs: performance.now() - bootstrapStarted });
         const { AppShellPluginUiProjectionProvider } = await import('./AppShellPluginUiProjection');
         const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
         const { PluginAppPageScreen } = await import('./PluginAppPageScreen');
         const { PluginSettingsPageScreen } = await import('@/components/settings/plugins/PluginSettingsPageScreen');
         const { PluginSettingsPageHost } = await import('@/components/plugins/surfaces');
+        console.info('R-C strict Machine union bootstrap', { stage: 'imports-ready', elapsedMs: performance.now() - bootstrapStarted });
         const renderApp = () => (
             <AppPaneProvider>
                 <AppShellPluginUiProjectionProvider>
@@ -3040,6 +3064,7 @@ describe('AppShellPluginUiProjectionProvider', () => {
         }));
         const screen = await renderScreen(renderApp());
         await flushHookEffects({ cycles: 6 });
+        console.info('R-C strict Machine union bootstrap', { stage: 'mounted', elapsedMs: performance.now() - bootstrapStarted });
 
         const assertScreenRoutes = () => {
             const appPageScreens = screen.tree.findAllByType(PluginAppPageScreen);

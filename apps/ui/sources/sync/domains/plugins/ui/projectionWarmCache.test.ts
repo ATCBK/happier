@@ -162,6 +162,25 @@ function emptyTargetedContributionsFor(occurrenceId: string) {
     });
 }
 
+it('only supplies retained presentation for the exact previously admitted mounted target', async () => {
+    await prepareWarmCacheEncryptionKey();
+    store.clear();
+    forgetPluginUiProjectionAdmissionSnapshots(ACCOUNT_A);
+    savePluginUiProjectionAdmissionSnapshot({ scope: ACCOUNT_A, targetKey: TARGET_KEY, machineId: MACHINE_ID,
+        projection: projectionAtGeneration('continuity-a', 91) });
+    const admission = targetedContributionsFor('continuity-a');
+    savePluginUiProjectionTargetedAdmissionSnapshot({ scope: ACCOUNT_A, targetKey: TARGET_KEY, machineId: MACHINE_ID,
+        targetedContributions: admission });
+    const input = { scope: ACCOUNT_A, targetKey: TARGET_KEY, machineId: MACHINE_ID, target: admission.target };
+    const presentation = readPluginUiProjectionAdmissionSnapshot(input);
+    expect(presentation?.generation).toBe(91);
+    expect(readPluginUiProjectionAdmissionSnapshot({ ...input, target: { ...admission.target, occurrenceId: 'continuity-b' } })).toBeNull();
+    expect(readPluginUiProjectionAdmissionSnapshot({ ...input, target: { ...admission.target,
+        sourceCustody: managedSourceCustody('different-artifact') } })).toBeNull();
+    expect(readPluginUiProjectionAdmissionSnapshot({ ...input, scope: ACCOUNT_B })).toBeNull();
+    expect(readPluginUiProjectionAdmissionSnapshot(input)).toBe(presentation);
+});
+
 describe('plugin UI projection admission custody', () => {
     beforeEach(async () => {
         // Nothing reads or writes device custody until its at-rest key resolves,
