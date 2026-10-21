@@ -197,13 +197,16 @@ describe('daemon Team credential direct-material reconciler', () => {
 
   // The administration list is paginated, so an owned direct resource beyond
   // the first page must still be reconciled instead of silently reported clean.
-  it('drains every credential-resource page of a Team', async () => {
+  it('requests only direct-delivery resources and drains every page of a Team', async () => {
     const owned = summary({ id: 'owned-on-page-two' });
     const foreign = summary({ id: 'other-team-member-source', custodianAccountId: 'someone-else' });
     const homeDomainAction = vi.fn(async (request: Readonly<{ actionId: string; input?: unknown }>) => {
       if (request.actionId === 'teams.list') return { ...teamsPage, retiredPageField: true,
         items: teamsPage.items.map(team => ({ ...team, retiredTeamField: true })) };
-      const input = request.input as Readonly<{ cursor?: string | null }>;
+      const input = request.input as Readonly<{ cursor?: string | null; filter?: string }>;
+      // The Home's default administration read probes broker readiness. Direct
+      // preparation must use its existing delivery filter on every page.
+      expect(input.filter).toBe('direct');
       const page = TeamCredentialResourcePageV1Schema.parse(input?.cursor === 'page-two'
         ? {
           resources: [owned],

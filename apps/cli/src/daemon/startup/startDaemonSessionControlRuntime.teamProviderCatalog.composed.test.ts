@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { DEFAULT_PROVIDER_SETTINGS_V1, ProviderConnectionIdSchema, splitProviderSettingsV1 } from '@happier-dev/protocol';
 import { ProviderModelBindingSourceV1Schema, ProviderModelConfirmationSourceV1Schema } from '@happier-dev/protocol/providers/binding-compatibility';
@@ -21,14 +21,24 @@ import { createAgentRuntimeDaemonServiceAuthorityPath, publishAgentRuntimeDaemon
   removeAgentRuntimeDaemonServiceAuthorityIfOwned } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
 import { openCurrentRunnerTeamCredentialProviderBinding } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceAuthorityClient';
 import { readSessionPreparationFailureDiagnostic } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
+import { AGENT_RUNTIME_DAEMON_SERVICES_PATH } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 
-const boundary = vi.hoisted(() => ({ control: null as Parameters<typeof startDaemonControlServer>[0] | null, port: 0 }));
+const nativeFetch = fetch;
+const boundary = vi.hoisted(() => ({ control: null as Parameters<typeof startDaemonControlServer>[0] | null, port: 0,
+  responseStatus: 0, responseBody: null as unknown }));
 // Keep the real control app/dispatcher; only its OS listener uses an ephemeral port.
 vi.mock('@/daemon/controlServer', async importOriginal => {
   const actual = await importOriginal<typeof import('@/daemon/controlServer')>();
   return { ...actual, startDaemonControlServer: async (input: Parameters<typeof startDaemonControlServer>[0]) => {
     boundary.control = input;
     const app = actual.createDaemonControlApp(input);
+    app.addHook('onSend', async (request, reply, payload) => {
+      if (request.url === AGENT_RUNTIME_DAEMON_SERVICES_PATH && typeof payload === 'string') {
+        boundary.responseStatus = reply.statusCode;
+        boundary.responseBody = JSON.parse(payload);
+      }
+      return payload;
+    });
     await app.listen({ host: '127.0.0.1', port: 0 });
     const address = app.server.address();
     if (!address || typeof address === 'string') throw new Error('Missing private listener');
@@ -110,14 +120,22 @@ it.each(['ready', 'missing declaration', 'non-204'] as const)(
     return get(url, options);
   });
   const fetchBoundary = vi.mocked(fetch).getMockImplementation()!;
-  vi.mocked(fetch).mockImplementation(async (url, options) => new URL(String(url)).pathname === PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH
-    ? new Response(null, { status: metadata === 'non-204' ? 403 : 204,
-      headers: metadata === 'missing declaration' ? {} : { [PROVIDER_BROKER_ENDPOINT_PATH_HEADER]: '/v1' } })
-    : fetchBoundary(url, options));
+  vi.mocked(fetch).mockImplementation(async (url, options) => {
+    const target = new URL(String(url));
+    if (target.pathname === AGENT_RUNTIME_DAEMON_SERVICES_PATH && target.hostname === '127.0.0.1'
+      && target.port === String(boundary.port)) return nativeFetch(url, options);
+    if (target.pathname === PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH) {
+      return new Response(null, { status: metadata === 'non-204' ? 403 : 204,
+        headers: metadata === 'missing declaration' ? {} : { [PROVIDER_BROKER_ENDPOINT_PATH_HEADER]: '/v1' } });
+    }
+    return fetchBoundary(url, options);
+  });
   const open = () => h.dispatch({ kind: 'provider_broker.binding.open', requestId: 'recipient-team-open',
     resourceId: 'resource', expectedResourceRevision: 2, agentTargetKey, modelId: model.descriptor.id });
   const path = await createAgentRuntimeDaemonServiceAuthorityPath({ happyHomeDir: configuration.happyHomeDir,
     publicReleaseRing: configuration.publicReleaseRing });
+  // The bundled development Agent belongs to this real source runner root.
+  h.runner.snapshotIdentity = `path:${resolve(__dirname, '../../..')}`;
   const authority = { happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
     path, sessionId: h.sessionId, runner: h.runner, retainedAgent: h.retainedAgent };
   const published = await publishAgentRuntimeDaemonServiceAuthority({ ...authority,
@@ -130,10 +148,13 @@ it.each(['ready', 'missing declaration', 'non-204'] as const)(
   try {
   if (metadata !== 'ready') {
     const refused = await openThroughRunner().then(() => null, (error: unknown) => error);
+    expect(brokerOpens).toBe(1);
+    expect(boundary.responseStatus).toBe(200);
+    expect(boundary.responseBody).toEqual({ ok: false,
+      error: { code: 'provider_endpoint_unavailable', message: 'provider_endpoint_unavailable' } });
     expect(refused).toMatchObject({ code: 'provider_endpoint_unavailable', message: 'provider_endpoint_unavailable' });
     expect(readSessionPreparationFailureDiagnostic(refused)).toEqual({
       originalCode: 'provider_endpoint_unavailable', reason: 'unknown', contextSource: 'unknown' });
-    expect(brokerOpens).toBe(1);
     return;
   }
   const opened = await openThroughRunner();

@@ -14,6 +14,7 @@ import { isSameTeamCredentialBrokerApplication } from '@/providers/broker/teamCr
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { readLeasedAgentProviderRequirements } from '@/plugins/runtime/providerBindings/adapter';
 import type { ProviderBrokerAdmissionFailureCodeV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import type { ProviderErrorCodeV1 } from '@happier-dev/protocol/providers/errors';
 
 /** Runtime opens use the worker's admitted application and the shared catalog transport. */
 export async function readSessionTeamCredentialProviderModels(input: Readonly<{
@@ -43,7 +44,7 @@ export type NormalizedSessionTeamCredentialLaunch = Readonly<{
 }>;
 
 export class SessionTeamCredentialLaunchUnavailableError extends Error {
-  constructor(readonly code: ProviderBrokerAdmissionFailureCodeV1 | 'team_credential_provider_selection_not_current'
+  constructor(readonly code: ProviderBrokerAdmissionFailureCodeV1 | ProviderErrorCodeV1 | 'team_credential_provider_selection_not_current'
     = 'team_credential_provider_selection_not_current') { super(code); }
 }
 

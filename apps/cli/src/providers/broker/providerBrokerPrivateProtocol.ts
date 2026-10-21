@@ -2,6 +2,9 @@ import type { ManagedServiceResponse } from '@happier-dev/plugin-sdk/managed-ser
 import { normalizeProviderOriginRelativePathSyntax } from '@happier-dev/protocol/providers/safety/url';
 import type { ProviderCredentialTransportV1, ProviderWireProtocol } from '@happier-dev/protocol';
 import { MACHINE_HTTP_LOCAL_CAPABILITY_HEADER } from '@happier-dev/iroh-native/node';
+import { SessionTeamCredentialLaunchUnavailableError } from '@/session/services/sessionTeamCredentialLaunch';
+import { logger } from '@/ui/logger';
+import { ProviderBrokerAdmissionFailureCodeV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
 /** The worker authenticates to the carrier, independently of upstream auth. */
 export function teamCredentialBrokerLocalCredentialTransport(protocol: ProviderWireProtocol): ProviderCredentialTransportV1 {
@@ -17,6 +20,8 @@ export const PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH =
   '/v1/_happier/provider-broker/endpoint' as const;
 export const PROVIDER_BROKER_ENDPOINT_PATH_HEADER =
   'x-happier-provider-endpoint-path' as const;
+export const PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER =
+  'x-happier-provider-broker-error-code' as const;
 /** Exact selected model for private Team endpoint materialization, not a
  * credential or an alternative application authority. */
 export const PROVIDER_BROKER_MODEL_ID_HEADER =
@@ -46,7 +51,15 @@ export async function readProviderBrokerEndpointUrl(input: Readonly<{
     method: 'GET', headers: input.headers, redirect: 'error', signal: input.signal,
   });
   const declaredPath = response.headers.get(PROVIDER_BROKER_ENDPOINT_PATH_HEADER);
-  if (response.status !== 204 || declaredPath === null) throw new Error('provider_endpoint_unavailable');
+  if (response.status !== 204 || declaredPath === null) {
+    const brokerReason = ProviderBrokerAdmissionFailureCodeV1Schema.safeParse(
+      response.headers.get(PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER));
+    logger.warnLocalFile('[ProviderBroker] Endpoint metadata refused', {
+      httpStatus: response.status, hasEndpointPath: declaredPath !== null,
+      brokerReasonCode: brokerReason.success ? brokerReason.data : null,
+    });
+    throw new SessionTeamCredentialLaunchUnavailableError('provider_endpoint_unavailable');
+  }
   const path = normalizeProviderOriginRelativePathSyntax(declaredPath);
   input.signal.throwIfAborted();
   return new URL(path, input.localOrigin).href;

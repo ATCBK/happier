@@ -12,6 +12,8 @@ import type {
     ProviderBrokerAuthenticatedStreamContext,
     ProviderBrokerRequestHandler,
 } from './providerBrokerRequestHandler';
+import { PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER } from './providerBrokerPrivateProtocol';
+export { PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER } from './providerBrokerPrivateProtocol';
 
 export type ProviderBrokerApplicationStreamTarget = Readonly<{
     port: number;
@@ -40,8 +42,6 @@ const RESPONSE_HOP_BY_HOP_HEADERS = new Set([
     'transfer-encoding',
     'upgrade',
 ]);
-export const PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER =
-    'x-happier-provider-broker-error-code' as const;
 export const PROVIDER_BROKER_APPLICATION_LIMIT_METRIC_HEADER =
     'x-happier-provider-broker-limit-metric' as const;
 export const PROVIDER_BROKER_APPLICATION_LIMIT_REMAINING_HEADER =

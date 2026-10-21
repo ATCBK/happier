@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
@@ -17,6 +17,8 @@ import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/contro
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { ProviderBrokerAdmissionFailureCodeV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { SessionTeamCredentialLaunchUnavailableError } from '@/session/services/sessionTeamCredentialLaunch';
+import { logger } from '@/ui/logger';
+import { PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER } from './providerBrokerApplicationServer';
 
 import {
   openExactSessionTeamCredentialProviderBinding,
@@ -683,8 +685,10 @@ describe('Session Team credential Provider binding', () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
-  it.each(['missing declaration', 'cancelled', 'selection changed'] as const)(
+  it.each(['missing declaration', 'non-204', 'cancelled', 'selection changed'] as const)(
     'does not publish Team custody when endpoint discovery is %s', async (failure) => {
+      const diagnostic = vi.spyOn(logger, 'warnLocalFile');
+      onTestFinished(() => diagnostic.mockRestore());
       const controller = new AbortController();
       const close = vi.fn(async () => undefined);
       const retire = vi.fn(async () => { throw new Error('retirement unavailable'); });
@@ -696,10 +700,11 @@ describe('Session Team credential Provider binding', () => {
       vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => {
         discoveryFinished = true;
         if (failure === 'cancelled') controller.abort(new Error('cancelled-during-endpoint-discovery'));
-        return new Response(null, { status: 204,
-          headers: failure === 'missing declaration' ? {} : { [PROVIDER_BROKER_ENDPOINT_PATH_HEADER]: '/v1' } });
+        return new Response(null, { status: failure === 'non-204' ? 403 : 204,
+          headers: failure === 'missing declaration' ? {} : { [PROVIDER_BROKER_ENDPOINT_PATH_HEADER]: '/v1',
+            ...(failure === 'non-204' ? { [PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER]: 'resource_unavailable' } : {}) } });
       }));
-      await expect(openSessionTeamCredentialProviderBinding({
+      const refused = await openSessionTeamCredentialProviderBinding({
         sessionId: 'session-1', machineId: 'worker-1', agentId: 'codex',
         agentTargetKey: row.selection.agentTargetKey, modelId: row.selection.modelId,
         binding: { v: 1, slot: { kind: 'provider_model' }, resourceId: 'resource-1', expectedResourceRevision: 3, deliveryMode: 'brokered' },
@@ -711,8 +716,20 @@ describe('Session Team credential Provider binding', () => {
           target: { custodianAccountId: 'account-2', brokerMachineId: 'broker-1', endpointId: 'b'.repeat(64), endpointRevision: 1,
             endpoint: { endpointId: 'b'.repeat(64) } } }),
         openTunnel: async () => ({ localPort: 43123, localCapability: 'c'.repeat(64), observedPath: 'direct', retire, close }),
-      })).rejects.toThrow(failure === 'missing declaration' ? 'provider_endpoint_unavailable'
-        : failure === 'cancelled' ? 'cancelled-during-endpoint-discovery' : 'selection_changed');
+      }).then(() => null, (error: unknown) => error);
+      if (failure === 'missing declaration' || failure === 'non-204') {
+        expect(refused).toBeInstanceOf(SessionTeamCredentialLaunchUnavailableError);
+        expect(refused).toMatchObject({ code: 'provider_endpoint_unavailable' });
+        expect(diagnostic.mock.calls.at(-1)?.[1]).toEqual({
+          httpStatus: failure === 'non-204' ? 403 : 204,
+          hasEndpointPath: failure !== 'missing declaration',
+          brokerReasonCode: failure === 'non-204' ? 'resource_unavailable' : null,
+        });
+      } else {
+        expect(refused).toBeInstanceOf(Error);
+        expect(refused).toHaveProperty('message', failure === 'cancelled'
+          ? 'cancelled-during-endpoint-discovery' : 'team_credential_provider_selection_changed');
+      }
       expect(adapter.materialize).not.toHaveBeenCalled();
       expect(close).toHaveBeenCalledOnce();
     },
