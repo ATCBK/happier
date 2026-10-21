@@ -1986,6 +1986,8 @@ remote_load_probe() {
     ssh_config="$projection_mutagen_ssh_path/config"
   fi
   remote_repo=$(value_for_target repo_dir "$number")
+  remote_executor_repo=$(value_for_target executor_repo_dir "$number")
+  [ -n "$remote_executor_repo" ] || remote_executor_repo=$remote_repo
   remote_path=$(value_for_target remote_path "$number")
   path_setup=
   if [ -n "$remote_path" ]; then
@@ -1995,7 +1997,7 @@ remote_load_probe() {
   if [ "$heavyweight_admission_required" -eq 1 ]; then
     probe="$probe
 if [ \"\$platform\" = linux ]; then
-  budget=\$(./apps/stack/bin/hstack-exec --heavyweight-memory-sample) || exit 1
+  budget=\$($(quote_remote "$remote_executor_repo/apps/stack/bin/hstack-exec") --heavyweight-memory-sample) || exit 1
   printf '%s\\n' \"\$budget\" | sed -n 's/.*\"unreservedMemoryKiB\":\(-\{0,1\}[0-9][0-9]*\).*/\1/p'
 fi"
   fi

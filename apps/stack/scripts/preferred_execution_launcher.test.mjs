@@ -3487,6 +3487,49 @@ test('native launcher exact target fails closed when its command connection is r
   assert.doesNotMatch(result.stdout, /wrong-target:linux|wrong-local/);
 });
 
+test('native load probe samples heavyweight memory through the configured executor checkout', async t => {
+  const fixture = await memoryRoutingFixture(t, { availableKiB: 28000000 });
+  const native = await installNativeAdmissionFixture({ root: fixture.root });
+  const executorRepo = resolve(native.launcher, '../../../..');
+  const commandRepo = join(fixture.root, 'command checkout 0.2');
+  const commandBin = join(commandRepo, 'apps/stack/bin');
+  await mkdir(commandBin, { recursive: true });
+  // The command checkout is a predecessor shim, not the host's execution owner.
+  // With no sibling named 0.3 it cannot supply the native memory subcommand.
+  await executable(join(commandBin, 'hstack-exec'), '#!/bin/sh\nexit 97\n');
+  const projection = join(fixture.stackDir, 'dev-target-exec-v1.sh');
+  await writeNativeProjectionFixture(projection, (await readFile(projection, 'utf8'))
+    .replace(/^target_2_repo_dir=.*$/m, `target_2_repo_dir='${commandRepo}'`)
+    + `target_2_executor_repo_dir='${executorRepo}'\n`);
+  // SSH is the genuine remote boundary. Execute the real generated load probe,
+  // while payload dispatch remains a disposable external command.
+  await executable(join(fixture.binDir, 'ssh'), `#!/bin/sh
+last_argument=; for argument in "$@"; do last_argument=$argument; done
+case "$*" in
+  *getconf*) /bin/sh -c "$last_argument" ;;
+  *command\\ -v*|*-O\\ check*|*-MNf*) exit 0 ;;
+  *) printf 'remote-payload\\n' ;;
+esac
+`);
+  await executable(join(fixture.binDir, 'uname'), '#!/bin/sh\nprintf "Linux\\n"\n');
+  await executable(join(fixture.binDir, 'awk'), `#!/bin/sh
+case "$*" in
+  */proc/meminfo*) case "$*" in *a/t*) printf '0.9 48000000 72000000 0 0\\n' ;; *) printf '48000000 72000000\\n' ;; esac ;;
+  */proc/loadavg*|*/proc/pressure/*) printf '0\\n' ;;
+  */proc/vmstat*) printf '0 0\\n' ;;
+  *) exec /usr/bin/awk "$@" ;;
+esac
+`);
+  const loginEnv = join(fixture.root, 'remote-login-env');
+  await writeFile(loginEnv, `export PATH='${fixture.binDir}':$PATH\n`);
+  fixture.invocation.env.BASH_ENV = loginEnv;
+  const result = spawnSync('/bin/sh', [launcher, '--target=roomy', '--', 'vitest', 'run', 'fixture.test.ts'], fixture.invocation);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'remote-payload\n');
+  const load = (await readFile(join(fixture.stackDir, 'dev-target-command-load-native/roomy.telemetry'), 'utf8')).trim().split(/\s+/);
+  assert.equal(load.at(-1), '48000000', 'the native owner must supply unreserved memory to load admission');
+});
+
 test('native launcher preserves a successful remote command when the login shell exit hook fails', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'happier-preferred-launcher-remote-exit-hook-'));
   t.after(() => rm(root, { recursive: true, force: true }));
