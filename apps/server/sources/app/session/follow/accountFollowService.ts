@@ -18,7 +18,7 @@ import { hasCanonicalFollowProviderInputAcceptanceInTx } from "./providerInputAc
 import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
 import { matchesPersonalFollowOnceOccurrenceV1, parsePersistedPersonalFollowOnceV1, projectPersonalFollowCustodyV1, resolveAccountFollowVoiceSelectionV1, type PersonalFollowOnceOccurrenceV1, type PersistedPersonalFollowOnceV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import { FollowPolicyV1Schema, isFollowPolicyEqualV1, serializeFollowPolicyV1, resolveFollowDeliveryV1, type FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
-import type { RunFollowOriginalV1, SessionFollowInputV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { deriveSessionFollowOriginalOccurrenceKeyV1, resolveExecutionRunFollowOccurrenceV1, type RunFollowOriginalV1, type SessionFollowInputV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import type { FollowSourceRefV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 import { sourceForSessionFollowEdgeV1, sourceKeyForSessionFollowSourceV1 } from './sessionFollowSourceIdentity';
 import { canReadFollowSourceInTx } from './followSourceAdmission';
@@ -179,7 +179,8 @@ export async function readAccountOtherFollowInTx(tx: Tx, input: Readonly<{
     if (!await activeAccount(tx, input.accountId) || !await canReadFollowSourceInTx(tx, { ...input, source })) return null;
     const sourceKey = sourceKeyForSessionFollowSourceV1(source);
     const row = await tx.accountSessionFollow.findUnique({ where: { accountId_sourceKey: { accountId: input.accountId, sourceKey } },
-        select: { ...FOLLOW_SELECT, deliveredDiscussionSeq: true, deliveredExecutionRunTerminalEventId: true, deliveredWorkflowRunRevision: true } });
+        select: { ...FOLLOW_SELECT, deliveredDiscussionSeq: true, deliveredExecutionRunTerminalEventId: true,
+            deliveredExecutionRunPermissionKey: true, deliveredWorkflowRunRevision: true } });
     if (!row || !row.following || JSON.stringify(sourceFromAccountFollow(row)) !== JSON.stringify(source)) return null;
     const follow = projectOtherAccountFollow(row);
     return follow ? { ...row, sourceKey, policy: follow.policy } : null;
@@ -190,9 +191,6 @@ export async function readAccountRunFollowDeliveryInTx(tx: Tx, input: Readonly<{
     accountId: string; authentication: SessionAccessAuthentication; original: RunFollowOriginalV1;
     event: Extract<SessionFollowInputV1, { original: RunFollowOriginalV1 }>['event'];
 }>) {
-    // Personal Run progress currently retains terminal identity only. Do not
-    // claim an attention ACK or replay push effects through that cursor.
-    if ('permissionRequests' in input.original) return null;
     const source = input.original.source;
     const row = await readAccountOtherFollowInTx(tx, { ...input, source });
     if (!row || !resolveFollowDeliveryV1({ policies: [row.policy], event: input.event }).selected
@@ -200,9 +198,12 @@ export async function readAccountRunFollowDeliveryInTx(tx: Tx, input: Readonly<{
             candidate: { source, ...(source.kind === 'execution_run' ? { senderSessionId: source.sessionId } : {}) } }) !== false) return null;
     const represented = 'terminalEventId' in input.original
         ? row.deliveredExecutionRunTerminalEventId === input.original.terminalEventId
+        : 'permissionRequests' in input.original
+        ? row.deliveredExecutionRunPermissionKey === deriveSessionFollowOriginalOccurrenceKeyV1(input.original)
         : (row.deliveredWorkflowRunRevision ?? 0) >= input.original.revision;
     return { sourceKey: row.sourceKey, policy: row.policy, represented,
         deliveredExecutionRunTerminalEventId: row.deliveredExecutionRunTerminalEventId,
+        deliveredExecutionRunPermissionKey: row.deliveredExecutionRunPermissionKey,
         deliveredWorkflowRunRevision: row.deliveredWorkflowRunRevision };
 }
 async function activeAccount(tx: Tx, accountId: string) {
@@ -367,13 +368,18 @@ export async function setOtherAccountFollow(input: Readonly<{
         const raw = input.source.kind === 'discussion' ? { sourceDiscussionId: input.source.discussionId }
             : input.source.kind === 'workflow_run' ? { sourceWorkflowRunId: input.source.runId }
             : { sourceExecutionRunSessionId: input.source.sessionId, sourceExecutionRunId: input.source.runId };
+        const runFrontier = input.source.kind === 'execution_run' ? input.executionRunFrontier : undefined;
+        const runOccurrence = runFrontier ? resolveExecutionRunFollowOccurrenceV1({ ...runFrontier,
+            sessionId: runFrontier.source.sessionId, runId: runFrontier.source.runId }) : null;
         const baseline = input.source.kind === 'discussion'
             ? { deliveredDiscussionSeq: (await tx.discussion.findUniqueOrThrow({ where: { id: input.source.discussionId },
                 select: { messageSeq: true } })).messageSeq }
             : input.source.kind === 'workflow_run'
                 ? { deliveredWorkflowRunRevision: (await tx.automationRun.findUniqueOrThrow({ where: { id: input.source.runId },
                     select: { revision: true } })).revision }
-                : { deliveredExecutionRunTerminalEventId: input.executionRunFrontier?.terminalEventId ?? null };
+                : { deliveredExecutionRunTerminalEventId: input.executionRunFrontier?.terminalEventId ?? null,
+                    deliveredExecutionRunPermissionKey: runOccurrence && 'permissionRequests' in runOccurrence.original
+                        ? deriveSessionFollowOriginalOccurrenceKeyV1(runOccurrence.original) : null };
         const row = await tx.accountSessionFollow.upsert({ where: { accountId_sourceKey: key },
             create: { accountId: input.accountId, sourceKey, ...raw, ...baseline,
                 following: true, hasPersistentFollow: true, notificationLevel,

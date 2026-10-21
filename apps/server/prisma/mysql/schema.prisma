@@ -2095,6 +2095,8 @@ model AccountSessionFollow {
     sourceWorkflowRunId String?
     deliveredDiscussionSeq Int?
     deliveredExecutionRunTerminalEventId String?
+    /// Exact Run permission original key; independent of terminal delivery progress.
+    deliveredExecutionRunPermissionKey String?
     deliveredWorkflowRunRevision Int?
     following Boolean @default(true)
     notificationLevel SessionFollowNotificationLevel @default(important)

@@ -29,6 +29,9 @@ function runtimeFixture(policy: FollowPolicyV1 = { preset: 'quiet' }) {
     const audience = [{ id: "runtime" }];
     const edge = {
         sourceSessionId: source.id, destinationSessionId: destination.id,
+        sourceKey: `session:${source.id}`, sourceDiscussionId: null,
+        sourceExecutionRunSessionId: null, sourceExecutionRunId: null, sourceWorkflowRunId: null,
+        deliveredExecutionRunTerminalEventId: null, deliveredWorkflowRunRevision: null,
         relation: "follower" as "follower" | "manager",
         attachedAt: new Date(100),
         policyJson: JSON.stringify(policy),

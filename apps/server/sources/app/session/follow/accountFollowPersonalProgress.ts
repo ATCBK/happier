@@ -21,6 +21,7 @@ import { markSessionFollowsChangedInTx } from './changes';
 import { observeAccountDiscussionFollowOccurrenceInTx } from './discussionFollowSource';
 import { sourceKeyForSessionFollowSourceV1 } from './sessionFollowSourceIdentity';
 import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
+import { deriveSessionFollowOriginalOccurrenceKeyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 
 type ProgressFailure = 'invalid_parameters' | 'credential_scope_denied' | 'account_inactive';
 type ProgressResult = Readonly<{ ok: true; value: SessionFollowPersonalProgressResponseV1 }>
@@ -67,7 +68,6 @@ export async function acceptAccountFollowPersonalProgress(input: Readonly<{
             return { ok: true, value: { accepted: true, alreadyRepresented: false } };
         }
         if ('original' in occurrence) {
-            if ('permissionRequests' in occurrence.original) return unrepresented;
             const current = await readRunFollowOccurrenceInTx(tx, { source: occurrence.original.source, original: occurrence.original,
                 executionRunFrontier: input.executionRunFrontier });
             if (!current) return unrepresented;
@@ -77,8 +77,12 @@ export async function acceptAccountFollowPersonalProgress(input: Readonly<{
             const updated = await tx.accountSessionFollow.updateMany({ where: { accountId: input.accountId, sourceKey: follow.sourceKey,
                 following: true, ...('terminalEventId' in occurrence.original
                     ? { deliveredExecutionRunTerminalEventId: follow.deliveredExecutionRunTerminalEventId }
+                    : 'permissionRequests' in occurrence.original
+                    ? { deliveredExecutionRunPermissionKey: follow.deliveredExecutionRunPermissionKey }
                     : { deliveredWorkflowRunRevision: follow.deliveredWorkflowRunRevision }) },
                 data: 'terminalEventId' in occurrence.original ? { deliveredExecutionRunTerminalEventId: occurrence.original.terminalEventId }
+                    : 'permissionRequests' in occurrence.original
+                    ? { deliveredExecutionRunPermissionKey: deriveSessionFollowOriginalOccurrenceKeyV1(occurrence.original) }
                     : { deliveredWorkflowRunRevision: occurrence.original.revision } });
             if (updated.count !== 1) throw new TransactionReplayRequiredError('follow-rule-progress-conflict');
             await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });

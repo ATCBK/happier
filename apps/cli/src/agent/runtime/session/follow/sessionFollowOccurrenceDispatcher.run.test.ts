@@ -25,6 +25,7 @@ it.each([
     ? resolveExecutionRunFollowOccurrenceV1({ sessionId: 'c111111111111111111111111', runId: 'run-one',
       status: 'running', terminalEventId: null, attention: { kind: 'permission_required', requestIds: ['permission-one'],
         requests: [{ requestId: 'permission-one', createdAt: 1 }] } }) : null;
+  if (kind === 'execution_run' && eventKind === 'needs_you') expect(permissionOccurrence?.event).toEqual({ kind: 'needs_you', type: 'approval' });
   const original: RunFollowOriginalV1 = kind === 'execution_run'
     ? permissionOccurrence?.original ?? { source: { kind, sessionId: 'c111111111111111111111111', runId: 'run-one' }, terminalEventId: 'terminal-one' }
     : { source: { kind, runId: 'workflow-one' }, revision: 4 };

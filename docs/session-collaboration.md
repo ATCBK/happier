@@ -235,7 +235,7 @@ the Run's own original through the Follow occurrence-route owner.
 Execution Runs retain their terminal occurrence id, including recovered host
 loss; Workflow Runs retain their revision and typed state. A live Execution Run
 permission request uses its sorted exact request-id/creation-time pairs as a `needs_you` approval
-original for Session receivers. Clearing or replacing that request withdraws
+original for Session and personal Account receivers. Clearing or replacing that request withdraws
 unstarted delivery through the same source reader and Pending owner; it never
 advances or fabricates a terminal cursor. Source notifications
 and receiver reconnect both use that read. Session receivers then use the shared
