@@ -70,10 +70,10 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("C
     }
 
     /** Observe the genuine database boundary; route, merge, readiness and publication logic stay real. */
-    async function observeTransactions<T>(observe: (tx: Tx) => void, run: () => T): Promise<Awaited<T>> {
+    async function observeTransactions<T>(observe: (tx: Tx) => void | Tx, run: () => T): Promise<Awaited<T>> {
         const original = db.$transaction.bind(db);
         db.$transaction = (async <R>(callback: (tx: Tx) => Promise<R>, options?: { isolationLevel?: "Serializable" | "RepeatableRead" | "ReadCommitted"; timeout?: number; maxWait?: number }) =>
-            original(async tx => { observe(tx); return await callback(tx); }, options)) as typeof db.$transaction;
+            original(async tx => { const observed = observe(tx); return await callback(typeof observed === "object" && observed !== null ? observed : tx); }, options)) as typeof db.$transaction;
         try { return await run(); }
         finally { db.$transaction = original; }
     }
@@ -229,6 +229,86 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("C
         // Immutable global contract preparation must not occupy the Account's
         // publication critical section. Mutable intent/quota reads remain fenced.
         expect(cursorCommittedDuringMaterialization).toBe(true);
+    });
+
+    it("selects an immutable release after a foreign Account cursor writer commits during admission", async () => {
+        const { account, manifest, headers } = await fixture(false);
+        const selectedManifest = PluginManifestV2Schema.parse({ ...manifest, contributes: {} });
+        const operations = createPluginAvailabilityOperations();
+        await operations.publishRelease({ accountId: account.id, input: { sourceClass: "registryPackage", facts: {
+            ref: { pluginId: manifest.id, version: manifest.version }, archiveDigestSha256: `sha256:${"a".repeat(64)}`,
+            normalizedManifest: selectedManifest, collectionContracts: [], uiSlots: [],
+            packageAssetArchive: { archiveDigestSha256: `sha256:${"b".repeat(64)}`, resources: [] },
+        } } });
+        const before = await db.account.findUniqueOrThrow({ where: { id: account.id } });
+        const transaction = db.$transaction.bind(db);
+        const pending: Promise<unknown>[] = [];
+        const releases = new Set<() => void>();
+        let interleavings = 0;
+        try {
+            await withAuthenticatedTestApp(registerPluginAvailabilityRoutes, async app => {
+                const response = await observeTransactions(tx => {
+                    const query = tx.$queryRawUnsafe.bind(tx);
+                    // Only the real database boundary is interleaved. Do not insert
+                    // a target read or establish its snapshot before its actual fence.
+                    const interleaveAdmission = async (sql: string, ...values: unknown[]) => {
+                        if (sql !== 'SELECT "id" FROM "Account" WHERE "id" = $1 FOR UPDATE' || values[0] !== account.id) {
+                            return await query(sql, ...values);
+                        }
+                        let release!: () => void;
+                        const held = new Promise<void>(resolve => { release = resolve; });
+                        releases.add(release);
+                        let ready!: (pid: number) => void;
+                        let fail!: (error: unknown) => void;
+                        const writerReady = new Promise<number>((resolve, reject) => { ready = resolve; fail = reject; });
+                        const writer = transaction(async (peer: Tx) => {
+                            const [{ pid }] = await peer.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                            // A preceding/older writer can legitimately change Account.seq.
+                            await peer.account.update({ where: { id: account.id }, data: { seq: { increment: 1 } } });
+                            ready(pid);
+                            await held;
+                        });
+                        void writer.catch(fail);
+                        pending.push(writer);
+                        try {
+                            const writerPid = await writerReady;
+                            let settled = false;
+                            const target = Promise.resolve(query(sql, ...values)).finally(() => { settled = true; });
+                            void target.catch(() => {});
+                            pending.push(target);
+                            let blocked = false;
+                            while (!settled) {
+                                const [state] = await db.$queryRaw<Array<{ blocked: boolean }>>`
+                                    SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+                                        WHERE datname = current_database() AND ${writerPid} = ANY(pg_blocking_pids(pid))) AS blocked
+                                `;
+                                if (state.blocked) { blocked = true; break; }
+                            }
+                            expect(blocked, "The actual admission statement must wait on the independent writer").toBe(true);
+                            interleavings++;
+                            release();
+                            await writer;
+                            return await target;
+                        } finally { release(); releases.delete(release); }
+                    };
+                    // Native Prisma transaction proxies can share raw-method storage.
+                    // Keep this database-boundary observer on our own proxy instead.
+                    return new Proxy(tx, { get(owner, property) {
+                        return property === "$queryRawUnsafe" ? interleaveAdmission : Reflect.get(owner, property, owner);
+                    } });
+                }, () => app.inject({ method: "POST", url: PluginAvailabilityActionHttpPathsV1["account.plugins.availability.intent.set"],
+                    headers, payload: { pluginId: manifest.id, desiredVersion: manifest.version, enabled: true,
+                        offlineUiHosting: "disabled", writableCollections: [], expectedRevision: null } }));
+                expect(response.statusCode, `${response.body}; observed admissions=${interleavings}`).toBe(200);
+                expect(response.json().intent).toMatchObject({ pluginId: manifest.id, desiredVersion: manifest.version, enabled: true, revision: "0" });
+                expect(await db.accountPluginIntent.count({ where: { accountId: account.id, pluginId: manifest.id } })).toBe(1);
+                expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq).toBe(before.seq + interleavings + 1);
+            });
+        } finally {
+            for (const release of releases) release();
+            await Promise.allSettled(pending);
+        }
+        expect(interleavings).toBeGreaterThan(0);
     });
 
     it("merges concurrent first claims and retains the newer declaration when the older daemon rejoins", async () => {

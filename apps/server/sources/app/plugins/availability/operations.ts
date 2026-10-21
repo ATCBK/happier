@@ -2263,7 +2263,13 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                             : null,
                     },
                 });
-            }, { /* Hosting intent admission reads Collection activation quota and readiness before promotion fencing. */ isolationLevel: "Serializable" });
+            }, {
+                // Exclusive Account admission precedes mutable intent, quota and
+                // readiness reads. ReadCommitted observes their current state
+                // after a lock wait instead of retaining PostgreSQL's earlier snapshot.
+                isolationLevel: "ReadCommitted",
+                transactionClass: "plugin-availability.intent-set",
+            });
             return outcome;
         } catch (error) {
             throw intentTransitionError(error);
