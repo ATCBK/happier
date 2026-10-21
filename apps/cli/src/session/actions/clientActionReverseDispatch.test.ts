@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createActionExecutor, type ActionExecutorDeps, RPC_METHODS, UiActionDispatchRequestV1Schema, ActionIdSchema } from '@happier-dev/protocol';
+import { createActionExecutor, type ActionExecutorDeps, RPC_METHODS, RPC_ERROR_CODES, UiActionDispatchRequestV1Schema, ActionIdSchema } from '@happier-dev/protocol';
 import { createClientActionReverseDispatcher, type ClientActionMachineRpc } from './clientActionReverseDispatch';
 import { createCliSettingsDeclarationAction } from './settingsDeclarationAction';
 import { mountedWorkReadClientRpcMethod } from '@happier-dev/protocol/actions/clientDispatchV1';
@@ -15,6 +15,20 @@ const disconnectedClient: ClientActionMachineRpc = {
 };
 
 describe('client Action reverse delivery', () => {
+  it('preserves the transport cause of an issued Find without claiming a known effect', async () => {
+    const dispatch = createClientActionReverseDispatcher(() => ({
+      hasConnectedClientRpcHandler: () => true,
+      callConnectedClientRpc: async (_method, _request, options) => {
+        options.onIssued();
+        return { ok: false, errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN };
+      },
+    }));
+    expect(await dispatch({ actionId: 'ui.find', input: { op: 'set', query: 'needle' },
+      context: { surface: 'agent', defaultSessionId: 'invoking-session' } }))
+      .toMatchObject({ ok: false, errorCode: 'outcome_uncertain', details: {
+        reason: 'client_rpc_transport_failure', errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN,
+      } });
+  });
   it('reports a failed conversation-search read without claiming an uncertain effect', async () => {
     const dispatch = createClientActionReverseDispatcher(() => ({
       hasConnectedClientRpcHandler: () => true,
@@ -567,7 +581,10 @@ describe('client Action reverse delivery', () => {
       },
     };
     await expect(executor(client).execute('ui.find', { op: 'read' }, { surface: 'agent' }))
-      .resolves.toEqual({ ok: false, errorCode: 'outcome_uncertain', error: 'outcome_uncertain' });
+      .resolves.toEqual({ ok: false, errorCode: 'outcome_uncertain', error: 'outcome_uncertain', details: {
+        reason: disposition === 'lost' ? 'client_rpc_transport_failure' : 'client_rpc_invalid_response',
+        errorCode: null, ...(disposition === 'lost' ? { errorClass: 'Error', httpStatus: null } : {}),
+      } });
     expect(effects).toBe(1);
   });
 

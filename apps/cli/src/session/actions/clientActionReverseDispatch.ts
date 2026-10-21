@@ -12,6 +12,7 @@ import {
 } from '@happier-dev/protocol/actions/clientDispatchV1';
 import type { ActionExecutorDeps } from '@happier-dev/protocol';
 import { projectApprovalExecutionOriginCaller } from '@happier-dev/protocol/actions/actionExecutor';
+import { readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { isWorkflowAuthoringActionId, workflowDraftClientRpcMethod, WorkflowDraftGetInputV1Schema } from '@happier-dev/protocol/actions/workflowAuthoringAction';
 import { PluginExecutionOriginActionIdSchema, PluginExecutionOriginActionInputSchemas } from '@happier-dev/protocol/actions/pluginExecutionOriginActionFamily';
 import type { SocketRpcAnsweringClientV1 } from '@happier-dev/protocol/socketRpc';
@@ -85,9 +86,18 @@ export function createClientActionReverseDispatcher(
     let issued = false;
     const sideEffectClass = getActionSpec(actionId).sideEffectClass;
     const mayHaveEffect = sideEffectClass !== 'read' && sideEffectClass !== 'none';
-    const unknownOutcome = () => mayHaveEffect
-      ? { ok: false as const, errorCode: 'outcome_uncertain', error: 'outcome_uncertain' }
-      : machineTransportUnavailable('invalid_action_output');
+    const failureWithCause = (reason: 'client_rpc_transport_failure' | 'client_rpc_invalid_response', code?: string, error?: unknown) => {
+      const errorCode = code && ([...Object.values(RPC_ERROR_CODES), 'machine_socket_unavailable',
+        'machine_rpc_result_decrypt_failed', 'cancelled'] as readonly string[]).includes(code) ? code : null;
+      const diagnostic = error === undefined ? undefined : readUnexpectedActionErrorDiagnosticV1(error);
+      return {
+        ...(mayHaveEffect ? { ok: false as const, errorCode: 'outcome_uncertain', error: 'outcome_uncertain' }
+          : machineTransportUnavailable(code ?? 'invalid_action_output')),
+        details: { reason, errorCode, ...(diagnostic ? {
+          errorClass: diagnostic.errorClass, httpStatus: diagnostic.httpStatus,
+        } : {}) },
+      };
+    };
     try {
       const response = await client.callConnectedClientRpc(method, request.data, {
         ...(answeringClient ? { answeringClient } : {}),
@@ -103,7 +113,8 @@ export function createClientActionReverseDispatcher(
           errorCode: 'client_routing_update_required', error: 'Update the Home server to support answering-client routing' };
         if (response.errorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE
           || response.errorCode === RPC_ERROR_CODES.METHOD_NOT_FOUND) return unavailable();
-        return issued && mayHaveEffect ? unknownOutcome() : machineTransportUnavailable(response.errorCode);
+        return issued ? failureWithCause('client_rpc_transport_failure', response.errorCode)
+          : machineTransportUnavailable(response.errorCode);
       }
       // The room may still be settling an accepted call after its receiver
       // withdrew new admission. Its encrypted method-not-found is a known
@@ -117,9 +128,10 @@ export function createClientActionReverseDispatcher(
         return { ...execution, result: { ...execution.result, answeringClientId: response.answeringClientId,
           ...(response.answeringClientIds ? { answeringClientIds: [...response.answeringClientIds] } : {}) } };
       }
-      return execution ?? unknownOutcome();
+      return execution ?? failureWithCause('client_rpc_invalid_response');
     } catch (error) {
-      return issued && mayHaveEffect ? unknownOutcome()
+      return issued ? failureWithCause('client_rpc_transport_failure',
+        context.signal?.aborted ? 'cancelled' : readRpcErrorCode(error) ?? undefined, error)
         : machineTransportUnavailable(context.signal?.aborted ? 'cancelled' : readRpcErrorCode(error) ?? undefined);
     }
   };
