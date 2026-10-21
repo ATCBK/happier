@@ -264,7 +264,8 @@ describe('CLI Board Action family', () => {
       });
       app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
         signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
-      app.get('/v1/artifacts', async () => []);
+      // A kind-filtered Artifact page is an envelope that also reports unclassified rows.
+      app.get('/v1/artifacts', async () => ({ items: [], hasUnclassified: false }));
       app.get('/v2/sessions', async () => ({ sessions: [rawSession], hasNext: false, nextCursor: null }));
       app.get('/v2/sessions/archived', async () => ({ sessions: [], hasNext: false, nextCursor: null }));
       app.get('/v2/sessions/session-one/system-records/record', async () => ({ record: null }));

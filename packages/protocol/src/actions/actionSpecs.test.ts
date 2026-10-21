@@ -387,6 +387,12 @@ const WORKFLOW_READ_ACTION_ID_SET = new Set([
   'session.trigger.list',
 ] as const);
 
+const HOME_PUBLIC_PROFILE_DEFERRED_ACTION_IDS = [
+  'home.public_profiles.restrict',
+  'home.public_profiles.restore',
+  'home.public_profiles.handle_reclaim',
+] as const;
+
 const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
   'reviews.comments.claimPublicationDispatch',
   'plugin.webhook.delivery.movePending',
@@ -522,7 +528,7 @@ const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
   'scm.pullRequest.openCompose',
   'scm.hostingRepository.describePublishTargets',
   'scm.diffSummary.generate',
-  ...HOME_GOVERNANCE_ACTION_IDS_V1,
+  ...HOME_GOVERNANCE_ACTION_IDS_V1.filter((id) => !(HOME_PUBLIC_PROFILE_DEFERRED_ACTION_IDS as readonly string[]).includes(id)),
   ...TEAM_ACTION_IDS_V1.filter(
     (id) => !TEAM_DEFERRED_APPROVAL_REPLAY_SAFE_ACTION_ID_SET.has(id) && id !== 'teams.update',
   ),
@@ -533,6 +539,7 @@ const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
 ];
 
 const RESULT_REQUIRED_DEFERRED_ACTION_IDS = [
+  ...HOME_PUBLIC_PROFILE_DEFERRED_ACTION_IDS,
   ...TEAM_DEFERRED_APPROVAL_REPLAY_SAFE_ACTION_ID_SET,
   'teams.update',
   'workspace.sync.conflict.resolve',

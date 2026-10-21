@@ -64,7 +64,7 @@ describe('personal widget areas at the Account Artifact owner', () => {
         const views = createWidgetAreaLayoutArtifactPortV1(b.dashboardTransport, { surface: core, isCurrent: () => true });
         const listed = await views.list();
         expect(listed.map(row => row.surface.owner.kind === 'corePage' ? row.surface.owner.layoutId : null))
-            .toEqual(['overview', 'costs', 'work', 'usage', 'plans', 'coach', 'how-you-work', 'sources']);
+            .toEqual(['overview', 'costs', 'work', 'usage', 'plans', 'coach', 'how-you-work', 'sources', 'agents']);
         expect(b.rows.size).toBe(0);
         for (const view of listed) {
             const owner = createWidgetSurfaceArtifactPortV1(b.transport, { surface: view.surface, isCurrent: () => true });
@@ -78,7 +78,7 @@ describe('personal widget areas at the Account Artifact owner', () => {
         const first = flattenWidgetLayoutWidgetsV1(initial.layout.items)[0]!.instance.id;
         await owner.apply({ kind: 'rename', instanceId: first, displayName: 'Mine' });
         const personal = await views.list();
-        expect(personal).toHaveLength(8);
+        expect(personal).toHaveLength(9);
         expect(personal.filter(row => row.artifactId === listed[0]!.artifactId)).toEqual([
             expect.objectContaining({ isPreset: true, isDefault: true, isEdited: true,
                 revision: b.rows.get(listed[0]!.artifactId)!.revision }),
@@ -86,9 +86,9 @@ describe('personal widget areas at the Account Artifact owner', () => {
         // A distinct view may have the same display name; its layout identity stays independent.
         const copy = await views.create({ layoutId: 'my-overview', name: 'Overview', fromSurface: listed[0]!.surface });
         const withCopy = await views.list();
-        expect(withCopy).toHaveLength(9);
-        expect(new Set(withCopy.map(row => row.artifactId)).size).toBe(9);
-        expect(new Set(withCopy.map(row => row.surface.owner.kind === 'corePage' ? row.surface.owner.layoutId : null)).size).toBe(9);
+        expect(withCopy).toHaveLength(10);
+        expect(new Set(withCopy.map(row => row.artifactId)).size).toBe(10);
+        expect(new Set(withCopy.map(row => row.surface.owner.kind === 'corePage' ? row.surface.owner.layoutId : null)).size).toBe(10);
         expect(copy).toMatchObject({ isPreset: false, isDefault: false, isEdited: false });
         expect(withCopy.filter(row => row.name === 'Overview')).toHaveLength(2);
         const replay = createWidgetSurfaceArtifactPortV1(b.transport, { surface: listed[0]!.surface, isCurrent: () => true });

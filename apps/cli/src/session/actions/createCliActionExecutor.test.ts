@@ -510,6 +510,17 @@ function createDataKeyExecutor(extra: CliActionExecutorTestOverrides = {}) {
   });
 }
 
+// Account mode authority is a live HTTP route, re-read at final Artifact create admission,
+// so the mode must stay served for every read rather than answering once.
+function serveLiveAccountEncryptionMode(mode: 'e2ee' | 'plain'): void {
+  const previous = mockAxiosGet.getMockImplementation();
+  mockAxiosGet.mockImplementation(async (url: string, ...rest: unknown[]) => (
+    new URL(url).pathname === '/v1/account/encryption'
+      ? { status: 200, data: { mode, updatedAt: 1 } }
+      : previous?.(url, ...rest)
+  ));
+}
+
 function publishActionsSettings(actionsSettingsV1: unknown, settingsVersion = 1): void {
   setAccountSettingsBoundary({ settings: { actionsSettingsV1 }, source: 'network', settingsVersion,
     loadedAtMs: Date.now(), settingsSecretsReadKeys: [], whenRefreshed: null });
@@ -1566,7 +1577,7 @@ describe('createCliActionExecutor', () => {
     mockAxiosPost.mockImplementation(async (url: string, body: { id: string }) => ({
       status: 200, data: url.endsWith('/verify') ? { ok: true } : { id: body.id, headerVersion: 1, bodyVersion: 1 },
     }));
-    mockAxiosGet.mockResolvedValueOnce({ status: 200, data: { mode: 'e2ee', updatedAt: 1 } });
+    serveLiveAccountEncryptionMode('e2ee');
     await expect(execute()).resolves.toMatchObject({
       kind: 'response',
       response: {
@@ -3233,7 +3244,7 @@ describe('createCliActionExecutor', () => {
     mockAxiosPost.mockImplementationOnce(async (_url: string, body: { id: string }) => ({
       status: 200, data: { id: body.id, headerVersion: 1, bodyVersion: 1 },
     }));
-    mockAxiosGet.mockResolvedValueOnce({ status: 200, data: { mode: 'e2ee', updatedAt: 1 } });
+    serveLiveAccountEncryptionMode('e2ee');
 
     const executor = createDataKeyExecutor();
     sendSessionMessage.mockResolvedValueOnce({ ok: true, sessionId: 'sess-1', localId: 'local-1', waited: false });
@@ -3263,7 +3274,7 @@ describe('createCliActionExecutor', () => {
     mockAxiosPost.mockImplementationOnce(async (_url: string, body: { id: string }) => ({
       status: 200, data: { id: body.id, headerVersion: 1, bodyVersion: 1 },
     }));
-    mockAxiosGet.mockResolvedValueOnce({ status: 200, data: { mode: 'e2ee', updatedAt: 1 } });
+    serveLiveAccountEncryptionMode('e2ee');
 
     const executor = createDataKeyExecutor();
     sendSessionMessage.mockResolvedValueOnce({ ok: true, sessionId: 'sess-1', localId: 'local-1', waited: false });

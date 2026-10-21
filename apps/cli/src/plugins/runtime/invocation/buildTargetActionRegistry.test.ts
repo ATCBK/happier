@@ -559,7 +559,9 @@ describe('buildTargetActionInvocationRegistry', () => {
             createServiceBinding: (generation, id) => withPluginInvocationAccountStorageAvailability(
                 createLoggerAvailablePluginInvocationServiceBinding(generation, id), accountAvailable ? 'available' : 'unavailable'),
         });
+        // Triage authors its data Actions as Account-target, so discovery is the Account realm's.
         const target = buildRegistry({ contributes, targetRegistrations: [], targetActivationFacts: [], resolveHostPolicy,
+            executionRealm: 'account',
             resolveAuthorizationFacts: (_action, purpose) => resolvePluginFinalPolicyAuthorizationFacts({
                 pluginId: 'acme.alpha',
                 current: { occurrenceId: '7' as PluginRuntimeOccurrenceId, desiredOccurrenceId: '7' as PluginRuntimeOccurrenceId,

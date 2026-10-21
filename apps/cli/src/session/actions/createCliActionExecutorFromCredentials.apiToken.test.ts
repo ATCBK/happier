@@ -508,25 +508,25 @@ describe('createCliActionExecutorFromCredentials API Token transport', () => {
   it('pins a fixed-Home stored-session root client to that Home daemon and fails closed when it is unavailable', async () => {
     daemonPost.mockResolvedValueOnce({
       ok: true,
-      result: { actionSpecs: [] },
+      result: { machines: [] },
     });
     await withPublishedAccountDaemon(async ({ credentials, serverId, serverApiUrl, daemonTarget, withdrawPublication }) => {
       const executor = createCliActionExecutorFromCredentials({ credentials, externalActionClient: true, serverId, serverApiUrl });
       await expect(executor.execute(
-        'action.spec.search',
+        'machines.list',
         { limit: 10 },
         { surface: 'cli' },
-      )).resolves.toEqual({ ok: true, result: { actionSpecs: [] } });
+      )).resolves.toEqual({ ok: true, result: { machines: [] } });
       expect(resolveLiveDaemonControlTargetForServer).toHaveBeenCalledWith(serverId);
       expect(daemonPost).toHaveBeenCalledWith(SIGNED_ROOT_ACTION_EXECUTE_PATH, {
-        actionId: 'action.spec.search',
+        actionId: 'machines.list',
         input: { limit: 10 },
       }, expect.objectContaining({ target: daemonTarget, mutation: false }));
 
       await withdrawPublication();
       await expect(executor.execute(
-        'action.spec.get',
-        { actionId: 'session.status.get' },
+        'machines.list',
+        { limit: 10 },
         { surface: 'cli' },
       )).resolves.toEqual({
         ok: false,
