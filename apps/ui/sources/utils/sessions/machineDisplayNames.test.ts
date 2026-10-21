@@ -150,6 +150,14 @@ describe('getMachineSentenceName', () => {
     it('keeps a removed machine named by what happened to it', () => {
         expect(getMachineSentenceName({ id: 'a-1', metadata: null, absence: 'removed' })).toBe(t('machine.removedMachine'));
     });
+
+    it('lets a sentence wrap before a hyphenated host name, never inside it', () => {
+        const name = getMachineSentenceName(m('a-1', undefined, 'NLDW3-5-36-33'));
+        // The text stays the host name; a word joiner after each hyphen removes the browser's break opportunity.
+        expect(name.replaceAll('\u2060', '')).toBe('NLDW3-5-36-33');
+        expect(name).toBe('NLDW3-\u20605-\u206036-\u206033');
+        expect(getMachineSentenceName(m('a-2', 'Studio Mac'))).toBe('Studio Mac');
+    });
 });
 
 describe('getSessionMachineLabel', () => {

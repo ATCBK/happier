@@ -90,7 +90,16 @@ export function getMachineSentenceName(machine: MachineNameInput | null | undefi
     if (!machine || (!machine.absence && (isMachineLocked(machine) || isMachineDisplayHydrating(machine)))) {
         return t('machine.thisMachineInSentence');
     }
-    return displayName ?? getMachineDisplayName(machine);
+    return keepHyphenatedNameTogether(displayName ?? getMachineDisplayName(machine));
+}
+
+/**
+ * A line may break after a hyphen, which splits a host name like "NLDW3-5-36-33" mid-name. A word
+ * joiner (zero width, no glyph) after each hyphen leaves the break opportunity only at the spaces
+ * around the name, so a sentence wraps before the name rather than inside it.
+ */
+function keepHyphenatedNameTogether(name: string): string {
+    return name.replace(/-(?=[^\s-])/g, '-\u2060');
 }
 
 /** What an unnamed machine is called on screen. */
