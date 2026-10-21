@@ -10,6 +10,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { readFile, readlink } from 'node:fs/promises';
 import { listProcessSnapshot } from './processSnapshotCache';
+import { posixPsEnvironment } from './posixPs';
 
 const SAFE_RESPAWN_ENVIRONMENT_VARIABLE_KEYS = ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'CODEX_SQLITE_HOME'] as const;
 const DAEMON_OWNERSHIP_ENVIRONMENT_VARIABLE_KEYS = [
@@ -166,15 +167,6 @@ function parsePositiveInt(value: unknown): number | null {
     ? value
     : Number.parseInt(typeof value === 'string' ? value : '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-// macOS launchd starts the daemon without LANG/LC_*, so BSD ps falls back to the C locale and
-// rewrites non-ASCII bytes in captured command lines as M-x control notation (e.g. 「项目」→
-// M-iM-!M-9M-gM^[M-.). The ps-captured runner entry then never matches the daemon's correct
-// (Node-native) path and every runner is misjudged stale. Forcing a UTF-8 locale on the ps
-// child makes its output byte-faithful regardless of the ambient daemon environment.
-function posixPsEnvironment(): NodeJS.ProcessEnv {
-  return { ...process.env, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' };
 }
 
 function parseWindowsProcessInfoOutput(output: string): Map<number, { pid: number; name?: string; cmd?: string }> {
