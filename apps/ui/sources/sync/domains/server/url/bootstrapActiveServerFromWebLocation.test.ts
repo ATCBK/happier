@@ -235,20 +235,21 @@ describe('bootstrapActiveServerFromWebLocation', () => {
     });
 
     it.each([
-        'https://app.example.test/terminal?key=abc123&server=https%3A%2F%2Fwrong.example.test',
-        'https://app.example.test/terminal/connect?key=abc123&server=https%3A%2F%2Fwrong.example.test',
+        'https://app.example.test/terminal?key=abc123&server=https%3A%2F%2Fwrong.example.test&serverId=terminal-owned-home',
+        'https://app.example.test/terminal/connect?key=abc123&server=https%3A%2F%2Fwrong.example.test&serverId=terminal-owned-home',
     ])('does not consume terminal route server params as global overrides for %s', async (href) => {
         process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = randomScope();
         process.env.EXPO_PUBLIC_HAPPY_SERVER_URL = 'https://api.happier.dev';
 
         stubWebLocation(href);
 
-        const { bootstrapActiveServerFromWebLocation, readWebServerUrlOverrideFromLocation } = await importFreshBootstrap();
+        const { bootstrapActiveServerFromWebLocation, readWebServerUrlOverrideFromLocation, readWebDestinationServerIdFromLocation } = await importFreshBootstrap();
         const override = readWebServerUrlOverrideFromLocation();
         const result = await bootstrapActiveServerFromWebLocation({ scope: 'device' });
 
         const { getActiveServerUrl } = await importFreshServerProfiles();
         expect(override).toBeNull();
+        expect(readWebDestinationServerIdFromLocation()).toBeNull();
         expect(result).toBeNull();
       expect(getActiveServerUrl()).toBe('https://api.happier.dev');
     });

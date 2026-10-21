@@ -76,6 +76,18 @@ function isRouteOwnedServerParam(pathname: string): boolean {
     return normalized === '/terminal' || normalized === '/terminal/connect';
 }
 
+/** Destination scope is a boot hint, not a global Home override during navigation. */
+export function readWebDestinationServerIdFromLocation(): string | null {
+    if (!isWebRuntime() || typeof window.location?.href !== 'string') return null;
+    try {
+        const current = new URL(window.location.href);
+        if (isRouteOwnedServerParam(current.pathname)) return null;
+        return current.searchParams.get('serverId')?.trim() || null;
+    } catch {
+        return null;
+    }
+}
+
 export function readWebServerUrlOverrideFromLocation(): WebServerUrlOverride | null {
     if (!isWebRuntime()) return null;
     if (typeof window.location?.href !== 'string') return null;

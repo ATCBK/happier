@@ -4,10 +4,11 @@ import { isTerminalConnectWebPathname, parseTerminalConnectUrl } from '@/utils/p
 import { TERMINAL_CONNECT_WEB_BOOTSTRAP_STORAGE_KEY } from '@/utils/path/terminalConnectWebBootstrap';
 import {
     bootstrapActiveServerFromWebLocation,
+    readWebDestinationServerIdFromLocation,
     readWebServerUrlOverrideFromLocation,
 } from '@/sync/domains/server/url/bootstrapActiveServerFromWebLocation';
 import { createServerUrlComparableKey } from '@/sync/domains/server/url/serverUrlCanonical';
-import { resolveUniqueServerProfileByUrl } from '@/sync/domains/server/serverProfiles';
+import { getServerProfileById, resolveUniqueServerProfileByUrl } from '@/sync/domains/server/serverProfiles';
 import {
     getActiveServerSnapshot,
     setActiveServer,
@@ -135,7 +136,7 @@ async function readRetainedBootCredentials(): Promise<AuthCredentials | null> {
     );
 }
 
-async function canAdoptBootServerCredentials(serverUrl: string): Promise<boolean> {
+async function canAdoptBootServerCredentials(serverUrl: string, serverId?: string): Promise<boolean> {
     const currentGuard =
         await guardAccountEncryptionFirstKeyCredentialMutation();
     if (currentGuard.kind !== 'allowed') return false;
@@ -143,6 +144,7 @@ async function canAdoptBootServerCredentials(serverUrl: string): Promise<boolean
     const targetGuard =
         await guardAccountEncryptionFirstKeyCredentialMutation({
             serverUrl,
+            ...(serverId ? { serverId } : {}),
         });
     return targetGuard.kind === 'allowed';
 }
@@ -178,18 +180,27 @@ export async function resolveBootCredentials(platformOs: string): Promise<AuthCr
         : null;
     const stackRuntimeServerUrl = platformOs === 'web' ? readStackRuntimeServerUrl() : null;
 
-    const bootServerUrl = webServerOverride?.serverUrl
+    const explicitBootServerUrl = webServerOverride?.serverUrl
         ?? (platformOs === 'web' ? resolveBootServerUrlFromTerminalConnectHash() : null);
+    const destinationServerId = platformOs === 'web' && !explicitBootServerUrl
+        ? readWebDestinationServerIdFromLocation()
+        : null;
+    const destinationServer = destinationServerId ? getServerProfileById(destinationServerId) : null;
+    // An explicit destination cannot borrow an unrelated Home's credential or create a profile.
+    if (destinationServerId && !destinationServer) return null;
+    const bootServerUrl = explicitBootServerUrl
+        ?? destinationServer?.canonicalServerUrl
+        ?? destinationServer?.serverUrl;
 
     if (bootServerUrl) {
-        const savedBootServer = resolveUniqueServerProfileByUrl(bootServerUrl);
+        const savedBootServer = destinationServer ?? resolveUniqueServerProfileByUrl(bootServerUrl);
         if (!savedBootServer) {
             // The URL remains intact for the mounted Home connect flow. Boot has no
             // modal owner with which to confirm and prove a new address before saving.
-            return webServerOverride ? null : await readRetainedBootCredentials();
+            return webServerOverride || destinationServerId ? null : await readRetainedBootCredentials();
         }
-        if (!await canAdoptBootServerCredentials(bootServerUrl)) {
-            return webServerOverride ? null : await readRetainedBootCredentials();
+        if (!await canAdoptBootServerCredentials(bootServerUrl, savedBootServer.id)) {
+            return webServerOverride || destinationServerId ? null : await readRetainedBootCredentials();
         }
         if (webServerOverride) {
             await bootstrapActiveServerFromWebLocation({

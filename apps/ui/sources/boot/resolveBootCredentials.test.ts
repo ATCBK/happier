@@ -11,6 +11,8 @@ import {
     getDeviceDefaultServerId,
     listServerProfiles,
     resetServerProfilesRuntimeForTests,
+    resolveServerProfileScopeId,
+    setServerProfileIdentityForUrl,
     upsertServerProfile,
 } from '@/sync/domains/server/serverProfiles';
 import type { HappierWebRuntimeConfig } from '@/sync/runtime/webRuntimeConfig';
@@ -18,6 +20,8 @@ import { scopedStorageId } from '@/utils/system/storageScope';
 import { encodeBase64 } from '@/encryption/base64';
 import { TERMINAL_CONNECT_WEB_BOOTSTRAP_STORAGE_KEY } from '@/utils/path/terminalConnectWebBootstrap';
 import { resolveBootCredentials } from './resolveBootCredentials';
+import { buildSessionDetailsHref } from '@/components/sessions/panes/url/sessionPaneUrlState';
+import { buildWorkspaceFileLink } from '@/utils/url/sessionFileDeepLink';
 
 installTokenStorageWebPlatformMocks();
 const runtime = await vi.hoisted(async () => {
@@ -233,6 +237,61 @@ describe('resolveBootCredentials', () => {
         });
         expect(getDeviceDefaultServerId()).toBe(deviceDefaultBefore);
         await expectStoredCredentials('https://other.example.test', retainedCredentials);
+    });
+
+    it.each(['walkthrough', 'files'] as const)('restores the saved destination Home from a real %s link before the stack default', async (surface) => {
+        enableStackWeb();
+        await retainHome(stackUrl, { token: 'stack-home-token' });
+        const destinationCredentials = { token: 'destination-home-token' };
+        const target = await saveHomeCredentials('https://reading.example.test', destinationCredentials);
+        const identified = await setServerProfileIdentityForUrl(target.serverUrl, 'srv_reading_home');
+        if (!identified) throw new Error('Expected the saved destination Home');
+        const destinationServerId = resolveServerProfileScopeId(identified);
+        const deviceDefaultBefore = getDeviceDefaultServerId();
+        const href = surface === 'walkthrough'
+            ? buildSessionDetailsHref({
+                sessionId: 'reading-session',
+                serverId: destinationServerId,
+                details: { kind: 'scmReview', comparison: { kind: 'turnCheckpoint', turnId: 'turn-1' }, view: 'walkthrough' },
+            })
+            : buildWorkspaceFileLink({ target: { kind: 'session', sessionId: 'reading-session', serverId: destinationServerId }, path: 'src/removed.ts' });
+        stubWebRuntime(new URL(href, 'https://app.example.test').href);
+
+        await expect(resolveBootCredentials('web')).resolves.toEqual(destinationCredentials);
+        expect(getActiveServerSnapshot()).toMatchObject({ serverId: destinationServerId, serverUrl: target.serverUrl });
+        expect(getDeviceDefaultServerId()).toBe(deviceDefaultBefore);
+        expect(runtime.window.location.search).toContain(`serverId=${destinationServerId}`);
+    });
+
+    it('keeps an explicit global Home URL ahead of the destination Home when booting', async () => {
+        enableStackWeb();
+        await retainHome(stackUrl, { token: 'stack-home-token' });
+        const destination = await saveHomeCredentials('https://reading.example.test', { token: 'destination-home-token' });
+        stubWebRuntime(`https://app.example.test/session/reading-session?serverId=${destination.id}&server=${encodeURIComponent(stackUrl)}`);
+
+        await expect(resolveBootCredentials('web')).resolves.toEqual({ token: 'stack-home-token' });
+        expect(getActiveServerSnapshot().serverUrl).toBe(stackUrl);
+    });
+
+    it('does not restore an unrelated Home for an unknown explicit destination Home', async () => {
+        enableStackWeb();
+        await retainHome(stackUrl, { token: 'stack-home-token' });
+        const selectedBefore = getActiveServerSnapshot();
+        stubWebRuntime('https://app.example.test/session/reading-session?serverId=unknown-home');
+
+        await expect(resolveBootCredentials('web')).resolves.toBeNull();
+        expect(getActiveServerSnapshot().serverId).toBe(selectedBefore.serverId);
+    });
+
+    it('does not restore an unrelated Home when first-key custody blocks the destination Home', async () => {
+        enableStackWeb();
+        const selectedBefore = await retainHome(stackUrl, { token: 'stack-home-token' });
+        const destination = await saveHomeCredentials('https://reading.example.test', { token: 'destination-home-token' });
+        await markFirstKeyCustody({ serverId: destination.id, serverUrl: destination.serverUrl });
+        stubWebRuntime(`https://app.example.test/session/reading-session?serverId=${destination.id}`);
+
+        await expect(resolveBootCredentials('web')).resolves.toBeNull();
+        expect(getActiveServerSnapshot().serverId).toBe(selectedBefore.serverId);
     });
 
     it('does not adopt the exact first-key bearer rejected before reload', async () => {
