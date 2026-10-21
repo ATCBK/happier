@@ -10,6 +10,7 @@ import { ModalCardFrame } from '@/modal/components/card/ModalCardFrame';
 import type { CustomModalInjectedProps } from '@/modal/types';
 import { t } from '@/text';
 
+import type { WorkspaceFileDetailsFileContent } from '../details/workspaceFileDetails/refreshWorkspaceFileDetails';
 import { formatFilePageBytes } from './FilePageStates';
 
 export type FilePageInfoFacts = Readonly<{
@@ -18,15 +19,21 @@ export type FilePageInfoFacts = Readonly<{
   kindLabel: string | null;
   language: string | null;
   sizeBytes: number | null;
-  encoding: string | null;
+  encoding: WorkspaceFileDetailsFileContent['encoding'] | null;
   lineCount: number | null;
 }>;
 
-/** UTF-8 is what text is expected to be; only an unusual encoding is worth a row (P3 §3.2 Info). */
-function isUnusualEncoding(encoding: string | null): encoding is string {
-  if (!encoding) return false;
-  const normalized = encoding.toLowerCase().replace(/[^a-z0-9]/g, '');
-  return normalized !== 'utf8' && normalized !== 'ascii';
+/** UTF-8 with LF is what text is expected to be: only an unusual encoding or line ending is worth a row (P3 §3.2 Info). */
+function unusualEncoding(encoding: FilePageInfoFacts['encoding']): string | null {
+  if (!encoding) return null;
+  if (encoding.reason === 'notUtf8') return t('files.pane.page.encodingNotUtf8');
+  return encoding.hasBom ? t('files.pane.page.encodingBom') : null;
+}
+
+function unusualLineEndings(encoding: FilePageInfoFacts['encoding']): string | null {
+  if (!encoding) return null;
+  if (encoding.mixedEol) return t('files.pane.page.eolMixed');
+  return encoding.eol === 'crlf' ? t('files.pane.page.eolCrlf') : null;
 }
 
 /**
@@ -48,7 +55,8 @@ export function FilePageInfoDialog(
       label: t('files.pane.page.infoKind'),
       value: facts.kindLabel,
     });
-  if (facts.language && facts.language !== 'text')
+  // The language is worth its own row only when the kind doesn't already name it (Markdown · markdown).
+  if (facts.language && facts.language !== 'text' && facts.language.toLowerCase() !== facts.kindLabel?.toLowerCase())
     rows.push({
       id: 'language',
       label: t('files.pane.page.infoLanguage'),
@@ -67,12 +75,10 @@ export function FilePageInfoDialog(
       label: t('files.pane.page.infoSize'),
       value: formatFilePageBytes(facts.sizeBytes),
     });
-  if (isUnusualEncoding(facts.encoding))
-    rows.push({
-      id: 'encoding',
-      label: t('files.pane.page.infoEncoding'),
-      value: facts.encoding,
-    });
+  const encoding = unusualEncoding(facts.encoding);
+  if (encoding) rows.push({ id: 'encoding', label: t('files.pane.page.infoEncoding'), value: encoding });
+  const lineEndings = unusualLineEndings(facts.encoding);
+  if (lineEndings) rows.push({ id: 'lineEndings', label: t('files.pane.page.infoLineEndings'), value: lineEndings });
   return (
     <ModalCardFrame
       testID="file-info-dialog"
@@ -84,12 +90,15 @@ export function FilePageInfoDialog(
       }}
     >
       <View style={styles.body}>
-        <View style={styles.identity}>
-          <FileIcon fileName={fileName} size={20} appearance="line" />
-          <Text testID="file-info-path" selectable style={styles.path}>
-            {facts.path}
-          </Text>
-        </View>
+        {/* Where it lives, when that says more than the title (a file at the root is its own name). */}
+        {facts.path !== fileName ? (
+          <View style={styles.identity}>
+            <FileIcon fileName={fileName} size={20} appearance="line" />
+            <Text testID="file-info-path" selectable style={styles.path}>
+              {facts.path}
+            </Text>
+          </View>
+        ) : null}
         <View style={styles.rows}>
           {rows.map((row, index) => (
             <View

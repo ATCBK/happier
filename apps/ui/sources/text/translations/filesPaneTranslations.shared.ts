@@ -79,17 +79,22 @@ export type FilesPaneTranslations = Readonly<{
         partialFact: (params: Readonly<{ slice: string; size: string }>) => string;
         /** The kind fact for text with no language: why it reads unhighlighted (lab FV2t). */
         plainText: string;
-        fromMachine: (params: Readonly<{ machine: string }>) => string;
-    }>;
         infoKind: string;
         infoLanguage: string;
         infoLines: string;
         infoSize: string;
         infoEncoding: string;
+        infoLineEndings: string;
+        encodingBom: string;
+        encodingNotUtf8: string;
+        eolCrlf: string;
+        eolMixed: string;
         /** The Save as Artifact audience: the source's Teams could not be read, so the copy stays private. */
         artifactAudienceUnavailable: string;
         /** Saved, then sharing with the Team failed: the Artifact exists and can be opened. */
         artifactShareFailed: (params: Readonly<{ team: string }>) => string;
+        fromMachine: (params: Readonly<{ machine: string }>) => string;
+    }>;
     /** P7 language features on the File page: the card, the state note, Problems and References. */
     intelligence: Readonly<{
         cardLabel: string;
@@ -246,6 +251,18 @@ export const filesPaneTranslationsEnglish = { en: {
             showingLast: ({ slice, size }) => "Showing the last " + slice + " of " + size,
             partialFact: ({ slice, size }) => slice + " of " + size,
             plainText: "Plain text",
+            infoKind: "Kind",
+            infoLanguage: "Language",
+            infoLines: "Lines",
+            infoSize: "Size",
+            infoEncoding: "Encoding",
+            infoLineEndings: "Line endings",
+            encodingBom: "UTF-8 with BOM",
+            encodingNotUtf8: "Not UTF-8",
+            eolCrlf: "Windows (CRLF)",
+            eolMixed: "Mixed",
+            artifactAudienceUnavailable: "Teams for this file couldn’t be read, so only you will see it.",
+            artifactShareFailed: ({ team }) => "Saved for you, but it couldn’t be shared with " + team + ".",
             fromMachine: ({ machine }) => "from " + machine,
         },
         intelligence: {
@@ -285,13 +302,6 @@ export const filesPaneTranslationsEnglish = { en: {
             saveAndAskAgent: ({ agent, count }) => "Save and ask " + agent + " to fix " + String(count) + " " + (count === 1 ? "problem" : "problems"),
             ask: ({ count }) => "Ask to fix " + String(count) + " " + (count === 1 ? "problem" : "problems"),
             saveAndAsk: ({ count }) => "Save and ask to fix " + String(count) + " " + (count === 1 ? "problem" : "problems"),
-            infoKind: "Kind",
-            infoLanguage: "Language",
-            infoLines: "Lines",
-            infoSize: "Size",
-            infoEncoding: "Encoding",
-            artifactAudienceUnavailable: "Teams for this file couldn’t be read, so only you will see it.",
-            artifactShareFailed: ({ team }) => "Saved for you, but it couldn’t be shared with " + team + ".",
             referencesEmpty: "Find references on a name in a file to see where it is used.",
             problemsEmpty: "Open a file to check it for problems.",
             fix: "Fix",
