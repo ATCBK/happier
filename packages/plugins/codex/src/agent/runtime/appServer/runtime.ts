@@ -3079,6 +3079,11 @@ export function createCodexAppServerRuntime(
       return;
     }
     const appServerClient = await ensureClient();
+    params.host.logger.debug('Codex app-server turn interrupt requested', {
+      turnId: activeTurn.sessionTurnId,
+      threadId: activeTurn.threadId,
+      agentTurnId,
+    });
     const interrupt = await requestCodexTurnInterruptWithStartupRetry({
       client: appServerClient,
       threadId: activeTurn.threadId,
@@ -3100,8 +3105,17 @@ export function createCodexAppServerRuntime(
         );
       },
     });
+    params.host.logger.debug('Codex app-server turn interrupt request settled', {
+      turnId: activeTurn.sessionTurnId,
+      agentTurnId,
+      outcome: interrupt,
+    });
     if (interrupt === 'providerTerminal') return;
     await activeTurn.promise.catch(() => undefined);
+    params.host.logger.debug('Codex app-server turn settled after interrupt', {
+      turnId: activeTurn.sessionTurnId,
+      agentTurnId,
+    });
   };
 
   const rollbackNativeConversation = async (
