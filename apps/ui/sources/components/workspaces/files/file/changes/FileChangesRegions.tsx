@@ -109,15 +109,59 @@ export function FileChangesBody(
     keys: review.reviewUnits.map((unit) => unit.key),
     onRead: review.controller.followReadingLine,
   });
+  // The one text region: a text file's diff, or an SVG's source changes under its image compare.
+  const textRegion = (unifiedDiff: string) => (
+    <View ref={diffRootRef} collapsable={false} style={styles.body}
+      onTouchStart={phone && Platform.OS !== 'web' ? readingLine.onTouchStart : undefined}>
+      <DiffHunkRowRegistryContext.Provider value={phone ? readingLine.registry : null}>
+        {props.children({
+          unifiedDiff,
+          hunks: review.hunks,
+          reviewUnits: review.reviewUnits,
+          scrollToLineId: review.scrollToLineId,
+          ...(phone && Platform.OS !== 'web' ? { onScroll: readingLine.onScroll } : {}),
+        })}
+      </DiffHunkRowRegistryContext.Provider>
+      {Platform.OS === 'web' && props.ask ? (
+        <FileReadAskControls rootRef={diffRootRef} mode="diff" scopeId={props.ask.scopeId} scope={props.ask.scope}
+          filePath={props.ask.filePath} text={unifiedDiff} sessionId={props.ask.sessionId} active={props.ask.active} />
+      ) : null}
+      {phone && strip.total > 0 ? (
+        <ReviewBar
+          testID="file-review-bar"
+          current={strip.current}
+          total={strip.total}
+          onPrevious={review.controller.previous}
+          onNext={review.controller.next}
+          onKeep={review.controller.keepCurrentAndAdvance}
+          // A kept current change reads "Kept" (pressing it lets go, as on the row).
+          keepLabel={review.controller.currentHunk && review.hunks.stateOf?.(review.controller.currentHunk) === 'kept'
+            ? t('hunkReview.kept') : undefined}
+          onDiscard={review.controller.discardCurrent}
+          discardDisabledReason={review.discardDisabledReason}
+          complete={
+            strip.fileComplete
+              ? {
+                  nextFileName: strip.nextFile
+                    ? baseName(strip.nextFile)
+                    : null,
+                  onNextFile: strip.nextFile
+                    ? review.controller.nextFile
+                    : undefined,
+                }
+              : null
+          }
+        />
+      ) : null}
+    </View>
+  );
   const viewer = props.image ? resolveFileViewerKind({ path: props.image.filePath }) : null;
   if (props.image && viewer && (viewer.kind === 'image' || viewer.kind === 'svg') && review.status !== 'loading') {
     return (
       <View style={styles.body}>
         <FileChangesImageCompare review={review} scope={props.image.scope} filePath={props.image.filePath}
           liveChangeKind={props.image.liveChangeKind} />
-        {viewer.kind === 'svg' && review.status === 'ready' && review.unifiedDiff ? props.children({
-          unifiedDiff: review.unifiedDiff, hunks: review.hunks, reviewUnits: review.reviewUnits, scrollToLineId: review.scrollToLineId,
-        }) : null}
+        {viewer.kind === 'svg' && review.status === 'ready' && review.unifiedDiff ? textRegion(review.unifiedDiff) : null}
       </View>
     );
   }
@@ -166,51 +210,7 @@ export function FileChangesBody(
       />
     );
   }
-  return (
-    <View ref={diffRootRef} collapsable={false} style={styles.body}
-      onTouchStart={phone && Platform.OS !== 'web' ? readingLine.onTouchStart : undefined}>
-      <DiffHunkRowRegistryContext.Provider value={phone ? readingLine.registry : null}>
-        {props.children({
-          unifiedDiff: review.unifiedDiff,
-          hunks: review.hunks,
-          reviewUnits: review.reviewUnits,
-          scrollToLineId: review.scrollToLineId,
-          ...(phone && Platform.OS !== 'web' ? { onScroll: readingLine.onScroll } : {}),
-        })}
-      </DiffHunkRowRegistryContext.Provider>
-      {Platform.OS === 'web' && props.ask ? (
-        <FileReadAskControls rootRef={diffRootRef} mode="diff" scopeId={props.ask.scopeId} scope={props.ask.scope}
-          filePath={props.ask.filePath} text={review.unifiedDiff} sessionId={props.ask.sessionId} active={props.ask.active} />
-      ) : null}
-      {phone && strip.total > 0 ? (
-        <ReviewBar
-          testID="file-review-bar"
-          current={strip.current}
-          total={strip.total}
-          onPrevious={review.controller.previous}
-          onNext={review.controller.next}
-          onKeep={review.controller.keepCurrentAndAdvance}
-          // A kept current change reads "Kept" (pressing it lets go, as on the row).
-          keepLabel={review.controller.currentHunk && review.hunks.stateOf?.(review.controller.currentHunk) === 'kept'
-            ? t('hunkReview.kept') : undefined}
-          onDiscard={review.controller.discardCurrent}
-          discardDisabledReason={review.discardDisabledReason}
-          complete={
-            strip.fileComplete
-              ? {
-                  nextFileName: strip.nextFile
-                    ? baseName(strip.nextFile)
-                    : null,
-                  onNextFile: strip.nextFile
-                    ? review.controller.nextFile
-                    : undefined,
-                }
-              : null
-          }
-        />
-      ) : null}
-    </View>
-  );
+  return textRegion(review.unifiedDiff);
 }
 
 const styles = StyleSheet.create({
