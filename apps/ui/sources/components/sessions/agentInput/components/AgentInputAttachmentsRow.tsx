@@ -20,6 +20,7 @@ import { Text } from '@/components/ui/text/Text';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
 import { useMediaStage } from '@/components/ui/media/stage/useMediaStage';
+import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 
@@ -31,7 +32,7 @@ import { readAgentInputImageNumbers } from '../agentInputContracts';
 import { ImageNumberBadge } from '@/components/ui/referenceChip/ImageNumberBadge';
 
 /** A draft image the composer already holds as a direct URI (the draft owns and revokes it). */
-type ComposerAttachmentImagePreviewItem = Readonly<{ key: string; uri: string; title: string }>;
+type ComposerAttachmentImagePreviewItem = Readonly<{ key: string; uri: string; title: string; mimeType?: string }>;
 
 type AttachmentVerticalViewport = Readonly<{
     offset: number;
@@ -95,6 +96,7 @@ function resolveAttachmentImagePreviewItems(items: readonly AgentInputAttachment
             key: attachment.key,
             uri: imagePreviewUri,
             title: attachment.label,
+            mimeType: attachment.preview?.mimeType,
         });
     }
     return previews;
@@ -901,7 +903,8 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                         stage.open(attachmentImagePreviewItems.map((item) => ({
                             kind: 'image' as const,
                             title: item.title,
-                            source: { enabled: true, source: { kind: 'uri' as const, uri: item.uri } },
+                            alphaCapable: resolveFileViewerKind({ path: item.title, mimeType: item.mimeType }).alphaCapable,
+                            source: { enabled: true, mimeType: item.mimeType, source: { kind: 'uri' as const, uri: item.uri } },
                             originRef: { current: (attachmentFocusTargetsRef.current.get(item.key) ?? null) as View | null },
                         })), imagePreviewIndex >= 0 ? imagePreviewIndex : 0);
                     }}

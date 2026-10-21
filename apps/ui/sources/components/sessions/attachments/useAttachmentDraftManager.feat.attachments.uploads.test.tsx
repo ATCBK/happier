@@ -169,6 +169,7 @@ describe('useAttachmentDraftManager (attachments.uploads)', () => {
         expect(manager().agentInputAttachments[0]?.preview).toEqual({
             kind: 'image',
             uri: 'data:image/png;base64,AQID',
+            mimeType: 'image/png',
         });
     });
 

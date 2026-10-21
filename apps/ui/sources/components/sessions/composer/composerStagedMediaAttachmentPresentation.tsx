@@ -7,6 +7,7 @@ import type {
 
 import { ComposerStagedMediaPreview } from '@/components/sessions/attachments/preview/ComposerStagedMediaPreview';
 import { openMediaStage } from '@/components/ui/media/stage/useMediaStage';
+import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import type {
     ComposerAttachmentCatalogRowDescriptor,
     ComposerAttachmentRowMediaPresentation,
@@ -27,6 +28,7 @@ function createHostPreviewAction(input: Readonly<{
         openMediaStage([{
             kind: input.handle.mediaKind === 'video' ? 'video' : 'image',
             title: input.attachment.presentation.label,
+            alphaCapable: resolveFileViewerKind({ path: input.handle.name, mimeType: input.handle.mimeType }).alphaCapable,
             source: {
                 source: { kind: 'composerStage', handle: input.handle },
                 enabled: true,

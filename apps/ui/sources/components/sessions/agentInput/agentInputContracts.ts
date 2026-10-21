@@ -278,7 +278,7 @@ export type AgentInputExtraActionChip = Readonly<{
 }>;
 
 export type AgentInputAttachmentPreview =
-    | Readonly<{ kind: 'image'; uri: string }>;
+    | Readonly<{ kind: 'image'; uri: string; mimeType?: string }>;
 
 export type AgentInputAttachmentUploadProgress = Readonly<{
     uploadedBytes: number;

@@ -24,12 +24,12 @@ function resolveSourceName(source: AttachmentUploadSource): string {
     return source.name;
 }
 
-function isImageSource(source: AttachmentUploadSource): boolean {
-    if (source.kind === 'folder') return false;
+function resolveImageSourcePresentation(source: AttachmentUploadSource) {
+    if (source.kind === 'folder') return null;
     const viewer = resolveFileViewerKind(source.kind === 'web'
         ? { path: source.file.name, mimeType: source.file.type }
         : { path: source.name, mimeType: source.mimeType, ...(source.kind === 'memory' ? { head: source.bytes } : {}) });
-    return viewer.kind === 'image' || viewer.kind === 'svg';
+    return viewer.kind === 'image' || viewer.kind === 'svg' ? viewer : null;
 }
 
 export function useAttachmentDraftManager(params: Readonly<{
@@ -210,7 +210,7 @@ export function useAttachmentDraftManager(params: Readonly<{
 
         for (const draft of drafts) {
             if (draft.source.kind !== 'web') continue;
-            if (!isImageSource(draft.source)) continue;
+            if (!resolveImageSourcePresentation(draft.source)) continue;
             if (map.has(draft.id)) continue;
             if (typeof urlApi?.createObjectURL !== 'function') continue;
             try {
@@ -233,7 +233,8 @@ export function useAttachmentDraftManager(params: Readonly<{
 
         return drafts.map((d) => {
             const name = resolveSourceName(d.source);
-            const imagePreviewUri = isImageSource(d.source)
+            const presentation = resolveImageSourcePresentation(d.source);
+            const imagePreviewUri = presentation
                 ? (
                     d.source.kind === 'native'
                         ? d.source.uri
@@ -248,7 +249,7 @@ export function useAttachmentDraftManager(params: Readonly<{
                 label: name,
                 attachmentType: d.source.kind === 'folder' ? 'folder' as const : 'file' as const,
                 status: d.status,
-                preview: imagePreviewUri ? { kind: 'image', uri: imagePreviewUri } : undefined,
+                preview: imagePreviewUri && presentation ? { kind: 'image', uri: imagePreviewUri, mimeType: presentation.mimeType } : undefined,
                 uploadProgress: d.uploadProgress,
                 error: d.error,
                 onRemove: () => removeDraft(d.id),

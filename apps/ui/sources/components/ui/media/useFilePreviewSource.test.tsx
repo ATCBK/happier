@@ -263,6 +263,24 @@ describe('useFilePreviewSource', () => {
             owner: { pluginId: 'acme.images', localId: 'image' }, mediaKind: 'image',
             mimeType: 'image/png', name: 'incident.png', sizeBytes: 3, sha256: 'a'.repeat(64),
         };
+        const { projectComposerAttachmentRowItems } = await import('@/components/sessions/composer/composerAttachmentProjection');
+        const { Modal } = await import('@/modal');
+        const attachment = {
+            v: 1 as const, instanceId: 'image-42', attachment: handle.owner, key: '42', value: {},
+            presentation: { label: 'Incident image', typeLabel: 'Image' }, availability: { status: 'ready' as const },
+            content: { kind: 'stagedMedia' as const, handle },
+        };
+        const row = projectComposerAttachmentRowItems({ attachments: [attachment], entriesById: {
+            'acme.images/image': { id: 'acme.images/image', pluginId: 'acme.images', identity: handle.owner,
+                occurrenceId: 'images-current', definition: { id: 'image', title: 'Image', icon: 'file', cardinality: 'many',
+                    valueSchema: { type: 'object' }, display: { kind: 'media', media: 'image' },
+                    preview: { kind: 'host', presentation: 'image' } } },
+        } })[0]!;
+        row.onPress?.();
+        const openedStage = vi.mocked(Modal.show).mock.lastCall?.[0];
+        const stageProps = openedStage && 'props' in openedStage ? openedStage.props : undefined;
+        expect(stageProps).toMatchObject({ items: [{ kind: 'image', alphaCapable: true,
+            source: { source: { kind: 'composerStage', handle } } }] });
         fixture.storage.getState().applySessions([{ ...fixture.session, metadata: null }]);
         const hook = await renderHook(({ staged }: { staged: ComposerContentHandleV1 }) => useFilePreviewSource({
             enabled: true, source: { kind: 'composerStage', handle: staged },
