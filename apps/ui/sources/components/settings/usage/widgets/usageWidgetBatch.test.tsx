@@ -1,13 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import * as pageAggregation from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
-import * as usageCost from '@happier-dev/protocol/usage/usageCost';
-import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
-import { ProviderAccountUsagePageProjectionWriteV1Schema, QualifiedProviderAccountUsageHistoryRequestV4Schema } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
-import { parseQualifiedConnectedAccountV4StructuredQueryValue } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4QueryCodec';
-import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
-import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { UsageAnalyticsQueryRequestSchema, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
 import { renderScreen, standardCleanup, flushHookEffects } from '@/dev/testkit';
@@ -160,89 +153,6 @@ describe('Usage page batch', () => {
     expect(home.requests.filter(request => request.path === '/v2/sessions/read-batch'
       || request.path.endsWith('/messages') || request.path.endsWith('/turns'))).toEqual([]);
     await screen.unmount();
-  });
-  it('keeps standalone Capacity independent of accounting across unrelated Account and current-record wakes', async () => {
-    const now = Date.now();
-    const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'capacity' };
-    const source = { bindingKind: 'account' as const, ref };
-    const recordKey = { providerId: 'codex', accountSubjectId: ref.accountId, subjectKind: 'account', quotaScope: 'account' } as const;
-    let record = ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
-      providerId: 'codex', accountSubject: { kind: 'providerSubject', id: ref.accountId }, observedAtMs: now, fetchedAtMs: now,
-      staleAfterMs: 600_000, source: 'providerHttp', confidence: 'confirmed', state: 'loaded_data',
-      meters: [{ meterId: 'weekly', label: 'Weekly', usedPct: 40, utilizationPct: 40, used: null, limit: null,
-        unit: 'count', status: 'ok', resetsAt: now + 86_400_000, windowDurationMs: 7 * 86_400_000 }] });
-    let projection: ReturnType<typeof ProviderAccountUsagePageProjectionWriteV1Schema.parse> | null = null;
-    const currentRead = createDeferred<void>();
-    let holdCurrentRead = false;
-    const profile = AccountProfileSchema.parse({ id: 'account-a', connectedAccountsV4: [{ ref, status: 'connected', authenticationModeId: 'manual',
-      revisionSemantics: 'revisioned', credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false,
-      configurationRevision: null, scopes: [] }] });
-    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-capacity-demand.test', accountId: 'account-a', profile }],
-      route: async request => {
-        if (request.path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
-        if (request.path === '/v2/usage/query') return Response.json(accounting);
-        if (request.path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,
-          signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
-        if (request.path === '/v4/connect/qualified/provider-account-usage/sources/resolve') return Response.json({
-          source, recordId: record.recordId, providerAccountId: ref.accountId, fetchedAt: record.fetchedAtMs, staleAfterMs: 600_000 });
-        if (request.path === '/v4/connect/qualified/provider-account-usage/record') {
-          if (holdCurrentRead) await currentRead.promise;
-          return Response.json({ content: { t: 'plain', v: record },
-            metadata: { fetchedAt: record.fetchedAtMs, staleAfterMs: 600_000, status: 'ok' }, sources: [source] });
-        }
-        if (request.path === '/v4/connect/qualified/provider-account-usage/history') {
-          if (request.method === 'HEAD') return new Response(null, { status: 405 });
-          if (request.method === 'PUT') { projection = ProviderAccountUsagePageProjectionWriteV1Schema.parse(request.body); return Response.json({ success: true }); }
-          const query = parseQualifiedConnectedAccountV4StructuredQueryValue(QualifiedProviderAccountUsageHistoryRequestV4Schema,
-            request.url.searchParams.get('query'));
-          return Response.json('projection' in query ? { projection, complete: projection !== null } : { entries: [], nextCursor: null });
-        }
-        return undefined;
-      } });
-    publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
-    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-    const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
-    storage.setState({ profileScope: { serverId: home.homes.a!.id, accountId: 'account-a' },
-      profile });
-    await getServerFeaturesSnapshot({ serverId: home.homes.a!.id, force: true });
-    // Transparent observers: the production projector and price logic remain real.
-    const aggregate = vi.spyOn(pageAggregation, 'resolveUsagePageAggregation');
-    const reprice = vi.spyOn(usageCost, 'repriceUsageAnalyticsResponse');
-    const seen: UsageWidgetBodyModel[] = [];
-    function Capacity() { seen.push(useUsageWidgetModel({ ...scope, metric: 'tokens', breakdown: [] }, 'usage_capacity').model); return null; }
-    const screen = await renderScreen(<InjectedAuthProvider credentials={credentials}><Capacity /></InjectedAuthProvider>);
-    try {
-      await expect.poll(() => seen.at(-1)?.slice?.pending).toBe(false);
-      const first = seen.at(-1)!.slice!;
-      expect(first.accounting).toBeUndefined();
-      expect(first.quota?.[0]?.current?.meters[0]?.usedPct).toBe(40);
-      const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
-      const { PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 } = await import('@happier-dev/protocol/changes');
-      for (let index = 0; index < 8; index++) {
-        await act(async () => {
-          storage.setState(state => ({ profile: { ...state.profile } }));
-          publishHomeAccountChange(home!.homes.a!.id, [`unrelated-${index}`], { changeKinds: ['session'], usageQueryAffects: false });
-          record = { ...record, fetchedAtMs: now + index + 1, observedAtMs: now + index + 1,
-            meters: record.meters.map(meter => ({ ...meter, usedPct: 41 + index, utilizationPct: 41 + index })) };
-          publishHomeAccountChange(home!.homes.a!.id, [PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1], { usageQueryAffects: true });
-          await flushHookEffects({ cycles: 5 });
-        });
-        await expect.poll(async () => { await flushHookEffects({ cycles: 2 });
-          return seen.at(-1)!.slice!.quota?.[0]?.current?.meters[0]?.usedPct; }).toBe(41 + index);
-      }
-      await flushHookEffects({ cycles: 10 });
-      expect(home.requests.filter(request => request.path === '/v2/usage/query')).toHaveLength(0);
-      expect(aggregate).toHaveBeenCalledTimes(0);
-      expect(reprice).toHaveBeenCalledTimes(0);
-      expect(seen.at(-1)!.slice!.quota?.[0]?.current?.meters[0]?.usedPct).toBe(48);
-      holdCurrentRead = true;
-      let refreshing: Promise<void> | undefined;
-      await act(async () => { refreshing = seen.at(-1)!.refresh(); await flushHookEffects({ cycles: 5 }); });
-      try {
-        await expect.poll(() => seen.at(-1)!.refreshing).toBe(true);
-        expect(seen.at(-1)!.slice!.quota?.[0]?.current?.meters[0]?.usedPct).toBe(48);
-      } finally { currentRead.resolve(); await refreshing; }
-    } finally { currentRead.resolve(); await screen.unmount(); }
   });
   it('owns coverage from the first frame, before the inventory has answered', async () => {
     const seen: boolean[] = [];

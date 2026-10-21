@@ -48,7 +48,7 @@ export type UsageRecapCardModel = Readonly<{
     subtitle: string;
     valueTone: UsageRecapCardValueTone;
     accentTone: UsageRecapCardAccentTone;
-    visual: UsageRecapCardVisualModel;
+    visual: UsageRecapCardVisualModel | null;
 }>;
 
 function resolvePeriodLabel(period: UsageFilterState['period']): string {
@@ -184,7 +184,7 @@ export function buildUsageRecapCardModels(input: Readonly<{
                 - resolveUsageBucketBounds('day', input.query.period.startMs, offset).bucketStartMs) / 86_400_000) + 1
             : Number.POSITIVE_INFINITY
         : resolveRangeDayCount(filters.period);
-    const activityRatio = summary.activeDays > 0
+    const activityRatio = summary.activeDays !== null && summary.activeDays > 0
         // An unbounded period ("All time") has no day count; its observed calendar is the span.
         ? summary.activeDays / (Number.isFinite(rangeDayCount)
             ? rangeDayCount
@@ -198,8 +198,8 @@ export function buildUsageRecapCardModels(input: Readonly<{
             testID: 'usage-recap-streak-card',
             shareTestID: 'usage-recap-share-streak',
             label: t('usage.summary.currentStreak'),
-            value: `${summary.currentStreakDays}d`,
-            subtitle: input.query
+            value: summary.currentStreakDays === null ? '—' : `${summary.currentStreakDays}d`,
+            subtitle: summary.activeDays === null ? t('common.unavailable') : input.query
                 ? t('usage.summary.currentStreakSubtitleForPeriod', { count: summary.activeDays, period: selectedPeriod })
                 : buildUsageCurrentStreakSubtitle(filters.period, summary.activeDays),
             valueTone: 'numeric',
@@ -220,7 +220,7 @@ export function buildUsageRecapCardModels(input: Readonly<{
             subtitle: input.shareFields?.dollars === false ? t('usage.tokens') : buildPeriodUsageSubtitle(viewModel, filters),
             valueTone: 'numeric',
             accentTone: 'blue',
-            visual: {
+            visual: summary.activeDays === null ? null : {
                 kind: 'progress',
                 ratio: activityRatio,
             },

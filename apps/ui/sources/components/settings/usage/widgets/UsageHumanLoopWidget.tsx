@@ -28,6 +28,7 @@ import {
   readUsageAnsweringShares,
   type UsageAnsweringClient,
 } from './usageHowYouWorkPresentation';
+import { UsageSteeringStyleBody } from './UsageChartStyleBodies';
 
 /** Two columns only when each keeps a readable ranked row. */
 const TWO_COLUMN_MIN_WIDTH_PX = 640;
@@ -46,12 +47,19 @@ const CLIENT_LABEL_KEYS: Readonly<
   android: 'usage.board.howYouWork.clientAndroid',
 };
 
+/** One body per widget: its Style own-input picks the encoding of the same question. */
+export function UsageHumanLoopWidget(props: UsageBodyProps) {
+  const style = props.presentation?.style;
+  if (style === 'tide') return <UsageSteeringStyleBody {...props} />;
+  return <UsageHumanLoopWidgetOriginal {...props} />;
+}
+
 /**
  * "Waiting on you": how long agents waited for an answer, for what, where the answers came from and
  * how often you steered. Only paired request→decision times count as waits; requests without a
  * recorded time stay a separate count, and answering devices show only where the client was witnessed.
  */
-export function UsageHumanLoopWidget(props: UsageBodyProps) {
+function UsageHumanLoopWidgetOriginal(props: UsageBodyProps) {
   const { theme } = useUnistyles();
   const chartTheme = useUsagePluginTheme();
   const width = useWidgetPresentation()?.geometry?.width;

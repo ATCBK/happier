@@ -87,6 +87,15 @@ const response = UsageAnalyticsQueryResponseSchema.parse({
 });
 
 describe('buildUsageRecapCardModels', () => {
+    it('keeps an unavailable day summary out of numeric streak copy', () => {
+        const filters = { period: '7days', metric: 'tokens', focus: null, costMode: 'auto' } as const;
+        const viewModel = buildUsageAnalyticsViewModel({ ...response, activity: undefined, insights: undefined }, filters);
+        const cards = buildUsageRecapCardModels({ viewModel, filters });
+        const card = cards.find(value => value.id === 'streak');
+        expect(card).toMatchObject({ value: '—', subtitle: t('common.unavailable') });
+        expect(cards.find(value => value.id === 'usage')?.visual).toBeNull();
+    });
+
     it('uses the witnessed favorite model even when unattributed usage leads the ranking', () => {
         const filters = { period: '7days', metric: 'tokens', focus: null, costMode: 'auto' } as const;
         const unknown = { key: 'unknown', label: 'unknown', eventCount: 4007 };
@@ -140,7 +149,10 @@ describe('buildUsageRecapCardModels', () => {
 
     it('labels a custom historical query with its exact offset calendar rather than the legacy preset', () => {
         const filters = { period: '7days', metric: 'tokens', focus: null, costMode: 'auto' } as const;
-        const viewModel = buildUsageAnalyticsViewModel(response, filters);
+        const viewModel = buildUsageAnalyticsViewModel({ ...response, activity: { ...response.activity,
+            calendarDays: Array.from({ length: 10 }, (_, index) => ({
+                date: new Date(Date.UTC(2024, 3, 22 + index)).toISOString().slice(0, 10), eventCount: 1,
+            })) } }, filters, 120);
         const query = normalizeUsageQuery({
             period: { startMs: Date.parse('2024-04-21T22:00:00Z'), endMs: Date.parse('2024-05-01T22:00:00Z') },
             granularity: 'day' as const, timeZoneOffsetMinutes: 120, metric: 'tokens' as const, costBasis: 'auto' as const,

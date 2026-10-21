@@ -31,6 +31,7 @@ import {
   readUsageWorkSessionId,
   sumUsageWaitingOnYouMs,
 } from './usageHowYouWorkPresentation';
+import { UsageDayStyleBody } from './UsageChartStyleBodies';
 
 const MINUTE_MS = 60_000;
 /** Axis marks every three hours of the day; the timeline drops any that would crowd a neighbour. */
@@ -44,12 +45,20 @@ function hourTicks(endMinutes: number): number[] {
 /** Below this body width a timeline row cannot place its clock axis; the exact rows remain. */
 const PLOT_MIN_WIDTH_PX = 320;
 
+/** One body per widget: its Style own-input picks the encoding of the same question. */
+export function UsageParallelWidget(props: UsageBodyProps) {
+  const style = props.presentation?.style;
+  // Lanes is the declared default at every size; Machine timeline is the retained original.
+  if (style !== 'timeline') return <UsageDayStyleBody {...props} style={style === 'dial' ? 'dial' : 'lanes'} />;
+  return <UsageParallelWidgetOriginal {...props} />;
+}
+
 /**
  * "Today, in parallel": every witnessed busy span and wait of today's work, by machine, on the
  * query's own clock. Agent time (summed per run) and busy clock time (their union) stay separate
  * numbers; a run with no recorded end draws only its start.
  */
-export function UsageParallelWidget(props: UsageBodyProps) {
+function UsageParallelWidgetOriginal(props: UsageBodyProps) {
   const { theme } = useUnistyles();
   const chartTheme = useUsagePluginTheme();
   const width = useWidgetPresentation()?.geometry?.width;

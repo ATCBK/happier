@@ -8,7 +8,7 @@ import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useWidgetFrameResourceActivity } from '@/components/widgets/frame/widgetFrameResourceActivity';
 import { t } from '@/text';
-import { UsageBodyReading, type UsageBodyProps } from './usageBodyKit';
+import { UsageBodyReading, type UsageBodyProps, type UsageWidgetPresentationInputs } from './usageBodyKit';
 import { useWidgetPresentation } from '@happier-dev/plugin-ui';
 import { useUsageWidgetModel } from './usageWidgetBatch';
 import { useUsageQueryActions } from './useUsageQueryActions';
@@ -35,6 +35,7 @@ import { UsageRecapWidget } from './UsageRecapWidget';
 import { UsageFootprintWidget } from './UsageFootprintWidget';
 import { UsageSourcesWidget } from './UsageSourcesWidget';
 import { UsageSourceCoverageWidget, UsageUnpricedWidget } from './UsageSourcePanels';
+import { UsageConstellationBody, UsageOrbitBody, UsagePlanetBody, UsageRunLengthBody, UsageScoreBody } from './UsageChartStyleBodies';
 
 /** The one body per builtin Usage definition; all share the descriptor owner's ids. */
 const USAGE_QUERY_BODIES: Readonly<
@@ -65,6 +66,11 @@ const USAGE_QUERY_BODIES: Readonly<
   usage_footprint: UsageFootprintWidget,
   usage_source_coverage: UsageSourceCoverageWidget,
   usage_unpriced: UsageUnpricedWidget,
+  usage_score: UsageScoreBody,
+  usage_orbit: UsageOrbitBody,
+  usage_constellation: UsageConstellationBody,
+  usage_planet: UsagePlanetBody,
+  usage_run_length: UsageRunLengthBody,
 };
 
 export function isUsageBuiltinWidgetId(
@@ -110,6 +116,9 @@ function UsageQueryWidgetBody(
   const pricesAction = useUsageModelPricesAction(props.id === 'usage_cost_facts' || props.id === 'usage_unpriced' ? slice : null, props.serverId, props.testID);
   useUsageQueryActions(props.id, slice?.shownQuery ?? query, pricesAction);
   const Body = USAGE_QUERY_BODIES[props.id];
+  const style = props.input.style, colourBy = props.input.colourBy, day = props.input.day;
+  // Keyed on the three scalars so an unrelated input change keeps the body's props stable.
+  const ownInputs = React.useMemo(() => readUsagePresentationInputs({ ...(style !== undefined ? { style } : {}), ...(colourBy !== undefined ? { colourBy } : {}), ...(day !== undefined ? { day } : {}) }), [style, colourBy, day]);
   // A first read holds the room of the shape that lands (Period summary's figures, the Coach's strip), so the
   // widgets below it do not move when the facts arrive; every other body holds three list rows.
   const presentation = useWidgetPresentation();
@@ -178,9 +187,17 @@ function UsageQueryWidgetBody(
         query={slice.shownQuery}
         serverId={props.serverId}
         testID={props.testID}
+        presentation={ownInputs}
       />
     </View>
   );
+}
+
+/** The widget's own presentation inputs, read once from the binder's resolved input. */
+function readUsagePresentationInputs(input: Readonly<Record<string, JsonValue>>): UsageWidgetPresentationInputs {
+  const text = (value: JsonValue | undefined) => typeof value === 'string' && value.length > 0 ? value : undefined;
+  const style = text(input.style), colourBy = text(input.colourBy), day = text(input.day);
+  return { ...(style ? { style } : {}), ...(colourBy ? { colourBy } : {}), ...(day ? { day } : {}) };
 }
 
 const styles = StyleSheet.create(() => ({

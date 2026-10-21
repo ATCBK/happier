@@ -43,7 +43,8 @@ const USAGE_WIDGET_DEMAND = {
   usage_session_value: { includeSessionEvidence: false, includeWorkEvidence: true },
   usage_outcomes: { includeSessionEvidence: false, includeWorkEvidence: true },
   usage_coach: { includeSessionEvidence: true, includeTranscriptEvidence: true, includeWorkEvidence: false },
-  usage_rhythm: { includeSessionEvidence: false, includeWorkEvidence: false },
+  // Rhythm's declared default metric is Busy time, which only witnessed intervals can answer.
+  usage_rhythm: { includeSessionEvidence: true, includeWorkEvidence: false },
   usage_parallel: { includeSessionEvidence: true, includeWorkEvidence: false },
   usage_human_loop: { includeSessionEvidence: true, includeTranscriptEvidence: true, includeWorkEvidence: false },
   usage_night_shift: { includeSessionEvidence: true, includeWorkEvidence: false },
@@ -51,6 +52,11 @@ const USAGE_WIDGET_DEMAND = {
   usage_footprint: { includeSessionEvidence: false, includeWorkEvidence: false },
   usage_source_coverage: { includeSessionEvidence: false, includeWorkEvidence: false },
   usage_unpriced: { includeSessionEvidence: false, includeWorkEvidence: false },
+  usage_score: { includeSessionEvidence: true, includeWorkEvidence: false },
+  usage_orbit: { includeSessionEvidence: false, includeWorkEvidence: false },
+  usage_constellation: { includeSessionEvidence: true, includeTranscriptEvidence: true, includeWorkEvidence: false },
+  usage_planet: { includeSessionEvidence: true, includeWorkEvidence: false },
+  usage_run_length: { includeSessionEvidence: true, includeWorkEvidence: false },
 } satisfies Record<UsageQueryWidgetId, Readonly<{ includeAccounting?: boolean; includeSessionEvidence: boolean; includeTranscriptEvidence?: boolean; includeWorkEvidence: boolean }>>;
 type UsageWidgetBatch = Readonly<{
   clauses: UsageWidgetQueryOverrides;

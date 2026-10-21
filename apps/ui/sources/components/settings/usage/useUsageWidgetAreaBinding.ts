@@ -18,7 +18,9 @@ export function useUsageWidgetAreaBinding(input: Readonly<{
     initialMetric?: UsageQuery['metric'];
     initialLayoutId?: string | null;
     onLayoutChange?: (layoutId: string) => void;
-}>) {
+}>): { -readonly [K in keyof ReturnType<typeof useCorePageWidgetAreaBinding>]: ReturnType<typeof useCorePageWidgetAreaBinding>[K] } & {
+    presets: ReturnType<typeof createUsageWidgetPresets>;
+} {
     const presets = React.useMemo(() => createUsageWidgetPresets(input.names, { initialMetric: input.initialMetric }), [input.names, input.initialMetric]);
     const context = React.useMemo(() => usageWidgetSurfaceContext(input.providedContext, input.period, input.sessionId), [input.providedContext, input.period, input.sessionId]);
     const binding = useCorePageWidgetAreaBinding({ serverId: input.serverId, pageId: 'usage', area: 'main', presets, context, initialLayoutId: input.initialLayoutId, onSelectLayout: input.onLayoutChange });

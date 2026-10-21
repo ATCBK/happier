@@ -2,6 +2,7 @@ import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { backoff } from '@/utils/timing/time';
 import { HappyError } from '@/utils/errors/errors';
 import { createServerFetchForActiveServer, type ServerFetch } from '@/sync/http/client';
+import type { CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
 import { UsageAnalyticsQueryResponseSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import type {
     UsageAnalyticsQueryRequest,
@@ -57,7 +58,7 @@ export interface UsageTotals {
     costBreakdown: Record<string, number>;
     reportCount: number;
     eventCount: number;
-    activeDays: number;
+    activeDays: number | null;
     tokensByModel: Record<string, number>;
     costByModel: Record<string, number>;
     costSource: 'reportedUsd' | 'estimatedUsd' | 'legacy';
@@ -91,16 +92,16 @@ export function getRecordTotal(record: Record<string, number>): number {
  */
 export function queryUsage(
     credentials: AuthCredentials, params: UsageQueryParams | undefined,
-    options: Readonly<{ request?: ServerFetch; signal?: AbortSignal; analyticsRequest: UsageAnalyticsQueryRequest }>,
+    options: Readonly<{ request?: ServerFetch; readTransport?: CapturedServerReadTransport; signal?: AbortSignal; analyticsRequest: UsageAnalyticsQueryRequest }>,
 ): Promise<UsageAnalyticsQueryResponse>;
 export function queryUsage(
     credentials: AuthCredentials, params?: UsageQueryParams,
-    options?: Readonly<{ request?: ServerFetch; signal?: AbortSignal; analyticsRequest?: UsageAnalyticsQueryRequest }>,
+    options?: Readonly<{ request?: ServerFetch; readTransport?: CapturedServerReadTransport; signal?: AbortSignal; analyticsRequest?: UsageAnalyticsQueryRequest }>,
 ): Promise<UsageResponse>;
 export async function queryUsage(
     credentials: AuthCredentials,
     params: UsageQueryParams = {},
-    options?: Readonly<{ request?: ServerFetch; signal?: AbortSignal; analyticsRequest?: UsageAnalyticsQueryRequest }>,
+    options?: Readonly<{ request?: ServerFetch; readTransport?: CapturedServerReadTransport; signal?: AbortSignal; analyticsRequest?: UsageAnalyticsQueryRequest }>,
 ): Promise<UsageResponse> {
     const requestUsage = options?.request ?? createServerFetchForActiveServer();
     const read = async () => {
@@ -142,7 +143,7 @@ export async function queryUsage(
             topLimit: 20,
         };
 
-        const response = await requestUsage('/v2/usage/query', {
+        const init: RequestInit = {
             method: 'POST',
             signal: options?.signal,
             headers: {
@@ -150,34 +151,39 @@ export async function queryUsage(
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify(request)
-        }, { includeAuth: false });
+        };
 
-        if (!response.ok) {
-            let message = 'Failed to query usage';
-            try {
-                const error = await response.json();
-                if (error?.error) message = error.error;
-            } catch {
-                // ignore
+        const consume = async (response: Response) => {
+            if (!response.ok) {
+                let message = 'Failed to query usage';
+                try {
+                    const error = await response.json();
+                    if (error?.error) message = error.error;
+                } catch {
+                    // ignore
+                }
+
+                if (response.status === 404 && !options?.analyticsRequest && !params.focus && message !== 'Session not found') {
+                    return await queryLegacyUsage(credentials, params, requestUsage);
+                }
+                if (response.status === 404 && params.sessionId) {
+                    throw new HappyError('Session not found', false, { status: 404, kind: 'config' });
+                }
+                if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
+                    const authorityRefused = response.status === 401 || response.status === 403;
+                    throw new HappyError(message, false, { status: response.status, kind: authorityRefused ? 'auth' : 'config',
+                        ...(options?.analyticsRequest && authorityRefused ? { code: 'denied' } : {}) });
+                }
+                throw new Error(`Failed to query usage: ${response.status}`);
             }
 
-            if (response.status === 404 && !options?.analyticsRequest && !params.focus && message !== 'Session not found') {
-                return await queryLegacyUsage(credentials, params, requestUsage);
-            }
-            if (response.status === 404 && params.sessionId) {
-                throw new HappyError('Session not found', false, { status: 404, kind: 'config' });
-            }
-            if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-                const authorityRefused = response.status === 401 || response.status === 403;
-                throw new HappyError(message, false, { status: response.status, kind: authorityRefused ? 'auth' : 'config',
-                    ...(options?.analyticsRequest && authorityRefused ? { code: 'denied' } : {}) });
-            }
-            throw new Error(`Failed to query usage: ${response.status}`);
-        }
-
-        const data: unknown = await response.json();
-        options?.signal?.throwIfAborted();
-        return options?.analyticsRequest ? UsageAnalyticsQueryResponseSchema.parse(data) : data as UsageResponse;
+            const data: unknown = await response.json();
+            options?.signal?.throwIfAborted();
+            return options?.analyticsRequest ? UsageAnalyticsQueryResponseSchema.parse(data) : data as UsageResponse;
+        };
+        return options?.readTransport
+            ? await options.readTransport.read('/v2/usage/query', init, { includeAuth: false }, consume)
+            : await consume(await requestUsage('/v2/usage/query', init, { includeAuth: false }));
     };
     // Rich Resource reads use their existing lifecycle's failure/retry owner.
     // Legacy callers retain their established backoff and route translation.
@@ -188,7 +194,7 @@ export async function queryUsage(
 export async function queryUsageAnalytics(
     credentials: AuthCredentials,
     request: UsageAnalyticsQueryRequest,
-    options: Readonly<{ request: ServerFetch; signal?: AbortSignal }>,
+    options: Readonly<{ request: ServerFetch; readTransport?: CapturedServerReadTransport; signal?: AbortSignal }>,
 ): Promise<UsageAnalyticsQueryResponse> {
     return await queryUsage(credentials, {}, { ...options, analyticsRequest: request });
 }

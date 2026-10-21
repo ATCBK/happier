@@ -13,8 +13,13 @@ import { UsageQueryBatchResultSchema } from '@happier-dev/protocol/usage/resolve
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { captureUiUsageQueryAccountContext, decodeUsageQueryResource, getUsageQueryResourceStore } from '@/sync/api/account/usageQueryResource';
 
+const clipboard = vi.hoisted(() => ({ image: vi.fn(async (_base64: string) => {}) }));
+// The operating-system clipboard is the boundary; captured Account, Action admission,
+// real Usage Resource, composition and delivery wiring stay real.
+vi.mock('expo-clipboard', () => ({ setImageAsync: clipboard.image }));
+
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
-afterEach(async () => { standardCleanup(); retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined; });
+afterEach(async () => { standardCleanup(); retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined; clipboard.image.mockClear(); });
 const accounting: UsageAnalyticsQueryResponse = { v: 1, totals: { eventCount: 1,
   tokens: { input: 10, output: 2, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 12 },
   cost: { reportedUsd: 99, estimatedUsd: 0, currency: 'USD' } },
@@ -27,11 +32,50 @@ async function context(denied = false, route?: Parameters<typeof serveAccountHom
     route: sessionBatch.handle });
   const focused = home.homes.a!;
   publishAppliedActiveServerSnapshot({ serverId: focused.id, serverUrl: focused.serverUrl, generation: 0 });
-  return { surface: 'ui' as const, actionCaller: { kind: 'host' as const }, serverId: focused.id, expectedAccountId: 'account-a' };
+  return { surface: 'ui' as const, authority: 'present_user' as const, actionCaller: { kind: 'host' as const }, serverId: focused.id, expectedAccountId: 'account-a' };
 }
 const input = { query: normalizeUsageQuery({ period: { startMs: 100, endMs: 900 } }), style: 'holo', format: 'square', selectedFields: ['tokens', 'modelMix'] };
 
 describe('recap export through the real captured UI Account Action', () => {
+  it('reads only the current captured public view and refuses its response after Account retirement', async () => {
+    let retireOnRead = false;
+    const caller = await context(false, request => {
+      if (request.path !== '/v1/account/public-profile/view') return undefined;
+      if (retireOnRead) retireActiveServerAccountScopeLifetime();
+      return Response.json({ kind: 'unavailable' });
+    });
+    const input = { source: { kind: 'public_profile' } };
+    expect(await createDefaultActionExecutor().execute('usage.recap.compose', input, caller))
+      .toMatchObject({ ok: true, result: { kind: 'unavailable', reason: 'public_profile_unavailable' } });
+    expect(home!.requests.some(request => request.path === '/v2/usage/query')).toBe(false);
+    retireOnRead = true;
+    expect(await createDefaultActionExecutor().execute('usage.recap.compose', input, caller))
+      .toMatchObject({ ok: false, errorCode: 'action_account_scope_changed' });
+  });
+  it('delivers admitted rendered facts through the real clipboard port and refuses a retired capture', async () => {
+    const caller = await context();
+    const executor = createDefaultActionExecutor({ usageRecapRender: async () => ({ kind: 'rendered', base64: 'iVBORw==' }) });
+    expect(await executor.execute('usage.recap.deliver', { ...input, intent: 'copy' }, caller))
+      .toMatchObject({ ok: true, result: { kind: 'delivered', compose: { kind: 'composed' } } });
+    expect(clipboard.image.mock.calls).toEqual([['iVBORw==']]);
+    clipboard.image.mockClear();
+    const { storage } = await import('@/sync/domains/state/storageStore');
+    const { ActionsSettingsV1Schema } = await import('@happier-dev/protocol/actions/actionSettings');
+    const settings = storage.getState().settings;
+    storage.setState({ settings: { ...settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+      v: 1, actions: { 'usage.recap.deliver': { enabled: false } },
+    }) } });
+    expect(await executor.execute('usage.recap.deliver', { ...input, intent: 'copy' }, caller)).toMatchObject({ ok: false });
+    expect(clipboard.image.mock.calls).toEqual([]);
+    storage.setState({ settings });
+    const stale = createDefaultActionExecutor({ usageRecapRender: async () => {
+      retireActiveServerAccountScopeLifetime();
+      return { kind: 'rendered', base64: 'iVBORw==' };
+    } });
+    expect(await stale.execute('usage.recap.deliver', { ...input, intent: 'copy' }, caller))
+      .toMatchObject({ ok: false, errorCode: 'action_account_scope_changed' });
+    expect(clipboard.image.mock.calls).toEqual([]);
+  });
   it('refuses unavailable shared Resource admission without starting a separate read', async () => {
     const caller = await context();
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');

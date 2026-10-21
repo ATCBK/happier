@@ -3,7 +3,7 @@ import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierSkeletonBlock } from '@happier-dev/plugin-ui/presentation';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
-import { UsageRecapComposeResultSchema, UsageRecapExportResultSchema, USAGE_RECAP_FIELDS } from '@happier-dev/protocol/usage/usageRecap';
+import { UsageRecapComposeResultSchema, UsageRecapDeliveryResultSchema, USAGE_RECAP_FIELDS } from '@happier-dev/protocol/usage/usageRecap';
 import { type UsageRecapField } from '@happier-dev/protocol';
 import {
   UsageQuerySchema,
@@ -30,7 +30,6 @@ import { useDeviceType } from '@/utils/platform/responsive';
 import { t } from '@/text';
 import {
   captureUsageViewPng,
-  deliverUsageImageFile,
 } from '../../usageAnalyticsExport';
 import { UsageStatCard } from './UsageStatCard';
 import {
@@ -228,24 +227,24 @@ export function UsageRecapComposer(
           }
           return { kind: 'rendered', base64: await captureUsageViewPng(cardRef.current,
             { signal: context.signal, isCurrent: lifetime.isCurrent }) };
-        } }).execute('usage.recap.export', { query: state.query, style, format, selectedFields: [...fields] }, {
-          surface: 'ui', actionCaller: { kind: 'host' }, serverId: lifetime.scope.serverId,
+        } }).execute('usage.recap.deliver', { query: state.query, style, format, selectedFields: [...fields], intent }, {
+          surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: lifetime.scope.serverId,
           expectedAccountId: lifetime.scope.accountId, signal: controller.signal,
         });
         controller.signal.throwIfAborted();
         if (!lifetime.isCurrent() || !executed.ok) throw new Error('usage_recap_export_unavailable');
-        const result = UsageRecapExportResultSchema.parse(executed.result);
-        if (result.kind !== 'exported' || result.compose.kind !== 'composed') throw new Error('usage_recap_export_unavailable');
+        const result = UsageRecapDeliveryResultSchema.parse(executed.result);
+        if (result.compose.kind !== 'composed') throw new Error('usage_recap_export_unavailable');
         setState({ kind: 'ready', result: result.compose, query: state.query });
-        const delivered = await deliverUsageImageFile(result.file, intent,
-          { signal: controller.signal, isCurrent: lifetime.isCurrent });
         if (controller.signal.aborted || !lifetime.isCurrent()) return;
         setNotice(
-          delivered
+          result.kind === 'cancelled' ? null : result.kind === 'delivered'
             ? intent === 'copy'
               ? t('usage.board.recap.copied')
               : null
-            : t('usage.board.recap.exportFailed'),
+            : result.kind === 'failed' && result.reason === 'outcome_unobservable'
+              ? t('usage.board.recap.deliveryUnconfirmed')
+              : t('usage.board.recap.exportFailed'),
         );
       } catch {
         if (!controller.signal.aborted && lifetime.isCurrent()) setNotice(t('usage.board.recap.exportFailed'));

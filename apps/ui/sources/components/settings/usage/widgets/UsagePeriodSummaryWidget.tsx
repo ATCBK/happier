@@ -2,7 +2,6 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { HappierDataMetric } from '@happier-dev/plugin-ui/presentation';
-import { projectUsagePageCost } from '@happier-dev/protocol/usage/usageCostFacts';
 import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFrameBodyCaption';
 import { formatTokenCount, formatUsageCost } from '@/utils/format/usageNumbers';
 import { t } from '@/text';
@@ -12,6 +11,7 @@ import {
   UsageCoverageLine,
   usagePeriodPhrase,
   useUsageAnalyticsView,
+  useUsageComparisonCost,
   useUsagePluginTheme,
   type UsageBodyProps,
   UsageBodyNoUsage,
@@ -29,6 +29,8 @@ const HOUR_MS = 60 * 60 * 1000;
 export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
   const chartTheme = useUsagePluginTheme();
   const view = useUsageAnalyticsView(props.slice, props.query);
+  const previousCost = useUsageComparisonCost(props.slice, props.query.costBasis,
+    props.query.metric === 'cost' ? view?.pageCost.selection : null);
   useWidgetFrameBodyCaption(usagePeriodPhrase(props.query));
   if (!view)
     return <UsageBodyNoUsage slice={props.slice} testID={props.testID} readingShape={{ kind: 'summary' }} onRetry={props.model.refresh} />;
@@ -47,7 +49,7 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
   const previousAccounting = props.slice.comparison?.accounting;
   const previous = previousAccounting
     ? cost
-      ? projectUsagePageCost(previousAccounting, props.query.costBasis, selectedCost.selection).amountUsd
+      ? previousCost
       : previousAccounting.totals.tokens.total
     : null;
   const comparison = usageComparison(current, previous);
@@ -144,8 +146,8 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
         size="stat"
         showLabel
         label={t('usage.board.page.activeDays')}
-        value={view.insights.activeDays}
-        caption={t('usage.board.page.longestStreak', {
+        value={view.insights.activeDays ?? UNKNOWN_VALUE}
+        caption={view.hero.longestStreakDays === null ? undefined : t('usage.board.page.longestStreak', {
           count: view.hero.longestStreakDays,
         })}
       />,

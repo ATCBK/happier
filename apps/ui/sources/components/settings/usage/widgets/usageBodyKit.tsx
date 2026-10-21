@@ -47,7 +47,11 @@ export type UsageBodyProps = Readonly<{
   query: UsageQuery;
   serverId: string;
   testID: string;
+  /** The placed widget's own presentation inputs (Style, Colour by, day); descriptor-owned, never query scope. */
+  presentation?: UsageWidgetPresentationInputs;
 }>;
+
+export type UsageWidgetPresentationInputs = Readonly<{ style?: string; colourBy?: string; day?: string }>;
 
 export function useUsagePluginTheme(): PluginUiThemeV1 {
   const { theme } = useUnistyles();
@@ -61,7 +65,16 @@ export function usagePeriodPhrase(query: Pick<UsageQuery, 'period' | 'timeZoneOf
 
 // One projection per admitted accounting response and presentation; bodies share it, never rebuild it.
 type UsageBodyAnalyticsView = UsageAnalyticsViewModel & Readonly<{ pageCost: UsagePageCostProjection }>;
-const viewModels = new WeakMap<object, Map<string, UsageBodyAnalyticsView>>();
+const viewModels = new WeakMap<object, Map<string, UsageBodyAnalyticsView | number | null>>();
+
+function usageBodyProjections(accounting: object) {
+  let byKey = viewModels.get(accounting);
+  if (!byKey) {
+    byKey = new Map();
+    viewModels.set(accounting, byKey);
+  }
+  return byKey;
+}
 
 /** Names stay in the opened Account projection; accounting carries only the Project anchor. */
 export function useUsageProjectLabels(serverId: string): ReadonlyMap<string, string> {
@@ -102,13 +115,9 @@ export function useUsageAnalyticsView(
   return React.useMemo(() => {
     if (!accounting) return null;
     const key = `${query.metric}\u0000${query.costBasis}\u0000${query.timeZoneOffsetMinutes ?? 0}\u0000${language}`;
-    let byKey = viewModels.get(accounting);
-    if (!byKey) {
-      byKey = new Map();
-      viewModels.set(accounting, byKey);
-    }
+    const byKey = usageBodyProjections(accounting);
     const cached = byKey.get(key);
-    if (cached) return cached;
+    if (cached !== null && typeof cached === 'object') return cached;
     const analytics = buildUsageAnalyticsViewModel(
       accounting,
       // The response already carries the admitted range; the legacy array filter is unused here.
@@ -125,6 +134,30 @@ export function useUsageAnalyticsView(
     query.timeZoneOffsetMinutes,
     language,
   ]);
+}
+
+/** Comparison bodies share the same admitted-response projection owner as current facts. */
+export function useUsageComparisonCost(
+  slice: UsageQueryResultSlice,
+  costBasis: UsageQuery['costBasis'],
+  selection: UsagePageCostProjection['selection'] | undefined,
+): number | null {
+  const accounting = slice.comparison?.accounting;
+  const kind = selection?.kind;
+  const currency = selection?.currency;
+  const mode = selection?.mode;
+  return React.useMemo(() => {
+    if (!accounting || kind === undefined || currency === undefined) return null;
+    // Selection objects can be replaced by an unrelated current-range revision;
+    // only their monetary meaning affects this preceding-range projection.
+    const key = JSON.stringify(['comparison', costBasis, kind, currency, mode]);
+    const byKey = usageBodyProjections(accounting);
+    const cached = byKey.get(key);
+    if (typeof cached === 'number' || cached === null) return cached;
+    const amount = projectUsagePageCost(accounting, costBasis, { kind, currency, ...(mode === undefined ? {} : { mode }) }).amountUsd;
+    byKey.set(key, amount);
+    return amount;
+  }, [accounting, costBasis, kind, currency, mode]);
 }
 
 /**

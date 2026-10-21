@@ -21,14 +21,14 @@ import { getAccountEncryptionModeCacheRevision } from './apiAccountEncryptionMod
 import { runSessionScmRpc } from '@/sync/ops/sessionScm';
 import { readMachineControlTargetForSession, resolveMachineControlTargetForSessionFromState, resolveDisplayMachineIdForSessionFromState } from '@/sync/ops/sessionMachineTarget';
 import { readRegisteredStorageState, subscribeRegisteredStorageState } from '@/sync/domains/state/storageStateReaderBridge';
-import { projectUsageQueryWorkEvidence, selectUsageQueryWorkEvidenceSessionIds } from '@/sync/domains/usage/usageWorkEvidence';
+import { projectUsageQueryWorkEvidence, selectUsageQueryWorkEvidenceSessionIds, projectSessionUsageWorkEvidence } from '@/sync/domains/usage/usageWorkEvidence';
 import { buildUsageCoachRemedies } from '@/sync/domains/usage/buildUsageCoachRemedies';
 import { admitUsageCoachRemedies, applyUsageCoachPreferences } from '@happier-dev/protocol/usage/coach/evaluateUsageCoach';
 import { projectNativeJsonValueForTransport, sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { readAccountSettingsForScope } from '@/sync/domains/state/accountSettingsPersistence';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import { projectSessionUsageWorkEvidence, type UsageSessionMessageEvidence } from '@happier-dev/protocol/usage/usageWorkEvidence';
+import { type UsageSessionMessageEvidence } from '@happier-dev/protocol/usage/usageWorkEvidence';
 import { isSessionContentReadable, readSessionContentAvailability } from '@/sync/domains/session/encryptedContentAvailability';
 import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import { ConnectedServiceQuotaGetInputV1Schema, projectProviderAccountUsageQuotaReadV1, type ConnectedServiceQuotaGetInputV1, type ConnectedServiceQuotaGetResultV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
@@ -50,6 +50,9 @@ import { readMachineName } from '@/utils/sessions/machineDisplayNames';
 import { getUsageQueryPoolMachineSelection, isUsageProjectionHomeAccountChange, subscribeUsageQueryStateInvalidation } from './usageQueryInvalidation';
 import type { ProviderAccountUsageProjectionDocuments } from './apiProviderAccountUsage';
 import { encodeUsageQueryResource, type UsageByteRange } from './usageQueryResourceEncoding';
+import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
+import { createCapturedServerReadTransport, type CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 
 function readOpenedQuotaScope(context: UsageQueryAccountContext) {
     const state = readRegisteredStorageState();
@@ -162,6 +165,7 @@ export type UsageQueryAccountContext = Readonly<{
     credentials: AuthCredentials;
     accountLifetime: ServerAccountScopeLifetime;
     request: ServerFetch;
+    readTransport?: CapturedServerReadTransport;
 }>;
 
 function requireCurrent(context: UsageQueryAccountContext, signal?: AbortSignal): void {
@@ -172,25 +176,40 @@ function requireCurrent(context: UsageQueryAccountContext, signal?: AbortSignal)
 }
 
 /** Public tariff transport is separate from private Account settings and never carries overrides. */
+const modelPriceReads = createScopedResolutionSingleFlight<UsageModelPriceCatalog>();
 export async function readUiUsageModelPrices(context: UsageQueryAccountContext, refresh = false,
     signal?: AbortSignal): Promise<UsageModelPriceCatalog> {
     requireCurrent(context, signal);
-    const response = await context.request(refresh ? '/v1/account/usage/prices/refresh' : '/v1/account/usage/prices', {
-        method: refresh ? 'POST' : 'GET',
-        headers: { Authorization: `Bearer ${context.credentials.token}`, ...(refresh ? { 'Content-Type': 'application/json' } : {}) },
-        ...(refresh ? { body: '{}' } : {}), ...(signal ? { signal } : {}),
-    });
-    requireCurrent(context, signal);
-    if (!response.ok) throw new HappyError('Model price catalog unavailable', false, {
-        status: response.status, kind: response.status === 401 || response.status === 403 ? 'auth' : 'config',
-        code: response.status === 401 || response.status === 403 ? 'denied'
-            : [404, 405, 501].includes(response.status) ? 'unsupported' : 'usage_prices_read_failed',
-    });
-    const raw: unknown = await response.json();
-    requireCurrent(context, signal);
-    const value = UsageModelPriceCatalogSchema.parse(raw);
-    if (refresh) invalidateUsageQueryResources(context.accountLifetime);
-    return value;
+    const transport = context.readTransport;
+    const scope = transport?.key;
+    const abort = new AbortController();
+    const retirement = context.accountLifetime.onRetire(() => abort.abort());
+    const cancellation = mergeAbortSignals([signal, abort.signal]);
+    const consume = async (response: Response) => {
+        if (!response.ok) throw new HappyError('Model price catalog unavailable', false, {
+            status: response.status, kind: response.status === 401 || response.status === 403 ? 'auth' : 'config',
+            code: response.status === 401 || response.status === 403 ? 'denied'
+                : [404, 405, 501].includes(response.status) ? 'unsupported' : 'usage_prices_read_failed',
+        });
+        return UsageModelPriceCatalogSchema.parse(await response.json());
+    };
+    if (refresh && scope) modelPriceReads.invalidate(scope);
+    try {
+        const path = refresh ? '/v1/account/usage/prices/refresh' : '/v1/account/usage/prices';
+        const init = { method: refresh ? 'POST' : 'GET',
+            headers: { Authorization: `Bearer ${context.credentials.token}`, ...(refresh ? { 'Content-Type': 'application/json' } : {}) },
+            ...(refresh ? { body: '{}' } : {}) };
+        const value = !refresh && transport && scope
+            ? await modelPriceReads.run(path, sharedSignal => transport.read(path, { ...init, signal: sharedSignal }, undefined, consume),
+                { scope, signal: cancellation.signal })
+            : await consume(await context.request(path, { ...init, signal: cancellation.signal }));
+        requireCurrent(context, cancellation.signal);
+        if (refresh) invalidateUsageQueryResources(context.accountLifetime);
+        return value;
+    } finally {
+        if (refresh && scope) modelPriceReads.invalidate(scope);
+        cancellation.dispose(); retirement.dispose();
+    }
 }
 
 /** The quota host read and Usage batch share the same admitted Action port. */
@@ -557,7 +576,8 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
                         completeMessageCoverage = page.hasMore === false && readableMessages.length === page.messages.length;
                         if (page.messages.length === 0 || readableMessages.length > 0) {
                             detail = projectSessionUsageWorkEvidence(session, readableMessages, { messagesComplete: completeMessageCoverage });
-                            messageEvidence = { acceptedInputs: detail.acceptedInputs, phaseEvents: detail.phaseEvents, coach: detail.coach };
+                            messageEvidence = { acceptedInputs: detail.acceptedInputs, phaseEvents: detail.phaseEvents, coach: detail.coach,
+                                collaboration: detail.collaboration };
                         }
                     }
                   }
@@ -596,7 +616,7 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
             admitted: sessions.filter(session => session.access?.capabilities.readTranscript !== false
                 && isSessionContentReadable(readSessionContentAvailability(session))).length };
         return { query, asOfMs: Date.now(), sessions, sessionCoverage,
-            detail: completeIntervals ? detail : { ...detail, facts: undefined, activityAtMs: undefined } };
+            detail: completeIntervals ? detail : { ...detail, facts: undefined, closedTurns: undefined, activityAtMs: undefined } };
     });
     const publish = () => {
         if (signal?.aborted || !context.accountLifetime.isCurrent()) return;
@@ -747,7 +767,8 @@ export function captureUiUsageQueryAccountContext(credentials: AuthCredentials):
             return response;
         } finally { await transport.release(); }
     };
-    return { credentials, accountLifetime, request };
+    return { credentials, accountLifetime, request,
+        readTransport: createCapturedServerReadTransport({ serverId: accountLifetime.scope.serverId, profile, credentials }) };
 }
 
 /** One Action port batches resolved A requests; B/backfill never delays available A. */
@@ -765,7 +786,6 @@ export async function readUiUsageQueryBatch(
     const requests = reads.map(read => read.query);
     const periods = new Map([...queries.map(query => [getUsageQueryKey(query), resolveUsageQueryPeriod(query, accountingNowMs)] as const),
         ...reads.map(read => [getUsageQueryKey(read.query), read.period] as const)]);
-    const accountingReads = new Map<string, Promise<Awaited<ReturnType<typeof queryUsageAnalytics>>>>();
     const priorAccounting = new Map(previous?.results.flatMap(slice => [
         [slice.key, { value: slice.accounting, asOfMs: slice.sources.find(source => source.source === 'accounting')?.asOfMs }] as const,
         ...(slice.comparison ? [[getUsageQueryKey(slice.comparison.query), { value: slice.comparison.accounting,
@@ -781,7 +801,8 @@ export async function readUiUsageQueryBatch(
     let work: readonly UsageWorkSourceSnapshot[] = queries.map(query => ({ query, status: query.includeAccounting && query.includeWorkEvidence ? 'pending' : 'not_loaded' }));
     const sessionWorkReads = new Map<string, Promise<SessionWorkSourceResult>>();
     getUsageQueryResourceStore(context);
-    const sessionInputReader = accountStores.get(resolveUsageOwnerLifetime(context))!.readSessionInput;
+    const accountOwner = accountStores.get(resolveUsageOwnerLifetime(context))!;
+    const sessionInputReader = accountOwner.readSessionInput;
     // One finite Account batch shares the scoped reader's existing observation.
     // It stays lazy: unchanged retained Session inputs need no currentness GET.
     let sessionCurrentness: Promise<SessionAccountCurrentnessSource> | undefined;
@@ -905,13 +926,7 @@ export async function readUiUsageQueryBatch(
         let snapshot: UsageAccountingSourceSnapshot;
         try {
             const request = usageQueryToAnalyticsRequest({ ...query, period: periods.get(getUsageQueryKey(query))! }, accountingNowMs);
-            const requestKey = createCanonicalJsonSigningInput(projectNativeJsonValueForTransport(request));
-            let read = accountingReads.get(requestKey);
-            if (!read) {
-                read = queryUsageAnalytics(context.credentials, request, { request: context.request, signal });
-                accountingReads.set(requestKey, read);
-            }
-            const value = await read;
+            const value = await accountOwner.readAccounting(request, signal);
             const asOfMs = resolveUsageAccountingAsOfMs(value);
             snapshot = { query, period: periods.get(getUsageQueryKey(query)), value, status: 'available', ...(asOfMs === undefined ? {} : { asOfMs }) };
         } catch (error) {
@@ -1024,6 +1039,7 @@ export async function readUiUsageQueryBatch(
 
 type UsageQueryInvalidation = HomeAccountChangeEvent | 'session-evidence';
 type AccountResourceOwner = Readonly<{ store: PluginUiResourceStore; invalidate(event?: UsageQueryInvalidation): void; readSessionInput: SessionInputReader;
+    readAccounting(request: Parameters<typeof queryUsageAnalytics>[1], signal?: AbortSignal): Promise<Awaited<ReturnType<typeof queryUsageAnalytics>>>;
     projectionDocuments: ProviderAccountUsageProjectionDocuments }>;
 // This is the existing Resource store's Account ownership, not a response cache.
 const accountStores = new WeakMap<ServerAccountScopeLifetime, AccountResourceOwner>();
@@ -1053,6 +1069,7 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
     const existing = accountStores.get(lifetime);
     if (existing) return existing.store;
     const evidenceAbort = new AbortController();
+    const accountingReads = createScopedResolutionSingleFlight<Awaited<ReturnType<typeof queryUsageAnalytics>>>();
     const projectionDocuments: ProviderAccountUsageProjectionDocuments = new Map();
     // Allowances belong to this Account, not a page's accounting batch. Keep
     // their latest Resource revision across navigation, including zero views.
@@ -1095,6 +1112,23 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
     }>>();
     const owner: AccountResourceOwner = {
         projectionDocuments,
+        async readAccounting(request, signal) {
+            requireCurrent(sharedContext, signal);
+            const cancellation = mergeAbortSignals([signal, evidenceAbort.signal]);
+            try {
+                const load = (readSignal: AbortSignal) => queryUsageAnalytics(sharedContext.credentials, request,
+                    { request: sharedContext.request, readTransport: sharedContext.readTransport, signal: readSignal });
+                // Opaque invocation-bound request closures cannot prove neutral cancellation.
+                // Only the captured physical transport enables cross-batch borrowing.
+                const value = sharedContext.readTransport
+                    ? await accountingReads.run(JSON.stringify([sharedContext.readTransport.key,
+                        createCanonicalJsonSigningInput(projectNativeJsonValueForTransport(request))]), load,
+                        { signal: cancellation.signal })
+                    : await load(cancellation.signal);
+                requireCurrent(sharedContext, cancellation.signal);
+                return value;
+            } finally { cancellation.dispose(); }
+        },
         readSessionInput(sessionId, readTranscript, load, onProgress) {
             requireCurrent(sharedContext);
             const basis = readEvidenceBasis(sessionId);
@@ -1331,6 +1365,9 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
         } }),
         invalidate(homeChange) {
             if (!lifetime.isCurrent()) return;
+            // A replacement demanded by this wake must not join pre-wake accounting.
+            // Existing borrowers retain their own publication and Account fences.
+            accountingReads.invalidate();
             for (const listener of [...listeners.keys()]) listener({ version: 1, subscriptionId: 'usage-query', kind: 'invalidated', digest: INVALIDATION_DIGEST }, homeChange);
         },
     };

@@ -25,7 +25,9 @@ export function useMachinesWidgetAreaBinding(
     /** The machine that needs the person now, else this computer, else the first online machine. */
     pinnedMachine: MachinesWidgetPresetMachine | null;
   }>,
-) {
+): { -readonly [K in keyof ReturnType<typeof useCorePageWidgetAreaBinding>]: ReturnType<typeof useCorePageWidgetAreaBinding>[K] } & {
+  presets: ReturnType<typeof createMachinesWidgetPresets>;
+} {
   const pinned = React.useRef<MachinesWidgetPresetMachine | null>(null);
   if (!pinned.current && input.pinnedMachine)
     pinned.current = input.pinnedMachine;

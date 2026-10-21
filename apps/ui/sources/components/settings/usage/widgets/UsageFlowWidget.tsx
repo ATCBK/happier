@@ -40,12 +40,20 @@ import {
   UsageBodyReading,
   resolveUsageChartPlotPx,
 } from './usageBodyKit';
+import { UsageRiverStyleBody } from './UsageChartStyleBodies';
+
+/** One body per widget: its Style own-input picks the encoding of the same question. */
+export function UsageFlowWidget(props: UsageBodyProps) {
+  const style = props.presentation?.style;
+  if (style === 'agentRiver') return <UsageRiverStyleBody {...props} />;
+  return <UsageFlowWidgetOriginal {...props} />;
+}
 
 /**
  * "Tokens over time": the period's flow stacked by Agent, or by model when the widget's own
  * breakdown asks for models. Money uses the same selected kind as the period and daily bars.
  */
-export function UsageFlowWidget(props: UsageBodyProps) {
+function UsageFlowWidgetOriginal(props: UsageBodyProps) {
   const { theme } = useUnistyles();
   const chartTheme = useUsagePluginTheme();
   const view = useUsageAnalyticsView(props.slice, props.query);

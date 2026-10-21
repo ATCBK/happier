@@ -271,7 +271,7 @@ export function createWidgetInputActionDepsV1(account: LazyActionAccountContext 
                     return { status: 'denied', reasonCode: 'widget_target_scope_mismatch' };
                 if (rows.status !== 'ready' || rows.coverage !== 'complete')
                     return { status: 'unavailable', reasonCode: 'widget_workspace_authority_unavailable' };
-                return validateWidgetWorkspaceInputV1({ value, serverId: account.serverId, workspaceRefs: rows.workspaceRefs }, workspaceRefResolutionContextV1);
+                return validateWidgetWorkspaceInputV1({ value, serverId: account.serverId, workspaceRefs: rows.workspaceRefs }, workspaceRefResolutionContextV1());
             }
             if (targetDeclaration?.kind !== 'session' || targetDeclaration.path !== field.path) return { status: 'valid' };
             const address = VoiceTrackedSessionAddressV1Schema.safeParse(value);

@@ -25,6 +25,7 @@ import {
   usageWorkPullRequestTitle,
   useUsageWorkDisclosures,
 } from './UsageWorkParts';
+import { UsageShippedStyleBody } from './UsageChartStyleBodies';
 
 /** Open to merged, from the host's own two timestamps; absent when either was not reported. */
 function mergedIn(row: UsageWorkOutcomeRow): string | null {
@@ -37,8 +38,15 @@ function mergedIn(row: UsageWorkOutcomeRow): string | null {
     : null;
 }
 
-/** Sessions → merged PRs, and the exact amount each linked PR consumed. A PR opens into its Sessions. */
+/** One body per widget: its Style own-input picks the encoding of the same question. */
 export function UsageOutcomesWidget(props: UsageBodyProps) {
+  const style = props.presentation?.style;
+  if (style === 'shipped') return <UsageShippedStyleBody {...props} />;
+  return <UsageOutcomesWidgetOriginal {...props} />;
+}
+
+/** Sessions → merged PRs, and the exact amount each linked PR consumed. A PR opens into its Sessions. */
+function UsageOutcomesWidgetOriginal(props: UsageBodyProps) {
   const theme = useUsagePluginTheme();
   const { theme: appTheme } = useUnistyles();
   const { summary, format, cell, basisLabel, sessionLabel, openSession } = useUsageWork(

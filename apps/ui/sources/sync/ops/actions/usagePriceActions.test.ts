@@ -1,5 +1,5 @@
 import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
@@ -8,6 +8,8 @@ import { createDefaultActionExecutor } from './defaultActionExecutor';
 import { captureUiUsageQueryAccountContext, decodeUsageQueryResource, getUsageQueryResourceStore } from '@/sync/api/account/usageQueryResource';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
 afterEach(async () => { standardCleanup(); retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined; });
@@ -15,6 +17,37 @@ const catalog = { v: 1, models: { reference: { inputUsdPerMillion: 2, outputUsdP
     provenance: { source: 'litellm', origin: 'bundled', asOfMs: 100, revision: 'test', fetchStatus: 'ready' } };
 
 describe('Usage model prices through captured UI Account Actions', () => {
+    it('shares price acquisition across independent Action callers without sharing their cancellation', async () => {
+        const held = createDeferred<void>();
+        home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://price-sharing.test', accountId: 'account-a' }],
+            route: async request => {
+                if (request.path !== '/v1/account/usage/prices') return undefined;
+                await held.promise;
+                return Response.json(catalog);
+            } });
+        const focused = home.homes.a!;
+        publishAppliedActiveServerSnapshot({ serverId: focused.id, serverUrl: focused.serverUrl, generation: 0 });
+        const caller = { surface: 'ui' as const, actionCaller: { kind: 'host' as const }, serverId: focused.id,
+            expectedAccountId: 'account-a', authority: 'present_user' as const };
+        const executor = createDefaultActionExecutor();
+        const abort = new AbortController();
+        const departed = executor.execute('usage.prices.get', {}, { ...caller, signal: abort.signal });
+        void departed.catch(() => {});
+        const live = executor.execute('usage.prices.get', {}, caller);
+        const requests = () => home!.requests.filter(request => request.path === '/v1/account/usage/prices');
+        try {
+            await vi.waitFor(() => expect(requests().length).toBeGreaterThan(0));
+            await flushHookEffects({ cycles: 20 });
+            expect(requests()).toHaveLength(1);
+            abort.abort();
+            held.resolve();
+            await expect(departed).rejects.toMatchObject({ name: 'AbortError' });
+            expect(await live).toMatchObject({ ok: true, result: catalog });
+            expect(await executor.execute('usage.prices.get', {}, caller)).toMatchObject({ ok: true, result: catalog });
+            expect(requests()).toHaveLength(2);
+        } finally { held.resolve(); await Promise.allSettled([departed, live]); }
+    });
+
     it('reads catalog and refresh provenance without disclosing settings and retires denied or late Account results', async () => {
         let denied = false;
         let retireOnRead = false;

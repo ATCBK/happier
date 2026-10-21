@@ -1,4 +1,5 @@
 import { PLANET_LIGHT_RAMP, PLANET_PALETTES } from '@happier-dev/brand/planet';
+import { USAGE_RECAP_STYLES } from '@happier-dev/protocol/usage/usageRecap';
 import { withUsageAccentAlpha } from '../../usageAccent';
 import type { UsageRecapFormat, UsageRecapStyle } from './usageStatCardModel';
 
@@ -308,12 +309,4 @@ export function resolveUsageStatCardLayout(
   };
 }
 
-export const USAGE_STAT_CARD_STYLES: readonly UsageRecapStyle[] = [
-  'daybreak',
-  'sigil',
-  'editorial',
-  'glass',
-  'holo',
-  'skyline',
-  'terminal',
-];
+export const USAGE_STAT_CARD_STYLES: readonly UsageRecapStyle[] = USAGE_RECAP_STYLES;

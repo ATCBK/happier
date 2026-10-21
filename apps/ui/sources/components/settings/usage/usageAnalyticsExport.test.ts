@@ -127,10 +127,23 @@ describe('usageAnalyticsExport', () => {
 
         expect(payload.recapCards).toHaveLength(4);
         expect(payload.recapCards.map((card) => card.id)).toEqual(['streak', 'usage', 'model', 'rhythm']);
+        expect(payload.recapCards.find(card => card.id === 'usage')?.visualKind).toBe('progress');
         expect(payload.recapCards[2]).toEqual(expect.objectContaining({
             label: 'Go-to model',
             value: 'claude-3.7-sonnet',
         }));
+    });
+
+    it('exports unavailable calendar evidence without manufacturing a progress visual or zero streak', () => {
+        const filters = { period: '30days', metric: 'tokens', focus: null, costMode: 'auto' } as const;
+        const viewModel = buildUsageAnalyticsViewModel({ ...response, activity: undefined, insights: undefined }, filters);
+        const input = { viewModel, filters };
+        const payload = buildUsageAnalyticsExportPayload(input);
+
+        expect(payload.recapCards.find(card => card.id === 'usage')?.visualKind).toBeNull();
+        expect(payload.recapCards.find(card => card.id === 'streak')?.value).toBe('—');
+        expect(payload.viewModel.insights).toMatchObject({ activeDays: null, currentStreakDays: null });
+        expect(buildUsageRecapCardSummaryText({ ...input, cardId: 'streak' })).toContain('—');
     });
 
     it('carries the active pivot dimension table in the JSON payload and as CSV (E-5)', () => {
@@ -255,7 +268,10 @@ describe('usageAnalyticsExport', () => {
 
         vi.doMock('react-native', async () => {
             const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
-            return createReactNativeNativeMock({ platformOS: 'ios' });
+            return { ...await createReactNativeNativeMock({ platformOS: 'ios' }),
+                Share: { sharedAction: 'sharedAction', dismissedAction: 'dismissedAction', share: async (content: { url: string }) => {
+                    await shareAsync(content.url); return { action: 'sharedAction' };
+                } } };
         });
         vi.doMock('expo-file-system', () => fs.module);
         vi.doMock('expo-sharing', () => ({
@@ -278,7 +294,7 @@ describe('usageAnalyticsExport', () => {
         });
 
         expect(shared).toBe(true);
-        expect(shareAsync).toHaveBeenCalledWith(expect.stringContaining('/happier-downloads/'), undefined);
+        expect(shareAsync).toHaveBeenCalledWith(expect.stringContaining('/happier-downloads/'));
         expect(fs.files.size).toBe(0);
     });
 
@@ -290,7 +306,10 @@ describe('usageAnalyticsExport', () => {
 
         vi.doMock('react-native', async () => {
             const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
-            return createReactNativeNativeMock({ platformOS: 'ios' });
+            return { ...await createReactNativeNativeMock({ platformOS: 'ios' }),
+                Share: { sharedAction: 'sharedAction', dismissedAction: 'dismissedAction', share: async (content: { url: string }) => {
+                    await shareAsync(content.url); return { action: 'sharedAction' };
+                } } };
         });
         vi.doMock('expo-file-system', () => fs.module);
         vi.doMock('expo-sharing', () => ({
@@ -313,7 +332,7 @@ describe('usageAnalyticsExport', () => {
         });
 
         expect(exported).toBe(true);
-        expect(shareAsync).toHaveBeenCalledWith(expect.stringContaining('/happier-downloads/'), { mimeType: 'application/json' });
+        expect(shareAsync).toHaveBeenCalledWith(expect.stringContaining('/happier-downloads/'));
         expect(fs.files.size).toBe(0);
     });
     it('reports a native document write fault while preserving the false export result and cleanup', async () => {

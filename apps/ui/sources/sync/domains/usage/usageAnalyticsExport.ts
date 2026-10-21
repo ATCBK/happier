@@ -88,7 +88,7 @@ export type UsageRecapCardExportPayload = Readonly<{
     subtitle: string;
     valueTone: UsageRecapCardValueTone;
     accentTone: UsageRecapCardAccentTone;
-    visualKind: 'activityMatrix' | 'progress' | 'rankBars';
+    visualKind: 'activityMatrix' | 'progress' | 'rankBars' | null;
 }>;
 
 export type UsageRecapCardExportInput = UsageAnalyticsExportInput & Readonly<{
@@ -115,7 +115,7 @@ export function buildUsageAnalyticsExportPayload(input: UsageAnalyticsExportInpu
         subtitle: card.subtitle,
         valueTone: card.valueTone,
         accentTone: card.accentTone,
-        visualKind: card.visual.kind,
+        visualKind: card.visual?.kind ?? null,
     }));
 
     return {
@@ -145,8 +145,9 @@ export function buildUsageAnalyticsSummaryText(input: UsageAnalyticsExportInput)
         `${t('usage.summary.export.costMode')}: ${costModeLabel}`,
         `${t('usage.summary.export.totalTokens')}: ${formatTokenCountLong(payload.viewModel.overview.totalTokens)}`,
         `${t('usage.summary.export.totalCost')}: ${formatUsageCost(payload.viewModel.overview.totalCost, payload.viewModel.costPresentation.currency)}`,
-        `${t('usage.summary.currentStreak')}: ${payload.viewModel.insights.currentStreakDays}d`,
-        `${t('usage.summary.export.activeDays')}: ${payload.viewModel.insights.activeDays}`,
+        `${t('usage.summary.currentStreak')}: ${payload.viewModel.insights.currentStreakDays === null
+            ? t('common.unavailable') : `${payload.viewModel.insights.currentStreakDays}d`}`,
+        `${t('usage.summary.export.activeDays')}: ${payload.viewModel.insights.activeDays ?? t('common.unavailable')}`,
         `${t('usage.summary.export.topModel')}: ${payload.viewModel.insights.favoriteModel?.label ?? payload.viewModel.breakdowns.models[0]?.label ?? t('usage.noData.title')}`,
         `${t('usage.summary.export.topEngine')}: ${payload.viewModel.leaders.engines[0]?.label ?? t('usage.noData.title')}`,
         `${t('usage.summary.export.modelTimeline')}: ${modelTimelineLabel ?? t('usage.noData.title')}`,

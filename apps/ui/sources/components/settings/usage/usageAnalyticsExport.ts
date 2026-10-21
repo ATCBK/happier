@@ -5,6 +5,7 @@ import { setClipboardImageSafe, setClipboardStringSafe } from '@/utils/ui/clipbo
 import { decodeBase64, encodeBase64 } from '@/encryption/base64';
 import { readCanonicalPaddedBase64DecodedLength } from '@happier-dev/protocol/crypto/base64';
 import { t } from '@/text';
+import type { UsageRecapDeliveryOutcome } from '@happier-dev/protocol/usage/usageRecap';
 import {
     buildUsageAnalyticsExportPayload, buildUsageAnalyticsSummaryText,
     buildUsagePivotCsv, buildUsagePivotTableExport,
@@ -114,7 +115,7 @@ export async function captureUsageViewPng(node: unknown, authority: UsageImageAu
     }
 }
 
-async function shareUsageImageOnNative(file: UsageImageFile, authority: UsageImageAuthority): Promise<boolean> {
+async function shareUsageImageOnNative(file: UsageImageFile, authority: UsageImageAuthority): Promise<UsageRecapDeliveryOutcome> {
     const sink = await createNativeCacheFileSink({ directoryName: 'happier-downloads', fileName: file.fileName });
     if (!sink.ok) throw new Error(sink.error);
     let retainCacheFile = false;
@@ -125,9 +126,11 @@ async function shareUsageImageOnNative(file: UsageImageFile, authority: UsageIma
         assertImageCurrent(authority);
         const result = await shareNativeCacheFile({ fileUri: sink.fileUri, name: file.fileName, mimeType: file.mediaType,
             isCurrent: () => !authority.signal?.aborted && authority.isCurrent?.() !== false });
-        if (result.status !== 'shared') return false;
+        if (result.status === 'canceled') return { kind: 'cancelled' };
+        if (result.status === 'unavailable') return { kind: 'unavailable', reason: 'delivery_target_unavailable' };
         retainCacheFile = result.retainCacheFile;
-        return true;
+        return result.completion === 'confirmed' ? { kind: 'delivered' }
+            : { kind: 'failed', reason: 'outcome_unobservable', handoff: 'presented' };
     } finally {
         if (!retainCacheFile) await sink.cleanup();
     }
@@ -138,10 +141,11 @@ async function shareUsageImageOnNative(file: UsageImageFile, authority: UsageIma
  * opens the system sheet that offers Save Image (native); Share uses the platform share target when
  * one exists; Copy places the image on the clipboard.
  */
-export async function deliverUsageImageFile(file: UsageImageFile, intent: 'save' | 'share' | 'copy', authority: UsageImageAuthority = {}): Promise<boolean> {
+export async function deliverUsageImageFileResult(file: UsageImageFile, intent: 'save' | 'share' | 'copy', authority: UsageImageAuthority = {}): Promise<UsageRecapDeliveryOutcome> {
     try {
         assertImageCurrent(authority);
-        if (intent === 'copy') return await setClipboardImageSafe(file.base64);
+        if (intent === 'copy') return await setClipboardImageSafe(file.base64)
+            ? { kind: 'delivered' } : { kind: 'unavailable', reason: 'clipboard_unavailable' };
         if (Platform.OS !== 'web') return await shareUsageImageOnNative(file, authority);
         if (intent === 'share' && typeof navigator !== 'undefined' && typeof navigator.share === 'function'
             && typeof navigator.canShare === 'function') {
@@ -152,15 +156,24 @@ export async function deliverUsageImageFile(file: UsageImageFile, intent: 'save'
             if (navigator.canShare({ files: [shared] })) {
                 assertImageCurrent(authority);
                 await navigator.share({ files: [shared] });
-                return true;
+                return { kind: 'delivered' };
             }
         }
         assertImageCurrent(authority);
-        return downloadDataUriOnWeb(`data:${file.mediaType};base64,${file.base64}`, file.fileName);
+        return downloadDataUriOnWeb(`data:${file.mediaType};base64,${file.base64}`, file.fileName)
+            ? { kind: 'delivered' } : { kind: 'failed', reason: 'delivery_failed' };
     } catch (error) {
+        if (authority.signal?.aborted || authority.isCurrent?.() === false
+            || error instanceof Error && error.name === 'AbortError') return { kind: 'cancelled' };
         log.log(`Failed to deliver usage image: ${error instanceof Error ? error.message : String(error)}`);
-        return false;
+        return { kind: 'failed', reason: 'delivery_failed' };
     }
+}
+
+/** Legacy callers use this as a handoff boolean, including Android sheet presentation. */
+export async function deliverUsageImageFile(file: UsageImageFile, intent: 'save' | 'share' | 'copy', authority: UsageImageAuthority = {}): Promise<boolean> {
+    const result = await deliverUsageImageFileResult(file, intent, authority);
+    return result.kind === 'delivered' || result.kind === 'failed' && result.handoff === 'presented';
 }
 
 export async function exportUsageAnalyticsJson(input: UsageAnalyticsExportInput): Promise<boolean> {

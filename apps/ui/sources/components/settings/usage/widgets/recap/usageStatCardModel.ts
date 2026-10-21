@@ -24,6 +24,7 @@ export type UsageStatCardStat = Readonly<{
     | 'agentHours'
     | 'maximumConcurrency'
     | 'linkedOutcomes'
+    | 'mergedPrs'
     | 'cacheShare'
     | 'cacheReadTokens'
     | 'cacheWriteTokens'
@@ -47,15 +48,15 @@ export type UsageStatCardMixRow = Readonly<{
   share: number;
   label: string | null;
 }>;
-/** One selected population (Agents or Models): its own rows, shares of its own `totalTokens`. */
+/** One selected population: public shares can remain useful with its token total hidden. */
 export type UsageStatCardMixGroup = Readonly<{
   kind: 'agentMix' | 'modelMix';
   rows: readonly UsageStatCardMixRow[];
-  totalTokens: number;
+  totalTokens: number | null;
 }>;
 
 /**
- * What a private stat card shows, derived only from the composed selected-field result. Every style
+ * What a stat card shows, derived only from the composed selected-field result. Every style
  * and format draws this one model; a fact that was not selected (or not witnessed) is simply absent.
  */
 export type UsageStatCardModel = Readonly<{
@@ -128,6 +129,29 @@ function mixGroup(
 export function buildUsageStatCardModel(
   result: UsageRecapComposed,
 ): UsageStatCardModel {
+  if (result.source === 'public_profile' && result.publicSnapshot) {
+    const facts = result.publicSnapshot.facts;
+    const stats: UsageStatCardStat[] = [];
+    if (facts.activeDays !== undefined) stats.push({ id: 'activeDays', value: formatCount(facts.activeDays), label: t('usage.board.recap.statActiveDays') });
+    if (facts.bestStreakDays !== undefined) stats.push({ id: 'streak',
+      value: t('usage.board.recap.daysValue', { count: facts.bestStreakDays }), label: t('usage.board.recap.statStreak') });
+    if (facts.agentTimeMs !== undefined) stats.push({ id: 'agentHours', value: `${formatCount(facts.agentTimeMs / HOUR_MS)} h`, label: t('usage.board.recap.statAgentHours') });
+    if (facts.peakParallel !== undefined) stats.push({ id: 'maximumConcurrency', value: formatCount(facts.peakParallel), label: t('usage.board.recap.statAtOnce') });
+    if (facts.mergedPrs !== undefined) stats.push({ id: 'mergedPrs', value: formatCount(facts.mergedPrs), label: t('usage.board.recap.statMergedPrs') });
+    for (const highlight of facts.highlights ?? []) {
+      const id = highlight.kind === 'active_days' ? 'activeDays' : highlight.kind === 'peak_parallel' ? 'maximumConcurrency' : 'mergedPrs';
+      if (stats.some(stat => stat.id === id)) continue;
+      const label = highlight.kind === 'active_days' ? t('usage.board.recap.statActiveDays')
+        : highlight.kind === 'peak_parallel' ? t('usage.board.recap.statAtOnce') : t('usage.board.recap.statMergedPrs');
+      stats.push({ id, value: formatCount(highlight.count), label });
+    }
+    return { style: result.style, format: result.format, manifest: result.selectedFields, unavailable: result.unavailableFields,
+      headline: facts.tokens === undefined ? null : { value: formatTokenCount(facts.tokens), unit: t('usage.board.recap.tokensUnit') },
+      mixGroups: facts.agentMix ? [{ kind: 'agentMix', totalTokens: facts.tokens ?? null,
+        rows: facts.agentMix.map((row, index) => ({ id: `agentMix-${index}`, agentId: row.agentId, share: row.share, label: usageAgentTitle(row.agentId) })) }] : [],
+      stats, days: facts.calendar?.map(day => day.level ?? 0) ?? [],
+      period: result.period, periodLabel: formatUsageRecapPeriod(result.period), asOfMs: result.asOfMs };
+  }
   const { facts } = result;
   const selected = new Set(result.selectedFields);
   const stats: UsageStatCardStat[] = [];

@@ -9,7 +9,7 @@ import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testki
 import { widgetProjectionOf } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
-import { unionPluginUiProjections } from '@/sync/domains/plugins/ui/projectionUnion';
+import { createPluginUiExecutionOriginCandidatePublication, unionPluginUiProjections } from '@/sync/domains/plugins/ui/projectionUnion';
 import { storage } from '@/sync/domains/state/storage';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { publishCommittedAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
@@ -62,7 +62,10 @@ it.each([{ count: 1, delayed: false }, { count: 2, delayed: false }, { count: 1,
     }), new Map([[pluginId, PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId,
         sourceRef: { machineId: ids[0], pluginId, sourceCustody } })]]));
     const projection = union.pluginUiProjection!;
-    const releaseProjection = publishCommittedAppShellPluginUiProjection(() => projection);
+    const candidates = createPluginUiExecutionOriginCandidatePublication();
+    candidates.publish(projection, [], [pluginId]);
+    const releaseProjection = publishCommittedAppShellPluginUiProjection(() => projection,
+        id => candidates.getSnapshot().get(id) ?? null);
     const machines = ids.map((id, index) => createMachineFixture({ id, activeAt: Date.now() - index }));
     storage.setState({ machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
         machineListByServerId: { [lifetime.scope.serverId]: machines }, machineListStatusByServerId: { [lifetime.scope.serverId]: 'idle' },

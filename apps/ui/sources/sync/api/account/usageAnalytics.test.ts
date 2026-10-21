@@ -47,6 +47,40 @@ describe('exact model-mix amounts', () => {
 });
 
 describe('buildUsageAnalyticsViewModel', () => {
+    it.each([
+        { bucketStarts: ['2026-07-06T01:00:00Z', '2026-07-06T02:00:00Z'], dates: ['2026-07-06'], expected: 1 },
+        { bucketStarts: ['2026-06-01T00:00:00Z', '2026-07-01T00:00:00Z'], dates: ['2026-07-04', '2026-07-05', '2026-07-06'], expected: 3 },
+    ])('uses calendar days rather than series buckets for current streak and active days ($expected days)', ({ bucketStarts, dates, expected }) => {
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-06T12:00:00Z'));
+        try {
+            const tokens = { input: 10, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 10 };
+            const cost = { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' };
+            const response = UsageAnalyticsQueryResponseSchema.parse({ v: 1, totals: { eventCount: 2, tokens, cost },
+                series: bucketStarts.map(start => ({ bucketStartMs: Date.parse(start),
+                    bucketEndMs: Date.parse(start) + 3_600_000, eventCount: 1, tokens, cost })),
+                activity: { calendarDays: dates.map(date => ({ date, eventCount: 1 })) } });
+            expect(buildUsageAnalyticsViewModel(response, baseState, 120).insights)
+                .toMatchObject({ activeDays: expected, currentStreakDays: expected, longestStreakDays: expected });
+            expect(buildUsageAnalyticsSummaryViewModel(response, 120))
+                .toMatchObject({ activeDays: expected, currentStreakDays: expected });
+            expect(buildUsageAnalyticsViewModel(response, baseState, 120).overview.activeDays).toBe(expected);
+        } finally {
+            clock.mockRestore();
+        }
+    });
+
+    it('keeps day summaries unavailable when modern accounting supplies no daily evidence', () => {
+        const tokens = { input: 10, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 10 };
+        const response = UsageAnalyticsQueryResponseSchema.parse({ v: 1,
+            totals: { eventCount: 1, tokens, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } },
+            series: [{ bucketStartMs: 1_700_000_000_000, bucketEndMs: 1_702_000_000_000,
+                eventCount: 1, tokens, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } }] });
+        const view = buildUsageAnalyticsViewModel(response, baseState);
+        expect(view.insights).toMatchObject({ activeDays: null, currentStreakDays: null, longestStreakDays: null });
+        expect(view.overview.activeDays).toBeNull();
+        expect(buildUsageAnalyticsSummaryViewModel(response)).toMatchObject({ activeDays: null, currentStreakDays: null });
+    });
+
     it('groups legacy hourly reports on the captured fixed-offset calendar rather than UTC report rows', () => {
         const usage: UsageDataPoint[] = [
             { timestamp: Date.parse('2026-07-01T22:00:00Z') / 1000, tokens: { total: 10 }, cost: { total: 1 }, reportCount: 2 },
@@ -432,12 +466,12 @@ describe('buildUsageAnalyticsViewModel', () => {
             const summary = buildUsageAnalyticsSummaryViewModel(response);
 
             expect(summary.totalTokens).toBe(300);
-            expect(summary.currentStreakDays).toBe(0);
+            expect(summary.currentStreakDays).toBeNull();
             expect(summary.weekTokens).toBe(0);
             expect(summary.weekCost).toBe(0);
 
             const viewModel = buildUsageAnalyticsViewModel(response, baseState);
-            expect(viewModel.insights.currentStreakDays).toBe(0);
+            expect(viewModel.insights.currentStreakDays).toBeNull();
         } finally {
             dateNowSpy.mockRestore();
         }
@@ -909,7 +943,7 @@ describe('usage view-model L6 extensions (T2)', () => {
                 busiestHour: { key: '13', label: '1 PM' },
                 ...(overrides?.cacheSavingsUsd !== undefined ? { cacheSavingsUsd: overrides.cacheSavingsUsd } : {}),
             },
-            activity: { calendarDays: [], weekdayHourBuckets: [] },
+            activity: { weekdayHourBuckets: [] },
             leaders: { agents: [], models: [], sessions: [], projects: [], workspaces: [], engines: [] },
             messageStats: { sessionCount: 7, messageCount: 20 },
             costPresentation: { mode: 'auto', effectiveUsd: 11.5, currency: 'USD', source: 'provider_reported' },

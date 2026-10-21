@@ -196,7 +196,7 @@ function foldMixTail(group: UsageStatCardMixGroup, limit: number | null): UsageS
 
 function mixCaption(group: UsageStatCardMixGroup): string {
   const name = t(group.kind === 'agentMix' ? 'usage.board.recap.field_agentMix' : 'usage.board.recap.field_modelMix');
-  return `${name} · ${formatTokenCount(group.totalTokens)} ${t('usage.board.recap.tokensUnit')}`;
+  return group.totalTokens === null ? name : `${name} · ${formatTokenCount(group.totalTokens)} ${t('usage.board.recap.tokensUnit')}`;
 }
 
 function describeCard(model: UsageStatCardModel): string {

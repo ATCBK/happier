@@ -10,7 +10,7 @@ import { collectUsageWorkSources } from '@happier-dev/protocol/usage/usageWorkSo
 import { resolveUsagePageAggregation } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { scmFallbackError } from '@/sync/ops/scm/scmRpcFailure';
 import { RetryableServerResponseError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
-import { captureUiUsageQueryAccountContext, decodeUsageQueryResource, getUsageQueryResourceStore, readUiUsageQueryBatch } from './usageQueryResource';
+import { captureUiUsageQueryAccountContext, decodeUsageQueryResource, getUsageQueryResourceStore, invalidateUsageQueryResources, readUiUsageQueryBatch } from './usageQueryResource';
 import { storage } from '@/sync/domains/state/storage';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { planSyncActionsFromChanges, plannedChangesAffectUsageQuery } from '@/sync/runtime/orchestration/changesPlanner';
@@ -2324,6 +2324,40 @@ describe('usage query captured Resource adapter', () => {
     } finally { release(); }
   });
 
+  it('reads witnessed collaboration through HTTP and retains content-free facts without refetching the opened page', async () => {
+    const captured = await context(request => {
+      if (request.path === '/v2/usage/query') return Response.json(value);
+      if (request.path === '/v2/sessions/collaboration') return Response.json({ session: {
+        ...createPlainSessionCurrentProjectionRecordFixture({ id: 'collaboration', createdAt: 1, updatedAt: 900, seq: 1,
+          active: true, activeAt: 900, metadataVersion: 1, agentStateVersion: 1,
+          metadata: { path: '/private', host: 'fixture.local', flavor: 'codex' } }),
+      } });
+      if (request.path === '/v1/sessions/collaboration/turns') return Response.json({ v: 1, sessionId: 'collaboration', updatedAt: 900,
+        turns: [{ turnId: 'old', agentId: 'claude', status: 'completed', startedAt: 100, terminalAt: 400, updatedAt: 400 },
+          { turnId: 'new', agentId: 'codex', status: 'completed', startedAt: 600, terminalAt: 800, updatedAt: 800 }] });
+      if (request.path === '/v1/sessions/collaboration/messages') return Response.json({ hasMore: false, messages: [
+        { id: 'run', seq: 1, createdAt: 200, messageRole: 'agent', content: { t: 'plain', v: { role: 'agent', content: {
+          type: 'codex', data: { type: 'tool-call', callId: 'run-call', name: 'SubAgentRun', input: {
+            runId: 'run-review', sidechainId: 'review-side', intent: 'review', backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+            launchOrigin: { kind: 'session', sessionId: 'collaboration' }, instructions: 'private instructions',
+          } },
+        } } } },
+      ] });
+      return undefined;
+    });
+    const query = normalizeUsageQuery({ session: 'collaboration', period: { startMs: 0, endMs: 1000 }, includeWorkEvidence: false });
+    const first = await readUiUsageQueryBatch(captured, { queries: [query] });
+    expect(first.results[0]?.howYouWork?.collaboration).toMatchObject({ coverage: 'partial', edges: [
+      { sourceAgentId: 'claude', targetAgentId: 'codex', relation: 'review', count: 1 },
+    ] });
+    const reads = sessionRequests().filter(request => request.path.endsWith('/messages')).length;
+    const second = await readUiUsageQueryBatch(captured, { queries: [query] });
+    expect(second.results[0]?.howYouWork?.collaboration).toEqual(first.results[0]?.howYouWork?.collaboration);
+    expect(sessionRequests().filter(request => request.path.endsWith('/messages'))).toHaveLength(reads);
+    expect(JSON.stringify(second)).not.toContain('private instructions');
+    expect(JSON.stringify(second)).not.toContain('review-side');
+  });
+
   it('keeps same-scope approval waits consistent across Coach and Human loop while empty turn history stays unknown', async () => {
     const nowMs = Date.now();
     const captured = await context(request => {
@@ -3275,6 +3309,94 @@ describe('usage query captured Resource adapter', () => {
       expect(retained, 'the live Account map must retain facts rather than decrypted bodies').toBe(0);
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.howYouWork?.inputs).toMatchObject({ acceptedCount: 1, steeringCount: 1 });
     } finally { observation.mockRestore(); inspector.disconnect(); }
+  });
+
+  it('shares accounting across distinct batches while cancellation and a later fresh read stay independent', async () => {
+    const held = createDeferred<void>();
+    const captured = await context(async request => {
+      if (request.path !== '/v2/usage/query') return undefined;
+      await held.promise;
+      return Response.json(value);
+    });
+    const query = normalizeUsageQuery({ period: { startMs: 1000, endMs: 2000 },
+      includeSessionEvidence: false, includeTranscriptEvidence: false, includeWorkEvidence: false });
+    const controller = new AbortController();
+    const departed = readUiUsageQueryBatch(captured, { queries: [query] }, controller.signal).catch(() => null);
+    const live = readUiUsageQueryBatch(captured, { queries: [{ ...query, metric: 'cost' }] });
+    const accountingRequests = () => home!.requests.filter(request => request.path === '/v2/usage/query');
+    try {
+      await vi.waitFor(() => expect(accountingRequests().length).toBeGreaterThan(0));
+      await flushHookEffects({ cycles: 20 });
+      const descriptors = new Set(accountingRequests().map(request => JSON.stringify(request.body)));
+      expect(accountingRequests()).toHaveLength(descriptors.size);
+      controller.abort();
+      held.resolve();
+      expect(await departed).toBeNull();
+      expect((await live).results[0]?.accounting?.totals.tokens.total).toBe(15);
+      expect(accountingRequests().every(request => !request.signal?.aborted)).toBe(true);
+      const completed = accountingRequests().length;
+      await readUiUsageQueryBatch(captured, { queries: [query] });
+      expect(accountingRequests().length).toBeGreaterThan(completed);
+    } finally { held.resolve(); await Promise.allSettled([departed, live]); }
+  });
+
+  it('never joins accounting begun before the Account Resource was invalidated', async () => {
+    const held = createDeferred<void>();
+    let total = 15;
+    const captured = await context(async request => {
+      if (request.path !== '/v2/usage/query') return undefined;
+      const observed = total;
+      await held.promise;
+      return Response.json({ ...value, totals: { ...value.totals, tokens: { ...value.totals.tokens, total: observed } } });
+    });
+    const query = normalizeUsageQuery({ period: { startMs: 1000, endMs: 2000 },
+      includeSessionEvidence: false, includeTranscriptEvidence: false, includeWorkEvidence: false });
+    const old = readUiUsageQueryBatch(captured, { queries: [query] });
+    await vi.waitFor(() => expect(home!.requests.some(request => request.path === '/v2/usage/query')).toBe(true));
+    total = 30;
+    invalidateUsageQueryResources(captured.accountLifetime);
+    const fresh = readUiUsageQueryBatch(captured, { queries: [{ ...query, metric: 'cost' }] });
+    await flushHookEffects({ cycles: 20 });
+    held.resolve();
+    expect((await fresh).results[0]?.accounting?.totals.tokens.total).toBe(30);
+    expect((await old).results[0]?.accounting?.totals.tokens.total).toBe(15);
+  });
+
+  it('keeps failed accounting slices on the Account wake lifecycle instead of separate batch retry timers', async () => {
+    let failed = true;
+    const captured = await context(request => request.path === '/v2/usage/query'
+      ? failed ? Response.json({ error: 'storage_unavailable' }, { status: 503 }) : Response.json(value) : undefined);
+    const query = normalizeUsageQuery({ period: { startMs: 1000, endMs: 2000 },
+      includeSessionEvidence: false, includeTranscriptEvidence: false, includeWorkEvidence: false });
+    const store = getUsageQueryResourceStore(captured);
+    const first = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
+    const second = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [{ ...query, metric: 'cost' }] }) });
+    vi.useFakeTimers();
+    const releases: (() => void)[] = [];
+    try {
+      releases.push(first.subscribe(() => {}, true));
+      await vi.advanceTimersByTimeAsync(50);
+      releases.push(second.subscribe(() => {}, true));
+      await Promise.all([first.refresh(), second.refresh()]);
+      const reads = () => home!.requests.filter(request => request.path === '/v2/usage/query').length;
+      const settled = reads();
+      await vi.runOnlyPendingTimersAsync();
+      expect(reads()).toBe(settled);
+      failed = false;
+      const recovered = [first, second].map(entry => new Promise<void>(resolve => {
+        const inspect = () => {
+          const content = entry.getSnapshot().value;
+          if (content && decodeUsageQueryResource(content).results[0]?.accounting?.totals.tokens.total === 15) resolve();
+        };
+        releases.push(entry.subscribe(inspect, false));
+        inspect();
+      }));
+      publishHomeAccountChange(captured.accountLifetime.scope.serverId);
+      await Promise.all(recovered);
+      expect(reads()).toBeGreaterThan(settled);
+      const resumed = home!.requests.filter(request => request.path === '/v2/usage/query').slice(settled);
+      expect(resumed).toHaveLength(new Set(resumed.map(request => JSON.stringify(request.body))).size);
+    } finally { releases.forEach(release => release()); vi.useRealTimers(); }
   });
 
   it('batches equivalent resolved inputs and preserves distinct scopes as independent slices', async () => {

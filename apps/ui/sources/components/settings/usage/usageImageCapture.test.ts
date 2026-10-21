@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { captureUsageViewPng, deliverUsageImageFile } from './usageAnalyticsExport';
+import { captureUsageViewPng, deliverUsageImageFile, deliverUsageImageFileResult } from './usageAnalyticsExport';
 
 const boundary = vi.hoisted(() => ({ OS: 'web', dataUri: 'data:image/png;base64,iVBORw==', capture: vi.fn(), download: vi.fn() }));
 vi.mock('react-native', async () => ({ ...(await (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock()), Platform: boundary }));
@@ -11,6 +11,15 @@ vi.mock('react-native-view-shot', () => ({ captureRef: async () => { await bound
 afterEach(() => { boundary.OS = 'web'; boundary.dataUri = 'data:image/png;base64,iVBORw=='; boundary.capture.mockReset(); fs.files.clear(); vi.unstubAllGlobals(); });
 
 describe('usage PNG production and local delivery boundaries', () => {
+    it('reports a browser share cancellation without falling back to a download', async () => {
+        const share = vi.fn(async () => { throw new DOMException('Dismissed', 'AbortError'); });
+        vi.stubGlobal('navigator', { canShare: () => true, share });
+        vi.stubGlobal('File', class { constructor(_parts: unknown[], _name: string, _options: unknown) {} });
+        vi.stubGlobal('document', { createElement: () => ({ click: boundary.download, style: {} }) });
+        expect(await deliverUsageImageFileResult({ mediaType: 'image/png', fileName: 'recap.png', base64: 'iVBORw==' }, 'share'))
+            .toEqual({ kind: 'cancelled' });
+        expect(boundary.download).not.toHaveBeenCalled();
+    });
     it('rejects a non-PNG data URI rather than labeling its bytes PNG', async () => {
         boundary.dataUri = 'data:image/jpeg;base64,iVBORw==';
         await expect(captureUsageViewPng({})).rejects.toThrow();

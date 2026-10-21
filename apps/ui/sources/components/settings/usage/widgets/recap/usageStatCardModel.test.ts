@@ -46,6 +46,26 @@ function composed(
 }
 
 describe('private stat card model', () => {
+  it('renders public shares and independent figures without inventing private amounts or elapsed time', async () => {
+    const { buildUsageStatCardModel } = await import('./usageStatCardModel');
+    const { UsageRecapComposeResultSchema } = await import('@happier-dev/protocol/usage/usageRecap');
+    const publicResult = UsageRecapComposeResultSchema.parse({ ...composed(['agentMix', 'parallel', 'rhythm', 'work', 'highlights'], {}),
+      source: 'public_profile', publicSnapshot: { v: 1, computedAtMs: periodEnd,
+        period: { startMs: periodStart, endMs: periodEnd, timeZoneOffsetMinutes: 120 },
+        coverage: { status: 'partial', method: 'runtime' }, fieldCoverage: {},
+        facts: { peakParallel: 4, mergedPrs: 2, highlights: [{ kind: 'active_days', count: 3 }, { kind: 'peak_parallel', count: 4 }],
+          calendar: [{ date: '2026-07-01', level: 3 }, { date: '2026-07-02', level: null }],
+          agentMix: [{ agentId: 'codex', share: 0.75, coverage: { status: 'partial', method: 'runtime' } }] } } });
+    if (publicResult.kind !== 'composed') throw new Error('Expected composed fixture');
+    const model = buildUsageStatCardModel(publicResult);
+    expect(model.headline).toBeNull();
+    expect(model.mixGroups[0]?.rows).toMatchObject([{ share: 0.75, agentId: 'codex' }]);
+    expect(model.mixGroups[0]?.totalTokens).toBeNull();
+    expect(model.stats.map(stat => stat.id)).toEqual(['maximumConcurrency', 'mergedPrs', 'activeDays']);
+    expect(model.stats.find(stat => stat.id === 'activeDays')).toMatchObject({ value: '3' });
+    expect(model.days).toEqual([3, 0]);
+    expect(JSON.stringify(model)).not.toMatch(/agentHours|dollars|unionElapsed/);
+  });
   it('does not promote raw whole-report money into unavailable scoped spend or repeat a Work highlight', async () => {
     const { buildUsageStatCardModel } = await import('./usageStatCardModel');
     const model = buildUsageStatCardModel(composed(['dollars', 'work', 'highlights'], {

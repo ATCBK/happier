@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { projectUsagePageCost } from '@happier-dev/protocol/usage/usageCostFacts';
 import { useWidgetPresentation } from '@happier-dev/plugin-ui';
 import {
   CompositionStrip,
@@ -33,6 +32,7 @@ import {
   UsageCoverageLine,
   usagePeriodPhrase,
   useUsageAnalyticsView,
+  useUsageComparisonCost,
   useUsagePluginTheme,
   type UsageBodyProps,
   UsageBodyNoUsage,
@@ -51,6 +51,7 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
   const { theme } = useUnistyles();
   const chartTheme = useUsagePluginTheme();
   const view = useUsageAnalyticsView(props.slice, props.query);
+  const previousCost = useUsageComparisonCost(props.slice, props.query.costBasis, view?.pageCost.selection);
   const presentation = useWidgetPresentation();
   const phone = useDeviceType() === 'phone';
   const text = usePlanText();
@@ -76,8 +77,6 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
       ? view.pageCost.amountUsd / totalTokens * 1e6 : null,
     currency: view.pageCost.selection?.currency ?? 'USD' };
   const previous = props.slice.comparison?.accounting;
-  const previousCost = previous
-    ? projectUsagePageCost(previous, props.query.costBasis, view.pageCost.selection).amountUsd : null;
   const previousPerMtok =
     previous && previous.totals.tokens.total > 0 && previousCost !== null
       ? (previousCost /

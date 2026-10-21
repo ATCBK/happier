@@ -58,6 +58,121 @@ async function loadApi() {
 }
 
 describe('apiProviderAccountUsage', () => {
+    it('borrows the quota record acquisition from the snapshot row owner without borrowing its cancellation', async () => {
+        await activateTestHome();
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        const { getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
+        const { createCapturedServerReadTransport } = await import('@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport');
+        const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
+        const { flushHookEffects } = await import('@/dev/testkit/hooks/flushHookEffects');
+        const serverId = getActiveServerSnapshot().serverId;
+        const profile = getServerProfileById(serverId);
+        if (!profile) throw new Error('Expected the activated Home profile');
+        const readTransport = createCapturedServerReadTransport({ serverId, profile, credentials });
+        const held = createDeferred<void>();
+        const snapshot = makeSnapshot();
+        const source = { bindingKind: 'account' as const,
+            ref: { service: { pluginId: 'example.usage', localId: 'usage' }, accountId: 'account' } };
+        let records = 0;
+        let sources = 0;
+        vi.stubGlobal('fetch', vi.fn(async (input: unknown) => {
+            if (isServerFetchConnectivityProbeRequest(input)) return Response.json({ ok: true });
+            if (String(input).includes('/sources/resolve')) {
+                sources += 1;
+                return Response.json({ source, recordId: snapshot.recordId,
+                    providerAccountId: snapshot.recordKey.accountSubjectId, fetchedAt: 1, staleAfterMs: 2 });
+            }
+            records += 1;
+            await held.promise;
+            return Response.json({ content: { t: 'plain', v: snapshot },
+                metadata: { fetchedAt: 1, staleAfterMs: 2, status: 'ok' }, sources: [source] });
+        }));
+        const { getProviderAccountUsageQuota, getProviderAccountUsageSnapshotPlain } = await loadApi();
+        const abort = new AbortController();
+        const rowOptions = { readTransport, retry: 'none' as const, signal: abort.signal };
+        const row = getProviderAccountUsageSnapshotPlain(credentials, { recordId: snapshot.recordId }, rowOptions);
+        void row.catch(() => {});
+        let quota: ReturnType<typeof getProviderAccountUsageQuota> | undefined;
+        try {
+            await vi.waitFor(() => expect(records).toBe(1));
+            quota = getProviderAccountUsageQuota(credentials, { source },
+                { accountMode: 'plain', readTransport, includePendingWork: false });
+            await vi.waitFor(() => expect(sources).toBe(1));
+            await flushHookEffects({ cycles: 20 });
+            expect(records).toBe(1);
+            abort.abort();
+            held.resolve();
+            await expect(row).rejects.toMatchObject({ name: 'AbortError' });
+            expect((await quota).current).toEqual(snapshot);
+        } finally { held.resolve(); await Promise.allSettled([quota, row]); }
+    });
+
+    it('shares admitted source and record transport across current and history demand without caching a result', async () => {
+        await activateTestHome();
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        const { getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
+        const { createCapturedServerReadTransport } = await import('@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport');
+        const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
+        const serverId = getActiveServerSnapshot().serverId;
+        const profile = getServerProfileById(serverId);
+        if (!profile) throw new Error('Expected the activated Home profile');
+        const readTransport = createCapturedServerReadTransport({ serverId, profile, credentials });
+        const held = createDeferred<void>();
+        const snapshot = makeSnapshot();
+        const source = { bindingKind: 'account' as const,
+            ref: { service: { pluginId: 'example.usage', localId: 'usage' }, accountId: 'account' } };
+        const record = { content: { t: 'plain', v: snapshot },
+            metadata: { fetchedAt: 1, staleAfterMs: 2, status: 'ok' }, sources: [source] };
+        const counts = new Map<string, number>();
+        vi.stubGlobal('fetch', vi.fn(async (input: unknown) => {
+            if (isServerFetchConnectivityProbeRequest(input)) return Response.json({ ok: true });
+            const path = new URL(String(input)).pathname;
+            counts.set(path, (counts.get(path) ?? 0) + 1);
+            await held.promise;
+            return Response.json(path.endsWith('/sources/resolve') ? { source, recordId: snapshot.recordId,
+                providerAccountId: snapshot.recordKey.accountSubjectId, fetchedAt: 1, staleAfterMs: 2 }
+                : path.endsWith('/history') ? { entries: [{ id: 'accepted', observedAtMs: 1, record }], nextCursor: null } : record);
+        }));
+        const { getProviderAccountUsageQuota } = await loadApi();
+        const options = { accountMode: 'plain' as const, readTransport, includePendingWork: false };
+        const current = getProviderAccountUsageQuota(credentials, { source }, options);
+        const history = getProviderAccountUsageQuota(credentials, { source,
+            history: { range: { startAtMs: 0, endAtMs: 5 }, pageSize: 1 } }, options);
+        try {
+            await vi.waitFor(() => expect(counts.size).toBeGreaterThan(0));
+            held.resolve();
+            expect((await current).current).toEqual(snapshot);
+            expect((await history).history?.entries[0]?.snapshot).toEqual(snapshot);
+            expect(counts.get('/v4/connect/qualified/provider-account-usage/sources/resolve')).toBe(1);
+            expect(counts.get('/v4/connect/qualified/provider-account-usage/record')).toBe(1);
+            expect(counts.get('/v4/connect/qualified/provider-account-usage/history')).toBe(1);
+            await getProviderAccountUsageQuota(credentials, { source }, options);
+            expect(counts.get('/v4/connect/qualified/provider-account-usage/record')).toBe(2);
+        } finally { held.resolve(); await Promise.allSettled([current, history]); }
+    });
+
+    it.each(['plain', 'e2ee'] as const)('returns a %s snapshot failure to its observation owner without an adapter retry', async mode => {
+        await activateTestHome();
+        let reads = 0;
+        const snapshot = makeSnapshot();
+        vi.stubGlobal('fetch', vi.fn(async (input: unknown) => {
+            if (isServerFetchConnectivityProbeRequest(input)) return Response.json({ ok: true });
+            if (++reads === 1) return Response.json({ error: 'storage_unavailable' }, { status: 503 });
+            return Response.json({ content: mode === 'plain' ? { t: 'plain', v: snapshot }
+                : { t: 'encrypted', c: 'ciphertext' }, metadata: { fetchedAt: 1, staleAfterMs: 2, status: 'ok' }, sources: [] });
+        }));
+        const api = await loadApi();
+        const read = mode === 'plain' ? api.getProviderAccountUsageSnapshotPlain : api.getProviderAccountUsageSnapshotSealed;
+        await expect(read(credentials, { recordId: snapshot.recordId }, { retry: 'none' })).rejects.toThrow();
+        expect(reads).toBe(1);
+        await expect(read(credentials, { recordId: snapshot.recordId }, { retry: 'none' })).resolves.not.toBeNull();
+        expect(reads).toBe(2);
+        // Standalone callers still own the established finite backoff.
+        reads = 0;
+        await expect(read(credentials, { recordId: snapshot.recordId })).resolves.not.toBeNull();
+        expect(reads).toBe(2);
+    });
+
     it.each(['plain', 'e2ee'] as const)('deduplicates concurrent %s backfill publication without holding independent reads', async accountMode => {
         await activateTestHome();
         const { ProviderAccountUsagePageProjectionWriteV1Schema } = await import('@happier-dev/protocol/connect/providerAccountUsageHistory');
@@ -197,6 +312,87 @@ describe('apiProviderAccountUsage', () => {
         mode = accountMode === 'plain' ? 'e2ee' : 'plain';
         await expect(getProviderAccountUsageQuota({ token: 'test-token' }, input, { ...options, accountMode: mode }))
             .rejects.toThrow('provider_account_usage_content_mode_mismatch');
+    });
+
+    it.each(['plain', 'e2ee'] as const)('derives unchanged %s observations once across rolling range and clock reads, but keeps reset and stale transitions', async accountMode => {
+        await activateTestHome();
+        const { buildProviderAccountUsagePageProjectionV1 } = await import('@happier-dev/protocol/connect/providerAccountUsagePageProjection');
+        const { sealProviderAccountUsagePageProjectionV1 } = await import('@happier-dev/protocol/connect/providerAccountUsagePageProjectionCrypto');
+        let snapshot: ProviderAccountUsageSnapshotV1 = { ...makeSnapshot(), staleAfterMs: 1_000,
+            meters: [{ meterId: 'quota', label: 'Quota', used: 20, limit: 100, utilizationPct: 20,
+                unit: 'requests', status: 'ok', resetsAt: 100, resetAtMs: 100, windowDurationMs: 100, details: {} }] };
+        const source = { ref: { service: { pluginId: 'example.usage', localId: 'usage' }, accountId: 'account' }, bindingKind: 'account' as const };
+        const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
+        const range = { startAtMs: 0, endAtMs: 500 };
+        const projection = buildProviderAccountUsagePageProjectionV1({ recordId: snapshot.recordId, range,
+            history: { entries: [{ id: 'accepted', observedAtMs: 1, snapshot }], nextCursor: null } });
+        const content = sealProviderAccountUsagePageProjectionV1({ projection, accountMode, material,
+            randomBytes: length => new Uint8Array(length).fill(9) });
+        let bodyReads = 0;
+        let backfill = false;
+        let writes = 0;
+        let etag = '"one"';
+        const request = async (path: string, init?: RequestInit) => {
+            if (path.includes('/history')) {
+                if (init?.method === 'PUT') { writes++; etag = '"two"'; return Response.json({ ok: true }, { headers: { etag } }); }
+                if (init?.method === 'HEAD') return new Response(null, { status: bodyReads ? 304 : 200,
+                    headers: { etag, 'x-happier-usage-projection-complete': backfill ? 'false' : 'true' } });
+                if (backfill) return Response.json({ entries: [], nextCursor: null });
+                bodyReads++;
+                return Response.json({ projection: { recordId: snapshot.recordId, demand: { range, resolution: 'accepted_observations' },
+                    observationCount: 1, frontier: { id: 'accepted', observedAtMs: 1 }, content }, complete: true }, { headers: { etag: '"one"' } });
+            }
+            const sealed = sealProviderAccountUsageSnapshot({ snapshot, material, randomBytes: length => new Uint8Array(length).fill(9) });
+            return Response.json(path.includes('/sources/resolve') ? { source, recordId: snapshot.recordId,
+                providerAccountId: snapshot.recordKey.accountSubjectId, fetchedAt: snapshot.fetchedAtMs, staleAfterMs: snapshot.staleAfterMs }
+                : { content: accountMode === 'plain' ? { t: 'plain', v: snapshot } : { t: 'encrypted', c: sealed.ciphertext,
+                    subscription: sealed.subscription, recoveryCreditDetails: sealed.recoveryCreditDetails },
+                    metadata: { fetchedAt: snapshot.fetchedAtMs, staleAfterMs: snapshot.staleAfterMs, status: 'ok' }, sources: [source] });
+        };
+        const { getProviderAccountUsageQuota } = await loadApi();
+        const projectionDocuments: import('./apiProviderAccountUsage').ProviderAccountUsageProjectionDocuments = new Map();
+        const options = { accountMode, material, request, projectionDocuments, includePendingWork: false };
+        const read = (nowMs: number, startAtMs = 0, endAtMs = 5) => getProviderAccountUsageQuota({ token: 'test-token' },
+            { source, projection: { range: { startAtMs, endAtMs }, resolution: 'accepted_observations' } }, { ...options, nowMs });
+        const first = await read(1);
+        expect(first.pace[0]?.value.status).toBe('available');
+        const admittedSnapshot = projectionDocuments.get(snapshot.recordId)!.admitted!.opened.history.entries[0]!.snapshot;
+        const meters = admittedSnapshot.meters;
+        let historyMeterReads = 0;
+        // Transparent access instrumentation preserves the real admitted history and derivation logic.
+        Object.defineProperty(admittedSnapshot, 'meters', { configurable: true, get() { historyMeterReads++; return meters; } });
+        for (let nowMs = 2; nowMs <= 6; nowMs++) {
+            const repeated = await read(nowMs, 0, nowMs + 5);
+            expect(repeated.pageFacts).toBe(first.pageFacts);
+            expect(repeated.pace).toBe(first.pace);
+            expect(repeated.unusedCapacity).toBe(first.unusedCapacity);
+        }
+        expect(historyMeterReads).toBe(0);
+        expect(bodyReads).toBe(1);
+        // Re-admitting an empty tail changes publication custody, not its observations.
+        backfill = true;
+        const extended = await read(7, 0, 501);
+        backfill = false;
+        expect(writes).toBe(1);
+        expect(extended.pageFacts).toBe(first.pageFacts);
+        expect(extended.pace).toBe(first.pace);
+        expect(extended.unusedCapacity).toBe(first.unusedCapacity);
+        const reset = await read(100);
+        expect(reset.pace[0]?.value).toEqual({ status: 'unavailable', reason: 'outside_window' });
+        expect(reset.unusedCapacity?.windows).toHaveLength(1);
+        const stale = await read(1_001);
+        expect(stale.pace[0]?.value).toEqual({ status: 'unavailable', reason: 'stale' });
+        const reversed = await read(2);
+        expect(reversed.pace).toEqual(first.pace);
+        expect(reversed.unusedCapacity?.windows).toHaveLength(0);
+        snapshot = { ...snapshot, observedAtMs: 2, fetchedAtMs: 2,
+            meters: snapshot.meters.map(meter => ({ ...meter, used: 30, utilizationPct: 30 })) };
+        const changed = await read(3);
+        expect(changed.pace).not.toEqual(first.pace);
+        expect(changed.current?.fetchedAtMs).toBe(2);
+        const narrower = await read(3, 2);
+        expect(narrower.pageFacts?.resetWitness).toBeNull();
+        expect(bodyReads).toBe(1);
     });
 
     it('derives pace and unused capacity once per read: later facets of the same read share its instant', async () => {

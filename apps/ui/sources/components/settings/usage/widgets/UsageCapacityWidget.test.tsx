@@ -1,14 +1,26 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderScreen, standardCleanup, flushHookEffects } from '@/dev/testkit';
+import * as pageAggregation from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import * as usageCost from '@happier-dev/protocol/usage/usageCost';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { captureUiUsageQueryAccountContext, decodeUsageQueryResource, getUsageQueryResourceStore, invalidateUsageQueryResources } from '@/sync/api/account/usageQueryResource';
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
+import { useUsageWidgetModel } from './usageWidgetBatch';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { t } from '@/text';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { resolveUsagePageAggregation } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
-import { ConnectedServiceQuotaGetResultV1Schema } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
-import { buildProviderAccountUsageRecordId } from '@happier-dev/protocol/connect/account-usage-primitives';
+import { ConnectedServiceQuotaGetResultV1Schema, ProviderAccountUsagePageProjectionWriteV1Schema, QualifiedProviderAccountUsageHistoryRequestV4Schema } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
+import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
+import { parseQualifiedConnectedAccountV4StructuredQueryValue } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4QueryCodec';
 import { WidgetPresentationProvider } from '@happier-dev/plugin-ui';
 import type { UsageWidgetBodyModel } from '../useUsageWidgetResource';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
@@ -21,6 +33,7 @@ let previousSnapshot = getAppliedActiveServerSnapshot();
 let previousAvailable = isAppliedActiveServerRuntimeAvailable();
 let previousProfile = storage.getState().profile;
 let previousScope = storage.getState().profileScope;
+let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
 beforeEach(() => {
   previousSnapshot = getAppliedActiveServerSnapshot();
   previousAvailable = isAppliedActiveServerRuntimeAvailable();
@@ -33,8 +46,179 @@ beforeEach(() => {
         displayName: groupId, incarnation: `${groupId}:1`, policy: { strategy: 'priority' }, generation: 1, runtimeStateRevision: 1,
         state: {}, members: [], activeConnectedAccountId: null, createdAt: 1, updatedAt: 1 })) }) });
 });
-afterEach(() => {
+
+it('keeps standalone Capacity independent of accounting across unrelated Account and current-record wakes', async () => {
+  const scope = { period: { startMs: 1000 }, agents: [], machines: [], projects: [], sources: [], session: null, costBasis: 'auto' } as const;
+  const now = Date.now();
+  const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'capacity' };
+  const source = { bindingKind: 'account' as const, ref };
+  const recordKey = { providerId: 'codex', accountSubjectId: ref.accountId, subjectKind: 'account', quotaScope: 'account' } as const;
+  let record = ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+    providerId: 'codex', accountSubject: { kind: 'providerSubject', id: ref.accountId }, observedAtMs: now, fetchedAtMs: now,
+    staleAfterMs: 600_000, source: 'providerHttp', confidence: 'confirmed', state: 'loaded_data',
+    meters: [{ meterId: 'weekly', label: 'Weekly', usedPct: 40, utilizationPct: 40, used: null, limit: null,
+      unit: 'count', status: 'ok', resetsAt: now + 86_400_000, windowDurationMs: 7 * 86_400_000 }] });
+  let projection: ReturnType<typeof ProviderAccountUsagePageProjectionWriteV1Schema.parse> | null = null;
+  let currentRead = createDeferred<void>();
+  let holdCurrentRead = false;
+  const historyRead = createDeferred<void>();
+  let holdHistoryRead = false;
+  const profile = AccountProfileSchema.parse({ id: 'account-a', connectedAccountsV4: [{ ref, status: 'connected', authenticationModeId: 'manual',
+    revisionSemantics: 'revisioned', credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false,
+    configurationRevision: null, scopes: [] }] });
+  home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-capacity-demand.test', accountId: 'account-a', profile }],
+    route: async request => {
+      if (request.path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+      if (request.path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+      if (request.path === '/v4/connect/qualified/provider-account-usage/sources/resolve') return Response.json({
+        source, recordId: record.recordId, providerAccountId: ref.accountId, fetchedAt: record.fetchedAtMs, staleAfterMs: 600_000 });
+      if (request.path === '/v4/connect/qualified/provider-account-usage/record') {
+        if (holdCurrentRead) await currentRead.promise;
+        return Response.json({ content: { t: 'plain', v: record },
+          metadata: { fetchedAt: record.fetchedAtMs, staleAfterMs: 600_000, status: 'ok' }, sources: [source] });
+      }
+      if (request.path === '/v2/pending/reset-starts/read') return Response.json({ entries: [{ sessionId: 'session', localId: 'held',
+        reset: { source, recordId: record.recordId, meterId: 'weekly', witness: { id: 'accepted', observedAtMs: record.fetchedAtMs } },
+        authorityCurrent: true }] });
+      if (request.path === '/v4/connect/qualified/provider-account-usage/history') {
+        if (request.method === 'HEAD') return new Response(null, { status: 405 });
+        if (request.method === 'PUT') { projection = ProviderAccountUsagePageProjectionWriteV1Schema.parse(request.body); return Response.json({ success: true }); }
+        if (holdHistoryRead) await historyRead.promise;
+        const query = parseQualifiedConnectedAccountV4StructuredQueryValue(QualifiedProviderAccountUsageHistoryRequestV4Schema,
+          request.url.searchParams.get('query'));
+        return Response.json('projection' in query ? { projection, complete: projection !== null } : {
+          entries: [{ id: 'accepted', observedAtMs: record.fetchedAtMs, record: { content: { t: 'plain', v: record },
+            metadata: { fetchedAt: record.fetchedAtMs, staleAfterMs: 600_000, status: 'ok' }, sources: [source] } }], nextCursor: null });
+      }
+      return undefined;
+    } });
+  publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
+  const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+  const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
+  storage.setState({ profileScope: { serverId: home.homes.a!.id, accountId: 'account-a' },
+    profile });
+  await getServerFeaturesSnapshot({ serverId: home.homes.a!.id, force: true });
+  // Transparent observers: the production projector and price logic remain real.
+  const aggregate = vi.spyOn(pageAggregation, 'resolveUsagePageAggregation');
+  const reprice = vi.spyOn(usageCost, 'repriceUsageAnalyticsResponse');
+  const seen: UsageWidgetBodyModel[] = [];
+  let resetModel: UsageWidgetBodyModel | undefined;
+  const { UsageCapacityWidget } = await import('./UsageCapacityWidget');
+  const { default: AgentInputResetStartPicker } = await import('@/components/sessions/agentInput/components/AgentInputResetStartPicker');
+  function ResetProbe() {
+    resetModel = useUsageWidgetModel({ session: 'session', includeQuotaHistory: true }, 'usage_capacity').model;
+    return null;
+  }
+  function Capacity(props: Readonly<{ reset: boolean }>) {
+    const { model, query } = useUsageWidgetModel({ ...scope, metric: 'tokens', breakdown: [] }, 'usage_capacity');
+    seen.push(model);
+    return <>{query && model.slice ? <UsageCapacityWidget id="usage_capacity" model={model} slice={model.slice} query={query}
+      serverId={home!.homes.a!.id} testID="capacity" /> : null}{props.reset ? <>
+        <AgentInputResetStartPicker sessionId="session" serverId={home!.homes.a!.id} onSelect={() => {}} /><ResetProbe />
+      </> : null}</>;
+  }
+  const view = (reset: boolean) => <InjectedAuthProvider credentials={credentials}><Capacity reset={reset} /></InjectedAuthProvider>;
+  const screen = await renderScreen(view(false));
+  try {
+    await expect.poll(() => seen.at(-1)?.slice?.pending).toBe(false);
+    const first = seen.at(-1)!.slice!;
+    expect(first.accounting).toBeUndefined();
+    expect(first.quota?.[0]?.current?.meters[0]?.usedPct).toBe(40);
+    expect(screen.findHostByTestId('capacity.cell.capacity')).not.toBeNull();
+    expect(screen.getTextContent()).toContain('60%');
+    expect(home.requests.filter(request => request.path.startsWith('/v4/connect/qualified/provider-account-usage/history'))
+      .map(request => [request.method, request.path])).toEqual([]);
+    expect(home.requests.filter(request => request.path === '/v2/pending/reset-starts/read').map(request => request.path)).toEqual([]);
+    expect(first.quota?.[0]?.pageFacts).toBeUndefined();
+    expect(first.quota?.[0]?.history).toBeUndefined();
+    const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+    const { PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 } = await import('@happier-dev/protocol/changes');
+    for (let index = 0; index < 8; index++) {
+      await act(async () => {
+        storage.setState(state => ({ profile: { ...state.profile } }));
+        publishHomeAccountChange(home!.homes.a!.id, [`unrelated-${index}`], { changeKinds: ['session'], usageQueryAffects: false });
+        record = { ...record, fetchedAtMs: now + index + 1, observedAtMs: now + index + 1,
+          meters: record.meters.map(meter => ({ ...meter, usedPct: 41 + index, utilizationPct: 41 + index })) };
+        publishHomeAccountChange(home!.homes.a!.id, [PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1], { usageQueryAffects: true });
+        await flushHookEffects({ cycles: 5 });
+      });
+      await expect.poll(async () => { await flushHookEffects({ cycles: 2 });
+        return seen.at(-1)!.slice!.quota?.[0]?.current?.meters[0]?.usedPct; }).toBe(41 + index);
+    }
+    await flushHookEffects({ cycles: 10 });
+    expect(home.requests.filter(request => request.path === '/v2/usage/query')).toHaveLength(0);
+    expect(aggregate).toHaveBeenCalledTimes(0);
+    expect(reprice).toHaveBeenCalledTimes(0);
+    expect(seen.at(-1)!.slice!.quota?.[0]?.current?.meters[0]?.usedPct).toBe(48);
+    expect(home.requests.filter(request => request.path.startsWith('/v4/connect/qualified/provider-account-usage/history'))
+      .map(request => [request.method, request.path])).toEqual([]);
+    holdCurrentRead = true;
+    let refreshing: Promise<void> | undefined;
+    await act(async () => { refreshing = seen.at(-1)!.refresh(); await flushHookEffects({ cycles: 5 }); });
+    try {
+      await expect.poll(() => seen.at(-1)!.refreshing).toBe(true);
+      expect(seen.at(-1)!.slice!.quota?.[0]?.current?.meters[0]?.usedPct).toBe(48);
+      holdHistoryRead = true;
+      await screen.update(view(true));
+      await expect.poll(() => resetModel?.pending).toBe(true);
+      currentRead.resolve();
+      await refreshing;
+      await expect.poll(() => home!.requests.some(request => request.path === '/v2/pending/reset-starts/read')).toBe(true);
+      expect(resetModel?.pending).toBe(true);
+      expect(resetModel?.slice?.quota?.[0]?.pageFacts).toBeUndefined();
+      historyRead.resolve();
+      await expect.poll(() => resetModel?.pending).toBe(false);
+      expect(resetModel?.slice?.quota?.[0]?.pageFacts?.resetWitness?.id).toBe('accepted');
+      expect(resetModel?.slice?.quota?.[0]?.waitingWork).toMatchObject({ status: 'available', entries: [{ localId: 'held' }] });
+      expect(screen.findHostByTestId(`agent-input-reset-start-option.${ref.service.pluginId}/${ref.service.localId}:${ref.accountId}:weekly`)).not.toBeNull();
+      const historyCalls = home.requests.filter(request => request.path.startsWith('/v4/connect/qualified/provider-account-usage/history')).length;
+      const pendingCalls = home.requests.filter(request => request.path === '/v2/pending/reset-starts/read').length;
+      const fullRead = resetModel!.slice!.quota![0]!;
+      const fullQuery = resetModel!.requestedQuery!.query;
+      await screen.update(view(false));
+      record = { ...record, fetchedAtMs: now + 100, observedAtMs: now + 100,
+        meters: record.meters.map(meter => ({ ...meter, usedPct: 50, utilizationPct: 50 })) };
+      await act(async () => { await seen.at(-1)!.refresh(); });
+      expect(seen.at(-1)!.slice!.quota?.[0]?.current?.meters[0]?.usedPct).toBe(50);
+      expect(screen.getTextContent()).toContain('50%');
+      expect(seen.at(-1)!.slice!.quota?.[0]?.pageFacts).toBeUndefined();
+      expect(home.requests.filter(request => request.path.startsWith('/v4/connect/qualified/provider-account-usage/history'))).toHaveLength(historyCalls);
+      expect(home.requests.filter(request => request.path === '/v2/pending/reset-starts/read')).toHaveLength(pendingCalls);
+      console.info('S4 Usage fixture demand', JSON.stringify({ currentOnlyHistoryReads: 0, currentOnlyPendingReads: 0,
+        explicitResetHistoryRequests: historyCalls, explicitResetPendingReads: pendingCalls,
+        historyRequestsAfterClosingDetail: historyCalls, pendingReadsAfterClosingDetail: pendingCalls }));
+      // A new detailed range seeds from the same Account owner's full LKG,
+      // not the newer head-only sibling claiming fresh private facts.
+      currentRead = createDeferred<void>();
+      const context = captureUiUsageQueryAccountContext(credentials)!;
+      const detail = getUsageQueryResourceStore(context).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({
+        queries: [normalizeUsageQuery({ ...fullQuery, period: { startMs: 0, endMs: now + 200 } })],
+      }) });
+      const reading = detail.refresh();
+      const release = detail.subscribe(() => {}, false);
+      try {
+        await expect.poll(() => detail.getSnapshot().value && decodeUsageQueryResource(detail.getSnapshot().value!).results[0]?.quota?.[0]).toEqual(fullRead);
+        expect(detail.getSnapshot().pending).not.toBe('idle');
+        await act(async () => {
+          storage.setState({ profileScope: null });
+          retireActiveServerAccountScopeLifetime();
+          currentRead.resolve();
+          await reading;
+        });
+        await screen.update(view(false));
+        expect(seen.at(-1)?.slice).toBeNull();
+      } finally { currentRead.resolve(); await reading; release(); }
+    } finally { currentRead.resolve(); historyRead.resolve(); await refreshing; }
+  } finally { currentRead.resolve(); historyRead.resolve(); await screen.unmount(); }
+});
+afterEach(async () => {
   standardCleanup();
+  retireActiveServerAccountScopeLifetime();
+  invalidateUsageQueryResources();
+  await home?.dispose();
+  home = undefined;
+  vi.restoreAllMocks();
   storage.setState({ profile: previousProfile, profileScope: previousScope });
   publishAppliedActiveServerSnapshot(previousSnapshot, previousAvailable);
 });

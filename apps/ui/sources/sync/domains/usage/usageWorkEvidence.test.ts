@@ -160,7 +160,7 @@ describe('opened Session usage work evidence', () => {
         expect(runtimeEmpty.permissions).toEqual([]);
         expect(compose(runtimeEmpty)).toMatchObject({ permissions: null, inputs: { acceptedCount: 0, steeringCount: 0 } });
         const confirmationEmpty = projectSessionUsageWorkEvidence({ ...session, agentState: null,
-            metadata: { actionConfirmationsV1: { v: 1, requests: {}, completedRequests: {} } },
+            metadata: { path: '', host: '', actionConfirmationsV1: { v: 1, requests: {}, completedRequests: {} } },
         });
         expect(confirmationEmpty.permissions).toEqual([]);
         // An observed empty map survives projection, but partial history cannot

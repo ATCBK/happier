@@ -4,6 +4,7 @@ import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/s
 import { decodeUsageQueryResource, getUsageQueryResourceStore, readUiQuota, readUiUsageModelPrices, type UsageQueryAccountContext } from '@/sync/api/account/usageQueryResource';
 import type { LazyActionAccountContext } from './actionAccountContext';
 import { HappyError } from '@/utils/errors/errors';
+import { PublicProfileReadResultV1Schema } from '@happier-dev/protocol/account/publicProfilePublication';
 
 /** Captured Home/Account reads use the same query adapter as mounted Resources. */
 export function createUiUsageActionPorts(account: UsageQueryAccountContext & Pick<LazyActionAccountContext, 'assertCurrent'>,
@@ -24,6 +25,22 @@ export function createUiUsageActionPorts(account: UsageQueryAccountContext & Pic
     }
   };
   return {
+    readPublicProfile: async context => {
+      context.signal?.throwIfAborted();
+      account.assertCurrent();
+      const response = await account.request('/v1/account/public-profile/view', { method: 'GET',
+        headers: { Authorization: `Bearer ${account.credentials.token}` }, ...(context.signal ? { signal: context.signal } : {}) });
+      context.signal?.throwIfAborted();
+      account.assertCurrent();
+      if ([404, 405, 501].includes(response.status)) return { kind: 'unavailable' };
+      if (!response.ok) return { ok: false, errorCode: response.status === 401 || response.status === 403 ? 'denied' : 'public_profile_read_failed',
+        error: 'public_profile_read_failed' };
+      const raw: unknown = await response.json();
+      context.signal?.throwIfAborted();
+      account.assertCurrent();
+      const result = PublicProfileReadResultV1Schema.safeParse(raw);
+      return result.success ? result.data : { ok: false, errorCode: 'public_profile_result_invalid', error: 'public_profile_result_invalid' };
+    },
     prices: { get: context => prices(false, context), refresh: context => prices(true, context) },
     readQuota: async (input, context) => {
       context.signal?.throwIfAborted();
@@ -108,6 +125,26 @@ export function createUiUsageActionPorts(account: UsageQueryAccountContext & Pic
         const render = renderRecap ?? (await import('@/components/settings/usage/widgets/recap/renderUsageRecapImage')).renderUsageRecapImage;
         account.assertCurrent();
         const result = await render(compose, { ...context, signal: retired.signal });
+        context.signal?.throwIfAborted();
+        account.assertCurrent();
+        return result;
+      } finally {
+        removeRetire.dispose();
+        context.signal?.removeEventListener('abort', abort);
+      }
+    },
+    deliverRecap: async (file, intent, context) => {
+      context.signal?.throwIfAborted();
+      account.assertCurrent();
+      const retired = new AbortController();
+      const removeRetire = account.accountLifetime.onRetire(() => retired.abort());
+      const abort = () => retired.abort();
+      context.signal?.addEventListener('abort', abort, { once: true });
+      try {
+        const { deliverUsageImageFileResult } = await import('@/components/settings/usage/usageAnalyticsExport');
+        account.assertCurrent();
+        const result = await deliverUsageImageFileResult(file, intent, { signal: retired.signal,
+          isCurrent: () => { account.assertCurrent(); return true; } });
         context.signal?.throwIfAborted();
         account.assertCurrent();
         return result;

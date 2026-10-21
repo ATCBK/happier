@@ -32,6 +32,7 @@ import {
   useUsagePluginTheme,
   type UsageBodyProps,
 } from './usageBodyKit';
+import { UsageSkyStyleBody, UsageWeekTideStyleBody, UsageDaylightStyleBody } from './UsageChartStyleBodies';
 
 /**
  * Below this body width the 7×24 matrix has no room to be read (a phone); the 24-hour rhythm says the same.
@@ -58,11 +59,20 @@ function settledBodyPx(width: number | undefined): number | undefined {
   return width < HALF_WIDTH_MAX_PX ? SETTLED_HALF_WIDTH_BODY_PX : undefined;
 }
 
+/** One body per widget: its Style own-input picks the encoding of the same question. */
+export function UsageRhythmWidget(props: UsageBodyProps) {
+  const style = props.presentation?.style;
+  if (style === 'sky') return <UsageSkyStyleBody {...props} />;
+  if (style === 'weekTide') return <UsageWeekTideStyleBody {...props} />;
+  if (style === 'daylight') return <UsageDaylightStyleBody {...props} />;
+  return <UsageRhythmWidgetOriginal {...props} />;
+}
+
 /**
  * "When you work": the active-days calendar beside the weekday × hour rhythm, both read from the same
  * admitted activity facts in the query's own calendar (fixed offset, Monday weeks).
  */
-export function UsageRhythmWidget(props: UsageBodyProps) {
+function UsageRhythmWidgetOriginal(props: UsageBodyProps) {
   const { theme } = useUnistyles();
   const chartTheme = useUsagePluginTheme();
   const view = useUsageAnalyticsView(props.slice, props.query);

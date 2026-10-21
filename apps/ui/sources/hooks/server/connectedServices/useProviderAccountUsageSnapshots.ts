@@ -66,6 +66,7 @@ async function readProviderAccountUsageSnapshot(params: Readonly<{
             {
                 signal: params.signal,
                 expectedActiveServer: params.serverBasis,
+                retry: 'none',
             },
         ),
         readSealed: () => getProviderAccountUsageSnapshotSealed(
@@ -74,6 +75,7 @@ async function readProviderAccountUsageSnapshot(params: Readonly<{
             {
                 signal: params.signal,
                 expectedActiveServer: params.serverBasis,
+                retry: 'none',
             },
         ),
         openSealed: (response) => {

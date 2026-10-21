@@ -1,5 +1,6 @@
 import { projectUsagePageCost, resolveEffectiveUsageCostUsd, resolveUsageCostPresentationSource, type UsagePageCostProjection } from '@happier-dev/protocol/usage/usageCostFacts';
 import { resolveUsageBucketBounds, resolveUsageCalendarInstant } from '@happier-dev/protocol/usage/usageCalendar';
+import { resolveUsageDayStreaks } from '@happier-dev/protocol/usage/usageActivitySummary';
 import { resolveUsageTokenCategories } from '@happier-dev/protocol/usage/usageTokenCategories';
 import { normalizeLegacyUsageTokens } from '@happier-dev/protocol/usage/legacyUsageTokens';
 import { agentIdFromEngineKey } from '@happier-dev/protocol/usage/usageFilterOptions';
@@ -83,9 +84,9 @@ export interface UsageAnalyticsKeyedLabel {
 }
 
 export interface UsageAnalyticsInsightsViewModel {
-    currentStreakDays: number;
-    activeDays: number;
-    longestStreakDays: number;
+    currentStreakDays: number | null;
+    activeDays: number | null;
+    longestStreakDays: number | null;
     sessionsUsed: number;
     messagesUsed: number;
     modelsTried: number;
@@ -152,7 +153,7 @@ export interface UsageHeroViewModel {
     events: number;
     /** Total chat messages across the period (messageStats fold-back, B-2). */
     messages: number;
-    longestStreakDays: number;
+    longestStreakDays: number | null;
 }
 
 /**
@@ -327,8 +328,8 @@ export interface UsageSummaryActivityPoint {
 }
 
 export interface UsageAnalyticsSummaryViewModel {
-    activeDays: number;
-    currentStreakDays: number;
+    activeDays: number | null;
+    currentStreakDays: number | null;
     totalTokens: number;
     totalCost: number;
     currency: string;
@@ -344,7 +345,6 @@ export interface UsageAnalyticsSummaryViewModel {
 export type UsageAnalyticsSource = UsageDataPoint[] | UsageAnalyticsQueryResponse;
 
 const USAGE_SUMMARY_RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-const USAGE_SUMMARY_DAY_MS = 24 * 60 * 60 * 1000;
 
 const dimensionKeys: Record<UsageDimension, keyof UsageDataPoint> = {
     // Maps to the legacy transport field (aligned with the DB column until R.8).
@@ -463,51 +463,12 @@ function resolveResponseCostPresentation(
     return fallback;
 }
 
-function countActiveBuckets(series: readonly UsageAnalyticsSeriesBucket[]): number {
-    let activeDays = 0;
-    for (const bucket of series) {
-        if (bucket.tokens.total > 0 || resolveDisplayCost(bucket.cost) > 0) {
-            activeDays += 1;
-        }
-    }
-    return activeDays;
-}
-
-function isActiveSeriesBucket(bucket: UsageAnalyticsSeriesBucket): boolean {
-    return bucket.tokens.total > 0 || resolveDisplayCost(bucket.cost) > 0;
-}
-
 function isSeriesBucketWithinWindow(
     bucket: UsageAnalyticsSeriesBucket,
     windowStartMs: number,
     windowEndMs: number,
 ): boolean {
     return bucket.bucketEndMs > windowStartMs && bucket.bucketStartMs <= windowEndMs;
-}
-
-function countCurrentStreakThroughNow(
-    series: readonly UsageAnalyticsSeriesBucket[],
-    nowMs: number,
-): number {
-    const activeBuckets = series
-        .filter(isActiveSeriesBucket)
-        .sort((left, right) => left.bucketStartMs - right.bucketStartMs);
-    const latestBucket = activeBuckets[activeBuckets.length - 1];
-    if (!latestBucket || !isSeriesBucketWithinWindow(latestBucket, nowMs - USAGE_SUMMARY_DAY_MS, nowMs)) {
-        return 0;
-    }
-
-    let streak = 0;
-    let nextBucketStartMs: number | null = null;
-    for (let index = activeBuckets.length - 1; index >= 0; index -= 1) {
-        const bucket = activeBuckets[index];
-        if (nextBucketStartMs !== null && nextBucketStartMs - bucket.bucketEndMs > 1) {
-            break;
-        }
-        streak += 1;
-        nextBucketStartMs = bucket.bucketStartMs;
-    }
-    return streak;
 }
 
 function sortBreakdownRows(rows: UsageBreakdownRow[]): UsageBreakdownRow[] {
@@ -627,19 +588,16 @@ function buildLegacyCalendarDays(usage: UsageDataPoint[], timeZoneOffsetMinutes:
 }
 
 function resolveLegacyDayStreaks(days: ReturnType<typeof buildLegacyCalendarDays>, nowMs: number, timeZoneOffsetMinutes: number) {
-    const active = days.filter(day => day.reportCount > 0 || day.tokens > 0 || day.cost > 0);
-    let run = 0;
-    let longestStreakDays = 0;
-    let previousStartMs: number | undefined;
-    for (const day of active) {
-        const startMs = day.timestamp * 1000;
-        run = previousStartMs !== undefined && startMs - previousStartMs === USAGE_SUMMARY_DAY_MS ? run + 1 : 1;
-        longestStreakDays = Math.max(longestStreakDays, run);
-        previousStartMs = startMs;
-    }
-    const todayStartMs = resolveUsageBucketBounds('day', nowMs, timeZoneOffsetMinutes).bucketStartMs;
-    const currentStreakDays = previousStartMs === todayStartMs || previousStartMs === todayStartMs - USAGE_SUMMARY_DAY_MS ? run : 0;
-    return { activeDays: active.length, currentStreakDays, longestStreakDays };
+    return resolveUsageDayStreaks({ days: days.map(day => ({ date: day.date,
+        eventCount: day.reportCount > 0 || day.tokens > 0 || day.cost > 0 ? 1 : 0 })),
+        referenceMs: nowMs, timeZoneOffsetMinutes, coverage: 'partial' });
+}
+
+function resolveResponseDayStreaks(response: UsageAnalyticsQueryResponse, timeZoneOffsetMinutes: number) {
+    const summary = resolveUsageDayStreaks({ days: response.activity?.calendarDays, referenceMs: Date.now(),
+        timeZoneOffsetMinutes, range: response.coverage?.range, coverage: response.coverage?.status });
+    return { ...summary, activeDays: summary.activeDays ?? response.insights?.activeDays ?? null,
+        longestStreakDays: summary.longestStreakDays ?? response.insights?.longestStreakDays ?? null };
 }
 
 function mapBreakdownEntry(
@@ -773,19 +731,18 @@ export function resolveSessionsUsed(response: UsageAnalyticsQueryResponse): numb
     return Math.max(messageSessions, usageSessions);
 }
 
-function buildInsightsFromResponse(response: UsageAnalyticsQueryResponse, activity: UsageAnalyticsActivityViewModel): UsageAnalyticsInsightsViewModel {
+function buildInsightsFromResponse(response: UsageAnalyticsQueryResponse, timeZoneOffsetMinutes: number): UsageAnalyticsInsightsViewModel {
     const insights = response.insights ?? null;
-    const series = [...(response.series ?? [])].sort((left, right) => left.bucketStartMs - right.bucketStartMs);
     const sessionsUsed = resolveSessionsUsed(response);
     const messagesUsed = response.messageStats?.messageCount ?? response.totals.eventCount;
     const modelsTried = response.breakdowns?.model?.length ?? 0;
-    const currentStreakDays = countCurrentStreakThroughNow(series, Date.now());
+    const { activeDays, currentStreakDays, longestStreakDays } = resolveResponseDayStreaks(response, timeZoneOffsetMinutes);
 
     if (insights) {
         return {
             currentStreakDays,
-            activeDays: insights.activeDays,
-            longestStreakDays: insights.longestStreakDays,
+            activeDays,
+            longestStreakDays,
             sessionsUsed,
             messagesUsed,
             modelsTried,
@@ -799,8 +756,8 @@ function buildInsightsFromResponse(response: UsageAnalyticsQueryResponse, activi
 
     return {
         currentStreakDays,
-        activeDays: activity.calendarDays.filter((day) => day.eventCount > 0).length,
-        longestStreakDays: 0,
+        activeDays,
+        longestStreakDays,
         sessionsUsed,
         messagesUsed,
         modelsTried,
@@ -888,10 +845,9 @@ function buildTimelineFromResponse(
 
 function buildTotalsFromResponse(
     totals: ProtocolUsageAnalyticsTotals,
-    series: readonly UsageAnalyticsSeriesBucket[] | undefined,
+    activeDays: number | null,
     costMode: UsageCostMode,
 ): UsageTotals {
-    const activeDays = countActiveBuckets(series ?? []);
     const totalCost = resolveAnalyticsCost(totals.cost, costMode);
 
     return {
@@ -973,12 +929,11 @@ function matchesFocus(dataPoint: UsageDataPoint, focus: UsageFocus | null): bool
     return dataPoint[dimensionKeys[focus.dimension]] === focus.key;
 }
 
-function buildSummaryFromResponse(response: UsageAnalyticsQueryResponse): UsageAnalyticsSummaryViewModel {
+function buildSummaryFromResponse(response: UsageAnalyticsQueryResponse, timeZoneOffsetMinutes: number): UsageAnalyticsSummaryViewModel {
     const series = [...(response.series ?? [])].sort((left, right) => left.bucketStartMs - right.bucketStartMs);
     const nowMs = Date.now();
     const recentWindowStartMs = nowMs - USAGE_SUMMARY_RECENT_WINDOW_MS;
-    const activeDays = countActiveBuckets(series);
-    const currentStreakDays = countCurrentStreakThroughNow(series, nowMs);
+    const { activeDays, currentStreakDays } = resolveResponseDayStreaks(response, timeZoneOffsetMinutes);
     const costPresentation = response.costPresentation ?? null;
     const costMode = costPresentation?.mode ?? 'auto';
     const topEngineLeader = response.leaders?.engines?.[0] ?? null;
@@ -1118,7 +1073,7 @@ export function buildUsageAnalyticsSummaryViewModel(
     timeZoneOffsetMinutes = 0,
 ): UsageAnalyticsSummaryViewModel {
     if (isUsageAnalyticsQueryResponse(source)) {
-        return buildSummaryFromResponse(source);
+        return buildSummaryFromResponse(source, timeZoneOffsetMinutes);
     }
     return buildSummaryFromLegacyUsage(source, timeZoneOffsetMinutes);
 }
@@ -1675,13 +1630,13 @@ export function buildUsageAnalyticsViewModel(
         const costPresentation = resolveResponseCostPresentation(source, filters.costMode);
         const activity = buildActivityFromResponse(source);
         const leaders = buildLeadersFromResponse(source);
-        const insights = buildInsightsFromResponse(source, activity);
+        const insights = buildInsightsFromResponse(source, timeZoneOffsetMinutes);
         const categoryTokens = source.tokenCategories ?? resolveUsageTokenCategories(source.totals.tokens, null);
         const displayTotals = { ...source.totals, tokens: categoryTokens ?? {
             input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: source.totals.tokens.total,
         } };
-        const overview = buildTotalsFromResponse(source.totals, source.series, filters.costMode);
-        const categoryOverview = buildTotalsFromResponse(displayTotals, source.series, filters.costMode);
+        const overview = buildTotalsFromResponse(source.totals, insights.activeDays, filters.costMode);
+        const categoryOverview = buildTotalsFromResponse(displayTotals, insights.activeDays, filters.costMode);
         const availableCostModes = resolveAvailableCostModes(source.totals.cost);
         const trend = buildTrendFromResponse(source.series, filters.costMode);
         const modelTimeline = buildTimelineFromResponse(source.modelTimeline, costPresentation);
@@ -1744,6 +1699,7 @@ export function buildUsageAnalyticsViewModel(
         : createCostPresentation({ reportedUsd: 0, estimatedUsd: 0, costSource: 'none', currency: 'USD' }, 'auto');
     const legacyOverview: UsageTotals = {
         ...totals,
+        activeDays: insights.activeDays,
         eventCount: totals.reportCount,
         costSource: 'legacy',
     };

@@ -32,6 +32,7 @@ import {
 import { useAllMachines } from '@/sync/domains/state/storage';
 import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 import { usagePageCostRow } from '../usageCostPresentation';
+import { UsageCrewBody } from './UsageChartStyleBodies';
 
 const DEFAULT_DIMENSIONS: readonly UsageAnalyticsBreakdownDimension[] = [
   'agent',
@@ -48,11 +49,18 @@ const DRILL_FIELD: Readonly<
   source: 'sources',
 };
 
+/** One body per widget: its Style own-input picks the encoding of the same question. */
+export function UsageBreakdownsWidget(props: UsageBodyProps) {
+  const style = props.presentation?.style;
+  if (style === 'crew') return <UsageCrewBody {...props} />;
+  return <UsageBreakdownsWidgetOriginal {...props} />;
+}
+
 /**
  * "Breakdowns": the widget's own breakdown dimensions as ranked rows, in the shown metric. Rows are
  * the server's ranked entries; a truncated ranking says so instead of implying the rest is zero.
  */
-export function UsageBreakdownsWidget(props: UsageBodyProps) {
+function UsageBreakdownsWidgetOriginal(props: UsageBodyProps) {
   const { theme } = useUnistyles();
   const [expanded, setExpanded] = React.useState<readonly string[]>([]);
   const chartTheme = useUsagePluginTheme();

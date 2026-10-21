@@ -103,7 +103,7 @@ function resolveConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetInput):
     if (input.appRuntime.accountLifetime && !input.appRuntime.accountLifetime.isCurrent())
       return { status: 'denied', reasonCode: 'widget_target_scope_mismatch' };
     const admitted = validateWidgetWorkspaceInputV1({ value: selected as JsonValue, serverId: input.scope.serverId,
-      workspaceRefs: input.workspaceRefs ?? [] }, workspaceRefResolutionContextV1);
+      workspaceRefs: input.workspaceRefs ?? [] }, workspaceRefResolutionContextV1());
     if (admitted.status !== 'valid') return { ...admitted, fields: [{ path, ...admitted }] };
     // Equality may accept target-platform spelling differences; only the admitted
     // checkout supplies the actual path bytes passed to filesystem/SCM readers.

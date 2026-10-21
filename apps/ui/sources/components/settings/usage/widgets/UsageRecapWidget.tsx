@@ -25,13 +25,20 @@ import { RecapStorySurface } from './recap/RecapStorySurface';
 import { UsageRecapComposer } from './recap/UsageRecapComposer';
 import { UsageRecapHighlights } from './recap/UsageRecapHighlights';
 import { UsageWorkAutopsy } from './UsageWorkAutopsy';
+import { UsageRecordsStyleBody } from './UsageChartStyleBodies';
+
+/** One body per widget: its Style own-input picks the encoding of the same question. */
+export function UsageRecapWidget(props: UsageBodyProps) {
+  if (props.presentation?.style === 'personalRecords') return <UsageRecordsStyleBody {...props} />;
+  return <UsageRecapWidgetOriginal {...props} />;
+}
 
 /**
  * Recap (lab urecap/s2wrap): the period's highlights from the same admitted slice, then the two
  * private outputs — the story, and the one stat-card composer behind Share. Existing summary/JSON/CSV
  * exports stay here as quiet actions on the same facts.
  */
-export function UsageRecapWidget(props: UsageBodyProps): React.ReactElement {
+function UsageRecapWidgetOriginal(props: UsageBodyProps): React.ReactElement {
   const shownQuery = props.slice.shownQuery;
   const shownKey = getUsageQueryKey(shownQuery);
   const delivery = React.useRef<AbortController | null>(null);

@@ -48,6 +48,54 @@ function mountedCosts(unpriced = false) {
 }
 
 describe('one selected money basis across Usage bodies', () => {
+  it('does not reaggregate unchanged comparison contributions on a source-progress render', async () => {
+    const props = mountedCosts();
+    const query = normalizeUsageQuery({ ...props.query, period: { startMs: day, endMs: 2 * day } });
+    const priorQuery = normalizeUsageQuery({ ...query, period: { startMs: 0, endMs: day } });
+    const slice = resolveUsagePageAggregation({ queries: [query], accounting: [
+      { query, status: 'available', value: props.slice.accounting! },
+      { query: priorQuery, status: 'available', value: props.slice.accounting! },
+    ] }).results[0]!;
+    let reads = 0;
+    const previous = { ...slice.comparison!.accounting!, contributions: slice.comparison!.accounting!.contributions!.map(row =>
+      new Proxy(row, { get(target, key, receiver) {
+        if (key === 'cost') reads++;
+        return Reflect.get(target, key, receiver);
+      } })) };
+    const withComparison = { ...slice, comparison: { ...slice.comparison!, accounting: previous } };
+    const bodies = (current: typeof withComparison, includeEfficiency = true) => <>
+      <UsagePeriodSummaryWidget {...props} query={query} slice={current} id="usage_period_summary" testID="comparison-summary" />
+      {includeEfficiency ? <UsageEfficiencyWidget {...props} query={query} slice={current} id="usage_efficiency" testID="comparison-efficiency" /> : null}
+    </>;
+    const screen = await renderScreen(bodies(withComparison, false));
+    expect(reads).toBeGreaterThan(0);
+    const metrics = () => screen.findAllByType(HappierDataMetric).filter(metric => metric.props.testID === 'comparison-summary.hero'
+      || metric.props.testID === 'comparison-efficiency.perMtok');
+    expect(metrics().map(metric => metric.props.comparison?.value)).toEqual(['▲ 0%']);
+    reads = 0;
+    await screen.update(bodies(withComparison));
+    expect(reads).toBe(0);
+    expect(metrics().map(metric => metric.props.comparison?.value)).toEqual(['▲ 0%', '▲ 0%']);
+    reads = 0;
+    await screen.update(bodies({ ...withComparison, pending: true }));
+    expect(reads).toBe(0);
+    expect(metrics().map(metric => metric.props.comparison?.value)).toEqual(['▲ 0%', '▲ 0%']);
+    const changedPrevious = { ...previous, contributions: previous.contributions.map(row => ({ ...row,
+      cost: { ...row.cost, reportedUsd: row.cost.reportedUsd * 2 } })) };
+    await screen.update(bodies({ ...withComparison, comparison: { ...withComparison.comparison, accounting: changedPrevious } }));
+    expect(metrics().map(metric => metric.props.comparison?.value)).toEqual(['▼ 50%', '▼ 50%']);
+  });
+  it('keeps unrequested calendar evidence unavailable in the period summary', async () => {
+    const props = mountedCosts();
+    const query = normalizeUsageQuery({ ...props.query, metric: 'tokens', includeSessionEvidence: false, includeWorkEvidence: false });
+    const screen = await renderScreen(<UsagePeriodSummaryWidget {...props} query={query}
+      id="usage_period_summary" testID="summary" />);
+    const metric = screen.findAllByType(HappierDataMetric)
+      .find(value => value.props.label === t('usage.board.page.activeDays'));
+    expect(metric?.props.value).toBe('—');
+    expect(metric?.props.caption).toBeUndefined();
+  });
+
   it('renders unpriced tokens from the canonical cost facts, never as money or a fabricated model estimate', async () => {
     const props = mountedCosts(true);
     const expected = props.slice.costFactTotals!.filter(fact => fact.kind === 'unpriced').reduce((sum, fact) => sum + fact.tokens.total, 0);
