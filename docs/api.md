@@ -2231,7 +2231,7 @@ Artifact bytes and grants. See the
 
 ### Artifacts
 - In 0.3 development, `GET /v1/artifacts?kind=skill`
-  (also `prompt`, `plugin_ui`, `work_board`, or `other`) returns
+  (accepted kinds are owned by Protocol's `artifacts/artifactKindV1.ts`) returns
   `{items: [...], hasUnclassified: boolean}` with the same authorized header
   projection and paging as the unfiltered list. `hasUnclassified` covers null-kind
   rows readable by the caller, including grants, independently of the current page.

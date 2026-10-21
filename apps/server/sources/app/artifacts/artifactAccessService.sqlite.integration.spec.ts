@@ -17,6 +17,7 @@ import { createFakeSocket, getSocketHandler } from "@/app/api/testkit/socketHarn
 import { deleteArtifact, migrateArtifactAccountEncryptionInTx, updateArtifactTx } from "./artifactWriteService";
 import { readArtifactHeaderForCallerInTx } from './artifactAccessService';
 import { withSqliteReadSnapshot } from '@/storage/prisma';
+import { buildWidgetSurfaceArtifactHeaderV1, buildWidgetSurfaceArtifactIdV1, readWidgetSurfaceArtifactHeaderV1 } from '@happier-dev/protocol/widgets';
 
 describe("Artifact document grants (real SQLite)", () => {
     let harness: LightSqliteHarness;
@@ -42,6 +43,36 @@ describe("Artifact document grants (real SQLite)", () => {
     }
 
     const protocolHeaders = { "x-happier-account-stored-content-protocol": String(CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION) };
+
+    it('serves only widget-area layouts through the existing kind filter and exact consumer schema', async () => {
+        const owner = await plainAccount();
+        const foreign = await plainAccount();
+        await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const headers = { 'x-test-user-id': owner.id, ...protocolHeaders };
+            const createLayout = async (accountId: string, layoutId: string) => {
+                const surface = { serverId: 'home', accountId, owner: { kind: 'project' as const, projectId: 'project', layoutId } };
+                const layout = { v: 1 as const, surface, name: layoutId, items: [] };
+                const id = buildWidgetSurfaceArtifactIdV1(surface);
+                const result = await app.inject({ method: 'POST', url: '/v1/artifacts',
+                    headers: { ...headers, 'x-test-user-id': accountId }, payload: { id, kind: 'widget_area_layout',
+                        header: encodePlainArtifactStoredContent(buildWidgetSurfaceArtifactHeaderV1(layout)),
+                        body: encodePlainArtifactStoredContent({ body: JSON.stringify(layout) }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER } });
+                expect(result.statusCode, result.body).toBe(200);
+                return id;
+            };
+            const id = await createLayout(owner.id, 'mine');
+            await createLayout(foreign.id, 'foreign');
+            const unrelated = await plainArtifact(owner.id);
+            const result = await app.inject({ method: 'GET', url: '/v1/artifacts?kind=widget_area_layout&limit=500&includeBody=true', headers });
+            expect(result.statusCode, result.body).toBe(200);
+            const page = result.json();
+            expect(page).toMatchObject({ items: [{ id, kind: 'widget_area_layout' }], hasUnclassified: true });
+            expect(page.items).toHaveLength(1);
+            expect(readWidgetSurfaceArtifactHeaderV1({ artifactId: id, header: decodePlainArtifactStoredContent(page.items[0].header) }))
+                .toMatchObject({ title: 'mine', surface: { accountId: owner.id } });
+            expect(page.items.some((row: { id: string }) => row.id === unrelated.id)).toBe(false);
+        });
+    });
 
     it('filters coarse kinds, reports authorized unclassified rows, and backfills without changing content', async () => {
         const owner = await plainAccount();
