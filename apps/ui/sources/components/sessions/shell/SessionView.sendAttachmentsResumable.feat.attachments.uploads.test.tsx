@@ -48,6 +48,7 @@ import {
 import type { PendingMessage, Session } from '@/sync/domains/state/storageTypes';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import type { SessionAgentPickerSelection } from '@/components/sessions/agentPicker/buildSessionAgentPickerDetailContent';
+import type { SessionComposerRenderer } from '@/components/sessions/composer/sessionComposerModel';
 
 installDisconnectedServerSocketBoundary(configureAttachmentSocket);
 
@@ -942,7 +943,7 @@ describe('SessionView (attachments.uploads resumable send)', () => {
         accountConnection = undefined;
     });
 
-    it('restores unsent attachment drafts when the session input remounts', async () => {
+    it('preserves unsent attachment drafts when the composer moves to a sheet or the session input remounts', async () => {
         featureEnabledState.reviewComments = false;
         sendMessageSpy.mockClear();
         resumeSessionSpy.mockClear();
@@ -955,9 +956,10 @@ describe('SessionView (attachments.uploads resumable send)', () => {
         let firstTree: renderer.ReactTestRenderer | undefined;
         let secondTree: renderer.ReactTestRenderer | undefined;
         try {
-            firstTree = (await renderScreen(<AppPaneProvider>
+            const firstScreen = await renderScreen(<AppPaneProvider>
                         <SessionView id="s1" />
-                    </AppPaneProvider>)).tree;
+                    </AppPaneProvider>);
+            firstTree = firstScreen.tree;
 
             const renderedFirstTree = firstTree;
             expect(renderedFirstTree).toBeDefined();
@@ -972,6 +974,16 @@ describe('SessionView (attachments.uploads resumable send)', () => {
 
             agentInput = findTestInstanceByTypeWithProps(renderedFirstTree, 'AgentInput' as any, {}) as any;
             expect(agentInput.props.attachmentRowItems).toEqual([
+                expect.objectContaining({ label: 'draft-note.txt', status: 'pending' }),
+            ]);
+
+            const renderInSheet: SessionComposerRenderer = composer => React.createElement('PhoneAskSheetHost', null, composer.content);
+            await firstScreen.update(<AppPaneProvider>
+                <SessionView id="s1" {...{ renderComposer: renderInSheet }} />
+            </AppPaneProvider>);
+            const sheet = firstTree.findByType('PhoneAskSheetHost' as React.ElementType);
+            expect(firstTree.findAllByType('AgentInput' as React.ElementType)).toHaveLength(1);
+            expect(sheet.findByType('AgentInput' as React.ElementType).props.attachmentRowItems).toEqual([
                 expect.objectContaining({ label: 'draft-note.txt', status: 'pending' }),
             ]);
 
@@ -3821,9 +3833,10 @@ describe('SessionView (attachments.uploads resumable send)', () => {
         pendingFireAndForget.length = 0;
 
         let tree: renderer.ReactTestRenderer | undefined;
+        const renderInSheet: SessionComposerRenderer = composer => React.createElement('PhoneAskSheetHost', null, composer.content);
         try {
             tree = (await renderScreen(<AppPaneProvider>
-                        <SessionView id="s1" routeServerId="server-1" />
+                        <SessionView id="s1" routeServerId="server-1" renderComposer={executionRun ? undefined : renderInSheet} />
                     </AppPaneProvider>)).tree;
 
             pendingFireAndForget.length = 0;
@@ -3831,6 +3844,10 @@ describe('SessionView (attachments.uploads resumable send)', () => {
             const renderedTree = tree;
             expect(renderedTree).toBeDefined();
             if (!renderedTree) throw new Error('SessionView test renderer did not mount');
+            if (!executionRun) {
+                expect(renderedTree.findByType('PhoneAskSheetHost' as React.ElementType)
+                    .findAllByType('AgentInput' as React.ElementType)).toHaveLength(1);
+            }
 
             const agentInput = findTestInstanceByTypeWithProps(renderedTree, 'AgentInput' as any, {}) as any;
             await act(async () => {
@@ -3906,6 +3923,7 @@ describe('SessionView (attachments.uploads resumable send)', () => {
         const home = await setServerProfileIdentityForUrl(profile.serverUrl, 'srv_seeded_walkthrough');
         if (!home) throw new Error('The walkthrough Home identity was not established');
         const scope = { serverId: resolveServerProfileScopeIdForIdentifier(home.id), accountId: 'account-1' };
+        expect(home.id).not.toBe(scope.serverId);
         if (!accountConnection) throw new Error('Expected the restored Account credentials');
         const credentialWrite = await TokenStorage.setCredentialsForServerUrlWithRollback(
             home.serverUrl, { serverId: scope.serverId }, {

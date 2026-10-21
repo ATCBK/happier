@@ -266,7 +266,7 @@ vi.mock('@/sync/ops', async (importOriginal) => {
 vi.mock('@/sync/ops/actions/defaultActionExecutor', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/sync/ops/actions/defaultActionExecutor')>();
     return { ...actual, createDefaultActionExecutor: (...args: Parameters<typeof actual.createDefaultActionExecutor>) => {
-        capturedOpenSessionSpy.mockImplementation((sid: string) => { args[0]?.openSession?.(sid); });
+        if (args[0]?.openSession) capturedOpenSessionSpy.mockImplementation((sid: string) => { args[0]?.openSession?.(sid); });
         return actual.createDefaultActionExecutor(...args);
     } };
 });

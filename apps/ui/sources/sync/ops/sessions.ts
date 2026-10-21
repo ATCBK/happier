@@ -1206,6 +1206,7 @@ export async function sessionSwitch(
         serverId?: string | null;
         accountLifetime?: ServerAccountScopeLifetime;
         signal?: AbortSignal;
+        onIssued?: () => void;
     }>,
 ): Promise<boolean> {
     const request: SessionModeChangeRequest = { to };
@@ -1234,7 +1235,10 @@ export async function sessionSwitch(
                 scope: lifetime.scope,
                 method: 'switch',
                 payload: request,
-                onIssued: assertCurrent,
+                onIssued: () => {
+                    assertCurrent();
+                    options.onIssued?.();
+                },
                 signal: cancellation.signal,
             });
             assertCurrent();
@@ -1250,6 +1254,7 @@ export async function sessionSwitch(
         method: 'switch',
         payload: request,
         ...(options?.signal ? { signal: options.signal } : {}),
+        ...(options?.onIssued ? { onIssued: options.onIssued } : {}),
     });
     return response;
 }

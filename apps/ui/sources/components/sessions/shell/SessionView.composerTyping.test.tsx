@@ -14,6 +14,8 @@ import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/session
 import { PendingRequestedActionV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { PENDING_INPUT_PROTOCOL_VERSION_V3 } from '@happier-dev/protocol/clientCompatibility/primitives';
 import { MINIMUM_CLI_PENDING_QUEUE_V2_VERSION } from '@/utils/system/versionUtils';
+import type { SessionComposerModel, SessionComposerRenderer } from '@/components/sessions/composer/sessionComposerModel';
+import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
 
 /**
  * Typing stays local to the mounted input while the real draft persists and restores.
@@ -24,12 +26,13 @@ import { MINIMUM_CLI_PENDING_QUEUE_V2_VERSION } from '@/utils/system/versionUtil
 
 vi.mock('socket.io-client', async (importOriginal) =>
   (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+const platformState = vi.hoisted(() => ({ os: 'ios' as 'ios' | 'web' }));
 vi.mock('react-native', async () => {
   const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
   return createReactNativeWebMock({
     View: 'View', Text: 'Text', Pressable: 'Pressable', ActivityIndicator: 'ActivityIndicator',
     useWindowDimensions: () => ({ width: 1200, height: 800 }),
-    Platform: { OS: 'ios', select: (spec: Record<string, unknown>) => spec.ios ?? spec.default },
+    Platform: { get OS() { return platformState.os; }, select: (spec: Record<string, unknown>) => spec[platformState.os] ?? spec.default },
   });
 });
 vi.mock('react-native-unistyles', async () =>
@@ -116,8 +119,9 @@ const { getSessionComposerDraftSnapshot } = await import('@/sync/ops/sessionDraf
 await loadSyncSingletonForTests();
 const { sync } = await import('@/sync/sync');
 
-function surfaceElement() {
-  return <SessionView id="s1" routeServerId={runtime.serverId} surfaceFocusedOverride surfaceVisibleOverride />;
+function surfaceElement(renderComposer?: SessionComposerRenderer) {
+  return <SessionView id="s1" routeServerId={runtime.serverId} surfaceFocusedOverride surfaceVisibleOverride
+    {...(renderComposer ? { renderComposer } : {})} />;
 }
 
 function renderScreen() {
@@ -147,6 +151,7 @@ function storedDraftText(): unknown {
 
 describe('SessionView composer typing', () => {
   beforeEach(async () => {
+    platformState.os = 'ios';
     submittedMessages.length = 0;
     resolveSessionComposerSendSpy.mockClear();
     storage.setState({
@@ -197,5 +202,75 @@ describe('SessionView composer typing', () => {
       expect(storedDraftText() ?? '').toBe('');
     });
     await reopened.unmount();
+  });
+
+  it('hosts the same composer contract in the screen or a sheet without copying the draft or send path', async () => {
+    let placement = 'SessionComposerHost';
+    const models: SessionComposerModel[] = [];
+    const renderComposer: SessionComposerRenderer = composer => {
+      models.push(composer);
+      return React.createElement(placement, null, composer.content);
+    };
+    const screen = await renderCanonicalScreen(surfaceElement(renderComposer), { wrapper: runtime.Wrapper });
+    expect(screen.tree.findAllByType('SessionComposerHost' as React.ElementType)).toHaveLength(1);
+    await typeCharacters(screen, '', 'Ask about this selection');
+    const before = findAgentInput(screen).props;
+    const beforeModel = models.at(-1);
+    expect(beforeModel).toBeDefined();
+
+    placement = 'PhoneAskSheetHost';
+    await screen.update(surfaceElement(composer => renderComposer(composer)));
+    expect(screen.tree.findAllByType('AgentInput' as React.ElementType)).toHaveLength(1);
+    expect(screen.tree.findAllByType('PhoneAskSheetHost' as React.ElementType)).toHaveLength(1);
+    const inSheet = findAgentInput(screen).props;
+    expect(inSheet.value).toBe('Ask about this selection');
+    // The host changes; the real controller's handlers and selected agent/model do not.
+    for (const key of ['onSend', 'onChangeText', 'onAbort', 'agentType', 'modelMode', 'attachmentRowItems']) {
+      expect(before).toHaveProperty(key);
+      expect(inSheet[key], key).toEqual(before[key]);
+    }
+    // Presentation closures may refresh on any render; compare the controls and choices they present.
+    const describeChip = (chip: AgentInputExtraActionChip) => ({
+      key: chip.key,
+      controlId: chip.controlId,
+      labelPolicy: chip.labelPolicy,
+      title: chip.collapsedOptionsPopover?.title ?? chip.collapsedContentPopover?.title,
+      selectedOptionId: chip.collapsedOptionsPopover?.selectedOptionId,
+    });
+    expect(inSheet.extraActionChips.map(describeChip)).toEqual(before.extraActionChips.map(describeChip));
+    expect(models.at(-1)?.ref).toBe(beforeModel?.ref);
+    expect(models.at(-1)?.address).toBe(beforeModel?.address);
+    expect(models.at(-1)?.focus).toBe(beforeModel?.focus);
+    expect(models.at(-1)?.ref).toEqual({ kind: 'session', sessionId: 's1' });
+    expect(storedDraftText()).toBe('Ask about this selection');
+    await renderer.act(async () => { findAgentInput(screen).props.onSend(); });
+    await vi.waitFor(() => expect(submittedMessages).toHaveLength(1));
+    expect(submittedMessages[0]).toMatchObject({
+      content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Ask about this selection' } } },
+    });
+    await vi.waitFor(() => expect(findAgentInput(screen).props.value).toBe(''));
+
+    placement = 'SessionComposerHost';
+    await screen.update(surfaceElement(composer => renderComposer(composer)));
+    expect(screen.tree.findAllByType('AgentInput' as React.ElementType)).toHaveLength(1);
+    expect(findAgentInput(screen).props.value).toBe('');
+    await screen.unmount();
+  });
+
+  it('keeps the composer usable when a web render has no DOM selection source', async () => {
+    platformState.os = 'web';
+    let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
+    try {
+      const { Platform } = await import('react-native');
+      expect(Platform.OS).toBe('web');
+      expect(typeof document).toBe('undefined');
+      screen = await renderScreen();
+      expect(screen.tree.findAllByType('AgentInput' as React.ElementType)).toHaveLength(1);
+      await typeCharacters(screen, '', 'A draft without DOM selection');
+      expect(findAgentInput(screen).props.value).toBe('A draft without DOM selection');
+    } finally {
+      await screen?.unmount();
+      platformState.os = 'ios';
+    }
   });
 });

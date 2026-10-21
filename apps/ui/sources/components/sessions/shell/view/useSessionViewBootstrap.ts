@@ -76,10 +76,9 @@ export function useSessionViewBootstrap(input: UseSessionViewBootstrapInput): Us
         if (!input.multiPaneEnabled) return;
         if (!(Platform.OS === 'web' || input.deviceType === 'tablet')) return;
         if (input.paneUrlState?.rightTabId) return;
-        const right = (pane.scopeState as any)?.right ?? null;
-        if (!right) return;
-        if (right.isOpen === true) return;
-        if (right.activeTabId !== null && right.activeTabId !== undefined) return;
+        const right = pane.scopeState?.right;
+        if (right?.isOpen === true) return;
+        if (right?.activeTabId != null) return;
         pane.openRight({ tabId: 'files' });
         pane.setRightTab('files');
     }, [

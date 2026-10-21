@@ -2134,8 +2134,9 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       }
     },
 
-    sessionControlSwitch: async ({ sessionId, to, serverId, signal }) => withAccountLifetime(signal, async signal => {
+    sessionControlSwitch: async ({ sessionId, to, serverId, signal, context }) => withAccountLifetime(signal, async signal => {
       const switched = await sessionSwitch(sessionId, to, { serverId, signal,
+        ...(context.onTransportIssued ? { onIssued: context.onTransportIssued } : {}),
         ...(accountContext ? { accountLifetime: accountContext.accountLifetime } : {}) });
       return switched === true ? { switched: true } : {
         ok: false, errorCode: 'session_control_unavailable', error: 'session_control_unavailable',

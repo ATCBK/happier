@@ -412,9 +412,6 @@ vi.mock('@/voice/session/voiceSession', () => ({
   useVoiceSessionSnapshot: () => ({ status: 'disconnected' }),
   voiceSessionManager: {},
 }));
-vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
-  createDefaultActionExecutor: () => ({ execute: vi.fn() }),
-}));
 vi.mock('@/components/sessions/agentInput', () => ({
   AgentInput: (props: any) => {
     agentInputSpy(props);
@@ -839,6 +836,18 @@ describe('SessionView header action menu visibility', () => {
     while (ancestor && (ancestor.type as unknown) !== 'AppPaneScopeHost') ancestor = ancestor.parent;
     expect(ancestor).toBe(paneHost);
     expect(screen.findAll((node) => (node.type as unknown) === 'ChatHeaderView')).toHaveLength(1);
+  });
+
+  it('names who a Session reports to in the phone header too, as one Reports-to line (DA3 D15)', async () => {
+    platformState.os = 'web';
+    responsiveState.deviceType = 'phone';
+    responsiveState.isLandscape = false;
+    chatHeaderSpy.mockClear();
+    await renderSessionView();
+    const lineage = chatHeaderSpy.mock.calls.at(-1)?.[0]?.lineage as React.ReactElement<{ presentation?: string }> | null | undefined;
+    // The wide header keeps the root-first breadcrumb; a folded phone header shows the lead only.
+    expect(lineage).toBeTruthy();
+    expect(lineage?.props.presentation).toBe('manager');
   });
 
   it('hides the open runs button when execution runs are unsupported for the session', async () => {

@@ -115,6 +115,7 @@ const pendingHttpSpy = vi.hoisted(() => vi.fn<(path: string, body: unknown) => P
 const transcriptPageReply = vi.hoisted(() => vi.fn());
 const transcriptReadAfterReply = vi.hoisted(() => vi.fn());
 const modalAlertSpy = vi.hoisted(() => vi.fn());
+const modalConfirmSpy = vi.hoisted(() => vi.fn(async () => false));
 const chatListPropsSpy = vi.hoisted(() => vi.fn());
 const chatHeaderPropsSpy = vi.hoisted(() => vi.fn());
 const voiceSurfacePropsSpy = vi.hoisted(() => vi.fn());
@@ -364,6 +365,7 @@ vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     const modalMock = createModalModuleMock();
     modalMock.spies.alert.mockImplementation((...args) => modalAlertSpy(...args));
+    modalMock.spies.confirm.mockImplementation(() => modalConfirmSpy());
     return modalMock.module;
   });
 vi.mock('expo-router', async () => {
@@ -867,6 +869,7 @@ describe('SessionView (direct sessions)', () => {
   function findWarningActionBannerProps(testID: string) {
     return warningActionBannerPropsSpy.mock.calls
       .map(([props]) => props)
+      .reverse()
       .find((props) => props?.testID === testID);
   }
 
@@ -958,6 +961,8 @@ describe('SessionView (direct sessions)', () => {
     sessionUsageLimitConsumeResetCreditSpy.mockResolvedValue({ ok: true, status: 'ready' });
     connectedServiceQuotaRecoveryCreditConsumeSpy.mockClear();
     modalAlertSpy.mockReset();
+    modalConfirmSpy.mockReset();
+    modalConfirmSpy.mockResolvedValue(false);
     machineExternalSessionTakeoverSpy.mockReset();
     machineExternalSessionTakeoverPersistSpy.mockReset();
     const acceptedTakeover = async (input: ReturnType<typeof ExternalSessionTakeoverStartInputV1Schema.parse>): Promise<ReturnType<typeof ExternalSessionOperationActionResponseV1Schema.parse>> => {
@@ -1848,6 +1853,7 @@ describe('SessionView (direct sessions)', () => {
   });
 
   it('applies connected-service reset credits from the AgentInput provider usage gauge', async () => {
+    modalConfirmSpy.mockResolvedValueOnce(true);
     (featureEnabledState as Record<string, boolean>)['connectedServices.quotas'] = true;
     storageState.sessions.s1.metadata = {
       ...storageState.sessions.s1.metadata,
@@ -1904,17 +1910,22 @@ describe('SessionView (direct sessions)', () => {
       await agentInput.props.instrumentQuota.onRecoveryCreditPress();
     });
 
-    expect(connectedServiceQuotaRecoveryCreditConsumeSpy).toHaveBeenCalledWith({
+    expect(connectedServiceQuotaRecoveryCreditConsumeSpy).toHaveBeenCalledWith(expect.objectContaining({
       machineId: 'machine-1',
       serverId: 'server-canonical',
+      accountId: 'account-canonical',
+      assertCurrent: expect.any(Function),
       serviceId: 'openai-codex',
       profileId: 'work',
       sourceSnapshotFetchedAtMs: 1,
       signal: expect.any(AbortSignal),
-    });
+    }));
+    expect(findAgentInput(screen).props.instrumentQuota?.viewModel.recoveryCreditSummary).toBeNull();
+    expect(findAgentInput(screen).props.instrumentQuota?.onRecoveryCreditPress).toBeUndefined();
   });
 
   it('applies connected-service reset credits from the usage-limit recovery banner', async () => {
+    modalConfirmSpy.mockResolvedValueOnce(true);
     daemonMergedProjectionState.current = { phase: 'ready', inputs: {
       pluginProjectionById: {},
       pluginProjectionV2: PluginProjectionV2Schema.parse({ v: 2, generation: 1, agentsById: {
@@ -1990,7 +2001,7 @@ describe('SessionView (direct sessions)', () => {
       },
     };
 
-    await renderSessionViewAndSettle();
+    const screen = await renderSessionViewAndSettle();
     const banner = findWarningActionBannerProps('session-usageLimit-recovery');
     const consumeResetCreditAction = banner?.secondaryActions?.find((action: { testID?: string }) =>
       action.testID === 'session-usageLimit-recovery-consumeResetCredit');
@@ -2003,15 +2014,19 @@ describe('SessionView (direct sessions)', () => {
     });
     await settleExternalSessionView();
 
-    expect(connectedServiceQuotaRecoveryCreditConsumeSpy).toHaveBeenCalledWith({
+    expect(connectedServiceQuotaRecoveryCreditConsumeSpy).toHaveBeenCalledWith(expect.objectContaining({
       machineId: 'machine-1',
       serverId: 'server-canonical',
+      accountId: 'account-canonical',
+      assertCurrent: expect.any(Function),
       serviceId: 'openai-codex',
       profileId: 'work',
       sourceSnapshotFetchedAtMs: 1000,
       signal: expect.any(AbortSignal),
-    });
+    }));
     expect(sessionUsageLimitConsumeResetCreditSpy).not.toHaveBeenCalled();
+    expect(findAgentInput(screen).props.instrumentQuota?.viewModel.recoveryCreditSummary).toBeNull();
+    expect(findAgentInput(screen).props.instrumentQuota?.onRecoveryCreditPress).toBeUndefined();
   });
 
   it('uses the current external Agent usage-recovery declaration for check-now', async () => {
@@ -2083,6 +2098,7 @@ describe('SessionView (direct sessions)', () => {
   });
 
   it('applies connected-service reset credits when runtime usage evidence is selected for the same connected profile', async () => {
+    modalConfirmSpy.mockResolvedValueOnce(true);
     (featureEnabledState as Record<string, boolean>)['connectedServices.quotas'] = true;
     storageState.sessions.s1.metadata = {
       ...storageState.sessions.s1.metadata,
@@ -2164,14 +2180,18 @@ describe('SessionView (direct sessions)', () => {
       await agentInput.props.instrumentQuota.onRecoveryCreditPress();
     });
 
-    expect(connectedServiceQuotaRecoveryCreditConsumeSpy).toHaveBeenCalledWith({
+    expect(connectedServiceQuotaRecoveryCreditConsumeSpy).toHaveBeenCalledWith(expect.objectContaining({
       machineId: 'machine-1',
       serverId: 'server-canonical',
+      accountId: 'account-canonical',
+      assertCurrent: expect.any(Function),
       serviceId: 'openai-codex',
       profileId: 'work',
       sourceSnapshotFetchedAtMs: 2000,
       signal: expect.any(AbortSignal),
-    });
+    }));
+    expect(findAgentInput(screen).props.instrumentQuota?.viewModel.recoveryCreditSummary).toBeNull();
+    expect(findAgentInput(screen).props.instrumentQuota?.onRecoveryCreditPress).toBeUndefined();
   });
 
   it('suppresses stale provider-account reset credits when the same connected-service snapshot has none', async () => {

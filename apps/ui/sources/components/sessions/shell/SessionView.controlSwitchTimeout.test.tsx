@@ -12,6 +12,7 @@ import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture, createPlainMachineRowFixture, createReadyMachineAgentInventoryFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { SessionRunnerRuntimeStatusV2Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRuntimeV2';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { sessionRunnerRuntimeStatusRetention } from '@/sync/domains/sessionRunnerRuntime/sessionRunnerRuntimeStatusRetention';
 import { createSessionMessagesFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
@@ -464,14 +465,19 @@ describe('SessionView (control switch timeout)', () => {
   });
 
   it('keeps local-control UI hidden and clears remote switching state after a timeout when controlledByUser never updates', async () => {
-    switchReply.mockImplementationOnce(() => new Promise(() => {}));
+    const issued = createDeferred<void>();
+    switchReply.mockImplementationOnce(() => {
+      issued.resolve();
+      return new Promise(() => {});
+    });
     await renderSessionView();
     const chatList = getChatListProps();
     expect(chatList.controlSwitchTo).toBeNull();
     expect(typeof chatList.onRequestSwitchToRemote).toBe('function');
 
-    act(() => {
+    await act(async () => {
       chatList.onRequestSwitchToRemote();
+      await issued.promise;
     });
 
     expect(getChatListProps().controlSwitchTo).toBe('remote');
@@ -486,11 +492,14 @@ describe('SessionView (control switch timeout)', () => {
   it('cancels a retained hidden Session observation and permits switching again when presented', async () => {
     vi.stubEnv('EXPO_PUBLIC_HAPPIER_CONTROL_SWITCH_UI_TIMEOUT_MS', '0');
     let release: (() => void) | undefined;
-    switchReply.mockImplementationOnce(() => new Promise<boolean>(resolve => { release = () => resolve(true); }));
+    const issued = createDeferred<void>();
+    switchReply.mockImplementationOnce(() => {
+      issued.resolve();
+      return new Promise<boolean>(resolve => { release = () => resolve(true); });
+    });
     const screen = await renderSessionView();
     try {
-      act(() => { getChatListProps().onRequestSwitchToRemote(); });
-      await vi.waitFor(() => expect(switchReply).toHaveBeenCalledTimes(1));
+      await act(async () => { getChatListProps().onRequestSwitchToRemote(); await issued.promise; });
       expect(getChatListProps().controlSwitchTo).toBe('remote');
       await screen.update(<SessionView id="s1" surfaceVisibleOverride={false} />);
       await vi.waitFor(() => expect(getChatListProps().controlSwitchTo).toBeNull());

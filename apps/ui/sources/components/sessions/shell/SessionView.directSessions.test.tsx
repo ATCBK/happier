@@ -30,12 +30,14 @@ import {
   StrictJsonValueSchema,
   type ProviderAccountUsageSnapshotV1,
   type SessionRunnerRuntimeStateV1,
+  type SessionUsageLimitRecoveryOperationResultV1,
 } from '@happier-dev/protocol';
 import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { SessionModelTransitionRequestV1Schema, SessionModelTransitionResultV1Schema,
   type SessionModelTransitionRequestV1, type SessionModelTransitionResultV1,
 } from '@happier-dev/protocol/sessions/control/modelTransitionV1';
 import { SessionTeamCredentialBindingMetadataPatchV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
+import { TeamCredentialResourceCatalogEntryV1Schema, type TeamCredentialProviderModelSelectionV1 } from '@happier-dev/protocol/teams';
 import { AccountSettingsV2GetResponseSchema, AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ExecutionRunListResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
@@ -78,7 +80,8 @@ vi.mock('socket.io-client', async (importOriginal) =>
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
-import { createProviderModelProjectionFixture } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createProviderModelProjectionFixture, createProviderModelProjectionGroupFixture } from '@/dev/testkit/harness/providerSettingsHarness';
+import { teamCapabilitiesFixture, teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import type { AgentInputChipPickerOption } from '@/components/sessions/agentInput/components/AgentInputChipPickerTypes';
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
 import type { SessionArmedAgentContinuation } from '@/sync/domains/input/draftValues/sessionDraftValueTypes';
@@ -139,17 +142,13 @@ const sessionUsageLimitWaitResumeEnableSpy = vi.hoisted(() =>
       _sessionId: string,
       _request?: unknown,
       _opts?: unknown,
-    ) => Promise<{
-      ok: true;
-    } | {
-      ok: false;
-      error: string;
-      errorCode?: string;
-    }>
-  >(async (_sessionId: string, _request?: unknown, _opts?: unknown) => ({ ok: true })),
+    ) => Promise<SessionUsageLimitRecoveryOperationResultV1>
+  >(async (sessionId: string, _request?: unknown, _opts?: unknown) => ({ ok: true, status: 'waiting', sessionId })),
 );
 const sessionUsageLimitWaitResumeCancelSpy = vi.hoisted(() =>
-  vi.fn(async (_sessionId: string, _opts?: unknown) => ({ ok: true })),
+  vi.fn<(_sessionId: string, _request?: unknown, _opts?: unknown) => Promise<SessionUsageLimitRecoveryOperationResultV1>>(
+    async (sessionId: string, _request?: unknown, _opts?: unknown) => ({ ok: true, status: 'cancelled', sessionId }),
+  ),
 );
 const sessionUsageLimitCheckNowSpy = vi.hoisted(() =>
   vi.fn<
@@ -242,6 +241,7 @@ const featureEnabledState = vi.hoisted(() => ({
   'sessions.usageLimitRecovery': false,
   'connectedServices.quotas': false,
   'connectedServices.poolQuotaLimitSelection': false,
+  'teams.credentialResources': false,
 }));
 const providerModelProjectionState = vi.hoisted(() => ({
   value: {
@@ -962,6 +962,87 @@ describe('SessionView (direct sessions)', () => {
     expect(storage.getState().settingsScope).toEqual(canonicalDraftScope);
   }
 
+  async function enableUsageLimitRecoveryHome() {
+    featureEnabledState['sessions.usageLimitRecovery'] = true;
+    settingsState.current = { ...settingsState.current,
+      featureToggles: { sessions: true, 'sessions.usageLimitRecovery': true },
+    };
+    const features = createRootLayoutFeaturesResponse();
+    for (const featureId of ['sessions', 'sessions.usageLimitRecovery'] as const) {
+      if (!tryWriteServerEnabledBitInPlace(features, featureId, true)) throw new Error(`Missing feature fixture ${featureId}`);
+    }
+    homes.answer(canonicalDraftScope.serverId, '/v1/features', { body: features });
+    homes.answer(canonicalDraftScope.serverId, '/v1/features/authenticated', { body: features });
+    const { getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+    await getServerFeaturesSnapshot({ serverId: canonicalDraftScope.serverId, force: true });
+  }
+
+  async function installTeamModelSelectionHome(selection: TeamCredentialProviderModelSelectionV1) {
+    featureEnabledState.providers = true;
+    featureEnabledState['teams.credentialResources'] = true;
+    settingsState.current = { ...settingsState.current,
+      featureToggles: { providers: true, teams: true, 'teams.credentialResources': true },
+    };
+    const features = createRootLayoutFeaturesResponse();
+    for (const featureId of ['providers', 'teams', 'teams.credentialResources'] as const) {
+      if (!tryWriteServerEnabledBitInPlace(features, featureId, true)) throw new Error(`Missing feature fixture ${featureId}`);
+    }
+    homes.answer(canonicalDraftScope.serverId, '/v1/features', { body: features });
+    homes.answer(canonicalDraftScope.serverId, '/v1/features/authenticated', { body: features });
+    homes.answer(canonicalDraftScope.serverId, '/v1/teams/list', { body: {
+      items: [teamSummaryFixture({ id: selection.teamId, capabilities: teamCapabilitiesFixture({}) })], nextCursor: null,
+    } });
+    const model = {
+      selection, descriptor: { id: selection.modelId, name: 'Team model' },
+      application: { agentTargetKey: selection.agentTargetKey,
+        implementationIdentity: { pluginId: 'acme.gateway', localId: 'gateway' },
+        endpointTemplateId: 'responses', protocol: 'openai-responses' },
+      confirmationSource: { connectionId: 'connected-source:recipient', catalogSourceKey: 's'.repeat(43) },
+      sourceRevision: 'source-1', availability: 'available',
+    };
+    const resource = TeamCredentialResourceCatalogEntryV1Schema.parse({
+      id: selection.resourceId, teamId: selection.teamId, displayName: 'Shared provider',
+      resourceRevision: selection.expectedResourceRevision, readiness: { kind: 'available' }, recoveryAction: null,
+      mayBroker: true, mayReceiveDirect: false, directMaterialState: 'never_delivered',
+      sessionUsePolicy: 'personal_allowed', providerModels: [model], connectedServiceSelections: [],
+      sourcePresentation: { kind: 'provider', provider: {
+        identity: { pluginId: 'acme.gateway', localId: 'gateway' }, definitionRevision: 1,
+      } },
+    });
+    homes.answer(canonicalDraftScope.serverId, '/v1/teams/credential-resources/entitled/list', { body: {
+      resources: [resource], nextCursor: null,
+    } });
+    providerModelProjectionState.value.data = createProviderModelProjectionFixture({
+      agentTargetKey: selection.agentTargetKey,
+      groups: [createProviderModelProjectionGroupFixture({ connectionId: model.confirmationSource.connectionId,
+        connectionRevision: 0, rows: [{
+          ref: { agentTargetKey: selection.agentTargetKey,
+            providerConnectionId: model.confirmationSource.connectionId, modelId: selection.modelId },
+          descriptor: model.descriptor, confirmationSource: model.confirmationSource,
+          sources: { manual: false, static: false, probe: false }, confidence: 'account_unverified',
+          compatibility: { result: { status: 'experimental', reasons: ['compatibility_evidence_missing'],
+            selectedProtocol: 'openai-responses', confirmationScope: { kind: 'model', modelId: selection.modelId } },
+            compatibilityFingerprint: 'compatibility:v1:worker', confirmed: true },
+          endpointHealth: 'not_checked', catalog: { stale: false }, loadState: 'unknown', visibility: 'visible',
+        }] })],
+    });
+    const { getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+    await getServerFeaturesSnapshot({ serverId: canonicalDraftScope.serverId, force: true });
+  }
+
+  async function mountTeamModelPicker(screen: Awaited<ReturnType<typeof renderSessionView>>, selection: TeamCredentialProviderModelSelectionV1) {
+    let picker = await mountSessionModelPicker(screen);
+    await waitForHomeGovernance(async () => {
+      await settleDirectSessionView();
+      picker = await mountSessionModelPicker(screen);
+      expect(picker.props.teamCredentialResources).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: selection.resourceId, teamId: selection.teamId,
+          providerModels: expect.arrayContaining([expect.objectContaining({ selection })]) }),
+      ]));
+    });
+    return picker;
+  }
+
   async function restorePresentUserComposerHome() {
     await accountConnection?.dispose();
     const credentials = { token: createAccountTokenForTests('account-route-1', { currentAccount: true }) };
@@ -1232,7 +1313,8 @@ describe('SessionView (direct sessions)', () => {
         expect(readAuthChip().label).not.toContain('Work');
       });
       await selectAgent(screen, 'claude');
-      expect(readAuthChip().label).toContain(profileId === 'work' ? 'Work' : 'missing-profile');
+      expect(readAuthChip().label).toContain(profileId === 'work' ? 'Work' : 'common.unavailable');
+      expect(readAuthChip().label).not.toContain('missing-profile');
       const renderContent = readAuthChip().renderContent;
       if (typeof renderContent !== 'function') throw new Error('Expected target auth content renderer');
       const content = renderContent({ requestClose: () => {}, maxHeight: 320 });
@@ -1252,19 +1334,19 @@ describe('SessionView (direct sessions)', () => {
         metadata: { ...storageState.sessions.s1.metadata, permissionMode: 'default', permissionModeUpdatedAt: 1 },
       };
       const screen = await renderSessionViewAndSettle();
+      await act(async () => { findAgentInput(screen).props.onPermissionModeChange('read-only'); });
+      expect(readCurrentSessionDraftDocument()?.extensions.happier?.nextPromptPermissionModeV1?.value).toBe('read-only');
       const localId = await submitSwitch(screen);
       const dispatch = externalRpcRequests.find((request) => request.method === RPC_METHODS.SESSION_AGENT_TRANSITION);
       expect(SessionAgentTransitionRequestV1Schema.parse(dispatch?.payload).input.meta.permissionMode).toBe('read-only');
       expect(readArm()?.submission).toMatchObject({ localId, input: { meta: { permissionMode: 'read-only' } } });
       await publishCustody(localId);
       expect(readArm()).toBeNull();
-      const publishedTuple = homes.requests.map(({ input }) => SessionMetadataTuplePatchV1Schema.safeParse(input))
-        .find((result) => result.success)?.data;
-      expect(publishedTuple).toMatchObject({ mode: 'owner_migration', target: {
-        ownerMetadata: { t: 'plain', v: { runtime: { permissionMode: 'read-only' } } },
-      } });
+      expect(readCurrentSessionDraftDocument()?.extensions.happier?.nextPromptPermissionModeV1).toBeUndefined();
+      expect(findAgentInput(screen).props.value).toBe('');
+      expect(homes.requests.filter(({ input }) => SessionMetadataTuplePatchV1Schema.safeParse(input).success)).toEqual([]);
       const { readSessionOwnerMetadataView } = await import('@/sync/domains/session/readSessionOwnerMetadataView');
-      await vi.waitFor(() => expect(readSessionOwnerMetadataView(storage.getState().sessions.s1)?.permissionMode).toBe('read-only'));
+      expect(readSessionOwnerMetadataView(storage.getState().sessions.s1)?.permissionMode).toBe('default');
     });
 
     it('dispatches an armed destination without presenting a source-runtime steer choice', async () => {
@@ -1988,6 +2070,7 @@ describe('SessionView (direct sessions)', () => {
     featureEnabledState['sessions.usageLimitRecovery'] = false;
     featureEnabledState['connectedServices.quotas'] = false;
     featureEnabledState['connectedServices.poolQuotaLimitSelection'] = false;
+    featureEnabledState['teams.credentialResources'] = false;
     keyboardAvoidanceState.availablePanelHeight = undefined;
     keyboardAvoidanceState.keyboardHeight = 0;
     settingsState.current = {};
@@ -2147,7 +2230,7 @@ describe('SessionView (direct sessions)', () => {
   });
 
   it('surfaces generic usage-limit recovery actions and status for provider runtime issues', async () => {
-    featureEnabledState['sessions.usageLimitRecovery'] = true;
+    await enableUsageLimitRecoveryHome();
     settingByKeyState.current.usageLimitRecoverySettingsV1 = { v: 1, mode: 'ask', resumePromptMode: 'off' };
     storageState.sessions.s1 = {
       ...storageState.sessions.s1,
@@ -2196,11 +2279,12 @@ describe('SessionView (direct sessions)', () => {
       expect.objectContaining({ serverId: 'server-route-1' }),
     );
     expect(sessionUsageLimitCheckNowSpy).not.toHaveBeenCalled();
-    expect(storage.getState().settings.usageLimitRecoverySettingsV1).toEqual(expect.objectContaining({
+    expect(modalAlertSpy.mock.calls).toEqual([]);
+    await waitForHomeGovernance(() => expect(storage.getState().settings.usageLimitRecoverySettingsV1).toEqual(expect.objectContaining({
       v: 1,
       mode: 'auto_wait',
       resumePromptMode: 'off',
-    }));
+    })));
   });
 
   it('renders stale-runner composer notice and badge from canonical daemon status', async () => {
@@ -2778,7 +2862,7 @@ describe('SessionView (direct sessions)', () => {
   });
 
   it('preserves the stored custom resume prompt when remembering usage-limit recovery', async () => {
-    featureEnabledState['sessions.usageLimitRecovery'] = true;
+    await enableUsageLimitRecoveryHome();
     settingByKeyState.current.usageLimitRecoverySettingsV1 = {
       v: 1,
       mode: 'ask',
@@ -2808,18 +2892,19 @@ describe('SessionView (direct sessions)', () => {
 
     const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
     await pressTestInstanceAsync(screen.findByTestId('session-usageLimit-recovery-remember'));
+    expect(modalAlertSpy.mock.calls).toEqual([]);
 
-    expect(storage.getState().settings.usageLimitRecoverySettingsV1).toEqual({
+    await waitForHomeGovernance(() => expect(storage.getState().settings.usageLimitRecoverySettingsV1).toEqual({
       v: 1,
       mode: 'auto_wait',
       promptMode: 'standard',
       resumePromptMode: 'custom',
       customResumePrompt: 'Resume from the last checklist item.',
-    });
+    }));
   });
 
   it('preserves the stored custom resume prompt when forgetting usage-limit recovery', async () => {
-    featureEnabledState['sessions.usageLimitRecovery'] = true;
+    await enableUsageLimitRecoveryHome();
     settingByKeyState.current.usageLimitRecoverySettingsV1 = {
       v: 1,
       mode: 'auto_wait',
@@ -2849,14 +2934,15 @@ describe('SessionView (direct sessions)', () => {
 
     const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
     await pressTestInstanceAsync(screen.findByTestId('session-usageLimit-recovery-forget'));
+    expect(modalAlertSpy.mock.calls).toEqual([]);
 
-    expect(storage.getState().settings.usageLimitRecoverySettingsV1).toEqual({
+    await waitForHomeGovernance(() => expect(storage.getState().settings.usageLimitRecoverySettingsV1).toEqual({
       v: 1,
       mode: 'ask',
       promptMode: 'standard',
       resumePromptMode: 'custom',
       customResumePrompt: 'Resume from the last checklist item.',
-    });
+    }));
   });
 
   it('does not persist auto-wait preference when arming usage-limit wait resume fails', async () => {
@@ -2864,7 +2950,8 @@ describe('SessionView (direct sessions)', () => {
     settingByKeyState.current.usageLimitRecoverySettingsV1 = { v: 1, mode: 'ask', resumePromptMode: 'off' };
     sessionUsageLimitWaitResumeEnableSpy.mockResolvedValueOnce({
       ok: false,
-      error: 'usage_limit_issue_unavailable',
+      status: 'not_found',
+      sessionId: 's1',
       errorCode: 'usage_limit_issue_unavailable',
     });
     storageState.sessions.s1 = {
@@ -3667,6 +3754,8 @@ describe('SessionView (direct sessions)', () => {
     expect(connectedServiceQuotaRecoveryCreditConsumeSpy).toHaveBeenCalledWith({
       machineId: 'machine-1',
       serverId: 'server-route-1',
+      accountId: 'account-route-1',
+      assertCurrent: expect.any(Function),
       serviceId: 'openai-codex',
       profileId: 'work',
       sourceSnapshotFetchedAtMs: 1,
@@ -3678,9 +3767,6 @@ describe('SessionView (direct sessions)', () => {
     }));
     expect(findProviderUsageRecoveryAction(screen)).toBeUndefined();
     expect(screen.findByTestId('session-usageLimit-recovery-consumeResetCredit')).toBeNull();
-    const requestSignal = connectedServiceQuotaRecoveryCreditConsumeSpy.mock.calls.at(-1)?.[0].signal;
-    await act(async () => { screen.tree.unmount(); });
-    expect(requestSignal?.aborted).toBe(true);
   });
 
   it('combines global windows with the active connected account favorites', async () => {
@@ -3767,6 +3853,8 @@ describe('SessionView (direct sessions)', () => {
     expect(connectedServiceQuotaRecoveryCreditConsumeSpy).toHaveBeenCalledWith({
       machineId: 'machine-1',
       serverId: 'server-route-1',
+      accountId: 'account-route-1',
+      assertCurrent: expect.any(Function),
       serviceId: 'openai-codex',
       profileId: 'work',
       sourceSnapshotFetchedAtMs: 2_000,
@@ -3809,6 +3897,8 @@ describe('SessionView (direct sessions)', () => {
     expect(connectedServiceQuotaRecoveryCreditConsumeSpy).toHaveBeenCalledWith({
       machineId: 'machine-1',
       serverId: 'server-route-1',
+      accountId: 'account-route-1',
+      assertCurrent: expect.any(Function),
       serviceId: 'openai-codex',
       profileId: 'work',
       sourceSnapshotFetchedAtMs: 2_000,
@@ -3867,6 +3957,8 @@ describe('SessionView (direct sessions)', () => {
     expect(connectedServiceQuotaRecoveryCreditConsumeSpy).toHaveBeenCalledWith({
       machineId: 'machine-1',
       serverId: 'server-route-1',
+      accountId: 'account-route-1',
+      assertCurrent: expect.any(Function),
       serviceId: 'openai-codex',
       profileId: 'work',
       sourceSnapshotFetchedAtMs: 1,
@@ -4853,8 +4945,6 @@ describe('SessionView (direct sessions)', () => {
   });
 
   it('routes an exact existing-session Team resource selection through session.model.set', async () => {
-    const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
-    const modelContentOverride = await mountSessionModelPicker(screen);
     const teamCredentialModel = {
       kind: 'team_credential_provider_model' as const,
       teamId: 'team-1',
@@ -4864,6 +4954,9 @@ describe('SessionView (direct sessions)', () => {
       agentTargetKey: 'agent:happier.agent.codex/codex',
       modelId: 'team-model',
     };
+    await installTeamModelSelectionHome(teamCredentialModel);
+    const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
+    const modelContentOverride = await mountTeamModelPicker(screen, teamCredentialModel);
 
     await act(async () => {
       const onSelect = modelContentOverride.props.onSelectTeamCredentialModel;
@@ -4873,11 +4966,11 @@ describe('SessionView (direct sessions)', () => {
       await Promise.resolve();
     });
 
-    expect(actionExecuteSpy).toHaveBeenCalledWith(
+    await waitForHomeGovernance(() => expect(actionExecuteSpy).toHaveBeenCalledWith(
       'session.model.set',
       { sessionId: 's1', teamCredentialModel },
       { surface: 'ui', defaultSessionId: 's1', serverId: 'server-route-1' },
-    );
+    ));
     expect(homes.requests.filter(({ input }) => SessionMetadataTuplePatchV1Schema.safeParse(input).success)).toEqual([]);
   });
 
@@ -4891,7 +4984,7 @@ describe('SessionView (direct sessions)', () => {
       agentTargetKey: 'agent:happier.agent.codex/codex',
       modelId: 'team-model',
     };
-
+    await installTeamModelSelectionHome(teamCredentialModel);
 
     storageState.sessions.s1 = { ...storageState.sessions.s1, accessLevel: 'owner', access: createSessionAccessFixture('owner') };
     const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
@@ -4900,7 +4993,7 @@ describe('SessionView (direct sessions)', () => {
     await act(async () => {
       await sync.migrateSessionMetadataOwnerLayout('s1', { serverId: canonicalDraftScope.serverId });
     });
-    const modelContentOverride = await mountSessionModelPicker(screen);
+    const modelContentOverride = await mountTeamModelPicker(screen, teamCredentialModel);
     await act(async () => {
       const onSelect = modelContentOverride.props.onSelectTeamCredentialModel;
       expect(onSelect).toEqual(expect.any(Function));
@@ -4910,6 +5003,8 @@ describe('SessionView (direct sessions)', () => {
     });
     await settleDirectSessionView();
 
+    await waitForHomeGovernance(() => expect(homes.requests.some(({ input }) =>
+      SessionTeamCredentialBindingMetadataPatchV1Schema.safeParse(input).success)).toBe(true));
     const committed = homes.requests.map(({ input }) => SessionTeamCredentialBindingMetadataPatchV1Schema.safeParse(input))
       .find((result) => result.success)?.data;
     expect(committed).toMatchObject({
@@ -4936,7 +5031,7 @@ describe('SessionView (direct sessions)', () => {
       agentTargetKey: 'agent:happier.agent.codex/codex',
       modelId: 'team-model',
     };
-
+    await installTeamModelSelectionHome(teamCredentialModel);
 
     storageState.sessions.s1 = { ...storageState.sessions.s1, accessLevel: 'owner', access: createSessionAccessFixture('owner') };
     const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
@@ -4950,7 +5045,7 @@ describe('SessionView (direct sessions)', () => {
       expect(patch.sessionExpectation).toEqual({ kind: 'inactive_model_intent' });
       return { status: 409, body: { code: 'session_active' } };
     } });
-    const modelContentOverride = await mountSessionModelPicker(screen);
+    const modelContentOverride = await mountTeamModelPicker(screen, teamCredentialModel);
     await act(async () => {
       const onSelect = modelContentOverride.props.onSelectTeamCredentialModel;
       expect(onSelect).toEqual(expect.any(Function));
@@ -4963,10 +5058,10 @@ describe('SessionView (direct sessions)', () => {
     // Nothing was saved, so there is nothing to restart into.
     expect(findAgentInput(screen).props.armedRouteContinuation).toBeFalsy();
     expect(findProviderBindingLine(screen)).toBeNull();
-    expect(modalAlertSpy).toHaveBeenCalledWith(
+    await waitForHomeGovernance(() => expect(modalAlertSpy).toHaveBeenCalledWith(
       'common.error',
       'teams.credentials.selection.activeTransitionUnsupported',
-    );
+    ));
   });
 
   it.each(['brokered', 'direct'] as const)(
@@ -5483,16 +5578,15 @@ describe('SessionView (direct sessions)', () => {
         },
       },
     };
-    getSessionRunnerRuntimeStatusSpy
-      .mockResolvedValueOnce({
-        state: runtimeState,
-        runnerProcessIdentity,
-      })
-      .mockResolvedValueOnce(null);
+    getSessionRunnerRuntimeStatusSpy.mockResolvedValue({
+      state: runtimeState,
+      runnerProcessIdentity,
+    });
 
     const firstScreen = await renderSessionViewAndSettle();
     expect(findAgentInput(firstScreen).props.currentRunnerProcessIdentity).toEqual(runnerProcessIdentity);
     await firstScreen.unmount();
+    getSessionRunnerRuntimeStatusSpy.mockResolvedValue(null);
 
     const secondScreen = await renderSessionViewAndSettle();
 
@@ -5985,15 +6079,18 @@ describe('SessionView (direct sessions)', () => {
       canApprovePermissions: true,
       metadata: {
         ...storageState.sessions.s1.metadata,
+        modelSelectionIntentV1: { v: 1, updatedAt: 2, selection: {
+          agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'gpt-5.6-sol',
+        } },
         sessionModelsV1: {
           v: 1,
           agentId: 'codex',
           updatedAt: 1,
-          currentModelId: 'default',
+          currentModelId: 'gpt-5.6-sol',
           availableModels: [
             {
-              id: 'default',
-              name: 'Use CLI settings',
+              id: 'gpt-5.6-sol',
+              name: '5.6 Sol',
               modelOptions: [
                 {
                   id: 'thinking',
@@ -6017,14 +6114,21 @@ describe('SessionView (direct sessions)', () => {
 
     let agentInput = findAgentInput(screen);
     expect(agentInput.props.acpConfigOptionOverridesOverride).toBeUndefined();
+    const picker = await mountSessionModelPicker(screen);
+    expect(picker.props.selectedOptionControls).toEqual([expect.objectContaining({
+      option: expect.objectContaining({ id: 'thinking' }), effectiveValue: 'medium',
+    })]);
+    const selectOptionControlValue = picker.props.onSelectOptionControlValue;
+    if (!selectOptionControlValue) throw new Error('Offered model control is not selectable');
 
     await act(async () => {
-      agentInput.props.onAcpConfigOptionChange('thinking', 'high');
+      selectOptionControlValue('thinking', 'high');
     });
     await settleDirectSessionView();
 
     agentInput = findAgentInput(screen);
     expect(agentInput.props.acpConfigOptionOverridesOverride).toBeUndefined();
+    expect(modalAlertSpy.mock.calls).toEqual([]);
     await waitForHomeGovernance(() => {
       const committedSession = storage.getState().sessions.s1;
       const committedMetadata = readSessionOwnerMetadataView(committedSession);
@@ -6038,6 +6142,9 @@ describe('SessionView (direct sessions)', () => {
         acpConfigOptionOverridesV1: { overrides: { thinking: { value: 'high' } } },
       });
     });
+    expect((await mountSessionModelPicker(screen)).props.selectedOptionControls).toEqual([expect.objectContaining({
+      option: expect.objectContaining({ id: 'thinking' }), effectiveValue: 'high',
+    })]);
   });
 
   it('projects the reported runtime model separately from the selected model and its controls', async () => {
@@ -7078,7 +7185,9 @@ describe('SessionView (direct sessions)', () => {
     useCanonicalDraftScope();
     // Standalone HTTP embeds address persisted Sessions, not a Machine-only
     // direct Session requiring a separate takeover before Send admission.
-    delete storageState.sessions.s1.metadata.directSessionV1;
+    const { directSessionV1: _direct, ...persistedMetadata } = storageState.sessions.s1.metadata;
+    storageState.sessions.s1 = { ...storageState.sessions.s1, metadata: persistedMetadata };
+    applyDirectSessionFixtures();
     const { getCurrentAuth, setCurrentAuth } = await import('@/auth/context/currentAuth');
     const previousAuth = getCurrentAuth();
     if (!accountConnection) throw new Error('Missing connected Home fixture');
@@ -7436,6 +7545,7 @@ describe('SessionView (direct sessions)', () => {
 
   it('starts takeover on send without emitting input before explicit operation Resume', async () => {
     showDirectSessionTakeoverDialogSpy.mockResolvedValueOnce({ action: 'direct', targetDirectory: '/tmp' });
+    storageState.sessions.s1 = { ...storageState.sessions.s1, metadata: { ...storageState.sessions.s1.metadata } };
     (storageState.sessions.s1 as any).metadata.directSessionV1 = {
       ...(storageState.sessions.s1 as any).metadata.directSessionV1,
       linkedAtMs: 1_000,
@@ -7474,6 +7584,7 @@ describe('SessionView (direct sessions)', () => {
         serverId: 'server-route-1',
       },
     });
+    expect(modalAlertSpy.mock.calls).toEqual([]);
     expect(externalRpcRequests).toContainEqual(expect.objectContaining({
       targetId: 'machine-1', method: RPC_METHODS.DAEMON_EXTERNAL_SESSION_TAKEOVER_START,
     }));
@@ -7551,6 +7662,7 @@ describe('SessionView (direct sessions)', () => {
 
   it('uses canonical public intent without emitting input when persisting takeover from the send prompt', async () => {
     showDirectSessionTakeoverDialogSpy.mockResolvedValueOnce({ action: 'persisted', targetDirectory: '/tmp' });
+    storageState.sessions.s1 = { ...storageState.sessions.s1, metadata: { ...storageState.sessions.s1.metadata } };
     machineDirectSessionStatusGetSpy.mockResolvedValue({
       ok: true,
       machineOnline: true,
@@ -7589,6 +7701,7 @@ describe('SessionView (direct sessions)', () => {
       await agentInput.props.onSend();
     });
 
+    expect(modalAlertSpy.mock.calls).toEqual([]);
     expect(externalRpcRequests).toContainEqual(expect.objectContaining({
       targetId: 'machine-1', method: RPC_METHODS.DAEMON_EXTERNAL_SESSION_TAKEOVER_START,
     }));

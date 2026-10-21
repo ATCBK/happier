@@ -480,11 +480,13 @@ const sessionViewModulePromise = import('./SessionView');
 // Fixture collection owns cold module loading, not the behavior test's execution budget.
 await sessionViewModulePromise;
 
-async function waitForCurrentComposerAccount(): Promise<void> {
-    await vi.waitFor(() => {
+async function waitForCurrentComposerAccount() {
+    return vi.waitFor(() => {
         const presentation = composerScopePluginPresentationSpy.mock.lastCall?.[0] as
             Parameters<typeof import('@/components/sessions/presentation/useComposerScopePluginPresentation').useComposerScopePluginPresentation>[0] | undefined;
         expect(presentation?.accountLifetime?.isCurrent()).toBe(true);
+        if (!presentation?.accountLifetime) throw new Error('Expected the current composer Account');
+        return presentation.accountLifetime;
     });
 }
 
@@ -527,7 +529,13 @@ describe('SessionView (data ready gating)', () => {
             const initialReads = ownerReads();
             expect(initialReads).toBeGreaterThan(0);
 
-            await waitForCurrentComposerAccount();
+            const lifetime = await waitForCurrentComposerAccount();
+            // The initial pending read can still publish after credential binding.
+            // Finish that real owner operation before measuring settings locality.
+            await act(async () => {
+                const { sync } = await import('@/sync/sync');
+                await sync.fetchPendingMessages('s1', lifetime.scope);
+            });
             const initialComposerRenders = agentInputPropsSpy.mock.calls.length;
             await act(async () => {
                 canonicalStorage.getState().applySettingsLocal({
