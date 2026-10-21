@@ -82,7 +82,8 @@ export function readLiveMachineInventoryRows<T extends MachineWithId>(params: Re
         serverId: params.serverIdentityId,
         serverIdAliases: [params.profile.id, ...(params.profile.legacyServerIds ?? [])],
     });
-    if (inventory.status !== 'idle' && inventory.status !== 'loading') return new Set();
+    // A failed list read (`error`) never proves a retained row gone; only an unobserved or signed-out Home admits nothing.
+    if (inventory.status !== 'idle' && inventory.status !== 'loading' && inventory.status !== 'error') return new Set();
     // A row's admitted content need not wait for unrelated fleet hydration.
     // Use scoped membership here: the active display fallback may still contain
     // an older row or a socket-only presence shell absent from the current list.

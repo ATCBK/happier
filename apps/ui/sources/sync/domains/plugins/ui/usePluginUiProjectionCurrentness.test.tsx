@@ -1567,7 +1567,7 @@ describe('usePluginUiProjectionCurrentness', () => {
         } finally { vi.useRealTimers(); }
     });
 
-    it('retries a transient projection failure while retaining an inert last-known-good snapshot', async () => {
+    it('keeps a confirmed projection interactive through a failed refresh while the machine is online, and demotes it only once the machine is offline', async () => {
         vi.useFakeTimers();
         try {
             projectionRuntime.describe
@@ -1589,7 +1589,9 @@ describe('usePluginUiProjectionCurrentness', () => {
             expect(rendered.getCurrent().pluginUiProjection?.translationsByPluginId['acme.preview']?.bundles).toEqual({
                 en: { title: 'Last known good' },
             });
-            expect(rendered.getCurrent().interactionEnabled).toBe(false);
+            // A failed refresh never proves absence: the last confirmed projection stays usable.
+            expect(rendered.getCurrent().phase).toBe('current');
+            expect(rendered.getCurrent().interactionEnabled).toBe(true);
 
             await flushHookEffects({ advanceTimersMs: 5_000, cycles: 1, turns: 2 });
 
@@ -1601,6 +1603,27 @@ describe('usePluginUiProjectionCurrentness', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    it('demotes a projection kept through a failed refresh once the machine goes offline', async () => {
+        projectionRuntime.describe
+            .mockResolvedValueOnce(supportedProjection('Last known good'))
+            .mockResolvedValue({ protocolVersion: 1, projection: null });
+        const rendered = await renderHook(() => usePluginUiProjectionCurrentness({
+            machineId: 'machine-1',
+            serverId: serverIdentityId,
+        }));
+        await flushHookEffects();
+        await act(async () => { invalidateProjection(); });
+        await flushHookEffects();
+        expect(rendered.getCurrent()).toMatchObject({ phase: 'current', interactionEnabled: true });
+
+        setMachine({ active: false });
+        await act(async () => { await rendered.rerender(); });
+        await flushHookEffects();
+        expect(rendered.getCurrent()).toMatchObject({ phase: 'retainedOffline', interactionEnabled: false });
+        expect(rendered.getCurrent().pluginUiProjection?.translationsByPluginId['acme.preview']?.bundles)
+            .toEqual({ en: { title: 'Last known good' } });
     });
 
     it('resolves a cold unreachable projection as unavailable while still recovering after transport timeouts', async () => {

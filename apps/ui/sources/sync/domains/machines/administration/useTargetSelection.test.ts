@@ -90,8 +90,11 @@ describe('resolveFreshMachineAdministrationExecutionTarget', () => {
         const { resolveFreshMachineAdministrationExecutionTarget } = await import('./useTargetSelection');
         const target = { serverIdentityId: 'srv_server_b', machineId: 'machine-b' };
 
-        storage.setState({ machineListStatusByServerId: { 'srv_server_b': 'error' } });
+        storage.setState({ machineListStatusByServerId: { 'srv_server_b': 'signedOut' } });
         expect(resolveFreshMachineAdministrationExecutionTarget(target, { accountScope: { serverId: profileB.id, accountId: 'account-b' } })).toBeNull();
+        // A failed list read never proves the admitted, presence-fresh row gone.
+        storage.setState({ machineListStatusByServerId: { 'srv_server_b': 'error' } });
+        expect(resolveFreshMachineAdministrationExecutionTarget(target, { accountScope: { serverId: profileB.id, accountId: 'account-b' } })).not.toBeNull();
 
         storage.setState({
             machineListStatusByServerId: { 'srv_server_b': 'idle' },
@@ -127,13 +130,13 @@ describe('resolveFreshMachineAdministrationExecutionTarget', () => {
         }
     });
 
-    it('does not revive a stale scoped row when the active inventory is authoritatively empty', async () => {
+    it('does not revive a retained scoped row when the Home is signed out and the active inventory is empty', async () => {
         const { resolveFreshMachineAdministrationExecutionTarget } = await import('./useTargetSelection');
         await setActiveServerId(profileB.id);
         storage.setState({
             machines: {},
             machineListByServerId: { 'srv_server_b': [machine('machine-b', true)] },
-            machineListStatusByServerId: { 'srv_server_b': 'error' },
+            machineListStatusByServerId: { 'srv_server_b': 'signedOut' },
         });
 
         expect(resolveFreshMachineAdministrationExecutionTarget({

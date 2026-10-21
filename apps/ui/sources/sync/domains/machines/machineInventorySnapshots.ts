@@ -141,9 +141,9 @@ function resolveRawMachineList(params: Readonly<{
         machines,
         // Observation answers "are these the live store rows, whose presence is a self-expiring current fact"
         // (a warm-cache row never is). Whether the list has been read lives in `settled`/`inventoryStatus`,
-        // so a refresh in flight over retained rows does not make an Online machine unselectable. A failed or
-        // signed-out read leaves the retained rows stale.
-        observation: machines !== null && (inventoryStatus === 'idle' || inventoryStatus === 'loading') ? 'live' : 'stale',
+        // so a refresh in flight over retained rows does not make an Online machine unselectable. A failed read
+        // never proves a retained row gone (its presence still self-expires); only a signed-out Home leaves it stale.
+        observation: machines !== null && inventoryStatus !== 'signedOut' ? 'live' : 'stale',
         settled: inventoryStatus === 'idle' && machines !== null,
         inventoryStatus,
     };

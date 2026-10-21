@@ -90,6 +90,14 @@ type LoadedProjectionState = Readonly<{
     authorityKey: string | null;
     failureReason?: MachineContributionRegistryProjectionFailureReason;
     /**
+     * A failed refresh never proves absence. When the describe for this
+     * authority failed over a snapshot this process already confirmed, that
+     * snapshot stays admitted (and interactive while the machine is online)
+     * under this key while retries continue. Only offline presence, a
+     * daemon-answered `unsupported`, or Account retirement withdraw it.
+     */
+    failedRefreshAuthorityKey?: string;
+    /**
      * `retainedOffline` is derived, never stored: a `current` snapshot with no
      * live authority is retained-offline whether it was confirmed earlier in
      * this process or restored from this Account's device custody.
@@ -427,6 +435,11 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
                     || previous.accountLifetime !== accountLifetime
                     || (previous.connectedAccountProjection === CONNECTED_ACCOUNT_PROJECTION_TRANSPORT_ERROR
                         && previous.failureReason === failureReason)) return previous;
+                if (previous.phase === 'current' && previous.authorityKey !== null) {
+                    return previous.failedRefreshAuthorityKey === authorityKey
+                        ? previous
+                        : { ...previous, failedRefreshAuthorityKey: authorityKey };
+                }
                 const retained = previous.phase === 'current' ? previous : restoreRetained();
                 return { ...retained, failureReason, phase: retained.phase === 'current' ? 'current' : 'unavailable',
                     connectedAccountProjection: CONNECTED_ACCOUNT_PROJECTION_TRANSPORT_ERROR };
@@ -556,7 +569,8 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
                     ? loadedProjection.phase === 'current'
                         ? 'retainedOffline'
                         : 'unavailable'
-                    : loadedProjection.phase === 'current' && loadedProjection.authorityKey === authorityKey
+                    : loadedProjection.phase === 'current'
+                        && (loadedProjection.authorityKey === authorityKey || loadedProjection.failedRefreshAuthorityKey === authorityKey)
                         ? 'current'
                         : 'establishing';
     const interactionEnabled = phase === 'current';

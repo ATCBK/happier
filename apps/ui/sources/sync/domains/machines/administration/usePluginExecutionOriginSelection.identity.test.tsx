@@ -751,7 +751,10 @@ describe('execution-origin plugin identity with real Account and machine owners'
         expect(hook.getCurrent().canExecute).toBe(false);
         await act(async () => { storage.setState({ machineListByServerId: { [home.id]: [refreshed] } }); });
         expect(hook.getCurrent().canExecute).toBe(true);
+        // A failed list read never proves the admitted, presence-fresh Machine gone; a signed-out Home does.
         await act(async () => { storage.setState({ machineListStatusByServerId: { [home.id]: 'error' } }); });
+        expect(hook.getCurrent().canExecute).toBe(true);
+        await act(async () => { storage.setState({ machineListStatusByServerId: { [home.id]: 'signedOut' } }); });
         expect(hook.getCurrent().state).toMatchObject({ kind: 'unavailable', reasons: ['stale'] });
         expect(hook.getCurrent().canExecute).toBe(false);
         expect(initial.resolveExecutionOrigin()).toBeNull();

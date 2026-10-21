@@ -99,11 +99,15 @@ describe('resolveAllProfileMachineInventorySnapshots', () => {
         // The scoped inventory owns current membership even if the active map still has an older object.
         expect(resolveAllProfileMachineInventorySnapshots({ ...base, machineListByServerId: { 'local-a': [{ ...row }] } })[0])
             .toMatchObject({ machines: [expect.objectContaining({ id: row.id })], executionEligibleMachineIds: [row.id] });
-        for (const status of [undefined, 'error', 'signedOut'] as const) {
+        for (const status of [undefined, 'signedOut'] as const) {
             expect(resolveAllProfileMachineInventorySnapshots({ ...base,
                 machineListStatusByServerId: { 'local-a': status } })[0])
                 .toMatchObject({ machines: [expect.objectContaining({ id: row.id })], executionEligibleMachineIds: [] });
         }
+        // A failed list read is not evidence the admitted row left: it stays execution-eligible.
+        expect(resolveAllProfileMachineInventorySnapshots({ ...base,
+            machineListStatusByServerId: { 'local-a': 'error' } })[0])
+            .toMatchObject({ observation: 'live', executionEligibleMachineIds: [row.id] });
         expect(resolveAllProfileMachineInventorySnapshots({ ...base, activeServerId: 'other',
             machineListStatusByServerId: { 'local-a': 'loading' } })[0]).toMatchObject({ executionEligibleMachineIds: [row.id] });
         for (const status of ['idle', 'loading'] as const) {
@@ -144,7 +148,7 @@ describe('resolveAllProfileMachineInventorySnapshots', () => {
         }
     });
 
-    it('keeps a machine with current presence selectable while its list refresh is in flight, and rejects it once the read failed', () => {
+    it('keeps a machine with current presence selectable while its list refresh is in flight or failed, and rejects it only on positive evidence', () => {
         const row = { ...machine({ id: 'refreshing-row', active: true }), activeAt: Date.now() };
         const base = { profiles: [profiles[0]], activeServerId: 'local-a', activeMachines: [row],
             machineListByServerId: { 'local-a': [row] }, accountScopesByServerId, loadWarmEntries: () => ({}) };
@@ -155,17 +159,21 @@ describe('resolveAllProfileMachineInventorySnapshots', () => {
         });
         expect(rejectionWhen('idle')).toBeNull();
         expect(rejectionWhen('loading')).toBeNull();
-        expect(rejectionWhen('error')).toBe('stale');
+        // A failed read never proves absence; only a signed-out Home (explicit refusal) or lapsed presence demotes.
+        expect(rejectionWhen('error')).toBeNull();
         expect(rejectionWhen('signedOut')).toBe('stale');
         // The admitted row remains executable, but the rest of the list is not settled.
         expect(resolveAllProfileMachineInventorySnapshots({ ...base, machineListStatusByServerId: { 'local-a': 'loading' } })[0])
             .toMatchObject({ observation: 'live', executionEligibleMachineIds: [row.id] });
         expect(isMachineInventorySettled(resolveAllProfileMachineInventorySnapshots({ ...base, machineListStatusByServerId: { 'local-a': 'loading' } }), 'srv_server_a')).toBe(false);
-        // A machine whose live presence lapsed is still rejected during the refresh.
+        // A machine whose live presence lapsed is still rejected during the refresh, and after a failed read.
         const lapsed = { ...row, active: false, activeAt: 1 };
         expect(resolveFleetMachineRejection({ ...target, machineSnapshots: resolveAllProfileMachineInventorySnapshots({
             ...base, activeMachines: [lapsed], machineListByServerId: { 'local-a': [lapsed] },
             machineListStatusByServerId: { 'local-a': 'loading' } }) })).toBe('offline');
+        expect(resolveFleetMachineRejection({ ...target, machineSnapshots: resolveAllProfileMachineInventorySnapshots({
+            ...base, activeMachines: [lapsed], machineListByServerId: { 'local-a': [lapsed] },
+            machineListStatusByServerId: { 'local-a': 'error' } }) })).toBe('offline');
     });
 
     it('projects request reachability for the exact Home and recovers after a successful retry', () => {
