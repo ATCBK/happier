@@ -1,5 +1,5 @@
 import { requestMicrophonePermission, showMicrophonePermissionDeniedAlert } from '@/utils/platform/microphonePermissions';
-import { scheduleTurnEndpoint } from '@/voice/input/TurnEndpointDetector';
+import { createTurnEndpointDetector, type TurnEndpointDetector } from '@/voice/input/TurnEndpointDetector';
 import { isHandsFreeSttEnabled, resolveHandsFreeTurnEndpointPolicy } from '@/voice/local/localVoiceSettings';
 import { Platform } from 'react-native';
 
@@ -12,10 +12,8 @@ type DeviceSttStatePatch = {
 type DeviceSttHandle = {
   sessionId: string;
   transcript: string;
-  isFinal: boolean;
-  pendingAutoStop: boolean;
   startedAt: number;
-  cancelAutoStop: (() => void) | null;
+  endpointDetector: TurnEndpointDetector;
   module: any;
   resolveEnd: () => void;
   endPromise: Promise<void>;
@@ -42,27 +40,6 @@ export function createDeviceSttController(deps: {
   const isDomRuntime = (): boolean => typeof window !== 'undefined' && typeof document !== 'undefined';
 
   const isHandsFreeDeviceSttEnabled = (): boolean => isHandsFreeSttEnabled(deps.getSettings());
-
-  const clearHandleTimer = () => {
-    handle?.cancelAutoStop?.();
-    if (handle) handle.cancelAutoStop = null;
-  };
-
-  const scheduleHandsFreeStop = (sessionId: string, expectedHandle: DeviceSttHandle) => {
-    expectedHandle.cancelAutoStop?.();
-    expectedHandle.cancelAutoStop = scheduleTurnEndpoint({
-      policy: resolveHandsFreeTurnEndpointPolicy(deps.getSettings()),
-      speechElapsedMs: Date.now() - expectedHandle.startedAt,
-      onEndpoint: () => {
-        expectedHandle.cancelAutoStop = null;
-        if (!handle || handle !== expectedHandle || handle.sessionId !== sessionId) return;
-        if (!isHandsFreeDeviceSttEnabled()) return;
-        if (handsFreeSessionId !== sessionId) return;
-        if (!deps.canAutoStopTurn(sessionId)) return;
-        deps.onAutoStopTurn(sessionId);
-      },
-    });
-  };
 
   const cleanupListeners = () => {
     const subscriptions = handle?.subscriptions ?? [];
@@ -108,7 +85,7 @@ export function createDeviceSttController(deps: {
       }
     }
 
-    clearHandleTimer();
+    handle?.endpointDetector.cancel();
     cleanupListeners();
 
     let resolveEnd: null | (() => void) = null;
@@ -119,10 +96,14 @@ export function createDeviceSttController(deps: {
     const nextHandle: DeviceSttHandle = {
       sessionId,
       transcript: '',
-      isFinal: false,
-      pendingAutoStop: false,
       startedAt: Date.now(),
-      cancelAutoStop: null,
+      endpointDetector: createTurnEndpointDetector({
+        onEndpoint: () => {
+          if (handle !== nextHandle || handsFreeSessionId !== sessionId) return;
+          if (!isHandsFreeDeviceSttEnabled() || !deps.canAutoStopTurn(sessionId)) return;
+          deps.onAutoStopTurn(sessionId);
+        },
+      }),
       module: ExpoSpeechRecognitionModule,
       resolveEnd: () => resolveEnd?.(),
       endPromise,
@@ -132,18 +113,27 @@ export function createDeviceSttController(deps: {
     handle = nextHandle;
 
     nextHandle.subscriptions.push(
+      ExpoSpeechRecognitionModule.addListener('speechstart', () => {
+        nextHandle.endpointDetector.cancel();
+      })
+    );
+
+    nextHandle.subscriptions.push(
       ExpoSpeechRecognitionModule.addListener('result', (event: any) => {
         const results = Array.isArray(event?.results) ? event.results : [];
         const transcript = typeof results?.[0]?.transcript === 'string' ? results[0].transcript.trim() : '';
         if (!transcript) return;
 
         nextHandle.transcript = transcript;
-        if (event?.isFinal) {
-          nextHandle.isFinal = true;
-          if (!nextHandle.pendingAutoStop && isHandsFreeDeviceSttEnabled()) {
-            nextHandle.pendingAutoStop = true;
-            scheduleHandsFreeStop(sessionId, nextHandle);
-          }
+        if (isHandsFreeDeviceSttEnabled()) {
+          nextHandle.endpointDetector.observe({
+            transcript,
+            isEndpoint: event?.isFinal === true,
+            policy: resolveHandsFreeTurnEndpointPolicy(deps.getSettings()),
+            speechElapsedMs: Date.now() - nextHandle.startedAt,
+          });
+        } else {
+          nextHandle.endpointDetector.cancel();
         }
       })
     );
@@ -186,7 +176,7 @@ export function createDeviceSttController(deps: {
       return '';
     }
 
-    clearHandleTimer();
+    handle.endpointDetector.cancel();
 
     try {
       handle.module?.stop?.();
@@ -198,7 +188,7 @@ export function createDeviceSttController(deps: {
 
     const text = handle.transcript.trim();
     const subscriptions = handle.subscriptions;
-    handle.cancelAutoStop?.();
+    handle.endpointDetector.cancel();
     handle = null;
 
     try {

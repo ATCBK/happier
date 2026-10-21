@@ -6,7 +6,7 @@ import { getOptionalHappierSherpaNativeModule } from '@happier-dev/sherpa-native
 import { ensureModelPackInstalled } from '@/voice/modelPacks/installer.native';
 import { resolveModelPackManifestUrl } from '@/voice/modelPacks/manifests';
 import { VoiceLocalSttSchema } from '@/sync/domains/settings/voiceLocalSttSettings';
-import { scheduleTurnEndpoint } from '@/voice/input/TurnEndpointDetector';
+import { createTurnEndpointDetector, type TurnEndpointDetector } from '@/voice/input/TurnEndpointDetector';
 import {
   isHandsFreeSttEnabled,
   resolveHandsFreeTurnEndpointPolicy,
@@ -59,7 +59,7 @@ type SherpaSttHandle = {
   pendingChunks: Uint8Array[];
   pendingBytes: number;
   pushLoop: Promise<void> | null;
-  cancelAutoStop: (() => void) | null;
+  endpointDetector: TurnEndpointDetector;
   /** Set synchronously when stop begins; stop is idempotent and auto-stop is disarmed from then on. */
   stopPromise: Promise<string> | null;
 };
@@ -151,8 +151,7 @@ export function createSherpaStreamingSttController(deps: {
 
   const detachHandle = (h: SherpaSttHandle) => {
     if (handle === h) handle = null;
-    h.cancelAutoStop?.();
-    h.cancelAutoStop = null;
+    h.endpointDetector.cancel();
     h.subscriptions.forEach((s) => s.remove());
     h.subscriptions = [];
   };
@@ -183,36 +182,19 @@ export function createSherpaStreamingSttController(deps: {
   const isHandsFreeActive = (h: SherpaSttHandle): boolean =>
     handsFreeSessionId === h.sessionId && isHandsFreeSttEnabled(deps.getSettings());
 
-  // The native recognizer owns end-of-speech detection (its endpoint rules); the shared hands-free
-  // turn policy (silenceMs/minSpeechMs) then decides when the turn ends, exactly as for device STT.
-  // Native resets the stream after an endpoint, so `isEndpoint` is true only on the batch where it
-  // fires and later silent batches return the same committed text with `isEndpoint` false. An
-  // endpoint therefore arms the stop (even when that batch also carries the final words, since the
-  // endpoint will not repeat), and only changed recognized text on a later batch disarms it.
   const onPushResult = (h: SherpaSttHandle, res: { text?: unknown; isEndpoint?: unknown }) => {
     const text = typeof res?.text === 'string' ? res.text.trim() : '';
-    const textChanged = text.length > 0 && text !== h.transcript;
     if (text) h.transcript = text;
-    if (h.stopPromise || !isHandsFreeActive(h)) return;
-
-    // Speech activity restarts the silence wait.
-    if (textChanged) {
-      h.cancelAutoStop?.();
-      h.cancelAutoStop = null;
+    if (h.stopPromise || !isHandsFreeActive(h)) {
+      h.endpointDetector.cancel();
+      return;
     }
-    if (res?.isEndpoint !== true) return;
-    // Trailing silence with no recognized words is not a turn.
-    if (!h.transcript || h.cancelAutoStop) return;
 
-    h.cancelAutoStop = scheduleTurnEndpoint({
+    h.endpointDetector.observe({
+      transcript: h.transcript,
+      isEndpoint: res?.isEndpoint === true,
       policy: resolveHandsFreeTurnEndpointPolicy(deps.getSettings()),
       speechElapsedMs: Date.now() - h.startedAt,
-      onEndpoint: () => {
-        h.cancelAutoStop = null;
-        if (handle !== h || h.stopPromise || !isHandsFreeActive(h)) return;
-        if (!deps.canAutoStopTurn(h.sessionId)) return;
-        deps.onAutoStopTurn(h.sessionId);
-      },
     });
   };
 
@@ -317,7 +299,13 @@ export function createSherpaStreamingSttController(deps: {
       pendingChunks: [],
       pendingBytes: 0,
       pushLoop: null,
-      cancelAutoStop: null,
+      endpointDetector: createTurnEndpointDetector({
+        onEndpoint: () => {
+          if (handle !== h || h.stopPromise || !isHandsFreeActive(h)) return;
+          if (!deps.canAutoStopTurn(h.sessionId)) return;
+          deps.onAutoStopTurn(h.sessionId);
+        },
+      }),
       stopPromise: null,
     };
     h.subscriptions.push(
@@ -365,8 +353,7 @@ export function createSherpaStreamingSttController(deps: {
   };
 
   const finishStop = async (h: SherpaSttHandle): Promise<string> => {
-    h.cancelAutoStop?.();
-    h.cancelAutoStop = null;
+    h.endpointDetector.cancel();
     h.subscriptions.forEach((s) => s.remove());
     h.subscriptions = [];
 
