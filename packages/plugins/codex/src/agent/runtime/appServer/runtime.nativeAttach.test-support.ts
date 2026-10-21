@@ -45,6 +45,8 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   turnIdForStart?: (occurrence: number) => string;
   nativeToolMode?: 'code_mode_only' | 'direct';
   initialProviderBinding?: CodexProviderBindingEngineConfigV1;
+  providerBinding?: AgentSessionOpenRequest['providerBinding'];
+  connectedAccounts?: AgentSessionRuntimeContext['services']['connectedAccounts'];
   processEnv?: Readonly<Record<string, string | undefined>>;
   skills?: AgentSessionOpenRequest['skills'];
   startupInstructions?: Extract<AgentSessionOpenRequest, { kind: 'create' }>['startupInstructions'] | null;
@@ -223,17 +225,22 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   const nativeExec = {
     ...exec,
     // Substitute the process boundary with the same real JSON-RPC socket transport.
-    clients: { spawn: async (request: { maxFrameBytes: number; requestTimeoutMs: number }) => await connectCodexUnixWebSocketJsonRpc({
-      socketPath, maxFrameBytes: request.maxFrameBytes, requestTimeoutMs: request.requestTimeoutMs,
-    }) },
+    clients: { spawn: async (request: { maxFrameBytes: number; requestTimeoutMs: number;
+      launch: { args?: readonly string[]; env?: Readonly<Record<string, string>> } }) => {
+      options.observer?.recordLaunch({ argv: request.launch.args ?? [], env: request.launch.env });
+      return await connectCodexUnixWebSocketJsonRpc({
+        socketPath, maxFrameBytes: request.maxFrameBytes, requestTimeoutMs: request.requestTimeoutMs,
+      });
+    } },
     run: async (request: { args: readonly string[] }) => ({
       stdout: new TextEncoder().encode(request.args.includes('--version') ? 'codex-cli 0.159.2' : request.args.includes('models') ? JSON.stringify({ models: [{ slug: 'fixture-model', tool_mode: options.nativeToolMode === 'direct' ? undefined : 'code_mode_only' }, { slug: 'direct-model' }] }) : ''),
       stderr: new Uint8Array(),
       stdoutTruncated: false, stderrTruncated: false,
       termination: { requestedBy: { kind: 'none' }, observed: { kind: 'exit', exitCode: 0 } },
     }),
-    spawn: async (request: { args: readonly string[] }) => {
+    spawn: async (request: { args: readonly string[]; env?: Readonly<Record<string, string>> }) => {
       if (options.nativeSpawnFailure) throw options.nativeSpawnFailure;
+      options.observer?.recordLaunch({ argv: request.args, env: request.env });
       if (options.nativeProcessResult) return {
         write: async () => undefined, closeStdin: async () => undefined,
         onOutput: () => ({ dispose() {} }), dispose: async () => undefined,
@@ -280,7 +287,8 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
       // Exec and host SDK services are genuine external boundaries; native/runtime/client logic stays real.
       const context = {
         signal: new AbortController().signal,
-        services: { exec: nativeExec, logger: options.logger ?? { debug() {}, warn() {} }, sessions: {} },
+        services: { exec: nativeExec, logger: options.logger ?? { debug() {}, warn() {} }, sessions: {},
+          ...(options.connectedAccounts ? { connectedAccounts: options.connectedAccounts } : {}) },
         session: { id: 'actual-happier-session', services: { models: options.models } },
         ui: { title: { set: async () => undefined } },
       } as unknown as AgentSessionRuntimeContext;
@@ -295,6 +303,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
           ...options.toolRestriction,
         },
         ...(mcpServers ? { mcpServers } : {}),
+        ...(options.providerBinding ? { providerBinding: options.providerBinding } : {}),
         ...(options.mcpToolPolicy ? { mcpToolPolicy: options.mcpToolPolicy } : {}),
         ...(options.skills ? { skills: options.skills } : {}),
         ...(options.startupInstructions === null ? {} : {

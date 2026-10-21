@@ -248,17 +248,6 @@ describe('createCodexNativeAppServerSessionRuntime', () => {
   });
 
   it.each([
-    ['create', {
-      kind: 'create' as const,
-      sessionId: 'session-1',
-      cwd: '/tmp/codex',
-      startupInstructions: {
-        v: 1 as const,
-        id: 'happier.global_voice_agent',
-        revision: 1,
-        instructions: 'Global Voice developer instructions.',
-      },
-    }],
     ['resume', {
       kind: 'resume' as const,
       sessionId: 'session-1',
@@ -387,29 +376,6 @@ describe('createCodexNativeAppServerSessionRuntime', () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
-  });
-
-  it('does not eagerly start a fresh session before its first prompt', async () => {
-    const appServer = createAppServerSession();
-    runtimeModuleMocks.createCodexAppServerRuntime.mockReturnValueOnce(appServer.runtime);
-    const context = {
-      signal: new AbortController().signal,
-      services: {
-        logger: { debug: vi.fn() },
-        sessions: { current: { media: { registerSourceRoot: vi.fn() } } },
-        connectedAccounts: createConnectedAccountsFixture(),
-      },
-      session: { id: 'session-1', services: {} },
-      ui: { title: { set: vi.fn(async () => undefined) } },
-    } as unknown as AgentSessionRuntimeContext;
-
-    await openCodexNativeAppServerSession({
-      kind: 'create',
-      sessionId: 'session-1',
-      cwd: '/tmp/codex',
-    }, context);
-
-    expect(runtimeModuleMocks.startCodexAppServerRuntime).not.toHaveBeenCalled();
   });
 
   it('lets tracked native-fork initialization run until Codex settles or the operation is cancelled', async () => {
@@ -1135,133 +1101,6 @@ describe('createCodexNativeAppServerSessionRuntime', () => {
     await expect(host.accountUsage.resolveSourceContext({
       serviceId: 'openai-codex',
     })).resolves.toEqual(source);
-  });
-
-  it('passes the host-frozen raw MCP launch configuration to the native app-server runtime', async () => {
-    const appServer = createAppServerSession();
-    runtimeModuleMocks.createCodexAppServerRuntime.mockReturnValueOnce(appServer.runtime);
-    const context = {
-      signal: new AbortController().signal,
-      services: {
-        logger: { debug: vi.fn() },
-        sessions: { current: { media: { registerSourceRoot: vi.fn() } } },
-        connectedAccounts: createConnectedAccountsFixture(),
-      },
-      session: { id: 'session-1', services: {} },
-      ui: { title: { set: vi.fn(async () => undefined) } },
-    } as unknown as AgentSessionRuntimeContext;
-    const mcpServers = Object.freeze({
-      happier: Object.freeze({
-        command: 'happier-mcp',
-        args: Object.freeze(['serve']),
-        env: Object.freeze({ HAPPIER_MCP_MODE: 'session' }),
-      }),
-    });
-
-    await openCodexNativeAppServerSession({
-      kind: 'create',
-      sessionId: 'session-1',
-      cwd: '/tmp/codex',
-      mcpServers,
-    }, context);
-
-    expect(runtimeModuleMocks.createCodexAppServerRuntime).toHaveBeenCalledWith(expect.objectContaining({
-      mcpServers,
-    }));
-    expect(runtimeModuleMocks.createCodexAppServerRuntime.mock.calls[0]?.[0])
-      .not.toHaveProperty('initialProviderBinding');
-  });
-
-  it('uses canonical session authentication without a realtime API-key purpose or watcher', async () => {
-    const appServer = createAppServerSession();
-    runtimeModuleMocks.createCodexAppServerRuntime.mockReturnValueOnce(appServer.runtime);
-    const connectedAccounts = createConnectedAccountsFixture({
-      bound: true,
-      apiKey: 'sk-realtime',
-    });
-    const context = {
-      signal: new AbortController().signal,
-      services: {
-        logger: { debug: vi.fn() },
-        sessions: { current: { media: { registerSourceRoot: vi.fn() } } },
-        connectedAccounts,
-      },
-      session: { id: 'session-1', services: {} },
-      ui: { title: { set: vi.fn(async () => undefined) } },
-    } as unknown as AgentSessionRuntimeContext;
-
-    const sessionRuntime = await openCodexNativeAppServerSession({
-      kind: 'create',
-      sessionId: 'session-1',
-      cwd: '/tmp/codex',
-    }, context);
-
-    expect(connectedAccounts.getBinding).not.toHaveBeenCalledWith(
-      'realtime_upstream',
-      expect.anything(),
-    );
-    expect(connectedAccounts.materialize).not.toHaveBeenCalled();
-    expect(connectedAccounts.watch).not.toHaveBeenCalledWith(
-      'realtime_upstream',
-      expect.anything(),
-    );
-    expect(runtimeModuleMocks.createCodexAppServerRuntime)
-      .toHaveBeenCalledWith(expect.objectContaining({
-        processEnv: expect.not.objectContaining({
-          OPENAI_API_KEY: expect.anything(),
-        }),
-      }));
-    await sessionRuntime.dispose();
-  });
-
-  it('passes exact validated Provider engine configuration to the native app-server runtime', async () => {
-    const appServer = createAppServerSession();
-    runtimeModuleMocks.createCodexAppServerRuntime.mockReturnValueOnce(appServer.runtime);
-    const context = {
-      signal: new AbortController().signal,
-      services: {
-        logger: { debug: vi.fn() },
-        sessions: { current: { media: { registerSourceRoot: vi.fn() } } },
-        connectedAccounts: createConnectedAccountsFixture(),
-      },
-      session: { id: 'session-1', services: {} },
-      ui: { title: { set: vi.fn(async () => undefined) } },
-    } as unknown as AgentSessionRuntimeContext;
-    const engineConfig = Object.freeze({
-      v: 1 as const,
-      modelProvider: 'happier_0123456789abcdef0123456789abcdef',
-      config: Object.freeze({
-        'model_providers.happier_0123456789abcdef0123456789abcdef': Object.freeze({
-          name: 'Happier provider' as const,
-          base_url: 'https://gateway.example.test/v1',
-          wire_api: 'responses' as const,
-          env_key: 'HAPPIER_CODEX_PROVIDER_API_KEY' as const,
-          requires_openai_auth: false as const,
-          supports_websockets: false as const,
-        }),
-      }),
-    });
-
-    await openCodexNativeAppServerSession({
-      kind: 'create',
-      sessionId: 'session-1',
-      cwd: '/tmp/codex',
-      providerBinding: {
-        connectionId: 'pc_work',
-        model: { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna' },
-        upstream: {
-          protocol: 'openai-responses',
-          normalizedUrl: 'https://gateway.example.test/v1',
-          credential: 'apiKey',
-        },
-        materialization: { v: 1, kind: 'engineConfig', engineConfig },
-      },
-    } as unknown as AgentSessionOpenRequest, context);
-
-    expect(runtimeModuleMocks.createCodexAppServerRuntime).toHaveBeenCalledWith(expect.objectContaining({
-      initialProviderBinding: engineConfig,
-      initialModelId: 'gpt-5.6-luna',
-    }));
   });
 
   it.each([

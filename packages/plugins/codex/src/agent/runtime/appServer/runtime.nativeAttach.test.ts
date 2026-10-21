@@ -7,6 +7,7 @@ import { startCodexAppServerRuntime } from './runtime.js';
 import { withCodexNativeAttachFixture as withFixture } from './runtime.nativeAttach.test-support.js';
 import { RuntimeDescriptorV1Schema } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
 import { PluginError } from '@happier-dev/plugin-sdk';
+import type { ConnectedAccountsService } from '@happier-dev/plugin-sdk/connected-accounts';
 
 // The fixture owns TMPDIR. Isolate the OS-user startup lock from live Agents,
 // while retaining the real file-lock and native socket/client behavior.
@@ -16,6 +17,75 @@ vi.mock('node:os', async importOriginal => {
 });
 
 describe('native Codex attachment preparation', () => {
+  it('maps startup instructions to native developerInstructions on create', async () => {
+    await withFixture(async ({ openConfiguredSession, requests }) => {
+      await openConfiguredSession();
+      expect(requests.find(request => request.method === 'thread/start')?.params)
+        .toMatchObject({ developerInstructions: 'Global Voice developer instructions.' });
+      expect(requests.some(request => request.method === 'turn/start')).toBe(false);
+    }, { startupInstructions: { v: 1, id: 'happier.global_voice_agent', revision: 1,
+      instructions: 'Global Voice developer instructions.' } });
+  });
+
+  it('passes the host-frozen raw MCP launch configuration to the native app-server', async () => {
+    const mcpServers = Object.freeze({ happier: Object.freeze({
+      command: 'happier-mcp', args: Object.freeze(['serve']),
+      env: Object.freeze({ HAPPIER_MCP_MODE: 'session' }),
+    }) });
+    const launches: Array<readonly string[]> = [];
+    await withFixture(async ({ openConfiguredSession }) => {
+      await openConfiguredSession();
+      expect(launches[0]).toEqual(expect.arrayContaining([
+        'mcp_servers.happier.command="happier-mcp"',
+        'mcp_servers.happier.args=["serve"]',
+        'mcp_servers.happier.env={HAPPIER_MCP_MODE="session"}',
+      ]));
+      expect(launches[0]?.some(arg => arg.startsWith('model_provider='))).toBe(false);
+    }, { mcpServers, observer: {
+      recordAppServerRequest() {}, recordLaunch: launch => { launches.push(launch.argv); },
+    } });
+  });
+
+  it('uses canonical session authentication without a realtime API-key purpose or watcher', async () => {
+    const connectedAccounts = {
+      getBinding: vi.fn<ConnectedAccountsService['getBinding']>(async () => null),
+      requestSelection: vi.fn<ConnectedAccountsService['requestSelection']>(),
+      materialize: vi.fn<ConnectedAccountsService['materialize']>(),
+      listAccounts: vi.fn<ConnectedAccountsService['listAccounts']>(),
+      materializeListedAccount: vi.fn<ConnectedAccountsService['materializeListedAccount']>(),
+      watch: vi.fn<ConnectedAccountsService['watch']>(() => ({ dispose() {} })),
+    } satisfies ConnectedAccountsService;
+    const launches: Array<Readonly<Record<string, string | undefined>> | undefined> = [];
+    await withFixture(async ({ openConfiguredSession }) => {
+      await openConfiguredSession();
+      expect(connectedAccounts.getBinding.mock.calls.map(([purpose]) => purpose)).not.toContain('realtime_upstream');
+      expect(connectedAccounts.materialize).not.toHaveBeenCalled();
+      expect(connectedAccounts.watch.mock.calls.map(([purpose]) => purpose)).not.toContain('realtime_upstream');
+      expect(launches.length).toBeGreaterThan(0);
+      expect(launches.every(env => env?.OPENAI_API_KEY === undefined)).toBe(true);
+    }, { connectedAccounts, observer: {
+      recordAppServerRequest() {}, recordLaunch: launch => { launches.push(launch.env); },
+    } });
+  });
+
+  it('passes exact validated Provider engine configuration to the native app-server', async () => {
+    const modelProvider = 'happier_0123456789abcdef0123456789abcdef';
+    const engineConfig = Object.freeze({ v: 1 as const, modelProvider, config: Object.freeze({
+      [`model_providers.${modelProvider}`]: Object.freeze({ name: 'Happier provider' as const,
+        base_url: 'https://gateway.example.test/v1', wire_api: 'responses' as const,
+        env_key: 'HAPPIER_CODEX_PROVIDER_API_KEY' as const, requires_openai_auth: false as const,
+        supports_websockets: false as const }),
+    }) });
+    await withFixture(async ({ openConfiguredSession, requests }) => {
+      await openConfiguredSession();
+      expect(requests.find(request => request.method === 'thread/start')?.params).toMatchObject({
+        model: 'gpt-5.6-luna', modelProvider, config: engineConfig.config,
+      });
+    }, { providerBinding: { connectionId: 'pc_work', model: { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna' },
+      upstream: { protocol: 'openai-responses', normalizedUrl: 'https://gateway.example.test/v1', credential: 'apiKey' },
+      materialization: { v: 1, kind: 'engineConfig', engineConfig } } });
+  });
+
   it.skipIf(process.platform === 'win32')('keeps the primary turn active when a completed execution run releases its process', async () => {
     const nativeTurns = new Map<string, { complete(): void; isOpen(): boolean }>();
     await withFixture(async ({ openConfiguredSession, openConfiguredRun, endpoints, nativeProcessExits }) => {
