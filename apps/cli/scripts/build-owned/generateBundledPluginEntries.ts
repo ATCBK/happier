@@ -89,6 +89,12 @@ import {
   type ProjectionPublicationLease,
 } from './bundledPlugins/outputs.ts';
 import { mapWithConcurrency } from './bundledPlugins/concurrency.ts';
+import {
+  BUNDLED_VOICE_RUNTIME_PLATFORMS,
+  resolveBundledVoiceRuntimeProjectionOutPath,
+  resolveGeneratorHostProjectionOutPaths,
+  resolveBundledPluginTranslationLocaleDirectory,
+} from './bundledPlugins/projectionPaths.mjs';
 import { createBundledPluginTimingReporter } from './bundledPlugins/timing.ts';
 import {
   inspectTypescriptModule as importTypescriptModule,
@@ -535,12 +541,6 @@ type BuiltInBackendContributionSource = Readonly<{
   definition: JsonValue;
   runtimeKind: string;
 }>;
-
-const BUNDLED_VOICE_RUNTIME_PLATFORMS = Object.freeze([
-  'web',
-  'ios',
-  'android',
-] as const satisfies readonly BundledVoiceRuntimePlatform[]);
 
 const BUNDLED_FIRST_PARTY_VOICE_PLUGIN_IDS: Readonly<Record<BundledFirstPartyVoicePackageId, string>> = Object.freeze({
   codex: 'happier.agent.codex',
@@ -3508,26 +3508,6 @@ export async function collectBundledFirstPartyVoiceProjectionSources(
   });
 }
 
-function resolveBundledVoiceRuntimeProjectionOutPath(rootDir: string, platform: string) {
-  return resolve(rootDir, 'apps/ui/sources/voice/registry',
-    `generatedBundledVoiceRuntimeEntries${platform === 'web' ? '' : `.${platform}`}.ts`);
-}
-
-function resolveGeneratorHostProjectionOutPaths(rootDir: string) {
-  return {
-    cliOutPath: resolve(rootDir, 'apps/cli/src/plugins/projection/registry/sources/generatedBundledPlugins.ts'),
-    cliManifestOutPath: resolve(rootDir, 'apps/cli/src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts'),
-    uiOutPath: resolve(rootDir, 'apps/ui/sources/agents/registry/generatedBundledPluginEntries.ts'),
-    agentPresentationOutPath: resolve(rootDir, 'packages/agents/src/generated/bundledAgentPresentation.ts'),
-    uiTranslationsOutPath: resolve(rootDir, 'apps/ui/sources/text/bundledPluginTranslations.generated.ts'),
-    uiVoiceEntriesOutPath: resolve(rootDir, 'apps/ui/sources/voice/registry/generatedBundledVoiceEntries.ts'),
-    protocolVoiceSelectionOptionsOutPath: resolve(rootDir, 'packages/protocol/src/voice/settings/generatedBundledVoiceSelectionOptions.ts'),
-    uiBehaviorOverridesOutPath: resolve(rootDir, 'apps/ui/sources/agents/registry/generatedBundledPluginEntries.uiBehaviorOverrides.ts'),
-    sessionAgentBehaviorsOutPath: resolve(rootDir, 'apps/ui/sources/agents/registry/generatedBundledPluginEntries.sessionAgentBehaviors.ts'),
-    visibleMessageResolversOutPath: resolve(rootDir, 'apps/ui/sources/agents/registry/generatedBundledPluginEntries.visibleMessageResolvers.ts'),
-  };
-}
-
 function renderBundledVoiceRuntimeProjectionOutputs(
   rootDir: string,
   sources: readonly BundledFirstPartyVoiceProjectionSource[],
@@ -4429,14 +4409,11 @@ async function generateBundledPluginEntries(
   const agentDefinitionsById = bundledAgentDefinitionProjection.agentDefinitionsById;
 
   const { cliOutPath, cliManifestOutPath, uiOutPath, agentPresentationOutPath, uiTranslationsOutPath, uiVoiceEntriesOutPath, protocolVoiceSelectionOptionsOutPath,
-    uiBehaviorOverridesOutPath, sessionAgentBehaviorsOutPath, visibleMessageResolversOutPath } = resolveGeneratorHostProjectionOutPaths(options.rootDir);
+    uiBehaviorOverridesOutPath, sessionAgentBehaviorsOutPath, visibleMessageResolversOutPath,
+    uiTranslationKeysOutPath, retiredAgentSettingsOutPath } = resolveGeneratorHostProjectionOutPaths(options.rootDir);
   const retiredPromptAssetPluginDescriptorsOutPath = resolve(
     options.rootDir,
     'apps/cli/src/prompts/assets/generated/pluginDescriptors.ts',
-  );
-  const retiredAgentSettingsOutPath = resolve(
-    options.rootDir,
-    'apps/ui/sources/agents/registry/generatedBundledPluginEntries.agentSettings.ts',
   );
   const agentsOutPath = resolve(options.rootDir, 'packages/agents/src/generated/bundledAgentDefinitions.ts');
   const retiredHostAgentSettingsOutPath = resolve(
@@ -4527,11 +4504,11 @@ async function generateBundledPluginEntries(
   const agentPresentationOut = renderBundledAgentPresentationTs(pluginPackages);
   const uiTranslationsOut = renderBundledPluginTranslationsTs(bundledPluginUiTranslations);
   const uiTranslationLocaleOutputs = Object.keys(bundledPluginUiTranslations).sort().map((locale) => ({
-    outPath: join(dirname(uiTranslationsOutPath), 'bundledPluginTranslations', `${locale}.generated.ts`),
+    outPath: join(resolveBundledPluginTranslationLocaleDirectory(options.rootDir), `${locale}.generated.ts`),
     out: renderBundledPluginTranslationsTs(bundledPluginUiTranslations, locale),
   }));
   uiTranslationLocaleOutputs.push({
-    outPath: join(dirname(uiTranslationsOutPath), 'bundledPluginTranslationKeys.generated.ts'),
+    outPath: uiTranslationKeysOutPath,
     out: renderBundledPluginTranslationKeysTs(bundledPluginUiTranslations),
   });
   const uiBehaviorOverridesOut = renderBundledUiBehaviorOverridesTs(agentUiBehaviorDescriptorSources);

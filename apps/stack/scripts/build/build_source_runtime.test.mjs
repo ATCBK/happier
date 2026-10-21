@@ -22,7 +22,7 @@ import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '.
 import { runServerRuntimeMigration } from '../runtime/launch/runServerRuntimeMigration.mjs';
 import { resolveServerRuntimeLaunchSpec } from '../runtime/launch/resolveServerRuntimeLaunchSpec.mjs';
 import { matchesNativeTypeScriptInputVersion, resolveTypeScriptCliInvocation } from '../../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
-import { withWorkspaceBundleLock } from '../../../../packages/cli-common/workspaceBundleLock.mjs';
+import { resolveWorkspaceBundleLockPath, withWorkspaceBundleLock } from '../../../../packages/cli-common/workspaceBundleLock.mjs';
 import { isJsonOwnerFileLockActive } from '../utils/proc/jsonOwnerFileLock.mjs';
 import { readWorkspaceBuildInputs, readSourceComponentBuildInputs } from '../utils/fs/workspaceBuildInputs.mjs';
 import { readCliSourceEntries, readWorkspacePackages, createWorkspaceSourceResolver } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
@@ -31,6 +31,24 @@ import { withDependencyRefreshLock } from '../utils/proc/dependency_refresh.mjs'
 import { withJsonOwnerFileLock } from '../utils/proc/jsonOwnerFileLock.mjs';
 import { startDevServer, createDevServerReloadExecutor } from '../utils/dev/server.mjs';
 import { resolveHeavyweightMemoryFloorKiB } from '../utils/dev_targets/remote_commands.mjs';
+
+test('daemon capture includes canonical generated UI projections without unrelated UI source', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-source-ui-projections-' });
+  const repoDir = await createReloadDaemonRepo(fixture, 'export const ready = true;');
+  const uiDir = join(repoDir, 'apps/ui');
+  const projections = [
+    'sources/agents/registry/generatedBundledPluginEntries.ts',
+    'sources/voice/registry/generatedBundledVoiceRuntimeEntries.ios.ts',
+    'sources/text/bundledPluginTranslations/en.generated.ts',
+  ];
+  for (const path of [...projections, 'sources/agents/registry/unrelated.ts']) {
+    await mkdir(dirname(join(uiDir, path)), { recursive: true });
+    await writeFile(join(uiDir, path), 'export {};');
+  }
+  const inputs = await readSourceComponentBuildInputs({ repoDir, component: 'daemon' });
+  for (const path of projections) assert.ok(inputs.files.includes(`apps/ui/${path}`), path);
+  assert.equal(inputs.files.includes('apps/ui/sources/agents/registry/unrelated.ts'), false);
+});
 
 test('component capture includes newly discovered bundled plugins and their workspace dependencies', async t => {
   const { build, transform } = createRequire(import.meta.url)('esbuild');
@@ -1102,6 +1120,11 @@ async function installSourcePreparationInputs(repoDir, component) {
     }
   }
   await mkdir(join(repoDir, 'apps/ui/scripts'), { recursive: true });
+  // The fixture models the canonical publisher's process boundary. Its actual
+  // authored-source drift semantics are covered by sourceGenerator.test.ts.
+  const pluginChecker = join(repoDir, 'apps/cli/scripts/build-owned/generateBundledPluginEntries.ts');
+  await mkdir(dirname(pluginChecker), { recursive: true });
+  if (!existsSync(pluginChecker)) await writeFile(pluginChecker, '');
   for (const [path, contents] of [
     ['apps/ui/package.json', JSON.stringify({ name: '@happier-dev/ui' })],
     ['apps/ui/scripts/prepareSourcePluginUiArtifacts.mjs', ''],
@@ -1123,6 +1146,68 @@ async function createReloadDaemonRepo(fixture, source) {
   await installSourcePreparationInputs(repoDir, 'daemon');
   return repoDir;
 }
+
+test('source daemon rejects stale plugin projections before replacing its working bundle',
+  { skip: process.platform !== 'linux', timeout: 30000 }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-source-plugin-projection-', registerCleanup: false });
+  t.after(async () => { await makeFixtureWritable(fixture.root); await fixture.cleanup(); });
+  const native = await installSourceAdmissionFixture(fixture.root);
+  const repoDir = await createReloadDaemonRepo(fixture, 'export const ready = true;');
+  const checker = join(repoDir, 'apps/cli/scripts/build-owned/generateBundledPluginEntries.ts');
+  const locatorDir = join(repoDir, 'apps/cli/src/plugins/projection/registry/sources');
+  const pluginDir = join(repoDir, 'packages/plugins/fixture');
+  await mkdir(locatorDir, { recursive: true });
+  await mkdir(join(pluginDir, 'src'), { recursive: true });
+  await writeFile(join(pluginDir, 'package.json'), JSON.stringify({
+    name: '@happier-dev/plugins-fixture', exports: { '.': { 'happier-source': './src/index.ts' } },
+  }));
+  await writeFile(join(pluginDir, 'src/index.ts'), 'export const activate = () => {};');
+  const authoredManifest = join(pluginDir, 'src/manifest.ts');
+  await writeFile(authoredManifest, 'export const locator = "engine";');
+  await writeFile(join(locatorDir, 'generatedBundledPluginManifests.ts'),
+    `export const BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS = ${JSON.stringify([{
+      sourceSpec: { locator: '@happier-dev/plugins-fixture' }, daemonEntryPath: null,
+      manifest: { runtime: {} },
+    }])};`);
+  const input = join(repoDir, 'apps/cli/assets/bundled-plugin-manifests/fixture.json');
+  await mkdir(dirname(input), { recursive: true });
+  await writeFile(input, '{"module":"engine"}');
+  // This subprocess is the external build-tool boundary, not a replacement
+  // for the builder's input capture, compilation, cache, or publication logic.
+  await writeFile(checker, `
+    import assert from 'node:assert/strict';
+    import {readFileSync,writeFileSync} from 'node:fs';
+    import {resolveWorkspaceBundleLockPath,withWorkspaceBundleLock} from ${JSON.stringify(new URL('../../../../packages/cli-common/workspaceBundleLock.mjs', import.meta.url).href)};
+    assert.deepEqual(process.argv.slice(2), ['--mode', 'check', '--scope', 'projections']);
+    await withWorkspaceBundleLock(async () => {
+      const declaration = readFileSync(new URL('../../assets/bundled-plugin-manifests/fixture.json', import.meta.url), 'utf8');
+      const authored = readFileSync(new URL('../../../../packages/plugins/fixture/src/manifest.ts', import.meta.url), 'utf8');
+      if (authored.includes('factory') && JSON.parse(declaration).module === 'engine') {
+        writeFileSync(${JSON.stringify(input)}, '{"module":"factory"}');
+        throw new Error('Generated plugin declaration differs from authored source');
+      }
+    }, {lockPath:resolveWorkspaceBundleLockPath(process.cwd()),wait:false});
+  `);
+  const stackBaseDir = fixture.path('stacks/qa');
+  const options = { repoDir, stackBaseDir, component: 'daemon', env: native.env };
+  const incumbent = await native.build(options);
+  await writeFile(authoredManifest, 'export const locator = "factory";');
+  await writeFile(join(repoDir, 'apps/cli/src/index.ts'), 'export const = ;');
+  const diagnostics = [];
+  const writeStderr = process.stderr.write;
+  t.mock.method(process.stderr, 'write', function(chunk, ...args) {
+    diagnostics.push(String(chunk));
+    return Reflect.apply(writeStderr, this, [chunk, ...args]);
+  });
+  await withWorkspaceBundleLock(async () => {
+    await assert.rejects(native.build(options), /Source preparation failed \(exit 1\)/);
+  }, { lockPath: resolveWorkspaceBundleLockPath(repoDir) });
+  assert.match(diagnostics.join(''), /Generated plugin declaration differs from authored source/);
+  assert.equal(await readFile(input, 'utf8'), '{"module":"factory"}', 'a concurrent source publisher cannot repair the already captured closure');
+  assert.deepEqual(JSON.parse(await readFile(join(stackBaseDir, 'source-runtime/selected-daemon.json'), 'utf8')),
+    { entrypoint: incumbent.entrypoint });
+  assert.equal((await import(pathToFileURL(incumbent.entrypoint))).ready, true);
+});
 
 test('QA startup reads last green without producer custody and prepares current source in background',
   { skip: process.platform !== 'linux', timeout: 30000 }, async t => {
@@ -1794,6 +1879,9 @@ test('source daemon owns its UI graph and bytes after checkout artifacts change'
   await writeFile(uiCompiler, `if (!process.env.HAPPIER_BUILD_DEPENDENCY_CUSTODY) throw new Error('missing-containing-build-dependency-custody');\n${compilerSource}`);
   const cliDir = join(repoDir,'apps/cli');
   const pluginDir = join(repoDir,'packages/plugins/fixture');
+  // This fixture replaces the complete plugin census with its UI-only plugin;
+  // model successful canonical declaration admission at the process boundary.
+  await writeFile(join(cliDir, 'scripts/build-owned/generateBundledPluginEntries.ts'), '');
   await mkdir(join(cliDir,'src/plugins/projection/registry/sources'),{recursive:true});
   await mkdir(join(repoDir,'apps/ui'),{recursive:true});
   await mkdir(join(pluginDir,'src'),{recursive:true});

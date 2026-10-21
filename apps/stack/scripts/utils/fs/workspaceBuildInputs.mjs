@@ -4,6 +4,7 @@ import { isBuiltin } from 'node:module';
 import cliDistBuildManifest from '../../../../../packages/cli-common/cliDistBuildManifest.cjs';
 import { readWorkspacePackages, workspaceSourcePackageClosure } from '../../../../../packages/cli-common/sourceRuntimeEntries.mjs';
 import { readBundledPluginPackageNames } from '../../../../cli/scripts/build-owned/bundledPluginMembership.ts';
+import { resolveBundledPluginUiProjectionInputPaths } from '../../../../cli/scripts/build-owned/bundledPlugins/projectionPaths.mjs';
 
 const SOURCE_ROOTS = ['src', 'sources', 'scripts'];
 const TEST_DIRECTORY_NAMES = new Set(['__fixtures__', '__snapshots__', '__tests__', 'fixtures', 'test', 'testkit', 'tests', 'test-support']);
@@ -119,6 +120,8 @@ export async function readSourceComponentBuildInputs({ repoDir, component }) {
         // Expo preparation imports the authored tools tree, including nested
         // postinstall modules. Capture and invalidate it with the same owner.
         : path === 'apps/ui' && component === 'expo' ? ['index.ts', 'public', 'plugins', 'modules', 'tools', 'sources/dev/testkit']
+          : path === 'apps/ui' && component === 'daemon'
+            ? resolveBundledPluginUiProjectionInputPaths(repoDir).map(input => relative(root, input))
           : path === 'apps/cli' ? ['native/processcustody', 'assets']
             : path === 'apps/server' ? ['prisma']
               : component === 'daemon' && path.startsWith('packages/plugins/') ? ['managed-runtime'] : [],

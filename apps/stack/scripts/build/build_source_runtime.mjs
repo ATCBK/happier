@@ -743,6 +743,16 @@ async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, 
   const outputPrefix = component === 'daemon' ? 'apps/cli' : 'apps/server';
   if (component === 'daemon') {
     const cli = await readCliSourceEntries({repoDir, manifest, transform});
+    if (cli.pluginMetadata.length > 0) {
+      // Check the same captured declarations that selected runner entrypoints.
+      // A moving checkout may contain a new registration and older generated
+      // locators; the canonical publisher must reject that mixed closure.
+      await run(process.execPath, ['--conditions=happier-source', '--experimental-strip-types',
+        join(projectDir, 'scripts/build-owned/generateBundledPluginEntries.ts'),
+        '--mode', 'check', '--scope', 'projections'], {
+        cwd: repoDir, env, signal, stdio: ['ignore', 'ignore', 'inherit'], captureFailureDiagnostic: true,
+      });
+    }
     Object.assign(entries, cli.entries);
     pluginMetadata.push(...cli.pluginMetadata.map(item => ({...item, dir:join(outputDir,item.prefix)})));
   } else {
