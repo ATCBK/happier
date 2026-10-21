@@ -12,10 +12,12 @@ import { computeContentPublicKeyFingerprint, sealEncryptedDataKeyEnvelopeV1, ope
 import { callSocketRpc, type SocketRpcContent } from '@happier-dev/sync-client';
 import { RPC_METHODS, RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD, ConnectedAccountControlCommandRequestSchema } from '@happier-dev/protocol/connect/connectedAccountDaemonRpcV1';
 import { signMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import { encodeBase64 as encodeCanonicalBase64 } from '@happier-dev/protocol/crypto/base64';
 import { buildMachineAgentsDetectRequest, projectMachineAgentsDetectResponse } from '@happier-dev/protocol/capabilities/machineAgentInventory';
 import { parseCapabilitiesDetectResponse } from '../../../../../../ui/sources/sync/api/capabilities/capabilitiesProtocol';
+import { parseDaemonContributionRegistryProjectionDescribeResponse } from '../../../../../../ui/sources/sync/api/daemon/daemonContributionRegistryProjectionProtocol';
 import { ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
 import { db } from '@/storage/db';
 import { inTx } from '@/storage/inTx';
@@ -37,6 +39,11 @@ import { createActionOperationStore } from '../../../../../../cli/src/daemon/act
 import { createActionOperationRunner } from '../../../../../../cli/src/daemon/actionOperations/actionOperationRunner';
 import { createActionOperationRpcHandlers, registerActionOperationRpcHandlers } from '../../../../../../cli/src/daemon/actionOperations/actionOperationRpcHandlers';
 import { registerCapabilitiesHandlers } from '../../../../../../cli/src/rpc/handlers/capabilities';
+import { registerDaemonContributionRegistryProjectionHandler } from '../../../../../../cli/src/rpc/handlers/daemonContributionRegistryProjection';
+import { createResolvedContributionRegistry } from '../../../../../../cli/src/plugins/projection/registry/createResolvedContributionRegistry';
+import { loadBundledPluginLocatorResult } from '../../../../../../cli/src/plugins/projection/registry/builtIn/locators';
+import { projectLoadedPluginContributes } from '../../../../../../cli/src/plugins/projection/registry/resolvePluginContributions';
+import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from '../../../../../../cli/src/plugins/projection/registry/sources/generatedBundledPluginManifests';
 
 let harness: LightSqliteHarness;
 const DIRECTORY_PREFLIGHT = RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT;
@@ -101,6 +108,20 @@ it('composes requester bound-v2 client, real Home sockets and guest inventory/pr
     });
     registerSessionCreationTargetPreparationRpc({ rpcHandlerManager: manager });
     registerCapabilitiesHandlers(manager);
+    const bundledAgents = loadBundledPluginLocatorResult(BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.filter(
+        ({ pluginId }) => pluginId === 'happier.agent.claude' || pluginId === 'happier.agent.codex',
+    ));
+    expect(bundledAgents.pluginFailures).toEqual([]);
+    const registry = createResolvedContributionRegistry(projectLoadedPluginContributes({
+        loadResult: { loadedPlugins: bundledAgents.loadedPlugins, diagnosticsByPluginId: {} }, provenance: 'first_party',
+    }));
+    registerDaemonContributionRegistryProjectionHandler(manager, {
+        resolveRegistry: async () => registry,
+        resolveInstalledPackages: async () => [],
+        // Home feature retrieval is an external network boundary. All registry
+        // producers, request admission and the client response parser stay real.
+        resolveServerFeaturesSnapshot: async () => undefined,
+    });
     const store = createActionOperationStore();
     for (const accountId of [owner.id, requester.id]) store.create({ operationId: `op-${accountId}`, actionId: 'projects.script.run',
         title: 'Run', scope: { accountId, machineId: machine.id }, cancellation: 'unsupported', inputIdentity: '{}' });
@@ -135,7 +156,8 @@ it('composes requester bound-v2 client, real Home sockets and guest inventory/pr
     try {
         await connected(daemon);
         for (const method of [DIRECTORY_PREFLIGHT, RPC_METHODS.DAEMON_SESSION_CREATION_PREPARE,
-            ACTION_OPERATION_RPC_METHODS_V2.list, RPC_METHODS.CAPABILITIES_DETECT]) {
+            ACTION_OPERATION_RPC_METHODS_V2.list, RPC_METHODS.CAPABILITIES_DETECT,
+            RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE]) {
             const qualified = `${machine.id}:${method}`;
             const registered = new Promise<void>((resolve, reject) => {
                 const receive = (value: { method: string }) => {
@@ -153,6 +175,27 @@ it('composes requester bound-v2 client, real Home sockets and guest inventory/pr
         expect(await home.in(`rpc:${owner.id}:${machine.id}:${RPC_METHODS.CAPABILITIES_DETECT}`).fetchSockets())
             .toMatchObject([{ data: { clientType: 'machine-scoped', machineId: machine.id,
                 verifiedMachineInstallationId: machine.installationId } }]);
+        const describe = () => call(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, { machineId: machine.id });
+        const described = parseDaemonContributionRegistryProjectionDescribeResponse(await describe());
+        expect(Object.keys(described?.projection.agentsById ?? {}).sort()).toEqual(['claude', 'codex']);
+        // A mis-bound registry handler must fail the real client parser rather
+        // than masquerade as an empty installed-Agent inventory.
+        manager.unregisterHandler(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE);
+        expect(parseDaemonContributionRegistryProjectionDescribeResponse(await describe())).toBeNull();
+        registerDaemonContributionRegistryProjectionHandler(manager, {
+            resolveRegistry: async () => registry,
+            resolveInstalledPackages: async () => [],
+            resolveServerFeaturesSnapshot: async () => undefined,
+        });
+        expect(Object.keys(parseDaemonContributionRegistryProjectionDescribeResponse(await describe())?.projection.agentsById ?? {}).sort())
+            .toEqual(['claude', 'codex']);
+        // Use admits Agent inventory, not the custodian's connected-account
+        // control carrier. With no registered control target, FORBIDDEN also
+        // distinguishes admission-before-discovery from a routing failure.
+        await expect(call(CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD, ConnectedAccountControlCommandRequestSchema.parse({
+            v: 1, machineId: machine.id,
+            command: { operation: 'describeService', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' } },
+        }))).rejects.toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.FORBIDDEN });
         const definitions = [{ definitionId: 'shared-command', title: 'Shared command',
             launch: { kind: 'command' as const, command: process.execPath, args: [] } }];
         const detectRequest = buildMachineAgentsDetectRequest({ agents: [], definitions, refresh: true });
@@ -193,5 +236,6 @@ it('composes requester bound-v2 client, real Home sockets and guest inventory/pr
             principal: { kind: 'account', accountId: requester.id } }));
         await expect(call(DIRECTORY_PREFLIGHT, { directory: { kind: 'path', path: missing } }))
             .rejects.toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.FORBIDDEN });
+        await expect(describe()).rejects.toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.FORBIDDEN });
     } finally { socket.close(); daemon.close(); await app.close(); }
 }, 30_000);
