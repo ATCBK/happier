@@ -52,6 +52,11 @@
       "types": "./dist/widgets/widgetPublicSnapshotV1.d.ts",
       "default": "./dist/widgets/widgetPublicSnapshotV1.js"
     },
+    "./widgets/publicProfileWidgetPresetsV1": {
+      "happier-source": "./src/widgets/publicProfileWidgetPresetsV1.ts",
+      "types": "./dist/widgets/publicProfileWidgetPresetsV1.d.ts",
+      "default": "./dist/widgets/publicProfileWidgetPresetsV1.js"
+    },
     "./account/publicProfileAtmosphere": {
       "happier-source": "./src/account/publicProfileAtmosphere.ts",
       "types": "./dist/account/publicProfileAtmosphere.d.ts",
