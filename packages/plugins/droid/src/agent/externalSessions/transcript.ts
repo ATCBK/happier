@@ -72,7 +72,7 @@ function normalize(row: NativeRow, fileKey: string): { item: AgentExternalSessio
   return projected;
 }
 /** Schema 2 is characterized by the pinned 0.170.0 native fixture. Parent links
- * and visibility are semantic authority; Orca's flat fold is not used. */
+ * and visibility are semantic authority; upstream's flat fold is not used. */
 export async function readDroidTranscript(filePath: string, signal: AbortSignal): Promise<DroidTranscript> {
   signal.throwIfAborted();
   const before = await stat(filePath);

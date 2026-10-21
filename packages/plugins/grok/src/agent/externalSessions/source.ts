@@ -71,7 +71,7 @@ export async function readGrokSummary(root: string, session: GrokSession) {
   const bytes = await readFile(summaryPath);
   let value: unknown;
   try { value = JSON.parse(new TextDecoder('utf8', { fatal: true }).decode(bytes)); } catch { throw new GrokSourceError('unsupported'); }
-  // The pinned Orca evidence is an unversioned dialect. An explicit future
+  // The pinned upstream evidence is an unversioned dialect. An explicit future
   // version or semantic field is not silently interpreted as that dialect.
   const known = new Set(['info', 'generated_title', 'session_summary', 'current_model_id', 'head_branch',
     'num_chat_messages', 'num_messages', 'created_at', 'updated_at', 'last_active_at']);

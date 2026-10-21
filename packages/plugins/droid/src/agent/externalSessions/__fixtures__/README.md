@@ -7,5 +7,5 @@ parent-linked active history, hook messages, and visibility filtering. Its fixtu
 also includes deliberate malformed and future records. Capture provenance is
 upstream's claim; this checkout has not run an installed Droid to certify it.
 
-The older stream-json dialect in Orca is not a versioned session-store contract.
+The older stream-json dialect in upstream is not a versioned session-store contract.
 It is reported unsupported rather than folded into this schema 2 decoder.

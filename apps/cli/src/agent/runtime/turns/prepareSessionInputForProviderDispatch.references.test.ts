@@ -95,7 +95,7 @@ describe('inline references at the final provider boundary', () => {
 
   it('retains the predecessor upload text once when the descriptor has no inline id', async () => {
     // Captured by executing the real predecessor buildAttachmentMessageMeta,
-    // formatAttachmentsBlock, buildStructuredInputMetaOverrides and mergeMessageMetaOverrides
+    // the legacy attachment formatter, buildStructuredInputMetaOverrides and mergeMessageMetaOverrides
     // at 8a088dd70f57ccf43fade3543fb6a3e874bee12a (all three source paths clean).
     const { text, meta } = legacyMessageV02;
     const prepared = await prepareSessionInputForProviderDispatch({ prompt: { text, localId: 'legacy',

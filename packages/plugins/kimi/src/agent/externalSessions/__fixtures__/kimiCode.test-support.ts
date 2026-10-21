@@ -4,7 +4,7 @@ import { join } from 'node:path';
 // Sanitised dialect vectors: Kimi Code 0.18.0, protocol 1.4.
 // MoonshotAI/kimi-code@e6c2f51fa3ed471e983a6dc4b2977709c62a9200:
 // agent-core/src/{agent/records/types,loop/events,services/message/transcript}.ts.
-// Layout corroborated by stablyai/orca@a18b44bfc0 Kimi 0.18 fixture.
+// Layout corroborated by upstream commit a18b44bfc0 Kimi 0.18 fixture.
 export const kimiUser = (text: string, origin = 'user') => ({ type: 'context.append_message',
   time: 1_792_488_000_000, message: { role: 'user', content: [{ type: 'text', text }],
     toolCalls: [], origin: { kind: origin, ...(origin === 'injection' ? { variant: 'fixture' } : {}) } } });

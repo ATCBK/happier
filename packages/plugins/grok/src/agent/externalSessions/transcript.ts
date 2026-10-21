@@ -8,7 +8,7 @@ import { grokFile, GrokSourceError, readGrokSummary, record, type GrokSession } 
 export type GrokTranscriptRow = Readonly<{ item: AgentExternalSessionTranscriptItem; text?: string; partial?: boolean }>;
 /** Both content search and transcript reads use this exact native projection.
  * XML-looking user text is not evidence of an injected envelope. Keep it
- * verbatim instead of applying Orca's generic hidden-tag/preview stripping. */
+ * verbatim instead of applying upstream's generic hidden-tag/preview stripping. */
 export function decodeGrokRecord(value: unknown, offset: number): GrokTranscriptRow | null {
   const id = `grok:byte:${offset}`;
   const createdAtMs = record(value) ? parseTimestampMs(value.timestamp) ?? 0 : 0;

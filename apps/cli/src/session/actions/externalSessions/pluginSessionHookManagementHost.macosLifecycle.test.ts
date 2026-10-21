@@ -347,7 +347,7 @@ describe.runIf(process.platform === 'darwin')(
                 untouched: {
                     source: 'foreign',
                     bytes: foreignByteMarker,
-                    nested: ['Vibe Island', 'Orca', 'Superset'],
+                    nested: ['First app', 'Second app', 'Third app'],
                 },
                 hooks: {
                     ForeignEvent: [{

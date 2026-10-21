@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-/** Sanitized adaptation of stablyai/orca@a18b44bfc0bfccaede1d9208dc77a97816b55fe9
+/** Sanitized adaptation of upstream commit a18b44bfc0bfccaede1d9208dc77a97816b55fe9
  * src/main/ai-vault/session-scanner-kiro-fixtures.ts and -kiro-parser.test.ts.
  * Evidence dialect: record version v1, flat KIRO_HOME/sessions/cli paired store.
  * Vendor context: https://kiro.dev/docs/cli/chat/. Producer CLI version is not

@@ -51,7 +51,7 @@ const UNDER_UNIT_WIDTH: Readonly<Record<MachineSummaryStyle, number>> = {
 };
 
 /**
- * How many instruments the `under` row has room for at its measured width (Orca's density steps, MPG-20):
+ * How many instruments the `under` row has room for at its measured width (upstream's density steps, MPG-20):
  * the row sits under a name in a block that gives it the whole width (the popover, a phone list line, a card),
  * so its own width is the room. Calm metrics yield first and a toned one is never dropped (`fitMachineSummaryMetrics`);
  * before the first measurement every chosen metric shows. At least one always fits.

@@ -1,15 +1,15 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-/** Characterized, sanitized Orca dialect, not a native CLI capture.
- * stablyai/orca@a18b44bfc0bfccaede1d9208dc77a97816b55fe9:
+/** Characterized, sanitized upstream dialect, not a native CLI capture.
+ * upstream commit a18b44bfc0bfccaede1d9208dc77a97816b55fe9:
  * session-scanner-grok-parser.test.ts and session-scanner-grok-parser.ts.
  * Vendor sessions.md (2026-10-20) establishes automatic persistence and
  * conversation truncation on rewind. No producing Grok version is asserted.
  */
 export const GROK_NATIVE_FIXTURE_PROVENANCE = {
   dialect: 'unversioned-summary-info-and-type-content-jsonl',
-  evidence: 'stablyai/orca@a18b44bfc0bfccaede1d9208dc77a97816b55fe9',
+  evidence: 'upstream commit a18b44bfc0bfccaede1d9208dc77a97816b55fe9',
   vendor: 'https://docs.x.ai/build/features/sessions.md',
   nativeCapture: false,
 } as const;

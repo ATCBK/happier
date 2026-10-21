@@ -111,7 +111,6 @@
     "src/agent/runtime/permissions/modeCanonical.ts",
     "src/agent/runtime/permissions/modeFromMetadata.ts",
     "src/agent/runtime/permissions/modeFromUserMessage.ts",
-    "src/agent/runtime/prompt/sessionReferenceBlock.ts",
     "src/agent/runtime/queueSpecialCommands.ts",
     "src/agent/runtime/registry/commandContracts.ts",
     "src/agent/runtime/registry/engineRegistry/nativeAgentSessionMedia.ts",

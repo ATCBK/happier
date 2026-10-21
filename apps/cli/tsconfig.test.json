@@ -322,7 +322,6 @@
     "src/agent/runtime/permissions/modeStateSync.test.ts",
     "src/agent/runtime/permissions/queuedPrompt.test.ts",
     "src/agent/runtime/permissions/startupSeed.test.ts",
-    "src/agent/runtime/prompt/sessionReferenceBlock.test.ts",
     "src/agent/runtime/queueSpecialCommands.test.ts",
     "src/agent/runtime/registry/activationDemand.test.ts",
     "src/agent/runtime/registry/agentExternalSessionsExecutionSurface.test.ts",

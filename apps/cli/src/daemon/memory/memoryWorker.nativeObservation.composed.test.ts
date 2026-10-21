@@ -131,7 +131,7 @@ describe('registered native transcript source observation', () => {
         : isDroid ? JSON.stringify({ type: 'session_start', version: 2, id: 'native', cwd: '/repo' }) + '\n'
         : isGemini ? JSON.stringify({ sessionId: nativeSessionId, projectHash: 'project', startTime: timestamp, lastUpdated: timestamp }) + '\n'
         : isAntigravity || isQwen || isFx || isCodeBuddy || isCursor || isGrok || isKiro ? '' : JSON.stringify({ type: 'session', version: 3, id: 'native', timestamp, cwd: '/repo' }) + '\n';
-      // Sanitised paired-store vectors from Orca a18b44bfc0; producing CLI
+      // Sanitised paired-store vectors from upstream a18b44bfc0; producing CLI
       // versions are unknown, as recorded beside the plugin-owned fixtures.
       const sidecarPath = isKimi ? join(directory, '.kimi-code', 'sessions', 'wd_fixture_123', 'session_fixture', 'state.json')
         : isCursor ? join(directory, '.cursor', 'chats', 'workspace-hash', nativeSessionId, 'meta.json')
