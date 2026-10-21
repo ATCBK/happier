@@ -98,12 +98,13 @@ describe('workspace tabs production composition', () => {
         disposeHome = homes.dispose; disconnectHome = await homes.restoreActiveConnection();
         const [{ storage }, { useWorkspaceFileOpener }, { useRegisterSessionPaneDriver }, { useAppPaneScope },
             { PanePresentationProvider }, { useAppPaneContext }, { router }, { normalizeActionsSettingsV1 },
-            { useSessionViewBootstrap }, { parseSessionPaneUrlState }] = await Promise.all([
+            { useSessionViewBootstrap }, { parseSessionPaneUrlState }, { useSessionTrack }] = await Promise.all([
             import('@/sync/domains/state/storage'), import('@/components/workspaces/files/useWorkspaceFileOpener'),
             import('@/components/sessions/panes/useRegisterSessionPaneDriver'), import('../panes/hooks/useAppPaneScope'),
             import('../panes/panePresentation'), import('../panes/AppPaneProvider'), import('expo-router'),
             import('@happier-dev/protocol/actions/actionSettings'),
             import('@/components/sessions/shell/view/useSessionViewBootstrap'), import('@/components/sessions/panes/url/sessionPaneUrlState'),
+            import('@/components/sessions/files/track/SessionTrack'),
         ]);
         const initial = storage.getState();
         const scope = initial.profileScope!;
@@ -118,6 +119,7 @@ describe('workspace tabs production composition', () => {
         let pane!: ReturnType<typeof useAppPaneScope>;
         let paneContext!: ReturnType<typeof useAppPaneContext>;
         let navigation!: WorkspaceNavigationContextValue;
+        let track!: ReturnType<typeof useSessionTrack>;
         const presentations: unknown[] = [];
         const foregroundInput = document.createElement('input');
         function TrackEntry() {
@@ -129,6 +131,8 @@ describe('workspace tabs production composition', () => {
                 sessionPath: '/repo', sessionAccepted: true, surfaceFocused: true, surfaceVisible: true,
                 routeAnchor: true, paneUrlSyncRouteActive: true }).pane;
             paneContext = useAppPaneContext();
+            track = useSessionTrack({ scopeId, sessionAddress: { serverId: scope.serverId, sessionId: 'tracked' },
+                workspaceRoot: '/repo', active: true });
             opener = useWorkspaceFileOpener(); return null;
         }
         const screen = await renderScreen(<PanePresentationProvider value={intent => presentations.push(intent)}><AppPaneProvider>
@@ -205,6 +209,42 @@ describe('workspace tabs production composition', () => {
                 expect(pane.scopeState?.details.activeTabKey).toBe('file:main.ts');
                 expect(navigation.state).toBe(afterSilentOpen);
             }
+            const beforeTracking = navigation.state;
+            const trackingPushes = vi.mocked(router.push).mock.calls.length;
+            const trackingReplacements = vi.mocked(router.replace).mock.calls.length;
+            const trackingHref = window.location.href;
+            await act(async () => {
+                storage.getState().applyLocalSettings({ filesTrackAgentEdits: true });
+                storage.getState().applySessions([createSessionFixture({ id: 'tracked', serverId: scope.serverId,
+                    active: true, activeAt: Date.now(), thinking: true, thinkingAt: Date.now(), latestTurnStatus: 'in_progress',
+                    metadata: { path: '/repo', machineId: 'machine-1', host: 'test' } })]);
+                storage.getState().applyMessages('tracked', [{
+                    id: 'track-provider-call', localId: null, createdAt: Date.now(), role: 'agent', isSidechain: false,
+                    content: [{ type: 'tool-call', id: 'track-write', name: 'Write',
+                        input: { file_path: '/repo/tracked.ts', content: 'hello' },
+                        description: null, uuid: 'track-call-uuid', parentUUID: null }],
+                }]);
+            });
+            await vi.waitFor(async () => { await act(async () => {});
+                expect(pane.scopeState?.details.activeTabKey).toBe('file:tracked.ts'); });
+            expect(track).toMatchObject({ enabled: true, paused: false, target: { path: 'tracked.ts' } });
+            expect(pane.scopeState?.details.tabs.find(candidate => candidate.key === 'file:tracked.ts')).toMatchObject({ isPreview: true, isPinned: false });
+            expect(navigation.state.focusedGroupId).toBe(beforeTracking.focusedGroupId);
+            expect(navigation.state.groups[beforeTracking.focusedGroupId].activeTabId).toBe(beforeTracking.groups[beforeTracking.focusedGroupId].activeTabId);
+            expect(Object.keys(navigation.state.tabs)).toEqual(Object.keys(beforeTracking.tabs));
+            expect(vi.mocked(router.push).mock.calls).toHaveLength(trackingPushes);
+            expect(presentations).toEqual([]);
+            if (platform === 'web') expect(document.activeElement).toBe(foregroundInput);
+            else {
+                expect(vi.mocked(router.replace).mock.calls).toHaveLength(trackingReplacements);
+                expect(window.location.href).toBe(trackingHref);
+            }
+            await act(async () => { storage.getState().applyMessages('tracked', [{
+                id: 'track-provider-result', localId: null, createdAt: Date.now() + 1, role: 'agent', isSidechain: false,
+                content: [{ type: 'tool-result', tool_use_id: 'track-write', content: 'written', is_error: false,
+                    uuid: 'track-result-uuid', parentUUID: null }],
+            }]); });
+            expect(track.target).toBeNull();
             const settings = { ...storage.getState().settings, actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
                 actions: { 'workspace.tabs.open': { disabledSurfaces: ['ui'] } } }) };
             homes.replaceAccountSettings('home', { settings, version: 2 });
@@ -212,7 +252,7 @@ describe('workspace tabs production composition', () => {
             await act(async () => { opened = await opener.open({ kind: 'session', sessionId: 'tracked', serverId: scope.serverId,
                 path: 'blocked.ts' }, { intent: 'preview', present: false }); });
             expect(opened).toBe(false);
-            expect(pane.scopeState?.details.activeTabKey).toBe('file:main.ts');
+            expect(pane.scopeState?.details.activeTabKey).toBe('file:tracked.ts');
         } finally { await screen.unmount(); foregroundInput.remove(); storage.setState(initial, true); }
     });
     it.each(['web', 'ios'] as const)('opens a qualified Project file through useOpenProject and keeps Find private on %s', async platform => {

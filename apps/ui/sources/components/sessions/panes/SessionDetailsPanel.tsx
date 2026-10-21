@@ -23,7 +23,6 @@ import {
     resolveProviderSessionDetailsTabIconName,
 } from '@/agents/registry/sessionSubagentUiBehavior';
 import { t } from '@/text';
-import { createWorkspaceFileDetailsTab } from '@/components/appShell/panes/details/fileDetailsTab';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { SidebarCollapseIcon, SidebarExpandIcon } from '@/components/navigation/shell/SidebarIcons';
@@ -436,8 +435,8 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
     ]);
 
     const openEmptyEditorFile = React.useCallback((path: string) => {
-        openDetailsTab(createWorkspaceFileDetailsTab(path), { intent: 'pinned' });
-    }, [openDetailsTab]);
+        openFileTab(path, 'pinned');
+    }, [openFileTab]);
     const openEmptyEditorReview = React.useCallback(() => {
         openDetailsTab(createSessionScmReviewDetailsTab(), { intent: 'pinned' });
     }, [openDetailsTab]);

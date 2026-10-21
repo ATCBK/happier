@@ -83,9 +83,9 @@ export function useSessionTrack(
     Parameters<typeof useTrackAgentEdits>[0]['openFile']
   >(
     (target, options) => {
-      // `present:false` is not yet forwarded by the canonical opener (S-P3a U1); the preview slot still follows.
       void opener.open(target, {
         intent: 'preview',
+        present: options.present,
         anchor: options.anchor,
         anchorSource: options.anchorSource,
       });
