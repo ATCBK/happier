@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WorkspaceFilesReplaceActionInputSchema } from '@happier-dev/protocol/actions/actionSpecs';
+import { ActionOperationSnapshotV1Schema, ACTION_OPERATION_RPC_METHODS_V1, ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
 
 import { act, renderHook, standardCleanup } from '@/dev/testkit';
 import {
@@ -13,10 +14,16 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 
 import { useReplaceUndoOnClose } from './useReplaceUndoOnClose';
+import { t } from '@/text';
+
+// Stop is the existing Action's UI confirmation boundary; admission and the operation remain real.
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 installDisconnectedServerSocketBoundary();
+// Load the real Action graph during collection, outside the individual operation's test deadline.
+await import('@/sync/ops/actions/defaultActionExecutor');
 const { useWorkspaceReplace } = await import('@/sync/domains/workspaces/files/workspaceFileReplace');
 
 const rpc = vi.hoisted(() => ({ call: vi.fn() }));
@@ -66,6 +73,7 @@ let account: ServerAccountScopeLifetime = {
   onRetire: () => ({ dispose: () => {} }),
 };
 const unsavedPaths: string[] = [];
+let actionRequestId: string | undefined;
 
 function useSurface() {
   const model = useWorkspaceReplace({
@@ -87,6 +95,7 @@ describe('useReplaceUndoOnClose', () => {
     const boundary = await createExternalActionAccountHttpBoundary({ serverUrl: 'https://replace-notice.test',
       serverIdentityId: 'srv_replace_notice', accountId: 'acct', machineId: 'mac', actionId: 'workspace.files.replace', tokenEpoch: 0,
       execute: async (request, context) => {
+        actionRequestId = context.requestId;
         const { machineId, ...payload } = WorkspaceFilesReplaceActionInputSchema.parse(request);
         return rpc.call({ method: 'workspace.files.replace', machineId, payload, serverId: scope.serverId,
           accountId: 'acct', signal: context.signal });
@@ -103,6 +112,50 @@ describe('useReplaceUndoOnClose', () => {
     retirePresentationNotice();
   });
   afterEach(async () => { standardCleanup(); await homes.reset(); });
+
+  it('retains the terminal partial receipt and original Undo when closed before Apply settles', async () => {
+    let completeTerminal: (value: unknown) => void = () => {};
+    let observingTerminal = false;
+    rpc.call.mockImplementation(async (request: { method: string; payload: { operation?: { kind: string } } }) => {
+      if (request.method === 'daemon.workspaceFiles.replace.preview.v1') return {
+        ok: true, files: [file, { ...file, path: 'src/later.ts' }], skipped: { notText: 0 }, hasMore: false, coverage: 'complete',
+      };
+      if (request.method === ACTION_OPERATION_RPC_METHODS_V2.get) {
+        observingTerminal = true;
+        return await new Promise(resolve => { completeTerminal = resolve; });
+      }
+      if (request.method === ACTION_OPERATION_RPC_METHODS_V1.cancel) return { kind: 'requested' };
+      if (request.payload.operation?.kind === 'restore') return {
+        ok: true, results: [{ path: file.path, status: 'restored', hash: hash('a') }],
+      };
+      return { operation: { operationId: 'replace-closing' } };
+    });
+    const hook = await renderHook(() => useSurface());
+    expect(hook.getCurrent().canApply).toBe(true);
+    let applying: Promise<void> = Promise.resolve();
+    await act(async () => { applying = hook.getCurrent().apply(); });
+    await waitForHomeGovernance(() => expect(observingTerminal).toBe(true));
+    await hook.unmount();
+    await act(async () => {
+      completeTerminal({ kind: 'found', operation: ActionOperationSnapshotV1Schema.parse({
+        version: 1, operationId: 'replace-closing', revision: 3, actionId: 'workspace.files.replace', state: 'succeeded',
+        scope: { accountId: 'acct', machineId: 'mac' }, title: 'Replace', requestId: actionRequestId,
+        createdAt: 1, startedAt: 2, settledAt: 3, cancellation: 'supported',
+        result: { ok: true, results: [{ path: file.path, status: 'replaced', hash: hash('d'), matchCount: 1, edits }], cancelled: ['src/later.ts'] },
+      }) });
+      await applying;
+    });
+    expect(rpc.call).toHaveBeenCalledWith(expect.objectContaining({ method: ACTION_OPERATION_RPC_METHODS_V1.cancel }));
+    const notice = readPresentationNotice();
+    expect(notice?.message).toContain(t('universalSearch.replace.summaryCancelled', { count: 1 }));
+    expect(notice?.undo).toBeDefined();
+    await act(async () => {
+      notice!.undo!.run();
+      await waitForHomeGovernance(() => expect(readPresentationNotice()?.message).toBe(t('universalSearch.replace.undoneTitle')));
+    });
+    expect(rpc.call.mock.lastCall?.[0]).toMatchObject({ machineId: 'mac',
+      payload: { rootPath: '/repo', operation: { kind: 'restore', files: [{ path: file.path, expectedHash: hash('d'), edits }] } } });
+  });
 
   it('keeps the originating Undo when a late reply arrives after selecting another folder and closing', async () => {
     let completeApply: (value: unknown) => void = () => {};

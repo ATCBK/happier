@@ -21,7 +21,7 @@ const rpc = vi.hoisted(() => ({ call: vi.fn() }));
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
     machineRpcWithServerScope: (request: unknown) => rpc.call(request),
 }));
-const { machineWorkspaceFileReplaceApply } = await import('./machineWorkspaceFileReplace');
+const { machineWorkspaceFileReplaceApply, machineWorkspaceFileReplacePreview } = await import('./machineWorkspaceFileReplace');
 const { createDefaultActionExecutor } = await import('./actions/defaultActionExecutor');
 const hash = 'a'.repeat(64);
 const nextHash = 'b'.repeat(64);
@@ -77,6 +77,25 @@ function snapshot(overrides: Record<string, unknown> = {}) {
 const apply = (signal?: AbortSignal, accountId = 'alice') => machineWorkspaceFileReplaceApply('machine', input, { serverId, accountId, signal });
 
 describe('workspace replace admitted Account carrier', () => {
+    const previewInput = { rootPath: '/repo', query: 'old', replacement: 'new', regex: false, matchCase: true };
+    const previewReceipt = { ok: true, files: [], skipped: { notText: 0 }, hasMore: false, coverage: 'complete' };
+    it('keeps replacement preview a no-prompt read by default', async () => {
+        rpc.call.mockResolvedValueOnce(previewReceipt);
+        expect(await machineWorkspaceFileReplacePreview('machine', previewInput, { serverId, accountId: 'alice' })).toEqual(previewReceipt);
+        expect(homes.artifacts(serverId).list()).toHaveLength(0);
+        expect(rpc.call).toHaveBeenCalledTimes(1);
+    });
+
+    it('honors an explicit UI Ask override before replacement preview reads the Machine', async () => {
+        rpc.call.mockResolvedValueOnce(previewReceipt);
+        await homes.requireUiApproval(serverId, 'workspace.files.replace.preview');
+        expect(await machineWorkspaceFileReplacePreview('machine', previewInput, { serverId, accountId: 'alice' })).toMatchObject({
+            ok: false, errorCode: 'approval_required', details: { kind: 'approval_request_created', actionId: 'workspace.files.replace.preview', artifactId: expect.any(String) },
+        });
+        expect(rpc.call).not.toHaveBeenCalled();
+        expect(homes.artifacts(serverId).list()).toHaveLength(1);
+    });
+
     it('admits the present user and publishes the exact retained receipt after the authenticated UI invocation', async () => {
         const writes: unknown[] = [];
         const unsubscribe = subscribeAcknowledgedWorkspaceFileWrites({ serverId, accountId: 'alice', machineId: 'machine', rootPath: '/repo' }, 'a.ts', write => writes.push(write));

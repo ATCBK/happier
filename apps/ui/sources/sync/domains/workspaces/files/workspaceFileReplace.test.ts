@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseUnifiedDiffHunks } from '@happier-dev/protocol/diff/hunks';
 import { WorkspaceFilesReplaceActionInputSchema } from '@happier-dev/protocol/actions/actionSpecs';
+import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 
 import { act, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
@@ -16,6 +17,8 @@ import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/e
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 installDisconnectedServerSocketBoundary();
+// Load the real Action graph during collection, outside an individual operation's test deadline.
+await import('@/sync/ops/actions/defaultActionExecutor');
 const {
   buildReplaceApplyFiles,
   buildReplacePreviewUnifiedDiff,
@@ -289,6 +292,71 @@ describe('useWorkspaceReplace', () => {
         await flushHookEffects();
         expect(hook.getCurrent().stale).toBe(false);
         expect(hook.getCurrent().canApply).toBe(true);
+    });
+
+    it('keeps the created approval request instead of claiming an unknown write outcome', async () => {
+        rpc.call.mockResolvedValueOnce(previewOk);
+        await homes.requireUiApproval(scope.serverId, 'workspace.files.replace');
+        const hook = await renderHook(() => useWorkspaceReplace({ scope, accountLifetime: account, matcher, unsavedPaths: [] }));
+        await act(async () => { await hook.getCurrent().apply(); });
+        expect(hook.getCurrent()).toMatchObject({
+            applyError: null, results: null, canApply: false,
+            approval: { operation: 'replace', request: { kind: 'approval_request_created', actionId: 'workspace.files.replace', artifactId: expect.any(String) } },
+        });
+        expect(rpc.call).toHaveBeenCalledTimes(1);
+    });
+
+    it('holds Apply after Review again until its same-query refresh settles', async () => {
+        let completeRefresh: (value: unknown) => void = () => {};
+        rpc.call.mockResolvedValueOnce(previewOk)
+            .mockResolvedValueOnce({ ok: true, results: [{ path: doc.path, status: 'changed' }] })
+            .mockImplementationOnce(() => new Promise(resolve => { completeRefresh = resolve; }));
+        const hook = await renderHook(() => useWorkspaceReplace({ scope, accountLifetime: account, matcher, unsavedPaths: [] }));
+        await act(async () => { await hook.getCurrent().apply(); });
+        await act(async () => { hook.getCurrent().resetResults(); });
+        expect(hook.getCurrent().preview?.files).toHaveLength(2);
+        expect(hook.getCurrent().loading).toBe(true);
+        expect(hook.getCurrent().canApply).toBe(false);
+        await act(async () => { await hook.getCurrent().apply(); });
+        expect(rpc.call).toHaveBeenCalledTimes(3);
+        await act(async () => { completeRefresh(previewOk); });
+        await flushHookEffects();
+        expect(hook.getCurrent().canApply).toBe(true);
+    });
+
+    it('retains preview approval from loading the next review page', async () => {
+        rpc.call.mockResolvedValueOnce({ ...previewOk, hasMore: true, cursor: { path: doc.path } });
+        const hook = await renderHook(() => useWorkspaceReplace({ scope, accountLifetime: account, matcher, unsavedPaths: [] }));
+        await homes.requireUiApproval(scope.serverId, 'workspace.files.replace.preview');
+        await act(async () => { hook.getCurrent().loadMore(); });
+        await vi.waitFor(() => expect(hook.getCurrent().approval).toMatchObject({ operation: 'preview',
+            request: { kind: 'approval_request_created', actionId: 'workspace.files.replace.preview' } }));
+        expect(hook.getCurrent().canApply).toBe(false);
+        expect(hook.getCurrent().preview?.files).toHaveLength(2);
+        expect(rpc.call).toHaveBeenCalledTimes(1);
+    });
+
+    it('retains original-target Undo approval while another folder is selected', async () => {
+        const edits = [{ startUtf16: 4, deleteLength: 19, insertText: 'useSettingsModalKey', originalText: 'useSettingsRouteKey' }];
+        rpc.call.mockResolvedValueOnce(previewOk)
+            .mockResolvedValueOnce({ ok: true, results: [{ path: doc.path, status: 'replaced', hash: hash('e'), matchCount: 1, edits }] })
+            .mockResolvedValueOnce(previewOk);
+        const hook = await renderHook((props: { rootPath: string }) => useWorkspaceReplace({
+            scope: { ...scope, rootPath: props.rootPath }, accountLifetime: account, matcher, unsavedPaths: [],
+        }), { initialProps: { rootPath: '/repo' } });
+        await act(async () => { await hook.getCurrent().apply(); });
+        await hook.rerender({ rootPath: '/other' });
+        await homes.requireUiApproval(scope.serverId, 'workspace.files.replace');
+        const offer = hook.getCurrent().undoOnClose;
+        expect(offer).not.toBeNull();
+        await act(async () => { expect(await offer?.run()).toMatchObject({ error: 'approval_required' }); });
+        expect(hook.getCurrent().approval).toMatchObject({ operation: 'restore',
+            request: { kind: 'approval_request_created', actionId: 'workspace.files.replace' } });
+        const artifacts = homes.artifacts(scope.serverId);
+        expect(StoredApprovalRequestSchema.parse(JSON.parse(artifacts.readPlainBody(artifacts.list()[0]!.id)!)))
+            .toMatchObject({ actionArgs: { rootPath: '/repo', operation: { kind: 'restore' } } });
+        expect(hook.getCurrent().undoOnClose).toBeNull();
+        expect(rpc.call).toHaveBeenCalledTimes(3);
     });
 
     it('applies the reviewed selection, skips unsaved files, and undoes with the recorded edits', async ({ onTestFinished }) => {
