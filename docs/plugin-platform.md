@@ -64,6 +64,17 @@ wording. See [Collection presentation](collection-presentation.md) and
 
 ## Declaration, activation and projection
 
+In 0.3 development source, the existing daemon projection describe request accepts
+`selection: 'settings'` or `selection: 'connectedAccountAdmission'`. Settings reads
+build the settings projection directly. Admission reads reuse the full projection's
+installed-package, Action, Resource, Machine-provisioner and Connected Account
+builders under the same registry lease, without constructing unrelated model, SCM,
+UI or Event payloads. Selection is part of the transport request identity. These
+partial replies never populate the complete UI projection cache; omitted selection
+still builds the full catalog. Workflow materialization retains that full demand
+because it consumes Action availability and occurrence metadata as well as Agents.
+This describes source behavior, not a loaded-runtime performance result.
+
 In 0.3 development, `definePlugin` projects an Agent's
 `connectedAccountLaunch.stateSharingDescriptor` into
 `capabilities.providerStateSharing`. This cold declaration carries configuration
