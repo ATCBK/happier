@@ -112,6 +112,59 @@ it('writes an explicit policy through the real Follow Action and retries the fai
     await screen.unmount();
 });
 
+it('reads its saved rule filter and Include again result back into the open editor', async () => {
+    const { normalizeSessionListFilterV1 } = await import('@happier-dev/protocol/sessions/listFilter/sessionListFilterV1');
+    const { SetSessionFollowRuleRequestV1Schema } = await import('@happier-dev/protocol/sessions/follow/sessionFollowRuleV1');
+    const home = await network.addHome('https://follow-rule-refresh.test', 'follow-account');
+    setActiveServerId(home.id);
+    publishAppliedActiveServerSnapshot({ serverId: home.id, serverUrl: home.serverUrl, generation: 1 });
+    storage.setState(state => ({ profileScope: { serverId: home.id, accountId: home.accountId },
+        profile: { ...state.profile, id: home.accountId } }));
+    const features = createRootLayoutFeaturesResponse({ features: { sessions: { enabled: true, following: { enabled: true } } } });
+    const receiver = { kind: 'session' as const, sessionId: 'destination' };
+    let rule: import('@happier-dev/protocol/sessions/follow/sessionFollowRuleV1').SessionFollowRuleV1 = { ruleId: 'payments', receiver, version: 3, content: { t: 'plain',
+        v: { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1({ homeServerIds: [home.id],
+            projects: { include: [], exclude: [{ serverId: home.id, projectKey: 'payments' }] } }),
+        policy: { preset: 'important' as const } } } };
+    network.setHttpResponder(async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/features') return Response.json(features);
+        if (path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+        if (path === '/v2/account/session-follow-rules/payments' && init?.method === 'PUT') {
+            const body = SetSessionFollowRuleRequestV1Schema.parse(JSON.parse(String(init.body)));
+            if (body.expectedVersion !== rule.version) return Response.json({ error: 'version_conflict' }, { status: 409 });
+            if (body.content.t !== 'plain') throw new Error('Expected keyless plain rule fixture');
+            rule = { ...rule, version: rule.version + 1, content: body.content };
+            return Response.json({ rule });
+        }
+        if (path === '/v2/account/session-follow-rules') return Response.json({ rules: [rule] });
+        if (path === '/v2/sessions/destination/follows/sessions') return Response.json({ sources: [] });
+        return null;
+    });
+    const errors = vi.spyOn(console, 'error');
+    const row = 'session-follow-source-rule:payments';
+    const screen = await renderScreen(<SessionFollowSourcesEditor destination={{ id: receiver.sessionId }}
+        serverId={home.id} destinationMachineId={null} />);
+    try {
+        await vi.waitFor(async () => { await flushHookEffects(); expect(screen.findByTestId(row)).toBeTruthy(); });
+        await screen.pressByTestIdAsync(row);
+        await screen.pressByTestIdAsync(`${row}-filter`);
+        await screen.pressByTestIdAsync('session-list-filter:status:failed');
+        await screen.pressByTestIdAsync('session-list-filter-done');
+        await vi.waitFor(() => expect(rule.version).toBe(4));
+        await vi.waitFor(() => expect(screen.findAllByTestId(`${row}-filter`).find(node => typeof node.props.onPress === 'function')?.props.disabled).toBe(false));
+        expect(rule.content.t === 'plain' ? rule.content.v.filter.statuses : null).toContain('failed');
+        // Include again must use the version the post-Save read returned; a stale
+        // projection conflicts at the real writer instead of silently passing.
+        await screen.pressByTestIdAsync(`${row}-left-out-payments-include`);
+        await vi.waitFor(() => expect(rule.version).toBe(5));
+        await vi.waitFor(() => expect(screen.findByTestId(`${row}-left-out-payments`)).toBeNull());
+        expect(screen.findByTestId(`${row}-left-out-undo`)).toBeTruthy();
+        expect(errors.mock.calls.filter(args => args.some(value => String(value).includes('getSnapshot')))).toEqual([]);
+    } finally { await screen.unmount(); errors.mockRestore(); }
+});
+
 it('keeps an explicit source-key Retry enabled and dispatches while automatic network work is paused', async () => {
     const { screen, sourceRequests } = await mountRetryEditor();
     const retryId = 'session-follow-source-source-retry';
