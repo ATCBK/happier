@@ -373,7 +373,7 @@ describe('WidgetAddSurface', () => {
         expect(close).toHaveBeenCalledTimes(1);
     });
 
-    it('says no match at once for a local search and marks only the pending Your widgets section', async () => {
+    it('waits for saved inventory before saying a search has no match, then offers Clear', async () => {
         const rec = recorder();
         const screen = await renderPanel({
             sections: [{ id: 'all', title: 'All', entries: [widgetEntry(SIGNUPS, rec)] }],
@@ -381,10 +381,15 @@ describe('WidgetAddSurface', () => {
         });
         screen.changeTextByTestId('add.search', 'kanban');
         await flushHookEffects({ cycles: 2 });
-        expect(screen.findAllByTestId('add.noMatch').length).toBeGreaterThan(0);
-        expect(screen.findAllByTestId('add.clearSearch').length).toBeGreaterThan(0);
+        expect(screen.findHostByTestId('add.noMatch')).toBeNull();
+        expect(screen.findHostByTestId('add.clearSearch')).toBeNull();
         expect(screen.findAllByTestId('add.pending.yours').length).toBeGreaterThan(0);
         expect(screen.getTextContent()).toContain('Your widgets');
+        const panelProps: React.ComponentProps<typeof WidgetAddPanel> = screen.findByType(WidgetAddPanel).props;
+        await screen.update(<WidgetAddPanel {...panelProps} pendingSections={[]} />);
+        expect(screen.findHostByTestId('add.pending.yours')).toBeNull();
+        expect(screen.findHostByTestId('add.noMatch')).not.toBeNull();
+        expect(screen.findHostByTestId('add.clearSearch')).not.toBeNull();
     });
 
     it('says a refused Your widgets read could not load and offers Retry, instead of reading Loading', async () => {

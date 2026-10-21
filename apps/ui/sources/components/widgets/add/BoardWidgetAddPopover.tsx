@@ -8,7 +8,7 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import type { SessionBoardController } from '@/components/sessions/board/useSessionBoardController';
 import type { SessionPluginRuntimeState } from '@/components/sessions/plugins/useSessionPluginRuntime';
-import { useYourWidgetCandidates } from '@/components/widgets/definitions/useYourWidgetCandidates';
+import { useYourWidgetCandidatesState } from '@/components/widgets/definitions/useYourWidgetCandidates';
 import { runWidgetDefinitionCommand } from '@/components/widgets/definitions/widgetDefinitionCommands';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import type { Session } from '@/sync/domains/state/storageTypes';
@@ -19,6 +19,7 @@ import { useSessionWidgetSurface } from '@/components/widgets/surface/useWidgetI
 import { SESSION_BOARD_OVERVIEW_VIEW_ID } from '@/sync/domains/session/board';
 
 import { WidgetAddSurface } from './WidgetAddSurface';
+import { useYourWidgetPendingSections } from './accountWidgetAddSections';
 import { buildBoardWidgetAddContent } from './widgetAddSections';
 import type { WidgetSetupDraft, WidgetSetupSubmitResult } from './widgetSetupModel';
 
@@ -63,7 +64,8 @@ function OpenBoardWidgetAddPopover(props: React.ComponentProps<typeof BoardWidge
     // on its own: its Session, named for people.
     const { scope, context } = useSessionWidgetSurface({ owner: 'sessionBoard', serverId, sessionId, session: session ?? null });
     const canPublish = scope !== null && controller.supports('item.addWidget');
-    const yours = useYourWidgetCandidates(canPublish ? scope : null, pluginRuntime?.pluginUiProjection ?? appRuntime.pluginUiProjection);
+    const { candidates: yours, status, retry } = useYourWidgetCandidatesState(canPublish ? scope : null, pluginRuntime?.pluginUiProjection ?? appRuntime.pluginUiProjection);
+    const pendingSections = useYourWidgetPendingSections(status, retry);
     const allCandidates = React.useMemo(() => yours.length ? [...candidates, ...yours] : candidates, [candidates, yours]);
     const content = React.useMemo(() => buildBoardWidgetAddContent({
         intents,
@@ -107,6 +109,7 @@ function OpenBoardWidgetAddPopover(props: React.ComponentProps<typeof BoardWidge
             searchPlaceholder={t('widgetAdd.searchWidgets')}
             addLabel={t('widgetAdd.addToBoard')}
             sections={content.sections}
+            pendingSections={pendingSections}
             {...(content.ask ? { ask: content.ask } : {})}
             {...(serverId ? { serverId } : {})}
             sessionId={sessionId}

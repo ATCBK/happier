@@ -3,7 +3,7 @@ import { MACHINE_BUILTIN_WIDGET_IDS_V1, PROJECT_BUILTIN_WIDGET_IDS_V1, SESSION_C
 
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { useHomeWidgetCandidates } from '@/components/hub/layout/useHomeWidgetCandidates';
-import { useYourWidgetCandidatesState } from '@/components/widgets/definitions/useYourWidgetCandidates';
+import { useYourWidgetCandidatesState, type AccountInventoryStatus } from '@/components/widgets/definitions/useYourWidgetCandidates';
 import { useYourWidgetLayoutFragments } from '@/components/widgets/definitions/useYourWidgetLayoutFragments';
 import { runAddWidgetLayoutFragmentCommandV1 } from '@/components/widgets/definitions/widgetLayoutFragmentCommands';
 import { buildWidgetGroupFragmentEntry, WidgetGroupFragmentPreview } from '@/components/widgets/group/widgetGroupFragmentSetup';
@@ -160,6 +160,17 @@ export function buildAccountWidgetAddSections(input: AccountWidgetAddInput): rea
 }
 
 /**
+ * One saved-inventory state projection for every Gallery: only an unresolved section waits, and a
+ * refused read offers Retry rather than continuing to claim it is loading.
+ */
+export function useYourWidgetPendingSections(status: AccountInventoryStatus, retry: () => void): readonly (
+    Pick<WidgetAddSection, 'id' | 'title'> & Readonly<{ retry?: () => void }>
+)[] {
+    return React.useMemo(() => status === 'ready' ? []
+        : [{ id: 'yours', title: t('widgetDefinition.yourWidgets'), ...(status === 'failed' ? { retry } : {}) }], [retry, status]);
+}
+
+/**
  * The live sections for a personal surface's Add: the app shell's widget candidates and the selected
  * widget's exact-authority preview. Mount it only while the Add is open, so a closed control reads
  * and previews nothing.
@@ -225,10 +236,6 @@ export function useAccountWidgetAddSections(input: Readonly<{
         if (yoursStatus === 'failed') retryYours();
         if (fragmentsStatus === 'failed') retryFragments();
     }, [fragmentsStatus, retryFragments, retryYours, yoursStatus]);
-    // Only the Account's own read can still be unresolved; a refused read says so and offers Retry, so
-    // the section never reads "Loading…" for a read that has already answered.
-    const pendingSections = React.useMemo(() => loading || failed
-        ? [{ id: 'yours', title: t('widgetDefinition.yourWidgets'), ...(!loading ? { retry } : {}) }]
-        : [], [failed, loading, retry]);
+    const pendingSections = useYourWidgetPendingSections(loading ? 'loading' : failed ? 'failed' : 'ready', retry);
     return { sections, loading, pendingSections };
 }

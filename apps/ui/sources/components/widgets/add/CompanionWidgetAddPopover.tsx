@@ -16,10 +16,11 @@ import { SessionBoardDeclarativeContent } from '@/components/sessions/board/Sess
 import { widgetProvidedContext, type WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
 import { WidgetSetupPreview } from '@/components/widgets/surface/WidgetSetupPreview';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
-import { useYourWidgetCandidates } from '@/components/widgets/definitions/useYourWidgetCandidates';
+import { useYourWidgetCandidatesState } from '@/components/widgets/definitions/useYourWidgetCandidates';
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 
 import { WidgetAddSurface } from './WidgetAddSurface';
+import { useYourWidgetPendingSections } from './accountWidgetAddSections';
 import { buildCompanionWidgetAddSections } from './widgetAddSections';
 import type { WidgetSetupDraft } from './widgetSetupModel';
 
@@ -79,7 +80,8 @@ function OpenCompanionWidgetAddPopover(props: React.ComponentProps<typeof Compan
             : null
     ), [account, session]);
     const appRuntime = useAppShellPluginUiProjection();
-    const yours = useYourWidgetCandidates(scope, pluginRuntime?.pluginUiProjection ?? appRuntime.pluginUiProjection);
+    const { candidates: yours, status, retry } = useYourWidgetCandidatesState(scope, pluginRuntime?.pluginUiProjection ?? appRuntime.pluginUiProjection);
+    const pendingSections = useYourWidgetPendingSections(status, retry);
     const candidates = React.useMemo(() => yours.length ? [...glanceCandidates, ...yours] : glanceCandidates, [glanceCandidates, yours]);
     const sections = React.useMemo(() => buildCompanionWidgetAddSections({
         refs,
@@ -116,6 +118,7 @@ function OpenCompanionWidgetAddPopover(props: React.ComponentProps<typeof Compan
             searchPlaceholder={t('widgetAdd.searchCompanion')}
             addLabel={t('widgetAdd.addToCompanion')}
             sections={sections}
+            pendingSections={pendingSections}
             {...(context?.session ? { serverId: context.session.ref.serverId, sessionId: context.session.ref.sessionId } : {})}
             testID={props.testID}
         />
