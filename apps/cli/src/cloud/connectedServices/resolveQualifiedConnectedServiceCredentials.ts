@@ -4,7 +4,7 @@ import type { ConnectedServiceId, ConnectedServiceCredentialRevisionV1 } from '@
 
 import type { ConnectedServiceCredentialApi } from '@/api/client/connectedServiceCredentialApi';
 import type { readQualifiedConnectedAccountCredentialV4 } from '@/api/client/qualifiedConnectedAccountApi';
-import { readQualifiedConnectedAccountCredentialMaterial } from '@/daemon/connectedServices/qualifiedConnectedAccountEstablishedRuntimeOwner';
+import { readQualifiedConnectedAccountCredentialMaterial, readQualifiedConnectedAccountCredentialIdentity } from '@/daemon/connectedServices/qualifiedConnectedAccountEstablishedRuntimeOwner';
 import { resolveFirstPartyQualifiedConnectedAccountServiceForLegacyServiceId } from '@/plugins/projection/registry/connectedAccountPurposeCompatibility';
 import type { StoredCredentials } from '@/persistence';
 import { resolveConnectedServiceAccountMode, type ConnectedServiceAccountMode } from './resolveConnectedServiceAccountMode';
@@ -70,5 +70,5 @@ export async function resolveQualifiedConnectedServiceCredentialSource(input: In
       raw: { happierQualifiedConnectedAccountCredentialV1: { v: 1, ref: snapshot.ref, authenticationModeId: snapshot.authenticationModeId, payload: credential } },
     },
   });
-  return { record, storageMode: material.storageMode, revisionSemantics: 'revisioned', credentialRevision: snapshot.credentialRevision };
+  return { record, providerOrganizationId: readQualifiedConnectedAccountCredentialIdentity(material).providerOrganizationId, storageMode: material.storageMode, revisionSemantics: 'revisioned', credentialRevision: snapshot.credentialRevision };
 }

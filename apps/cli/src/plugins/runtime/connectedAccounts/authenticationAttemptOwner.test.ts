@@ -1727,7 +1727,7 @@ describe('ConnectedAccountAuthenticationAttemptOwner', () => {
                 return {
                     status: 'connected',
                     accountId: 'account-a',
-                    providerIdentity: { accountId: 'provider-user-1', email: 'work@example.test' },
+                    providerIdentity: { accountId: 'provider-user-1', email: 'work@example.test', organizationId: 'org-b' },
                     displayName: 'Account A',
                     scopes: ['read'],
                 };
@@ -1765,7 +1765,7 @@ describe('ConnectedAccountAuthenticationAttemptOwner', () => {
                 immutableGenerationId: 'artifact-acme-1',
             }),
             stagedCredentials: { accessToken: 'provider-token' },
-            providerIdentity: { accountId: 'provider-user-1', email: 'work@example.test' },
+            providerIdentity: { accountId: 'provider-user-1', email: 'work@example.test', organizationId: 'org-b' },
         }));
         expect(h.configurationCurrent).toHaveBeenCalled();
     });

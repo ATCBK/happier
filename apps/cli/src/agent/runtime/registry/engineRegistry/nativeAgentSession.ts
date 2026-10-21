@@ -1933,7 +1933,7 @@ function projectPublicNativeAgentRuntimeDiagnostic(
     const classification = sanitizeConnectedServiceRuntimeFailureClassification(details?.runtimeAuthClassification);
     // Public lifecycle listeners need selected-account recovery facts, never private token evidence.
     const publicClassification = classification
-        ? (({ failingAccessTokenFingerprint: _fingerprint, rateLimits: _raw, ...safe }) => safe)(classification)
+        ? (({ failingAccessTokenFingerprint: _fingerprint, sourceProviderOrganizationId: _organization, rateLimits: _raw, ...safe }) => safe)(classification)
         : null;
     return {
         code: diagnostic.code,

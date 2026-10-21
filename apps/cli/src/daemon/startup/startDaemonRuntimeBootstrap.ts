@@ -1,3 +1,5 @@
+import type { ProviderAccountUsageUsageIdentityResolver } from '../connectedServices/accountUsage/hydration';
+import { readQualifiedConnectedAccountCredentialIdentity, readQualifiedConnectedAccountCredentialMaterial } from '../connectedServices/qualifiedConnectedAccountEstablishedRuntimeOwner';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 
@@ -65,6 +67,7 @@ import { createConnectedServiceRuntimeIdentityFanoutReader } from '../connectedS
 import {
   resolveConnectedServiceCredentialResolutions,
 } from '@/cloud/connectedServices/resolveConnectedServiceCredentials';
+import { computeConnectedServiceAccessTokenFingerprint } from '../connectedServices/refresh/credentialFreshness/tokenFingerprint';
 import { readConnectedServiceCredentialProviderAccountId } from '../connectedServices/shared/connectedServiceCredentialRecord';
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from '../connectedServices/accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
@@ -164,6 +167,7 @@ export type StartDaemonRuntimeBootstrapParams = Readonly<{
       operation: BuiltInLegacyConnectedAccountOperation;
     }>,
   ) => QualifiedConnectedAccountPeerOperationTransport;
+  resolveConnectedAccountUsageIdentity?: ProviderAccountUsageUsageIdentityResolver;
   listScheduledQualifiedConnectedAccounts?: () => Promise<
     readonly QualifiedConnectedAccountProfileV4[]
   >;
@@ -180,6 +184,7 @@ export type StartDaemonRuntimeBootstrapParams = Readonly<{
   >[0]['activatePurposeBindings'];
   onQualifiedConnectedAccountCredentialUpdated?: (
     account: QualifiedConnectedAccountRef,
+    options?: Readonly<{ reason?: 'provider_context' }>,
   ) => void | Promise<void>;
   stopSession?: (sessionId: string) => Promise<StopSessionResult>;
   /**
@@ -204,7 +209,7 @@ export type StartDaemonRuntimeBootstrapParams = Readonly<{
    * The quotas coordinator must consume this store directly for switch/fanout authority instead
    * of falling back to runtime quota snapshots when canonical usage evidence exists.
    */
-  providerAccountUsageStore: Pick<ProviderAccountUsageStore, 'recordSnapshot' | 'resolveRecordId' | 'resolveBySource'>;
+  providerAccountUsageStore: Pick<ProviderAccountUsageStore, 'recordSnapshot' | 'resolveRecordId' | 'resolveBySource' | 'retainSourcesForProfile'>;
   connectedServiceRuntimeRegistry?: ConnectedServiceRuntimeRegistry;
   connectedServiceQuotaFetcherDescriptors?: readonly ConnectedServiceQuotaFetcherDescriptor[];
 }>;
@@ -532,8 +537,9 @@ export async function startDaemonConnectedServiceRuntime(
                       params.listScheduledQualifiedConnectedAccounts,
                   }
                 : {}),
-              onCredentialUpdated: async (account: QualifiedConnectedAccountRef) => {
-                await params.onQualifiedConnectedAccountCredentialUpdated?.(account);
+              onCredentialUpdated: async (account: QualifiedConnectedAccountRef, options?: Readonly<{ reason?: 'provider_context' }>) => {
+                await params.onQualifiedConnectedAccountCredentialUpdated?.(account, options);
+                if (options?.reason === 'provider_context') return;
                 const serviceId = buildQualifiedPluginContributionKey(account.service);
                 const affectedTargets = connectedServiceRuntimeRegistry.listRefreshTargets().filter((target) =>
                   target.bindings.some((binding) => binding.serviceId === serviceId && binding.profileId === account.accountId));
@@ -706,6 +712,14 @@ export async function startDaemonConnectedServiceRuntime(
           credentials: params.credentials,
           store: params.providerAccountUsageStore,
           nowMs: Date.now(),
+          resolveUsageIdentity: params.resolveConnectedAccountUsageIdentity,
+          resolveCurrentProviderAccountIdentityForSource: async (source) => {
+            const material = await readQualifiedConnectedAccountCredentialMaterial({
+              credentials: params.credentials, account: source.ref,
+              getAccountEncryptionMode: () => params.api.getAccountEncryptionMode(),
+            });
+            return material ? readQualifiedConnectedAccountCredentialIdentity(material) : null;
+          },
         })
       ).hydration,
       createCoordinator: () => new ConnectedServiceQuotasCoordinator({
@@ -743,6 +757,23 @@ export async function startDaemonConnectedServiceRuntime(
                 params.qualifiedConnectedAccountEstablishedRuntimeOwner,
               listScheduledAccounts:
                 params.listScheduledQualifiedConnectedAccounts,
+              resolveUsageIdentity: params.resolveConnectedAccountUsageIdentity,
+              resolveCurrentCredentialProof: async (account) => {
+                const serviceKey = buildQualifiedPluginContributionKey(account.service);
+                const legacyServiceId = resolveFirstPartyLegacyConnectedServiceIdForQualifiedServiceKey(serviceKey);
+                if (!legacyServiceId) return null;
+                const resolutions = await resolveConnectedServiceCredentialResolutions({ credentials: params.credentials,
+                  api: params.api, bindings: [{ serviceId: legacyServiceId, profileId: account.accountId }] });
+                const resolution = resolutions.get(legacyServiceId);
+                if (resolution?.revisionSemantics !== 'revisioned') return null;
+                return { providerAccountId: readConnectedServiceCredentialProviderAccountId(resolution.record),
+                  providerOrganizationId: resolution.providerOrganizationId ?? null,
+                  credentialFingerprint: resolution.record.kind === 'oauth'
+                    ? computeConnectedServiceAccessTokenFingerprint(resolution.record.oauth.accessToken) : null };
+              },
+              enrichCredentialContext: async (input) => connectedServiceRefreshCoordinator
+                ? await connectedServiceRefreshCoordinator.enrichQualifiedConnectedAccountCredentialContext(input)
+                : { status: 'unavailable' as const },
               listAccounts: async ({ service, signal }) => (
                 await listQualifiedConnectedAccountsV4({
                   token: params.credentials.token,

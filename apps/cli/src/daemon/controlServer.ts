@@ -840,6 +840,7 @@ export function createDaemonControlApp({
     source?: ConnectedServiceUsageSourceV1;
     deriveCredentialFingerprintFromSource?: true;
     credentialFingerprint?: string | null;
+    sourceProviderAccountId?: string;
     policyDisposition?: 'evidence_only';
   }>) => Promise<unknown>;
   handleProviderAccountUsageAdoption?: (input: Readonly<{
@@ -2466,6 +2467,7 @@ export function createDaemonControlApp({
         source: z.optional(ConnectedServiceUsageSourceV1Schema),
         deriveCredentialFingerprintFromSource: z.optional(z.literal(true)),
         credentialFingerprint: z.optional(z.nullable(z.string().check(z.regex(/^sha256:[a-f0-9]{8}$/u)))),
+        sourceProviderAccountId: z.optional(z.string().check(z.trim(), z.minLength(1))),
         policyDisposition: z.optional(z.literal('evidence_only')),
       }),
       response: {
@@ -2509,6 +2511,7 @@ export function createDaemonControlApp({
           ? { deriveCredentialFingerprintFromSource: true as const }
           : {}),
         ...(request.body.credentialFingerprint !== undefined ? { credentialFingerprint: request.body.credentialFingerprint } : {}),
+        ...(request.body.sourceProviderAccountId ? { sourceProviderAccountId: request.body.sourceProviderAccountId } : {}),
         ...(request.body.policyDisposition ? { policyDisposition: request.body.policyDisposition } : {}),
       });
       if (!isProviderAccountUsageSnapshotIntakeAccepted(result)) {
@@ -4389,6 +4392,7 @@ export function startDaemonControlServer({
       source?: ConnectedServiceUsageSourceV1;
 	    deriveCredentialFingerprintFromSource?: true;
 	    credentialFingerprint?: string | null;
+    sourceProviderAccountId?: string;
       policyDisposition?: 'evidence_only';
 	  }>) => Promise<unknown>;
 	  handleProviderAccountUsageAdoption?: (input: Readonly<{

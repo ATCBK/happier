@@ -5,6 +5,13 @@ import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 
 import { routeSessionUsageLimitRecoverySwitchAccountNow } from './sessionUsageLimitRecoverySwitchAccountNow';
+import { handleConnectedServiceRuntimeAuthFailureForSession } from '@/daemon/connectedServices/runtimeAuth/handleConnectedServiceRuntimeAuthFailureForSession';
+import { sanitizeConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/sanitizeConnectedServiceRuntimeFailureClassification';
+import { resolveRuntimeAuthFailureSourceProfile } from '@/daemon/connectedServices/runtimeAuth/resolveRuntimeAuthFailureSourceProfile';
+import { ConnectedServiceAuthGroupSwitchCoordinator, InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry,
+  type ConnectedServiceAuthGroupSwitchState } from '@/daemon/connectedServices/accountGroups/switching/ConnectedServiceAuthGroupSwitchCoordinator';
+import { DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1 } from '@/daemon/connectedServices/accountGroups/selection/selectConnectedServiceAuthGroupCandidate';
+
 
 function createUsageLimitIssue(
   patch: Partial<SessionRuntimeIssueV1> = {},
@@ -41,6 +48,46 @@ function createRawSession(issue: SessionRuntimeIssueV1 | null): RawSessionRecord
 }
 
 describe('routeSessionUsageLimitRecoverySwitchAccountNow', () => {
+  it('switches a Claude group through the real recovery owner from a strict public issue without organization fields', async () => {
+    const serviceId = 'happier.agent.claude/claude-subscription';
+    let state: ConnectedServiceAuthGroupSwitchState = {
+      serviceId, groupId: 'happier', activeProfileId: 'primary', generation: 7, runtimeStateRevision: 0,
+      policy: { ...DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1, strategy: 'priority', autoSwitch: true },
+      members: [{ profileId: 'primary', priority: 1, createdAtMs: 1, enabled: true },
+        { profileId: 'backup', priority: 2, createdAtMs: 2, enabled: true }],
+      memberStatesByProfileId: new Map([['backup', { quotaSnapshot: { capturedAtMs: 1000, effectiveRemainingPercent: 99 } }]]),
+    };
+    // Persistence and native application are the boundaries; policy and recovery remain real.
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(), nowMs: () => 1000, quotaFreshnessMs: 60_000,
+      loadState: async () => state,
+      commitSwitch: async ({ toProfileId, expectedGeneration }) => {
+        expect(state.generation).toBe(expectedGeneration);
+        state = { ...state, activeProfileId: toProfileId, generation: expectedGeneration + 1 }; return state;
+      }, applyGeneration: async () => ({ ok: true }),
+    });
+    const result = await routeSessionUsageLimitRecoverySwitchAccountNow({ sessionId: 'session-1',
+      rawSession: createRawSession(createUsageLimitIssue({ agentId: 'claude', usageLimit: {
+        v: 1, resetAtMs: 10_000, retryAfterMs: null, quotaScope: 'account', recoverability: 'switch_account',
+        connectedService: { serviceId, profileId: 'primary', groupId: 'happier' },
+      } })), request: { sessionId: 'session-1', provider: 'claude' },
+      notifyRuntimeAuthFailure: async (body) => ({ ok: true, result: await handleConnectedServiceRuntimeAuthFailureForSession({
+        getChildren: () => [{ startedBy: 'daemon', happySessionId: 'session-1', pid: 123, spawnOptions: { directory: '/project',
+          connectedServices: { v: 2, bindingsByServiceId: { [serviceId]: {
+            source: 'connected', selection: 'group', profileId: 'primary', groupId: 'happier',
+          } } },
+        } }], sessionId: body.sessionId, switchesThisTurn: body.switchesThisTurn ?? 0,
+        classification: sanitizeConnectedServiceRuntimeFailureClassification(body.classification), switchCoordinator: coordinator,
+        resolveProviderQualifiedRuntimeAuthFailureSource: async ({ classification }) => await resolveRuntimeAuthFailureSourceProfile({
+          classification, getGroupMembers: async () => state.members,
+          resolveProviderAccountIdentity: async (profileId) => ({ providerAccountId: 'same-user', providerOrganizationId: profileId }),
+        }),
+      }) }),
+    });
+    expect(result).toMatchObject({ ok: true, status: 'switch_applied', sessionId: 'session-1' });
+    expect(state).toMatchObject({ activeProfileId: 'backup', generation: 8 });
+  });
+
   it('replays the latest switchable usage-limit issue through runtime auth recovery', async () => {
     const notifyRuntimeAuthFailure = vi.fn(async () => ({
       handled: true,

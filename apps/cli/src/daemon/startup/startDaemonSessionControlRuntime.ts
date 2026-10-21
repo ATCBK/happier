@@ -1,3 +1,4 @@
+import { matchesCurrentQuotaObservationCredential } from '@/daemon/connectedServices/quotas/proof/quotaProbeFreshProof';
 import axios from 'axios';
 import { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import type { PendingSessionResumeAdmission, PendingSessionResumePort } from '../sessions/activatePendingInactiveSession';
@@ -134,7 +135,7 @@ import { buildRuntimeAuthUsageLimitRecoveryProjection } from '@/daemon/connected
 import { checkRuntimeAuthUsageLimitRecovery } from '@/daemon/connectedServices/runtimeAuth/checkRuntimeAuthUsageLimitRecovery';
 import { isCurrentUsageLimitRecoveryAccount } from '@/daemon/connectedServices/runtimeAuth/isCurrentUsageLimitRecoveryAccount';
 import { continueAccountQualifiedSessionAfterUsageLimitReset } from '@/daemon/connectedServices/continuation/continueSessionAfterUsageLimitReset';
-import { readQualifiedConnectedAccountCredentialMaterial } from '@/daemon/connectedServices/qualifiedConnectedAccountEstablishedRuntimeOwner';
+import { readQualifiedConnectedAccountCredentialMaterial, readQualifiedConnectedAccountCredentialIdentity } from '@/daemon/connectedServices/qualifiedConnectedAccountEstablishedRuntimeOwner';
 import { projectTemporaryThrottleRecoveryMetadata } from '@/daemon/connectedServices/runtimeAuth/projection/temporaryThrottleRecoveryMetadata';
 import { resolveConnectedServiceCredentialResolutions } from '@/cloud/connectedServices/resolveConnectedServiceCredentials';
 import { resolveConnectedServiceAccountMode } from '@/cloud/connectedServices/resolveConnectedServiceAccountMode';
@@ -11116,6 +11117,15 @@ export async function startDaemonSessionControlRuntime(
       }),
     );
   };
+  const resolveConnectedAccountUsageIdentity = async (serviceId: string) => {
+    const service = resolveQualifiedConnectedAccountServiceForIngressServiceId(serviceId);
+    if (!service) return null;
+    const lease = await acquireDaemonPluginRuntimeRegistryLease();
+    try {
+      return lease.registry.contributes.connectedAccountDescriptorsById
+        .get(buildQualifiedPluginContributionKey(service))?.definition.usageIdentity ?? null;
+    } finally { await lease.release(); }
+  };
   const resolveProviderQualifiedRuntimeAuthFailureSourceForSession: NonNullable<
     Parameters<
       typeof authorizeConnectedServiceRuntimeAuthFailureSource
@@ -11139,16 +11149,9 @@ export async function startDaemonSessionControlRuntime(
         ) {
           return classification;
         }
-        // Released V2/V3 sealed-credential reads remain scalar-keyed on the server wire;
-        // first-party services translate at this named ingress. External qualified services
-        // have no scalar credential identity and resolve provider accounts through the V4
-        // group owner only.
-        const scalarCredentialServiceId =
-          resolveFirstPartyLegacyConnectedServiceIdForQualifiedServiceKey(
-            classification.serviceId,
-          );
         return await resolveRuntimeAuthFailureSourceProfile({
           classification,
+          requiresProviderOrganizationId: (await resolveConnectedAccountUsageIdentity(classification.serviceId))?.requiredContext === 'organization',
           getGroupMembers: async () =>
             (
               await readQualifiedConnectedServiceAuthGroup({
@@ -11159,21 +11162,15 @@ export async function startDaemonSessionControlRuntime(
             )?.members.map((member) => ({
               profileId: member.connectedAccountId,
             })) ?? null,
-          resolveProviderAccountId: async (profileId) => {
-            if (!scalarCredentialServiceId) return null;
-            const resolution = await resolveConnectedServiceCredentialResolutions(
-              {
-                credentials:
-                  accountContext?.bootstrap.credentials ?? params.credentials,
-                api: accountContext?.api ?? params.api,
-                bindings: [{ serviceId: scalarCredentialServiceId, profileId }],
-              },
-            ).then(
-              (byServiceId) => byServiceId.get(scalarCredentialServiceId) ?? null,
-            );
-            return resolution
-              ? readConnectedServiceCredentialProviderAccountId(resolution.record)
-              : null;
+          resolveProviderAccountIdentity: async (profileId) => {
+            const service = resolveQualifiedConnectedAccountServiceForIngressServiceId(classification.serviceId);
+            if (!service) return null;
+            const material = await readQualifiedConnectedAccountCredentialMaterial({
+              credentials: accountContext?.bootstrap.credentials ?? params.credentials,
+              account: { service, accountId: profileId },
+              getAccountEncryptionMode: (signal) => resolveConnectedServiceAccountMode(accountContext?.api ?? params.api, { signal }),
+            });
+            return material ? readQualifiedConnectedAccountCredentialIdentity(material) : null;
           },
         });
       }),
@@ -11645,9 +11642,8 @@ export async function startDaemonSessionControlRuntime(
                 ),
               });
               return material ? {
-                providerAccountId: material.credential.values.providerAccountId
-                  ?? material.snapshot.metadata.providerIdentity?.accountId ?? null,
-                credentialRevision: material.snapshot.credentialRevision,
+                ...readQualifiedConnectedAccountCredentialIdentity(material),
+                requiresProviderOrganizationId: (await resolveConnectedAccountUsageIdentity(intent.serviceId))?.requiredContext === 'organization',
               } : null;
             };
             const account = await readAccount();
@@ -19417,9 +19413,9 @@ export async function startDaemonSessionControlRuntime(
         try {
           await assertSessionAccountCurrent(input.sessionId, accountContext);
           return await withSessionAccountHome(accountContext, async () => {
-            let qualifiedUsageSource: ConnectedServiceUsageSourceV1 | null = null;
             let claimedSource = input.source;
             if (
+              input.sourceProviderAccountId === undefined &&
               claimedSource?.bindingKind === 'group_member' &&
               input.snapshot.accountSubject.kind === 'providerSubject'
             ) {
@@ -19427,6 +19423,8 @@ export async function startDaemonSessionControlRuntime(
               claimedSource = await resolveProviderAccountUsageSourceProfile({
                 source: groupSource,
                 providerAccountId: input.snapshot.accountSubject.id,
+                providerOrganizationId: input.snapshot.recordKey.quotaScope === 'organization'
+                  ? input.snapshot.recordKey.quotaScopeId ?? null : null,
                 getCurrentGroup: async () => {
                   await assertSessionAccountCurrent(
                     input.sessionId,
@@ -19446,27 +19444,15 @@ export async function startDaemonSessionControlRuntime(
                       }
                     : null;
                 },
-                resolveProviderAccountId: async (profileId) => {
-                  const legacyServiceId =
-                    resolveFirstPartyLegacyConnectedServiceIdForQualifiedServiceKey(
-                      groupSource.serviceId,
-                    );
-                  if (!legacyServiceId) return null;
-                  const resolution =
-                    await resolveConnectedServiceCredentialResolutions({
-                      credentials:
-                        accountContext?.bootstrap.credentials ??
-                        params.credentials,
-                      api: accountContext?.api ?? params.api,
-                      bindings: [{ serviceId: legacyServiceId, profileId }],
-                    }).then(
-                      (byServiceId) => byServiceId.get(legacyServiceId) ?? null,
-                    );
-                  return resolution
-                    ? readConnectedServiceCredentialProviderAccountId(
-                        resolution.record,
-                      )
-                    : null;
+                resolveProviderAccountIdentity: async (profileId) => {
+                  const service = resolveQualifiedConnectedAccountServiceForIngressServiceId(groupSource.serviceId);
+                  if (!service) return null;
+                  const material = await readQualifiedConnectedAccountCredentialMaterial({
+                    credentials: accountContext?.bootstrap.credentials ?? params.credentials,
+                    account: { service, accountId: profileId },
+                    getAccountEncryptionMode: (signal) => resolveConnectedServiceAccountMode(accountContext?.api ?? params.api, { signal }),
+                  });
+                  return material ? readQualifiedConnectedAccountCredentialIdentity(material) : null;
                 },
               });
             }
@@ -19526,6 +19512,9 @@ export async function startDaemonSessionControlRuntime(
                 ? { observation: { sources: [capturedClaimedSource] as const } }
                 : {}),
               credentialFingerprint,
+              sourceProviderAccountId: input.sourceProviderAccountId,
+              requiresProviderOrganizationId: input.source
+                ? (await resolveConnectedAccountUsageIdentity(input.source.serviceId))?.requiredContext === 'organization' : false,
               verifyCredentialFingerprint: async (candidate) => {
                 const serviceId = ConnectedAccountServiceKeySchema.safeParse(
                   readBuiltInLegacyConnectedAccountServiceKeyIngress(
@@ -19545,14 +19534,14 @@ export async function startDaemonSessionControlRuntime(
                   return false;
                 }
                 const record = sourceCredentialResolution.record;
-                return (
-                  record?.kind === 'oauth' &&
-                  record.oauth.providerAccountId ===
-                    candidate.providerAccountId &&
-                  computeConnectedServiceAccessTokenFingerprint(
-                    record.oauth.accessToken,
-                  ) === candidate.credentialFingerprint
-                );
+                return matchesCurrentQuotaObservationCredential({
+                  ...candidate,
+                  credential: record?.kind === 'oauth' ? {
+                    providerAccountId: record.oauth.providerAccountId,
+                    providerOrganizationId: sourceCredentialResolution.providerOrganizationId ?? null,
+                    credentialFingerprint: computeConnectedServiceAccessTokenFingerprint(record.oauth.accessToken),
+                  } : null,
+                });
               },
               resolveAuthoritativeSource: async (source) => {
                 const currentBinding =
@@ -19566,8 +19555,7 @@ export async function startDaemonSessionControlRuntime(
                   currentBinding.profileId !== source.profileId
                 )
                   return null;
-                qualifiedUsageSource =
-                  currentBinding.groupId === null
+                return currentBinding.groupId === null
                     ? {
                         serviceId: currentBinding.serviceId,
                         profileId: currentBinding.profileId,
@@ -19582,7 +19570,6 @@ export async function startDaemonSessionControlRuntime(
                           groupId: currentBinding.groupId,
                           groupGeneration: currentBinding.groupGeneration,
                         };
-                return qualifiedUsageSource;
               },
               resolvePersistenceTargets:
                 resolveQualifiedProviderAccountUsagePersistenceTargets,
@@ -19603,6 +19590,9 @@ export async function startDaemonSessionControlRuntime(
               sessionId: input.sessionId,
               snapshot: input.snapshot,
             });
+            const qualifiedUsageSource = 'qualifiedSource' in result ? result.qualifiedSource ?? null : null;
+            const verifiedLocalSource = 'verifiedLocalSource' in result ? result.verifiedLocalSource ?? null : null;
+            const verifiedSourceProviderAccountId = 'sourceProviderAccountId' in result ? result.sourceProviderAccountId ?? null : null;
             // Transport custody ends at the canonical recorder and persistence scheduler.
             // Policy fanout and recovery proof are downstream settlement and cannot delay receipt.
             void Promise.resolve()
@@ -19624,11 +19614,12 @@ export async function startDaemonSessionControlRuntime(
                 }> | null = null;
                 if (
                   isProviderAccountUsageStoreMutationAccepted(result) &&
-                  qualifiedUsageSource &&
-                  credentialFingerprint &&
-                  input.snapshot.accountSubject.kind === 'providerSubject'
+                  (verifiedLocalSource || qualifiedUsageSource) &&
+                  credentialFingerprint
                 ) {
-                  const source = qualifiedUsageSource;
+                  const source = verifiedLocalSource ?? qualifiedUsageSource!;
+                  const observedProviderAccountId = verifiedSourceProviderAccountId
+                    ?? (input.snapshot.accountSubject.kind === 'providerSubject' ? input.snapshot.accountSubject.id : null);
                   const serviceId = ConnectedAccountServiceKeySchema.safeParse(
                     readBuiltInLegacyConnectedAccountServiceKeyIngress(
                       source.serviceId,
@@ -19646,14 +19637,17 @@ export async function startDaemonSessionControlRuntime(
                   const coordinator = accountContext
                     ? accountContext.connectedServiceQuotasCoordinator
                     : params.getConnectedServiceQuotasCoordinator();
-                  const projected = legacyServiceId
+                  const projection = legacyServiceId
                     ? projectProviderAccountUsageSnapshotToConnectedServiceQuotaSnapshotV1(
                         {
                           snapshot: input.snapshot,
-                          source: { ...source, serviceId: legacyServiceId },
+                          source,
                         },
                       )
                     : null;
+                  const projected = projection && verifiedSourceProviderAccountId
+                    ? { ...projection, activeAccountId: verifiedSourceProviderAccountId }
+                    : projection;
                   const credentialResolution =
                     serviceId.success &&
                     claimedServiceId === serviceId.data &&
@@ -19661,14 +19655,18 @@ export async function startDaemonSessionControlRuntime(
                       ? sourceCredentialResolution
                       : null;
                   const credential = credentialResolution?.record ?? null;
-                  sourceIsExactlyCurrent =
-                    credentialResolution?.revisionSemantics === 'revisioned' &&
-                    credential?.kind === 'oauth' &&
-                    credential.oauth.providerAccountId ===
-                      input.snapshot.accountSubject.id &&
-                    computeConnectedServiceAccessTokenFingerprint(
-                      credential.oauth.accessToken,
-                    ) === credentialFingerprint;
+                  sourceIsExactlyCurrent = credentialResolution?.revisionSemantics === 'revisioned'
+                    && matchesCurrentQuotaObservationCredential({
+                      providerAccountId: observedProviderAccountId ?? '',
+                      providerOrganizationId: input.snapshot.recordKey.quotaScope === 'organization'
+                        ? input.snapshot.recordKey.quotaScopeId ?? null : null,
+                      credentialFingerprint,
+                      credential: credential?.kind === 'oauth' ? {
+                        providerAccountId: credential.oauth.providerAccountId,
+                        providerOrganizationId: credentialResolution.providerOrganizationId ?? null,
+                        credentialFingerprint: computeConnectedServiceAccessTokenFingerprint(credential.oauth.accessToken),
+                      } : null,
+                    });
                   if (
                     serviceId.success &&
                     legacyServiceId &&
@@ -19686,6 +19684,14 @@ export async function startDaemonSessionControlRuntime(
                       source.bindingKind === 'group_member'
                         ? (source.groupGeneration ?? null)
                         : null;
+                    if (verifiedLocalSource) {
+                      coordinator.recordRuntimeProfileSnapshot({
+                        serviceId: serviceId.data,
+                        profileId: source.profileId,
+                        snapshot: { ...projected, serviceId: serviceId.data },
+                        verifiedCredentialFingerprint: credentialFingerprint,
+                      });
+                    }
                     const proof = coordinator.resolveQuotaProbeFreshProof({
                       serviceId: legacyServiceId,
                       profileId: source.profileId,
@@ -19705,7 +19711,7 @@ export async function startDaemonSessionControlRuntime(
                         profileId: source.profileId,
                         groupId,
                         groupGeneration,
-                        providerAccountId: input.snapshot.accountSubject.id,
+                        providerAccountId: observedProviderAccountId ?? '',
                         materialFingerprint: credentialFingerprint,
                       },
                       snapshot: projected,

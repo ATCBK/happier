@@ -7,7 +7,7 @@ import type {
 import { CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1 } from '@happier-dev/protocol/connect/plugin-connected-account-authentication-v2';
 import { QualifiedConnectedAccountIdSchema, sameQualifiedConnectedAccountRef,
     connectedAccountSourceCustodyV1Equal, type ConnectedAccountSourceCustodyV1 } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
-import type { PluginConnectedAccountAuthenticationModeV2 } from '@happier-dev/protocol';
+import type { PluginConnectedAccountAuthenticationModeV2, QualifiedConnectedAccountCredentialSnapshotV4 } from '@happier-dev/protocol';
 import { compilePluginJsonSchema, isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 
 import {
@@ -127,10 +127,7 @@ export type ConnectedAccountAttemptSettlementRequest = Readonly<{
     sourceCustody: ConnectedAccountSourceCustodyV1;
     stagedCredentials: Readonly<Record<string, string>>;
     stagedAccountConfigurationContent?: unknown;
-    providerIdentity?: Readonly<{
-        accountId?: string;
-        email?: string;
-    }>;
+    providerIdentity?: QualifiedConnectedAccountCredentialSnapshotV4['metadata']['providerIdentity'];
     displayName: string;
     scopes: readonly string[];
 }>;

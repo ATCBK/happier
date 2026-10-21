@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { connectedAccountProjectionFamily } from './connectedAccounts';
+import { PluginConnectedAccountDescriptorContributionV2Schema } from '@happier-dev/protocol';
 
 function manualAuthentication(fields = [{
   id: 'token',
@@ -20,6 +21,18 @@ function manualAuthentication(fields = [{
 }
 
 describe('connectedAccountProjectionFamily', () => {
+  it('projects the declared organization usage identity requirement into the registry read', () => {
+    const definition = PluginConnectedAccountDescriptorContributionV2Schema.parse({
+      id: 'work', title: 'Work', authentication: manualAuthentication(),
+      usageIdentity: { requiredContext: 'organization' },
+    });
+    const projected = connectedAccountProjectionFamily.project({ generation: 1, registry: {
+      connectedAccountDescriptors: [{ provenance: 'external', source: { kind: 'installed' }, pluginId: 'acme.accounts', definition }],
+      scmHostingProviders: [], pluginDiagnosticsByPluginId: {},
+    } as never });
+    expect(projected.entriesById['acme.accounts/work']).toMatchObject({ usageIdentity: { requiredContext: 'organization' } });
+  });
+
   it('projects a non-SCM descriptor by its own qualified descriptor identity', () => {
     const projected = connectedAccountProjectionFamily.project({
       generation: 1,

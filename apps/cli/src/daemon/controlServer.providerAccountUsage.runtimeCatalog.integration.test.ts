@@ -105,6 +105,7 @@ describe('createDaemonControlApp provider account usage routes', () => {
                     source,
                     deriveCredentialFingerprintFromSource: true,
                     credentialFingerprint: 'sha256:deadbeef',
+                sourceProviderAccountId: 'acct_123',
                     policyDisposition: 'evidence_only',
                 },
             });
@@ -120,6 +121,7 @@ describe('createDaemonControlApp provider account usage routes', () => {
                 source,
                 deriveCredentialFingerprintFromSource: true,
                 credentialFingerprint: 'sha256:deadbeef',
+                sourceProviderAccountId: 'acct_123',
                 policyDisposition: 'evidence_only',
             });
         } finally {

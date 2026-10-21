@@ -936,6 +936,7 @@ export async function notifyDaemonProviderAccountUsageSnapshot(
     source?: ConnectedServiceUsageSourceV1 | null;
     deriveCredentialFingerprintFromSource?: true;
     credentialFingerprint?: string | null;
+    sourceProviderAccountId?: string;
     policyDisposition?: 'evidence_only';
   }>,
   options: DaemonControlRequestOptions = {},
@@ -948,6 +949,7 @@ export async function notifyDaemonProviderAccountUsageSnapshot(
       ? { deriveCredentialFingerprintFromSource: true as const }
       : {}),
     ...(body.credentialFingerprint !== undefined ? { credentialFingerprint: body.credentialFingerprint } : {}),
+    ...(body.sourceProviderAccountId ? { sourceProviderAccountId: body.sourceProviderAccountId } : {}),
     ...(body.policyDisposition ? { policyDisposition: body.policyDisposition } : {}),
   }, options);
 }

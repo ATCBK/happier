@@ -305,6 +305,7 @@ describe('connected-account runtime invoker', () => {
         const quota = {
             observedAtMs: 1_000,
             planLabel: 'Acme Enterprise',
+            providerOrganizationId: 'organization-a',
             limits: Array.from({ length: 129 }, (_, index) => ({
                 id: `window-${index}`,
                 remaining: index,
@@ -808,6 +809,33 @@ describe('connected-account runtime invoker', () => {
             expect.objectContaining({ url: issuedUrl }),
         ]);
         await owners.dispose();
+    });
+
+    it.each([true, false])('enriches context only through the optional operation (supported=%s)', async (supported) => {
+        const values = new Map<string, string>();
+        const registeredRuntime: PluginConnectedAccountRuntime = {
+            ...runtime(() => {}),
+            async refresh() { throw new Error('context enrichment must not refresh tokens'); },
+            ...(supported ? {
+                async enrichCredentialContext(context: Parameters<PluginConnectedAccountRuntime['refresh']>[0]) {
+                    await context.stagedCredentials.set('providerContext', 'organization-1');
+                    return { status: 'connected' as const };
+                },
+            } : {}),
+        };
+        const result = await invokeEstablished(createEstablishedInvoker(registeredRuntime), {
+            kind: 'enrichCredentialContext',
+            operationId: 'context-1',
+            stagedCredentials: {
+                get: async key => values.get(key) ?? null,
+                set: async (key, value) => { values.set(key, value); },
+                delete: async key => { values.delete(key); },
+            },
+        });
+        expect(result).toMatchObject(supported ? { status: 'connected' } : {
+            status: 'outcomeUnknown', diagnostic: { code: 'connected_account_context_enrichment_unsupported' },
+        });
+        expect(values.get('providerContext')).toBe(supported ? 'organization-1' : undefined);
     });
 
     it('registers refresh credential fields without reopening remote currentness for each field', async () => {

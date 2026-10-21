@@ -53,6 +53,7 @@ export const connectedAccountProjectionFamily = definePluginProjectionFamilyV2({
           title: descriptor.title, ...(descriptor.description ? { description: descriptor.description } : {}),
           authentication: descriptor.authentication,
           capabilities: descriptor.capabilities ?? [],
+          ...(descriptor.usageIdentity ? { usageIdentity: descriptor.usageIdentity } : {}),
           ...(descriptor.recoveryCredits ? { recoveryCredits: descriptor.recoveryCredits } : {}),
           ...(descriptor.billingUrl ? { billingUrl: descriptor.billingUrl } : {}),
           // UI-T28: Connected Account setup is host-rendered from the STATIC

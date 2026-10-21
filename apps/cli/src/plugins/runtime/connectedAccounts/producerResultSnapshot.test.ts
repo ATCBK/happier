@@ -4,9 +4,31 @@ import { describe, expect, it } from 'vitest';
 
 import {
     snapshotConnectedAccountEstablishedResult,
+    snapshotConnectedAccountAuthenticationResult,
 } from './producerResultSnapshot';
 
 describe('connected-account producer result snapshots', () => {
+    it('detaches authentication identity before the invoker currentness check', () => {
+        const providerIdentity = { accountId: 'provider-user', organizationId: 'org-a' };
+        const result = snapshotConnectedAccountAuthenticationResult(
+            { status: 'connected', providerIdentity, scopes: ['read'] },
+            value => value,
+        );
+        providerIdentity.organizationId = 'org-b';
+        expect(result).toMatchObject({ providerIdentity: { accountId: 'provider-user', organizationId: 'org-a' } });
+    });
+
+    it('detaches attested provider identity before credential replacement can await', () => {
+        const providerIdentity = { accountId: 'provider-user', organizationId: 'org-a' };
+        const result = snapshotConnectedAccountEstablishedResult(
+            { kind: 'status' },
+            { status: 'connected', providerIdentity },
+            { quotaLeafUnavailable: false },
+        );
+        providerIdentity.organizationId = 'org-b';
+        expect(result).toMatchObject({ providerIdentity: { accountId: 'provider-user', organizationId: 'org-a' } });
+    });
+
     it('preserves rich quota facts while detaching mutable producer details', () => {
         const limit = {
             id: 'spark:primary', providerLimitId: 'spark', label: 'Spark · Primary',

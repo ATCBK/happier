@@ -154,16 +154,22 @@ function snapshotConnectedAccountDiagnostic(
     }
 }
 
-export function redactConnectedAccountAuthenticationResultDiagnostic(
+export function snapshotConnectedAccountAuthenticationResult(
     value: unknown,
-    redactDiagnosticText: RedactConnectedAccountDiagnosticText,
+    redactDiagnosticText?: RedactConnectedAccountDiagnosticText,
 ): unknown {
     if (value === null || typeof value !== 'object') return value;
     const result = value as Readonly<Record<string, unknown>>;
-    if (result.diagnostic === undefined) return value;
-    const diagnostic = snapshotConnectedAccountDiagnostic(result.diagnostic, redactDiagnosticText);
+    const diagnostic = result.diagnostic === undefined ? undefined
+        : snapshotConnectedAccountDiagnostic(result.diagnostic, redactDiagnosticText);
     if (diagnostic === null) throw new TypeError('Connected Account diagnostic redaction failed');
-    return Object.freeze({ ...result, diagnostic });
+    return Object.freeze({
+        ...result,
+        ...(Array.isArray(result.scopes) ? { scopes: Object.freeze([...result.scopes]) } : {}),
+        ...(result.providerIdentity !== null && typeof result.providerIdentity === 'object' && !Array.isArray(result.providerIdentity)
+            ? { providerIdentity: Object.freeze({ ...result.providerIdentity }) } : {}),
+        ...(diagnostic === undefined ? {} : { diagnostic }),
+    });
 }
 
 export function snapshotConnectedAccountEstablishedResult<
@@ -205,6 +211,9 @@ export function snapshotConnectedAccountEstablishedResult<
     return Object.freeze({
         ...result,
         ...('scopes' in result && result.scopes !== undefined ? { scopes: Object.freeze([...result.scopes]) } : {}),
+        ...('providerIdentity' in result && result.providerIdentity !== null
+            && typeof result.providerIdentity === 'object' && !Array.isArray(result.providerIdentity)
+            ? { providerIdentity: Object.freeze({ ...result.providerIdentity }) } : {}),
         ...(diagnostic === undefined ? {} : { diagnostic }),
     }) as ConnectedAccountRuntimeEstablishedResult<TOperation>;
 }

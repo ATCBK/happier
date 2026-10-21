@@ -10588,13 +10588,14 @@ describe('native Agent session host adapter', () => {
             code: 'provider_usage_limit', severity: 'error', message: 'Usage Limit Reached', details: { v: 1, source: 'usage_limit', providerPrivate: 'secret-raw-evidence', runtimeAuthClassification: {
                 kind: 'usage_limit', limitCategory: 'usage_limit', serviceId: 'happier.agent.antigravity/antigravity-account', profileId: 'selected-profile', groupId: 'selected-pool',
                 groupGeneration: 4, expectedCredentialRevision: 'csr_abcdefghijklmnopqrstuv', resetsAtMs: null, retryAfterMs: null, quotaScope: 'account', planType: null,
-                failingAccessTokenFingerprint: 'secret-token-fingerprint', rateLimits: { message: 'secret-provider-detail' }, source: 'stable_provider_message',
+                sourceProviderAccountId: 'same-user', sourceProviderOrganizationId: 'org-internal-context', failingAccessTokenFingerprint: 'secret-token-fingerprint', rateLimits: { message: 'secret-provider-detail' }, source: 'stable_provider_message',
             } },
         } });
         const event = events.find(event => event.kind === 'turn-failed');
         expect(event).toMatchObject({ diagnostic: { details: { runtimeAuthClassification: { serviceId: 'happier.agent.antigravity/antigravity-account',
             profileId: 'selected-profile', groupId: 'selected-pool', groupGeneration: 4, expectedCredentialRevision: 'csr_abcdefghijklmnopqrstuv' } } } });
         expect(JSON.stringify(event)).not.toContain('secret-');
+        expect(JSON.stringify(event)).not.toContain('org-internal-context');
     });
 
     it('preserves bounded native diagnostics while redacting private detail bags in public runtime listeners', async () => {

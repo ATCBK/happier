@@ -47,7 +47,7 @@ import {
     type ConnectedAccountPluginRuntimeLease,
 } from './contributionRegistry';
 import {
-    redactConnectedAccountAuthenticationResultDiagnostic,
+    snapshotConnectedAccountAuthenticationResult,
     snapshotConnectedAccountEstablishedResult,
     staleConnectedAccountProducerResult,
 } from './producerResultSnapshot';
@@ -129,6 +129,11 @@ export type ConnectedAccountRuntimeEstablishedOperation =
         operationId: string;
         stagedCredentials: PluginConnectedAccountCredentialStore;
     }>
+    | Readonly<{
+        kind: 'enrichCredentialContext';
+        operationId: string;
+        stagedCredentials: PluginConnectedAccountCredentialStore;
+    }>
     | Readonly<{ kind: 'status' }>
     | Readonly<{ kind: 'quota' }>
     | Readonly<{ kind: 'recoveryCredits.read' }>
@@ -191,6 +196,7 @@ async function assertEstablishedFieldReadCurrent(
     if (
         input.operation.kind !== 'materialize'
         && input.operation.kind !== 'refresh'
+        && input.operation.kind !== 'enrichCredentialContext'
         && input.operation.kind !== 'status'
     ) {
         return await assertCurrent();
@@ -212,7 +218,7 @@ export type ConnectedAccountRuntimeEstablishedResult<
         ? Awaited<ReturnType<NonNullable<PluginConnectedAccountRuntime['recoveryCredits']>['read']>> | null
         : TOperation['kind'] extends 'recoveryCredits.consume'
             ? Awaited<ReturnType<NonNullable<PluginConnectedAccountRuntime['recoveryCredits']>['consume']>> | null
-    : TOperation['kind'] extends 'refresh'
+    : TOperation['kind'] extends 'refresh' | 'enrichCredentialContext'
         ? Awaited<ReturnType<PluginConnectedAccountRuntime['refresh']>>
         : TOperation['kind'] extends 'status'
             ? Awaited<ReturnType<PluginConnectedAccountRuntime['status']>>
@@ -867,21 +873,33 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
                 break;
             }
             case 'refresh':
+            case 'enrichCredentialContext':
                 result = await invokeCurrentConnectedAccountCallback(
                     assertCurrent,
-                    () => runtime.refresh(Object.freeze({
-                        ...context,
-                        operation: Object.freeze({
-                            operationId: operation.operationId,
-                            configurationRevision:
-                                input.target.expectedRuntimeConfigurationRevision,
-                        }),
-                        stagedCredentials: guardStagedCredentials(
-                            operation.stagedCredentials,
-                            assertFieldReadCurrent,
-                            (value) => registerRawForRedaction(value),
-                        ),
-                    }), options),
+                    async () => {
+                        if (operation.kind === 'enrichCredentialContext' && !runtime.enrichCredentialContext) {
+                            return { status: 'outcomeUnknown', diagnostic: {
+                                code: 'connected_account_context_enrichment_unsupported',
+                                message: 'This Connected Account runtime does not support credential context enrichment.',
+                            } };
+                        }
+                        const mutationContext = Object.freeze({
+                            ...context,
+                            operation: Object.freeze({
+                                operationId: operation.operationId,
+                                configurationRevision:
+                                    input.target.expectedRuntimeConfigurationRevision,
+                            }),
+                            stagedCredentials: guardStagedCredentials(
+                                operation.stagedCredentials,
+                                assertFieldReadCurrent,
+                                (value) => registerRawForRedaction(value),
+                            ),
+                        });
+                        return operation.kind === 'refresh'
+                            ? await runtime.refresh(mutationContext, options)
+                            : await runtime.enrichCredentialContext!(mutationContext, options);
+                    },
                 );
                 break;
             case 'status':
@@ -901,6 +919,7 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
                     const base = {
                         observedAtMs: quota.observedAtMs,
                         limits: quota.limits,
+                        ...(quota.providerOrganizationId === undefined ? {} : { providerOrganizationId: quota.providerOrganizationId }),
                         ...(quota.planLabel === undefined ? {} : { planLabel: quota.planLabel }),
                         ...(quota.subscription === undefined ? {} : { subscription: quota.subscription }),
                     };
@@ -980,9 +999,10 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
                         invocation.lease.runtime.authentication.modes[input.admission.modeId],
                         invocation.context, input, invocation.registerRawForRedaction, invocation.assertCurrent,
                     );
-                const output = invocation.redactDiagnosticText
-                    ? redactConnectedAccountAuthenticationResultDiagnostic(result, invocation.redactDiagnosticText)
-                    : result;
+                const output = snapshotConnectedAccountAuthenticationResult(
+                    result,
+                    invocation.redactDiagnosticText,
+                );
                 await invocation.assertCurrent();
                 return output;
             } finally {

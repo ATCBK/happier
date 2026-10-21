@@ -72,6 +72,10 @@ const malformedSelectionModules = [
 // a timed operation can leave its import pending across the next module reset.
 const { probeAgentModelsForActions } = await import('../../../../ui/sources/sync/ops/actions/agentInventoryActionDeps');
 const { parseCapabilitiesInvokeResponse } = await import('../../../../ui/sources/sync/api/capabilities/capabilitiesProtocol');
+const { createCliActionInventoryDeps } = await import('@/session/actions/cliActionDeps/createCliActionInventoryDeps');
+const { createActionExecutor } = await import('@happier-dev/protocol/actions/actionExecutor');
+const { createUnavailableActionTransportDeps } = await import('@/testkit/actionTransportDeps');
+const { ActionExecuteFailureSchema } = await import('@happier-dev/protocol/actions/actionExecutionResult');
 let tempDir: string | null = null;
 let releaseRuntime: (() => Promise<void>) | null = null;
 
@@ -182,6 +186,19 @@ describe('capabilities.invoke connected-service preflight', () => {
           },
         });
         expect(response, method).toMatchObject({ ok: false, error: { code: 'connected-service-preflight-failed' } });
+        if (method === 'probeModels') {
+          const parsed = parseCapabilitiesInvokeResponse(response);
+          if (!parsed) throw new Error('Invalid real capability response');
+          uiCapabilityTransport.invoke.mockResolvedValue({ supported: true, response: parsed });
+          expect(await probeAgentModelsForActions({ machineId: 'machine-test', probe: { cwd: tempDir } },
+            { agentId: 'codex', backendTargetParam: null })).toMatchObject({ ok: false, errorCode: 'connected-service-preflight-failed' });
+          const inventory = createCliActionInventoryDeps({ token: 'fixture-token', sessionId: '', mode: 'plain', ctx: null,
+            callMachineAction: async () => response });
+          const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...inventory });
+          const failure = await executor.execute('agents.models.list', { agentId: 'codex', machineId: 'machine-test',
+            probe: { cwd: tempDir } }, { surface: 'cli', authority: 'present_user' });
+          expect(ActionExecuteFailureSchema.parse(failure)).toMatchObject({ errorCode: 'connected-service-preflight-failed' });
+        }
       }
       expect(readStoredCredentials).not.toHaveBeenCalled();
       expect(createApiClient).not.toHaveBeenCalled();

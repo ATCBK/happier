@@ -92,6 +92,25 @@ describe('native Agent account-usage host owner', () => {
         notifyAdoption.mockReset();
     });
 
+    it('delivers observed provisional credential proof without deriving proof from the saved profile', async () => {
+        notifySnapshot.mockResolvedValue({ ok: true, result: { status: 'snapshot_advanced' } });
+        const service = createNativeAgentAccountUsageService({ sessionId: 'session-1', signal: new AbortController().signal,
+            session: { getMetadataSnapshot: () => ({ path: '/workspace', host: 'test-host', homeDir: '/home/test',
+                happyHomeDir: '/home/test/.happier', happyLibDir: '/home/test/.happier/lib', happyToolsDir: '/home/test/.happier/tools' }) },
+        });
+        const snapshot = createSnapshot('provisional:native');
+        const result = await service.recordSnapshot({ sessionId: 'session-1',
+            snapshot: { ...snapshot, recordKey: { ...snapshot.recordKey, subjectKind: 'unknown' },
+                accountSubject: { kind: 'provisionalLocalSubject', id: 'provisional:native' } },
+            source: { serviceId: 'happier.agent.claude/claude-subscription', env: {
+                HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: JSON.stringify([{ kind: 'profile', serviceId: 'happier.agent.claude/claude-subscription', profileId: 'work' }]),
+            } }, credentialProof: { providerAccountId: 'observed-user', credentialFingerprint: 'sha256:deadbeef' },
+        });
+        expect(result.status).toBe('recorded');
+        expect(notifySnapshot).toHaveBeenCalledWith(expect.objectContaining({ sourceProviderAccountId: 'observed-user', credentialFingerprint: 'sha256:deadbeef' }), expect.anything());
+        expect(notifySnapshot.mock.calls[0]?.[0]).not.toHaveProperty('deriveCredentialFingerprintFromSource');
+    });
+
     it('resolves an external service address without exposing currentness witnesses', async () => {
         const service = createNativeAgentAccountUsageService({
             sessionId: 'session-1',

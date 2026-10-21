@@ -1,3 +1,4 @@
+import { normalizeConnectedAccountAccessTokenFingerprint } from '@happier-dev/plugin-sdk/connected-accounts';
 import { buildProviderAccountUsageRecordId, ProviderAccountUsageRecordKeyV1Schema, ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { ConnectedAccountServiceKeyIngressSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { ConnectedServiceUsageSourceV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
@@ -54,6 +55,8 @@ type SnapshotRequest = Readonly<{
     snapshot: ProviderAccountUsageSnapshotV1;
     source?: ConnectedServiceUsageSourceV1 | null;
     deriveCredentialFingerprintFromSource?: true;
+    sourceProviderAccountId?: string;
+    credentialFingerprint?: string;
     policyDisposition?: 'evidence_only';
 }>;
 type PendingSnapshot = Readonly<{
@@ -356,13 +359,21 @@ export function createNativeAgentAccountUsageService(params: Readonly<{
             if (request.source != null && (!sourceAddress || !resolvedSource)) {
                 return { status: 'rejected', reason: 'invalid_snapshot' };
             }
+            const proof = isRecord(request.credentialProof) ? request.credentialProof : null;
+            const sourceProviderAccountId = readTrimmedString(proof?.providerAccountId);
+            const credentialFingerprint = normalizeConnectedAccountAccessTokenFingerprint(proof?.credentialFingerprint);
+            if (request.credentialProof !== undefined && (!sourceProviderAccountId || !credentialFingerprint || !resolvedSource)) {
+                return { status: 'rejected', reason: 'invalid_snapshot' };
+            }
             const pendingSnapshot: SnapshotRequest = {
                 sessionId: params.sessionId,
                 snapshot: parsed,
                 ...(resolvedSource?.connectedServiceSource
                     ? {
                         source: resolvedSource.connectedServiceSource,
-                        deriveCredentialFingerprintFromSource: true as const,
+                        ...(sourceProviderAccountId && credentialFingerprint
+                            ? { sourceProviderAccountId, credentialFingerprint }
+                            : { deriveCredentialFingerprintFromSource: true as const }),
                     }
                     : {}),
                 ...(request.policyDisposition === 'evidence_only'

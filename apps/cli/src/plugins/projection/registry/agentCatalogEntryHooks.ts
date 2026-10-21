@@ -279,9 +279,12 @@ export function projectAgentConnectedAccountLaunchCatalogEntry(params: Readonly<
             }
             let materialization: ReturnType<typeof nativeAuthCodec.materialize>;
             try {
+                const files = await input.nativeHome.readFiles(stateSharingDescriptor.authIsolation.secretEntries);
+                if (!params.isCurrent()) return unavailableNativeAuthVerification('plugin_generation_retired');
                 materialization = nativeAuthCodec.materialize({
                     selection: input.selection,
                     credential: input.credential,
+                    files,
                 });
             }
             catch {

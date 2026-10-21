@@ -20,6 +20,7 @@ type ConnectedServiceCredentialResolutionApi = Partial<Pick<ConnectedServiceCred
 
 export type ConnectedServiceCredentialResolution = Readonly<{
   record: ConnectedServiceCredentialRecordV1;
+  providerOrganizationId?: string | null;
 }> & ConnectedServiceCredentialRevisionBoundaryV1;
 
 export class ConnectedServiceCredentialEncryptionMaterialUnavailableError extends ConnectedServiceStoredContentUnavailableError {
@@ -54,6 +55,7 @@ export async function resolveConnectedServiceCredentialResolutions(params: Reado
     if (!source) throw new ConnectedServiceCredentialResolutionError(binding);
     result.set(binding.serviceId, {
       record: source.record,
+      providerOrganizationId: source.providerOrganizationId ?? null,
       revisionSemantics: 'revisioned',
       credentialRevision: source.credentialRevision,
     });

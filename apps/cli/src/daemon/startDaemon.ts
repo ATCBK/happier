@@ -2971,6 +2971,15 @@ export async function startDaemon(
         logger.debug('[DAEMON RUN] Failed to resolve connected-service quota fetcher contributions; continuing without provider quota fetchers', error);
         return [];
       });
+    const resolveConnectedAccountUsageIdentity: NonNullable<Parameters<typeof startDaemonRuntimeBootstrap>[0]['resolveConnectedAccountUsageIdentity']> = async (service) => {
+        const lease = await acquireAuthoritativePluginRuntimeRegistryLease({
+          happyHomeDir: configuration.happyHomeDir, controller: pluginReloadController,
+        });
+        try {
+          return lease.registry.contributes.connectedAccountDescriptorsById
+            .get(buildQualifiedPluginContributionKey(service))?.definition.usageIdentity ?? null;
+        } finally { await lease.release(); }
+    };
     const runtimeBootstrap = await startDaemonRuntimeBootstrap({
       publicProfileRefresh: await captureNativePublicProfileRefresh({
         credentials, serverId: configuration.activeServerId, serverHttpBaseUrl: resolveServerHttpBaseUrl(),
@@ -3003,6 +3012,7 @@ export async function startDaemon(
       pidToTrackedSession,
       qualifiedConnectedAccountEstablishedRuntimeOwner:
         establishedConnectedAccountRuntimeOwner,
+      resolveConnectedAccountUsageIdentity,
       listScheduledQualifiedConnectedAccounts:
         connectedAccountPurposeBindingRuntime.listCoordinatorAccounts,
       subscribeConnectedAccountInvalidations:
@@ -3107,6 +3117,7 @@ export async function startDaemon(
           logger, processEnv: process.env, pidToTrackedSession, connectedServiceRuntimeRegistry,
           connectedServiceAuthGroupPreTurnSwitchCoordinator, connectedServicePredictiveSwitchGuard,
           consumeCommittedAuthGroupGeneration, connectedServiceQuotaFetcherDescriptors,
+          resolveConnectedAccountUsageIdentity,
           resolveQualifiedConnectedAccountPeerClass: () => resolveQualifiedConnectedAccountPeerClass(
             serverFeaturesSnapshotStore.getSnapshot(), apiMachineForSessions?.getSessionSyncPendingInputServerContractResult() ?? null),
           resolveQualifiedConnectedAccountPeerOperationTransport: ({ service, operation }) => resolveQualifiedConnectedAccountPeerOperationTransport({
