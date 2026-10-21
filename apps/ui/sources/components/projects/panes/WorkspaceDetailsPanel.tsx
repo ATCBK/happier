@@ -468,11 +468,14 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
             <>
                 {props.renderHeaderActionsPrefix ? props.renderHeaderActionsPrefix({ iconButtonStyle, iconColor: theme.colors.text.secondary }) : null}
                 {newSession.approvalNotice}
-                <BrowserSurfaceOpenButton
-                    onPress={openBrowserLaunchpadTab}
-                    size={34}
-                    testID="workspace-details-open-browser"
-                />
+                {/* A phone's Project bar carries the browser and Terminal (its File page has no strip). */}
+                {deviceType !== 'phone' ? (
+                    <BrowserSurfaceOpenButton
+                        onPress={openBrowserLaunchpadTab}
+                        size={34}
+                        testID="workspace-details-open-browser"
+                    />
+                ) : null}
                 {hasWorkspaceReviewCommentDrafts ? (
                     <Pressable
                         onPress={newSession.open}

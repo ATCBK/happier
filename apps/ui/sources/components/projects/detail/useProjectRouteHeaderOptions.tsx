@@ -23,12 +23,13 @@ export function useProjectRouteHeaderOptions(params: Readonly<{
     onBack?: () => void;
     onToggleWorkspaceExperience?: () => void;
     onToggleWorktrees?: () => void;
+    onOpenBrowser?: () => void;
     onOpenTerminal: () => void;
 }>): Readonly<Record<string, unknown>> {
     const routerRef = useProjectRouteRouterRef();
     const navigation = useNavigation();
     const { theme } = useUnistyles();
-    // Back, worktrees and Terminal are the phone bar's controls. Wider screens draw the Project
+    // Back, worktrees, the browser and Terminal are the phone bar's controls. Wider screens draw the Project
     // header (`ProjectShellHeader`), whose tab bar owns the checkout (branch) and Terminal; lending
     // these too drew a second Back/branch/terminal row beside the page title (DA R-12).
     const phoneBar = useDeviceType() === 'phone';
@@ -86,6 +87,7 @@ export function useProjectRouteHeaderOptions(params: Readonly<{
                 workspaceExperienceToggleA11yLabel={params.workspaceExperienceToggleA11yLabel}
                 onToggleWorkspaceExperience={params.onToggleWorkspaceExperience}
                 onOpenWorktrees={params.onToggleWorktrees}
+                onOpenBrowser={params.onOpenBrowser}
                 onOpenTerminal={params.onOpenTerminal}
             />
         ),
@@ -95,6 +97,7 @@ export function useProjectRouteHeaderOptions(params: Readonly<{
         handleBack,
         params.activeRootPath,
         params.onBack,
+        params.onOpenBrowser,
         params.onOpenTerminal,
         params.onToggleWorkspaceExperience,
         params.onToggleWorktrees,

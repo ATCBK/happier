@@ -13,11 +13,13 @@ vi.mock('expo-router', async () => {
     return createExpoRouterMock().module;
 });
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+vi.mock('@/hooks/server/useFeatureDecision', () => ({ useFeatureDecision: () => ({ state: 'enabled' }) }));
 
-function Probe(props: { onOptions: (options: Readonly<Record<string, unknown>>) => void }) {
+function Probe(props: { onOptions: (options: Readonly<Record<string, unknown>>) => void; onOpenBrowser?: () => void }) {
     const options = useProjectRouteHeaderOptions({
         workspaceRef: null, testIdPrefix: 'project-header', showWorktreesButton: true,
-        onToggleWorktrees: () => {}, onOpenTerminal: () => {},
+        onToggleWorktrees: () => {}, onOpenTerminal: () => {}, onOpenBrowser: props.onOpenBrowser ?? (() => {}),
     });
     props.onOptions(options);
     return null;
@@ -37,6 +39,27 @@ describe('Project route header options', () => {
             // lending the phone bar's controls would draw a second Back/branch/terminal row beside a page title.
             expect(typeof seen!.headerLeft === 'function').toBe(published);
             expect(typeof seen!.headerRight === 'function').toBe(published);
+        } finally {
+            await screen.unmount();
+        }
+    });
+
+    it('on a phone carries the browser launcher beside Terminal, since the File page has no strip to hold it (lab FV1p)', async () => {
+        windowSize.width = 390;
+        windowSize.height = 844;
+        const onOpenBrowser = vi.fn();
+        let seen: Readonly<Record<string, unknown>> | null = null;
+        const screen = await renderScreen(<Probe onOptions={(options) => { seen = options; }} onOpenBrowser={onOpenBrowser} />);
+        try {
+            const HeaderRight = seen!.headerRight as () => React.ReactNode;
+            const bar = await renderScreen(<>{HeaderRight()}</>);
+            try {
+                expect(bar.findAllHostsByTestId('project-header-open-terminal')).toHaveLength(1);
+                await bar.pressByTestIdAsync('project-header-open-browser');
+                expect(onOpenBrowser).toHaveBeenCalledTimes(1);
+            } finally {
+                await bar.unmount();
+            }
         } finally {
             await screen.unmount();
         }

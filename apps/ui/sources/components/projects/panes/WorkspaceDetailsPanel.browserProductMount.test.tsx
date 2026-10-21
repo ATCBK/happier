@@ -64,8 +64,9 @@ vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
     }),
 }));
 
+const deviceType = vi.hoisted(() => ({ current: 'tablet' as 'tablet' | 'phone' }));
 vi.mock('@/utils/platform/responsive', () => ({
-    useDeviceType: () => 'tablet',
+    useDeviceType: () => deviceType.current,
 }));
 
 vi.mock('@/components/plugins/projection/useScopedPluginUiProjection', () => ({
@@ -101,7 +102,10 @@ vi.mock('@/components/projects/detail/surfaces/ProjectTerminalSurface', () => ({
 }));
 
 
-beforeEach(() => storage.setState(storage.getInitialState(), true));
+beforeEach(() => {
+    storage.setState(storage.getInitialState(), true);
+    deviceType.current = 'tablet';
+});
 
 describe('WorkspaceDetailsPanel browser product mount', () => {
     it('opens the browser launchpad as a generic browser details surface tab', async () => {
@@ -149,5 +153,21 @@ describe('WorkspaceDetailsPanel browser product mount', () => {
         expect(paneScreen.findAllHostsByTestId('workspace-details-open-browser')).toHaveLength(0);
         await paneScreen.pressByTestIdAsync('workspace-details-close');
         expect(closeDetailsSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves the browser launcher to the phone Project bar, as it does Terminal', async () => {
+        deviceType.current = 'phone';
+        const { WorkspaceDetailsPanel } = await import('./WorkspaceDetailsPanel');
+        await renderScreen(
+            <WorkspaceDetailsPanel
+                workspaceRef={{ id: 'wr_1', serverId: 'server-1', machineId: 'machine-1', rootPath: '/repo/main', createdAtMs: 1_700_000_000_000, label: 'Repo' }}
+                scopeId="project:wr_1"
+                activeRootPath="/repo/main"
+            />,
+        );
+        const stripActions = detailsSplitWorkspaceSpy.mock.calls.at(-1)?.[0].renderStripActions?.();
+        const strip = await renderScreen(React.createElement('StripMock', null, stripActions));
+        expect(strip.findAllHostsByTestId('workspace-details-open-browser')).toHaveLength(0);
+        expect(strip.findAllHostsByTestId('workspace-details-open-terminal')).toHaveLength(0);
     });
 });

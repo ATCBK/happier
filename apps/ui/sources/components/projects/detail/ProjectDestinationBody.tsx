@@ -93,6 +93,7 @@ export const ProjectDestinationBody = React.memo(() => {
         testIdPrefix: 'project-header',
         showWorktreesButton: true,
         onToggleWorktrees: () => actions.replaceOverviewVisibility({ visible: !showWorktrees }),
+        onOpenBrowser: actions.openBrowser,
         onOpenTerminal: () => actions.openTerminal({ exitOverview: true }),
     });
     return <>

@@ -3,6 +3,7 @@ import { useLocalSearchParams, usePathname } from '@/components/appShell/workspa
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 import { resolveProjectCockpitRouteFromPathname } from '@/components/workspaceCockpit/project/projectCockpitState';
+import { createBrowserLaunchpadDetailsTab } from '@/components/browser/surfaces';
 import { buildProjectTerminalDetailsInstanceId, openProjectTerminalDetailsTab } from './openProjectTerminalDetailsTab';
 import { buildProjectRouteHref, readProjectSelectedRouteResource, type ProjectRouteSegment, type ProjectDetailsSourceSurface } from './projectRouteState';
 import { useProjectRouteRouterRef } from './useProjectRouteRouterRef';
@@ -64,5 +65,8 @@ export function useProjectRouteActions(params: Readonly<{
             terminalInstanceId: buildProjectTerminalDetailsInstanceId(params.workspaceRef.id),
         });
     }, [navigateToSegment, page, params.activeRootPath, params.pane, params.showWorktrees, params.workspaceRef]);
-    return { buildHref, navigateToSegment, openTerminal, openWorktreesInDetails, replaceOverviewVisibility };
+    const openBrowser = React.useCallback(() => {
+        params.pane?.openDetailsTab(createBrowserLaunchpadDetailsTab(), { intent: 'pinned' });
+    }, [params.pane]);
+    return { buildHref, navigateToSegment, openBrowser, openTerminal, openWorktreesInDetails, replaceOverviewVisibility };
 }

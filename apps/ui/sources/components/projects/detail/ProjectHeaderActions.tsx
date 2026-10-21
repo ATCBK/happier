@@ -1,29 +1,29 @@
 import * as React from 'react';
-import { Pressable, View } from 'react-native';
+import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 
 import { t } from '@/text';
-import { Icon } from '@/components/ui/icons/Icon';
+import { BrowserSurfaceOpenButton } from '@/components/browser/surfaces/BrowserSurfaceOpenButton';
+import { IconButton } from '@/components/ui/buttons/IconButton';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.space.s8,
+        gap: theme.space.s4,
         paddingRight: theme.space.s8,
-    },
-    iconButton: {
-        width: 34,
-        height: 34,
-        borderRadius: 10,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderWidth: 1,
-        borderColor: theme.colors.border.default,
-        backgroundColor: theme.colors.surface.base,
     },
 }));
 
+/**
+ * The phone Project bar's controls: the Project's launchers (worktrees, browser, Terminal). They are
+ * plain icon buttons in the header's own glyph colour, like the Session header's (DESIGN.md: icon
+ * buttons carry no edge). The phone File page has no tab strip, so the bar is where the browser
+ * launcher lives there (lab FV1p); the Details strip leaves it, and Terminal, to the bar.
+ */
 export const ProjectHeaderActions = React.memo((props: Readonly<{
     testIdPrefix: string;
     showWorktreesButton: boolean;
@@ -31,44 +31,57 @@ export const ProjectHeaderActions = React.memo((props: Readonly<{
     workspaceExperienceToggleA11yLabel?: string;
     onToggleWorkspaceExperience?: () => void;
     onOpenWorktrees?: () => void;
+    onOpenBrowser?: () => void;
     onOpenTerminal: () => void;
 }>) => {
     const styles = stylesheet;
     const { theme } = useUnistyles();
+    const glyphColor = theme.colors.chrome.header.foreground;
+    const size = HAPPIER_PAGE_METRICS.controlHeightPx;
+    const target = resolveMinimumInteractiveTargetSize(Platform.OS);
+    const glyph = (name: React.ComponentProps<typeof Icon>['name']) => <Icon name={name} size={ICON_SIZE.sm} color={glyphColor} />;
 
     return (
         <View style={styles.container}>
-            {props.showWorkspaceExperienceButton && props.onToggleWorkspaceExperience ? (
-                <Pressable
+            {props.showWorkspaceExperienceButton && props.onToggleWorkspaceExperience && props.workspaceExperienceToggleA11yLabel ? (
+                <IconButton
                     testID={`${props.testIdPrefix}-toggle-workspace-experience`}
+                    variant="plain"
+                    size={size}
+                    minimumInteractiveTargetSize={target}
                     onPress={props.onToggleWorkspaceExperience}
-                    style={styles.iconButton}
-                    accessibilityRole="button"
                     accessibilityLabel={props.workspaceExperienceToggleA11yLabel}
-                >
-                    <Icon name="arrows-left-right" size={16} color={theme.colors.text.secondary} />
-                </Pressable>
+                    icon={glyph('arrows-left-right')}
+                />
             ) : null}
             {props.showWorktreesButton && props.onOpenWorktrees ? (
-                <Pressable
+                <IconButton
                     testID={`${props.testIdPrefix}-open-worktrees`}
+                    variant="plain"
+                    size={size}
+                    minimumInteractiveTargetSize={target}
                     onPress={props.onOpenWorktrees}
-                    style={styles.iconButton}
-                    accessibilityRole="button"
                     accessibilityLabel={t('files.branchMenu.category.worktrees')}
-                >
-                    <Icon name="git-branch" size={16} color={theme.colors.text.secondary} />
-                </Pressable>
+                    icon={glyph('git-branch')}
+                />
             ) : null}
-            <Pressable
+            {props.onOpenBrowser ? (
+                <BrowserSurfaceOpenButton
+                    testID={`${props.testIdPrefix}-open-browser`}
+                    size={size}
+                    iconColor={glyphColor}
+                    onPress={props.onOpenBrowser}
+                />
+            ) : null}
+            <IconButton
                 testID={`${props.testIdPrefix}-open-terminal`}
+                variant="plain"
+                size={size}
+                minimumInteractiveTargetSize={target}
                 onPress={props.onOpenTerminal}
-                style={styles.iconButton}
-                accessibilityRole="button"
                 accessibilityLabel={t('settings.terminal')}
-            >
-                <Icon name="terminal" size={16} color={theme.colors.text.secondary} />
-            </Pressable>
+                icon={glyph('terminal')}
+            />
         </View>
     );
 });
