@@ -53,6 +53,15 @@ Agent or an occurrence-scoped question can still await an answer after the lates
 turn ends. Turn status and Runtime Activity keep their separate lifecycle owners.
 These are current 0.3 development source semantics, not a release availability claim.
 
+UI tuple admission keeps Agent-state content and public pending projections on the
+same accepted revision, using the canonical Session tuple currentness owner and
+its metadata privacy-contraction rules. An older payload cannot restore pending
+flags after settlement clears the observation timestamp. Metadata remains
+independently versioned. Cache-only public updates retain their envelope version
+without claiming encrypted detail has been decrypted; newer hydrated request
+flags can settle independently of newer metadata. Composer status observes the
+canonical pending flags so transcript-only settlement reaches a mounted composer.
+
 The `session.list` Action keeps its default summary response. An explicit
 `view: 'awareness'` request requires a response carrying both `view: 'awareness'`
 and `projectionVersion: 1`; an unmarked response from a host that ignores the option
