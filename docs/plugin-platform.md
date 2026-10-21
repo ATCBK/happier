@@ -3543,6 +3543,11 @@ document. Each opaque consumer token selects one exact admitted request-auth
 capability and qualified-purpose set; neither the document nor the physical
 management bearer grants combined inference authority. Plugins retain their
 ordinary `activate(api)` registration and scoped Connected Accounts services.
+An admitted broker operation without a Provider Connection uses this same
+consumer-access mechanism within its existing operation scope; the document
+does not itself authorize connection-wide process sharing or retained-source
+custody. Connection-backed consumers still require their admitted shared
+gateway placement.
 Providers without that sharing declaration retain their existing custody.
 See [managed gateways](providers.md#managed-subscription-backed-gateways) for
 consumer settlement, recovery and the personal Account broker boundary.
