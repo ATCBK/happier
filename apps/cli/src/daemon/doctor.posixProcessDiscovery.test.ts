@@ -66,7 +66,6 @@ describe('doctor POSIX process discovery', () => {
     });
   });
 
-  // @happier-platform:begin feat=daemon-ps-locale-fix RED/GREEN 用例
   it('forces a UTF-8 locale on every ps invocation so launchd-inherited C locales cannot M-escape command lines', async () => {
     const pid = 28_800;
     const command = '/Users/alice/项目/.runner-snapshots/bee5314ededb46bd/index.mjs opencode --started-by daemon';
@@ -99,5 +98,4 @@ describe('doctor POSIX process discovery', () => {
     expect(info?.cmd).toBe(command);
     expect(info?.daemonOwnershipEnvironmentVariables?.HAPPIER_HOME_DIR).toBe('/h');
   });
-  // @happier-platform:end feat=daemon-ps-locale-fix
 });

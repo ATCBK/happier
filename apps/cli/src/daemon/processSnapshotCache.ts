@@ -13,7 +13,6 @@ const DEFAULT_PROCESS_SNAPSHOT_TTL_MS = 1_000;
 let cachedSnapshot: Readonly<{ capturedAtMs: number; processes: readonly ProcessSnapshotEntry[] }> | null = null;
 let inFlightSnapshot: Promise<readonly ProcessSnapshotEntry[]> | null = null;
 
-// @happier-platform:begin feat=daemon-ps-locale-fix ps-list 扫描同样强制 UTF-8 locale
 // ps-list spawns `ps` with the ambient environment (no injection point); under a launchd daemon
 // without LANG/LC_* that ps runs in the C locale and M-escapes non-ASCII bytes in captured
 // command lines (same root cause as the doctor.ts ps projections). Force a UTF-8 locale around
@@ -35,7 +34,6 @@ async function psListWithPosixUtf8Locale(): Promise<readonly ProcessSnapshotEntr
     else process.env.LC_ALL = saved.LC_ALL;
   }
 }
-// @happier-platform:end feat=daemon-ps-locale-fix
 
 export async function listProcessSnapshot({
   ttlMs = DEFAULT_PROCESS_SNAPSHOT_TTL_MS,

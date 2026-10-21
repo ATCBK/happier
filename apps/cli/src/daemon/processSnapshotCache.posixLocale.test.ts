@@ -29,7 +29,6 @@ describe('process snapshot posix locale', () => {
     else process.env.LC_ALL = originalLcAll;
   });
 
-  // @happier-platform:begin feat=daemon-ps-locale-fix RED/GREEN 用例（ps-list 通路）
   it('runs the ps-list scan with a forced UTF-8 locale and restores an unset ambient environment', async () => {
     delete process.env.LANG;
     delete process.env.LC_ALL;
@@ -60,5 +59,4 @@ describe('process snapshot posix locale', () => {
     expect(process.env.LANG).toBe('xx_XX.ISO8859-1');
     expect(process.env.LC_ALL).toBeUndefined();
   });
-  // @happier-platform:end feat=daemon-ps-locale-fix
 });
