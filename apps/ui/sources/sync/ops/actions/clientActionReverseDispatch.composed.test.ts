@@ -27,6 +27,8 @@ import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol/auth/apiTokenGran
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import type { CurrentUiContextReader } from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
+import type { PluginUiContributionOriginV1 } from '@/sync/domains/plugins/ui/projectionOrigins';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 
 const navigation = vi.hoisted(() => ({ push: vi.fn(), segments: [] as string[], sessionId: '' }));
 // The cross-package daemon dispatcher can import Socket before the UI installs
@@ -99,6 +101,103 @@ afterEach(async () => {
 });
 
 describe('admitted app Actions and daemon-to-app continuations', () => {
+  it('keeps reverse binding renders and in-flight Actions independent of executable-only AppShell publications', async () => {
+    const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
+    const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+    const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const { EMPTY_PLUGIN_UI_PROJECTION } = await import('@/sync/domains/plugins/ui/projection');
+    const { PluginProjectedActionV2Schema, PluginMachineExecutionOriginV1Schema } = await import('@happier-dev/protocol');
+    const { PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY } = await import('@/sync/domains/plugins/ui/projectionUnion');
+    const { createDeferred, flushHookEffects } = await import('@/dev/testkit');
+    const machine = createMachineFixture({ id: 'declaration-bound-machine', activeAt: Date.now() });
+    const other = createMachineFixture({ id: 'next-declaration-machine', activeAt: Date.now() });
+    await act(async () => {
+      storage.setState(state => ({ profile: { ...state.profile!, id: 'relay-account' },
+        machines: { [machine.id]: machine, [other.id]: other }, machineListByServerId: {} }));
+    });
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    expect(lifetime?.isCurrent()).toBe(true);
+    const executionOrigin = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_reverse', materializationRef: { machineId: machine.id,
+      pluginId: 'test.reverse', materializationId: 'reverse-installation' } });
+    const action = PluginProjectedActionV2Schema.parse({ id: 'inspect', pluginId: 'test.reverse', occurrenceId: 'test-reverse-occurrence',
+      title: 'Inspect', scopes: ['global'], surfaces: ['agent'], dangerLevel: 'safe', available: true,
+      execution: { target: 'client', client: { artifactId: 'reverse-client', exportName: 'inspect' }, platforms: ['web'] },
+      executionOrigin,
+      authorization: { generation: { targetGeneration: 'test-reverse-occurrence', desiredGeneration: 'test-reverse-occurrence',
+        appliedGeneration: 'test-reverse-occurrence' }, resourceSelections: [], scopedGrants: [], serviceAvailability: [], operatingSystemAuthorization: [] } });
+    const origin = { machineId: machine.id, serverId, generation: 1, interactionEnabled: true, phase: 'current' as const,
+      executionOrigin };
+    let bindingRenders = 0;
+    const project = (hostOrigin: PluginUiContributionOriginV1) => ({ ...EMPTY_PLUGIN_UI_PROJECTION,
+      actionsById: { 'test.reverse/inspect': { ...action, executionOrigin: hostOrigin.executionOrigin ?? executionOrigin,
+        get [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]() {
+        // Observe the real render's consumed input, not a mocked hook/component.
+        // An ancestor Profiler misses context-only descendant updates in this renderer.
+        if (new Error().stack?.includes('ClientActionReverseRuntime')) bindingRenders++;
+        return hostOrigin;
+      } } } });
+    const projection = project(origin);
+    const value = { pluginUiProjection: projection, pluginBrowserProjection: null, phase: 'current' as const,
+      interactionEnabled: true, machineId: machine.id, serverId, platform: 'web' as const, accountLifetime: lifetime,
+      clientExecutableActivation: { status: 'ready' as const }, reloadClientExecutables() {}, reloadConnectedAccountProjection() {} };
+    const socket = clientSockets.slice().reverse().find(candidate => candidate.listeners(SOCKET_RPC_EVENTS.REQUEST).length > 0);
+    if (!socket) throw new Error('Account reverse receiver absent');
+    const methods = new Set<string>();
+    const registrations: string[] = [];
+    const emit = vi.spyOn(socket, 'emit').mockImplementation((event, ...args) => {
+      const payload: unknown = args[0];
+      if (payload && typeof payload === 'object' && 'method' in payload && typeof payload.method === 'string') {
+        if (event === SOCKET_RPC_EVENTS.REGISTER) { methods.add(payload.method); registrations.push(payload.method); }
+        if (event === SOCKET_RPC_EVENTS.UNREGISTER) methods.delete(payload.method);
+      }
+      return socket;
+    });
+    releases.push(() => emit.mockRestore());
+    const registered = vi.spyOn(apiSocket, 'registerMachineScopedRpcHandler');
+    releases.push(() => registered.mockRestore());
+    const child = React.createElement(ClientActionReverseRuntime);
+    const render = (next: React.ComponentProps<typeof AppShellPluginUiProjectionValueProvider>['value']) =>
+      React.createElement(AppShellPluginUiProjectionValueProvider, { value: next, children: child });
+    const screen = await renderScreen(render(value));
+    const pendingNavigation = createDeferred<Readonly<{ status: 'none' }>>();
+    let navigationStarted = false;
+    releases.push(registerPendingNavigationRuntime(async () => { navigationStarted = true; return await pendingNavigation.promise; }));
+    try {
+      await flushHookEffects();
+      const receive = registered.mock.calls.find(([id, method]) => id === machine.id && method === RPC_METHODS.UI_ACTION_EXECUTE)?.[2];
+      if (!receive) throw new Error('Mounted Action registration absent');
+      const request = { v: 1, actionId: 'session.pending.next', input: {}, context: { surface: 'agent', authority: 'account_automation' } };
+      const pending = receive(request, { signal: new AbortController().signal });
+      await vi.waitFor(() => expect(navigationStarted).toBe(true));
+      const settledRenders = bindingRenders;
+      const settledRegistrations = [...registrations];
+      for (let revision = 1; revision <= 5; revision++) {
+        await screen.update(render({ ...value, connectedAccountProjectionRevision: revision,
+          clientExecutableActivation: { status: 'establishing' } }));
+      }
+      expect(bindingRenders - settledRenders).toBe(0);
+      expect(registrations).toEqual(settledRegistrations);
+      expect(methods.has(`${machine.id}:${RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE}`)).toBe(true);
+      pendingNavigation.resolve({ status: 'none' });
+      expect(await pending).toMatchObject({ execution: { ok: true, result: { status: 'none' } } });
+      for (const unavailableOrigin of [{ ...origin, phase: 'retainedOffline' as const },
+        { ...origin, interactionEnabled: false }, { ...origin, serverId: 'another-home' }]) {
+        await screen.update(render(value));
+        expect(methods.has(`${machine.id}:${RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE}`)).toBe(true);
+        await screen.update(render({ ...value, pluginUiProjection: project(unavailableOrigin) }));
+        expect(methods.has(`${machine.id}:${RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE}`)).toBe(false);
+      }
+      await screen.update(render({ ...value, pluginUiProjection: project({ ...origin, machineId: other.id,
+        executionOrigin: { ...executionOrigin, materializationRef: { ...executionOrigin.materializationRef, machineId: other.id } } }) }));
+      expect(methods.has(`${other.id}:${RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE}`)).toBe(true);
+      expect(bindingRenders).toBeGreaterThan(settledRenders);
+      await act(async () => { storage.getState().clearProfileScope(); });
+      expect(lifetime?.isCurrent()).toBe(false);
+      expect(methods.size).toBe(0);
+      expect(await receive(request, { signal: new AbortController().signal }))
+        .toMatchObject({ execution: { ok: false, errorCode: 'target_unavailable' } });
+    } finally { pendingNavigation.resolve({ status: 'none' }); await screen.unmount(); }
+  });
   it('keeps Find, picker and composer edits on the client viewing the invoking Session', async () => {
     const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
     const { renderMountedCurrentUiContext } = await import('@/dev/testkit/harness/mountedCurrentUiContext');
@@ -766,6 +865,15 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
     let carrier = createPlainSessionCurrentProjectionRecordFixture({ id: carrierId, metadata: carrierMetadata });
     const carrierPath = `/v2/sessions/${carrierId}`;
     homes.answer(serverId, `GET ${carrierPath}${buildSessionDetailAccessProjectionQuery(serverId)}`, { select: () => ({ body: { session: carrier } }) });
+    const sessionBatch = createSessionReadBatchHttpBoundary(request => request.path === '/v2/sessions/read-batch' ? undefined
+      : homes.request(request.url, { method: request.method, headers: request.headers, signal: request.signal }));
+    homes.answer(serverId, 'POST /v2/sessions/read-batch', { select: async (body, request) => {
+      const url = new URL(request.url);
+      const response = await sessionBatch.handle({ url, path: url.pathname, home: serverId, accountId: 'relay-account',
+        method: 'POST', headers: new Headers(request.init?.headers), signal: request.signal, body });
+      if (!response) throw new Error('Expected the canonical Session batch fixture to respond');
+      return { status: response.status, body: await response.json() };
+    } });
     homes.answer(serverId, `PATCH ${carrierPath}`, { select: input => {
       // Only the Home's HTTP tuple storage/ACK is replaced; Sync's parser,
       // privacy projection, binding and carrier custody remain real.
