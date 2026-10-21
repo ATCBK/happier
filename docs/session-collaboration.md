@@ -905,6 +905,16 @@ the exact retained Machine–Session custody, the durable Session source or prot
 return, and current participant/reviewer access before invoking the same append transaction.
 This does not require the receiver's Session process or current-publisher registration; it
 does not start one. Both deliberate drafts and ordinary human-approved replies use it.
+In development source, the signed currentness check accepts the retained addressed
+source only for this reviewed publication purpose: it verifies the signed root's
+Session, input and turn against the current original/return and participant access.
+It does not waive Account, Session access-key, Machine installation or permission
+revocation. The replay host supplies its credential-bound Account and canonical Home
+facts; after trusted person approval, preparation reads use that current reviewer's
+Account rather than the retired Agent's signed HTTP carrier. The captured Agent
+origin remains immutable and publication still reopens the exact executing private
+approval and body through the same Machine publisher. Ordinary signed HTTP reads,
+effects and authorization issuance do not acquire a retained-source exemption.
 Ordinary Agent publication and atomic create retain their current-Session publisher fence.
 An indeterminate Machine append returns explicit `outcome_unknown` to the existing Action
 owner rather than silently withholding an acknowledgement or claiming no effect.
