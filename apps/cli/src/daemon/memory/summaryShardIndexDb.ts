@@ -34,8 +34,12 @@ export type SummaryIndexStats = Readonly<{
   latestIndexedMessageAtMs: number | null;
 }>;
 
+export type MemoryIndexPolicyKeys = Readonly<{ tier1: string; deep: string; external: string }>;
+
 export type SummaryShardIndexDbHandle = Readonly<{
   init: () => void;
+  getIndexPolicyKeys: () => MemoryIndexPolicyKeys | null;
+  setIndexPolicyKeys: (keys: MemoryIndexPolicyKeys) => void;
   insertSummaryShard: (args: Readonly<{
     sessionId: string;
     seqFrom: number;
@@ -131,6 +135,12 @@ function applyConnectionPragmas(db: SqliteDatabaseSync): void {
 }
 
 function ensureSchemaTables(db: SqliteDatabaseSync): void {
+  // Row policy keys alone cannot identify the policy of an advanced cursor
+  // whose projection is empty. Keep that baseline with the owning cursors.
+  db.exec(`CREATE TABLE IF NOT EXISTS memory_index_policy (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    tier1 TEXT NOT NULL, deep TEXT NOT NULL, external TEXT NOT NULL
+  );`);
   db.exec(`
     CREATE TABLE IF NOT EXISTS session_cursors (
       sessionId TEXT PRIMARY KEY,
@@ -427,6 +437,15 @@ export function openSummaryShardIndexDb(args: Readonly<{ dbPath: string }>): Sum
   return {
     init: () => {
       // Schema is ensured at open time; keep init() for call-site symmetry.
+    },
+    getIndexPolicyKeys: () => {
+      const row = db.prepare('SELECT tier1, deep, external FROM memory_index_policy WHERE singleton = 1').get() as MemoryIndexPolicyKeys | undefined;
+      return row ?? null;
+    },
+    setIndexPolicyKeys: keys => {
+      db.prepare(`INSERT INTO memory_index_policy (singleton, tier1, deep, external) VALUES (1, ?, ?, ?)
+        ON CONFLICT(singleton) DO UPDATE SET tier1=excluded.tier1, deep=excluded.deep, external=excluded.external`)
+        .run(keys.tier1, keys.deep, keys.external);
     },
     insertSummaryShard: (shard) => {
       const keywordsText = shard.keywords.map((k) => String(k ?? '').trim()).filter(Boolean).join(' ');

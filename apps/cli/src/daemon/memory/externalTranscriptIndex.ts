@@ -12,6 +12,16 @@ export function externalMemoryStorageId(source: MemoryExternalTranscriptSourceV1
   return JSON.stringify(['external_transcript', source.agentId, source.sourceKey, source.nativeSessionId]);
 }
 
+export function resolveExternalMemoryIndexPolicy(settings: MemorySettingsV1): Readonly<{
+  policy: ReturnType<typeof resolveMemoryIndexPolicy>;
+  key: string;
+}> {
+  const external = settings.conversationSearch.indexExternal;
+  const policy = resolveMemoryIndexPolicy({ ...settings,
+    contentPolicy: { ...settings.contentPolicy, includeToolOutputs: external.includeToolOutput } });
+  return { policy, key: JSON.stringify([memoryIndexPolicyKey(policy), external.historyDays]) };
+}
+
 /** Native records share the memory owner's semantic admission and redaction. */
 export function extractExternalMemoryTranscriptItems(
   items: readonly (AgentExternalSessionTranscriptItem | AgentExternalSessionTerminalObservation)[],
@@ -78,9 +88,8 @@ export async function syncExternalMemoryTranscriptOnce(input: Readonly<{
   input.signal.throwIfAborted();
   const sessionId = externalMemoryStorageId(input.source);
   const external = input.settings.conversationSearch.indexExternal;
-  const contentPolicy = { ...input.settings.contentPolicy, includeToolOutputs: external.includeToolOutput };
-  const policy = resolveMemoryIndexPolicy({ ...input.settings, contentPolicy });
-  const policyKey = JSON.stringify([memoryIndexPolicyKey(policy), external.historyDays]);
+  const { policy, key: policyKey } = resolveExternalMemoryIndexPolicy(input.settings);
+  const contentPolicy = policy.contentPolicy;
   if (input.db.hasSessionArtifactsOutsidePolicy({ sessionId, policyKey })) input.db.deleteSessionIndexData({ sessionId });
   const state = input.db.getExternalSourceState({ sessionId });
   const frontier: Frontier = state?.cursor ? JSON.parse(state.cursor) : { type: 'page' };

@@ -71,7 +71,7 @@ import {
   resolveMemoryIndexPolicy,
 } from './transcript/coveragePolicy';
 import { createMemoryExternalTranscriptSources, type MemoryExternalObservation } from './externalTranscriptSources';
-import { syncExternalMemoryTranscriptsBatch } from './externalTranscriptIndex';
+import { resolveExternalMemoryIndexPolicy, syncExternalMemoryTranscriptsBatch } from './externalTranscriptIndex';
 import { runMemoryWorkerSourcesTick } from './runMemoryWorkerSourcesTick';
 import { readCliProjectPromptStackContext } from '@/agent/prompting/coding/sessionProjectPromptStack';
 
@@ -1038,14 +1038,13 @@ export async function startMemoryWorker(params: Readonly<{
   const applySettings = async (next: MemorySettingsV1, signal?: AbortSignal): Promise<void> => {
     signal?.throwIfAborted();
     const previousSettings = settings;
-    const tier1PolicyChanged = memoryIndexPolicyKey(resolveTier1IndexPolicy(previousSettings))
+    let tier1PolicyChanged = memoryIndexPolicyKey(resolveTier1IndexPolicy(previousSettings))
       !== memoryIndexPolicyKey(resolveTier1IndexPolicy(next));
-    const deepPolicyChanged = memoryIndexPolicyKey(resolveDeepIndexPolicy(previousSettings))
+    let deepPolicyChanged = memoryIndexPolicyKey(resolveDeepIndexPolicy(previousSettings))
       !== memoryIndexPolicyKey(resolveDeepIndexPolicy(next));
-    const externalPolicyChanged = JSON.stringify(previousSettings.conversationSearch.indexExternal)
+    let externalPolicyChanged = JSON.stringify(previousSettings.conversationSearch.indexExternal)
       !== JSON.stringify(next.conversationSearch.indexExternal);
-    const policyChanged = tier1PolicyChanged || deepPolicyChanged;
-    if (policyChanged || externalPolicyChanged) {
+    if (tier1PolicyChanged || deepPolicyChanged || externalPolicyChanged) {
       for (const operation of activeIndexOperations) operation.controller.abort();
       await Promise.allSettled([...activeIndexOperations].map((operation) => operation.promise));
       signal?.throwIfAborted();
@@ -1139,11 +1138,70 @@ export async function startMemoryWorker(params: Readonly<{
       deep = openDeepIndexDb({ dbPath: paths.deepDbPath });
       deep.init();
     }
-    if (previousSettings.indexMode !== settings.indexMode) indexesQualified = false;
-    if (externalPolicyChanged && deep) {
-      for (const retained of deep.listExternalSourceStates()) deep.deleteSessionIndexData({ sessionId: retained.sessionId });
+    if (!settings.conversationSearch.indexExternal.enabled
+      || settings.conversationSearch.indexExternal.agents.length === 0) {
+      // This is source release only. Discovery/backfill remains on the loop,
+      // but opting out must drain observation demands before it completes.
       await externalSources.refresh(settings, signal ?? new AbortController().signal);
-      externalSourcesNeedRefresh = false;
+    }
+    const policyKeys = {
+      tier1: memoryIndexPolicyKey(resolveTier1IndexPolicy(settings)),
+      deep: memoryIndexPolicyKey(resolveDeepIndexPolicy(settings)),
+      external: JSON.stringify(settings.conversationSearch.indexExternal),
+    };
+    const retainedPolicyKeys = tier1.getIndexPolicyKeys();
+    // Row provenance preserves matching older indexes. Only cursor-only
+    // progress lacks a previous policy; rewind it once when adopting the index.
+    tier1PolicyChanged = retainedPolicyKeys !== null && retainedPolicyKeys.tier1 !== policyKeys.tier1;
+    deepPolicyChanged = retainedPolicyKeys !== null && retainedPolicyKeys.deep !== policyKeys.deep;
+    externalPolicyChanged = retainedPolicyKeys !== null && retainedPolicyKeys.external !== policyKeys.external;
+    if (!retainedPolicyKeys) {
+      const externalPolicy = resolveExternalMemoryIndexPolicy(settings).key;
+      const externalIds = new Set<string>();
+      for (const retained of deep.listExternalSourceStates()) {
+        externalIds.add(retained.sessionId);
+        if (!settings.conversationSearch.indexExternal.enabled
+          || !settings.conversationSearch.indexExternal.agents.includes(retained.source.agentId)
+          || deep.hasSessionArtifactsOutsidePolicy({ sessionId: retained.sessionId, policyKey: externalPolicy })) {
+          deep.deleteSessionIndexData({ sessionId: retained.sessionId });
+        }
+      }
+      const deepSessionIds = new Set(deep.listIndexedSessionIds());
+      for (const sessionId of new Set([...tier1.listIndexedSessionIds(), ...deepSessionIds])) {
+        if (externalIds.has(sessionId)) continue;
+        const hintsPruned = tier1.pruneSessionArtifacts({ sessionId, policyKey: policyKeys.tier1 });
+        const deepPruned = deep.pruneSessionArtifacts({ sessionId, policyKey: policyKeys.deep });
+        // With no rows, progress cannot prove that newly admitted historical
+        // content was searched. Matching rows themselves remain in place.
+        if (hintsPruned || tier1.getLatestShardSeqTo({ sessionId }) === 0) {
+          tier1.rewindSessionCursor({ sessionId, lane: 'hints', seq: 0 });
+        }
+        if (deepPruned || !deepSessionIds.has(sessionId)) {
+          tier1.rewindSessionCursor({ sessionId, lane: 'deep', seq: 0 });
+        }
+      }
+    }
+    if (previousSettings.indexMode !== settings.indexMode) indexesQualified = false;
+    if ((externalPolicyChanged || tier1PolicyChanged || deepPolicyChanged) && deep) {
+      for (const retained of deep.listExternalSourceStates()) deep.deleteSessionIndexData({ sessionId: retained.sessionId });
+      externalSourcesNeedRefresh = true;
+    }
+    if (tier1PolicyChanged || deepPolicyChanged) {
+      const retainedSessionIds = [...new Set([
+        ...tier1.listIndexedSessionIds(),
+        ...(deepPolicyChanged ? deep.listIndexedSessionIds() : []),
+      ])];
+      for (const sessionId of retainedSessionIds) {
+        // Invalidate before any fallible source IO. Rebuild through the existing
+        // inventory/work loop (or explicit ensureUpToDate), never settings RPCs.
+        if (tier1PolicyChanged) tier1.deleteSessionIndexData({ sessionId });
+        else tier1.rewindSessionCursor({ sessionId, lane: 'deep', seq: 0 });
+        if (deepPolicyChanged) deep.deleteSessionIndexData({ sessionId });
+        tier1.trySeedSessionCursorsIfMissing({ sessionId, nowMs: Date.now(), lastHintedSeq: 0, lastDeepIndexedSeq: 0 });
+      }
+    }
+    if (!retainedPolicyKeys || tier1PolicyChanged || deepPolicyChanged || externalPolicyChanged) {
+      tier1.setIndexPolicyKeys(policyKeys);
     }
     if (!indexesQualified) {
       try {
@@ -1152,12 +1210,13 @@ export async function startMemoryWorker(params: Readonly<{
         await reconcileRetainedSessionAccess(signal);
         indexesQualified = true;
       } catch (error) {
-        deep?.close();
-        deep = null;
-        tier1?.close();
-        tier1 = null;
+        signal?.throwIfAborted();
+        // Keep the worker/RPCs alive, but do not expose unqualified content.
+        // The existing inventory cadence retries this same access owner.
         workerStatus = { ...workerStatus, state: 'error' };
-        throw error;
+        logger.debug('[memoryWorker] Retained access qualification failed; retrying on inventory refresh', {
+          message: error instanceof Error ? error.message : String(error),
+        });
       }
     }
 
@@ -1171,42 +1230,6 @@ export async function startMemoryWorker(params: Readonly<{
     });
     await applyArchivedEligibility(signal);
 
-    if (policyChanged && tier1) {
-      const externalIds = new Set(deep?.listExternalSourceStates().map(state => state.sessionId) ?? []);
-      for (const sessionId of externalIds) deep?.deleteSessionIndexData({ sessionId });
-      const retainedSessionIds = [...new Set([
-        ...(tier1PolicyChanged || deepPolicyChanged ? tier1.listIndexedSessionIds() : []),
-        ...(deepPolicyChanged ? (deep?.listIndexedSessionIds().filter(id => !externalIds.has(id)) ?? []) : []),
-      ])];
-      if (retainedSessionIds.length > 0) {
-        try {
-          for (const sessionId of retainedSessionIds) {
-            // Policy transitions fail closed: remove every old-policy byte and
-            // progress cursor before any fallible reconstruction work.
-            if (tier1PolicyChanged) tier1.deleteSessionIndexData({ sessionId });
-            else if (deepPolicyChanged) tier1.rewindSessionCursor({ sessionId, lane: 'deep', seq: 0 });
-            if (deepPolicyChanged) deep?.deleteSessionIndexData({ sessionId });
-          }
-          if (tier1PolicyChanged || (settings.indexMode === 'deep' && deepPolicyChanged)) {
-            await syncEligibleSessions({
-              sessionIds: retainedSessionIds,
-              observedSeqBySessionId: new Map(),
-              allowInitialBackfillSessionIds: retainedSessionIds,
-              forcePolicySnapshot: true,
-              ...(signal ? { signal } : {}),
-            });
-          }
-        } catch (error) {
-          for (const sessionId of retainedSessionIds) {
-            if (tier1PolicyChanged) tier1.deleteSessionIndexData({ sessionId });
-            if (deepPolicyChanged) deep?.deleteSessionIndexData({ sessionId });
-          }
-          effectiveSettings = settings;
-          workerStatus = { ...workerStatus, state: 'error', currentSessionId: null, currentPhase: null };
-          throw error;
-        }
-      }
-    }
     effectiveSettings = settings;
 
     // Background indexing runs only in daemon mode.
@@ -1221,6 +1244,10 @@ export async function startMemoryWorker(params: Readonly<{
             if (stopped) return;
             if (!settings.enabled) return;
             signal.throwIfAborted();
+            if (!indexesQualified) {
+              await reconcileRetainedSessionAccess(signal);
+              indexesQualified = true;
+            }
             externalSourcesNeedRefresh = true;
             externalSources.invalidate();
             workLoop?.trigger();
@@ -1239,7 +1266,7 @@ export async function startMemoryWorker(params: Readonly<{
             }
           },
           onError: (error) => {
-            if (workerStatus.currentPhase === 'inventory') {
+            if (!indexesQualified || workerStatus.currentPhase === 'inventory') {
               workerStatus = { ...workerStatus, state: 'error', currentSessionId: null, currentPhase: null };
             }
             logger.debug('[memoryWorker] Inventory refresh failed (best-effort)', {
@@ -1260,6 +1287,7 @@ export async function startMemoryWorker(params: Readonly<{
             if (stopped) return;
             if (!settings.enabled) return;
             if (!tier1) return;
+            if (!indexesQualified) return;
             signal.throwIfAborted();
             if (candidateSessionIds.length > 0 || settings.conversationSearch.indexExternal.enabled) {
               workerStatus = { ...workerStatus, state: 'indexing', lastTickAtMs: Date.now(), currentPhase: 'tick' };

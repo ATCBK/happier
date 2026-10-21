@@ -955,6 +955,7 @@ describe('memoryWorker', () => {
     await worker.reloadSettings();
 
     expect(worker.getSettings().contentPolicy.includeAssistantMessages).toBe(true);
+    await worker.ensureUpToDate('sess-policy');
     const rebuilt = await searchTier2Memory({
       dbPath: deepPath,
       query: { v: 1, query: 'admitted', scope: { type: 'global' }, mode: 'deep' },
@@ -963,6 +964,147 @@ describe('memoryWorker', () => {
     expect(rebuilt.ok && rebuilt.hits.map((hit) => hit.type === undefined ? hit.sessionId : null)).toEqual(['sess-policy']);
 
     await worker.stop();
+  });
+
+  it('reuses retained tier1, deep and external rows on two unchanged non-default policy restarts', async () => {
+    const session = { id: 'retained', machineId: 'machine_1', seq: 7, createdAt: 1000, updatedAt: 2000,
+      active: false, activeAt: 0, archivedAt: null, encryptionMode: 'plain' };
+    const fetchSession = vi.fn(async () => { throw new Error('source_temporarily_unavailable'); });
+    vi.doMock('@/session/transport/http/sessionsHttp', () => ({
+      fetchSessionsPage: async ({ archivedOnly }: { archivedOnly?: boolean }) => ({ sessions: archivedOnly ? [] : [session], nextCursor: null, hasNext: false }),
+      fetchSessionById: fetchSession,
+    }));
+    const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
+    await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'deep', backfillPolicy: 'all_history',
+      coveragePolicy: { type: 'full' }, contentPolicy: { includeAssistantMessages: false },
+      conversationSearch: { indexExternal: { enabled: true, agents: ['claude'] } } });
+    const { startMemoryWorker } = await import('./memoryWorker');
+    const { openSummaryShardIndexDb } = await import('./summaryShardIndexDb');
+    const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
+    const { memoryIndexPolicyKey, resolveMemoryIndexPolicy } = await import('./transcript/coveragePolicy');
+    const { resolveExternalMemoryIndexPolicy } = await import('./externalTranscriptIndex');
+    const { openProtectedSqliteDatabaseSync } = await import('../persistence/sqliteSync');
+    const credentials: StoredCredentials = { token: 't', encryption: null };
+    let worker = await startMemoryWorker({ credentials, machineId: 'machine_1' });
+    const tier1Path = worker.getTier1DbPath()!;
+    const deepPath = worker.getDeepDbPath()!;
+    const policyKey = memoryIndexPolicyKey(resolveMemoryIndexPolicy(worker.getSettings()));
+    const tier1 = openSummaryShardIndexDb({ dbPath: tier1Path });
+    tier1.insertSummaryShard({ sessionId: 'retained', seqFrom: 1, seqTo: 7, createdAtFromMs: 1000,
+      createdAtToMs: 1000, summary: 'quartz retained hint', keywords: [], entities: [], decisions: [], policyKey });
+    tier1.trySeedSessionCursorsIfMissing({ sessionId: 'retained', nowMs: 1, lastHintedSeq: 7, lastDeepIndexedSeq: 7 });
+    tier1.close();
+    const source = { type: 'external_transcript' as const, agentId: 'claude', sourceKey: 'user', nativeSessionId: 'native' };
+    const deep = openDeepIndexDb({ dbPath: deepPath });
+    deep.insertChunk({ sessionId: 'retained', seqFrom: 1, seqTo: 7, createdAtFromMs: 1000, createdAtToMs: 1000, text: 'quartz retained deep', policyKey });
+    deep.insertChunk({ sessionId: 'external', source, seqFrom: 1, seqTo: 1, createdAtFromMs: 1000, createdAtToMs: 1000, text: 'quartz native',
+      policyKey: resolveExternalMemoryIndexPolicy(worker.getSettings()).key });
+    deep.setExternalSourceState({ sessionId: 'external', source, cursor: 'retained-native-cursor', nextOrdinal: 1 });
+    expect(deep.getDeepIndexStats().deepChunkCount).toBe(2);
+    deep.close();
+    try {
+      for (let restart = 0; restart < 2; restart++) {
+        await worker.stop();
+        if (restart === 0) {
+          // Simulate the current pre-fix index: it has row policy keys, but
+          // does not yet record the policy of cursor-only projections.
+          const older = openProtectedSqliteDatabaseSync(tier1Path);
+          older.exec('DROP TABLE IF EXISTS memory_index_policy');
+          older.close();
+        }
+        worker = await startMemoryWorker({ credentials, machineId: 'machine_1' });
+        const retainedTier1 = openSummaryShardIndexDb({ dbPath: tier1Path });
+        const retainedDeep = openDeepIndexDb({ dbPath: deepPath });
+        try {
+          expect(retainedTier1.getSummaryIndexStats().lightShardCount).toBe(1);
+          expect(retainedTier1.getSessionCursors({ sessionId: 'retained', nowMs: 2 }).lastDeepIndexedSeq).toBe(7);
+          expect.soft(retainedDeep.search({ query: 'quartz', scope: { type: 'global' }, maxResults: 10, includeExternal: true })
+            .map(hit => hit.text).sort()).toEqual(['quartz native', 'quartz retained deep']);
+          expect.soft(retainedDeep.getExternalSourceState({ sessionId: 'external' })?.cursor).toBe('retained-native-cursor');
+        } finally { retainedTier1.close(); retainedDeep.close(); }
+      }
+      expect(fetchSession).not.toHaveBeenCalled();
+      const changed = { ...worker.getSettings(), contentPolicy: { ...worker.getSettings().contentPolicy, includeAssistantMessages: true } };
+      await worker.stop();
+      await writeMemorySettingsToDisk(changed);
+      worker = await startMemoryWorker({ credentials, machineId: 'machine_1' });
+      const changedIndex = openDeepIndexDb({ dbPath: deepPath });
+      try { expect(changedIndex.getDeepIndexStats().deepChunkCount).toBe(0); } finally { changedIndex.close(); }
+      expect(fetchSession).not.toHaveBeenCalled();
+    } finally { await worker.stop(); }
+  });
+
+  it('keeps status/settings RPCs registered after a startup inventory failure and recovers on the existing loop', async () => {
+    vi.useFakeTimers();
+    const session = { id: 'retained', machineId: 'machine_1', seq: 1, createdAt: 1000, updatedAt: 2000,
+      active: false, activeAt: 0, archivedAt: null, encryptionMode: 'plain' };
+    let unavailable = false;
+    const fetchSessionsPage = vi.fn(async ({ archivedOnly }: { archivedOnly?: boolean }) => {
+      if (unavailable) throw new Error('HTTP 500');
+      return { sessions: archivedOnly ? [] : [session], nextCursor: null, hasNext: false };
+    });
+    vi.doMock('@/session/transport/http/sessionsHttp', () => ({ fetchSessionsPage, fetchSessionById: async () => session }));
+    vi.doMock('@/session/replay/fetchEncryptedTranscriptMessages', () => ({
+      fetchEncryptedTranscriptMessagesPage: async () => ({ messages: [], hasMore: false, nextBeforeSeq: null, nextAfterSeq: null }),
+    }));
+    const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
+    await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'deep' });
+    const { configuration } = await import('@/configuration');
+    const { startMemoryWorker } = await import('./memoryWorker');
+    const { openSummaryShardIndexDb } = await import('./summaryShardIndexDb');
+    const { RpcHandlerManager } = await import('@/api/rpc/RpcHandlerManager');
+    const { registerMachineMemoryRpcHandlers } = await import('@/api/machine/rpcHandlers.memory');
+    const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
+    const credentials: StoredCredentials = { token: 't', encryption: null };
+    let worker = await startMemoryWorker({ credentials, machineId: 'machine_1' });
+    const db = openSummaryShardIndexDb({ dbPath: worker.getTier1DbPath()! });
+    db.trySeedSessionCursorsIfMissing({ sessionId: 'retained', nowMs: 1, lastHintedSeq: 1, lastDeepIndexedSeq: 1 });
+    db.close();
+    await worker.stop();
+    unavailable = true;
+    const daemonBefore = configuration.isDaemonProcess;
+    configuration.isDaemonProcess = true;
+    try {
+      worker = await startMemoryWorker({ credentials, machineId: 'machine_1' });
+      expect(worker.getWorkerStatus().state).toBe('error');
+      expect(worker.getTier1DbPath()).toBeNull();
+      const manager = new RpcHandlerManager({ scopePrefix: 'machine_1', encryptionMode: 'plain', logger: () => {} });
+      registerMachineMemoryRpcHandlers({ rpcHandlerManager: manager, memoryWorker: worker });
+      expect(await manager.handleRequest({ method: `machine_1:${RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET}`, params: {} })).toMatchObject({ enabled: true });
+      expect(await manager.handleRequest({ method: `machine_1:${RPC_METHODS.DAEMON_MEMORY_STATUS}`, params: {} })).toMatchObject({ enabled: true, worker: { state: 'error' } });
+      unavailable = false;
+      await vi.advanceTimersByTimeAsync(worker.getSettings().worker.inventoryRefreshIntervalMs);
+      expect(worker.getTier1DbPath()).not.toBeNull();
+      expect(worker.getWorkerStatus().state).not.toBe('error');
+    } finally { await worker.stop(); configuration.isDaemonProcess = daemonBefore; vi.useRealTimers(); }
+  });
+
+  it('invalidates a real policy change before returning without waiting for source backfill', async () => {
+    const fetchSessionById = vi.fn(async () => { throw new Error('HTTP 500'); });
+    vi.doMock('@/session/transport/http/sessionsHttp', () => ({
+      fetchSessionById,
+      fetchSessionsPage: async () => ({ sessions: [], hasNext: false, nextCursor: null }),
+    }));
+    const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
+    await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'deep', backfillPolicy: 'all_history' });
+    const { startMemoryWorker } = await import('./memoryWorker');
+    const { openSummaryShardIndexDb } = await import('./summaryShardIndexDb');
+    const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
+    const worker = await startMemoryWorker({ credentials: { token: 't', encryption: null }, machineId: 'machine_1' });
+    const path = worker.getDeepDbPath()!;
+    const db = openDeepIndexDb({ dbPath: path });
+    db.insertChunk({ sessionId: 'retained', seqFrom: 1, seqTo: 1, createdAtFromMs: 1000, createdAtToMs: 1000, text: 'old tool output' });
+    db.close();
+    const tier1 = openSummaryShardIndexDb({ dbPath: worker.getTier1DbPath()! });
+    tier1.trySeedSessionCursorsIfMissing({ sessionId: 'retained', nowMs: 1, lastHintedSeq: 1, lastDeepIndexedSeq: 1 });
+    tier1.close();
+    try {
+      await writeMemorySettingsToDisk({ ...worker.getSettings(), deep: { ...worker.getSettings().deep, includeToolOutput: true } });
+      await expect(worker.reloadSettings()).resolves.toBeUndefined();
+      const read = openDeepIndexDb({ dbPath: path });
+      try { expect(read.getDeepIndexStats().deepChunkCount).toBe(0); } finally { read.close(); }
+      expect(fetchSessionById).not.toHaveBeenCalled();
+    } finally { await worker.stop(); }
   });
 
   it('purges retained deep artifacts when deep policy changes while hints mode is active', async () => {
