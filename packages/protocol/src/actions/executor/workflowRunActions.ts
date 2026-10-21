@@ -997,8 +997,6 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
           permissionMode: permissionCeiling }, ...(originSessionId ? { targetSessionId: originSessionId } : {}),
       }, resolvedAgentContext),
       admitLeaf: async (leaf, facts) => {
-        if (!assertNonEscalatingPermissionMode({ requestedMode: facts.permissionCeiling,
-          callerMode: controller.effectivePermissionMode }).ok) throw workflowError('run_access_denied');
         const resolved = resolvedAgentContext && facts.role ? { ...resolvedAgentContext,
           roles: { ...resolvedAgentContext.roles, [facts.role.roleId]: facts.role } } : resolvedAgentContext;
         return admitActionAgentStartV1(args.context, readWorkflowRunLeafStartRequestV1(leaf), resolved);

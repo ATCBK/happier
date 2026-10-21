@@ -908,6 +908,55 @@ describe('workflow Run Actions', () => {
     expect(execute.mock.calls.some(([operation]) => operation.operation === 'admit')).toBe(false);
   });
 
+  it.each(['yolo', 'read-only'] as const)('admits mixed deferred and concrete leaves through canonical permission checks: %s', async permissionMode => {
+    const runId = '22222222-2222-4222-8222-222222222222';
+    const execute = vi.fn(async (operation: Readonly<Record<string, unknown>>) => {
+      if (operation.operation === 'get') throw Object.assign(new Error('not found'), { response: { status: 404 } });
+      if (operation.operation !== 'admit') throw new Error(`unexpected:${String(operation.operation)}`);
+      return { kind: 'created', run: { sourceArtifactId: null, ownerAccountId: 'account-1', visibleTeamId: null,
+        id: runId, origin: operation.origin, state: 'queued', revision: 0,
+        machineId: 'machine-1', workflowCustodyState: 'pending', originDeliveryAckRevision: null,
+        availability: { pause: true, resumeBoundary: false, restoreWorkspace: false, cancel: true, inspectExecution: false, disabledReasons: [] },
+        createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+      } };
+    });
+    const owner = createWorkflowRunActionOwner({
+      resolveAccountId: async () => 'account-1', storage: { execute }, definitions: { get: vi.fn() },
+      resolveEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
+      prepareWorkspace: async () => ({ ok: true, workspaceTarget: { project: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' } } }),
+      resolveMaterializationContext: async () => ({ effects: { resolveTargetAvailability: async () => true,
+        // Machine catalog IO is external; materialization and admission remain real.
+        readActionContract: async () => ({ inputSchema: { type: 'object' }, outputSchema: {} }) } }),
+    });
+    const starting = owner.execute({ actionId: 'workflow.run.start', input: {
+      runId, source: { kind: 'inline', definition: {
+        version: 1, defaults: definition.defaults, inputs: [{ name: 'engines', valueType: 'json', required: false }],
+        blocks: [
+          { kind: 'loop', id: 'planners', onlyWhen: { kind: 'exists', value: { kind: 'input', name: 'engines', path: [] } },
+            repetition: { kind: 'items', items: { kind: 'input', name: 'engines', path: [] },
+              execution: 'parallel', failurePolicy: 'collect_outcomes' }, body: [
+              { kind: 'action', id: 'plan', actionId: 'subagents.plan.start', input: {
+                instructions: { kind: 'literal', value: 'Plan' },
+                backendTargetKeys: { kind: 'list', items: [{ kind: 'item', field: 'value', path: [] }] },
+                permissionMode: { kind: 'literal', value: 'read_only' },
+              } },
+            ] },
+          { kind: 'step', id: 'synthesis', execution: { executionTarget: { kind: 'detached_run' }, permissionMode },
+            document: { text: 'Synthesize', references: [], attachments: [] }, input: [], result: { kind: 'text' } },
+        ],
+      } },
+    }, context: { surface: 'agent', callerPermissionMode: 'default',
+      externalActionTarget: { kind: 'machine', machineId: 'machine-1', project: { machineId: 'machine-1', directory: '/repo' } },
+    } });
+    if (permissionMode === 'yolo') {
+      await expect(starting).rejects.toMatchObject({ code: 'permission_exceeds_ceiling' });
+      expect(execute.mock.calls.some(([operation]) => operation.operation === 'admit')).toBe(false);
+    } else {
+      await expect(starting).resolves.toMatchObject({ admission: 'created', run: { id: runId } });
+      expect(execute.mock.calls.some(([operation]) => operation.operation === 'admit')).toBe(true);
+    }
+  });
+
   it('semantically validates saved definitions before preparing a run', async () => {
     const execute = vi.fn(async (operation: Readonly<Record<string, unknown>>) => {
       if (operation.operation === 'get') throw Object.assign(new Error('not found'), { response: { status: 404 } });
