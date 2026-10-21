@@ -657,7 +657,7 @@ async function runResourceProposalFromUi(
       if (!result.ok) return null;
       if (retryReceipt && result.value.mode === 'trash') {
         try {
-          const full = await account.fetchArtifact(retryReceipt.artifactId);
+          const full = await account.fetchArtifact(retryReceipt.artifactId, { fresh: true });
           const stored = full?.header && typeof full.body === 'string'
             ? approvalArtifactBodyMatchesHeaderV1(full.header, full.body) : null;
           if (stored?.family !== 'built_in' || stored.request.v !== 2
@@ -667,7 +667,7 @@ async function runResourceProposalFromUi(
           const next = ApprovalRequestV2Schema.parse({ ...stored.request, updatedAtMs: Date.now(),
             storageRetryResults: [...(stored.request.storageRetryResults ?? []), result.value] });
           const written = await writeApprovalRequestArtifact({ artifactId: retryReceipt.artifactId, request: next,
-            read: id => account.fetchArtifact(id),
+            read: id => account.fetchArtifact(id, { fresh: true }),
             write: (basis, header, body) => account.updateArtifact(retryReceipt.artifactId, header, body, basis) });
           if (!written.ok) throw new Error(written.error);
         } catch {

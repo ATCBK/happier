@@ -20,8 +20,10 @@ import { MachineMetadataSchema } from '../domains/state/storageTypes';
 import { serverFetch } from '../http/client';
 import { getSyncSingleton } from '../runtime/getSyncSingleton';
 import { readMachineEncryptionContextInput } from '../encryption/machineEncryption';
+import { runWithServerRequestAuthorityForServerAccountScope } from '../runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
+import { readMachineRows } from '../api/machines/machineRowsApi';
 
-function createPolicyPort(machineId: string, signal?: AbortSignal, isCredentialCurrent?: () => boolean): MachineFinitePolicyMetadataPortV1 {
+function createPolicyPort(machineId: string, signal?: AbortSignal, isCredentialCurrent?: () => boolean, fresh = false): MachineFinitePolicyMetadataPortV1 {
     const server = getActiveServerSnapshot();
     const account = storage.getState().profileScope;
     let open: ((value: string) => Promise<unknown>) | null = null;
@@ -47,7 +49,7 @@ function createPolicyPort(machineId: string, signal?: AbortSignal, isCredentialC
             seal = null;
             expectedDataEncryptionKey = undefined;
             isMachineCurrent = () => false;
-            if (!isCurrent()) return { status: 'unavailable' };
+            if (!account || !isCurrent()) return { status: 'unavailable' };
             const machine = storage.getState().machines[machineId];
             if (!machine || (!machine.storageMode && !machine.access)) return { status: 'unavailable' };
             if (machine.availability?.kind === 'locked') return { status: 'locked' };
@@ -56,11 +58,16 @@ function createPolicyPort(machineId: string, signal?: AbortSignal, isCredentialC
             const encryption = getSyncSingleton().encryption;
             const cipher = mode === 'e2ee' ? encryption?.getMachineEncryption(machineId) : null;
             if (mode === 'e2ee' && !cipher) return { status: 'locked' };
-            const response = await serverFetch(`/v1/machines/${encodeURIComponent(machineId)}`, { method: 'GET', signal }, {
-                expectedActiveServer: { serverId: server.serverId, generation: server.generation },
+            const payload: unknown = await runWithServerRequestAuthorityForServerAccountScope({ scope: account, activeRequest: serverFetch }, async authority => {
+                if (!isCurrent()) return null;
+                if (authority.readTransport) {
+                    const row = (await readMachineRows({ readTransport: authority.readTransport, machineIds: [machineId], signal, fresh })).get(machineId);
+                    return row ? { machine: row } : null;
+                }
+                const response = await authority.request(`/v1/machines/${encodeURIComponent(machineId)}`, { method: 'GET', signal });
+                return response.ok ? await response.json() as unknown : null;
             });
-            if (!response.ok || !isCurrent()) return { status: 'unavailable' };
-            const payload: unknown = await response.json();
+            if (!isCurrent() || payload === null) return { status: 'unavailable' };
             if (!payload || typeof payload !== 'object' || !('machine' in payload)) return { status: 'invalid' };
             const raw = payload.machine;
             if (!raw || typeof raw !== 'object' || !('id' in raw) || raw.id !== machineId
@@ -132,5 +139,5 @@ export async function machineWorkerPolicyGet(machineId: string, options?: Readon
 }
 
 export async function machineWorkerPolicySet(machineId: string, input: unknown, options?: Readonly<{ signal?: AbortSignal; isCredentialCurrent?: () => boolean }>): Promise<MachineFinitePolicyMutationResultV1> {
-    return mutateMachineFinitePolicyV1(input, createPolicyPort(machineId, options?.signal, options?.isCredentialCurrent), options);
+    return mutateMachineFinitePolicyV1(input, createPolicyPort(machineId, options?.signal, options?.isCredentialCurrent, true), options);
 }

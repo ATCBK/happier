@@ -183,8 +183,11 @@ it.each(['available', 'rate_limited', 'account_changed', 'home_changed', 'machin
       });
       return { body: { v: 1, actionId: 'approval.request.decide', requestId: carried.requestId, execution } };
     } });
-    const { createPlainMachineRowFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+    const { createPlainMachineRowFixture, createMachineReadBatchResponseFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
     const machine = createPlainMachineRowFixture({ id: 'spawn-machine', accountId: 'spawn-account' });
+    homes.answer(homeId, 'POST /v1/machines/read-batch', { select: async input => ({
+      body: await createMachineReadBatchResponseFixture(input, id => id === machine.id ? machine : null).json(),
+    }) });
     homes.answer(homeId, '/v1/machines', { body: [machine] });
     homes.answer(homeId, '/v1/machines/spawn-machine', { body: { machine } });
     const app = createDefaultActionExecutor();

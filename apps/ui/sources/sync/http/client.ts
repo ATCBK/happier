@@ -26,6 +26,8 @@ import { resolveActiveServerRuntimeOrigin } from '@/sync/runtime/nativeLoopbackT
 import { getActiveServerHomeCarrier } from '@/sync/domains/server/serverRuntime';
 import type { HomeCarrier } from '@/sync/runtime/homeCarrier';
 import { normalizeRequestBodyHeaders } from './requestBodyHeaders';
+import { bindAccountEncryptionObservation, matchesAccountEncryptionObservationCredentials, type AccountEncryptionObservationBinding } from './accountEncryptionObservationBinding';
+import { waitForAccountEncryptionObservation } from '@happier-dev/sync-client';
 
 export { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 
@@ -269,6 +271,8 @@ async function requestAtEndpoint<T>(
     options: ServerFetchOptions = {},
     consumeResponse?: (response: Response) => Promise<T>,
 ): Promise<Response | T> {
+    throwIfAborted(context.signal);
+    throwIfAborted(init?.signal ?? undefined);
     const localAbortSequence = context.active ? abortSequence : null;
     const usesReachabilitySupervision = context.active || context.superviseReachability === true;
     const recoversStoredCredentials = context.active || context.recoverStoredCredentials === true;
@@ -858,6 +862,7 @@ export function createServerFetchAtEndpoint(
         runtimeOrigin?: string;
         homeCarrier?: HomeCarrier;
         credentials?: AuthCredentials | null;
+        accountEncryptionObservation?: AccountEncryptionObservationBinding;
         serverId?: string;
         signal?: AbortSignal;
         /** Preserve readiness/supervisor policy for a captured incumbent binding. */
@@ -897,7 +902,29 @@ export function createServerFetchAtEndpoint(
         return consumeResponse ? await requestAtEndpoint(context, path, init, options, consumeResponse)
             : await requestAtEndpoint(context, path, init, options);
     }
-    return request;
+    const observation = params.accountEncryptionObservation;
+    const matchesObservation = observation && params.credentials && matchesAccountEncryptionObservationCredentials(observation, params.credentials)
+        && observation.serverId === serverId && normalizeEndpointBase(observation.endpointUrl) === endpointUrl
+        && normalizeEndpointBase(observation.runtimeOrigin) === normalizeEndpointBase(runtimeOrigin)
+        && observation.homeCarrierEndpointId === (params.homeCarrier?.endpointId ?? null);
+    if (!matchesObservation) return request;
+    const isCurrent = () => observation.isCurrent() && !params.signal?.aborted && params.isCurrent?.() !== false;
+    const assertCurrent = () => {
+        throwIfAborted(params.signal);
+        if (!isCurrent()) throw new StaleServerGenerationError();
+    };
+    return bindAccountEncryptionObservation(request, {
+        ...observation,
+        isCurrent,
+        read: async signal => {
+            assertCurrent();
+            const read = observation.read(signal);
+            const identity = await (params.signal ? waitForAccountEncryptionObservation(read, params.signal) : read);
+            assertCurrent();
+            return identity;
+        },
+        peek: () => isCurrent() ? observation.peek() : null,
+    });
 }
 
 /**
