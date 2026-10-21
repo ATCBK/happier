@@ -174,11 +174,13 @@ const machineRecipientPreparations = new Map<string, Readonly<{
     inputs: ReturnType<typeof recipientPreparationInputs>;
     isCurrent: () => boolean;
     result: Promise<void>;
-}> & { invalidated: boolean }>();
+}> & { invalidated: boolean; unprepared: boolean }>();
 
 /** Refresh admission is keyed by content/key/access inputs and canonical Machine change cursors,
- * not presence or row sequence. Only successful preparation is retained; failed/pending work
- * remains retryable (a recipient's missing Account binding can be repaired without a Machine edit).
+ * not presence or row sequence. Only successful preparation is retained across reads; failed/pending
+ * work remains retryable by the next read (a recipient's missing Account binding can be repaired without
+ * a Machine edit) but is asked once per read: one read's warm and hydration publications share its
+ * `isCurrent`, so they must not each re-ask the Home about the same Machine.
  * Explicit Actions still use the fresh scoped owner above. */
 export async function prepareMachineDataKeyEnvelopesForMachines(params: Readonly<{
     scope: ServerAccountScope;
@@ -202,7 +204,8 @@ export async function prepareMachineDataKeyEnvelopesForMachines(params: Readonly
         const inputs = recipientPreparationInputs(machine, params.recipientChangeCursors.get(machine.id));
         const previous = machineRecipientPreparations.get(key);
         if (previous) {
-            if (!previous.invalidated && sameStrictJsonValue(previous.inputs, inputs)) return previous.result;
+            if (!previous.invalidated && sameStrictJsonValue(previous.inputs, inputs)
+                && (!previous.unprepared || previous.isCurrent === params.isCurrent)) return previous.result;
             // A changed recipient input must not be mistaken for the old in-flight result.
             await previous.result;
             if (!params.isCurrent()) return;
@@ -217,14 +220,15 @@ export async function prepareMachineDataKeyEnvelopesForMachines(params: Readonly
         const result: Promise<void> = prepareMachineDataKeyEnvelopesDetachedForScope({ scope: params.scope, machineId: machine.id,
             ...(initialMachineRow ? { initialMachineRow } : {}),
             isCurrent: params.isCurrent }).then(prepared => {
-            if (prepared.kind !== 'prepared' || entry.invalidated || !params.isCurrent()) {
+            if (prepared.kind !== 'prepared') entry.unprepared = true;
+            if (entry.invalidated || !params.isCurrent()) {
                 if (machineRecipientPreparations.get(key) === entry) machineRecipientPreparations.delete(key);
             }
         }).catch((error: unknown) => {
             if (machineRecipientPreparations.get(key) === entry) machineRecipientPreparations.delete(key);
             throw error;
         });
-        const entry = { inputs, isCurrent: params.isCurrent, result, invalidated: false };
+        const entry = { inputs, isCurrent: params.isCurrent, result, invalidated: false, unprepared: false };
         machineRecipientPreparations.set(key, entry);
         await result;
     }));

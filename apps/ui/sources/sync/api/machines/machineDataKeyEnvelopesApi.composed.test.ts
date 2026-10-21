@@ -51,6 +51,39 @@ describe('captured Machine recipient preparation transport', () => {
         } finally { await home.dispose(); }
     });
 
+    it('asks the Home about each Manage Machine once per list read, however many publications that read makes', async () => {
+        const secret = new Uint8Array(32).fill(27);
+        const access = { custodian: { accountId: 'carol', displayName: 'Carol' }, role: 'manage' as const,
+            resourceMode: 'e2ee' as const, accessState: 'ready' as const };
+        const ids = Array.from({ length: 12 }, (_, index) => `fleet-${index}`);
+        const rowFor = (id: string) => ({ id, revokedAt: null, replacedByMachineId: null, storageMode: 'e2ee', dataEncryptionKey: null,
+            metadata: encodeBase64(encryptLegacy({ host: id, platform: 'linux', happyCliVersion: '0.2',
+                homeDir: '/home/owner', happyHomeDir: '/home/owner/.happier' }, secret)),
+            metadataVersion: 1, daemonState: null, daemonStateVersion: 0, access });
+        const home = await serveAccountHomes({ homes: [{ key: 'resource', serverUrl: 'https://fleet-read.test',
+            accountId: 'alice', accountMode: 'e2ee', credentials: { token: createAccountTokenForTests('alice'), secret: encodeBase64(secret) } }],
+            // This device does not hold the key yet, so the preparation ends pending rather than prepared.
+            route: request => request.path.endsWith('/data-key-envelopes') ? Response.json({
+                machineId: request.path.split('/')[3], custodianAccountId: 'carol', encryptionMode: 'e2ee',
+                machineOwnerEnvelopeFingerprint: null, callerDataEncryptionKey: null, nextCursor: null,
+                content: { metadata: '', metadataVersion: 1, daemonState: null, daemonStateVersion: 0 }, recipients: [] })
+                : Response.json({ kind: 'refused', code: 'machine_unavailable' }) });
+        const scope = { serverId: home.homes.resource!.id, accountId: 'alice' };
+        const machines = ids.map(id => createMachineFixture({ id, access }));
+        const publishedRows = ids.map(id => ({ ...createMachineFixture({ id, access }), ...rowFor(id) }));
+        const isCurrent = () => true; // One list read owns one closure across its warm and hydration publications.
+        try {
+            // The warm publication, then each hydration batch of the same read.
+            await prepareMachineDataKeyEnvelopesForMachines({ scope, machines, publishedRows, recipientChangeCursors: new Map(), isCurrent });
+            for (const machine of machines) {
+                await prepareMachineDataKeyEnvelopesForMachines({ scope, machines: [machine], publishedRows, recipientChangeCursors: new Map(), isCurrent });
+            }
+            const requests = home.requests.filter(request => request.path.startsWith('/v1/machines/'));
+            expect(requests.filter(request => request.path.endsWith('/data-key-envelopes'))).toHaveLength(ids.length);
+            expect(requests.filter(request => !request.path.endsWith('/data-key-envelopes'))).toEqual([]);
+        } finally { await home.dispose(); }
+    });
+
     it.each(['dataKey', 'legacy', 'mixed-legacy', 'malformed-present', 'lost-ack'] as const)('prepares %s custody under the resource Home and preserves edited content', async variant => {
         const secret = new Uint8Array(32).fill(27);
         const usesDataKey = variant === 'dataKey' || variant === 'lost-ack';
