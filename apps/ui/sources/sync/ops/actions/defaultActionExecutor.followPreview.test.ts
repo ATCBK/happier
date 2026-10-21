@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { createSessionFixture, createPlainSessionByIdResponseFixture, createSessionOwnerViewerFixture, createSessionAccessFixture, createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionFixture, createPlainSessionByIdResponseFixture, createSessionOwnerViewerFixture, createSessionAccessFixture, createSessionViewerFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
-import { SessionListQueryV1Schema } from '@happier-dev/protocol/sessions/listing/query';
+import { SESSION_LIST_PAGE_MAX_LIMIT, SessionListQueryV1Schema } from '@happier-dev/protocol/sessions/listing/query';
 import { encodeV2SessionListCursorV1 } from '@happier-dev/protocol';
 import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
@@ -12,6 +12,12 @@ import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/wor
 import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowStoredContentV1';
 import { WorkflowRunRecipientCensusResponseV1Schema } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
 import type { FollowReceiverRefV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
+import { Encryption } from '@/sync/encryption/encryption';
+import { encodeBase64 } from '@/encryption/base64';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
+import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
+import { sealSessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -39,7 +45,58 @@ beforeEach(async () => { await homes.reset(); });
 afterEach(async () => { await restoredAccount?.dispose(); restoredAccount = undefined;
     getStorage().setState(initial, true); standardCleanup(); });
 
-it('resolves matching through every ordinary and attention page without changing mounted membership', async () => {
+it.each(['cold', 'newer-row'] as const)('settles Matching from %s encrypted query summaries without opening each Session', async state => {
+    const serverUrl = 'https://cold-encrypted-preview.test';
+    const secret = new Uint8Array(32).fill(4);
+    const credentials = { token: createAccountTokenForTests('alice', { currentAccount: true }), secret: encodeBase64(secret, 'base64') };
+    const serverId = await homes.addHome({ name: 'Cold encrypted', serverUrl, accountId: 'alice', currentAccount: true,
+        accountEncryptionMode: 'e2ee', credentials });
+    const material = createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material: { type: 'legacy', secret } });
+    homes.answer(serverId, '/v1/account/encryption/currentness', { body: { mode: 'e2ee', version: 1,
+        signingKeyFingerprint: null,
+        contentKeyFingerprint: convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(material.contentPublicKeyFingerprint),
+        updatedAt: 1, recipientEnvelopeReadiness: { status: 'available' } } });
+    homes.answer(serverId, `POST ${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, { body: { status: 'listed', coverage: 'complete', rows: [] } });
+    restoredAccount = await restoreServerAccountForTest({ serverUrl, accountId: 'alice', credentials, request: homes.request });
+    const { sync } = await import('@/sync/sync');
+    await sync.awaitBootstrapForegroundAcquisition();
+    await vi.waitFor(() => expect(getStorage().getState().isDataReady).toBe(true));
+    const encryption = await Encryption.create(secret);
+    const key = new Uint8Array(32).fill(7);
+    const cipher = await encryption.openEncryption(key);
+    const base = queryRow(createSessionFixture({ id: 'cold-member', active: false,
+        metadata: { path: '/payments', host: 'test', projectId: 'payments' } }));
+    if (base.ownerMetadata?.t !== 'plain') throw new Error('Expected the canonical plaintext fixture owner envelope');
+    const [metadata] = await cipher.encrypt([JSON.parse(base.metadata)]);
+    const row = { ...base, encryptionMode: 'e2ee', metadata: encodeBase64(metadata!, 'base64'),
+        ownerMetadata: sealSessionOwnerMetadataEnvelopeV1({ ownerMetadata: base.ownerMetadata.v,
+            material: material.material, randomBytes: length => new Uint8Array(length).fill(3) }),
+        dataEncryptionKey: encodeBase64(await encryption.encryptEncryptionKey(key), 'base64') };
+    if (state === 'newer-row') getStorage().setState({ sessionListRowsByServerId: { [serverId]: {
+        [row.id]: createSessionListRenderableSessionFixture({ id: row.id, seq: row.seq + 1, updatedAt: row.updatedAt + 1,
+            encryptionMode: 'e2ee', encryptedContentAvailability: undefined, metadataLayoutVersion: 1,
+            metadata: null, metadataVersion: row.metadataVersion, agentStateVersion: row.agentStateVersion ?? 1 }),
+    } } });
+    homes.answer(serverId, '/v2/account/session-follow-rules', { body: { rules: [] } });
+    homes.answer(serverId, '/v2/sessions/query', { body: SessionListQueryResponseV1Schema.parse({ sessions: [row],
+        hasNext: false, nextCursor: null, attentionHasNext: false, attentionNextCursor: null }) });
+    const filter = normalizeSessionListFilterV1({ show: 'sessions', homeServerIds: [serverId], scope: 'all_accessible',
+        startedBy: ['you', 'agents', 'triggers'], projects: { include: [{ serverId, projectKey: 'payments' }], exclude: [] } });
+    const preview = await createDefaultActionExecutor().execute('follow.preview', { receiver: { kind: 'account' }, filter },
+        { surface: 'ui', serverId, expectedAccountId: 'alice' });
+    expect(homes.requests.filter(request => request.path === '/v2/sessions/query'), JSON.stringify(preview)).toHaveLength(1);
+    const applied = getStorage().getState().sessionListRowsByServerId[serverId]?.['cold-member'];
+    expect(applied, JSON.stringify(applied)).toMatchObject({ encryptedContentAvailability: 'ready',
+        metadata: { projectId: 'payments' }, seq: state === 'newer-row' ? row.seq + 1 : row.seq });
+    expect(preview, JSON.stringify(preview)).toMatchObject({ ok: true, result: { coverage: 'complete', matchCount: 1,
+        matches: [{ source: { kind: 'session', sessionId: 'cold-member' } }] } });
+    expect(await createDefaultActionExecutor().previewSessionTargets({ selector: 'matching', filter },
+        { surface: 'ui', serverId, expectedAccountId: 'alice' })).toMatchObject({ coverage: 'complete',
+        addresses: [{ serverId, sessionId: 'cold-member' }] });
+    expect(homes.requests.filter(request => /^\/v[12]\/sessions\/cold-member(?:\?|$)/.test(request.path))).toEqual([]);
+});
+
+it('resolves matching through the complete corpus at the transport page bound without attention duplication or mounted membership changes', async () => {
     const serverId = await addAppliedHome('Complete', 'https://complete-preview.test');
     const before = getStorage().getState().ordinarySessionListMembershipByServerId;
     const pages: unknown[] = [];
@@ -53,17 +110,19 @@ it('resolves matching through every ordinary and attention page without changing
         return { body: SessionListQueryResponseV1Schema.parse({ sessions: [queryRow(createSessionFixture({ id,
             metadata: { path: '/repo', host: 'test', projectId: 'payments' } }))],
             nextCursor: query.cursor || query.attentionCursor ? null : ordinaryCursor, hasNext: !query.cursor && !query.attentionCursor,
-            attentionNextCursor: query.attentionCursor ? null : attentionCursor, attentionHasNext: !query.attentionCursor }) };
+            attentionNextCursor: query.includeAttention && !query.attentionCursor ? attentionCursor : null,
+            attentionHasNext: query.includeAttention === true && !query.attentionCursor }) };
     } });
     const filter = normalizeSessionListFilterV1({ homeServerIds: [serverId], scope: 'all_accessible',
         startedBy: ['you', 'agents', 'triggers'], projects: { include: [{ serverId, projectKey: 'payments' }], exclude: [] } });
     const executor = createDefaultActionExecutor();
     const preview = await executor.execute('follow.preview', { receiver: { kind: 'account' }, filter: { ...filter, show: 'sessions' } },
         { surface: 'ui', serverId, expectedAccountId: 'alice' });
-    expect(preview, JSON.stringify(preview)).toMatchObject({ ok: true, result: { coverage: 'complete', matchCount: 3 } });
+    expect(pages[0]).toMatchObject({ limit: SESSION_LIST_PAGE_MAX_LIMIT, includeAttention: false });
+    expect(preview, JSON.stringify(preview)).toMatchObject({ ok: true, result: { coverage: 'complete', matchCount: 2 } });
     expect(await executor.previewSessionTargets({ selector: 'matching', filter },
         { surface: 'ui', serverId, expectedAccountId: 'alice' })).toMatchObject({ coverage: 'complete', addresses: [
-        { serverId, sessionId: 'first-match' }, { serverId, sessionId: 'older-match' }, { serverId, sessionId: 'attention-match' },
+        { serverId, sessionId: 'first-match' }, { serverId, sessionId: 'older-match' },
     ] });
     pages.length = 0;
     const result = await executor.execute('session.status.get', { sessionId: { selector: 'matching', filter } },
@@ -71,9 +130,8 @@ it('resolves matching through every ordinary and attention page without changing
     // Status effects may fail without a Machine; resolution must nevertheless retain the complete concrete list.
     expect(result, JSON.stringify({ result, pages })).toMatchObject({ ok: true, result: { kind: 'fanout', results: [
         { target: { serverId, sessionId: 'first-match' } }, { target: { serverId, sessionId: 'older-match' } },
-        { target: { serverId, sessionId: 'attention-match' } },
     ] } });
-    expect(pages).toHaveLength(3);
+    expect(pages).toHaveLength(2);
     expect(getStorage().getState().ordinarySessionListMembershipByServerId).toEqual(before);
 });
 

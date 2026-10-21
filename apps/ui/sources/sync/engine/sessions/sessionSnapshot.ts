@@ -16,6 +16,7 @@ import { AccountEncryptionCurrentnessReadinessError, fetchAccountEncryptionCurre
 import {
     deriveSessionContentAvailability,
     isSessionContentReadable,
+    readSessionContentAvailability,
     type RecipientEncryptionReadiness,
     type SessionContentAvailability,
 } from '@/sync/domains/session/encryptedContentAvailability';
@@ -797,12 +798,16 @@ function buildHydratedSessionRenderablePatch(
     const metadataRevisionAdvances = tupleCurrentness.metadataCurrent
         && !classifySessionTupleApplyCurrentness(hydratedRenderable, currentRenderable).metadataCurrent;
 
+    // An unopened layout-1 summary can already carry owner-only visibility at this same tuple.
+    // Settling content replaces that projection with the full readable summary, not just its flag.
     const shouldPatchMetadata =
         hydratedRenderable.metadata != null
         && tupleCurrentness.metadataCurrent
         && (
             currentRenderable.metadata == null
             || metadataRevisionAdvances
+            || (isSessionContentReadable(readSessionContentAvailability(hydratedRenderable))
+                && !isSessionContentReadable(readSessionContentAvailability(currentRenderable)))
         );
     if (shouldPatchMetadata) {
         patch.metadata = hydratedRenderable.metadata;
@@ -1383,7 +1388,7 @@ export async function fetchAndApplySessions(params: {
     applySessionListRenderablePatches?: (patches: readonly SessionListRenderablePatch[]) => void;
     prioritizeSessionIds?: ReadonlyArray<string>;
     activeSessionIds?: ReadonlyArray<string>;
-    requiredHydrationSessionIds?: ReadonlyArray<string>;
+    requiredHydrationSessionIds?: ReadonlyArray<string> | 'all';
     /** Reuse the containing Sync's exact reader when a required summary is superseded. */
     hydrateRequiredSession?: (sessionId: string, accountCurrentness: AccountEncryptionCurrentnessResponse | undefined) => Promise<void>;
     awaitSessionListHydration?: boolean;
@@ -1709,7 +1714,7 @@ export async function fetchAndApplySessions(params: {
     const shouldApplyRenderables = typeof params.applySessionListRenderables === 'function';
     let appliedRenderableCount = 0;
     const requiredHydrationSessionIds = new Set(
-        (params.requiredHydrationSessionIds ?? [])
+        (params.requiredHydrationSessionIds === 'all' ? fetchedSessionIds : params.requiredHydrationSessionIds ?? [])
             .map((sessionId) => String(sessionId ?? '').trim())
             .filter(Boolean),
     );
@@ -2164,6 +2169,16 @@ export async function fetchAndApplySessions(params: {
                                             });
                                             staleSkippedRowsBeforeEnqueue += 1;
                                             hydrationAttribution.staleBeforeEnqueueRows += 1;
+                                            // Query demand owns the settled list summary, not an opened
+                                            // Session entity. A heartbeat may supersede the snapshot while
+                                            // its tuple-current summary patch still satisfies that demand.
+                                            const currentRenderable = params.getCurrentSessionListRenderable?.(row.id);
+                                            if (isQuerySource && isRequiredHydrationRow && currentRenderable
+                                                && readSessionContentAvailability(currentRenderable) !== null
+                                                && isCurrentRenderableCompleteForWarmHydration(row, currentRenderable)) {
+                                                markRequiredHydrationResult(row, decryptedSession);
+                                                return null;
+                                            }
                                             // A newer opened Session may already have satisfied this
                                             // read through detail/socket hydration. Skipping its older
                                             // snapshot is not a required-hydration failure; a newer

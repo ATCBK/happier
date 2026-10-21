@@ -16,7 +16,7 @@ export function projectSessionListFilterAfterHomeQueryV1(filter: SessionListFilt
 /** Structural Home queries shared by the session list and authorized rule previews. */
 export function projectSessionListFilterHomeQueriesV1(filters: SessionListFilterV1, options: Readonly<{
   storage: SessionListQueryV1['storage']; includeInactive: boolean; mountedHomeServerIds: readonly string[];
-  limit?: number; tagFacet?: 'query' | 'local';
+  limit?: number; tagFacet?: 'query' | 'local'; includeAttention?: boolean;
 }>): ReadonlyArray<Readonly<{ serverId: string; query: SessionListQueryV1 }>> {
   const normalized = normalizeSessionListFilterV1(filters);
   const mountedHomeServerIds = new Set(normalizeSessionListFilterHomeIds(options.mountedHomeServerIds));
@@ -36,8 +36,9 @@ export function projectSessionListFilterHomeQueriesV1(filters: SessionListFilter
       ...(normalized.underSessionId === undefined ? {} : { underSessionId: normalized.underSessionId }),
       audiences: normalized.audiences.filter(audience => audience.serverId === serverId).map(toHomeAudience),
       tagIds: tagFacetLocal ? [] : normalized.tagIds.filter(tag => tag.serverId === serverId).map(tag => tag.tagId),
-      // Active lists always include their incumbent attention supplement.
-      ...(options.storage === 'active' ? { includeAttention: true } : {}),
+      // Visible lists promote attention before ordinary paging completes. Exhaustive
+      // readers already visit that same structural corpus and can omit the supplement.
+      ...(options.storage === 'active' ? { includeAttention: options.includeAttention ?? true } : {}),
       ...(typeof options.limit === 'number' ? { limit: options.limit } : {}),
     } }));
 }

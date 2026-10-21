@@ -13,7 +13,7 @@ import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/proto
 import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { createAccountEncryptionCurrentnessFixture, createSessionNotificationContextFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
-import { SessionListQueryV1Schema } from '@happier-dev/protocol/sessions/listing/query';
+import { SESSION_LIST_PAGE_MAX_LIMIT, SessionListQueryV1Schema, type SessionListQueryV1 } from '@happier-dev/protocol/sessions/listing/query';
 import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 import { getSessionStatus } from '@/session/services/getSessionStatus';
@@ -83,12 +83,16 @@ describe('CLI Session target composition', () => {
       const ref = { id: 'checkout', serverId: context.serverId, machineId: 'machine-selected', rootPath: '/repo',
         projectKey: 'qa-project', createdAtMs: 1 };
       const key = { kind: 'workspace-ref', serverId: context.serverId, id: ref.id };
-      vi.spyOn(axios, 'post').mockImplementation(async url => {
+      const previewQueries: SessionListQueryV1[] = [];
+      vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
         if (String(url).endsWith('/v1/account/project-rows/list')) return { status: 200,
           data: { status: 'listed', coverage: 'complete', rows: [{ key, revision: 0, content: { t: 'plain', v: { key, value: ref } } }] } };
-        if (String(url).endsWith('/v2/sessions/query')) return { status: 200,
+        if (String(url).endsWith('/v2/sessions/query')) {
+          previewQueries.push(SessionListQueryV1Schema.parse(body));
+          return { status: 200,
           data: SessionListQueryResponseV1Schema.parse({ sessions: [candidate], nextCursor: null, hasNext: false,
             attentionNextCursor: null, attentionHasNext: false }) };
+        }
         throw new Error(`Unexpected Project/Session read: ${url}`);
       });
       const project = { serverId: context.serverId, projectKey: 'qa-project' };
@@ -106,6 +110,9 @@ describe('CLI Session target composition', () => {
         target: { selector: 'matching', filter }, actionId: 'session.message.send',
       }, context)).resolves.toMatchObject({ ok: true, result: { coverage: 'complete',
         addresses: [{ serverId: context.serverId, sessionId }], error: null } });
+      expect(previewQueries).toHaveLength(3);
+      for (const query of previewQueries) expect(query).toMatchObject({ limit: SESSION_LIST_PAGE_MAX_LIMIT,
+        includeInactive: true, includeAttention: false });
       await expect(deps.sessionList({ context, project, query: { v: 1, storage: 'active', includeInactive: true,
         scope: 'all_accessible', attention: 'any', audiences: [], tagIds: [] } }))
         .resolves.toMatchObject({ sessions: [{ id: sessionId }] });

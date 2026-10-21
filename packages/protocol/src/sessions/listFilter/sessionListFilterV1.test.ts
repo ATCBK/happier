@@ -1,9 +1,21 @@
 import { describe, expect, it } from 'vitest';
 
 import { ScopeActionInputSchemas } from '../../actions/scopeActionFamily.js';
+import { SESSION_LIST_PAGE_MAX_LIMIT } from '../listing/query.js';
+import { projectSessionListFilterHomeQueriesV1 } from './sessionListFilterQueryV1.js';
 import { canSessionListFilterIncludeRunsV1, matchSessionBotFilterV1, matchSessionProjectFilterV1, matchSessionListFilterV1, normalizeSessionListFilterV1, readSessionListStartedByV1, SessionListFilterV1Schema } from './sessionListFilterV1.js';
 
 describe('SessionListFilterV1', () => {
+    it('lets exhaustive previews omit attention promotion while preserving the structural corpus and transport page bound', () => {
+        const filter = normalizeSessionListFilterV1({ homeServerIds: ['home'], scope: 'all_accessible',
+            projects: { include: [{ serverId: 'home', projectKey: 'private-project' }], exclude: [] } });
+        const options = { storage: 'active' as const, includeInactive: true, mountedHomeServerIds: ['home'],
+            limit: SESSION_LIST_PAGE_MAX_LIMIT, includeAttention: false };
+        const [preview] = projectSessionListFilterHomeQueriesV1(filter, options);
+        expect(preview?.query).toEqual({ v: 1, storage: 'active', includeInactive: true, scope: 'all_accessible',
+            attention: 'any', audiences: [], tagIds: [], includeAttention: false, limit: SESSION_LIST_PAGE_MAX_LIMIT });
+        expect(projectSessionListFilterHomeQueriesV1(filter, { ...options, includeAttention: undefined })[0]?.query.includeAttention).toBe(true);
+    });
     it('never uses list attention promotion as proof that a Run matches the selected starter', () => {
         const filter = normalizeSessionListFilterV1({ scope: 'all_accessible', homeServerIds: ['home'], startedBy: ['you'] });
         expect(matchSessionListFilterV1(filter, { serverId: 'home', kind: 'run', startedBy: 'triggers', attentionRequired: true })).toBe('miss');

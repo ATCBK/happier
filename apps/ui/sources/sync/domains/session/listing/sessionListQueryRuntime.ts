@@ -166,7 +166,7 @@ export function fetchSessionListQueryPageForHome(
     const serverId = String(serverIdRaw ?? '').trim();
     const key = JSON.stringify([
         serverId, readSessionListQueryReadEpoch(serverId),
-        page.source, readSharedMembership(page.membership), page.limit ?? null, page.cursor ?? null, page.attentionCursor ?? null,
+        page.source, readSharedMembership(page.membership), page.hydration ?? null, page.limit ?? null, page.cursor ?? null, page.attentionCursor ?? null,
     ]);
     let shared = pageReadsInFlight.get(key);
     if (!shared) {

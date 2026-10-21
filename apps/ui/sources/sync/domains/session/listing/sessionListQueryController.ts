@@ -75,6 +75,8 @@ export type SessionListOrdinaryPageAdapter = Readonly<{
 export type SessionListQueryPageRequest = Readonly<{
     source: SessionListPageSource;
     membership: SessionListPageMembership;
+    /** Predicate consumers need settled summaries, not just structural membership. */
+    hydration?: 'required';
     limit?: number;
     cursor?: string | null;
     attentionCursor?: string | null;

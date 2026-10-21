@@ -4,6 +4,7 @@ import { FollowReceiverRefV1Schema } from '@happier-dev/protocol/sessions/follow
 import type { FollowPreviewActionInputV1 } from '@happier-dev/protocol/sessions/follow/actions';
 import { projectSessionListFilterAfterHomeQueryV1, projectSessionListFilterHomeQueriesV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterQueryV1';
 import { canSessionListFilterIncludeRunsV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { SESSION_LIST_PAGE_MAX_LIMIT } from '@happier-dev/protocol/sessions/listing/query';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { getStorage } from '@/sync/domains/state/storage';
 import { findSessionListLookupSession } from '@/sync/domains/session/listing/sessionListLookupState';
@@ -42,14 +43,14 @@ export async function previewSessionFollowRule(input: Readonly<{
         const admitted = new Map<string, () => boolean>();
         if (filter.show !== 'runs') {
             for (const home of projectSessionListFilterHomeQueriesV1(filter, { storage: 'active', includeInactive: true,
-                mountedHomeServerIds: [input.serverId] })) {
+                mountedHomeServerIds: [input.serverId], limit: SESSION_LIST_PAGE_MAX_LIMIT, includeAttention: false })) {
                 let cursor: string | undefined;
                 let attentionCursor: string | undefined;
                 let previousPage: Awaited<ReturnType<typeof fetchSessionListQueryPageForHome>> | undefined;
                 const seen = new Set<string>();
                 for (;;) {
                     input.assertCurrent();
-                    let page = await fetchSessionListQueryPageForHome(home.serverId, { membership: 'rowOnly',
+                    let page = await fetchSessionListQueryPageForHome(home.serverId, { membership: 'rowOnly', hydration: 'required',
                         source: { kind: 'query', body: { ...home.query, cursor, attentionCursor }, allowV1Fallback: false },
                         cursor, attentionCursor, signal: input.signal });
                     input.assertCurrent();

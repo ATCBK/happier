@@ -21,6 +21,7 @@ import type { SessionTransportEncryptionMaterial } from '@/session/transport/enc
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { evaluateFollowRulePreviewV1, type FollowRulePreviewCandidateV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRulePreviewV1';
 import { projectSessionListFilterAfterHomeQueryV1, projectSessionListFilterHomeQueriesV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterQueryV1';
+import { SESSION_LIST_PAGE_MAX_LIMIT } from '@happier-dev/protocol/sessions/listing/query';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { readRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionContext';
 import { readRequesterHomeWithinActionLifetime } from '@/daemon/sessionEncryption/requesterCurrentness';
@@ -317,7 +318,7 @@ export function createSessionListActionDeps(params: Readonly<{
       const credentials = requester?.credentials ?? params.credentials;
       const viewerAccountId = readAccountIdFromToken(credentials.token) ?? undefined;
       const queries = projectSessionListFilterHomeQueriesV1(filter, { storage: 'active', includeInactive: true,
-        mountedHomeServerIds: [homeServerId] });
+        mountedHomeServerIds: [homeServerId], limit: SESSION_LIST_PAGE_MAX_LIMIT, includeAttention: false });
       const unservedHome = filter.homeServerIds.some(home => home !== homeServerId);
       let coverage: 'complete' | 'partial' | 'unavailable' = unservedHome || filter.show !== 'sessions'
         || context.sessionListAccess === 'current_session' ? 'partial' : 'complete';
