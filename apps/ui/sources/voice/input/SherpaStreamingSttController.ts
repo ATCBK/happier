@@ -185,20 +185,22 @@ export function createSherpaStreamingSttController(deps: {
 
   // The native recognizer owns end-of-speech detection (its endpoint rules); the shared hands-free
   // turn policy (silenceMs/minSpeechMs) then decides when the turn ends, exactly as for device STT.
-  // `isEndpoint` alone is not trusted as silence: the native stream is never reset, so once an
-  // endpoint rule trips (e.g. the max-utterance rule) it can stay set while the user keeps talking.
-  // Changing recognized text is speech activity and always disarms a pending stop.
+  // Native resets the stream after an endpoint, so `isEndpoint` is true only on the batch where it
+  // fires and later silent batches return the same committed text with `isEndpoint` false. An
+  // endpoint therefore arms the stop (even when that batch also carries the final words, since the
+  // endpoint will not repeat), and only changed recognized text on a later batch disarms it.
   const onPushResult = (h: SherpaSttHandle, res: { text?: unknown; isEndpoint?: unknown }) => {
     const text = typeof res?.text === 'string' ? res.text.trim() : '';
     const textChanged = text.length > 0 && text !== h.transcript;
     if (text) h.transcript = text;
     if (h.stopPromise || !isHandsFreeActive(h)) return;
 
-    if (res?.isEndpoint !== true || textChanged) {
+    // Speech activity restarts the silence wait.
+    if (textChanged) {
       h.cancelAutoStop?.();
       h.cancelAutoStop = null;
-      return;
     }
+    if (res?.isEndpoint !== true) return;
     // Trailing silence with no recognized words is not a turn.
     if (!h.transcript || h.cancelAutoStop) return;
 

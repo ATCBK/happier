@@ -187,13 +187,7 @@ describe('SherpaStreamingSttController (native)', () => {
 
     for (let i = 6; i <= 10; i++) emitAudioFrame(i);
     await flushMicrotasks();
-    pushResolvers.shift()?.({ text: 'hello there', isEndpoint: true });
-    await flushMicrotasks();
-    // The words just changed, so the speaker may still be talking.
-    expect(onAutoStopTurn).not.toHaveBeenCalled();
-
-    for (let i = 11; i <= 15; i++) emitAudioFrame(i);
-    await flushMicrotasks();
+    // The endpoint batch can carry the final words; the native endpoint fires only once, so it arms.
     pushResolvers.shift()?.({ text: 'hello there', isEndpoint: true });
     await flushMicrotasks();
     expect(onAutoStopTurn).toHaveBeenCalledWith('s1');
@@ -270,6 +264,33 @@ describe('SherpaStreamingSttController (native)', () => {
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(onAutoStopTurn).not.toHaveBeenCalled();
+  });
+
+  it('ends the turn after the endpoint while later silent batches report no endpoint', async () => {
+    vi.useFakeTimers();
+    const { controller, onAutoStopTurn } = await createController({ handsFree: { enabled: true, silenceMs: 450 } });
+    controller.setHandsFreeSession('s1');
+    await controller.start('s1');
+
+    for (let i = 1; i <= 5; i++) emitAudioFrame(i);
+    await flushMicrotasks();
+    pushResolvers.shift()?.({ text: 'hello', isEndpoint: false });
+    await flushMicrotasks();
+
+    // Native resets the stream after an endpoint: isEndpoint is true only on the batch where it fires,
+    // and later silent batches return the same committed text with isEndpoint=false.
+    const results = [true, false, false];
+    for (const [n, isEndpoint] of results.entries()) {
+      for (let i = 1; i <= 5; i++) emitAudioFrame((n + 2) * 5 + i);
+      await flushMicrotasks();
+      pushResolvers.shift()?.({ text: 'hello', isEndpoint });
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    expect(onAutoStopTurn).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(300);
+    expect(onAutoStopTurn).toHaveBeenCalledWith('s1');
   });
 
   it('does not auto-stop when the session is not hands-free', async () => {

@@ -235,7 +235,7 @@ Even in **Direct to session**, TTS can still be enabled so Happier can read agen
 
 ### Hands-free mode
 
-When you use **Device STT**, Happier can also expose hands-free endpointing controls such as silence timeout and minimum speech duration.
+With **Device STT** or **Local neural STT**, Local voice can run hands-free: it detects when you stop speaking, sends the turn, and starts listening again. Silence timeout and minimum speech duration control when a turn counts as finished. **OpenAI-compatible STT** and **Google Gemini STT** transcribe a finished recording, so they are push-to-talk: tap the mic again to send. See [Local voice providers](/voice/local-providers) for details.
 
 ### Test TTS
 
