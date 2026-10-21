@@ -2580,6 +2580,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         }) === 'DELETE'
         : await Modal.confirm(presentation.title ?? t('approvals.untitled'), presentation.summary ?? '',
           { ...(presentation.confirmLabel ? { confirmText: presentation.confirmLabel } : {}),
+            ...(presentation.destructive ? { destructive: true } : {}),
             ...(context.signal ? { signal: context.signal } : {}), });
       // Let the Action owner project invocation cancellation before checking
       // Account currentness, which also throws for an aborted invocation.
