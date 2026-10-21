@@ -316,7 +316,10 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
     hasMore: false, nextBeforeSeq: null, nextAfterSeq: null }));
   app.post('/v2/sessions/:sessionId/archive', { preHandler: app.authenticate,
     config: { apiTokenSessionAction: 'session.archive', restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId' } },
-  }, async request => {
+  }, async (request, reply) => {
+    if (row((request.params as { sessionId: string }).sessionId).active) {
+      return reply.code(409).send({ error: 'session-active' });
+    }
     lifecycleEffects.push(request.url);
     archivedSessions.add((request.params as { sessionId: string }).sessionId);
     return { success: true, archivedAt: 123 };
@@ -649,6 +652,7 @@ it('executes an authored Account Action through restricted Agent capability cust
 
 it.each([503, 401, 403] as const)('keeps Home mint availability distinct from authorization denial (%s), then recovers', async status => {
   const f = await fixture();
+  f.markInactive();
   try {
     f.setActionsSettings(normalizeActionsSettingsV1({ v: 1, actions: { 'session.archive': { disabledSurfaces: [] } } }));
     f.failAuthorization(status);
@@ -979,6 +983,12 @@ it.each(['session.stop', 'session.archive', 'session.unarchive'] as const)(
     expect(effectCount()).toBe(0);
     const admissionStart = f.observations.length;
     if (actionId === 'session.archive') {
+      f.markSessionActive(sessionId);
+      const selfArchive = await invoke(sessionId);
+      expect(selfArchive, JSON.stringify({ selfArchive, observations: f.observations.slice(-10) }))
+        .toMatchObject({ failed: true, value: { errorCode: 'unsupported_action', error: 'self_stop_forbidden' } });
+      expect(effectCount()).toBe(0);
+      f.markSessionInactive(sessionId);
       const grandchildId = 'c123456789012345678901232';
       f.addNestedReport(grandchildId);
       f.markSessionActive(grandchildId);
@@ -1046,7 +1056,8 @@ it.each(['session.stop', 'session.archive', 'session.unarchive'] as const)(
       || row.path === '/v1/account/entity-rows/prompt-library')).toEqual([]);
     const signed = f.observations.filter(row => row.signed);
     expect(signed.some(row => row.path === '/v2/sessions/query')).toBe(true);
-    expect(signed.every(row => row.status === 200 && !row.bearer), JSON.stringify(signed)).toBe(true);
+    expect(signed.every(row => !row.bearer && (row.status === 200
+      || actionId === 'session.archive' && row.path.endsWith('/archive') && row.status === 409)), JSON.stringify(signed)).toBe(true);
     const targetReads = f.observations.filter(row => row.path === `/v2/sessions/${childId}`);
     expect(targetReads.length).toBeGreaterThan(0);
     expect(targetReads.every(row => row.signed && !row.bearer)).toBe(true);
