@@ -8,7 +8,7 @@ import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
-import type { EditorDecoration, TextEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
+import type { EditorDecoration, Rect, TextEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Popover } from '@/components/ui/popover';
@@ -45,6 +45,8 @@ const PHONE_LANE_WIDTH_PX = 22;
 const selectSessionTurns = (session: Session | null) => session?.sessionTurns?.turns ?? null;
 const selectSessionAgentId = (session: Session | null) => session ? readSessionPresentationAgentId(session) : null;
 const RECENCY_BAR_PX = 2;
+/** Runs at least this strong in the View column read as the newer ones; Edit draws them stronger. */
+const RECENT_RUN_OPACITY = 0.45;
 
 type BlameLine = Readonly<{ run: FileBlameRun; start: boolean; index: number }>;
 
@@ -349,10 +351,6 @@ function BlameCell({
   line: BlameLine | null;
   width: number;
   compact: boolean;
-  revision?: string | number | null;
-  refreshContent?: () => Promise<void>;
-  /** The mounted code editor's existing decoration channel; Markdown rich editing has no gutter. */
-  editor?: TextEditorHandle | null;
   agentId: string | null;
   recency: number;
   active: boolean;
@@ -452,6 +450,7 @@ export type FileBlameRegionInput = Readonly<{
   readBlame: boolean;
   revision?: UseFileBlameInput['revision'];
   refreshContent?: UseFileBlameInput['refreshContent'];
+  /** The mounted code editor's existing decoration channel; Markdown rich editing has no gutter. */
   editor?: TextEditorHandle | null;
   /** The Session whose File page this is; its turns attribute uncommitted lines. Project pages pass null. */
   sessionAddress: SessionAddress | null;
@@ -564,14 +563,18 @@ export function useFileBlameRegion(
       ),
     );
   }, [blame.runs, input.compact, nowMs, theme.space.s6, theme.space.s8]);
-  const openRun = React.useCallback((run: FileBlameRun) => {
+  // In Edit the run has no cell to hang from; the card opens at the run's first line in the editor.
+  const [editorAnchor, setEditorAnchor] = React.useState<Rect | null>(null);
+  const openRun = React.useCallback((run: FileBlameRun, lineRect: Rect | null = null) => {
     anchorRef.current = anchors.current.get(run.id) ?? null;
+    setEditorAnchor(lineRect);
     setOpenRunId((current) => (current === run.id ? null : run.id));
   }, []);
   const active = input.enabled && input.readBlame && blame.runs.length > 0;
   const editorDecorations = React.useMemo<readonly EditorDecoration[]>(() => active ? blame.runs.map((run) => ({
     layer: 'blame', id: `blame:${run.id}`, startLine: run.startLine, lineCount: run.lineCount, runId: run.id,
-  })) : [], [active, blame.runs]);
+    tone: recencyOpacity(run, ages) >= RECENT_RUN_OPACITY ? 'recent' : 'older',
+  })) : [], [active, ages, blame.runs]);
   React.useEffect(() => {
     const editor = input.editor;
     if (!editor?.setDecorations) return;
@@ -583,7 +586,7 @@ export function useFileBlameRegion(
     return input.editor.onDecorationPress((layer, decoration) => {
       if (layer !== 'blame' || !('runId' in decoration)) return;
       const run = blame.runs.find((entry) => entry.id === decoration.runId);
-      if (run) openRun(run);
+      if (run) openRun(run, input.editor?.getLineRect?.(run.startLine) ?? null);
     });
   }, [active, input.editor, blame.runs, openRun]);
   const renderLeadingLane = React.useMemo(
@@ -627,10 +630,13 @@ export function useFileBlameRegion(
     : -1;
   const open = openIndex >= 0 ? blame.runs[openIndex]! : null;
   const close = React.useCallback(() => setOpenRunId(null), []);
+  // A run open from Edit hangs from its line there; stepping keeps that line's place.
+  const editorRect = editorAnchor && input.editor ? editorAnchor : null;
   const step = (delta: number) => {
     const next = blame.runs[openIndex + delta];
     if (next) {
       anchorRef.current = anchors.current.get(next.id) ?? anchorRef.current;
+      if (editorRect) setEditorAnchor(input.editor?.getLineRect?.(next.startLine) ?? editorRect);
       setOpenRunId(next.id);
     }
   };
@@ -638,6 +644,7 @@ export function useFileBlameRegion(
     <Popover
       open
       anchorRef={anchorRef}
+      anchor={editorRect ? { kind: 'rect', rect: { left: editorRect.x, top: editorRect.y, width: Math.max(1, editorRect.width), height: Math.max(1, editorRect.height) }, coordinateSpace: 'window' } : undefined}
       onRequestClose={close}
       placement="bottom"
       phonePresentation="sheet"

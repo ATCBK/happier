@@ -51,7 +51,7 @@ export function createMonacoDecorations(editor: DecorationEditor, monaco: Pick<t
             const anchorColumn = deleted ? (item.anchor === 'before' ? 1 : model.getLineMaxColumn(firstLine)) : 1;
             const range: IRange = model.validateRange({ startLineNumber: item.startLine, startColumn: 'startCharacter' in item ? item.startCharacter + 1 : anchorColumn,
                 endLineNumber: endLine, endColumn: deleted ? anchorColumn : 'endCharacter' in item ? item.endCharacter + 1 : model.getLineMaxColumn(Math.max(1, Math.min(model.getLineCount(), endLine))) });
-            const marker = 'happier-editor-layer-' + layer + ' happier-editor-' + layer + '-' + ('kind' in item ? item.kind : 'severity' in item ? item.severity : 'run');
+            const marker = 'happier-editor-layer-' + layer + ' happier-editor-' + layer + '-' + ('kind' in item ? item.kind : 'severity' in item ? item.severity : item.tone ?? 'run');
             return { range, options: { stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
                 linesDecorationsClassName: marker, ...('severity' in item ? { inlineClassName: 'happier-editor-diagnostic-' + item.severity, hoverMessage: { value: item.message } } : {}) } };
         }));

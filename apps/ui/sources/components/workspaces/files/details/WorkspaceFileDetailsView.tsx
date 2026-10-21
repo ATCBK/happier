@@ -1658,6 +1658,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                     </>
                 ) : showsViewerBody ? (
                     <FileViewerBody
+                    {/* Blame in Edit: the gutter markers open the same run card (a portal popover at the run's line). */}
+                    {blameRegion.card}
                         viewer={fileViewer}
                         title={filePath.split(/[\\/]/).at(-1) || filePath}
                         source={viewerPreviewInput}

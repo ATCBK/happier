@@ -12,7 +12,7 @@ import { TextInput } from '@/components/ui/text/Text';
 import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 import { CODE_GUTTER_METRICS, resolveCodeEditorFontMetrics, resolveCodeEditorGutterMetrics } from '../codeEditorFontMetrics';
 import { resolveCodeMonoFontFamily } from '../../codeTypography';
-import { buildMonacoEditorThemeData, formatCodeEditorChangeMarkCss, formatCodeEditorDiagnosticCss, resolveCodeEditorTheme } from '../editorTheme';
+import { buildMonacoEditorThemeData, formatCodeEditorBlameMarkCss, formatCodeEditorChangeMarkCss, formatCodeEditorDiagnosticCss, resolveCodeEditorTheme } from '../editorTheme';
 
 /** One shared stylesheet for every mounted Monaco editor's change marks; rewritten when the theme changes. */
 const CHANGE_MARK_STYLE_ID = 'happier-editor-change-marks';
@@ -272,6 +272,7 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                 // digits; the mark sits a fixed step after the digits themselves, clear of them and of the text.
                 { inset: `calc(${CODE_GUTTER_METRICS.columnGap + 2}px - var(${LINE_NUMBER_SLACK_VAR}, 0px))` }),
             formatCodeEditorDiagnosticCss(editorTheme, (severity) => `.monaco-editor .happier-editor-diagnostic-${severity}`),
+            formatCodeEditorBlameMarkCss(editorTheme, (tone) => `.monaco-editor .cldr.happier-editor-blame-${tone}`),
             // The code view's numbers (CodeGutter): the smaller number size, right edge where View draws it.
             `.monaco-editor .margin-view-overlays .line-numbers{font-size:var(${LINE_NUMBER_FONT_SIZE_VAR});padding-right:var(${LINE_NUMBER_SLACK_VAR}, 0px)}`,
         ].join('\n');

@@ -28,7 +28,9 @@ export type EditorDecorationLayer = 'change' | 'diagnostic' | 'blame';
 export type EditorDecoration =
     | Readonly<{ layer?: 'change'; id: string; key: string; kind: 'added' | 'modified' | 'deleted'; startLine: number; endLine: number; removedLines?: readonly string[]; anchor?: 'before' | 'after' }>
     | Readonly<{ layer?: 'diagnostic'; id: string; severity: 'error' | 'warning' | 'information' | 'hint'; startLine: number; startCharacter: number; endLine: number; endCharacter: number; message: string; code?: string | number; source?: string }>
-    | Readonly<{ layer?: 'blame'; id: string; startLine: number; lineCount: number; runId: string }>;
+    /** `tone`: the run's recency, as the View column's edge bar (newer half `recent`); the engines draw it as the run's bar. */
+    | Readonly<{ layer?: 'blame'; id: string; startLine: number; lineCount: number; runId: string; tone?: EditorBlameTone }>;
+export type EditorBlameTone = 'recent' | 'older';
 
 export type CodeEditorProps = Readonly<{
     resetKey: string;

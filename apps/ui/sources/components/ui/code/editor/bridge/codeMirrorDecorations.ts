@@ -60,12 +60,12 @@ export function createCodeMirrorDecorations(api: DecorationApi, press?: (layer: 
         constructor(readonly layer: EditorDecorationLayer, readonly item: EditorDecoration) { super(); }
         override eq(other: View.GutterMarker) {
             if (!(other instanceof Marker)) return false;
-            const role = (item: EditorDecoration) => 'kind' in item ? item.kind : 'severity' in item ? item.severity : 'run';
+            const role = (item: EditorDecoration) => 'kind' in item ? item.kind : 'severity' in item ? item.severity : item.tone ?? 'run';
             return this.item.id === other.item.id && this.item.startLine === other.item.startLine && role(this.item) === role(other.item);
         }
         override toDOM() {
             const element = document.createElement('span');
-            element.className = 'happier-editor-marker happier-editor-' + this.layer + '-' + ('kind' in this.item ? this.item.kind : 'severity' in this.item ? this.item.severity : 'run');
+            element.className = 'happier-editor-marker happier-editor-' + this.layer + '-' + ('kind' in this.item ? this.item.kind : 'severity' in this.item ? this.item.severity : this.item.tone ?? 'run');
             return element;
         }
     }

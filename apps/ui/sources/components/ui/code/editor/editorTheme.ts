@@ -145,6 +145,7 @@ export function buildMonacoEditorThemeData(editorTheme: CodeEditorTheme): Monaco
 
 /** Width of a change-gutter bar: an optical stroke, the same in both engines. */
 const CHANGE_MARK_WIDTH_PX = 3;
+const BLAME_MARK_WIDTH_PX = 2;
 
 /**
  * The change gutter's three marks, drawn the same in Monaco and CodeMirror (ade-shell ED3): added is a solid
@@ -167,6 +168,16 @@ export function resolveCodeEditorChangeMarkStyles(theme: Pick<CodeEditorTheme, '
  * (Monaco's line decoration, CodeMirror's gutter marker): the bars set only their stroke, the wedge hangs
  * from the element's lower edge.
  */
+/**
+ * Blame in Edit (P8 §3.7, BL1 notes): each run is the View column's 2 px ink edge bar, drawn at the start of
+ * the engine's marker lane just after the numbers, stronger for the newer runs. The marker element spans the
+ * lane, so the whole lane is the press target that opens the run's card.
+ */
+export function formatCodeEditorBlameMarkCss(theme: Pick<CodeEditorTheme, 'textColor'>, selector: (tone: 'recent' | 'older' | 'run') => string): string {
+    const bar = (percent: number) => `{background:linear-gradient(to right,color-mix(in srgb,${theme.textColor} ${percent}%,transparent) 0 ${BLAME_MARK_WIDTH_PX}px,transparent ${BLAME_MARK_WIDTH_PX}px)!important;cursor:pointer}`;
+    return [`${selector('recent')}${bar(60)}`, `${selector('older')}${bar(28)}`, `${selector('run')}${bar(28)}`].join('\n');
+}
+
 /** The engines' problem squiggle: a wavy underline in the state colour, the same in Monaco and CodeMirror. */
 export function formatCodeEditorDiagnosticCss(theme: Pick<CodeEditorTheme, 'diagnosticErrorColor' | 'diagnosticWarningColor'>,
     selector: (severity: 'error' | 'warning') => string): string {
