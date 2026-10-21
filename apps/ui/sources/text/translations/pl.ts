@@ -27,7 +27,7 @@ import { publicIdentity } from './features/publicIdentity.pl';
 import { terminalWorkspaceKeyboardTranslations } from './terminalWorkspaceTranslations.shared';
 
 
-import { defineTranslations } from '../_types';
+import { defineTranslations, type WidenTranslationValues } from '../_types';
 
 import { promptPickerTranslations as feature_promptPickerTranslations } from './features/pl';
 
@@ -17528,7 +17528,7 @@ settingsSession: {
 } as const;
 
 
-export const pl = defineTranslations(plValues);
+export const pl: WidenTranslationValues<typeof plValues> = defineTranslations(plValues);
 
 
 export type TranslationsPl = typeof pl;

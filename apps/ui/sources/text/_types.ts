@@ -2,7 +2,7 @@ export type { TranslationStructure } from './translations/en';
 
 export type Translations = import('./translations/en').TranslationStructure;
 
-type WidenTranslationValues<T> = T extends (...args: never[]) => unknown
+export type WidenTranslationValues<T> = T extends (...args: never[]) => unknown
     ? T
     : T extends string
         ? string
