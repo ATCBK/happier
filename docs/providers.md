@@ -821,6 +821,10 @@ Resource access has two intentionally different privacy contracts:
   not yet complete; read-only model listing must not establish an operation. The Home admits the current Account, Team resource, Session or execution run, policy, limits,
   and placement for each request; the broker then performs the Provider request. Recipients do
   not receive credential bytes, the private Pool roster, or Pool-management authority.
+  Source-member currentness is checked by `resolveTeamCredentialSourceMemberCurrentnessInTx`
+  with brokered delivery: the account or enabled Pool member must still belong to the pinned
+  source lifetime, but need not support direct export. Native OAuth/device accounts therefore
+  remain usable through the broker without becoming exportable.
 - **Direct** access deliberately discloses usable current material to an authorized recipient for
   a source that supports export. Future revocation can stop new retrieval, but cannot recall
   material already delivered or enforce later out-of-product requests.
