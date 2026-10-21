@@ -5,6 +5,11 @@ import { createDeferred } from '@/testkit/async/deferred';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import type { Credentials } from '@/persistence';
 
+// Prepare the real worker graph before the operation deadline/fake clock.
+// Each case still reloads it after installing its own HTTP and disk fixtures.
+await import('@/api/api');
+await import('./memoryWorker');
+
 type SessionsPageArgs = Readonly<{ activeOnly?: boolean; archivedOnly?: boolean; cursor?: string; limit?: number }>;
 
 const CREDENTIALS: Credentials = {

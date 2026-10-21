@@ -1415,7 +1415,7 @@ export async function startMemoryWorker(params: Readonly<{
       operationSignal.throwIfAborted();
       return syncExternalSourcesOnce(operationSignal, maxSources);
     });
-    const operation = { sessionIds: new Set<string>(), controller, promise };
+    const operation = { kind: 'transcript' as const, sessionIds: new Set<string>(), controller, promise };
     activeIndexOperations.add(operation);
     externalSyncPromise = promise;
     try { await promise; }

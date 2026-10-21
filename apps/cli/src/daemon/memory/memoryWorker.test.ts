@@ -11,6 +11,62 @@ import { encodeBase64, encryptLegacy } from '@/api/encryption';
 await import('@/api/api');
 
 describe('memoryWorker', () => {
+  it.each(['new_only', 'all_history'] as const)('keeps a checked 6/5 event-tail Session ready while another Session in the %s batch is reading', async backfillPolicy => {
+    const covered = { id: 'event-tail', machineId: 'machine_1', seq: 6, createdAt: 2000, updatedAt: 3000,
+      active: true, activeAt: 3000, archivedAt: null, encryptionMode: 'plain' };
+    const pending = { ...covered, id: 'pending', seq: 1 };
+    let includePending = false;
+    let releasePending!: () => void;
+    const held = new Promise<void>(resolve => { releasePending = resolve; });
+    let pendingReadStarted = false;
+    vi.doMock('@/session/transport/http/sessionsHttp', () => ({
+      fetchSessionsPage: async ({ archivedOnly }: { archivedOnly?: boolean }) => ({
+        sessions: archivedOnly ? [] : includePending ? [covered, pending] : [covered], nextCursor: null, hasNext: false,
+      }),
+      fetchSessionById: async ({ sessionId }: { sessionId: string }) => sessionId === covered.id ? covered : pending,
+    }));
+    vi.doMock('@/session/replay/fetchEncryptedTranscriptMessages', () => ({
+      fetchEncryptedTranscriptMessagesPage: async ({ sessionId, afterSeq, roles }: { sessionId: string; afterSeq?: number; roles?: readonly string[] }) => {
+        if (sessionId === pending.id) { pendingReadStarted = true; await held; }
+        const messages = sessionId === covered.id ? [
+          { id: 'reply', seq: 5, createdAt: 2000, messageRole: 'agent',
+            content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'quartz retained reply' } } } },
+          { id: 'event', seq: 6, createdAt: 2001, messageRole: 'event',
+            content: { t: 'plain', v: { role: 'event', content: { type: 'event', data: { type: 'turn-end' } } } } },
+        ].filter(row => row.seq > (afterSeq ?? 0) && (!roles || roles.includes(row.messageRole))) : [];
+        return { messages, hasMore: false, nextBeforeSeq: null, nextAfterSeq: null };
+      },
+    }));
+    const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
+    await writeMemorySettingsToDisk({ v: 1, enabled: true, enabledAtMs: 1000, indexMode: 'deep', backfillPolicy,
+      coveragePolicy: { type: 'full' }, deep: { minChunkMessages: 1 } });
+    const { startMemoryWorker } = await import('./memoryWorker');
+    const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1' });
+    let refresh: Promise<void> | undefined;
+    try {
+      await worker.ensureUpToDate(covered.id);
+      await worker.ensureUpToDate(covered.id);
+      const { MemoryWorkerStatusV1Schema } = await import('@happier-dev/protocol/memory/memoryStatus');
+      expect(MemoryWorkerStatusV1Schema.parse(worker.getWorkerStatus())).toMatchObject({
+        sessionProgress: [{ sessionId: covered.id, observedSeq: 6, checkedSeq: 6, indexedSeq: 5 }],
+        activeOperations: [],
+      });
+      expect(worker.getIndexSources?.().find(row => row.source.type === 'happier_session' && row.source.sessionId === covered.id)?.state).toBe('ready');
+      includePending = true;
+      refresh = worker.ensureUpToDate();
+      while (!pendingReadStarted) {
+        for (let turn = 0; turn < 16 && !pendingReadStarted; turn++) {
+          MemoryWorkerStatusV1Schema.parse(worker.getWorkerStatus());
+          await Promise.resolve();
+        }
+        await new Promise<void>(resolve => setImmediate(resolve));
+      }
+      expect(worker.getIndexSources?.().find(row => row.source.type === 'happier_session' && row.source.sessionId === covered.id)?.state).toBe('ready');
+      expect(MemoryWorkerStatusV1Schema.parse(worker.getWorkerStatus()).activeOperations).toEqual([
+        { kind: 'transcript', sessionIds: [pending.id] },
+      ]);
+    } finally { releasePending(); await refresh; await worker.stop(); }
+  });
   it.each([
     { observed: 3, indexed: 5, backfillPolicy: 'new_only' as const },
     { observed: 7, indexed: 6, backfillPolicy: 'new_only' as const },
@@ -32,7 +88,7 @@ describe('memoryWorker', () => {
       },
     }));
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
-    await writeMemorySettingsToDisk({ enabled: true, enabledAtMs: 1000, indexMode: 'deep', backfillPolicy,
+    await writeMemorySettingsToDisk({ v: 1, enabled: true, enabledAtMs: 1000, indexMode: 'deep', backfillPolicy,
       coveragePolicy: { type: 'full' }, deep: { minChunkMessages: 1 } });
     const { startMemoryWorker } = await import('./memoryWorker');
     const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1', deps: {
@@ -225,6 +281,8 @@ describe('memoryWorker', () => {
       expect(MemoryStatusV1Schema.parse(result).sources).toContainEqual({
         source: { type: 'happier_session', sessionId: 'retained' }, state: 'ready',
       });
+      expect(MemoryStatusV1Schema.parse(result).worker).toMatchObject({ activeOperations: [],
+        sessionProgress: [{ sessionId: 'retained', observedSeq: null, checkedSeq: 0, indexedSeq: 0 }] });
     } finally { writer.exec('ROLLBACK'); deepWriter.exec('ROLLBACK'); writer.close(); deepWriter.close(); await worker.stop(); }
   });
   it.each(['empty', 'indexed'] as const)('publishes completed %s queue coverage when the inventory sequence includes non-message events', async status => {
