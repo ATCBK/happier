@@ -93,7 +93,7 @@ export function ensureMemoryIndexQueueSchema(db: SqliteDatabaseSync): void {
 }
 
 export function createMemoryIndexQueueDb(db: SqliteDatabaseSync): MemoryIndexQueueDbHandle {
-  const sessionStatusStmt = db.prepare('SELECT status FROM memory_session_index_state WHERE sessionId = ?');
+  const sessionStatusStmt = db.prepare('SELECT status, lastErrorCode FROM memory_session_index_state WHERE sessionId = ?');
   const upsertSessionStateStmt = db.prepare(`
     INSERT INTO memory_session_index_state (
       sessionId, selectedByBackfillPolicy, coveragePolicyJson, status, queuedReason,
@@ -196,6 +196,11 @@ export function createMemoryIndexQueueDb(db: SqliteDatabaseSync): MemoryIndexQue
       const row = sessionStatusStmt.get(sessionId);
       return row && typeof row === 'object' && 'status' in row && typeof row.status === 'string'
         ? row.status : null;
+    },
+    getMemorySessionIndexErrorCode: sessionId => {
+      const row = sessionStatusStmt.get(sessionId);
+      return row && typeof row === 'object' && 'lastErrorCode' in row && typeof row.lastErrorCode === 'string'
+        ? row.lastErrorCode : null;
     },
     recordMemorySessionIndexState: (state: MemorySessionIndexStateUpdate) => {
       const id = String(state.sessionId ?? '').trim();

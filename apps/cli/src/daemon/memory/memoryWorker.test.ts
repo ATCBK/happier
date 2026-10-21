@@ -109,6 +109,7 @@ describe('memoryWorker', () => {
       expect(worker.getIndexSources?.()).toContainEqual({ source, state: 'indexing' });
       await worker.ensureUpToDate('local');
       expect(worker.getIndexSources?.()).toContainEqual({ source, state: 'ready' });
+      session.seq = 2;
       deferred = new Promise(resolve => { resume = resolve; });
       const entered = new Promise<void>(resolve => { started = resolve; });
       const syncing = worker.ensureUpToDate('local');

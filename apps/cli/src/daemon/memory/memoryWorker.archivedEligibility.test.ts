@@ -681,7 +681,7 @@ describe('memoryWorker archived eligibility and derived-index removal', () => {
     vi.doMock('@/session/transport/http/sessionsHttp', () => ({
       fetchSessionsPage: vi.fn(async () => ({ sessions: [], nextCursor: null, hasNext: false })),
       fetchSessionById: vi.fn(async () => sessionRow('old-explicit', {
-        seq: 1,
+        seq: rows.at(-1)!.seq,
         createdAt: 1,
         archivedAt: null,
         encryptionMode: 'plain',

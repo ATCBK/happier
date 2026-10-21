@@ -536,11 +536,18 @@ export async function startMemoryWorker(params: Readonly<{
     if (options?.apply === false) return refresh;
 
     if (refresh.mode === 'snapshot') {
+      // Preserve the next selected identity across refreshed snapshots. Resetting
+      // to zero can starve the suffix (including native slots) indefinitely
+      // when the inventory cadence is shorter than one traversal.
+      const nextSessionId = candidateSessionIds[candidateCursor];
+      const externalOffset = candidateCursor >= candidateSessionIds.length
+        ? candidateCursor - candidateSessionIds.length : null;
       candidateAllowInitialBackfillSessionIds.clear();
       candidateObservedSeqBySessionId.clear();
       inventorySeenSessionIds.clear();
       candidateSessionIds = [...refresh.sessionIds];
-      candidateCursor = 0;
+      candidateCursor = externalOffset !== null ? candidateSessionIds.length + externalOffset
+        : Math.max(0, nextSessionId ? candidateSessionIds.indexOf(nextSessionId) : 0);
       for (const [sessionId, seq] of refresh.observedSeqBySessionId) {
         candidateObservedSeqBySessionId.set(sessionId, seq);
       }
@@ -960,7 +967,16 @@ export async function startMemoryWorker(params: Readonly<{
     }
 
     const edited = admittedSessionIds.filter(sessionId => editedSessionIds.has(sessionId));
-    const unchanged = admittedSessionIds.filter(sessionId => !editedSessionIds.has(sessionId));
+    const unchanged = admittedSessionIds.filter(sessionId => {
+      if (editedSessionIds.has(sessionId)) return false;
+      const observed = input.observedSeqBySessionId.get(sessionId);
+      const status = tier1!.getMemorySessionIndexStatus(sessionId);
+      // A completed full snapshot whose source has not advanced needs no body
+      // IO. Revisions still use the dirty set; moving windows still prune.
+      return input.forcePolicySnapshot === true || settings.coveragePolicy.type !== 'full'
+        || observed === undefined || (status !== 'indexed' && status !== 'empty')
+        || tier1!.getSessionCursors({ sessionId, nowMs }).lastDeepIndexedSeq < observed;
+    });
     if (edited.length) {
       // The same admitted revision invalidates the inactive projection too;
       // switching modes must not revive bytes from before that revision.
@@ -1299,7 +1315,7 @@ export async function startMemoryWorker(params: Readonly<{
               workerStatus = { ...workerStatus, state: 'indexing', lastTickAtMs: Date.now(), currentPhase: 'tick' };
             }
             const maxSessions = Math.max(1, Math.trunc(settings.worker.maxSessionsPerTick));
-            candidateCursor = await runMemoryWorkerSourcesTick({ sessionIds: candidateSessionIds,
+            await runMemoryWorkerSourcesTick({ sessionIds: candidateSessionIds,
               externalSourceCount: externalSources.getReadySourceCount(), cursor: candidateCursor, maxSessions,
               signal, advanceCursor: next => { candidateCursor = next; },
               prepareExternalSources: async () => {
@@ -1527,11 +1543,13 @@ export async function startMemoryWorker(params: Readonly<{
         if (!indexesQualified || !tier1 || (settings.indexMode === 'deep' && !deep)) return { source, state: 'indexing' };
         const pending = editedSessionIds.has(sessionId) || [...activeIndexOperations].some(operation => operation.sessionIds.has(sessionId));
         const queueStatus = tier1.getMemorySessionIndexStatus(sessionId);
+        const errorCode = queueStatus === 'failed' ? tier1.getMemorySessionIndexErrorCode(sessionId) : null;
         // The completed queue outcome owns coverage. Inventory sequences also
         // include non-message events and cannot be compared with a transcript
         // frontier to reopen an exhausted scan. This projection is read-only.
-        return { source, state: pending ? 'indexing' : queueStatus === 'failed' ? 'error'
-          : queueStatus === 'indexed' || queueStatus === 'empty' ? 'ready' : 'indexing' };
+        return { source, state: queueStatus === 'failed' ? 'error' : pending ? 'indexing'
+          : queueStatus === 'indexed' || queueStatus === 'empty' ? 'ready' : 'indexing',
+          ...(errorCode ? { errorCode } : {}) };
       });
       return [...sessions, ...externalSources.getIndexSources(indexesQualified ? deep : null).map(row =>
         !settings.enabled || !settings.conversationSearch.indexExternal.enabled ? { ...row, state: 'disabled' as const } : row)];

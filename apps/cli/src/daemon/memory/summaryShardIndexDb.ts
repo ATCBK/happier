@@ -684,6 +684,7 @@ export function openSummaryShardIndexDb(args: Readonly<{ dbPath: string }>): Sum
     },
     recordMemorySessionIndexState: queueDb.recordMemorySessionIndexState,
     getMemorySessionIndexStatus: queueDb.getMemorySessionIndexStatus,
+    getMemorySessionIndexErrorCode: queueDb.getMemorySessionIndexErrorCode,
     recordMemoryWorkerRun: queueDb.recordMemoryWorkerRun,
     getMemoryIndexQueueTelemetry: queueDb.getMemoryIndexQueueTelemetry,
     deleteOldestSummaryShards: ({ limit }) => {
