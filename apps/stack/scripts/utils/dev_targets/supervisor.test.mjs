@@ -13,6 +13,7 @@ import {
   prepareStackDevTargetSourceReload,
   resolvePreservedDaemonTargetPlans,
   resolveDefaultRemoteServerPort,
+  resolveDefaultRemoteExpoPort,
   resolveRemoteServerReadyTimeoutMs,
   startStackDevTargets as startStackDevTargetsImpl,
   startStackDevTargetsInBackground,
@@ -2303,27 +2304,28 @@ test('remote daemon placement is not reported running until the daemon readiness
   }
 });
 
-test('default remote tunnel port varies by Stack process instance', () => {
-  const first = resolveDefaultRemoteServerPort({
-    localServerPort: 52753,
-    targetIndex: 0,
-    instanceId: 100,
-  });
-  const replacement = resolveDefaultRemoteServerPort({
-    localServerPort: 52753,
-    targetIndex: 0,
-    instanceId: 101,
-  });
-
-  assert.notEqual(first, replacement);
-  assert.ok(first >= 40_000 && first <= 59_999);
-  assert.ok(replacement >= 40_000 && replacement <= 59_999);
+for (const resolvePort of [resolveDefaultRemoteServerPort, resolveDefaultRemoteExpoPort]) {
+test(`default remote ports are deterministic, instance-specific and outside ephemeral and local reserved ranges (${resolvePort.name})`, () => {
+    const input = { localServerPort: 52753, localExpoPort: 19081, targetIndex: 0, instanceId: 100 };
+    const first = resolvePort(input);
+    assert.equal(resolvePort(input), first);
+    assert.notEqual(resolvePort({ ...input, instanceId: 101 }), first);
+    assert.notEqual(resolvePort({ ...input, targetIndex: 1 }), first);
+    // Cover every residue of the former 20000-port pools, including wraparound.
+    for (let instanceId = 0; instanceId < 20_000; instanceId++) {
+      const port = resolvePort({ ...input, instanceId });
+      assert.ok(port >= 1024 && port < 32768, `port ${port} overlaps a supported default ephemeral range`);
+      assert.ok(port < 18081 || port > 20080, `port ${port} overlaps the controller's reserved Expo pool`);
+      assert.ok(![5432, 6432, 9229].includes(port), `port ${port} is a fixed service port`);
+    }
 });
+}
 
 test('a colliding generated reverse port is replaced before any remote runtime is retained', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-reverse-port-collision-' });
   const target = { name: 'nl1', platform: 'posix', ssh: 'nl1-ssh', repoDir: '/remote/repo', cliHomeDir: '/remote/home' };
   const tunnels = [];
+  const occupiedPort = resolveDefaultRemoteServerPort({ localServerPort: 3022, targetIndex: 0, instanceId: 2050849 });
   let replacement;
   const replaced = new Promise(resolve => { replacement = resolve; });
   let running;
@@ -2337,7 +2339,7 @@ test('a colliding generated reverse port is replaced before any remote runtime i
     targetPlans: [{ target, services: { server: false, expo: false, daemon: true } }],
     onTargetStateChange: state => { if (state.status === 'running') running(state); }, env: {},
   }, {
-    // SSH is the boundary: another Stack holds 53871, its probe still accepts
+    // SSH is the boundary: another Stack holds the first candidate, its probe still accepts
     // connections, and the failed worker has not published any native runtime.
     runProcess: async ({ command, args }) => {
       if (command === 'ssh' && String(args.at(-1)).includes('daemon.state.json')) {
@@ -2354,7 +2356,7 @@ test('a colliding generated reverse port is replaced before any remote runtime i
         finish: result => { child.exitCode = result.code; finish(result); } };
       if (input.command === 'ssh' && input.args.includes('-N')) {
         tunnels.push(child);
-        if (input.args.includes('127.0.0.1:53871:127.0.0.1:3022')) child.finish({ code: 255 });
+        if (input.args.includes(`127.0.0.1:${occupiedPort}:127.0.0.1:3022`)) child.finish({ code: 255 });
         if (tunnels.length === 2) replacement(child);
       }
       return child;
@@ -2369,7 +2371,7 @@ test('a colliding generated reverse port is replaced before any remote runtime i
     assert.ok(tunnel.args.includes('127.0.0.1:3022:127.0.0.1:3022'), 'the canonical Home route stays fixed');
     const state = await ready;
     assert.equal(state.serviceStatus.daemon, 'running');
-    assert.notEqual(state.servicePorts.daemon, 53871);
+    assert.notEqual(state.servicePorts.daemon, occupiedPort);
   } finally { await controller.close(); }
 });
 

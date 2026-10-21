@@ -110,6 +110,19 @@ Doctor:
 hstack stack doctor exp1
 ```
 
+### Development port allocation (0.3 development)
+
+Fresh remote targets choose deterministic server/daemon ports in 10000–17999
+and Expo ports in 21000–28999. Fresh repo-local servers use 30005–32004 by
+default. These pools avoid the supported platforms' default ephemeral ranges
+and the local Expo pool at 18081–20080.
+
+Server/daemon pins and retained runtime ports keep their endpoints when defaults
+change. Explicit server port-range overrides retain their selection precedence.
+A failed fresh server/daemon forward can select another candidate through the
+existing target retry; retained routes stay fixed. Expo has no separate
+port-collision reallocation path.
+
 ### Source stack reload (0.3 development)
 
 `hstack stack start exp1 --runtime=source --ui=export --restart` prepares the

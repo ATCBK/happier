@@ -303,6 +303,18 @@ async function main() {
   const existingStacklessEnv = stacklessEnvPath ? readEnvFileObject(stacklessEnvPath) : {};
   const existingPinnedServerPort = coercePositiveInt(existingStacklessEnv.HAPPIER_STACK_SERVER_PORT);
   const existingPinnedExpoPort = coercePositiveInt(existingStacklessEnv.HAPPIER_STACK_EXPO_DEV_PORT);
+  // Keep fresh listeners below Linux's default ephemeral range (32768+) and
+  // separate from Expo's local pool and the remote supervisor's service pools.
+  const serverPortBase = (process.env.HAPPIER_STACK_SERVER_PORT_BASE ?? '30005').toString();
+  const serverPortRange = (process.env.HAPPIER_STACK_SERVER_PORT_RANGE ?? '2000').toString();
+  const hasExplicitServerPortRange = Boolean(
+    process.env.HAPPIER_STACK_SERVER_PORT_BASE?.trim() || process.env.HAPPIER_STACK_SERVER_PORT_RANGE?.trim()
+  );
+  // A changed default does not relocate an existing runtime. An operator's
+  // explicit range keeps its existing precedence over a recorded port.
+  const retainedServerPort = runtimeServerPort && (
+    !hasExplicitServerPortRange || isPortWithinRange(runtimeServerPort, serverPortBase, serverPortRange)
+  ) ? runtimeServerPort : null;
 
   // Convenience:
   // `yarn stop` should stop the repo-local stack without requiring users to know its generated name.
@@ -376,21 +388,15 @@ async function main() {
           HAPPIER_STACK_LOG_TEE_DIR: stacklessLogsDir,
           HAPPIER_STACK_LOG_TEE_TIMESTAMPS: '1',
           // Stackless isolation: keep ports away from main/default stack ports by default.
-          HAPPIER_STACK_SERVER_PORT_BASE: (process.env.HAPPIER_STACK_SERVER_PORT_BASE ?? '52005').toString(),
-          HAPPIER_STACK_SERVER_PORT_RANGE: (process.env.HAPPIER_STACK_SERVER_PORT_RANGE ?? '2000').toString(),
+          HAPPIER_STACK_SERVER_PORT_BASE: serverPortBase,
+          HAPPIER_STACK_SERVER_PORT_RANGE: serverPortRange,
           HAPPIER_STACK_EXPO_DEV_PORT_BASE: (process.env.HAPPIER_STACK_EXPO_DEV_PORT_BASE ?? '18081').toString(),
           HAPPIER_STACK_EXPO_DEV_PORT_RANGE: (process.env.HAPPIER_STACK_EXPO_DEV_PORT_RANGE ?? '2000').toString(),
           // Make Expo's Metro use stable (stack-scoped) port strategy.
           HAPPIER_STACK_EXPO_DEV_PORT_STRATEGY: (process.env.HAPPIER_STACK_EXPO_DEV_PORT_STRATEGY ?? 'stable').toString(),
           ...(wantsTuiMobile ? { HAPPIER_STACK_CLI_BUILD_MODE: 'always' } : {}),
-          ...(runtimeServerPort &&
-          !existingPinnedServerPort &&
-          isPortWithinRange(
-            runtimeServerPort,
-            process.env.HAPPIER_STACK_SERVER_PORT_BASE ?? '52005',
-            process.env.HAPPIER_STACK_SERVER_PORT_RANGE ?? '2000'
-          )
-            ? { HAPPIER_STACK_SERVER_PORT: String(runtimeServerPort) }
+          ...(retainedServerPort && !existingPinnedServerPort
+            ? { HAPPIER_STACK_SERVER_PORT: String(retainedServerPort) }
             : {}),
           ...(runtimeExpoPort &&
           !existingPinnedExpoPort &&
@@ -461,14 +467,14 @@ async function main() {
 	    // even before the first `yarn dev/start` run creates stack.runtime.json.
 	    let persistedServerPort = null;
 	    if (!existingPinnedServerPort) {
-	      if (runtimeServerPort && isPortWithinRange(runtimeServerPort, serverBase, serverRange)) {
-	        persistedServerPort = runtimeServerPort;
+	      if (retainedServerPort) {
+	        persistedServerPort = retainedServerPort;
 	      } else {
 		        persistedServerPort = await selectLocalServerPortCandidateForStack({
 	          env: {
 	            ...effectiveEnv,
-	            HAPPIER_STACK_SERVER_PORT_BASE: (effectiveEnv.HAPPIER_STACK_SERVER_PORT_BASE ?? '52005').toString(),
-	            HAPPIER_STACK_SERVER_PORT_RANGE: (effectiveEnv.HAPPIER_STACK_SERVER_PORT_RANGE ?? '2000').toString(),
+	            HAPPIER_STACK_SERVER_PORT_BASE: (effectiveEnv.HAPPIER_STACK_SERVER_PORT_BASE ?? serverPortBase).toString(),
+	            HAPPIER_STACK_SERVER_PORT_RANGE: (effectiveEnv.HAPPIER_STACK_SERVER_PORT_RANGE ?? serverPortRange).toString(),
 	          },
 	          stackMode: true,
 	          stackName: stacklessName,
@@ -511,7 +517,7 @@ async function main() {
 	      ...(effectiveEnv.HAPPIER_ACTIVE_SERVER_ID ? { HAPPIER_ACTIVE_SERVER_ID: effectiveEnv.HAPPIER_ACTIVE_SERVER_ID } : {}),
 	      ...(persistedServerPort &&
 	      !existingPinnedServerPort &&
-	      isPortWithinRange(persistedServerPort, serverBase, serverRange)
+	      (persistedServerPort === retainedServerPort || isPortWithinRange(persistedServerPort, serverBase, serverRange))
 	        ? { HAPPIER_STACK_SERVER_PORT: String(persistedServerPort) }
 	        : {}),
 	      ...(runtimeExpoPort &&

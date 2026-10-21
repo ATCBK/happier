@@ -176,6 +176,11 @@ function planDefersRemoteCompanionPreparation(plan) {
   return plan?.services?.server === true && planRequiresRemoteCliWorkspacePreparation(plan);
 }
 
+// Keep generated listeners below Linux's default ephemeral range (32768+),
+// which also avoids macOS/Windows defaults (49152+). These separate pools avoid
+// fixed service ports and the controller's 18081–20080 Expo pool, even when the
+// target runs locally. Server/daemon preserved, configured and retained ports
+// take precedence over generated candidates.
 export function resolveDefaultRemoteServerPort({
   localServerPort,
   targetIndex,
@@ -184,14 +189,14 @@ export function resolveDefaultRemoteServerPort({
   const local = Math.abs(Math.trunc(Number(localServerPort) || 0));
   const instance = Math.abs(Math.trunc(Number(instanceId) || 0));
   const index = Math.abs(Math.trunc(Number(targetIndex) || 0));
-  return 40_000 + ((local + instance + (index * 997)) % 20_000);
+  return 10_000 + ((local + instance + (index * 997)) % 8_000);
 }
 
 export function resolveDefaultRemoteExpoPort({ localExpoPort, targetIndex, instanceId = process.pid } = {}) {
   const local = Math.abs(Math.trunc(Number(localExpoPort) || 0));
   const instance = Math.abs(Math.trunc(Number(instanceId) || 0));
   const index = Math.abs(Math.trunc(Number(targetIndex) || 0));
-  return 20_000 + ((local + instance + (index * 577)) % 20_000);
+  return 21_000 + ((local + instance + (index * 577)) % 8_000);
 }
 
 function resolveCanonicalLoopbackForward(canonicalServerUrl, localServerPort) {

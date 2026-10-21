@@ -872,6 +872,43 @@ test('repo-local wrapper prunes pinned server port when it falls outside the con
   }
 });
 
+for (const retainedPort of [null, 53288]) {
+test(`repo-local default allocation avoids ephemeral ports and retains an existing endpoint (${retainedPort ?? 'fresh'})`, async () => {
+  const scriptsDir = dirname(fileURLToPath(import.meta.url));
+  const repoRoot = dirname(dirname(dirname(scriptsDir)));
+  const stacksRoot = mkdtempSync(join(tmpdir(), 'happier-repo-local-ports-'));
+  try {
+    const identity = resolveRepoStackIdentity({ repoRoot, stacksStorageRoot: stacksRoot });
+    mkdirSync(identity.stackBaseDir, { recursive: true });
+    const envPath = join(identity.stackBaseDir, 'env');
+    if (retainedPort) {
+      writeFileSync(identity.runtimeStatePath, JSON.stringify({ ports: { server: retainedPort } }));
+    }
+    const res = await runNode([join(scriptsDir, 'repo_local.mjs'), 'service', 'status'], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        HAPPIER_STACK_STORAGE_DIR: stacksRoot,
+        HAPPIER_STACK_SERVER_PORT_BASE: undefined,
+        HAPPIER_STACK_SERVER_PORT_RANGE: undefined,
+        HAPPIER_STACK_REPO_LOCAL_AUTO_INSTALL: '0',
+        HAPPIER_STACK_REPO_LOCAL_PREFLIGHT_ONLY: '1',
+      },
+    });
+    assert.equal(res.code, 0, res.stderr);
+    const updated = readFileSync(envPath, 'utf8');
+    const port = Number(updated.match(/^HAPPIER_STACK_SERVER_PORT=(\d+)$/m)?.[1]);
+    if (retainedPort) {
+      assert.equal(port, retainedPort, 'changing a default must not relocate a retained runtime');
+    } else {
+      assert.ok(port >= 1024 && port < 32768, `new server port ${port} overlaps ephemeral ports`);
+      assert.ok(port < 18081 || port > 20080, `new server port ${port} overlaps the Expo pool`);
+      assert.ok(![5432, 6432, 9229].includes(port));
+    }
+  } finally { rmSync(stacksRoot, { recursive: true, force: true }); }
+});
+}
+
 test('repo-local wrapper persists a stable pinned server port when none is present (service/tailscale pre-start)', async () => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const packageRoot = dirname(scriptsDir); // apps/stack
