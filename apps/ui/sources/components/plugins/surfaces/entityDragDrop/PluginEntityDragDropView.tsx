@@ -8,7 +8,9 @@ import { EntityDragGripChooser } from '@/components/ui/treeDragDrop/ui/EntityDra
 import { usePluginUiClientExecutableRegistrationRevision } from '@/components/plugins/reactNative/clientExecutableContributions';
 import { PoliteAccessibilityStatus } from '@/components/ui/accessibility/PoliteAccessibilityStatus';
 import { createEntityDragGestureAdapter, ENTITY_DRAG_ACTIVATION_DISTANCE_PX } from '@/components/ui/treeDragDrop/entityDragGestureAdapter';
-import { useEntityDragDestinations, useEntityDragSourceState, useEntityDropTargetState } from '@/components/ui/treeDragDrop/entityDragDropHooks';
+import { useEntityDragSourceState, useEntityDropTargetState } from '@/components/ui/treeDragDrop/entityDragDropHooks';
+import { useEntityDragChooser } from '@/components/ui/treeDragDrop/useEntityDragChooser';
+import { useSessionListMoveSheet } from '@/components/sessions/shell/move-sheet/useSessionListMoveSheet';
 import { isSecondaryEntityRowControl, useEntityDragDomBinding, useEntityDropDomBinding } from '@/components/ui/treeDragDrop/useEntityDragDomBinding';
 import { measureWindowBounds, readWindowBounds, toTreeDropMeasurableRef } from '@/components/ui/treeDragDrop/registry/measureWindowBounds';
 import { EntityDragGripTrigger, EntityStagedMoveDock, useEntityStagedMoveHints } from '@/components/ui/treeDragDrop/ui/EntityReleasePreview';
@@ -63,7 +65,10 @@ function MountedPluginEntityDragSource(props: DragSourceProps & Readonly<{
     const state = useEntityDragSourceState(runtime, sourceId);
     const pointerInteraction = Platform.OS === 'web' && isHoverCapablePrimaryPointer();
     const enabled = source !== null && props.disabled !== true;
-    const [chooserOpen, setChooserOpen] = React.useState(false);
+    const chooser = useEntityDragChooser(runtime, sourceId);
+    const chooserOpen = chooser.open;
+    const setChooserOpen = chooser.onOpenChange;
+    const { openMoveSheet } = useSessionListMoveSheet();
     const [selected, setSelected] = React.useState<EntityDropDestination | null>(null);
     const keyboardCarry = React.useRef<EntityDragCarry | null>(null);
     const gestureAdapter = React.useRef<ReturnType<typeof createEntityDragGestureAdapter> | null>(null);
@@ -101,7 +106,7 @@ function MountedPluginEntityDragSource(props: DragSourceProps & Readonly<{
         if (props.organizing !== true) gestureAdapter.current?.cancel();
     }, [props.organizing]);
 
-    const destinations = useEntityDragDestinations(runtime, sourceId, chooserOpen);
+    const destinations = chooser.destinations;
     const sections = resolveHappierDropChooserSections({ options: destinations.map((destination, index) => ({
         id: String(index), label: destination.label ?? (destination.admission.status === 'allowed'
             ? destination.admission.effect.preview.verb : destination.admission.reason.message),
@@ -149,10 +154,13 @@ function MountedPluginEntityDragSource(props: DragSourceProps & Readonly<{
             const input = event as Readonly<{ repeat?: boolean }>;
             return isKeyboardCarrying() && handleStagedKey(key, input.repeat === true);
         },
+        additionalOperations: [{ id: 'entity.mentionInComposer', label: t('entityDragDrop.composer.mentionInComposer'), disabled: !enabled,
+            onSelect: () => { void openMoveSheet({ runtime, sourceLabel: title, composerOnly: true,
+                prepareSource: () => source ? { sourceId, dispose: () => {} } : null }); } }],
     };
     const grip = enabled && !pointerInteraction && props.organizing === true ? <EntityDragGripChooser
         open={chooserOpen} onOpenChange={setChooserOpen} sections={sections}
-        onSelect={key => { const destination = destinations[Number(key)]; if (destination) void runtime.perform(sourceId, destination.targetId, destination.destination, 'chooser'); }}
+        onSelect={key => { void chooser.select(destinations[Number(key)]); }}
         trigger={({ toggle }) => <GestureDetector gesture={gesture}><EntityDragGripTrigger onPress={toggle} accessibilityLabel={label}
             active={state.active} density="touch" expanded={chooserOpen} tabIndex={props.tabIndex} /></GestureDetector>} /> : null;
     const settledMatch = React.useMemo(() => ({ sourceId }), [sourceId]);

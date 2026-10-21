@@ -1,6 +1,8 @@
 import * as React from 'react';
 import { showDocumentShareSheet } from '@/components/sharing/documents/showDocumentShareSheet';
 import { View } from 'react-native';
+import { WorkspaceDestinationRow } from '@/components/appShell/workspace/WorkspaceDestinationRow';
+import { useEntityComposerMention } from '@/components/ui/treeDragDrop/useEntityComposerMention';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
     Collection,
@@ -330,6 +332,7 @@ function LibraryAccountTriggersSlot() {
 function useLibraryAnatomy(summaries: ReadonlyMap<string, WorkflowLibraryRunSummary> | null): CollectionAnatomy<LibraryRow> {
     const { theme } = useUnistyles();
     return React.useMemo(() => ({
+        wrapItem: (row, children) => <WorkflowDefinitionDragRow row={row}>{children}</WorkflowDefinitionDragRow>,
         // The page row's one icon size, as on the Built-in and every other sheet below it.
         glyph: () => <Icon name="tree-structure" size={HAPPIER_PAGE_METRICS.rowIconGlyphPx} color={theme.colors.text.secondary} />,
         title: rowTitle,
@@ -357,6 +360,8 @@ function useLibraryAnatomy(summaries: ReadonlyMap<string, WorkflowLibraryRunSumm
 
 /** A row's own menu: Run now, Export JSON, and Delete for workflows you own. */
 function useLibraryRowActions(row: LibraryRow): CollectionRowActions {
+    const mention = useEntityComposerMention();
+    const scope = useActiveServerAccountScope();
     const commands = React.useContext(LibraryRowCommandsContext);
     const { theme } = useUnistyles();
     const owned = row.group === 'library';
@@ -392,12 +397,17 @@ function useLibraryRowActions(row: LibraryRow): CollectionRowActions {
         ),
         secondaryActionAccessibilityLabel: t('workflows.destination.rowMenu.accessibility'),
         secondaryActions: [
+            ...(row.group !== 'fromPlugins' && scope ? [{ id: 'mentionInComposer', label: t('entityDragDrop.composer.mentionInComposer') }] : []),
             { id: 'run', label: t('workflows.destination.rowMenu.runNow'), disabled: unavailable },
             ...(owned ? [{ id: 'share', label: t('workflows.destination.rowMenu.share') }] : []),
             ...(row.group === 'fromPlugins' ? [] : [{ id: 'export', label: t('workflows.exportJson') }]),
             ...(owned ? [{ id: 'delete', label: t('common.delete'), destructive: true }] : []),
         ],
         onSecondaryAction: (id) => {
+            if (id === 'mentionInComposer' && row.group !== 'fromPlugins' && scope) {
+                void mention({ kind: 'workflow', scope, workflowId: row.definition.definitionId }, rowTitle(row));
+                return;
+            }
             if (commands === null) return;
             if (row.group === 'fromPlugins') {
                 if (id === 'run') commands.run(row.plugin.workflow);
@@ -410,6 +420,15 @@ function useLibraryRowActions(row: LibraryRow): CollectionRowActions {
             else if (id === 'delete') commands.remove(definitionId);
         },
     };
+}
+
+function WorkflowDefinitionDragRow(props: Readonly<{ row: LibraryRow; children: React.ReactNode }>) {
+    const scope = useActiveServerAccountScope();
+    const row = props.row;
+    return <WorkspaceDestinationRow href={null} existingMenu entityTitle={rowTitle(row)}
+        entityItem={scope && row.group !== 'fromPlugins' ? { kind: 'workflow', scope, workflowId: row.definition.definitionId } : null}>
+        {props.children}
+    </WorkspaceDestinationRow>;
 }
 
 function useLibraryRowCommands(summaries: ReadonlyMap<string, WorkflowLibraryRunSummary> | null, deletedDefinitionId: string | null): LibraryRowCommands {

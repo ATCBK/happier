@@ -3,6 +3,24 @@ import { expect, it } from 'vitest';
 import { renderHook } from '@/dev/testkit';
 import { createEntityDragDropRuntime } from '../entityDragDropRuntime';
 import { useEntityDragSource, useEntityDropTarget } from '../entityDragDropHooks';
+import { act } from 'react-test-renderer';
+import { useEntityDragChooser } from '../useEntityDragChooser';
+
+it('keeps Mention in composer unavailable when no composer is mounted', async () => {
+    const runtime = createEntityDragDropRuntime();
+    const scope = { serverId: 'home', accountId: 'account' };
+    runtime.registerSource({ id: 'workflow', scope, isCurrent: () => true,
+        getItem: () => ({ kind: 'workflow', scope, workflowId: 'review' }) });
+    const hook = await renderHook(() => useEntityDragChooser(runtime, 'workflow'));
+    act(() => hook.getCurrent().onOpenChange(true));
+    expect(hook.getCurrent().destinations).toContainEqual(expect.objectContaining({
+        admission: expect.objectContaining({ status: 'refused', reason: expect.objectContaining({ code: 'composerUnavailable' }) }),
+    }));
+    expect(await hook.getCurrent().select(hook.getCurrent().destinations[0])).toBeNull();
+    expect(runtime.getSnapshot().phase).toBe('carrying');
+    act(() => hook.getCurrent().onOpenChange(false));
+    expect(runtime.getSnapshot().phase).toBe('idle');
+});
 
 it('mounted descriptors read the latest source identity and optional semantic destinations', async () => {
     const runtime = createEntityDragDropRuntime();

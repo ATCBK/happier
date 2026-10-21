@@ -10,6 +10,8 @@ import { useOptionalWorkspaceNavigation } from './WorkspaceNavigationContext';
 import { readDestinationInstanceTitle, resolveDestinationRefFromHref } from '../destinations/compactAppDestinationCatalog';
 import type { EntityDragItemV1 } from '@happier-dev/protocol/plugins/ui';
 import { resolveWorkspaceDestinationEntityItem } from './workspaceEntitySource';
+import { useEntityComposerMention } from '@/components/ui/treeDragDrop/useEntityComposerMention';
+import { t } from '@/text';
 
 type WorkspaceDestinationRowProps = Readonly<{
     href: string | null;
@@ -19,7 +21,8 @@ type WorkspaceDestinationRowProps = Readonly<{
     middleClickBehavior?: 'open' | 'passthrough';
     /** Host-built qualified identity for destinations that also supply context. */
     entityItem?: EntityDragItemV1 | null;
-    children: React.ReactNode | ((actions: ReturnType<typeof useWorkspaceOpenActions>) => React.ReactNode);
+    entityTitle?: string;
+    children: React.ReactNode | ((actions: ReturnType<typeof useWorkspaceOpenActions> & Readonly<{ openMenu(): void }>) => React.ReactNode);
     style?: StyleProp<ViewStyle>;
     /** Rows with an existing menu already include useWorkspaceOpenActions.items there. */
     existingMenu?: boolean;
@@ -33,7 +36,7 @@ type WorkspaceDestinationRowProps = Readonly<{
 
 /** Destination gestures share one owner, without replacing the row's normal activation or anatomy. */
 export function WorkspaceDestinationRow(props: WorkspaceDestinationRowProps) {
-    if (!props.href && typeof props.children !== 'function') return props.style ? <View style={props.style}>{props.children}</View> : <>{props.children}</>;
+    if (!props.href && !props.entityItem && typeof props.children !== 'function') return props.style ? <View style={props.style}>{props.children}</View> : <>{props.children}</>;
     return <WorkspaceDestinationRowDestination {...props} />;
 }
 
@@ -42,16 +45,18 @@ function WorkspaceDestinationRowDestination(props: WorkspaceDestinationRowProps)
     const workspace = useOptionalWorkspaceNavigation();
     const scope = useActiveServerAccountScope();
     const runtime = useEntityDragDropRuntime();
+    const mention = useEntityComposerMention();
     const sourceId = React.useId();
     const [anchor, setAnchor] = React.useState<PopoverAnchor | null>(null);
     const latest = React.useRef({ actions, props, workspace, scope });
     latest.current = { actions, props, workspace, scope };
     const detach = React.useRef<(() => void) | null>(null);
     const host = React.useRef<HTMLElement | null>(null);
+    const anchorRef = React.useRef<View | HTMLElement | null>(null);
     const getItem = (): EntityDragItemV1 | null => {
         const current = latest.current;
         const href = current.props.href;
-        if (!href || !current.scope || current.actions.items.length === 0) return null;
+        if (!current.scope || (!current.props.entityItem && (!href || current.actions.items.length === 0))) return null;
         return resolveWorkspaceDestinationEntityItem({ href, scope: current.scope,
             catalog: current.workspace?.catalog, entityItem: current.props.entityItem });
     };
@@ -61,10 +66,14 @@ function WorkspaceDestinationRowDestination(props: WorkspaceDestinationRowProps)
     const describe = (): string | null => {
         const { props: current, workspace: navigation } = latest.current;
         const ref = current.href && navigation?.catalog ? resolveDestinationRefFromHref(navigation.catalog, current.href) : null;
-        return ref && navigation?.catalog ? readDestinationInstanceTitle(navigation.catalog, ref) : null;
+        return current.entityTitle ?? (ref && navigation?.catalog ? readDestinationInstanceTitle(navigation.catalog, ref) : null);
     };
     const currentDescribe = React.useRef(describe);
     currentDescribe.current = describe;
+    const openMenu = React.useCallback(() => {
+        if (latest.current.props.existingMenu || (!latest.current.actions.items.length && !currentGetItem.current())) return;
+        setAnchor({ kind: 'view', ref: anchorRef });
+    }, []);
     const dragSource = props.dragSource !== false;
     React.useEffect(() => {
         if (!scope || !dragSource) return;
@@ -83,6 +92,7 @@ function WorkspaceDestinationRowDestination(props: WorkspaceDestinationRowProps)
         canStart: (event, element) => !isSecondaryEntityRowControl(event, element) });
     React.useEffect(() => () => detach.current?.(), []);
     const attach = React.useCallback((node: unknown) => {
+        anchorRef.current = node as View | HTMLElement | null;
         detach.current?.();
         detach.current = null;
         host.current = null;
@@ -103,7 +113,7 @@ function WorkspaceDestinationRowDestination(props: WorkspaceDestinationRowProps)
             }
         };
         const context = (event: MouseEvent) => {
-            if (latest.current.props.existingMenu || !latest.current.actions.items.length || secondaryControl(event)) return;
+            if (latest.current.props.existingMenu || (!latest.current.actions.items.length && !currentGetItem.current()) || secondaryControl(event)) return;
             event.preventDefault();
             event.stopPropagation();
             setAnchor({ kind: 'rect', rect: { left: event.clientX, top: event.clientY, height: 1 }, coordinateSpace: 'window' });
@@ -118,13 +128,19 @@ function WorkspaceDestinationRowDestination(props: WorkspaceDestinationRowProps)
         };
     }, [sourceRef]);
     return <View ref={attach} style={props.style}>
-        {typeof props.children === 'function' ? props.children(actions) : props.children}
+        {typeof props.children === 'function' ? props.children({ ...actions, openMenu }) : props.children}
         {!props.existingMenu && anchor !== null ? <DropdownMenu
             open={anchor !== null}
             onOpenChange={(open) => { if (!open) setAnchor(null); }}
             popoverAnchor={anchor ?? undefined}
-            items={actions.items}
-            onSelect={(id) => { actions.select(id); setAnchor(null); }}
+            items={[...actions.items, ...(getItem() ? [{ id: 'entity.mentionInComposer', title: t('entityDragDrop.composer.mentionInComposer') }] : [])]}
+            onSelect={(id) => {
+                if (id === 'entity.mentionInComposer') {
+                    const item = currentGetItem.current();
+                    if (item) void mention(item, currentDescribe.current() ?? '');
+                } else actions.select(id);
+                setAnchor(null);
+            }}
             placement="bottom"
             variant="slim"
             matchTriggerWidth={false}

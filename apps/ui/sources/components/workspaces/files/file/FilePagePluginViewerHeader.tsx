@@ -77,7 +77,7 @@ export function FilePagePluginViewerHeader(
       copyPath: share.copyPath ? intent => share.copyPath?.({ absolute: intent?.altKey === true }) : undefined,
       copyAbsolutePath: share.copyAbsolutePath,
       copyLink: share.copyLink,
-      attachToMessage: share.attachToMessage,
+      mentionInComposer: share.mentionInComposer,
       saveAsArtifact: share.saveAsArtifact,
       download: () => share.download(),
       shareFile: share.shareFile,

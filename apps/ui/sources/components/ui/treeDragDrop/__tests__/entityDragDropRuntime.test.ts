@@ -24,6 +24,20 @@ function fixture() {
 }
 
 describe('mounted entity drag owner', () => {
+    it('measures the release pointer before the final resolver and dispatches only the innermost target', async () => {
+        const f = fixture();
+        let measured: unknown = null;
+        const seen: unknown[] = [];
+        f.runtime.registerTarget({ ...f.target, id: 'inner', parentId: 'target',
+            measureBounds: async pointer => { measured = pointer; },
+            resolve: ({ pointer }) => ({ ...allowed, effect: { ...allowed.effect, input: { pointer, measured } } }),
+            execute: async effect => { seen.push(effect.input); return { status: 'applied' }; } });
+        const carry = f.runtime.begin('source')!;
+        carry.move({ x: 40, y: 30 });
+        expect(await carry.release()).toEqual({ status: 'applied' });
+        expect(seen).toEqual([{ pointer: { x: 40, y: 30 }, measured: { x: 40, y: 30 } }]);
+        expect(f.effects).toEqual([]);
+    });
     it('publishes resolver-owned discrete keys while keeping same-place pointer frames on their own channel', () => {
         const f = fixture();
         f.runtime.registerTarget({ ...f.target,

@@ -72,6 +72,22 @@ describe('workspace destination row browser gestures', () => {
         });
         standardCleanup();
     });
+    it('registers a typed folder without a navigation href', async () => {
+        const item = { kind: 'repository-file', scope: { serverId: 'home-b', accountId: 'account-a' }, machineId: 'machine', path: '/workspace/src', entryKind: 'directory' } as const;
+        let openMenu: (() => void) | undefined;
+        const screen = await renderScreen(<WorkspaceDestinationRow href={null} entityItem={item} entityTitle="src/">{actions => {
+            openMenu = actions.openMenu;
+            return <ViewBoundary />;
+        }}</WorkspaceDestinationRow>);
+        const host = document.createElement('div');
+        screen.root.findAllByType('View')[0].props.ref(host);
+        const drag = new Event('dragstart', { bubbles: true, cancelable: true });
+        Object.defineProperty(drag, 'dataTransfer', { value: { setData: vi.fn(), effectAllowed: '' } });
+        act(() => { host.dispatchEvent(drag); });
+        expect(runtime.getSnapshot().item).toEqual(item);
+        act(() => { runtime.cancel(); openMenu?.(); });
+        expect(screen.findByType(DropdownMenu).props.items).toContainEqual(expect.objectContaining({ id: 'entity.mentionInComposer' }));
+    });
     it('lets a Details tab middle click reach guarded close without outward-opening its non-null href', async () => {
         const h = harness();
         const tab = { key: 'file:src/app.ts', kind: 'file', title: 'app.ts', isPinned: true, isPreview: false,
@@ -227,8 +243,10 @@ describe('workspace destination row browser gestures', () => {
         root.dispatchEvent(drag);
         expect(runtime.getSnapshot().item).toEqual({ kind: 'session',
             scope: { serverId: 'home-b', accountId: 'account-a' }, address: { serverId: 'home-b', sessionId: 'B1' } });
-        // The browser sees only a delivery hint, never the scoped Session identity.
-        expect(setData.mock.calls).toEqual([[ENTITY_DRAG_DELIVERY_MIME_V1, '']]);
+        // The browser sees a delivery hint and the destination title as plain text, never the scoped Session identity.
+        expect(setData.mock.calls[0]).toEqual([ENTITY_DRAG_DELIVERY_MIME_V1, '']);
+        expect(setData.mock.calls.slice(1).map(([type]) => type)).toEqual(['text/plain']);
+        expect(JSON.stringify(setData.mock.calls)).not.toMatch(/home-b|account-a|B1/);
         runtime.cancel();
 
         await act(async () => { root.dispatchEvent(new MouseEvent('contextmenu', { clientX: 20, clientY: 30, bubbles: true, cancelable: true })); });

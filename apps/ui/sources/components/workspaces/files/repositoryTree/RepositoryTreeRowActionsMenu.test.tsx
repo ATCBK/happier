@@ -58,19 +58,19 @@ describe('canonical repository row menu', () => {
         await vi.waitFor(() => expect(selected).toEqual(['repository-tree-menuitem-copy-path']));
     });
 
-    it('runs a file row\'s Share items through the share owner for its own path: Happier link and Attach only where they have a target', async () => {
+    it('keeps Mention available for files and folders while link sharing requires a destination', async () => {
         const workspaceScope = { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' };
         const share = { workspaceScope, actionScope: { serverId: 'home-a', accountId: 'account-a' },
             linkTarget: { kind: 'session' as const, sessionId: 'session-a', serverId: 'home-a' },
             composer: { scope: { serverId: 'home-a', accountId: 'account-a' }, ref: { kind: 'session' as const, sessionId: 'session-a' }, workspace: workspaceScope } };
         const file = await render({ kind: 'file', downloadActionsEnabled: false, share });
         expect(file.screen.findByTestId('repository-tree-menuitem-copyLink')).toBeTruthy();
-        expect(file.screen.findByTestId('repository-tree-menuitem-attachToMessage')).toBeTruthy();
+        expect(file.screen.findByTestId('repository-tree-menuitem-mentionInComposer')).toBeTruthy();
         const noTargets = await render({ kind: 'file', downloadActionsEnabled: false, share: { workspaceScope, actionScope: share.actionScope } });
         expect(noTargets.screen.findByTestId('repository-tree-menuitem-copyLink')).toBeNull();
-        expect(noTargets.screen.findByTestId('repository-tree-menuitem-attachToMessage')).toBeNull();
+        expect(noTargets.screen.findByTestId('repository-tree-menuitem-mentionInComposer')).toBeTruthy();
         const folder = await render({ kind: 'directory', downloadActionsEnabled: false, share });
         expect(folder.screen.findByTestId('repository-tree-menuitem-copyLink')).toBeNull();
-        expect(folder.screen.findByTestId('repository-tree-menuitem-attachToMessage')).toBeNull();
+        expect(folder.screen.findByTestId('repository-tree-menuitem-mentionInComposer')).toBeTruthy();
     });
 });

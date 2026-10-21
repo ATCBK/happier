@@ -10,6 +10,7 @@ export type OpenSessionListMoveSheetParams = Readonly<{
     sourceLabel: string;
     runtime: EntityDragDropRuntime;
     prepareSource: () => SessionListMoveSheetSource | null;
+    composerOnly?: boolean;
 }>;
 export type UseSessionListMoveSheetResult = Readonly<{ openMoveSheet: (params: OpenSessionListMoveSheetParams) => Promise<EntityDropOutcomeV1 | null> }>;
 
@@ -34,9 +35,9 @@ export function useSessionListMoveSheet(): UseSessionListMoveSheetResult {
                     resolve(outcome);
                 };
                 modalId = Modal.show({ component: SessionListMoveSheet,
-                    chrome: { kind: 'card', title: t('sessionsList.moveSheetTitle', { item: params.sourceLabel }) },
+                    chrome: { kind: 'card', title: params.composerOnly ? t('entityDragDrop.composer.mentionInComposer') : t('sessionsList.moveSheetTitle', { item: params.sourceLabel }) },
                     closeOnBackdrop: true, onRequestClose: () => settle(null),
-                    props: { sourceLabel: params.sourceLabel, runtime: params.runtime, sourceId, onComplete: settle, onCancel: () => settle(null) },
+                    props: { sourceLabel: params.sourceLabel, runtime: params.runtime, sourceId, composerOnly: params.composerOnly, onComplete: settle, onCancel: () => settle(null) },
                 });
             });
         } catch (error) {

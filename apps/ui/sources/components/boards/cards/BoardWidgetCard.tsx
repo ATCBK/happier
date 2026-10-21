@@ -19,6 +19,7 @@ import { useWidgetInstanceBindingLabel } from '@/components/widgets/surface/useW
 import { WidgetSurface } from '@/components/widgets/surface/WidgetSurface';
 import { readWidgetSourcePluginName, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { t } from '@/text';
+import { useEntityComposerMention } from '@/components/ui/treeDragDrop/useEntityComposerMention';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 
 import type { WorkBoardSaveOutcome } from '../model/workBoardSaveQueue';
@@ -69,6 +70,7 @@ export const BoardWidgetCard = React.memo(function BoardWidgetCard(props: BoardW
     const { instance } = placement;
     const appRuntime = useAppShellPluginUiProjection();
     const scope = props.scope;
+    const mention = useEntityComposerMention();
     const candidate = props.descriptor;
     const size = props.size;
     const widgetPresentation = React.useMemo(() => ({ size, footprint: getWidgetSizeFootprintV1('workBoard', size)! }), [size]);
@@ -105,7 +107,8 @@ export const BoardWidgetCard = React.memo(function BoardWidgetCard(props: BoardW
     } : undefined;
     const actions = React.useMemo((): ItemAction[] => {
         return orderWidgetMenu({
-            instance: buildWidgetInstanceActions({ editInputs: inputs.editInputs, onRename: rename.begin }),
+            instance: buildWidgetInstanceActions({ editInputs: inputs.editInputs, onRename: rename.begin,
+                ...(scope ? { onMention: () => { void mention({ kind: 'work-board-widget', scope: { serverId: scope.serverId, accountId: scope.accountId }, boardId, instanceId: instance.id }, title); } } : {}) }),
             // The same declaration-filtered variants; the Canvas and grid retain their layout owners.
             size: buildWidgetSizeActions(sizeControl),
             frame: buildWidgetFrameStyleActions({
@@ -122,7 +125,7 @@ export const BoardWidgetCard = React.memo(function BoardWidgetCard(props: BoardW
             remove: [{ id: 'remove', title: t('boards.widgets.remove'), icon: 'trash', destructive: true,
                 onPress: () => { void edit({ kind: 'widget_remove' }); } }],
         });
-    }, [definition.about, edit, inputs.editInputs, placement.frameStyle, sizeControl, props.count, props.index, rename.begin, surfaceDefault]);
+    }, [boardId, definition.about, edit, inputs.editInputs, instance.id, mention, placement.frameStyle, scope, sizeControl, props.count, props.index, rename.begin, surfaceDefault, title]);
 
     // Leaving the Board keeps each card's place: the body's last height stays while it holds no reads.
     const [bodyHeight, setBodyHeight] = React.useState(0);

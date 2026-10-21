@@ -72,23 +72,19 @@ beforeEach(async () => {
 afterEach(async () => { standardCleanup(); await fixture?.dispose(); portalBoundary?.restore(); vi.unstubAllGlobals(); });
 
 describe('SVG File page preview dispatch', () => {
-    it('attaches the file to the exact mounted Session composer through the real transaction owner', async () => {
+    it('mentions the file through the shared chooser and real mounted composer transaction owner', async () => {
         const { createExistingSessionComposerDocumentOwner } = await import('@/components/sessions/composer/existingSessionComposerDocumentOwner');
         const { projectComposerDocumentSnapshot } = await import('@/components/sessions/composer/composerSnapshotProjection');
         const { registerSessionComposerPresentationTarget } = await import('@/components/sessions/presentation/sessionComposerPresentationTargets');
         const { FilePageHeader } = await import('../file/FilePageHeader');
+        const { ComposerEntityDropTarget } = await import('@/components/sessions/composer/ComposerEntityDropTarget');
+        const { SelectionList } = await import('@/components/ui/selectionList');
         const scope = { serverId: fixture.scope.serverId, accountId: 'alice' };
         const ref = { kind: 'session' as const, sessionId: fixture.session.id };
         const document = createExistingSessionComposerDocumentOwner({ scope, ref });
         document.replaceDocument({ text: 'Explain', structuredInputMentions: [], composerAttachments: [] });
-        const screen = await fixture.render(<ModalProvider>
-            <WorkspaceFileDetailsView targetKind="session" scopeId="session:share" scope={fixture.scope}
-                filePath={filePath} sessionIdForAugmentation={fixture.session.id} />
-        </ModalProvider>);
         let unregister = () => {};
         try {
-            await vi.waitFor(() => expect(screen.getTextContent()).toContain(svg));
-            expect(screen.findByType(FilePageHeader).props.menuActions.some((item: { id: string }) => item.id === 'attachToMessage')).toBe(false);
             await act(async () => {
                 unregister = registerSessionComposerPresentationTarget({ serverId: scope.serverId, sessionId: ref.sessionId }, {
                     readRevision: () => document.read().revision,
@@ -100,16 +96,30 @@ describe('SVG File page preview dispatch', () => {
                     commitDocument: ({ expectedRevision, mutation }) => document.apply(expectedRevision, mutation),
                 });
             });
+            const screen = await fixture.render(<ModalProvider>
+                <WorkspaceFileDetailsView targetKind="session" scopeId="session:share" scope={fixture.scope}
+                    filePath={filePath} sessionIdForAugmentation={fixture.session.id} />
+                <ComposerEntityDropTarget id="file-share-composer" scope={scope} refValue={ref} bounds={() => null}
+                    inputRef={{ current: null }} presented editable fileScope={fixture.scope} kinds={['file']} />
+            </ModalProvider>);
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain(svg));
             await flushHookEffects({ cycles: 4 });
-            const attach = screen.findByType(FilePageHeader).props.menuActions.find((item: { id: string }) => item.id === 'attachToMessage');
+            const attach = screen.findByType(FilePageHeader).props.menuActions.find((item: { id: string }) => item.id === 'mentionInComposer');
             expect(attach).toBeDefined();
-            await act(async () => { await attach.onSelect(); });
+            let completion: Promise<void> | undefined;
+            await act(async () => { completion = attach.onSelect(); });
+            await vi.waitFor(() => expect(screen.root.findAllByType(SelectionList)).toHaveLength(1));
+            const chooser = screen.findByType(SelectionList);
+            const options = chooser.props.rootStep.sections.flatMap((section: { options: Array<{ id: string; disabled?: boolean }> }) => section.options);
+            const option = options.find((item: { disabled?: boolean }) => !item.disabled);
+            expect(option, JSON.stringify(options)).toBeDefined();
+            await act(async () => { chooser.props.onSelect(option.id); });
+            await act(async () => { await completion; });
             expect(document.read().document.text).toContain('Explain');
             expect(document.read().document.text).toContain('logo-dark.svg');
             expect(document.read().document.structuredInputMentions).toHaveLength(1);
-            await act(async () => unregister());
-            expect(screen.findByType(FilePageHeader).props.menuActions.some((item: { id: string }) => item.id === 'attachToMessage')).toBe(false);
-        } finally { unregister(); await screen.unmount(); }
+            await screen.unmount();
+        } finally { unregister(); }
     });
 
     it.each(['card', 'chooser'])('opens binary-classified bytes as read-only text from the real %s', async (entry) => {

@@ -2608,7 +2608,7 @@ const en = Shared_entityDragDropTranslations.en;
 
 const ru: EntityDragDropTranslations = {
     files: { attach: "Прикрепить", uploadHere: "Загрузить сюда" },
-    composer: { addContext: "Добавить контекст", consequence: "Отправится с вашим следующим сообщением · пока ничего не отправляется", target: "Редактор", readOnly: "Этот редактор доступен только для чтения", otherWorkspace: "Не относится к этому рабочему пространству", unavailable: "Эта ссылка недоступна" },
+    composer: { addContext: "Добавить контекст", consequence: "Отправится с вашим следующим сообщением · пока ничего не отправляется", target: "Редактор", readOnly: "Этот редактор доступен только для чтения", otherWorkspace: "Не относится к этому рабочему пространству", unavailable: "Эта ссылка недоступна" , mentionHere: "Упомянуть здесь", cantMentionHere: "Здесь нельзя упомянуть", attachAsImage: ({ number }: { number: number }) => `Прикрепить как Изображение #${number}`, attachAndMention: "Добавляет во вложения и упоминает здесь", noMentionInText: ({ name }: { name: string }) => `${name} · без упоминания в тексте`, mentionFiles: ({ count }: { count: number }) => `Упомянуть здесь ${count} ${count % 10 === 1 && count % 100 !== 11 ? 'файл' : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14) ? 'файла' : 'файлов'}`, mentionInComposer: "Упомянуть в редакторе", uploadFolderAndMention: "Загружает папку и упоминает её здесь" },
     surface: {
         scopeMismatch: 'Находится в другом Home или другой учётной записи',
         widgetMoveUnavailable: 'Этот виджет нельзя переместить в эту область',

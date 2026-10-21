@@ -2581,7 +2581,7 @@ const en = Shared_entityDragDropTranslations.en;
 
 const zhHant: EntityDragDropTranslations = {
     files: { attach: "附加", uploadHere: "上傳到這裡" },
-    composer: { addContext: "新增上下文", consequence: "隨你的下一則訊息送出 · 暫不送出任何內容", target: "輸入框", readOnly: "此輸入框為唯讀", otherWorkspace: "不屬於此工作區", unavailable: "此參照無法使用" },
+    composer: { addContext: "新增上下文", consequence: "隨你的下一則訊息送出 · 暫不送出任何內容", target: "輸入框", readOnly: "此輸入框為唯讀", otherWorkspace: "不屬於此工作區", unavailable: "此參照無法使用" , mentionHere: "在此引用", cantMentionHere: "無法在此引用", attachAsImage: ({ number }: { number: number }) => `附加為圖片 #${number}`, attachAndMention: "加入附件列並在此引用", noMentionInText: ({ name }: { name: string }) => `${name} · 內文中未引用`, mentionFiles: ({ count }: { count: number }) => `在此引用 ${count} 個檔案`, mentionInComposer: "在編輯框中引用", uploadFolderAndMention: "上傳資料夾並在此引用" },
     surface: {
         scopeMismatch: '它在另一個 Home 或帳戶中',
         widgetMoveUnavailable: '此元件無法移到這個介面區域',

@@ -121,6 +121,7 @@ import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMe
 import { useMachineListForServer } from '@/sync/domains/state/storage';
 import { useWorkflowEditorAccountMemory } from './useWorkflowEditorAccountMemory';
 import { WorkflowAccountLifetimeProvider } from '../workflowAccountScope';
+import { useEntityComposerMention } from '@/components/ui/treeDragDrop/useEntityComposerMention';
 
 const styles = StyleSheet.create((theme) => ({
     // The page's paper, as the editor body paints it (its loading and missing states included).
@@ -255,6 +256,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
     const accountLifetime = props.accountLifetime === undefined ? focusedAccountLifetime : props.accountLifetime;
     const workflowRunDetailActions = React.useMemo(() => createWorkflowRunDetailActions({ accountLifetime }), [accountLifetime]);
     const activeAccountScope = accountLifetime?.scope ?? null;
+    const mention = useEntityComposerMention();
     const addressedMachines = useMachineListForServer(activeAccountScope?.serverId ?? '');
     const machines = props.accountLifetime === undefined ? focusedMachines : addressedMachines ?? [];
     const accountScopeKey = activeAccountScope === null
@@ -1652,6 +1654,9 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
     }, [accountLifetime, accessResolved, description, draft, router, savePending]);
     const menuActions = React.useMemo((): readonly PageHeaderMenuAction[] => {
         const actions: PageHeaderMenuAction[] = [];
+        if (saved !== null && activeAccountScope) actions.push({ id: 'mentionInComposer', title: t('entityDragDrop.composer.mentionInComposer'),
+            testID: 'workflow-editor-menu-mention-in-composer',
+            onSelect: async () => { await mention({ kind: 'workflow', scope: activeAccountScope, workflowId: saved.definitionId }, shareName || t('workflows.page.untitled')); } });
         if (saved !== null && accessResolved) actions.push({ id: 'duplicate', title: t('common.duplicate'),
             testID: 'workflow-editor-menu-duplicate', disabled: savePending || draft === null || validateWorkflowEditorDraft(draft).normalizedDefinition === undefined,
             onSelect: handleDuplicate });
@@ -1702,7 +1707,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
         }
         return actions;
     }, [accountLifetime, activeAccountScope, accessResolved, canEditDefinition, detailsPaneAvailable, draft, draftNavigation.requestLeave, editWithAgent,
-        handleDelete, handleDiscardChanges, handleDuplicate, routeDraftDirty, savePending, deletePending, saved, shareName]);
+        handleDelete, handleDiscardChanges, handleDuplicate, mention, routeDraftDirty, savePending, deletePending, saved, shareName]);
 
     React.useEffect(() => {
         if (props.source.kind !== 'new' || props.source.requestImport !== true || importRequestedRef.current) return;

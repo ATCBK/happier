@@ -3,19 +3,19 @@ import { resolveDestinationRefFromHref, type CompactAppDestination } from '../de
 
 /** A destination's registered route owns its carried identity; the host supplies Account scope. */
 export function resolveWorkspaceDestinationEntityItem(input: Readonly<{
-    href: string;
+    href: string | null;
     scope: EntityDragScopeV1;
     catalog: readonly CompactAppDestination[] | undefined;
     entityItem?: EntityDragItemV1 | null;
 }>): EntityDragItemV1 | null {
     const { href, scope, entityItem } = input;
-    const ref = input.catalog ? resolveDestinationRefFromHref(input.catalog, href) : null;
+    const ref = href && input.catalog ? resolveDestinationRefFromHref(input.catalog, href) : null;
     if (ref?.params.serverId && ref.params.serverId !== scope.serverId) return null;
     if (ref?.params.accountId && ref.params.accountId !== scope.accountId) return null;
     if (entityItem) {
         if (entityItem.scope.serverId !== scope.serverId || entityItem.scope.accountId !== scope.accountId) return null;
         // Session files keep their catalog-qualified destination; Project files retain checkout identity.
-        if (entityItem.kind === 'repository-file' && !entityItem.workspaceId) {
+        if (href && entityItem.kind === 'repository-file' && entityItem.entryKind !== 'directory' && !entityItem.workspaceId) {
             if (ref?.kind === 'project' && ref.params.workspaceRefId) return { ...entityItem, workspaceId: ref.params.workspaceRefId };
             return { kind: 'destination', scope, href };
         }
@@ -23,5 +23,6 @@ export function resolveWorkspaceDestinationEntityItem(input: Readonly<{
     }
     if (ref?.kind === 'session' && ref.params.id) return { kind: 'session', scope,
         address: { serverId: scope.serverId, sessionId: ref.params.id } };
-    return { kind: 'destination', scope, href };
+    if (ref?.kind === 'workflow' && ref.params.id) return { kind: 'workflow', scope, workflowId: ref.params.id };
+    return href ? { kind: 'destination', scope, href } : null;
 }

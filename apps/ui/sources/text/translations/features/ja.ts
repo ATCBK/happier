@@ -2586,7 +2586,7 @@ const en = Shared_entityDragDropTranslations.en;
 
 const ja: EntityDragDropTranslations = {
     files: { attach: "添付", uploadHere: "ここにアップロード" },
-    composer: { addContext: "コンテキストを追加", consequence: "次のメッセージと一緒に送信 · まだ何も送信されません", target: "入力欄", readOnly: "この入力欄は読み取り専用です", otherWorkspace: "このワークスペースに含まれていません", unavailable: "この参照は利用できません" },
+    composer: { addContext: "コンテキストを追加", consequence: "次のメッセージと一緒に送信 · まだ何も送信されません", target: "入力欄", readOnly: "この入力欄は読み取り専用です", otherWorkspace: "このワークスペースに含まれていません", unavailable: "この参照は利用できません" , mentionHere: "ここで参照", cantMentionHere: "ここでは参照できません", attachAsImage: ({ number }: { number: number }) => `画像 #${number} として添付`, attachAndMention: "トレイに追加し、ここで参照します", noMentionInText: ({ name }: { name: string }) => `${name} · 本文での参照なし`, mentionFiles: ({ count }: { count: number }) => `ここで ${count} 個のファイルを参照`, mentionInComposer: "入力欄で参照", uploadFolderAndMention: "フォルダーをアップロードし、ここで参照します" },
     surface: {
         scopeMismatch: '別の Home またはアカウントにあります',
         widgetMoveUnavailable: 'このウィジェットはこの表示領域に移動できません',

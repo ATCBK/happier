@@ -72,6 +72,7 @@ import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { useWidgetMovementAdmission } from '@/components/widgets/surface/useWidgetMovementAdmission';
 import { SessionSurfaceEntityDragHandle, SessionSurfaceEntityFeedback, SessionSurfaceEntityTargetFeedback, useSessionSurfaceCarriedStyle, useSessionSurfaceEntityDrag, useSessionSurfaceGeometryRefresh } from '@/components/sessions/board/SessionSurfaceEntityDrag';
+import { useEntityComposerMention } from '@/components/ui/treeDragDrop/useEntityComposerMention';
 import { resolveEntityFlatRowPosition } from '@/components/ui/treeDragDrop/geometry/entityFlatListStrategy';
 import { resolveActionExecutionErrorMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 import { resolveWidgetAreaEntityDrop } from './widgetAreaEntityDrop';
@@ -791,6 +792,7 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
             sourceItem: props.movementSourceItem, area: props.area, canEdit: props.canEdit }),
     } : null);
     const carriedStyle = useSessionSurfaceCarriedStyle(drag);
+    const mention = useEntityComposerMention();
     const renaming = useWidgetFrameRename({
         title,
         testID,
@@ -837,7 +839,8 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
                 onOverflowTriggerKeyDown={key => stepWidgetSizeControl(sizeControl, key)}
                 renderOverflowSection={({ id }) => renderWidgetSizeMenuSection(sizeControl, id, `${testID}.size`)}
                 actions={orderWidgetMenu({
-                    instance: buildWidgetInstanceActions({ editInputs: edit.editInputs, onRename: renaming.begin }),
+                    instance: buildWidgetInstanceActions({ editInputs: edit.editInputs, onRename: renaming.begin,
+                        onMention: () => { void mention({ kind: 'widget-area-instance', scope: { serverId: surface.serverId, accountId: surface.accountId }, ref: { surface, instanceId: instance.id } }, title); } }),
                     size: buildWidgetSizeActions(sizeControl),
                     frame: parent ? [] : buildWidgetFrameStyleActions({
                         placement: GEOMETRY_PLACEMENT[geometry],

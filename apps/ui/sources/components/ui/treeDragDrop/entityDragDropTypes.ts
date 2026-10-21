@@ -44,7 +44,7 @@ export type EntityDropTarget = Readonly<{
     /** A region the carried card keeps clear of while this target is selected (the composer's block). */
     getClearBounds?: () => WindowBounds | null;
     /** Native/hosted measurement at pointer release, before final hit testing and dispatch. */
-    measureBounds?: () => Promise<void>;
+    measureBounds?: (pointer: WindowPointer | null) => Promise<void>;
     /** Shape strategies may reject points within an enclosing rectangle. */
     containsPointer?: (pointer: WindowPointer) => boolean;
     isCurrent?: () => boolean;

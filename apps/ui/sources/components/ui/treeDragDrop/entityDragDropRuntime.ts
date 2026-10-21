@@ -196,7 +196,7 @@ export function createEntityDragDropRuntime(options: Readonly<{
     const refreshMeasurements = async () => {
         const active = carry;
         if (!active || active.input !== 'pointer' || active.dispatched || active.releasePromise) return;
-        try { await Promise.all(matchingMeasurementTargets(active).map(target => target.measureBounds!())); }
+        try { await Promise.all(matchingMeasurementTargets(active).map(target => target.measureBounds!(pointer))); }
         catch { if (carry === active) cancel('target-geometry-unavailable'); return; }
         if (carry === active) refresh();
     };
@@ -222,7 +222,7 @@ export function createEntityDragDropRuntime(options: Readonly<{
         captureSourceFeedback(active.source);
         const measuredTargets = matchingMeasurementTargets(active);
         if (measuredTargets.length > 0) {
-            try { await Promise.all(measuredTargets.map(target => target.measureBounds!())); }
+            try { await Promise.all(measuredTargets.map(target => target.measureBounds!(pointer))); }
             catch {
                 if (carry !== active) return null;
                 const outcome: EntityDropOutcomeV1 = { status: 'refused', reason: reason('target-geometry-unavailable') };

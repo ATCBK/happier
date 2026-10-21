@@ -2588,7 +2588,7 @@ const en = Shared_entityDragDropTranslations.en;
 
 const ca: EntityDragDropTranslations = {
     files: { attach: "Adjunta", uploadHere: "Puja aquí" },
-    composer: { addContext: "Afegeix context", consequence: "S’envia amb el teu proper missatge · encara no s’envia res", target: "Redactor", readOnly: "Aquest redactor és de només lectura", otherWorkspace: "No forma part d’aquest espai de treball", unavailable: "Aquesta referència no està disponible" },
+    composer: { addContext: "Afegeix context", consequence: "S’envia amb el teu proper missatge · encara no s’envia res", target: "Redactor", readOnly: "Aquest redactor és de només lectura", otherWorkspace: "No forma part d’aquest espai de treball", unavailable: "Aquesta referència no està disponible" , mentionHere: "Esmenta aquí", cantMentionHere: "No es pot esmentar aquí", attachAsImage: ({ number }: { number: number }) => `Adjunta com a Imatge #${number}`, attachAndMention: "L’afegeix a la safata i l’esmenta aquí", noMentionInText: ({ name }: { name: string }) => `${name} · sense esment al text`, mentionFiles: ({ count }: { count: number }) => `Esmenta ${count} ${count === 1 ? 'fitxer' : 'fitxers'} aquí`, mentionInComposer: "Esmenta al redactor", uploadFolderAndMention: "Puja la carpeta i l’esmenta aquí" },
     surface: {
         scopeMismatch: 'És en un altre Home o compte',
         widgetMoveUnavailable: 'Aquest giny no es pot moure a aquesta superfície',

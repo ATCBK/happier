@@ -40,7 +40,8 @@ export const EntityDragItemV1Schema = lazyZodSchema(() => z.discriminatedUnion('
     z.strictObject({ kind: z.literal('destination'), scope, href: Id.check(z.refine(href => href.startsWith('/') && !href.startsWith('//'))) }),
     // A local navigation preference is carried only within its own customization list.
     z.strictObject({ kind: z.literal('navigation-item'), scope, surfaceId: Id, itemId: Id }),
-    z.strictObject({ kind: z.literal('repository-file'), scope, machineId: Id, workspaceId: z.optional(Id), path: Id }),
+    z.strictObject({ kind: z.literal('repository-file'), scope, machineId: Id, workspaceId: z.optional(Id), path: Id, entryKind: z.optional(z.enum(['file', 'directory'])) }),
+    z.strictObject({ kind: z.literal('workflow'), scope, workflowId: Id }),
     z.strictObject({ kind: z.literal('session-board-item'), scope, address, viewId: Id, itemId: Id }),
     z.strictObject({ kind: z.literal('work-board-item'), scope, boardId: Id, item: BoardItemRefV1Schema }),
     // A configured widget placed on a WorkBoard: its qualified instance ref is `scope` + this Board + id.

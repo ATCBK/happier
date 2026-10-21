@@ -1306,7 +1306,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         copyPath: share.copyPath ? intent => share.copyPath?.({ absolute: intent?.altKey === true }) : undefined,
         copyAbsolutePath: share.copyAbsolutePath,
         copyLink: share.copyLink,
-        attachToMessage: share.attachToMessage,
+        mentionInComposer: share.mentionInComposer,
         saveAsArtifact: share.saveAsArtifact,
         download: fileEntry?.kind !== 'deleted' ? () => share.download() : undefined,
         shareFile: share.shareFile,

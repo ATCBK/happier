@@ -10,12 +10,14 @@ import { composerRefsV1Equal } from '@happier-dev/protocol/plugins/ui/composerRe
 import { listCurrentComposerReferences, type ComposerReferenceSearchHost } from '@/components/autocomplete/composerSuggestionKinds';
 import type { ComposerSessionSuggestionItem } from '@/sync/domains/input/suggestionSession';
 import type { FileSuggestionScope } from '@/sync/domains/input/suggestionFile';
-import { buildComposerFileReferenceSelection, buildComposerSessionReferenceSelection, buildContributedComposerReferenceSelection } from '@/sync/domains/input/composerReferenceSelection';
+import { buildComposerFileReferenceSelection, buildComposerSessionReferenceSelection, buildComposerWorkflowReferenceSelection, buildComposerWidgetReferenceSelection, buildContributedComposerReferenceSelection } from '@/sync/domains/input/composerReferenceSelection';
+import { widgetEntitySourceRef } from '@/components/ui/treeDragDrop/widgetLayoutEntityDrop';
 import { isAbsoluteLocalPath, normalizeLocalPathForComparison, resolvePathRelativeToRoot } from '@/utils/path/resolvePathRelativeToRoot';
-import { normalizePluginUiProjection, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
+import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { resolvePluginUiClientDragSourceRegistration, type PluginUiClientExecutableRegistrationReader } from '@/components/plugins/reactNative/clientExecutableContributions';
 import type { ComposerPresentationAttachmentComposition } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
 import { resolvePluginUiClientExecutablePlatform } from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
+import { planComposerReferenceInsertion } from './composerReferenceInsertion';
 
 export type ComposerEntityDropContext = Readonly<{
     scope: EntityDragScopeV1;
@@ -30,24 +32,18 @@ export type ComposerEntityDropContext = Readonly<{
     dragSources?: PluginUiProjectionModel['dragSourcesById'];
     resolveDestinationFile?: (href: string) => Extract<EntityDragItemV1, { kind: 'repository-file' }> | null;
     preview: EntityDropPreviewV1;
+    at?: Parameters<typeof planComposerReferenceInsertion>[0]['at'];
+    itemLabel?: string;
     reason: (code: string) => string;
 }>;
 
-function buildReferenceOperations(
-    selection: ReturnType<typeof buildComposerFileReferenceSelection> | ReturnType<typeof buildComposerSessionReferenceSelection> | ReturnType<typeof buildContributedComposerReferenceSelection>,
-    snapshot: ComposerSnapshotV1,
-): ComposerOperationV1[] {
-    const spacer = snapshot.text.length > 0 && !/\s$/.test(snapshot.text) ? ' ' : '';
-    const start = snapshot.text.length + spacer.length;
-    return [
-        { kind: 'text.insert', position: { offset: snapshot.text.length }, text: spacer + selection.token },
-        { kind: 'reference.insert', reference: { ...selection.payload, token: selection.token, start, end: start + selection.token.length } },
-    ];
-}
-
 /** Attach and drag/drop insert the same typed reference, preserving the draft. */
-export function buildFileReferenceOperation(path: string, snapshot: ComposerSnapshotV1): ComposerOperationV1[] {
-    return buildReferenceOperations(buildComposerFileReferenceSelection(path, path.split('/').at(-1) ?? path), snapshot);
+export function buildFileReferenceOperation(path: string, snapshot: ComposerSnapshotV1,
+    at: Parameters<typeof planComposerReferenceInsertion>[0]['at'] = { kind: 'caret' }): ComposerOperationV1[] {
+    const folder = path.endsWith('/');
+    const basename = (folder ? path.slice(0, -1) : path).split('/').at(-1) ?? path;
+    const selection = buildComposerFileReferenceSelection(path, basename + (folder ? '/' : ''));
+    return planComposerReferenceInsertion({ snapshot, reference: { label: selection.label, ref: selection.ref, kind: selection.payload.kind, payload: selection.payload }, at });
 }
 
 export function resolveComposerEntityDrop(item: EntityDragItemV1, context: ComposerEntityDropContext): EntityDropAdmissionV1 {
@@ -61,7 +57,7 @@ export function resolveComposerEntityDrop(item: EntityDragItemV1, context: Compo
         const host = context.referenceHost;
         if (!host || host.serverId !== context.scope.serverId || !host.isCurrent()) return refuse('referenceUnavailable');
         const platform = context.platform ?? resolvePluginUiClientExecutablePlatform();
-        const sources = context.dragSources ?? normalizePluginUiProjection(host.projection, platform).dragSourcesById;
+        const sources = context.dragSources ?? host.pluginUiProjection.dragSourcesById;
         const source = sources[buildQualifiedPluginContributionKey(item.contribution)];
         const localId = source?.definition.composerAttachment;
         if (source && localId) {
@@ -75,7 +71,11 @@ export function resolveComposerEntityDrop(item: EntityDragItemV1, context: Compo
             try {
                 if (!validatePluginDragSourceReferenceV1(source.definition, item.reference)) return refuse('referenceUnavailable');
                 const value = registration.runtime.toComposerAttachment(item.reference);
-                const operation = ComposerOperationV1Schema.safeParse({ kind: 'attachment.add', attachmentLocalId: localId, value });
+                const at = context.at ?? { kind: 'caret' };
+                const mentionAt = at.kind === 'offset' ? { start: at.offset, end: at.offset }
+                    : at.kind === 'activeWord' ? at.range
+                    : snapshot.selection ?? { start: snapshot.text.length, end: snapshot.text.length };
+                const operation = ComposerOperationV1Schema.safeParse({ kind: 'attachment.add', attachmentLocalId: localId, value, mentionAt });
                 if (!operation.success || operation.data.kind !== 'attachment.add' || !attachment.valueValidator?.(operation.data.value.value)
                     || !host.isCurrent() || resolvePluginUiClientDragSourceRegistration(registrationInput)?.registration !== registration.registration) return refuse('referenceUnavailable');
                 return { status: 'allowed', effect: { actionId: 'composer.transaction.apply', input: {
@@ -96,7 +96,18 @@ export function resolveComposerEntityDrop(item: EntityDragItemV1, context: Compo
         if (item.address.serverId !== context.scope.serverId) return refuse('scopeMismatch');
         const candidate = context.sessions.find(candidate => candidate.id === item.address.sessionId && candidate.serverId === item.address.serverId);
         if (!candidate) return refuse('referenceUnavailable');
-        operations = buildReferenceOperations(buildComposerSessionReferenceSelection(candidate), snapshot);
+        const selection = buildComposerSessionReferenceSelection(candidate);
+        operations = planComposerReferenceInsertion({ snapshot, reference: { label: selection.label, ref: selection.ref, kind: selection.payload.kind, payload: selection.payload }, at: context.at ?? { kind: 'caret' } });
+    } else if (item.kind === 'workflow') {
+        const selection = buildComposerWorkflowReferenceSelection(item.workflowId, context.itemLabel ?? item.workflowId);
+        operations = planComposerReferenceInsertion({ snapshot,
+            reference: { ...selection.payload, payload: selection.payload }, at: context.at ?? { kind: 'caret' } });
+    } else if (item.kind === 'work-board-widget' || item.kind === 'widget-area-instance') {
+        const identity = widgetEntitySourceRef(item);
+        if (!identity) return refuse('referenceUnavailable');
+        const selection = buildComposerWidgetReferenceSelection(identity, context.itemLabel ?? identity.instanceId);
+        operations = planComposerReferenceInsertion({ snapshot,
+            reference: { ...selection.payload, payload: selection.payload }, at: context.at ?? { kind: 'caret' } });
     } else if (item.kind === 'repository-file') {
         const workspace = context.workspace;
         if (!workspace || workspace.serverId !== item.scope.serverId || workspace.machineId !== item.machineId) return refuse('workspaceMismatch');
@@ -106,7 +117,7 @@ export function resolveComposerEntityDrop(item: EntityDragItemV1, context: Compo
         if (!path || !isAbsoluteLocalPath(path) || path.split('/').some(part => part === '..')) return refuse('workspaceMismatch');
         const relative = resolvePathRelativeToRoot({ path: item.path, root: workspace.rootPath });
         if (!relative || relative === '.') return refuse('workspaceMismatch');
-        operations = buildFileReferenceOperation(relative, snapshot);
+        operations = buildFileReferenceOperation(item.entryKind === 'directory' ? `${relative.replace(/\/$/, '')}/` : relative, snapshot, context.at);
     } else if (item.kind === 'plugin') {
         const host = context.referenceHost;
         if (!host || host.serverId !== context.scope.serverId || !host.isCurrent()) return refuse('referenceUnavailable');
@@ -120,8 +131,9 @@ export function resolveComposerEntityDrop(item: EntityDragItemV1, context: Compo
         ));
         const trigger = current?.presentation.kind === 'composerReference' ? current.presentation.triggers[0] : undefined;
         if (!trigger || !reference.label) return refuse('referenceUnavailable');
-        operations = buildReferenceOperations(buildContributedComposerReferenceSelection({ reference: reference.reference,
-            candidate: { id: reference.candidateId, label: reference.label }, trigger }), snapshot);
+        const selection = buildContributedComposerReferenceSelection({ reference: reference.reference,
+            candidate: { id: reference.candidateId, label: reference.label }, trigger });
+        operations = planComposerReferenceInsertion({ snapshot, reference: { label: selection.label, ref: selection.ref, kind: selection.payload.kind, payload: selection.payload }, at: context.at ?? { kind: 'caret' } });
     } else return refuse('referenceUnavailable');
 
     return { status: 'allowed', effect: { actionId: 'composer.transaction.apply', input: {

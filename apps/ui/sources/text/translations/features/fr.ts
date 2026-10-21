@@ -2588,7 +2588,7 @@ const en = Shared_entityDragDropTranslations.en;
 
 const fr: EntityDragDropTranslations = {
     files: { attach: "Joindre", uploadHere: "Importer ici" },
-    composer: { addContext: "Ajouter du contexte", consequence: "Envoyé avec ton prochain message · rien n’est encore envoyé", target: "Éditeur", readOnly: "Cet éditeur est en lecture seule", otherWorkspace: "Ne fait pas partie de cet espace de travail", unavailable: "Cette référence est indisponible" },
+    composer: { addContext: "Ajouter du contexte", consequence: "Envoyé avec ton prochain message · rien n’est encore envoyé", target: "Éditeur", readOnly: "Cet éditeur est en lecture seule", otherWorkspace: "Ne fait pas partie de cet espace de travail", unavailable: "Cette référence est indisponible" , mentionHere: "Mentionner ici", cantMentionHere: "Impossible de le mentionner ici", attachAsImage: ({ number }: { number: number }) => `Joindre comme Image #${number}`, attachAndMention: "L’ajoute aux pièces jointes et le mentionne ici", noMentionInText: ({ name }: { name: string }) => `${name} · sans mention dans le texte`, mentionFiles: ({ count }: { count: number }) => `Mentionner ${count} ${count === 1 ? 'fichier' : 'fichiers'} ici`, mentionInComposer: "Mentionner dans l’éditeur", uploadFolderAndMention: "Téléverse le dossier et le mentionne ici" },
     surface: {
         scopeMismatch: 'Cet élément est dans un autre Home ou compte',
         widgetMoveUnavailable: 'Ce widget ne peut pas être déplacé vers cette surface',

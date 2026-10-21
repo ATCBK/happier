@@ -34,7 +34,7 @@ export type FileMenuContext = Readonly<{
     copyPath?: FileMenuRun;
     copyAbsolutePath?: FileMenuRun;
     copyLink?: FileMenuRun;
-    attachToMessage?: FileMenuRun;
+    mentionInComposer?: FileMenuRun;
     saveAsArtifact?: FileMenuRun;
     download?: FileMenuRun;
     shareFile?: FileMenuRun;
@@ -114,7 +114,7 @@ export const FILE_MENU_ITEMS: readonly FileMenuItem[] = [
     item({ id: 'copyPath', group: 'share', titleKey: 'files.pane.menu.copyPath', callback: c => c.copyPath }),
     item({ id: 'copyAbsolutePath', group: 'share', titleKey: 'files.pane.menu.copyAbsolutePath', callback: c => c.copyAbsolutePath, surfaces: ['phone'] }),
     item({ id: 'copyLink', group: 'share', titleKey: 'files.pane.menu.copyHappierLink', callback: c => c.copyLink }),
-    item({ id: 'attachToMessage', group: 'share', titleKey: 'files.pane.menu.attachToMessage', callback: c => c.attachToMessage, requiresContent: true }),
+    item({ id: 'mentionInComposer', group: 'share', titleKey: 'entityDragDrop.composer.mentionInComposer', callback: c => c.mentionInComposer }),
     item({ id: 'saveAsArtifact', group: 'share', titleKey: 'files.pane.menu.saveAsArtifact', callback: c => c.saveAsArtifact, requiresMachine: true }),
     item({ id: 'download', group: 'share', titleKey: 'files.repositoryTree.actions.download', callback: c => c.download, requiresContent: true }),
     item({ id: 'shareFile', group: 'share', titleKey: 'common.share', callback: c => c.shareFile,

@@ -1,20 +1,17 @@
 import { Platform } from 'react-native';
 import type { ComposerRefV1 } from '@happier-dev/protocol/plugins/ui/composerRef';
-import { ComposerTransactionResultV1Schema } from '@happier-dev/protocol/plugins/ui/composer';
 import type { EntityDragScopeV1 } from '@happier-dev/protocol/plugins/ui';
 import type { WorkspaceFileOpenInput } from '@happier-dev/protocol/actions/workspaceActionFamily';
 
 import { useWorkspaceFileTransfers, type WorkspaceFileCachedContent, type WorkspaceFileDownloadAction } from '@/hooks/workspaces/transfers/useWorkspaceFileTransfers';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import type { FileSuggestionScope } from '@/sync/domains/input/suggestionFile';
-import { readMountedComposerPresentationSnapshot } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
-import { resolveComposerEntityDrop } from '@/components/sessions/composer/composerEntityDrop';
-import { describeComposerEntityDropReason } from '@/components/sessions/composer/composerEntityDropReason';
 import { resolveMachineAbsolutePath } from '@/sync/domains/fileSystem/resolveMachineAbsolutePath';
 import { resolveAbsolutePath } from '@/utils/path/pathUtils';
 import { isAbsoluteLocalPath, normalizeLocalPathForComparison } from '@/utils/path/resolvePathRelativeToRoot';
 import { buildWorkspaceFileLink } from '@/utils/url/sessionFileDeepLink';
-import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { useEntityComposerMention } from '@/components/ui/treeDragDrop/useEntityComposerMention';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { buildFileShareClipboardRequest, resolveFileShareActionScope, type FileShareClipboardIntent } from './fileShareClipboard';
 import { canOpenFileInDefaultApp } from '@/sync/runtime/files/saveFileBytes';
@@ -26,6 +23,7 @@ type FileShareCallback = () => void | Promise<void>;
 export type WorkspaceFileShareActionsInput = Readonly<{
     workspaceScope: WorkspaceScopeBase | null;
     path: string;
+    entryKind?: 'file' | 'directory';
     actionScope?: ServerAccountScope | null;
     linkInput?: WorkspaceFileOpenInput;
     homeDir?: string | null;
@@ -38,6 +36,7 @@ export type WorkspaceFileShareActionsInput = Readonly<{
 
 /** Supplies behaviour to the canonical file menu; platform and menu presentation stay separate. */
 export function useWorkspaceFileShareActions(input: WorkspaceFileShareActionsInput) {
+    const mention = useEntityComposerMention();
     const transfers = useWorkspaceFileTransfers({ workspaceScope: input.workspaceScope });
     const actionScope = resolveFileShareActionScope(input.actionScope, input.composer?.scope);
     const execution = useMountedActionExecution(actionScope, { openOnRequest: true, retainInvocation: true });
@@ -70,29 +69,16 @@ export function useWorkspaceFileShareActions(input: WorkspaceFileShareActionsInp
     });
     const openSupported = canOpenFileInDefaultApp();
     const openInDefaultApp = openSupported ? () => download('open') : undefined;
-    const composer = input.composer;
-    const attachToMessage = composer && input.workspaceScope ? () => report(async () => {
-        if (!areServerAccountScopesEqual(actionScope, composer.scope)) throw new Error(describeComposerEntityDropReason('scopeMismatch'));
+    const source = input.workspaceScope;
+    const mentionInComposer = actionScope && source ? () => report(async () => {
         if (!execution.isCurrent()) return;
-        if (!input.machineReachable && !input.cachedContent) throw new Error(input.unavailableReason);
-        const source = input.workspaceScope!;
-        const snapshot = readMountedComposerPresentationSnapshot({ scope: composer.scope, ref: composer.ref });
-        const admission = resolveComposerEntityDrop({ kind: 'repository-file', scope: {
-            serverId: source.serverId, accountId: composer.scope.accountId,
-        }, machineId: source.machineId, path: resolveMachineAbsolutePath({ rootPath: source.rootPath, requestPath: input.path, pathKind: 'workspace_entry' }) }, {
-            ...composer, snapshot, sessions: [], reason: describeComposerEntityDropReason,
-            preview: { verb: t('entityDragDrop.composer.addContext'), target: t('entityDragDrop.composer.target') },
-        });
-        if (admission.status !== 'allowed') throw new Error(admission.reason.message);
-        const result = await execution.execute('composer.transaction.apply', admission.effect.input);
-        if (!execution.isCurrent()) return;
-        if (!result.ok) throw new Error(result.error);
-        const output = ComposerTransactionResultV1Schema.safeParse(result.result);
-        if (!output.success) throw new Error(t('common.unavailable'));
-        if (output.data.status !== 'applied') throw new Error(describeComposerEntityDropReason(output.data.status));
+        await mention({ kind: 'repository-file', scope: { serverId: source.serverId, accountId: actionScope.accountId }, machineId: source.machineId,
+            entryKind: input.entryKind ?? 'file',
+            path: resolveMachineAbsolutePath({ rootPath: expandedRoot ?? source.rootPath, requestPath: input.path, pathKind: 'workspace_entry' }),
+        }, input.path);
     }) : undefined;
     return {
-        attachToMessage, download, openInDefaultApp, saveAsArtifact: input.onSaveAsArtifact,
+        mentionInComposer, download, openInDefaultApp, saveAsArtifact: input.onSaveAsArtifact,
         copyPath: actionScope ? (options?: Readonly<{ absolute?: boolean }>) => copy({ kind: 'path', absolute: options?.absolute }) : undefined,
         copyAbsolutePath: actionScope && absolutePath ? () => copy({ kind: 'path', absolute: true }) : undefined,
         copyLink: actionScope && input.linkInput ? () => copy({ kind: 'link' }) : undefined,

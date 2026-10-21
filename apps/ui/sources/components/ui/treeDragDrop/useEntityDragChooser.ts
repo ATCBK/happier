@@ -1,12 +1,26 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { EntityDragCarry, EntityDragDropRuntime, EntityDropDestination } from './entityDragDropTypes';
 import { useEntityDragDestinations, useEntityDragSourceState } from './entityDragDropHooks';
+import { t } from '@/text';
+
+export function isComposerEntityDropDestination(destination: EntityDropDestination): boolean {
+    return destination.admission.status === 'allowed'
+        ? destination.admission.effect.actionId === 'composer.transaction.apply'
+        : destination.label === t('entityDragDrop.composer.mentionInComposer');
+}
 
 /** Keep one staged carry through async admission and selection; dismiss never dispatches it. */
 export function useEntityDragChooser(runtime: EntityDragDropRuntime, sourceId: string, onApplied?: () => void) {
     const [open, setOpen] = useState(false);
     const state = useEntityDragSourceState(runtime, sourceId);
-    const destinations = useEntityDragDestinations(runtime, sourceId, open && state.phase === 'carrying');
+    const currentDestinations = useEntityDragDestinations(runtime, sourceId, open && state.phase === 'carrying');
+    const destinations = useMemo(() => {
+        if (!open || state.phase !== 'carrying' || currentDestinations.some(isComposerEntityDropDestination)) return currentDestinations;
+        const item = runtime.getSnapshot().item;
+        if (!item || !['session', 'repository-file', 'workflow', 'work-board-widget', 'widget-area-instance', 'destination', 'plugin'].includes(item.kind)) return currentDestinations;
+        return [...currentDestinations, { targetId: 'unavailable-composer', label: t('entityDragDrop.composer.mentionInComposer'),
+            admission: { status: 'refused' as const, reason: { code: 'composerUnavailable', message: t('entityDragDrop.composer.unavailable') } } }];
+    }, [currentDestinations, open, runtime, state.phase]);
     const carry = useRef<EntityDragCarry | null>(null);
     const applied = useRef(onApplied); applied.current = onApplied;
     const onOpenChange = useCallback((value: boolean) => {

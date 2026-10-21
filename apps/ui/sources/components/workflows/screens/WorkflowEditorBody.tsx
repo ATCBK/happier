@@ -22,6 +22,7 @@ import { glassSurfaceBackgroundColor } from '@/components/ui/glass/glassSurfaceP
 import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
 import { PAGE_COLUMN_MAX_WIDTH_PX } from '@/components/ui/layout/contentWidthMode';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
+import { WorkspaceDestinationRow } from '@/components/appShell/workspace/WorkspaceDestinationRow';
 import { NavigationBackChromeProvider, useNavigationBackControl } from '@/components/ui/layout/NavigationBackChrome';
 import { DefaultBackButton } from '@/components/navigation/Header';
 import { PAGE_HEADER_MARK_SLOT_SIZE_PX, PageHeaderMarkSlot } from '@/components/ui/layout/PageHeaderMarkSlot';
@@ -1139,6 +1140,10 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
         <>
         {hasPageCommands ? <Stack.Screen options={chromeOptions} /> : null}
         <NavigationBackChromeProvider control={columnVisible ? null : hasPageCommands && (hostedDestination || appShellPresent) ? pageBackControl : inheritedBackControl}>
+        <WorkspaceDestinationRow href={null} existingMenu entityTitle={draft.name}
+            entityItem={props.currentWorkflowRef && props.accountLifetime?.scope ? {
+                kind: 'workflow', scope: props.accountLifetime.scope, workflowId: props.currentWorkflowRef,
+            } : null}>
         <PageHeader
             testID={`${testIDPrefix}-header`}
             actionsLayout={compactLayout ? 'wrap' : 'inline'}
@@ -1226,6 +1231,7 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
                     </View>
             )}
         />
+        </WorkspaceDestinationRow>
         </NavigationBackChromeProvider>
         </>
     );

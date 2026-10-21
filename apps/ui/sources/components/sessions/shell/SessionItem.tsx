@@ -44,6 +44,7 @@ import { useNavigateToSession } from '@/hooks/session/useNavigateToSession';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { useWorkspaceOpenActions } from '@/components/appShell/workspace/useWorkspaceOpenActions';
 import { WorkspaceDestinationRow } from '@/components/appShell/workspace/WorkspaceDestinationRow';
+import { useEntityComposerMention } from '@/components/ui/treeDragDrop/useEntityComposerMention';
 import { useDestinationRouter } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { t } from '@/text';
 import { hasSessionListUnreadAttention, normalizeSessionListBackgroundWorkAttentionMode } from '@/sync/domains/session/listing/sessionListBackgroundWorkAttention';
@@ -123,6 +124,7 @@ import {
 } from '@/components/sessions/debug/sessionDebugMenuItem';
 import {
     storage,
+    useActiveServerAccountScope,
     useLocalSetting,
     useSetting,
 } from '@/sync/domains/state/storage';
@@ -732,6 +734,8 @@ const SessionItemContent = React.memo(
                 && isSessionAwarenessContentReadableV1(sessionStatus.awareness.encryption),
         });
         const sessionNameResolved = workflowOccurrence?.title ?? savedSessionName;
+        const mention = useEntityComposerMention();
+        const mentionScope = useActiveServerAccountScope();
         const workflowLifecycle = sessionStatus.isConnected && sessionStatus.state !== 'stale'
             ? workflowOccurrence?.lifecycle : undefined;
         const workflowPresentation = workflowLifecycle === undefined ? null
@@ -1068,12 +1072,16 @@ const SessionItemContent = React.memo(
             }];
         }, [dragEnabled, organize.active, organize.available, rowActionIconColor]);
         const leadingMenuItems = React.useMemo(
-            () => [...workspaceOpen.items, ...draftMenuItems, ...copyDebugMenuItems, ...forkMenuItems, ...organizeMenuItems],
-            [copyDebugMenuItems, draftMenuItems, forkMenuItems, organizeMenuItems, workspaceOpen.items],
+            () => [...workspaceOpen.items, ...(mentionScope && mentionScope.serverId === serverId ? [{ id: 'entity.mentionInComposer', title: t('entityDragDrop.composer.mentionInComposer') }] : []), ...draftMenuItems, ...copyDebugMenuItems, ...forkMenuItems, ...organizeMenuItems],
+            [copyDebugMenuItems, draftMenuItems, forkMenuItems, organizeMenuItems, workspaceOpen.items, mentionScope, serverId],
         );
 
         const handleSelectLeadingMenuItem = React.useCallback(async (itemId: string): Promise<boolean> => {
             if (workspaceOpen.select(itemId)) return true;
+            if (itemId === 'entity.mentionInComposer' && mentionScope && mentionScope.serverId === serverId) {
+                await mention({ kind: 'session', scope: mentionScope, address: { serverId, sessionId: resolvedSession.id } }, sessionNameResolved);
+                return true;
+            }
             if (itemId === SESSION_ROW_ORGANIZE_LIST_MENU_ITEM_ID) {
                 organize.enter();
                 return true;
@@ -1094,7 +1102,7 @@ const SessionItemContent = React.memo(
                 return true;
             }
             return false;
-        }, [confirmDeleteDraft, copyFeedback, openForkFlow, organize, resolvedSession.id, resolveSessionDebugInformation, workspaceOpen]);
+        }, [confirmDeleteDraft, copyFeedback, mention, mentionScope, openForkFlow, organize, resolvedSession.id, resolveSessionDebugInformation, serverId, sessionNameResolved, workspaceOpen]);
 
         const handleEnterSelectionMode = React.useCallback(() => {
             if (!resolvedSelectionKey) return;

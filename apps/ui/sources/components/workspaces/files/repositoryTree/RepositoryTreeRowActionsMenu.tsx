@@ -43,7 +43,7 @@ const FILE_MENU_ITEM_ICONS: Readonly<Record<string, ItemAction['icon']>> = {
     openWithBlame: 'clock-counter-clockwise',
     copyPath: 'copy',
     copyLink: 'link',
-    attachToMessage: 'paperclip',
+    mentionInComposer: 'paperclip',
     saveAsArtifact: 'file-arrow-up',
     download: 'download',
     shareFile: 'share-network',
@@ -83,11 +83,12 @@ export function RepositoryTreeRowActionsMenu(props: Readonly<{
     const share = useWorkspaceFileShareActions({
         workspaceScope: props.share?.workspaceScope ?? null,
         path: props.path,
+        entryKind: props.kind,
         actionScope: props.share?.actionScope ?? null,
         linkInput: file && props.share?.linkTarget ? { target: props.share.linkTarget, path: props.path } : undefined,
         machineReachable,
         unavailableReason,
-        composer: file ? props.share?.composer ?? null : null,
+        composer: props.share?.composer ?? null,
     });
     const sharedContext = React.useMemo<FileMenuContext>(() => ({
         ...props.fileMenuContext,
@@ -99,14 +100,14 @@ export function RepositoryTreeRowActionsMenu(props: Readonly<{
         copyPath: props.fileMenuContext?.copyPath ?? (share.copyPath ? () => share.copyPath?.()
             : () => props.onSelect('repository-tree-menuitem-copy-path')),
         copyLink: props.fileMenuContext?.copyLink ?? share.copyLink,
-        attachToMessage: props.fileMenuContext?.attachToMessage ?? share.attachToMessage,
+        mentionInComposer: props.fileMenuContext?.mentionInComposer ?? share.mentionInComposer,
         openInDefaultApp: props.fileMenuContext?.openInDefaultApp ?? (file ? share.openInDefaultApp : undefined),
         shareFile: props.fileMenuContext?.shareFile ?? (file ? share.shareFile : undefined),
         rename: props.fileMenuContext?.rename ?? (() => props.onSelect('repository-tree-menuitem-rename')),
         download: props.fileMenuContext?.download ?? (props.kind === 'file' && props.downloadActionsEnabled ? () => props.onSelect('repository-tree-menuitem-download') : undefined),
         openBeside: props.fileMenuContext?.openBeside ?? (workspaceOpen.items.some(item => item.id === 'workspace.open.right')
             ? () => { workspaceOpen.open('splitRight'); } : undefined),
-    }), [file, machineReachable, props.downloadActionsEnabled, props.fileMenuContext, props.kind, props.onSelect, share.attachToMessage,
+    }), [file, machineReachable, props.downloadActionsEnabled, props.fileMenuContext, props.kind, props.onSelect, share.mentionInComposer,
         share.copyLink, share.copyPath, share.openInDefaultApp, share.shareFile, unavailableReason, workspaceOpen]);
     const sharedItems = React.useMemo(() => resolveFileMenuItems(sharedContext, 'treeRow'), [sharedContext]);
     const sharedActions = React.useMemo(() => sharedItems.map(item => ({

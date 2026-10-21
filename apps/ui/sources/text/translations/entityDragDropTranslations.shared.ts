@@ -6,7 +6,7 @@ export type EntityDragDropTranslations = typeof en;
 
 export const en = {
     files: { attach: "Attach", uploadHere: "Upload here" },
-    composer: { addContext: "Add context", consequence: "Sent with your next message · nothing sends yet", target: "Composer", readOnly: "This composer is read-only", otherWorkspace: "It isn’t part of this workspace", unavailable: "This reference is unavailable" },
+    composer: { addContext: "Add context", consequence: "Sent with your next message · nothing sends yet", target: "Composer", readOnly: "This composer is read-only", otherWorkspace: "It isn’t part of this workspace", unavailable: "This reference is unavailable" , mentionHere: "Mention here", cantMentionHere: "Can’t mention it here", attachAsImage: ({ number }: { number: number }) => `Attach as Image #${number}`, attachAndMention: "Adds it to the tray and mentions it here", noMentionInText: ({ name }: { name: string }) => `${name} · no mention in the text`, mentionFiles: ({ count }: { count: number }) => `Mention ${count} ${count === 1 ? 'file' : 'files'} here`, mentionInComposer: "Mention in composer", uploadFolderAndMention: "Uploads the folder and mentions it here" },
     surface: {
         scopeMismatch: 'It’s in another Home or account',
         widgetMoveUnavailable: 'This widget can’t move to this surface',

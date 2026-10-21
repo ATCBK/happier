@@ -147,8 +147,10 @@ export function buildWidgetMoveActions(input: Readonly<{
 export function buildWidgetInstanceActions(input: Readonly<{
     editInputs?: Readonly<{ onPress: () => void; binding: string | null }> | undefined;
     onRename?: (() => void) | undefined;
+    onMention?: (() => void) | undefined;
 }>): ItemAction[] {
     return [
+        ...(input.onMention ? [{ id: 'mentionInComposer', title: t('entityDragDrop.composer.mentionInComposer'), icon: 'at' as const, onPress: input.onMention }] : []),
         ...(input.editInputs ? [{
             id: 'editInputs',
             title: t('widgetAdd.editInputs'),

@@ -36,15 +36,18 @@ describe('one file menu inventory across page, phone and tree', () => {
     it('keeps cached sharing available offline while Machine operations explain their unavailability', () => {
         const noop = () => {};
         const context = { ...base, platform: 'tauri' as const, machineReachable: false,
-            copyPath: noop, copyLink: noop, attachToMessage: noop, download: noop,
+            copyPath: noop, copyLink: noop, mentionInComposer: noop, download: noop,
             rename: noop, openInDefaultApp: noop, changes: { discardAll: noop } };
         const items = resolveFileMenuItems(context, 'treeRow');
-        for (const id of ['copyPath', 'copyLink', 'attachToMessage', 'download']) {
+        for (const id of ['copyPath', 'copyLink', 'mentionInComposer', 'download']) {
             expect(items.find(item => item.id === id)?.state).toBe('enabled');
         }
         for (const id of ['rename', 'openInDefaultApp', 'discard']) {
             expect(items.find(item => item.id === id)?.state).toEqual({ disabledReason: 'offline' });
         }
+        const uncached = resolveFileMenuItems({ ...context, hasCachedContent: false, isDirectory: true }, 'treeRow');
+        expect(uncached.find(item => item.id === 'mentionInComposer')?.state).toBe('enabled');
+        expect(uncached.find(item => item.id === 'download')?.state).toEqual({ disabledReason: 'offline' });
         expect(resolveFileMenuItems({ ...context, platform: 'web' }, 'page').some(item => item.id === 'openInDefaultApp')).toBe(false);
     });
 

@@ -2599,7 +2599,7 @@ const en = Shared_entityDragDropTranslations.en;
 
 const pl: EntityDragDropTranslations = {
     files: { attach: "Dołącz", uploadHere: "Prześlij tutaj" },
-    composer: { addContext: "Dodaj kontekst", consequence: "Wysyłane z następną wiadomością · nic jeszcze nie zostanie wysłane", target: "Edytor", readOnly: "Ten edytor jest tylko do odczytu", otherWorkspace: "Nie należy do tego obszaru roboczego", unavailable: "To odwołanie jest niedostępne" },
+    composer: { addContext: "Dodaj kontekst", consequence: "Wysyłane z następną wiadomością · nic jeszcze nie zostanie wysłane", target: "Edytor", readOnly: "Ten edytor jest tylko do odczytu", otherWorkspace: "Nie należy do tego obszaru roboczego", unavailable: "To odwołanie jest niedostępne" , mentionHere: "Wspomnij tutaj", cantMentionHere: "Nie można wspomnieć tutaj", attachAsImage: ({ number }: { number: number }) => `Dołącz jako Obraz #${number}`, attachAndMention: "Dodaje do załączników i wspomina tutaj", noMentionInText: ({ name }: { name: string }) => `${name} · bez wzmianki w tekście`, mentionFiles: ({ count }: { count: number }) => `Wspomnij tutaj ${count} ${count === 1 ? 'plik' : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14) ? 'pliki' : 'plików'}`, mentionInComposer: "Wspomnij w edytorze", uploadFolderAndMention: "Przesyła folder i wspomina go tutaj" },
     surface: {
         scopeMismatch: 'Znajduje się w innym Home lub na innym koncie',
         widgetMoveUnavailable: 'Tego widżetu nie można przenieść do tego obszaru',

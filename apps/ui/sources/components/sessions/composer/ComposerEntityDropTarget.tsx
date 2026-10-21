@@ -3,7 +3,9 @@ import * as React from 'react';
 import type { ComposerRefV1, ActionId } from '@happier-dev/protocol';
 import type { EntityDragKindV1, EntityDragScopeV1, EntityDropOutcomeV1 } from '@happier-dev/protocol/plugins/ui';
 import { useEntityDragDropRuntime, useEntityDropTarget, useEntityDropTargetState, TreeDropOutline,
-    type WindowBounds } from '@/components/ui/treeDragDrop';
+    type WindowBounds, type WindowPointer } from '@/components/ui/treeDragDrop';
+import type { MultiTextInputHandle } from '@/components/ui/forms/MultiTextInput';
+import { readExternalFileDragPointer, subscribeExternalFileDragPointer } from '@/components/ui/treeDragDrop/externalFileDropAdapter';
 import { readMountedComposerPresentationSnapshot, readMountedComposerAttachmentComposition } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { readComposerSessionSuggestionItems } from '@/sync/domains/input/suggestionSession';
@@ -18,7 +20,7 @@ import { useOptionalWorkspaceNavigation } from '@/components/appShell/workspace/
 import { resolveDestinationRefFromHref } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { parseSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import { resolveMachineAbsolutePath } from '@/sync/domains/fileSystem/resolveMachineAbsolutePath';
-import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
+import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
 import { resolvePluginUiClientExecutablePlatform } from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
 
 /** Only this feedback leaf observes carry changes; typing and pointer frames stay separate. */
@@ -31,6 +33,8 @@ export function ComposerEntityDropTarget(props: Readonly<{
     clearBounds?: () => WindowBounds | null;
     presented: boolean;
     editable: boolean;
+    inputRef: React.RefObject<Pick<MultiTextInputHandle, 'offsetAtPoint' | 'setDropCaret'> | null>;
+    externalFilesActive?: boolean;
     fileScope?: FileSuggestionScope | null;
     referenceHost?: ComposerReferenceSearchHost | null;
     kinds: readonly import('@/components/autocomplete/composerSuggestionKinds').ComposerSuggestionKindId[];
@@ -40,11 +44,55 @@ export function ComposerEntityDropTarget(props: Readonly<{
     const navigation = useOptionalWorkspaceNavigation();
     const executor = React.useMemo(() => createDefaultActionExecutor(), []);
     const platform = resolvePluginUiClientExecutablePlatform();
-    const projection = props.referenceHost?.projection ?? null;
     // Carry frames reuse the canonical normalized map; they do not normalize
     // every plugin family or recompile attachment schemas while hovering.
-    const dragSources = React.useMemo(() => normalizePluginUiProjection(projection, platform).dragSourcesById, [projection, platform]);
-    const acceptedKinds: EntityDragKindV1[] = [];
+    const dragSources = props.referenceHost?.pluginUiProjection.dragSourcesById ?? EMPTY_PLUGIN_UI_PROJECTION.dragSourcesById;
+    const dropPosition = React.useRef<Readonly<{ pointer: WindowPointer; offset: number }> | null>(null);
+    const current = React.useRef(props);
+    current.current = props;
+    React.useEffect(() => {
+        let frame: ReturnType<typeof requestAnimationFrame> | null = null;
+        let pending: object | null = null;
+        const readPoint = () => {
+            const snapshot = runtime.getSnapshot();
+            if (snapshot.phase === 'carrying' && snapshot.targetId === props.id && snapshot.admission?.status === 'allowed') return runtime.getPointer();
+            if (!current.current.externalFilesActive || !current.current.editable || !current.current.presented) return null;
+            const point = readExternalFileDragPointer();
+            const bounds = current.current.bounds();
+            return point && bounds && point.x >= bounds.x && point.x <= bounds.x + bounds.width
+                && point.y >= bounds.y && point.y <= bounds.y + bounds.height ? point : null;
+        };
+        const update = () => {
+            pending = null;
+            if (!readPoint()) {
+                if (frame !== null) cancelAnimationFrame(frame);
+                frame = null;
+                current.current.inputRef.current?.setDropCaret(null);
+                return;
+            }
+            if (frame !== null) return;
+            frame = requestAnimationFrame(() => {
+                frame = null;
+                const point = readPoint();
+                const handle = current.current.inputRef.current;
+                if (!point || !handle) return;
+                const request = {};
+                pending = request;
+                void handle.offsetAtPoint(point).then(offset => {
+                    if (pending === request && current.current.inputRef.current === handle) handle.setDropCaret(offset);
+                }, () => { if (pending === request) handle.setDropCaret(null); });
+            });
+        };
+        const dispose = [runtime.subscribe(update), runtime.subscribePointer(update), subscribeExternalFileDragPointer(update)];
+        update();
+        return () => {
+            pending = null;
+            if (frame !== null) cancelAnimationFrame(frame);
+            dispose.forEach(unsubscribe => unsubscribe());
+            current.current.inputRef.current?.setDropCaret(null);
+        };
+    }, [runtime, props.id, props.externalFilesActive, props.editable, props.presented]);
+    const acceptedKinds: EntityDragKindV1[] = ['workflow', 'work-board-widget', 'widget-area-instance'];
     if (props.kinds.includes('session')) acceptedKinds.push('session');
     if (props.kinds.includes('file')) acceptedKinds.push('repository-file', 'destination');
     if (props.kinds.includes('composerReference')) {
@@ -64,11 +112,21 @@ export function ComposerEntityDropTarget(props: Readonly<{
     useEntityDropTarget(runtime, {
         id: props.id, scope: props.scope, acceptedKinds, getBounds: props.bounds,
         ...(props.clearBounds ? { getClearBounds: props.clearBounds } : {}), isCurrent,
-        listDestinations: () => [{ destination: null, label: t('entityDragDrop.composer.addContext') }],
-        resolve: ({ item }) => {
+        measureBounds: async pointer => {
+            dropPosition.current = null;
+            if (!pointer) return;
+            const offset = await props.inputRef.current?.offsetAtPoint(pointer);
+            if (typeof offset === 'number') dropPosition.current = { pointer, offset };
+        },
+        getDestinationKey: () => null,
+        listDestinations: () => [{ destination: null, label: t('entityDragDrop.composer.mentionInComposer') }],
+        resolve: ({ item, pointer }) => {
             const sessionId = props.refValue.kind === 'session' ? props.refValue.sessionId : null;
             return resolveComposerEntityDrop(item, {
                 scope: props.scope, ref: props.refValue,
+                at: pointer && dropPosition.current?.pointer.x === pointer.x && dropPosition.current.pointer.y === pointer.y
+                    ? { kind: 'offset', offset: dropPosition.current.offset } : { kind: 'caret' },
+                itemLabel: runtime.describeSource(runtime.getSnapshot().sourceId ?? '')?.title,
                 snapshot: (() => {
                     const snapshot = readMountedComposerPresentationSnapshot({ scope: props.scope, ref: props.refValue });
                     return snapshot && !props.editable ? { ...snapshot, state: { ...snapshot.state, editable: false } } : snapshot;
@@ -94,7 +152,7 @@ export function ComposerEntityDropTarget(props: Readonly<{
                         path: resolveMachineAbsolutePath({ rootPath: workspace.rootPath, requestPath: file.path }) } : null;
                 },
                 // Lab ST2: say what releasing does to the message: it travels with it, nothing sends yet.
-                preview: { glyph: 'add', verb: t('entityDragDrop.composer.addContext'), target: t('entityDragDrop.composer.target'), consequence: t('entityDragDrop.composer.consequence') },
+                preview: { glyph: 'add', verb: t('entityDragDrop.composer.mentionHere'), target: t('entityDragDrop.composer.target'), consequence: t('entityDragDrop.composer.consequence') },
                 reason: describeComposerEntityDropReason,
             });
         },

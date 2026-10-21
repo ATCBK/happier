@@ -3,6 +3,18 @@ import { EntityDragItemV1Schema, EntityDropEffectV1Schema, entityDragKindV1, isE
 
 const scope = { serverId: 'home-a', accountId: 'account-a' };
 describe('transient entity identity', () => {
+    it('carries repository directories and workflow definitions with identity only', () => {
+        for (const item of [
+            { kind: 'repository-file', scope, machineId: 'machine', path: '/workspace/src', entryKind: 'directory' },
+            { kind: 'workflow', scope, workflowId: 'review' },
+        ]) {
+            expect(EntityDragItemV1Schema.safeParse(item).success).toBe(true);
+            expect(EntityDragItemV1Schema.safeParse({ ...item, body: 'private content' }).success).toBe(false);
+        }
+        expect(isEntityDragKindV1('workflow')).toBe(true);
+        expect(EntityDragItemV1Schema.safeParse({ kind: 'workflow', scope, workflowId: '' }).success).toBe(false);
+        expect(EntityDragItemV1Schema.safeParse({ kind: 'repository-file', scope, machineId: 'machine', path: '/src', entryKind: 'link' }).success).toBe(false);
+    });
     it('carries layout groups only in the supported Account-scoped group hosts', () => {
         const group = { kind: 'widget-layout-group', scope, ref: { surface: { ...scope, owner: { kind: 'home' } }, instanceId: 'group' } };
         expect(EntityDragItemV1Schema.safeParse(group).success).toBe(true);
