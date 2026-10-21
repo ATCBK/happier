@@ -13,6 +13,18 @@ import { PublicProfilePreviewIntentV1Schema, PublicProfilePublishIntentV1Schema,
   PublicProfilePreviewResultV1Schema, PublicProfileUpdateResultV1Schema } from '../../account/publicProfileIntents.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 import { PublicEmbedInputV1Schema, PublicEmbedResultV1Schema } from '../../account/publicProfileEmbeds.js';
+import type { PublicProfilePreparedRequestV1 } from '../../account/publicProfilePublication.js';
+import { redactObservationInputPaths } from './observationRedaction.js';
+import { readRecord } from '../../inputs/inputRecords.js';
+
+// Unapplied metadata choices, computed facts and pixels stay with the live invocation.
+// The prepared review already carries the resolved, consented metadata, not the private candidate selection.
+const projectPublicProfileReviewInput = redactObservationInputPaths('metadataSelection', 'snapshot', 'appearance.atmosphere.picture.content');
+export function projectPublicProfilePreparedReview(request: PublicProfilePreparedRequestV1): Readonly<{
+  operation: PublicProfilePreparedRequestV1['operation']; body: unknown;
+}> {
+  return { operation: request.operation, body: projectPublicProfileReviewInput(request.body) };
+}
 
 /** Self-only profile intents; the answering Home owns policy and the authenticated Account. */
 export const ACCOUNT_PROFILE_ACTION_SPECS_V1 = Object.freeze([
@@ -63,7 +75,10 @@ export const ACCOUNT_PROFILE_ACTION_SPECS_V1 = Object.freeze([
     method: 'GET', path: '/v1/account/public-profile', inputSchema: z.strictObject({}), outputSchema: PublicProfileOwnerReadV1Schema,
   }),
   {
-    id: 'account.public_profile.preview', approval: { result: 'required' }, title: 'Preview your public profile',
+    id: 'account.public_profile.preview', approval: { result: 'required', flow: 'blocking' }, title: 'Preview your public profile',
+    approvalInputCustody: 'live_only', approvalResultCustody: 'live_only', projectObservationInput: projectPublicProfileReviewInput,
+    projectObservationOutput: value => { const kind = readRecord(value).kind;
+      return kind === 'ready' || kind === 'unavailable' ? { kind } : {}; },
     description: 'Prepare the exact allowed disclosure locally without uploading a public snapshot or image.',
     safety: 'safe', sideEffectClass: 'read', requiredAuthority: 'account_automation', executionPlacement: 'account',
     placements: [], surfaces: { ui: true, voice: false, agent: true, mcp: false, cli: true, rpc: false },
@@ -72,18 +87,21 @@ export const ACCOUNT_PROFILE_ACTION_SPECS_V1 = Object.freeze([
   } as const satisfies PreNormalizedActionSpec,
   homeDomainActionRow({
     id: 'account.public_profile.publish', approval: { result: 'required', flow: 'blocking' }, title: 'Publish your public profile',
+    approvalInputCustody: 'live_only', projectObservationInput: projectPublicProfileReviewInput,
     description: 'Publish reviewed plaintext facts and presentation on this Account service. Daily refresh requires its own Action authorization.',
     safety: 'danger', sideEffectClass: 'external', cliPath: ['account', 'public-profile', 'publish'],
     method: 'POST', path: '/v1/account/public-profile/publish', inputSchema: PublicProfilePublishIntentV1Schema, outputSchema: PublicProfileMutationResultV1Schema,
   }),
   homeDomainActionRow({
     id: 'account.public_profile.resume', approval: { result: 'required', flow: 'blocking' }, title: 'Resume your public profile',
+    approvalInputCustody: 'live_only', projectObservationInput: projectPublicProfileReviewInput,
     description: 'Refresh and resume the existing applied public edition without applying a draft or changing consent.',
     safety: 'danger', sideEffectClass: 'external', cliPath: ['account', 'public-profile', 'resume'],
     path: '/v1/account/public-profile/resume', inputSchema: z.strictObject({}), outputSchema: PublicProfileMutationResultV1Schema,
   }),
   homeDomainActionRow({
     id: 'account.public_profile.update', approval: { result: 'required', flow: 'blocking' }, title: 'Update your public profile',
+    approvalInputCustody: 'live_only', projectObservationInput: projectPublicProfileReviewInput,
     approvalPolicy: { uiConfirmation: 'direct' },
     description: 'Apply reviewed fields, metadata, period or presentation. An acknowledged change survives any follow-on refresh failure.',
     safety: 'danger', sideEffectClass: 'external', cliPath: ['account', 'public-profile', 'update'],
@@ -91,6 +109,7 @@ export const ACCOUNT_PROFILE_ACTION_SPECS_V1 = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'account.public_profile.refresh', approval: { result: 'required', flow: 'blocking' }, title: 'Refresh your public profile',
+    approvalInputCustody: 'live_only', projectObservationInput: projectPublicProfileReviewInput,
     description: 'Replace facts under the existing consent and prune previously selected project links. Never publish, resume or apply a private draft.',
     safety: 'danger', sideEffectClass: 'external', cliPath: ['account', 'public-profile', 'refresh'],
     method: 'PUT', path: '/v1/account/public-profile/snapshot', inputSchema: z.strictObject({}), outputSchema: PublicProfileMutationResultV1Schema,

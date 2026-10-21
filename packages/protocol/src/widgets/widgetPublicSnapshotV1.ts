@@ -5,6 +5,8 @@ import { PluginDeclarativeDocumentStructureV1Schema } from '../plugins/contribut
 import { preflightPluginDeclarativeDocumentV1 } from '../plugins/contributions/ui/declarativeDocumentPreflightV1.js';
 import { WidgetGridSizeV1Schema, WidgetGroupWidthV1Schema, resolveWidgetGroupWidthFitV1 } from './widgetPresentationV1.js';
 import { validatePublicProfileDocumentBindings } from '../account/projectPublicProfile.js';
+import { BuiltinUsagePublicPresentationV1Schema } from './builtinWidgetDescriptorV1.js';
+import { WidgetInstanceV1Schema } from './widgetInstanceV1.js';
 
 const symbolicSource = z.strictObject({ kind: z.literal('value'), value: z.strictObject({ kind: z.literal('public_profile') }) });
 const inertKinds = new Set(['text', 'status', 'stack', 'group', 'list', 'section', 'item', 'metadata', 'state']);
@@ -63,8 +65,8 @@ const id = z.string().check(z.trim(), z.minLength(1));
 const frameStyle = z.enum(['card', 'plain']);
 export const PublicProfileLayoutWidgetV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('widget'), id, size: WidgetGridSizeV1Schema, frameStyle,
-  title: z.optional(id),
-  presentation: WidgetPublicSnapshotPresentationV1Schema,
+  title: WidgetInstanceV1Schema.shape.displayName,
+  presentation: z.union([WidgetPublicSnapshotPresentationV1Schema, BuiltinUsagePublicPresentationV1Schema]),
 }));
 export const PublicProfileLayoutGroupV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('group'), id, width: WidgetGroupWidthV1Schema, frameStyle,
@@ -77,7 +79,7 @@ export const PublicProfileLayoutV1Schema = lazyZodSchema(() => z.strictObject({ 
   const ids = new Set<string>();
   for (const item of layout.items) {
     for (const widget of item.kind === 'widget' ? [item] : item.children) {
-      try { validatePublicProfileDocumentBindings(widget.presentation.document); }
+      try { if (widget.presentation.kind === 'declarative') validatePublicProfileDocumentBindings(widget.presentation.document); }
       catch { ctx.addIssue({ code: 'custom', message: 'Public-profile field binding is invalid' }); }
     }
     for (const value of item.kind === 'group' ? [item.id, ...item.children.map(child => child.id)] : [item.id]) {
@@ -99,7 +101,7 @@ function dropUnknownStoredPresentations(input: unknown): unknown {
   const keep = (item: unknown): boolean => {
     const widget = storedRecord(item);
     const presentation = storedRecord(widget?.presentation);
-    return !(widget?.kind === 'widget' && typeof presentation?.kind === 'string' && presentation.kind !== 'declarative');
+    return !(widget?.kind === 'widget' && typeof presentation?.kind === 'string' && presentation.kind !== 'declarative' && presentation.kind !== 'usage');
   };
   return { ...layout, items: layout.items.filter(keep).flatMap(item => {
     const group = storedRecord(item);

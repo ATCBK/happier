@@ -576,7 +576,7 @@ export type ActionExecutorContext = Readonly<{
   /** Host-prepared target snapshot, retained by the existing approval origin. Never caller input. */
   sessionTargetsV1?: import('../sessionTargetV1.js').ActionResolvedSessionTargetsV1;
   /** Host-only read admission for Coach mutations; ordinary usage.query remains progressive. Never wire input. */
-  usageQueryReadiness?: 'coach_evidence';
+  usageQueryReadiness?: 'coach_evidence' | 'public_profile';
   /** Exact prepared public disclosure, retained only by the live host invocation. Never wire input. */
   publicProfilePreparedAction?: import('./publicProfileActions.js').PreparedPublicProfileAction;
   /** Prepared local public preview, under the same exact live invocation custody. */

@@ -22,6 +22,46 @@ const snapshot: PublicProfileSnapshotV1 = PublicProfileSnapshotV1Schema.parse({ 
   lenses: [{ execution: 'outside', facts }],
 });
 describe('public-profile disclosure projection', () => {
+  it('retains reviewed block titles only with their admitted current-policy content', () => {
+    const widget = { kind: 'widget', id: 'summary', title: 'Work in this period', size: 'medium', frameStyle: 'card',
+      presentation: { kind: 'declarative', document: { version: 1, root: { kind: 'metric', label: 'Tokens',
+        data: { kind: 'value', value: { kind: 'public_profile' } }, value: { path: ['snapshot', 'facts', 'tokens'], type: 'number' } } } } };
+    const layout = PublicProfileLayoutV1Schema.parse({ v: 1, items: [widget] });
+    const input = { context: { handle: 'person', identity: {},
+      service: { displayName: 'Service', publicBaseUrl: 'https://example.com' },
+      urls: { page: 'https://example.com/@person', json: 'https://example.com/v1/public/profiles/person',
+        badgeBase: 'https://example.com/@person/badge', card: 'https://example.com/@person/card.svg',
+        og: 'https://example.com/@person/og.png', report: 'mailto:operator@example.com' } },
+      metadata: {}, snapshot, layout, appearance: { theme: 'auto', atmosphere: { source: 'none' } } } as const;
+    expect(projectPublicProfile({ ...input, policy: DEFAULT_PUBLIC_PROFILE_POLICY_V1 })?.layout.items)
+      .toMatchObject([{ id: 'summary', title: 'Work in this period' }]);
+    expect(projectPublicProfile({ ...input, policy: DEFAULT_PUBLIC_PROFILE_POLICY_V1 })).toMatchObject({ indexable: false });
+    expect(projectPublicProfile({ ...input, policy: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, indexable: true } }))
+      .toMatchObject({ indexable: true });
+    expect(projectPublicProfile({ ...input, policy: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1,
+      fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, tokens: false } } })?.layout.items).toEqual([]);
+  });
+  it('admits built-in Usage placements without private query inputs and removes calendar-dependent copies when hidden', () => {
+    const widget = { kind: 'widget', id: 'sky', title: 'Sky of days', size: 'full', frameStyle: 'plain',
+      presentation: { kind: 'usage', widgetId: 'usage_rhythm', inputs: { style: 'sky' } } };
+    const layout = PublicProfileLayoutV1Schema.parse({ v: 1, items: [widget] });
+    const input = { context: { handle: 'person', identity: {},
+      service: { displayName: 'Service', publicBaseUrl: 'https://example.com' },
+      urls: { page: 'https://example.com/@person', json: 'https://example.com/v1/public/profiles/person',
+        badgeBase: 'https://example.com/@person/badge', card: 'https://example.com/@person/card.svg',
+        og: 'https://example.com/@person/og.png', report: 'mailto:operator@example.com' } },
+      metadata: {}, snapshot: { ...snapshot, facts: { calendar: [{ date: '1970-01-01', level: 4 as const }] } },
+      layout, appearance: { theme: 'auto', atmosphere: { source: 'none' } } } as const;
+    expect(projectPublicProfile({ ...input, policy: DEFAULT_PUBLIC_PROFILE_POLICY_V1 })?.layout.items)
+      .toMatchObject([{ id: 'sky', presentation: { kind: 'usage', widgetId: 'usage_rhythm' } }]);
+    expect(projectPublicProfile({ ...input, policy: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1,
+      fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, calendar: false } } })?.layout.items).toEqual([]);
+    for (const presentation of [
+      { ...widget.presentation, inputs: { style: 'sky', query: { period: 'all' } } },
+      { ...widget.presentation, inputs: { style: 'sky', metric: 'cost' } },
+      { ...widget.presentation, widgetId: 'usage_cost_facts', inputs: {} },
+    ]) expect(PublicProfileLayoutV1Schema.safeParse({ v: 1, items: [{ ...widget, presentation }] }).success).toBe(false);
+  });
   it('orders anonymous duration observations independently of their private input chronology', () => {
     const durations = [{ agentId: 'codex', durationMs: 400 }, { agentId: 'claude', durationMs: 300 }, { agentId: 'claude', durationMs: 100 }];
     const policy = { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, sessionDurations: true } };
@@ -29,6 +69,38 @@ describe('public-profile disclosure projection', () => {
     expect(project(durations)).toEqual(project([...durations].reverse()));
     expect(project(durations)).toEqual([{ agentId: 'claude', durationMs: 100 }, { agentId: 'claude', durationMs: 300 }, { agentId: 'codex', durationMs: 400 }]);
     expect(durations[0]!.agentId).toBe('codex');
+  });
+  it('keeps an execution-share breakdown when Agent mix is hidden without restoring either hidden field', () => {
+    const context = { handle: 'person', identity: {}, service: { displayName: 'Service', publicBaseUrl: 'https://example.com' },
+      urls: { page: 'https://example.com/@person', json: 'https://example.com/v1/public/profiles/person',
+        badgeBase: 'https://example.com/@person/badge', card: 'https://example.com/@person/card.svg',
+        og: 'https://example.com/@person/og.png', report: 'mailto:operator@example.com' } };
+    const layout = PublicProfileLayoutV1Schema.parse({ v: 1, items: [{ kind: 'widget', id: 'execution', size: 'medium', frameStyle: 'plain',
+      presentation: { kind: 'usage', widgetId: 'usage_breakdowns', inputs: { style: 'breakdowns' } } }] });
+    const policy = { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, agentMix: false, tokens: false } };
+    const view = projectPublicProfile({ context, metadata: {}, snapshot, layout, policy,
+      appearance: { theme: 'auto', atmosphere: { source: 'none' } } });
+    expect(view?.layout.items).toHaveLength(1);
+    expect(view?.snapshot.facts.sourceSplit).toEqual([{ execution: 'outside', share: 1 }]);
+    expect(view?.snapshot.facts).not.toHaveProperty('agentMix');
+    expect(JSON.stringify(view)).not.toContain('87654321');
+  });
+  it('keeps independently consented Agent days in Crew without restoring hidden shares', () => {
+    const context = { handle: 'person', identity: {}, service: { displayName: 'Service', publicBaseUrl: 'https://example.com' },
+      urls: { page: 'https://example.com/@person', json: 'https://example.com/v1/public/profiles/person',
+        badgeBase: 'https://example.com/@person/badge', card: 'https://example.com/@person/card.svg',
+        og: 'https://example.com/@person/og.png', report: 'mailto:operator@example.com' } };
+    const layout = PublicProfileLayoutV1Schema.parse({ v: 1, items: [{ kind: 'widget', id: 'crew', size: 'medium', frameStyle: 'plain',
+      presentation: { kind: 'usage', widgetId: 'usage_breakdowns', inputs: { style: 'crew' } } }] });
+    const policy = { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields,
+      agentMix: false, agentActiveDays: true, tokens: false } };
+    const view = projectPublicProfile({ context, metadata: {}, snapshot: { ...snapshot, facts: { ...facts,
+      agentActiveDays: [{ agentId: 'codex', days: 2, coverage }] } }, layout, policy,
+      appearance: { theme: 'auto', atmosphere: { source: 'none' } } });
+    expect(view?.layout.items).toHaveLength(1);
+    expect(view?.snapshot.facts.agentActiveDays).toEqual([{ agentId: 'codex', days: 2, coverage }]);
+    expect(view?.snapshot.facts).not.toHaveProperty('agentMix');
+    expect(JSON.stringify(view)).not.toContain('87654321');
   });
   it('publishes the same inert source restriction to generated schema consumers', () => {
     const schema = PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaObject(WidgetPublicSnapshotDocumentV1Schema, { target: 'draft-7' }));
@@ -60,6 +132,26 @@ describe('public-profile disclosure projection', () => {
     expect(view.facts.highlights).toEqual([]);
     expect(PublicProfileSnapshotV1Schema.safeParse(view).success).toBe(true);
     expect(snapshot.facts.tokens).toBe(87654321);
+  });
+  it('removes hidden dependent columns inside source-lens tables without removing allowed execution labels', () => {
+    const context = { handle: 'person', identity: {}, service: { displayName: 'Service', publicBaseUrl: 'https://example.com' },
+      urls: { page: 'https://example.com/@person', json: 'https://example.com/v1/public/profiles/person',
+        badgeBase: 'https://example.com/@person/badge', card: 'https://example.com/@person/card.svg',
+        og: 'https://example.com/@person/og.png', report: 'mailto:operator@example.com' } };
+    const layout = PublicProfileLayoutV1Schema.parse({ v: 1, items: [{ kind: 'widget', id: 'lens', size: 'medium', frameStyle: 'plain',
+      presentation: { kind: 'declarative', document: { version: 1, root: { kind: 'table',
+        data: { kind: 'value', value: { kind: 'public_profile' } }, rows: ['snapshot', 'lenses'], columns: [
+          { label: 'Execution', field: { path: ['execution'], type: 'string' } },
+          { label: 'Absolute token count', field: { path: ['facts', 'tokens'], type: 'number' } },
+        ] } } } }] });
+    const policy = { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, tokens: false } };
+    const input = { context, metadata: {}, snapshot, layout, appearance: { theme: 'auto', atmosphere: { source: 'none' } } } as const;
+    const view = projectPublicProfile({ ...input, policy });
+    expect(view?.layout.items).toHaveLength(1);
+    expect(JSON.stringify(view?.layout)).toContain('Execution');
+    expect(JSON.stringify(view?.layout)).not.toContain('Absolute token count');
+    expect(JSON.stringify(view)).not.toContain('87654321');
+    expect(projectPublicProfile({ ...input, policy: { ...policy, fields: { ...policy.fields, sourceSplit: false } } })?.layout.items).toEqual([]);
   });
   it('rejects nested authority, private facts, invalid calendar dates and duplicate categories', () => {
     for (const input of [

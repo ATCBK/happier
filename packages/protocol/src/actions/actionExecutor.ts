@@ -111,6 +111,7 @@ import { executeWaitActionV1 } from './executor/waitAction.js';
 import { executeUsageAction } from './executor/usageActions.js';
 import { isPublicProfilePreparationActionIdV1 } from '../account/publicProfileActionIds.js';
 import { preparePublicProfileAction, executePublicProfileAction, PublicProfileAccountScopeError } from './executor/publicProfileActions.js';
+import { projectPublicProfilePreparedReview } from './specs/accountProfile.js';
 import { executeUsageCoachAction } from './executor/usageCoachActions.js';
 import { isWorkspaceActionId } from './workspaceActionFamily.js';
 import { isFilesystemActionId } from './filesystemActionFamily.js';
@@ -1425,7 +1426,7 @@ async function prepareApprovalRequest(params: Readonly<{
     ...(widgetPresentation ? { widgetPresentation } : {}),
     ...(widgetLibraryName ? { widgetLibraryName } : {}),
     ...(params.context.publicProfilePreparedAction?.actionId === params.actionId
-      ? { publicProfileRequest: params.context.publicProfilePreparedAction.request, destination: { serverId: params.context.serverId,
+      ? { publicProfileRequest: projectPublicProfilePreparedReview(params.context.publicProfilePreparedAction.request), destination: { serverId: params.context.serverId,
           accountId: params.context.expectedAccountId } } : {}),
   } as const;
   if (params.actionId === 'computer.secret.fill' || params.actionId === 'browser.automation.secret.fill') {

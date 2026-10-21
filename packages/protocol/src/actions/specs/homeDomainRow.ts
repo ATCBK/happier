@@ -66,6 +66,7 @@ type HomeDomainActionRowInput<
   inputHints?: PreNormalizedActionSpec['inputHints'];
   projectObservationInput?: PreNormalizedActionSpec['projectObservationInput'];
   projectObservationOutput?: PreNormalizedActionSpec['projectObservationOutput'];
+  approvalInputCustody?: PreNormalizedActionSpec['approvalInputCustody'];
   approvalResultCustody?: PreNormalizedActionSpec['approvalResultCustody'];
 }>;
 
@@ -117,6 +118,7 @@ export function homeDomainActionRow<
     outputSchema: spec.outputSchema,
     ...(spec.projectObservationInput ? { projectObservationInput: spec.projectObservationInput } : {}),
     ...(spec.projectObservationOutput ? { projectObservationOutput: spec.projectObservationOutput } : {}),
+    ...(spec.approvalInputCustody ? { approvalInputCustody: spec.approvalInputCustody } : {}),
     ...(spec.approvalResultCustody ? { approvalResultCustody: spec.approvalResultCustody } : {}),
     serverTransport: { method: spec.method ?? 'POST', path: spec.path,
       ...(spec.preservePathFieldsInBody ? { preservePathFieldsInBody: true as const } : {}) },

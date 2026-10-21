@@ -1,24 +1,23 @@
 import { z } from 'zod/mini';
 import { getUsageQueryKey, normalizeUsageQuery, type UsageQuery } from '../../inputs/usageQuery.js';
-import { PublicProfilePolicyV1Schema, type PublicProfilePolicyV1, type PublicProfileSnapshotV1,
+import { PublicProfilePolicyV1Schema, type PublicProfilePolicyV1,
   type PublicProfileMetadataV1, PublicProfileLinkV1Schema } from '../../account/publicProfile.js';
 import { PublicProfileOwnerReadV1Schema, PublicProfilePreparedRequestV1Schema, PublicProfileMutationResultV1Schema,
-  type PublicProfileOwnerReadV1, type PublicProfilePreparedRequestV1, type PublicProfileOwnerRecordV1,
-  PublicProfileAppearanceV1Schema } from '../../account/publicProfilePublication.js';
+  type PublicProfileOwnerReadV1, type PublicProfilePreparedRequestV1, type PublicProfileOwnerRecordV1 } from '../../account/publicProfilePublication.js';
 import { PublicProfilePreviewIntentV1Schema, PublicProfilePublishIntentV1Schema, PublicProfileUpdateIntentV1Schema,
   type PublicProfileMetadataSelectionV1 } from '../../account/publicProfileIntents.js';
 import { type PublicProfilePreparationActionIdV1 } from '../../account/publicProfileActionIds.js';
-import { projectPublicProfile } from '../../account/projectPublicProfile.js';
+import { projectPublicProfilePreview } from '../../account/projectPublicProfile.js';
 import { ScmCredentialFreeRepositorySelectorV1Schema, type ScmHostingRepositoryGetResponseV1 } from '../../scm/repositoryClone.js';
 import { UsageQueryBatchResultSchema, type UsageQueryResultSlice } from '../../usage/resolveUsagePageAggregation.js';
 import type { ActionExecuteFailure, ActionExecuteResult } from '../actionExecutionResult.js';
 import type { ActionExecutorContext, ActionExecutorDeps } from './types.js';
 import type { UsageActionPorts } from './usageActions.js';
 import { readActionFailureEnvelope } from './actionFailureEnvelope.js';
+import type { PublicProfileSnapshotBuildResult } from '../../account/publicProfileSnapshot.js';
+export type { PublicProfileSnapshotBuildResult } from '../../account/publicProfileSnapshot.js';
 
 type ProjectSelection = z.infer<typeof ScmCredentialFreeRepositorySelectorV1Schema>;
-export type PublicProfileSnapshotBuildResult = Readonly<{ kind: 'ready'; snapshot: PublicProfileSnapshotV1 }>
-  | Readonly<{ kind: 'unavailable'; reason: string }>;
 
 /** Hosts bind custody and real IO only. Snapshot computation remains a shared domain owner. */
 export type PublicProfileActionPorts = Readonly<{
@@ -26,7 +25,7 @@ export type PublicProfileActionPorts = Readonly<{
   read(context: ActionExecutorContext): Promise<PublicProfileOwnerReadV1 | ActionExecuteFailure>;
   dispatchPrepared(request: PublicProfilePreparedRequestV1, context: ActionExecutorContext): Promise<unknown>;
   usage?: UsageActionPorts;
-  /** Absent until this host can supply the canonical proved public-eligible population. */
+  /** Only key-holding hosts bind the canonical public snapshot computation. */
   buildSnapshot?(input: Readonly<{ queryResult: UsageQueryResultSlice; policy: PublicProfilePolicyV1; nowMs: number }>): PublicProfileSnapshotBuildResult;
   getRepository?(selector: ProjectSelection, context: ActionExecutorContext): Promise<ScmHostingRepositoryGetResponseV1 | ActionExecuteFailure>;
 }>;
@@ -120,7 +119,7 @@ async function recheckProjects(record: PublicProfileOwnerRecordV1, ports: Public
 
 async function snapshot(query: UsageQuery, policy: PublicProfilePolicyV1, ports: PublicProfileActionPorts, context: ActionExecutorContext) {
   if (!ports.usage || !ports.buildSnapshot) return null;
-  const queried = await ports.usage.query({ queries: [query] }, context);
+  const queried = await ports.usage.query({ queries: [query] }, { ...context, usageQueryReadiness: 'public_profile' });
   await check(ports, context);
   if (readActionFailureEnvelope(queried)) return null;
   const batch = UsageQueryBatchResultSchema.safeParse(queried);
@@ -134,7 +133,9 @@ async function snapshot(query: UsageQuery, policy: PublicProfilePolicyV1, ports:
 
 /** Public preparation never inherits the ordinary private-history population. */
 function publicQuery(query: UsageQuery) {
-  return normalizeUsageQuery({ ...query, population: 'public_eligible_personal' });
+  return normalizeUsageQuery({ ...query, population: 'public_eligible_personal', includeAccounting: true,
+    includeActivity: true, activityResolution: 'both', includeSessionEvidence: true, includeWorkEvidence: true,
+    includeQuotaHistory: false, includeTranscriptEvidence: false });
 }
 
 /** Intent preparation always precedes approval and generic Home-domain dispatch. */
@@ -195,12 +196,8 @@ export async function preparePublicProfileAction(actionId: PublicProfilePreparat
   const built = await snapshot(query, policy, ports, context);
   if (!built) return unavailable('usage_unavailable');
   if (actionId === 'account.public_profile.preview') {
-    // Picture bytes stay in local preparation custody until the atmosphere
-    // adapter can supply its corresponding local preview representation.
-    const appearance = PublicProfileAppearanceV1Schema.safeParse(intent.appearance);
-    if (!appearance.success) return unavailable('asset_unavailable');
-    const view = projectPublicProfile({ context: owner.context, policy, metadata: metadata.metadata,
-      snapshot: built, layout: intent.layout, appearance: appearance.data });
+    const view = projectPublicProfilePreview({ context: owner.context, policy, metadata: metadata.metadata,
+      snapshot: built, layout: intent.layout, appearance: intent.appearance });
     return view ? { kind: 'settled', result: { ok: true, result: { kind: 'ready', view } } } : unavailable('preparation_unavailable');
   }
   await check(ports, context);

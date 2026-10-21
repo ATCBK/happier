@@ -4,12 +4,15 @@ import { bindHomeDomainActionHttpRequestV1, bindPublicProfilePreparedHttpRequest
 import { bindPublicProfileActionPorts } from './executor/publicProfileActions.js';
 import { normalizeUsageQuery } from '../inputs/usageQuery.js';
 import { DEFAULT_PUBLIC_PROFILE_POLICY_V1, PublicProfileSnapshotV1Schema } from '../account/publicProfile.js';
-import { DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1, PublicProfileOwnerReadV1Schema } from '../account/publicProfilePublication.js';
+import { DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1, PublicProfileOwnerReadV1Schema, type PublicProfilePreparedAppearanceV1 } from '../account/publicProfilePublication.js';
 import { ApprovalRequestV2Schema, type ApprovalRequest } from '../approvals/approvalRequestV1.js';
 import { decideApprovalRequestTransition } from '../approvals/approvalRequestTransition.js';
 import { getActionSpec } from './actionSpecs.js';
 import { ActionsSettingsV1Schema } from './actionSettings.js';
 import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
+import { buildPublicProfileSnapshot } from '../account/publicProfileSnapshot.js';
+import { resolveUsagePageAggregation } from '../usage/resolveUsagePageAggregation.js';
+import { UsageAnalyticsQueryResponseSchema } from '../usage/usageAnalyticsContracts.js';
 
 const settings = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: {
   'account.public_profile.update': ['cli', 'plugin'], 'account.public_profile.refresh': ['cli'],
@@ -18,6 +21,14 @@ const context = { surface: 'cli', authority: 'present_user', serverId: 'home', e
 const approvalRequired: NonNullable<ActionExecutorDeps['isActionApprovalRequired']> = (id, ctx, input) =>
   isApprovalRequiredByActionsSettings(id, ctx.actionsSettings ?? ActionsSettingsV1Schema.parse({ v: 1 }), ctx, undefined, undefined, input);
 const layout = { v: 1, items: [] } as const;
+const picturePng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j1ioAAAAASUVORK5CYII=';
+function reviewedPictureAppearance(): PublicProfilePreparedAppearanceV1 {
+  return { atmosphere: { source: 'picture', picture: { layout: 'horizon', descriptor: {
+    kind: 'photo', title: 'Reviewed image', credit: null, adaptiveHaze: false, horizon: {}, focus: {},
+    hour: 0, grades: { light: 0, dusk: 0, night: 0 }, dark: 'night',
+    look: { effect: 'mosaic', params: {}, strength: 0.37, dissolve: { style: 'rows', from: 0.58, to: 1 } },
+  }, content: { mimeType: 'image/png', base64: picturePng } } }, theme: 'light' };
+}
 function owner() {
   return PublicProfileOwnerReadV1Schema.parse({ kind: 'ready', context: { handle: 'ada', identity: { name: 'Ada' },
     service: { displayName: 'Home', publicBaseUrl: 'https://home.test' }, urls: {
@@ -102,11 +113,13 @@ describe('public-profile Actions through the shared executor', () => {
     expect(requests).toEqual(['account.public_profile.get']);
   });
 
-  it('retains the exact prepared Apply through blocking approval and a moving owner response', async () => {
+  it('retains the exact image Apply through blocking approval without uploading its bytes in the Approval Artifact', async () => {
     let current = owner();
     let stored: ApprovalRequest | null = null;
+    let offeredBeforeDecision: unknown;
     const requests: unknown[] = [];
-    const candidate = { layout: { v: 1 as const, items: [] }, appearance: { atmosphere: { source: 'none' as const }, theme: 'light' as const } };
+    const candidate: { layout: typeof layout; appearance: PublicProfilePreparedAppearanceV1 } = { layout, appearance: reviewedPictureAppearance() };
+    const reviewed = structuredClone(candidate);
     const homeDomainAction: NonNullable<ActionExecutorDeps['homeDomainAction']> = async args => {
       if (args.actionId === 'account.public_profile.get') return current;
       const request = bindPublicProfilePreparedHttpRequestV1(args.actionId, args.preparedRequest);
@@ -115,7 +128,11 @@ describe('public-profile Actions through the shared executor', () => {
     };
     const executor = createActionExecutor({ homeDomainAction,
       publicProfileActions: bindPublicProfileActionPorts({ homeDomainAction, assertCurrent: () => {} }),
-      approvalsCreate: async ({ request }) => { stored = ApprovalRequestV2Schema.parse(request); return { artifactId: 'apply-approval' }; },
+      approvalsCreate: async ({ request }) => {
+        offeredBeforeDecision = structuredClone(request);
+        stored = ApprovalRequestV2Schema.parse(request);
+        return { artifactId: 'apply-approval' };
+      },
       approvalsGet: async () => stored,
       approvalsUpdate: async ({ request }) => {
         if (!stored) throw new Error('Missing approval');
@@ -125,7 +142,8 @@ describe('public-profile Actions through the shared executor', () => {
         return { ok: true };
       },
       approvalsWaitForDecision: async ({ request }) => {
-        expect(request.preview).toMatchObject({ publicProfileRequest: { operation: 'update', body: candidate } });
+        expect(requests).toEqual([]);
+        expect(request.preview).toMatchObject({ destination: { serverId: 'home', accountId: 'account' } });
         // The caller's local draft and server policy move while review is open.
         candidate.appearance.atmosphere = { source: 'none' };
         Object.assign(candidate.appearance, { theme: 'dark' });
@@ -135,12 +153,13 @@ describe('public-profile Actions through the shared executor', () => {
       },
       isApprovalExecutionOriginCurrent: async () => true,
     } as ActionExecutorDeps);
-    await expect(executor.execute('account.public_profile.update', candidate, { ...context, surface: 'agent', authority: 'account_automation',
-      runtimeAccountId: 'account', actionCaller: { kind: 'host' }, actionRequestId: 'apply-request', defaultSessionMachineId: 'machine' }))
-      .resolves.toMatchObject({ ok: true, result: { kind: 'updated', refresh: 'not_needed', record: { policy: { fields: { tokens: false } } } } });
-    expect(requests).toEqual([{ method: 'PUT', path: '/v1/account/public-profile/policy', body: {
-      layout, appearance: { atmosphere: { source: 'none' }, theme: 'light' },
-    } }]);
+    const result = await executor.execute('account.public_profile.update', candidate, { ...context, surface: 'agent', authority: 'account_automation',
+      runtimeAccountId: 'account', actionCaller: { kind: 'host' }, actionRequestId: 'apply-request', defaultSessionMachineId: 'machine' });
+    // Assert outside the boundary callback so the executor cannot normalize this regression into a generic failure.
+    expect(offeredBeforeDecision).toBeDefined();
+    expect(JSON.stringify(offeredBeforeDecision)).not.toContain(picturePng);
+    expect(result).toMatchObject({ ok: true, result: { kind: 'updated', refresh: 'not_needed', record: { policy: { fields: { tokens: false } } } } });
+    expect(requests).toEqual([{ method: 'PUT', path: '/v1/account/public-profile/policy', body: reviewed }]);
   });
 
   it('retains a confirmed policy narrowing when the optional refresh cannot build an eligible snapshot', async () => {
@@ -160,11 +179,89 @@ describe('public-profile Actions through the shared executor', () => {
     expect(requests).not.toContain('account.public_profile.refresh');
   });
 
+  it.each(['publish', 'resume', 'refresh', 'preview', 'preview_required'] as const)('keeps the exact computed %s snapshot out of durable approvals and observations', async variant => {
+    const operation = variant === 'preview_required' ? 'preview' : variant;
+    const current = owner();
+    if (current.kind !== 'ready') throw new Error('Expected existing edition');
+    current.record.state = operation === 'resume' ? 'paused' : 'published';
+    current.record.query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1_000 } });
+    let stored: ApprovalRequest | null = null;
+    let offered: unknown;
+    let observedTokens = 1234567;
+    const writes: unknown[] = [];
+    const observations: unknown[] = [];
+    const homeDomainAction: NonNullable<ActionExecutorDeps['homeDomainAction']> = async args => {
+      if (args.actionId === 'account.public_profile.get') return current;
+      writes.push(bindPublicProfilePreparedHttpRequestV1(args.actionId, args.preparedRequest));
+      return { kind: 'updated', record: null };
+    };
+    const executor = createActionExecutor({ homeDomainAction, isActionApprovalRequired: approvalRequired,
+      publicProfileActions: bindPublicProfileActionPorts({ homeDomainAction, assertCurrent: () => {}, buildSnapshot: buildPublicProfileSnapshot,
+        usage: { query: async ({ queries }) => resolveUsagePageAggregation({ queries, accounting: queries.map(query => ({ query,
+          status: 'available', asOfMs: 1_000, value: UsageAnalyticsQueryResponseSchema.parse({ v: 1,
+            totals: { eventCount: 1, tokens: { input: observedTokens, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: observedTokens },
+              cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } },
+            contributions: [{ id: 'request', observedAtMs: 1, sessionId: null, turnId: null, agentId: 'codex', modelId: null,
+              machineId: null, projectKey: null, workspaceId: null, source: 'runtime', eventCount: 1,
+              tokens: { input: observedTokens, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: observedTokens },
+              cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } }],
+          }) })) }) } }),
+      approvalsCreate: async ({ request }) => { offered = structuredClone(request); stored = request; return { artifactId: 'snapshot-review' }; },
+      approvalsGet: async () => stored,
+      approvalsUpdate: async ({ request }) => {
+        if (!stored) throw new Error('Missing approval');
+        const next = decideApprovalRequestTransition(stored, request);
+        if (!next.ok) return next;
+        stored = request; return { ok: true };
+      },
+      approvalsWaitForDecision: async ({ request }) => {
+        observedTokens = 7654321;
+        return { decision: 'approve', decisionAuthority: 'present_user', request };
+      }, isApprovalExecutionOriginCurrent: async () => true,
+      observeActionExecution: observation => { observations.push(observation); },
+    } as ActionExecutorDeps);
+    const appearance = operation === 'preview' ? reviewedPictureAppearance() : DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1;
+    const input = operation === 'publish' || operation === 'preview' ? { ...(operation === 'publish' ? { intent: 'publish' } : {}),
+      policy: DEFAULT_PUBLIC_PROFILE_POLICY_V1, metadataSelection: { bio: 'private-unreviewed-bio', projectSelections: [{
+        provider: { id: 'example/forge', kind: 'custom', displayName: 'Forge', baseUrl: 'https://forge.test' },
+        repository: { nameWithOwner: 'private-unreviewed-owner/private-repo' }, protocol: 'https',
+      }] },
+      query: current.record.query, layout, appearance } : {};
+    const previewSettings = variant === 'preview_required' ? ActionsSettingsV1Schema.parse({ v: 1,
+      actions: { 'account.public_profile.preview': { approvalRequiredSurfaces: ['agent'] } } }) : settings;
+    const result = await executor.execute(`account.public_profile.${operation}`, input, { ...context, actionsSettings: previewSettings,
+      surface: 'agent', authority: 'account_automation',
+      runtimeAccountId: 'account', actionCaller: { kind: 'host' }, actionRequestId: 'snapshot-request', defaultSessionMachineId: 'machine' });
+    if (offered !== undefined) expect(JSON.stringify(offered)).not.toContain('private-unreviewed');
+    expect(observations.length).toBeGreaterThan(0);
+    expect(JSON.stringify(observations)).not.toContain('private-unreviewed');
+    expect(JSON.stringify(observations)).not.toContain('1234567');
+    expect(JSON.stringify(observations)).not.toContain(picturePng);
+    if (operation === 'preview') {
+      if (variant === 'preview_required') {
+        expect(offered).toBeDefined();
+        expect(JSON.stringify(stored)).not.toContain('1234567');
+        expect(JSON.stringify(stored)).not.toContain(picturePng);
+      } else expect(offered).toBeUndefined();
+      expect(writes).toEqual([]);
+      expect(result).toMatchObject({ ok: true, result: { kind: 'ready', view: { appearance, snapshot: { facts: { tokens: 1234567 } } } } });
+      return;
+    }
+    expect(offered).toBeDefined();
+    expect(JSON.stringify(offered)).not.toContain('1234567');
+    expect(result).toMatchObject({ ok: true, result: { kind: 'updated' } });
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({ body: { snapshot: { facts: { tokens: 1234567 } } } });
+    expect(JSON.stringify(writes)).not.toContain('private-unreviewed');
+  });
+
   it('derives the public population before retaining a caller query update without binding a snapshot builder', async () => {
     const current = owner();
     const requests: unknown[] = [];
     const ordinaryQuery = normalizeUsageQuery({ period: { relative: '30days' }, agents: ['claude'] });
-    const publicQuery = normalizeUsageQuery({ ...ordinaryQuery, population: 'public_eligible_personal' });
+    const publicQuery = normalizeUsageQuery({ ...ordinaryQuery, population: 'public_eligible_personal', includeAccounting: true,
+      includeActivity: true, activityResolution: 'both', includeSessionEvidence: true, includeWorkEvidence: true,
+      includeQuotaHistory: false, includeTranscriptEvidence: false });
     const homeDomainAction: NonNullable<ActionExecutorDeps['homeDomainAction']> = async args => {
       const request = args.preparedRequest ? bindPublicProfilePreparedHttpRequestV1(args.actionId, args.preparedRequest)
         : bindHomeDomainActionHttpRequestV1(args.actionId, args.input);

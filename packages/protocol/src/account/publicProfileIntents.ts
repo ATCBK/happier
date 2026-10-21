@@ -4,7 +4,8 @@ import { UsageQuerySchema } from '../inputs/usageQuery.js';
 import { ScmCredentialFreeRepositorySelectorV1Schema } from '../scm/repositoryClone.js';
 import { PublicProfileMetadataV1Schema, PublicProfilePolicyV1Schema } from './publicProfile.js';
 import { PublicProfilePublishBodyV1Schema, PublicProfileUpdateBodyV1Schema,
-  PublicProfileViewV1Schema, PublicProfileOwnerRecordV1Schema, PublicProfileUnavailableReasonV1Schema } from './publicProfilePublication.js';
+  PublicProfileLocalPreviewViewV1Schema, PublicProfileOwnerRecordV1Schema, PublicProfileUnavailableReasonV1Schema } from './publicProfilePublication.js';
+export { PublicProfileLocalPreviewViewV1Schema, type PublicProfileLocalPreviewViewV1 } from './publicProfilePublication.js';
 
 /** Repository publicity is observed by the host, never asserted in an Action input. */
 export const PublicProfileMetadataSelectionV1Schema = lazyZodSchema(() => z.strictObject({
@@ -34,12 +35,14 @@ export const PublicProfileUpdateIntentV1Schema = lazyZodSchema(() => z.strictObj
 }).check(z.refine(value => Object.values(value).some(member => member !== undefined))));
 export type PublicProfileUpdateIntentV1 = z.infer<typeof PublicProfileUpdateIntentV1Schema>;
 
-export const PublicProfilePreparationUnavailableReasonV1Schema = z.enum([
+// Lazy: publicProfilePublication participates in an import cycle with the widget
+// snapshot schema, so its enum options are not readable at module evaluation.
+export const PublicProfilePreparationUnavailableReasonV1Schema = lazyZodSchema(() => z.enum([
   ...PublicProfileUnavailableReasonV1Schema.options, 'usage_unavailable', 'usage_query_result_invalid',
   'project_visibility_unavailable', 'preparation_unavailable',
-]);
+]));
 export const PublicProfilePreviewResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('ready'), view: PublicProfileViewV1Schema }),
+  z.strictObject({ kind: z.literal('ready'), view: PublicProfileLocalPreviewViewV1Schema }),
   z.strictObject({ kind: z.literal('unavailable'), reason: PublicProfilePreparationUnavailableReasonV1Schema }),
 ]));
 export const PublicProfileUpdateResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [

@@ -5,6 +5,8 @@ import { ScmCredentialFreeRepositorySelectorV1Schema } from '../scm/repositoryCl
 import { WidgetSnapshotDocumentV1Schema } from '../sessions/board/declarative/snapshot.js';
 import { WidgetGridSizeV1Schema, WidgetGroupWidthV1Schema } from '../widgets/widgetPresentationV1.js';
 import { PublicProfileLayoutV1Schema } from '../widgets/widgetPublicSnapshotV1.js';
+import { BuiltinUsagePublicPresentationV1Schema } from '../widgets/builtinWidgetDescriptorV1.js';
+import { WidgetInstanceV1Schema } from '../widgets/widgetInstanceV1.js';
 import { PublicProfileAtmosphereV1Schema, PublicProfilePreparedAtmosphereV1Schema } from './publicProfileAtmosphere.js';
 import { PublicProfileIdentityV1Schema, PublicProfileLinkV1Schema,
   PublicProfileMetadataV1Schema, PublicProfilePolicyV1Schema, PublicProfileSnapshotV1Schema } from './publicProfile.js';
@@ -35,7 +37,8 @@ export type PublicProfileContextV1 = z.infer<typeof PublicProfileContextV1Schema
 const id = z.string().check(z.minLength(1));
 const frameStyle = z.enum(['card', 'plain']);
 export const PublicProfileViewWidgetV1Schema = lazyZodSchema(() => z.strictObject({ kind: z.literal('widget'), id,
-  size: WidgetGridSizeV1Schema, frameStyle, presentation: z.strictObject({ kind: z.literal('declarative'), document: WidgetSnapshotDocumentV1Schema }),
+  size: WidgetGridSizeV1Schema, frameStyle, title: WidgetInstanceV1Schema.shape.displayName,
+  presentation: z.union([z.strictObject({ kind: z.literal('declarative'), document: WidgetSnapshotDocumentV1Schema }), BuiltinUsagePublicPresentationV1Schema]),
 }));
 export const PublicProfileViewLayoutV1Schema = lazyZodSchema(() => z.strictObject({ v: z.literal(1),
   items: z.array(z.discriminatedUnion('kind', [PublicProfileViewWidgetV1Schema,
@@ -44,11 +47,18 @@ export const PublicProfileViewLayoutV1Schema = lazyZodSchema(() => z.strictObjec
   ])),
 }));
 export const PublicProfileViewV1Schema = lazyZodSchema(() => z.strictObject({ v: z.literal(1), handle: z.string(),
+  indexable: z.boolean(),
   service: PublicProfileServiceV1Schema, state: z.literal('published'), identity: PublicProfileIdentityV1Schema,
   metadata: PublicProfileMetadataV1Schema, snapshot: PublicProfileSnapshotV1Schema, layout: PublicProfileViewLayoutV1Schema,
   appearance: PublicProfileAppearanceV1Schema, urls: PublicProfileUrlsV1Schema,
 }));
 export type PublicProfileViewV1 = z.infer<typeof PublicProfileViewV1Schema>;
+/** Local key-holding preview only: anonymous responses still accept references, never prepared pixels. */
+export const PublicProfileLocalPreviewViewV1Schema = lazyZodSchema(() => z.strictObject({
+  ...z.omit(PublicProfileViewV1Schema, { appearance: true }).shape,
+  appearance: PublicProfilePreparedAppearanceV1Schema,
+}));
+export type PublicProfileLocalPreviewViewV1 = z.infer<typeof PublicProfileLocalPreviewViewV1Schema>;
 export const PublicProfileReadResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('published'), view: PublicProfileViewV1Schema }),
   z.strictObject({ kind: z.literal('paused'), handle: z.string(), identity: PublicProfileIdentityV1Schema }),

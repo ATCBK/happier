@@ -1,12 +1,15 @@
 import { PublicProfilePolicyV1Schema, PublicProfileSnapshotV1Schema, PublicProfileMetadataV1Schema, PublicProfileIdentityV1Schema,
   type PublicProfilePolicyV1, type PublicProfileSnapshotV1, type PublicProfileField, type PublicUsageFactsV1,
   type PublicProfileMetadataV1, type PublicProfileIdentityV1 } from './publicProfile.js';
-import { PublicProfileViewV1Schema, type PublicProfileViewV1, type PublicProfileContextV1, type PublicProfileAppearanceV1 } from './publicProfilePublication.js';
+import { PublicProfileViewV1Schema, type PublicProfileViewV1, type PublicProfileContextV1, type PublicProfileAppearanceV1,
+  type PublicProfilePreparedAppearanceV1, PublicProfileLocalPreviewViewV1Schema,
+  type PublicProfileLocalPreviewViewV1 } from './publicProfilePublication.js';
 import { PublicProfileLayoutV1Schema, type PublicProfileLayoutV1, type WidgetPublicSnapshotDocumentV1 } from '../widgets/widgetPublicSnapshotV1.js';
 import { zodSchemaToJsonSchemaObject, type JsonSchemaObject } from '../actions/actionInputJsonSchema.js';
 import { freezePluginDeclarativeDataNodeV1, isPluginDeclarativeDataNodeV1, validatePluginDeclarativeDataNodeFieldTypesV1, type PluginDeclarativeDataNodeV1,
   type PluginDeclarativeDataFieldV1 } from '../plugins/contributions/ui/declarativeDataV1.js';
 import type { PluginDeclarativeNodeV2 } from '../plugins/contributions/ui/v2.js';
+import type { BuiltinUsagePublicPresentationV1 } from '../widgets/builtinWidgetDescriptorV1.js';
 
 const factFields = { tokens: 'tokens', activeDays: 'activeDays', agentTimeMs: 'agentTime', mergedPrs: 'mergedPrs',
   currentStreakDays: 'currentStreak', bestStreakDays: 'bestStreak', peakParallel: 'peakParallel', calendar: 'calendar',
@@ -69,6 +72,9 @@ function schemaAt(path: readonly string[]): JsonSchemaObject | undefined {
   return schema;
 }
 function permitted(path: readonly string[], policy: PublicProfilePolicyV1): boolean {
+  if (path[0] === 'snapshot' && path[1] === 'lenses') {
+    return enabled(policy, 'sourceSplit') && (path[2] !== '*' || permitted(['snapshot', ...path.slice(3)], policy));
+  }
   if (path[0] === 'snapshot' && path[1] === 'facts') {
     const field = factFields[path[2] as keyof PublicUsageFactsV1];
     if (!field || !enabled(policy, field)) return false;
@@ -78,6 +84,30 @@ function permitted(path: readonly string[], policy: PublicProfilePolicyV1): bool
   if (path[0] === 'identity') return enabled(policy, path[1] === 'sinceMs' ? 'since' : path[1] === 'avatarUrl' ? 'avatar' : 'name');
   if (path[0] === 'metadata') return enabled(policy, path[1] as PublicProfileField);
   return true;
+}
+/** Built-in bodies receive only masked facts; placements cannot grant their own disclosure. */
+function permittedUsage(presentation: BuiltinUsagePublicPresentationV1, policy: PublicProfilePolicyV1): boolean {
+  const any = (...fields: PublicProfileField[]) => fields.some(field => enabled(policy, field));
+  switch (presentation.widgetId) {
+    case 'usage_rhythm': return presentation.inputs.style === 'sky' || presentation.inputs.style === 'heatmap'
+      ? enabled(policy, 'calendar') : presentation.inputs.style === 'daylight'
+        ? any('punch', 'dayNightActivity') : enabled(policy, 'punch');
+    case 'usage_daily': return enabled(policy, 'calendar');
+    case 'usage_period_summary': return any('tokens', 'activeDays', 'agentTime', 'mergedPrs', 'currentStreak', 'bestStreak', 'peakParallel');
+    case 'usage_breakdowns': return presentation.inputs.style === 'crew' ? any('agentMix', 'agentActiveDays') : any('agentMix', 'sourceSplit');
+    case 'usage_constellation': case 'usage_orbit': return enabled(policy, 'agentMix');
+    case 'usage_flow': return enabled(policy, 'weeklyAgentMix');
+    case 'usage_parallel': return enabled(policy, 'peakParallel');
+    case 'usage_outcomes': return enabled(policy, 'mergedPrs');
+    case 'usage_recap': return presentation.inputs.style === 'personalRecords'
+      ? any('activeDays', 'currentStreak', 'bestStreak', 'peakParallel', 'sessionDurations')
+      : enabled(policy, 'highlights') && any('activeDays', 'peakParallel', 'mergedPrs');
+    case 'usage_footprint': return enabled(policy, 'footprint');
+    case 'usage_source_coverage': return any(...Object.values(factFields));
+    case 'usage_run_length': return enabled(policy, 'sessionDurations');
+    // Every encoding is independently masked; the neutral portrait carries no hidden fact.
+    case 'usage_planet': return true;
+  }
 }
 function assertField(field: PluginDeclarativeDataFieldV1, prefix: readonly string[] = []) {
   const schema = schemaAt([...prefix, ...field.path]);
@@ -130,15 +160,17 @@ function compileNode(node: PluginDeclarativeNodeV2, view: Readonly<{ snapshot: P
   }
   return node;
 }
-/** The only outward view compiler: current identity, consent, facts and inert placements. */
-export function projectPublicProfile(input: Readonly<{ context: PublicProfileContextV1; policy: PublicProfilePolicyV1;
-  metadata: PublicProfileMetadataV1; snapshot: PublicProfileSnapshotV1; layout: PublicProfileLayoutV1; appearance: PublicProfileAppearanceV1 }>): PublicProfileViewV1 | null {
+type PublicProfileProjectionInput = Readonly<{ context: PublicProfileContextV1; policy: PublicProfilePolicyV1;
+  metadata: PublicProfileMetadataV1; snapshot: PublicProfileSnapshotV1; layout: PublicProfileLayoutV1 }>;
+/** One compiler for current identity, consent, facts and inert placements in local and published views. */
+function projectPublicProfileCore(input: PublicProfileProjectionInput): Omit<PublicProfileViewV1, 'appearance'> | null {
   if (!input.context.handle || !input.context.service || !input.context.urls) return null;
   const policy = PublicProfilePolicyV1Schema.parse(input.policy);
   const safe = { snapshot: projectPublicProfileSnapshot(input.snapshot, policy), metadata: projectPublicProfileMetadata(input.metadata, policy),
     identity: projectPublicProfileIdentity(input.context.identity, policy), handle: input.context.handle };
   const layout = validatePublicProfileLayout(input.layout);
   const projectWidget = (widget: Extract<PublicProfileLayoutV1['items'][number], { kind: 'widget' }>) => {
+    if (widget.presentation.kind === 'usage') return permittedUsage(widget.presentation, policy) ? widget : null;
     const root = compileNode(widget.presentation.document.root, safe, policy);
     return root ? { ...widget, presentation: { kind: 'declarative' as const, document: { version: 1 as const, root } } } : null;
   };
@@ -147,6 +179,16 @@ export function projectPublicProfile(input: Readonly<{ context: PublicProfileCon
     const children = item.children.map(projectWidget).filter(widget => widget !== null);
     return children.length ? [{ ...item, children }] : [];
   });
-  return PublicProfileViewV1Schema.parse({ v: 1, ...safe, state: 'published', service: input.context.service,
-    urls: input.context.urls, layout: { v: 1, items }, appearance: input.appearance });
+  return { v: 1, ...safe, indexable: policy.indexable, state: 'published', service: input.context.service,
+    urls: input.context.urls, layout: { v: 1, items } };
+}
+/** Anonymous responses retain the strict applied/publication-reference-only representation. */
+export function projectPublicProfile(input: PublicProfileProjectionInput & Readonly<{ appearance: PublicProfileAppearanceV1 }>): PublicProfileViewV1 | null {
+  const view = projectPublicProfileCore(input);
+  return view ? PublicProfileViewV1Schema.parse({ ...view, appearance: input.appearance }) : null;
+}
+/** The exact prepared pixels remain local; only Apply can turn them into a public publication reference. */
+export function projectPublicProfilePreview(input: PublicProfileProjectionInput & Readonly<{ appearance: PublicProfilePreparedAppearanceV1 }>): PublicProfileLocalPreviewViewV1 | null {
+  const view = projectPublicProfileCore(input);
+  return view ? PublicProfileLocalPreviewViewV1Schema.parse({ ...view, appearance: input.appearance }) : null;
 }

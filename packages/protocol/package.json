@@ -7,6 +7,11 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./account/publicProfileSnapshot": {
+      "happier-source": "./src/account/publicProfileSnapshot.ts",
+      "types": "./dist/account/publicProfileSnapshot.d.ts",
+      "default": "./dist/account/publicProfileSnapshot.js"
+    },
     "./actions/executor/publicProfileActions": {
       "happier-source": "./src/actions/executor/publicProfileActions.ts",
       "types": "./dist/actions/executor/publicProfileActions.d.ts",
