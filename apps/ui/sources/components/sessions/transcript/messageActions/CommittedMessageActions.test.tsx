@@ -23,7 +23,7 @@ const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 // Load consumers after the canonical native and HTTP boundaries are configured.
 const { View } = await import('react-native');
-const { renderScreen, standardCleanup, createTestSessionTranscriptSource, wrapWithSessionTranscriptSource } = await import('@/dev/testkit');
+const { renderScreen, standardCleanup, createSessionFixture, createTestSessionTranscriptSource, wrapWithSessionTranscriptSource } = await import('@/dev/testkit');
 const { TranscriptMessageSelectionProvider } = await import('../messageSelection/TranscriptMessageSelectionContext');
 const { ContextMenu } = await import('@/components/ui/forms/dropdown/ContextMenu');
 const { settingsDefaults } = await import('@/sync/domains/settings/settings');
@@ -92,6 +92,41 @@ function element(kind: 'user-text' | 'agent-text', overrides: Partial<typeof set
 }
 
 describe('Committed row and native menu availability', () => {
+    it.each([false, true])('tracks Save as decision from the layout-1 owner view without rerendering for unrelated Session updates (Bot: %s)', async (bot) => {
+        const previousState = getStorage().getState();
+        const ownerMetadata = { ...createSessionFixture().metadata!, ...(bot ? { bot: { kind: 'bot' as const } } : {}), work: { memoryEnabled: true } };
+        const { projectSessionSharedMetadataV1 } = await import('@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1');
+        const session = createSessionFixture({ id: 's1', serverId, metadataLayoutVersion: 1,
+            // Session's retained Metadata type also carries the schema-produced public envelope.
+            metadata: projectSessionSharedMetadataV1({ metadata: ownerMetadata }) as unknown as NonNullable<ReturnType<typeof createSessionFixture>['metadata']>,
+            ownerMetadataView: ownerMetadata });
+        let screen: Awaited<ReturnType<typeof renderScreen>> | null = null;
+        try {
+            getStorage().getState().applySessions([session]);
+            screen = await renderScreen(element('agent-text', { transcriptMessageMakeRepeatableActionEnabled: false }));
+            const menuHasDecision = () => screen!.findAllByType(ContextMenu)[0]?.props.items.some((item: { id: string }) => item.id === 'saveDecision');
+            expect(menuHasDecision()).toBe(true);
+            expect(screen.findHostByTestId('transcript-message-save-decision:m1')).not.toBeNull();
+            const renders = bodyRenders;
+            await act(async () => {
+                getStorage().getState().applySessions([createSessionFixture({ id: 'unrelated', serverId })]);
+                getStorage().setState(state => ({ sessions: { ...state.sessions, s1: { ...session, updatedAt: 99 } } }));
+            });
+            expect(bodyRenders).toBe(renders);
+            for (const ownerMetadataView of [{ ...ownerMetadata, work: { memoryEnabled: false } }, null, ownerMetadata]) {
+                await act(async () => {
+                    getStorage().setState(state => ({ sessions: { ...state.sessions, s1: { ...session, ownerMetadataView } } }));
+                });
+                const enabled = ownerMetadataView?.work.memoryEnabled === true;
+                expect(screen.findHostByTestId('transcript-message-save-decision:m1') !== null).toBe(enabled);
+                expect(menuHasDecision()).toBe(enabled);
+            }
+        } finally {
+            await screen?.unmount();
+            getStorage().setState(previousState, true);
+        }
+    });
+
     it('opens the exact committed answer source through the shared row and native menu entry', async () => {
         const open = vi.fn();
         const screen = await renderScreen(element('agent-text', {}, false, 'answer', false, 'Quoted answer', false, false, undefined, open, 'committed-answer'));

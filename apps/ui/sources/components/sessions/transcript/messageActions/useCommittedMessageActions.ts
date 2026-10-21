@@ -23,6 +23,7 @@ import { parseSessionMessageRefV1, type SessionMessageRefV1 } from '@happier-dev
 import type { DiscussionSecondOpinionSourceV1 } from '@happier-dev/protocol/discussions/secondOpinion';
 import { readSessionMemoryEnabledV1 } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 import { useSessionSelector } from '@/sync/store/hooks';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 
 export type CommittedMessageActionId = 'copy' | 'fork' | 'rollback' | 'select' | 'pin' | 'savePrompt' | 'plugins' | 'makeRepeatable' | 'secondOpinion' | 'discuss' | 'saveDecision';
 export type CommittedMessageAction = Readonly<{
@@ -112,7 +113,7 @@ export function useCommittedMessageActions(input: CommittedMessageActionInput) {
     const committedSource = input.openDiscussionSource ? committedMessage : null;
     // Save as decision writes to this Session's memory; with memory off there is nothing it could save to.
     const memoryEnabled = useSessionSelector(input.sessionId, input.serverId,
-        (session) => session !== null && readSessionMemoryEnabledV1(session.metadata));
+        (session) => session !== null && readSessionMemoryEnabledV1(readSessionOwnerMetadataView(session)));
     const copy = async () => {
         if (!await copyWithFeedback(() => setClipboardStringSafe(input.copyText), copyKey)) {
             Modal.alert(t('common.error'), t('items.failedToCopyToClipboard'));
