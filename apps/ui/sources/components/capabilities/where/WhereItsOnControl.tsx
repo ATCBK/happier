@@ -53,6 +53,7 @@ import { joinList } from '@/utils/text/joinList';
 import {
   describeReach,
   describeReachRule,
+  foldMachineNames,
   sayWhereItsOn,
   type WhereItsOnNames,
   type WhereItsOnSentence,
@@ -226,7 +227,7 @@ function ConsequenceLine(
   const marker = '\u0002';
   const [before, after] = t('capabilities.where.available', {
     agents: marker,
-    machines: joinList(consequence.onlineMachineNames.map((name) => `${NAME_OPEN}${name}${NAME_CLOSE}`)),
+    machines: joinList(foldMachineNames(consequence.onlineMachineNames).map((name) => `${NAME_OPEN}${name}${NAME_CLOSE}`)),
     projects: consequence.onlyProjectNames.length ? joinList(consequence.onlyProjectNames) : undefined,
   }).split(marker);
   return (

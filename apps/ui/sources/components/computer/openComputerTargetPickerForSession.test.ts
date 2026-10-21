@@ -55,4 +55,22 @@ describe('resolveComputerTargetPickerForSession', () => {
     expect(request?.agentName).toBe(t(claude.displayNameKey));
     expect(request?.agentName).not.toBe(t('browserPresence.agentFallbackName'));
   });
+
+  it('never puts the raw machine id in picker copy while the Machine has no readable name', () => {
+    const named = resolveComputerTargetPickerForSession({
+      sessionId: 'picker-name-session',
+      machineId: '610145ef-b9fc-46e7-bf7c-f7c97c2e1c1e',
+      machineName: 'devbox',
+      onSelected: () => {},
+    });
+    const unnamed = resolveComputerTargetPickerForSession({
+      sessionId: 'picker-name-session',
+      machineId: '610145ef-b9fc-46e7-bf7c-f7c97c2e1c1e',
+      machineName: null,
+      onSelected: () => {},
+    });
+
+    expect(named?.machineName).toBe('devbox');
+    expect(unnamed?.machineName).toBe(t('computerUse.presentation.tabFallback'));
+  });
 });

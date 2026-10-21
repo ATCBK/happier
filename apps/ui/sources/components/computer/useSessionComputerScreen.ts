@@ -73,7 +73,7 @@ export function useSessionComputerScreen(props: Readonly<{
         serverId,
         accountLifetime,
         machineId: props.machineId,
-        machineName: machineName ?? props.machineId,
+        machineName,
         currentTargetKey: selectedTarget ? computerTargetKey(selectedTarget) : null,
         access: control.selection?.access ?? control.selection?.approvalDisplay.access,
         onSelected: applySelection,

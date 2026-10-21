@@ -116,6 +116,15 @@ describe('describeReach', () => {
         expect(consequence.onlineMachineNames).toEqual(['MacBook Pro', 'nl2']);
         expect(formatWhereItsOnConsequence(consequence, names)).toBe('Available to Claude and Codex on MacBook Pro and nl2, only in client-site');
     });
+    it('names a few machines and folds the rest into a count, so a long Account still reads as one sentence', () => {
+        const many = ['m1', 'm2', 'm3', 'm4', 'm5', 'm6'].map(machineId => ({ machineId,
+            agents: [{ agentId: 'claude', enabled: true, decidedBy: null }] }));
+        const consequence = describeReach(many, many.map(row => ({ machineId: row.machineId, online: true })), names, () => 'full');
+        expect(formatWhereItsOnConsequence(consequence, names))
+            .toBe(`Available to Claude on m1, m2, m3, and ${t('capabilities.detail.moreMachines', { count: 3 })}`);
+        const four = describeReach(many.slice(0, 4), many.slice(0, 4).map(row => ({ machineId: row.machineId, online: true })), names, () => 'full');
+        expect(formatWhereItsOnConsequence(four, names)).toBe('Available to Claude on m1, m2, m3, and m4');
+    });
     const projection = [
         { machineId: 'mbp', agents: [{ agentId: 'claude', enabled: true, decidedBy: null }, { agentId: 'gemini', enabled: true, decidedBy: null }] },
         { machineId: 'nl2', agents: [{ agentId: 'codex', enabled: true, decidedBy: null }, { agentId: 'claude', enabled: false, decidedBy: null }] },

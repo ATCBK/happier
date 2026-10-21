@@ -312,6 +312,21 @@ export function describeReach(
   };
 }
 
+/**
+ * Up to this many machines read by name in the "Available to … on …" sentence; a longer list names the first few
+ * and counts the rest. The plain and the marked (control) sentence both fold through `foldMachineNames`.
+ */
+const NAMED_MACHINES_MAX = 4;
+const NAMED_MACHINES_FOLDED = 3;
+
+export function foldMachineNames(machineNames: readonly string[]): readonly string[] {
+  if (machineNames.length <= NAMED_MACHINES_MAX) return machineNames;
+  return [
+    ...machineNames.slice(0, NAMED_MACHINES_FOLDED),
+    t('capabilities.detail.moreMachines', { count: machineNames.length - NAMED_MACHINES_FOLDED }),
+  ];
+}
+
 /** "Available to Claude and Codex on MacBook Pro and nl2", or that it is available nowhere yet. */
 export function formatWhereItsOnConsequence(
   consequence: WhereItsOnConsequence,
@@ -325,7 +340,7 @@ export function formatWhereItsOnConsequence(
     return t('capabilities.where.availableNowhere');
   return t('capabilities.where.available', {
     agents: joinList(consequence.availableAgentIds.map(names.agentName)),
-    machines: joinList(consequence.onlineMachineNames),
+    machines: joinList(foldMachineNames(consequence.onlineMachineNames)),
     projects: consequence.onlyProjectNames.length ? joinList(consequence.onlyProjectNames) : undefined,
   });
 }

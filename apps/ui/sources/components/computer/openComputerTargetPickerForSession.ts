@@ -25,7 +25,8 @@ type ComputerTargetPickerForSessionParams = Readonly<{
     serverId?: string | null;
     accountLifetime?: ServerAccountScopeLifetime | null;
     machineId: string;
-    machineName: string;
+    /** Null while the Machine has no readable name: the picker then says "Computer", never the raw id. */
+    machineName: string | null;
     currentTargetKey?: string | null;
     access?: ComputerAccessV1;
     onSelected: (selection: ComputerSelectedTargetResponseV1) => void;
@@ -78,7 +79,7 @@ export function resolveComputerTargetPickerForSession(params: ComputerTargetPick
         purpose,
         scope: { sessionId: params.sessionId, machineId: params.machineId, serverId },
         agentName: core ? t(core.displayNameKey) : t('browserPresence.agentFallbackName'),
-        machineName: params.machineName,
+        machineName: params.machineName ?? t('computerUse.presentation.tabFallback'),
         currentTargetKey: params.currentTargetKey ?? null,
         access: params.access,
         ...(refusalCode ? { refusalCode } : {}),
