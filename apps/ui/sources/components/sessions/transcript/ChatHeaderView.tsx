@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { PaneMainBody } from '@/components/ui/panels/paneMainComposerAnchor';
 import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { View, Platform, Pressable, type LayoutChangeEvent } from 'react-native';
 import { useNavigation } from '@/components/appShell/workspace/destinationRoute';
@@ -129,7 +130,7 @@ export const ChatHeaderView = React.memo(function ChatHeaderView({
     };
 
     return (
-        <View style={[styles.container, { paddingTop: includeTopInset ? insets.top : 0, backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]}>
+        <PaneMainBody style={[styles.container, { paddingTop: includeTopInset ? insets.top : 0, backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]}>
             <View style={[styles.contentWrapper, constrainWidth ? null : { alignItems: 'stretch' }]}
                 onLayout={(event: LayoutChangeEvent) => {
                     const width = Math.round(event.nativeEvent.layout.width);
@@ -268,7 +269,7 @@ export const ChatHeaderView = React.memo(function ChatHeaderView({
 
                 </HeaderBand>
             </View>
-        </View>
+        </PaneMainBody>
     );
 });
 

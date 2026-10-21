@@ -10,6 +10,7 @@ import { useReportSessionCockpitComposerChromeHeight } from '@/components/worksp
 import { ComposerKeyboardProvider } from './ComposerKeyboardContext';
 import type { ComposerKeyboardScaffoldProps } from './ComposerKeyboardScaffoldTypes';
 import { useComposerKeyboardLayout } from './useComposerKeyboardLayout.native';
+import { PaneMainBody } from '@/components/ui/panels/paneMainComposerAnchor';
 
 export function ComposerKeyboardScaffold(props: ComposerKeyboardScaffoldProps): React.ReactElement {
     const { theme } = useUnistyles();
@@ -50,13 +51,13 @@ export function ComposerKeyboardScaffold(props: ComposerKeyboardScaffoldProps): 
                 testID={props.testID}
                 style={[{ flex: 1, minHeight: 0, minWidth: 0, backgroundColor: surfaceBackgroundColor }, props.style]}
             >
-                <View
+                <PaneMainBody
                     {...contentProps}
                     testID={props.contentTestID}
                     style={[{ flex: 1, minHeight: 0, minWidth: 0 }, contentPropsStyle, props.contentStyle]}
                 >
                     {props.children}
-                </View>
+                </PaneMainBody>
                 <Animated.View
                     testID={props.composerTestID}
                     onLayout={handleComposerLayout}

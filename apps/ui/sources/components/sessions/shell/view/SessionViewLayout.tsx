@@ -12,6 +12,7 @@ import { shadowLevelStyle } from '@/shadowElevation';
 import { t } from '@/text';
 import { isRunningOnMac } from '@/utils/platform/platform';
 import { Icon } from '@/components/ui/icons/Icon';
+import { usePaneMainBodyPresentation } from '@/components/ui/panels/paneMainComposerAnchor';
 import {
     resolveSessionViewContentBottomSpacing,
     SESSION_VIEW_AGENT_INPUT_OUTER_BOTTOM_PADDING_PX,
@@ -42,6 +43,7 @@ export type SessionViewLayoutProps = Readonly<{
 }>;
 
 export function SessionViewLayout(props: SessionViewLayoutProps) {
+    const { hiddenProps } = usePaneMainBodyPresentation();
     const { theme } = useUnistyles();
     const safeArea = useChromeSafeAreaInsets();
     const { width: windowWidth } = useWindowDimensions();
@@ -72,6 +74,8 @@ export function SessionViewLayout(props: SessionViewLayoutProps) {
         <>
             {props.shouldShowCliWarning && !showBackButton && (
                 <Pressable
+                    {...hiddenProps}
+                    testID="session-view-cli-warning"
                     onPress={props.onDismissCliWarning}
                     style={{
                         position: 'absolute',
@@ -120,6 +124,7 @@ export function SessionViewLayout(props: SessionViewLayoutProps) {
 
             {showBackButton && (
                 <Pressable
+                    {...hiddenProps}
                     onPress={props.onBackPress}
                     testID="session-view-landscape-back-button"
                     style={{

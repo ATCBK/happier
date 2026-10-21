@@ -13,6 +13,7 @@ vi.mock('react-native-unistyles', async () => {
 });
 
 // Keep the cold real graph outside each DOM journey's render/focus budget.
+await import('@/sync/syncEngine');
 const { MultiPaneHost } = await import('./MultiPaneHost');
 const { MultiPaneHostWithBottom } = await import('./MultiPaneHostWithBottom');
 const { focusPaneRegion } = await import('@/components/appShell/panes/paneRegion');

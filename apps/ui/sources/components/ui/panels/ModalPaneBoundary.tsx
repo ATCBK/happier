@@ -145,6 +145,20 @@ const nativeAccessibilityFocusAnchorStyle = {
     pointerEvents: 'none' as const,
 };
 
+/** Shared projection for a retained surface that is covered, without making it a modal. */
+export function resolvePaneUnderlayAccessibilityProps(hidden: boolean, isWeb: boolean): Pick<
+    ModalPaneBoundary['underlayProps'],
+    'pointerEvents' | 'inert' | 'aria-hidden' | 'accessibilityElementsHidden' | 'importantForAccessibility'
+> {
+    return {
+        pointerEvents: hidden ? 'none' : 'auto',
+        inert: isWeb && hidden ? true : undefined,
+        'aria-hidden': isWeb && hidden ? true : undefined,
+        accessibilityElementsHidden: isWeb ? undefined : hidden,
+        importantForAccessibility: isWeb ? undefined : hidden ? 'no-hide-descendants' : 'auto',
+    };
+}
+
 /**
  * The one semantic/focus/escape boundary for retained pane overlays. Its View
  * bridge owns native Back so descendant overlays retain platform topmost
@@ -237,13 +251,7 @@ export function useModalPaneBoundary(options: ModalPaneBoundaryOptions): ModalPa
 
     const underlayProps = React.useMemo<ModalPaneBoundary['underlayProps']>(() => ({
         tabIndex: isWeb ? -1 : undefined,
-        pointerEvents: options.active ? 'none' as const : 'auto' as const,
-        inert: isWeb && options.active ? true : undefined,
-        'aria-hidden': isWeb && options.active ? true : undefined,
-        accessibilityElementsHidden: isWeb ? undefined : options.active,
-        importantForAccessibility: isWeb
-            ? undefined
-            : options.active ? 'no-hide-descendants' as const : 'auto' as const,
+        ...resolvePaneUnderlayAccessibilityProps(options.active, isWeb),
         suppressDescendantPaneBoundaries: options.active,
     }), [isWeb, options.active]);
 

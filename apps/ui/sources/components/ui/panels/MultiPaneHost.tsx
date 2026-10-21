@@ -19,7 +19,7 @@ import { SurfaceRim } from '@/components/ui/surfaces/SurfaceRim';
 import { RetainedPanelSurface } from './RetainedPanelSurface';
 import { DEFAULT_DETAILS_MIN_PX, DEFAULT_RIGHT_MIN_PX, DEFAULT_SESSION_MIN_PX, DEFAULT_SESSION_WIDTH_PX } from './paneBreakpoints';
 import { usePaneRegionFocusBoundary } from '@/components/appShell/panes/paneRegion';
-import { PaneMainComposerReporterContext } from './paneMainComposerAnchor';
+import { PaneMainBodyPresentationContext, PaneMainComposerReporterContext } from './paneMainComposerAnchor';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 
@@ -287,7 +287,9 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
                     >
                         <PluginSurfaceFocusEligibilityProvider active={mainFocusEligible} presentationActive={mainPresented}>
                             <PaneMainComposerReporterContext.Provider value={reportMainComposer}>
+                                <PaneMainBodyPresentationContext.Provider value={mainPresented && !(rightInMain && rightPresence.present)}>
                                 {main}
+                                </PaneMainBodyPresentationContext.Provider>
                             </PaneMainComposerReporterContext.Provider>
                         </PluginSurfaceFocusEligibilityProvider>
                     </ModalPaneBoundaryView>

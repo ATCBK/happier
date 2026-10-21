@@ -98,7 +98,7 @@ import { EmbeddedSessionUnavailable } from "./embedded/EmbeddedSessionUnavailabl
 import { PluginSurfaceNestingBoundary } from "@/components/plugins/surfaces/pluginSurfaceNesting";
 import { Text } from "@/components/ui/text/Text";
 import { SessionRightSidebarProvider } from "@/components/sessions/panes/SessionRightPanel";
-import { PaneMainComposerAnchor } from '@/components/ui/panels/paneMainComposerAnchor';
+import { PaneMainBody, PaneMainComposerAnchor } from '@/components/ui/panels/paneMainComposerAnchor';
 import { createSessionPaneSurfaceScope } from "@/components/sessions/plugins/useSessionPluginRuntime";
 import { PaneMainHideButton } from "@/components/appShell/panes/mainColumn/PaneMainColumnControls";
 import { AppPaneScopeHost } from "@/components/appShell/panes/AppPaneScopeHost";
@@ -2643,7 +2643,7 @@ function SessionViewLoadedContent({
             {embedded ? null : header}
             {/* The transcript's own positioning context: its floating notices anchor below the header. */}
             <View style={{ flex: 1, minHeight: 0, minWidth: 0, position: 'relative' }}>
-            {requesterRecoveryBanner}
+            {requesterRecoveryBanner ? <PaneMainBody>{requesterRecoveryBanner}</PaneMainBody> : null}
             <SessionTranscriptSelectionBoundary
                 sessionId={sessionId}
                 metadata={ownerMetadata}

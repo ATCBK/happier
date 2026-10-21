@@ -10,6 +10,7 @@ import { useReportSessionCockpitComposerChromeHeight } from '@/components/worksp
 import { ComposerKeyboardProvider } from './ComposerKeyboardContext';
 import type { ComposerKeyboardScaffoldProps } from './ComposerKeyboardScaffoldTypes';
 import { useComposerKeyboardLayout } from './useComposerKeyboardLayout.web';
+import { PaneMainBody } from '@/components/ui/panels/paneMainComposerAnchor';
 
 function normalizeScaffoldHeight(height: number): number | undefined {
     if (!Number.isFinite(height) || height <= 0) return undefined;
@@ -140,13 +141,13 @@ export function ComposerKeyboardScaffold(props: ComposerKeyboardScaffoldProps): 
                 ]}
             >
                 {/* Sibling of the content, never a wrapper — see the native scaffold. */}
-                    <View
+                <PaneMainBody
                     {...contentProps}
                     testID={props.contentTestID}
                     style={[{ flexBasis: 0, flexGrow: 1, minHeight: 0, minWidth: 0 }, contentPropsStyle, props.contentStyle]}
                 >
                     {props.children}
-                </View>
+                </PaneMainBody>
                 <View
                     ref={composerRef}
                     testID={props.composerTestID}

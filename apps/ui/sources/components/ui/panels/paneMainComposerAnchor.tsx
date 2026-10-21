@@ -1,11 +1,37 @@
 import * as React from 'react';
-import { View, type StyleProp, type ViewStyle } from 'react-native';
+import { Platform, View, type StyleProp, type ViewStyle } from 'react-native';
+
+import { ModalPaneBoundaryView, resolvePaneUnderlayAccessibilityProps } from './ModalPaneBoundary';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 /**
  * The main column's composer, as the pane host sees it: a pane presented inside the session column
  * (lab AR1 EFv) covers the column down to the composer's top edge, so the composer stays in reach.
  */
 export const PaneMainComposerReporterContext = React.createContext<((node: View | null) => void) | null>(null);
+
+/** The pane owner withdraws the covered body, not the composer's still-visible band. */
+export const PaneMainBodyPresentationContext = React.createContext<boolean | null>(null);
+
+export function usePaneMainBodyPresentation() {
+    const presented = React.useContext(PaneMainBodyPresentationContext);
+    return {
+        presented,
+        hiddenProps: presented === false ? resolvePaneUnderlayAccessibilityProps(true, Platform.OS === 'web') : {},
+    };
+}
+
+/** Replaces an existing body/header View without hiding or remounting its retained content. */
+export function PaneMainBody(props: React.ComponentProps<typeof ModalPaneBoundaryView>): React.ReactElement {
+    const { presented, hiddenProps } = usePaneMainBodyPresentation();
+    const body = <ModalPaneBoundaryView {...props} {...hiddenProps}
+        suppressDescendantPaneBoundaries={props.suppressDescendantPaneBoundaries || presented === false} />;
+    // Outside a pane host, do not invent focus authority for a standalone surface.
+    if (presented === null) return body;
+    return <PluginSurfaceFocusEligibilityProvider active={presented} presentationActive={presented}>
+        {body}
+    </PluginSurfaceFocusEligibilityProvider>;
+}
 
 /** The main column's composer band; reports itself to the enclosing pane host on every layout. */
 export function PaneMainComposerAnchor(props: Readonly<{ style?: StyleProp<ViewStyle>; children: React.ReactNode }>): React.ReactElement {
