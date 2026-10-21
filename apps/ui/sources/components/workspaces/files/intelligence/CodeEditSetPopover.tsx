@@ -181,7 +181,7 @@ function useEditSetCommit(params: Readonly<{
   // domain clients below retain their native, typed Machine receipts.
   const author = useMountedActionExecution(options.serverId ?? latest.current.scope.serverId, { openOnRequest: true });
   const scopeKey = JSON.stringify([author.binding?.scope, author.binding?.revision,
-    latest.current.scope.machineId, latest.current.scope.rootPath, latest.current.filePath, options.accountId, op]);
+    latest.current.scope.machineId, latest.current.scope.rootPath, options.accountId]);
   const currentScopeKey = React.useRef(scopeKey);
   currentScopeKey.current = scopeKey;
   const apply = React.useCallback(async () => {
