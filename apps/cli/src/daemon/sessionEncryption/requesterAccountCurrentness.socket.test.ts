@@ -2,12 +2,13 @@ import axios from 'axios';
 import nacl from 'tweetnacl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
+import { projectAccountEncryptionIdentity } from '@happier-dev/sync-client';
 import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { admitRequesterAccountActionContext, prepareRequesterAccountActionContext } from "./requesterAccountActionProjection";
 import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
 import { acquireRequesterAccountEncryptionCurrentness, readRequesterAccountEncryptionCurrentness,
-    isRequesterAccountEncryptionCurrentnessObserved } from '@/api/client/accountEncryptionCurrentnessObservation';
+    readObservedAccountEncryptionCurrentness, isRequesterAccountEncryptionCurrentnessObserved } from '@/api/client/accountEncryptionCurrentnessObservation';
 import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { createExternalActionAuthorizedRequestHeaders, projectExternalActionRequesterHttpAuthorization, verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
@@ -100,6 +101,26 @@ describe('requester Account currentness over the installed socket wiring', () =>
                 .resolves.toMatchObject({ mode: 'plain' });
             expect(reads).toHaveBeenCalledTimes(1);
         } finally { await observation.dispose(); await channel.close(); }
+    });
+
+    it.each(['requester', 'observed'] as const)('refuses a borrowed identity when its exact borrower retires while a different transport holder stays live (%s)', async reader => {
+        const channel = await createRequesterCurrentnessSocketHarness();
+        const fact = { mode: 'plain' as const, version: 1, updatedAt: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null };
+        vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: fact });
+        const scope = { accountId: 'bob', serverBaseUrl: 'https://home.example' };
+        const transport = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: 'transport-holder' });
+        const borrower = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: 'borrower' });
+        try {
+            await transport.read();
+            const borrowed = reader === 'requester'
+                ? readRequesterAccountEncryptionCurrentness({ ...scope, token: 'borrower' })
+                : readObservedAccountEncryptionCurrentness({ ...scope, token: 'borrower' });
+            const outcome = expect(borrowed).rejects.toThrow();
+            await borrower.dispose();
+            await outcome;
+            await expect(transport.read()).resolves.toMatchObject({ mode: 'plain' });
+        } finally { await borrower.dispose(); await transport.dispose(); await channel.close(); }
     });
 
     it('selects Follow changes beyond a full Account page and invalidates across a cursor gap and reconnect', async () => {
@@ -268,13 +289,13 @@ describe('requester Account currentness over the installed socket wiring', () =>
         const scope = { accountId: 'bob', token, serverBaseUrl: 'https://home.example' };
         const observation = acquireRequesterAccountEncryptionCurrentness(scope);
         const storage = () => resolveCliAccountStorageContext({ credentials: { token, encryption: null },
-            serverBaseUrl: scope.serverBaseUrl, authorizationHeaders: { Authorization: `Bearer ${token}` } });
+            serverBaseUrl: scope.serverBaseUrl, authorizationHeaders: { Authorization: `Bearer ${token}` }, usage: 'identity' });
         try {
             await observation.read();
             const initial = reads.mock.calls.length;
             for (let pass = 0; pass < 12; pass++) await expect(storage()).resolves.toEqual({ mode: 'plain', material: null });
             await expect(runWithServerHttpBaseUrl(scope.serverBaseUrl,
-                () => resolveCliAccountStorageContext({ credentials: { token, encryption: null } })))
+                () => resolveCliAccountStorageContext({ credentials: { token, encryption: null }, usage: 'identity' })))
                 .resolves.toEqual({ mode: 'plain', material: null });
             expect(reads.mock.calls.length - initial).toBe(0);
             await channel.disconnect();
@@ -296,9 +317,9 @@ describe('requester Account currentness over the installed socket wiring', () =>
         const observation = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: 'secret-token' });
         const remaining = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: 'remaining-secret-token' });
         try {
-            await expect(observation.read()).resolves.toEqual(first);
+            await expect(observation.read()).resolves.toEqual(projectAccountEncryptionIdentity(first));
             await observation.dispose();
-            await expect(remaining.read()).resolves.toEqual(second);
+            await expect(remaining.read()).resolves.toEqual(projectAccountEncryptionIdentity(second));
             expect(axios.get).toHaveBeenLastCalledWith('https://private-home.example/v1/account/encryption/currentness',
                 expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer remaining-secret-token' }) }));
             expect(warnings).toHaveBeenCalled();
@@ -323,7 +344,7 @@ describe('requester Account currentness over the installed socket wiring', () =>
         const observation = acquireRequesterAccountEncryptionCurrentness(scope);
         const api = new ConnectedServiceCredentialHttpClient({ token: scope.token });
         const readObservedMode = () => runWithServerHttpBaseUrl(scope.serverBaseUrl,
-            () => api.getAccountEncryptionMode({ refresh: true, throwOnTransportError: true }));
+            () => api.getAccountEncryptionMode({ usage: 'identity', throwOnTransportError: true }));
         try {
             await observation.read();
             // Claiming advances the Account cursor before returning its exact
@@ -499,15 +520,15 @@ describe('requester Account currentness over the installed socket wiring', () =>
         const first = acquireRequesterAccountEncryptionCurrentness(scope);
         const second = acquireRequesterAccountEncryptionCurrentness(scope);
         try {
-            expect(await first.read()).toEqual(fact);
-            expect(await second.read()).toEqual(fact);
+            expect(await first.read()).toEqual(projectAccountEncryptionIdentity(fact));
+            expect(await second.read()).toEqual(projectAccountEncryptionIdentity(fact));
             expect(reads).toHaveBeenCalledTimes(1);
             expect(channel.clients).toHaveLength(1);
             // Keep initial connection and reconnect on the real Socket.IO clock.
             vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
             await vi.advanceTimersByTimeAsync(600_000);
             expect(first.isCurrent(fact)).toBe(true);
-            expect(await second.read()).toEqual(fact);
+            expect(await second.read()).toEqual(projectAccountEncryptionIdentity(fact));
             expect(reads).toHaveBeenCalledTimes(1);
             expect(channel.clients).toHaveLength(1);
             vi.useRealTimers();
@@ -519,7 +540,7 @@ describe('requester Account currentness over the installed socket wiring', () =>
             await expect(first.read()).rejects.toThrow();
             expect(reads).toHaveBeenCalledTimes(1);
             await channel.reconnect();
-            expect(await second.read()).toEqual(fact);
+            expect(await second.read()).toEqual(projectAccountEncryptionIdentity(fact));
             expect(reads).toHaveBeenCalledTimes(2);
             await first.dispose();
             expect(second.isCurrent(fact)).toBe(true);
@@ -538,12 +559,12 @@ describe('requester Account currentness over the installed socket wiring', () =>
         const first = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: 'original-token' });
         const remaining = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: 'remaining-token' });
         try {
-            await expect(first.read()).resolves.toEqual(fact);
+            await expect(first.read()).resolves.toEqual(projectAccountEncryptionIdentity(fact));
             await first.dispose();
             retired = true;
-            await expect(remaining.read()).resolves.toEqual(fact);
+            await expect(remaining.read()).resolves.toEqual(projectAccountEncryptionIdentity(fact));
             await channel.push('bob', null);
-            await expect(remaining.read()).resolves.toEqual(fact);
+            await expect(remaining.read()).resolves.toEqual(projectAccountEncryptionIdentity(fact));
             expect(reads).toHaveBeenLastCalledWith('https://home.example/v1/account/encryption/currentness',
                 expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer remaining-token' }) }));
             const connected = channel.clients.filter(client => client.connected);
@@ -582,10 +603,10 @@ describe('requester Account currentness over the installed socket wiring', () =>
             await waiting;
             await original.dispose();
             await expect(reading).resolves.toBe('retired');
-            await expect(remaining.read()).resolves.toEqual(currentFact);
+            await expect(remaining.read()).resolves.toEqual(projectAccountEncryptionIdentity(currentFact));
             release();
             await new Promise<void>(resolve => setImmediate(resolve));
-            await expect(remaining.read()).resolves.toEqual(currentFact);
+            await expect(remaining.read()).resolves.toEqual(projectAccountEncryptionIdentity(currentFact));
             expect(remaining.isCurrent(currentFact)).toBe(true);
             const connected = channel.clients.filter(client => client.connected);
             expect(connected).toHaveLength(1);
@@ -612,7 +633,7 @@ describe('requester Account currentness over the installed socket wiring', () =>
             const changed = { mode: 'e2ee' as const, version: 2, updatedAt: 2, signingKeyFingerprint: 'signing', contentKeyFingerprint: 'content' };
             await channel.push('bob', changed);
             release({ status: 200, data: { ...changed, mode: 'plain', version: 1, updatedAt: 1, signingKeyFingerprint: null, contentKeyFingerprint: null } });
-            expect(await pending).toEqual(changed);
+            expect(await pending).toEqual(projectAccountEncryptionIdentity(changed));
             expect(observation.isCurrent(changed)).toBe(true);
         } finally { release({ status: 503 }); await observation.dispose(); await channel.close(); }
     });
@@ -630,9 +651,9 @@ describe('requester Account currentness over the installed socket wiring', () =>
             expect(observation.isCurrent(fact)).toBe(false);
             available = true;
             const before = reads.mock.calls.length;
-            expect(await observation.read()).toEqual(fact);
+            expect(await observation.read()).toEqual(projectAccountEncryptionIdentity(fact));
             expect(reads.mock.calls.length - before).toBe(1);
-            expect(await observation.read()).toEqual(fact);
+            expect(await observation.read()).toEqual(projectAccountEncryptionIdentity(fact));
             expect(reads.mock.calls.length - before).toBe(1);
         } finally { await observation.dispose(); await channel.close(); }
     });
@@ -657,12 +678,14 @@ describe('requester Account currentness over the installed socket wiring', () =>
             expect(prepared).not.toBeNull();
             const context = readRequesterAccountActionContext(prepared?.authorization);
             expect(context).not.toBeNull();
+            expect(await context?.refreshAccountSettings()).toBe(true);
+            const initialReads = reads.mock.calls.filter(([url]) => String(url).endsWith('/currentness')).length;
             for (let decision = 0; decision < 3; decision++) {
                 expect(await prepared?.authorization.requesterHttpProjection?.createRequestHeaders({
                     effectActionId: 'projects.inspect', method: 'GET', path: '/v1/account/encryption/currentness',
                 })).not.toBeNull();
             }
-            expect(reads.mock.calls.filter(([url]) => String(url).endsWith('/currentness'))).toHaveLength(1);
+            expect(reads.mock.calls.filter(([url]) => String(url).endsWith('/currentness'))).toHaveLength(initialReads);
             expect(channel.clients).toHaveLength(1);
         } finally { await prepared?.dispose?.(); await channel.close(); }
     });
@@ -690,12 +713,13 @@ describe('requester Account currentness over the installed socket wiring', () =>
             await reading;
             await first.dispose();
             release();
-            expect(await second.read()).toEqual(fact);
+            expect(await second.read()).toEqual(projectAccountEncryptionIdentity(fact));
             expect(second.isCurrent(fact)).toBe(true);
         } finally { release(); await first.dispose(); await second.dispose(); await channel.close(); }
     });
 
-    it('keeps the fresh preparation Settings minimum when the idle encryption identity has not changed', async () => {
+    it.each(['session', 'finite'] as const)(
+        'keeps the fresh preparation Settings minimum when the idle encryption identity has not changed (%s)', async kind => {
         const channel = await createRequesterCurrentnessSocketHarness();
         let fact = { mode: 'plain' as const, version: 1, settingsVersion: 1, updatedAt: 1,
             signingKeyFingerprint: null, contentKeyFingerprint: null };
@@ -707,17 +731,23 @@ describe('requester Account currentness over the installed socket wiring', () =>
         });
         const scope = { accountId: 'bob', token: 'bob', serverBaseUrl: 'https://home.example' };
         const observation = acquireRequesterAccountEncryptionCurrentness(scope);
-        const accepted: { value: Awaited<ReturnType<typeof prepareRequesterSessionBootstrap>> } = { value: null };
+        const accepted: { cleanup?: () => Promise<void> } = {};
         try {
             await observation.read();
             // The Home write has committed, while its Settings/socket publication is delayed.
             fact = { ...fact, version: 2, settingsVersion: 2 };
-            const preparing = prepareRequesterSessionBootstrap({ credentials: { token: 'bob', encryption: null },
+            const preparing = kind === 'finite' ? admitRequesterAccountActionContext({ authorization: root,
+                credentials: { token: 'bob', encryption: null }, serverId: 'home', serverIdentityId: 'stable-home',
+                serverHttpBaseUrl: scope.serverBaseUrl, isCurrent: async () => true })
+                .then(result => { accepted.cleanup = result?.dispose; return result !== null; })
+                : prepareRequesterSessionBootstrap({ credentials: { token: 'bob', encryption: null },
                 attribution: { serverId: 'home', accountId: 'bob', machineId: 'machine', installationId: 'installation' },
                 boundary: { serverId: 'home', serverHttpBaseUrl: scope.serverBaseUrl, happyHomeDir: '/unused-before-session-binding' },
-                verifyMachineAdmissionCurrent: async () => true }).then(result => { accepted.value = result; return result; });
-            await expect(preparing).rejects.toMatchObject({ code: 'ACCOUNT_SETTINGS_STALE' });
-        } finally { await accepted.value?.cleanupOnFailure(); await observation.dispose(); await channel.close(); }
+                verifyMachineAdmissionCurrent: async () => true })
+                .then(result => { accepted.cleanup = result?.cleanupOnFailure; return result !== null; });
+            if (kind === 'finite') await expect(preparing).resolves.toBe(false);
+            else await expect(preparing).rejects.toMatchObject({ code: 'ACCOUNT_SETTINGS_STALE' });
+        } finally { await accepted.cleanup?.(); await observation.dispose(); await channel.close(); }
     });
 
     it.each(['malformed', 'reconnect'] as const)(

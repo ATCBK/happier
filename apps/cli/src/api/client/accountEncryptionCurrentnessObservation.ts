@@ -49,12 +49,27 @@ function admittedObservation(scope: Readonly<{ accountId?: string; token: string
     return undefined;
 }
 
+async function readAdmittedObservation(observed: SharedObservation, scope: Readonly<{
+    accountId?: string; token: string; serverBaseUrl: string; signal?: AbortSignal;
+}>): Promise<AccountEncryptionIdentity> {
+    const credentialReference = observed.references.get(scope.token);
+    const identity = await observed.read(scope.signal);
+    // A surviving peer (or a newly admitted reference for the same token)
+    // cannot extend this borrower's captured credential-reference lifetime.
+    if (scope.signal?.aborted) throw scope.signal.reason ?? new AccountEncryptionCurrentnessUnavailableError();
+    if (!credentialReference || admittedObservation(scope) !== observed
+        || observed.references.get(scope.token) !== credentialReference) {
+        throw new AccountEncryptionCurrentnessUnavailableError();
+    }
+    return identity;
+}
+
 /** Only an authenticated live holder's exact credential can borrow the shared fact. */
 export function readObservedAccountEncryptionCurrentness(scope: Readonly<{
     token: string; serverBaseUrl: string; signal?: AbortSignal;
 }>): Promise<AccountEncryptionIdentity> | null {
     const observed = admittedObservation(scope);
-    return observed ? observed.read(scope.signal) : null;
+    return observed ? readAdmittedObservation(observed, scope) : null;
 }
 
 export function sameRequesterAccountEncryptionCurrentness(a: AccountEncryptionIdentity, b: AccountEncryptionIdentity): boolean {
@@ -73,7 +88,7 @@ export async function readRequesterAccountEncryptionCurrentness(scope: Readonly<
     // A signed Action request must retain its own fresh authenticated transport.
     const observed = !scope.authorizationHeaders || suppliedAuthorization === `Bearer ${scope.token}`
         ? admittedObservation({ ...scope, serverBaseUrl }) : undefined;
-    return observed ? await observed.read(scope.signal)
+    return observed ? await readAdmittedObservation(observed, { ...scope, serverBaseUrl })
         : projectAccountEncryptionIdentity(await fetchAccountEncryptionCurrentnessFromServer({ ...scope, serverBaseUrl }));
 }
 

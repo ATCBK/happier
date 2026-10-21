@@ -19,6 +19,7 @@ import { acquireRequesterAccountEncryptionCurrentness } from './accountEncryptio
 import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { projectAutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
 import { readAccountEncryptionModeOnce } from './accountEncryptionMode';
+import { projectAccountEncryptionIdentity } from '@happier-dev/sync-client';
 
 describe('connected-service credential exact 0.2.1 response boundary', () => {
   beforeEach(() => {
@@ -156,7 +157,7 @@ describe('connected-service credential exact 0.2.1 response boundary', () => {
     });
     const api = new ConnectedServiceCredentialHttpClient({ token });
     try {
-      await expect(observation.read()).resolves.toEqual(initial);
+      await expect(observation.read()).resolves.toEqual(projectAccountEncryptionIdentity(initial));
       // The claim response carries the newly advanced Account cursor before
       // its socket wake is necessarily delivered to the identity observation.
       serverFact = { ...initial, version: 2 };
