@@ -23,6 +23,9 @@ import { RunnerDaemonManagedProviderBootstrapV1Schema, decodeRunnerDaemonPluginS
 import type { startDaemonControlServer } from '@/daemon/controlServer';
 
 import { startDaemonSessionControlRuntime } from './startDaemonSessionControlRuntime';
+import { brokerOpenFailureCases, openRefusedAccountConnectionBroker } from '@/providers/broker/accountConnectionClient.testkit';
+import { logger } from '@/ui/logger';
+import { AgentRuntimeDaemonServiceResponseV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 
 const boundary = vi.hoisted(() => ({
   controlInput: null as Parameters<typeof startDaemonControlServer>[0] | null,
@@ -39,7 +42,10 @@ vi.mock('@/daemon/controlServer', () => ({
   },
 }));
 
-it.each(['local', 'peer'] as const)('prepares a titled %s shared gateway through runner services and refuses changed runtime authority', async placement => {
+it.each([
+  { placement: 'local', failureReason: undefined }, { placement: 'peer', failureReason: undefined },
+  ...brokerOpenFailureCases.map(failureReason => ({ placement: 'peer', failureReason })),
+] as const)('prepares a titled $placement gateway (refusal $failureReason) through real runner dispatch', async ({ placement, failureReason }) => {
   await withConfiguredDaemonTestHome({ prefix: 'runner-shared-gateway-', env: {
     HAPPIER_ACCOUNT_SETTINGS_MODE: 'never',
   } }, async ({ homeDir }) => {
@@ -47,6 +53,7 @@ it.each(['local', 'peer'] as const)('prepares a titled %s shared gateway through
       happyHomeDir: homeDir, controller: createPluginReloadController(), physicalGateway: true, probeCatalog: placement === 'peer' });
     let runtime: Awaited<ReturnType<typeof startDaemonSessionControlRuntime>> | undefined;
     let brokerAttempted = false;
+    const warning = vi.spyOn(logger, 'warnLocalFile');
     try {
       const token = `fixture.${Buffer.from(JSON.stringify({ sub: 'account' })).toString('base64url')}.fixture`;
       const machineId = placement === 'peer' ? 'peer-worker' : fixture.machineId;
@@ -145,8 +152,9 @@ it.each(['local', 'peer'] as const)('prepares a titled %s shared gateway through
         spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(), connectedServicesRestartRequestedPids: new Set(),
         beforeShutdown: () => {}, onHappySessionWebhook: async () => {}, requestShutdown: () => {}, processEnv: {},
         resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'home', machineId: fixture.machineId }),
-        ...(placement === 'peer' ? { openAccountConnectionProviderBrokerAccess: async () => {
+        ...(placement === 'peer' ? { openAccountConnectionProviderBrokerAccess: async request => {
           brokerAttempted = true;
+          if (failureReason) return await openRefusedAccountConnectionBroker(request, failureReason);
           throw new Error('No broker effect during preparation');
         } } : {}),
       });
@@ -186,6 +194,33 @@ it.each(['local', 'peer'] as const)('prepares a titled %s shared gateway through
       expect(wrongClaim).toMatchObject({ ok: false, error: {
         code: 'plugin_services_managed_provider_retention_mismatch',
         cause: { code: 'managed_provider_retention_scope_operation_claim_id', stage: 'dispatch' } } });
+      if (failureReason) {
+        const refused = await services.dispatch(AgentRuntimeDaemonServiceRequestV1Schema.parse({
+          v: 1, context: request.context,
+          operation: { kind: 'plugin_services.managed_provider.start_v1', requestId: 'gateway-start-refused',
+            invocationId: 'gateway-invocation', retained: { v: 1, scope: bootstrap.scope, custody: bootstrap.custody,
+              providerPluginHardRevocationRevisionAtAdmission: bootstrap.providerPluginHardRevocationRevisionAtAdmission } },
+        }), { sessionId, runner, retainedAgent, invocationContext: tracked.runnerAgentInvocationContext!,
+          trackedSession: tracked, isCurrent: async () => true });
+        expect(refused).toMatchObject({ ok: false });
+        expect(AgentRuntimeDaemonServiceResponseV1Schema.parse(refused)).toEqual(refused);
+        expect(JSON.stringify(refused)).not.toContain(failureReason);
+        const records = warning.mock.calls.flatMap(([label]) => {
+          try { return [JSON.parse(label) as { kind?: string; reason?: string }]; } catch { return []; }
+        });
+        for (const kind of ['runner_managed_provider_start_refused', 'runner_plugin_services_dispatch_refused']) {
+          expect.soft(records.filter(record => record.kind === kind)).toContainEqual(expect.objectContaining({ kind, reason: failureReason,
+            ...(failureReason === 'endpoint_discovery_failed' ? { httpStatus: 403 } : {}),
+          }));
+        }
+        expect(warning.mock.calls.filter(([label]) => label === '[ProviderBroker] Account connection open refused')).toEqual([
+          ['[ProviderBroker] Account connection open refused', { reason: failureReason,
+            ...(failureReason === 'endpoint_discovery_failed' ? { httpStatus: 403 } : {}),
+          }],
+        ]);
+        expect(JSON.stringify(records)).not.toContain('do-not-log');
+        return;
+      }
       if (placement === 'peer') {
         expect(commitActiveProviderConnectionsCatalog({ scopeKey: snapshot.scopeKey,
           lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), catalog: {
@@ -222,6 +257,7 @@ it.each(['local', 'peer'] as const)('prepares a titled %s shared gateway through
         manifestAuthority: 'external', runtimeBindingBasis: basis });
       expect(retained).toMatchObject({ identity: basis.deployment.implementationIdentity });
     } finally {
+      warning.mockRestore();
       await runtime?.stopControlServer();
       resetActiveAccountSettingsSnapshotForTests();
       boundary.controlInput = null;

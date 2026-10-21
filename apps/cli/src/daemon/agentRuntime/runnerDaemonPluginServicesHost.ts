@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { runConnectedAccountBindingStage, withConnectedAccountBindingDiagnostic } from '../connectedServices/purposeBindings/bindingDiagnostics';
+import { readAccountConnectionProviderBrokerFailureDiagnostic } from '@/providers/broker/accountConnectionClient';
+import { logger } from '@/ui/logger';
 
 import {
     isPluginError,
@@ -119,6 +121,14 @@ export function createRunnerDaemonPluginServicesPreparationError(
         message: failure.message,
         details: { cause: { code: failure.cause?.code ?? failure.code, stage } },
     });
+}
+
+/** File-only projection; the strict runner response keeps the public failure above. */
+export function projectRunnerDaemonPluginServicesFailureDiagnostic(error: unknown) {
+    return {
+        cause: projectRunnerDaemonPluginServicesFailure(error).cause,
+        ...readAccountConnectionProviderBrokerFailureDiagnostic(error),
+    };
 }
 
 type Invocation = {
@@ -1210,19 +1220,27 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
                 return result(operation, null);
             }
             case 'plugin_services.managed_provider.start_v1': {
-                const managedProvider =
-                    await requireManagedProvider();
-                assertManagedProviderRetention(operation.retained, managedProvider.bootstrap);
-                invocation.managedProviderStart ??=
-                    Promise.resolve(managedProvider.start());
-                await invocation.managedProviderStart;
-                if (!await managedProvider.isCurrent()) {
-                    return fail(
-                        'plugin_services_managed_provider_authority_unavailable',
-                        'Runner managed Provider authority changed during start',
-                    );
+                try {
+                    const managedProvider = await requireManagedProvider();
+                    assertManagedProviderRetention(operation.retained, managedProvider.bootstrap);
+                    invocation.managedProviderStart ??= Promise.resolve(managedProvider.start());
+                    await invocation.managedProviderStart;
+                    if (!await managedProvider.isCurrent()) {
+                        return fail(
+                            'plugin_services_managed_provider_authority_unavailable',
+                            'Runner managed Provider authority changed during start',
+                        );
+                    }
+                    return result(operation, null);
+                } catch (error) {
+                    const diagnostic = projectRunnerDaemonPluginServicesFailureDiagnostic(error);
+                    if (diagnostic.reason) {
+                        try {
+                            logger.warnLocalFile(JSON.stringify({ kind: 'runner_managed_provider_start_refused', ...diagnostic }));
+                        } catch { /* Preserve the original managed Provider refusal. */ }
+                    }
+                    throw error;
                 }
-                return result(operation, null);
             }
             case 'plugin_services.managed_provider.materialize_agent_binding_v1': {
                 const managedProvider =

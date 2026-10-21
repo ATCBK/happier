@@ -7,6 +7,40 @@ import { MACHINE_HTTP_LOCAL_CAPABILITY_HEADER } from '@happier-dev/iroh-native/n
 import type { ManagedProviderEndpointAccessProjection } from '@/plugins/runtime/invocation/services/managedServicesAdapter';
 import type { ManagedServiceRequest } from '@happier-dev/plugin-sdk/managed-services';
 import { readProviderBrokerEndpointUrl } from './providerBrokerPrivateProtocol';
+import { logger } from '@/ui/logger';
+import { MachineCarrierError } from '@/daemon/peer/iroh/machineCarrier';
+
+type BrokerOpenFailureReason = 'broker_open_refused' | 'binding_invalid' | 'tunnel_open_failed'
+  | 'admission_refused' | 'endpoint_discovery_failed' | 'consumer_binding_invalid';
+
+type AccountConnectionProviderBrokerFailureDiagnostic = Readonly<{
+  reason: BrokerOpenFailureReason | 'native_runtime_absent';
+  httpStatus?: number;
+}>;
+// Same-process diagnostic custody only. Nothing is added to the public error,
+// serialized response, SDK, or native exception, and the original error is retained.
+const failureDiagnostics = new WeakMap<object, AccountConnectionProviderBrokerFailureDiagnostic>();
+
+export function reportAccountConnectionProviderBrokerOpenFailure(diagnostic: AccountConnectionProviderBrokerFailureDiagnostic): void {
+  try { logger.warnLocalFile('[ProviderBroker] Account connection open refused', diagnostic); }
+  catch { /* Diagnostics must not replace the original refusal. */ }
+}
+
+export function withAccountConnectionProviderBrokerFailureDiagnostic<T>(
+  error: T, diagnostic: AccountConnectionProviderBrokerFailureDiagnostic,
+): T {
+  if (error !== null && (typeof error === 'object' || typeof error === 'function')) {
+    failureDiagnostics.set(error, diagnostic);
+  }
+  return error;
+}
+
+export function readAccountConnectionProviderBrokerFailureDiagnostic(
+  error: unknown,
+): AccountConnectionProviderBrokerFailureDiagnostic | undefined {
+  return error !== null && (typeof error === 'object' || typeof error === 'function')
+    ? failureDiagnostics.get(error) : undefined;
+}
 
 type BrokerTunnel = Readonly<{
   localPort: number;
@@ -43,96 +77,140 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
   fetchImpl?: typeof fetch;
 }>): Promise<AccountConnectionProviderBrokerAccess> {
   const unavailable = () => createProviderErrorV1('provider_endpoint_unavailable', { connectionId: input.connectionId, machineId: input.targetMachineId });
-  input.signal.throwIfAborted();
-  if ((input.consumer.kind === 'execution_run') !== (input.executionRunOccurrenceId !== undefined)
-    || input.executionRunOccurrenceId === '') throw unavailable();
-  const request: ProviderBrokerAccountOpenRequestV2 = {
-    v: 2, source: { kind: 'account_connection', connectionId: input.connectionId,
-      expectedConnectionSecurityFingerprint: input.expectedConnectionSecurityFingerprint,
-      expectedManagedRuntimeBindingFingerprint: input.expectedManagedRuntimeBindingFingerprint },
-    initiatorMachineId: input.initiatorMachineId, targetMachineId: input.targetMachineId,
-    consumer: input.consumer, application: input.application,
+  let failedReason: BrokerOpenFailureReason = 'consumer_binding_invalid';
+  let discoveryHttpStatus: number | undefined;
+  const reportFailure = (reason: BrokerOpenFailureReason, httpStatus?: number) => {
+    reportAccountConnectionProviderBrokerOpenFailure({ reason, ...(httpStatus === undefined ? {} : { httpStatus }) });
   };
-  const opened = ProviderBrokerAccountOpenResponseV2Schema.parse(await input.openBroker(request, input.signal));
-  if (!opened.ok) throw unavailable();
-  const payload = opened.authority.payload;
-  if (payload.homeId !== input.homeId || payload.accountId !== input.accountId
-    || payload.initiator.machineId !== input.initiatorMachineId
-    || payload.target.machineId !== input.targetMachineId
-    || !pluginJsonValuesEqual(payload.source, request.source)
-    || !pluginJsonValuesEqual(payload.consumer, input.consumer)
-    || payload.executionRunOccurrenceId !== input.executionRunOccurrenceId
-    || !pluginJsonValuesEqual(payload.application, input.application)) throw unavailable();
-  // The existing carrier verifies the signature and transport-observed peer
-  // before it publishes this host-only loopback listener. It renews the same
-  // exact authority for each new stream and never replays an inference call.
-  const tunnel = await input.openTunnel({ brokerOpen: opened, signal: input.signal,
-    refreshBrokerOpen: async (signal = input.signal) => await input.openBroker({ ...request, refreshAuthority: opened.authority }, signal) });
-  const localOrigin = `http://127.0.0.1:${tunnel.localPort}`;
-  let closed = false;
-  let cleanupInFlight: Promise<void> | null = null;
-  const headers = Object.freeze({
-    authorization: `Bearer ${tunnel.localCapability}`,
-    [MACHINE_HTTP_LOCAL_CAPABILITY_HEADER]: tunnel.localCapability,
-  });
-  const assertAdmitted = async (signal: AbortSignal = input.signal) => {
-    signal.throwIfAborted();
-    if (closed || !await input.admitConsumer(opened.authority, signal)) throw unavailable();
-    signal.throwIfAborted();
-    if (closed) throw unavailable();
-  };
-  const cleanup = () => {
-    if (cleanupInFlight) return cleanupInFlight;
-    closed = true;
-    cleanupInFlight ??= (async () => {
-      try {
-        await tunnel.retire();
-      } finally {
-        await tunnel.close();
-      }
-    })().catch((error: unknown) => {
-      cleanupInFlight = null;
-      throw error;
-    });
-    return cleanupInFlight;
-  };
-  let endpointUrl: string;
   try {
-    await assertAdmitted();
-    endpointUrl = await readProviderBrokerEndpointUrl({ localOrigin, headers, signal: input.signal,
-      ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}) });
-    await assertAdmitted();
-  } catch {
-    // Never publish an unverified base path or leave its listener exposed.
-    // Preserve the opening failure even if remote retirement also fails.
-    try { await cleanup(); } finally {
-      input.signal.throwIfAborted();
-      throw unavailable();
+    input.signal.throwIfAborted();
+    if ((input.consumer.kind === 'execution_run') !== (input.executionRunOccurrenceId !== undefined)
+      || input.executionRunOccurrenceId === '') throw unavailable();
+    const request: ProviderBrokerAccountOpenRequestV2 = {
+      v: 2, source: { kind: 'account_connection', connectionId: input.connectionId,
+        expectedConnectionSecurityFingerprint: input.expectedConnectionSecurityFingerprint,
+        expectedManagedRuntimeBindingFingerprint: input.expectedManagedRuntimeBindingFingerprint },
+      initiatorMachineId: input.initiatorMachineId, targetMachineId: input.targetMachineId,
+      consumer: input.consumer, application: input.application,
+    };
+    failedReason = 'broker_open_refused';
+    const opened = ProviderBrokerAccountOpenResponseV2Schema.parse(await input.openBroker(request, input.signal));
+    if (!opened.ok) throw unavailable();
+    failedReason = 'binding_invalid';
+    const payload = opened.authority.payload;
+    if (payload.homeId !== input.homeId || payload.accountId !== input.accountId
+      || payload.initiator.machineId !== input.initiatorMachineId
+      || payload.target.machineId !== input.targetMachineId
+      || !pluginJsonValuesEqual(payload.source, request.source)
+      || !pluginJsonValuesEqual(payload.consumer, input.consumer)
+      || payload.executionRunOccurrenceId !== input.executionRunOccurrenceId
+      || !pluginJsonValuesEqual(payload.application, input.application)) throw unavailable();
+    // The existing carrier verifies the signature and transport-observed peer
+    // before it publishes this host-only loopback listener. It renews the same
+    // exact authority for each new stream and never replays an inference call.
+    failedReason = 'tunnel_open_failed';
+    let tunnel: BrokerTunnel;
+    try {
+      tunnel = await input.openTunnel({ brokerOpen: opened, signal: input.signal,
+        refreshBrokerOpen: async (signal = input.signal) => await input.openBroker({ ...request, refreshAuthority: opened.authority }, signal) });
+    } catch (error) {
+      // Classify the carrier's closed signature/binding failures, without
+      // inspecting native messages or changing its verification decision.
+      if (error instanceof MachineCarrierError && [
+        'grant_invalid', 'grant_unknown_key', 'grant_bad_signature', 'grant_expired', 'grant_not_yet_valid',
+        'grant_binding_mismatch', 'transport_identity_mismatch', 'broker_initiator_mismatch', 'broker_target_endpoint_changed',
+      ].includes(error.code)) failedReason = 'binding_invalid';
+      throw error;
     }
+    const localOrigin = `http://127.0.0.1:${tunnel.localPort}`;
+    let closed = false;
+    let cleanupInFlight: Promise<void> | null = null;
+    const headers = Object.freeze({
+      authorization: `Bearer ${tunnel.localCapability}`,
+      [MACHINE_HTTP_LOCAL_CAPABILITY_HEADER]: tunnel.localCapability,
+    });
+    const assertAdmitted = async (signal: AbortSignal = input.signal) => {
+      failedReason = 'admission_refused';
+      signal.throwIfAborted();
+      if (closed || !await input.admitConsumer(opened.authority, signal)) throw unavailable();
+      signal.throwIfAborted();
+      if (closed) throw unavailable();
+    };
+    const cleanup = () => {
+      if (cleanupInFlight) return cleanupInFlight;
+      closed = true;
+      cleanupInFlight ??= (async () => {
+        try {
+          await tunnel.retire();
+        } finally {
+          await tunnel.close();
+        }
+      })().catch((error: unknown) => {
+        cleanupInFlight = null;
+        throw error;
+      });
+      return cleanupInFlight;
+    };
+    let endpointUrl: string;
+    try {
+      await assertAdmitted();
+      failedReason = 'endpoint_discovery_failed';
+      endpointUrl = await readProviderBrokerEndpointUrl({ localOrigin, headers, signal: input.signal,
+        fetchImpl: async (request, options) => {
+          const response = await (input.fetchImpl ?? fetch)(request, options);
+          discoveryHttpStatus = response.status;
+          return response;
+        } });
+      await assertAdmitted();
+    } catch {
+      // Never publish an unverified base path or leave its listener exposed.
+      // Preserve the opening failure even if remote retirement also fails.
+      try { await cleanup(); } finally {
+        input.signal.throwIfAborted();
+        throw unavailable();
+      }
+    }
+    const readHttpBinding = async (signal?: AbortSignal) => {
+      const lifetime = signal ? AbortSignal.any([input.signal, signal]) : input.signal;
+      try { await assertAdmitted(lifetime); }
+      catch (error) {
+        if (!lifetime.aborted) {
+          withAccountConnectionProviderBrokerFailureDiagnostic(error, { reason: 'admission_refused' });
+          reportFailure('admission_refused');
+        }
+        throw error;
+      }
+      return Object.freeze({ endpointUrl, headers });
+    };
+    return Object.freeze({
+      isCurrent: () => !closed && !input.signal.aborted,
+      readHttpBinding,
+      access: Object.freeze({
+        endpointUrl: (endpointTemplateId: string) => !closed && endpointTemplateId === input.application.endpointTemplateId ? endpointUrl : null,
+        async request(request: ManagedServiceRequest) {
+          const binding = await readHttpBinding(request.signal);
+          const path = normalizeProviderOriginRelativePathSyntax(request.pathAndQuery, { allowQuery: true });
+          const target = new URL(path, localOrigin);
+          if (target.origin !== localOrigin || target.hash !== '') throw unavailable();
+          const signal = request.signal ? AbortSignal.any([input.signal, request.signal]) : input.signal;
+          const response = await (input.fetchImpl ?? fetch)(target, {
+            method: request.method ?? 'GET', headers: { ...request.headers, ...binding.headers },
+            ...(request.body ? { body: new Uint8Array(request.body) } : {}), redirect: 'error', signal,
+          });
+          return Object.freeze({ ok: response.ok, status: response.status, statusText: response.statusText,
+            headers: Object.freeze(Object.fromEntries(response.headers)), body: response.body });
+        },
+      }),
+      cleanup,
+    });
+  } catch (error) {
+    if (!input.signal.aborted) {
+      const httpStatus = failedReason === 'endpoint_discovery_failed' ? discoveryHttpStatus : undefined;
+      withAccountConnectionProviderBrokerFailureDiagnostic(error, {
+        reason: failedReason, ...(httpStatus === undefined ? {} : { httpStatus }),
+      });
+      reportFailure(failedReason, httpStatus);
+    }
+    throw error;
   }
-  const readHttpBinding = async (signal?: AbortSignal) => {
-    await assertAdmitted(signal ? AbortSignal.any([input.signal, signal]) : input.signal);
-    return Object.freeze({ endpointUrl, headers });
-  };
-  return Object.freeze({
-    isCurrent: () => !closed && !input.signal.aborted,
-    readHttpBinding,
-    access: Object.freeze({
-      endpointUrl: (endpointTemplateId: string) => !closed && endpointTemplateId === input.application.endpointTemplateId ? endpointUrl : null,
-      async request(request: ManagedServiceRequest) {
-        const binding = await readHttpBinding(request.signal);
-        const path = normalizeProviderOriginRelativePathSyntax(request.pathAndQuery, { allowQuery: true });
-        const target = new URL(path, localOrigin);
-        if (target.origin !== localOrigin || target.hash !== '') throw unavailable();
-        const signal = request.signal ? AbortSignal.any([input.signal, request.signal]) : input.signal;
-        const response = await (input.fetchImpl ?? fetch)(target, {
-          method: request.method ?? 'GET', headers: { ...request.headers, ...binding.headers },
-          ...(request.body ? { body: new Uint8Array(request.body) } : {}), redirect: 'error', signal,
-        });
-        return Object.freeze({ ok: response.ok, status: response.status, statusText: response.statusText,
-          headers: Object.freeze(Object.fromEntries(response.headers)), body: response.body });
-      },
-    }),
-    cleanup,
-  });
 }

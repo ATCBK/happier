@@ -1,15 +1,88 @@
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 import { createProviderBrokerRouteGrantSigningInputV2, type ProviderBrokerAccountOpenResponseV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { createProviderBrokerMachineCarrierTunnelOpen } from '@/daemon/peer/iroh/providerBrokerMachineCarrierTunnelOpen';
 import { openAccountConnectionProviderBrokerAccess } from './accountConnectionClient';
+import { logger } from '@/ui/logger';
+import { ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
 const capturedFacts = { expectedConnectionSecurityFingerprint: 'connection-security:v1:test',
   expectedManagedRuntimeBindingFingerprint: 'managed-runtime-binding:v1:test' };
 
 describe('personal connection broker consumer', () => {
+  it.each([
+    ['broker_open_refused', undefined, 'ordinary'],
+    ['binding_invalid', undefined, 'ordinary'],
+    ['binding_invalid', undefined, 'signature'],
+    ['admission_refused', undefined, 'ordinary'],
+    ['tunnel_open_failed', undefined, 'ordinary'],
+    ['endpoint_discovery_failed', 403, 'ordinary'],
+    ['endpoint_discovery_failed', 204, 'ordinary'],
+  ] as const)('logs the private %s branch (HTTP %s, %s) without disclosing broker material', async (reason, httpStatus, variant) => {
+    const connectionId = ProviderConnectionIdSchema.parse('gateway-1');
+    const application = { agentTargetKey: 'backend:claude:built_in', protocol: 'anthropic',
+      endpointTemplateId: 'http', implementationIdentity: { pluginId: 'happier.provider.gateway', localId: 'gateway' } } as const;
+    const consumer = { kind: 'session', sessionId: 'session-1' } as const;
+    const key = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(7));
+    const payload = { v: 2, grantId: 'grant-1', aud: 'happier-provider-broker-route-v2',
+      issuedAt: 100, expiresAt: 200, homeId: 'home-1', accountId: 'account-1',
+      source: { kind: 'account_connection', connectionId, ...capturedFacts }, initiatorTokenEpoch: 0,
+      initiator: { accountId: 'account-1', machineId: 'worker-1', endpointId: 'a'.repeat(64) },
+      target: { custodianAccountId: 'account-1', machineId: 'hub-1', endpointId: 'b'.repeat(64) }, consumer, application } as const;
+    const opened: Extract<ProviderBrokerAccountOpenResponseV2, { ok: true }> = {
+      ok: true, authority: { payload, signature: { alg: 'Ed25519', keyId: 'home', valueBase64Url: Buffer.from(tweetnacl.sign.detached(
+        Buffer.from(createProviderBrokerRouteGrantSigningInputV2(payload)), key.secretKey,
+      )).toString('base64url') } },
+      target: { custodianAccountId: 'account-1', brokerMachineId: 'hub-1', endpointId: 'b'.repeat(64), endpointRevision: 1,
+        endpoint: { endpointId: 'b'.repeat(64) } },
+    };
+    if (variant === 'signature') opened.authority.signature.valueBase64Url = Buffer.alloc(64).toString('base64url');
+    let publishedClosed = false;
+    let retirementAcknowledged = false;
+    let nativeOpens = 0;
+    // Home issuance/admission, native transport, and HTTP are system boundaries.
+    // The signed binding verifier and Account broker consumer remain real.
+    const openTunnel = createProviderBrokerMachineCarrierTunnelOpen({ homeId: 'home-1', accountId: 'account-1', localMachineId: 'worker-1',
+      runtime: { endpoint: { endpointId: 'a'.repeat(64) }, openHttpTunnel: async () => {
+        if (reason === 'tunnel_open_failed') throw new Error('synthetic-private-native-error?token=do-not-log');
+        const first = nativeOpens++ === 0;
+        return { localPort: 43123, localCapability: 'c'.repeat(64), observedPath: 'unknown', remoteEndpointId: 'b'.repeat(64),
+          close: async () => { if (first) publishedClosed = true; } };
+      } }, resolveTrustRoots: () => [{ keyId: 'home', publicKey: Buffer.from(key.publicKey).toString('base64url') }], nowMs: () => 150,
+      fetchImpl: async (_request, options) => {
+        expect(options?.method).toBe('DELETE');
+        retirementAcknowledged = true;
+        return new Response(null, { status: 204 });
+      } });
+    const warning = vi.spyOn(logger, 'warnLocalFile');
+    try {
+      const error = await openAccountConnectionProviderBrokerAccess({ homeId: 'home-1', accountId: 'account-1',
+        initiatorMachineId: 'worker-1', targetMachineId: reason === 'binding_invalid' && variant !== 'signature' ? 'different-hub' : 'hub-1',
+        connectionId, consumer, application, ...capturedFacts, signal: new AbortController().signal,
+        openBroker: async () => reason === 'broker_open_refused' ? { ok: false, reasonCode: 'broker_unavailable' } : opened,
+        admitConsumer: async () => reason !== 'admission_refused',
+        openTunnel,
+        fetchImpl: async () => new Response(null, { status: httpStatus ?? 204,
+          headers: { 'x-happier-provider-endpoint-path': httpStatus === 204 ? 'https://private.example/?token=do-not-log' : '/' } }),
+      }).then(() => { throw new Error('Expected broker refusal'); }, (error: unknown) => error);
+      // Tunnel exceptions retain their existing shape; diagnostics must not alter settlement.
+      if (reason !== 'tunnel_open_failed' && variant !== 'signature') expect(ProviderErrorV1Schema.parse(error).code).toBe('provider_endpoint_unavailable');
+      const records = warning.mock.calls.filter(([label]) => label === '[ProviderBroker] Account connection open refused');
+      expect(records).toEqual([['[ProviderBroker] Account connection open refused', {
+        reason, ...(httpStatus === undefined ? {} : { httpStatus }),
+      }]]);
+      const serialized = JSON.stringify(records);
+      for (const privateValue of ['do-not-log', 'synthetic-private', 'home-1', 'account-1', 'gateway-1', 'worker-1', 'hub-1', 'a'.repeat(64), opened.authority.signature.valueBase64Url]) {
+        expect(serialized).not.toContain(privateValue);
+      }
+      if (reason === 'admission_refused' || reason === 'endpoint_discovery_failed') {
+        expect(publishedClosed).toBe(true);
+        expect(retirementAcknowledged).toBe(true);
+      }
+    } finally { warning.mockRestore(); }
+  });
   it('withdraws the old bearer listener while remote retirement remains pending', async () => {
     const connectionId = ProviderConnectionIdSchema.parse('gateway-1');
     const application = { agentTargetKey: 'backend:claude:built_in', protocol: 'anthropic',

@@ -559,6 +559,7 @@ import {
   createRunnerDaemonPluginServicesHost,
   createRunnerDaemonPluginServicesPreparationError,
   projectRunnerDaemonPluginServicesFailure,
+  projectRunnerDaemonPluginServicesFailureDiagnostic,
   type RunnerDaemonCurrentGlobalActionExecutor,
   type RunnerDaemonCurrentGlobalExternalSessionsOwner,
   type RunnerDaemonCurrentGlobalMcpOwner,
@@ -8554,9 +8555,9 @@ export async function startDaemonSessionControlRuntime(
               retainedAgent: admittedRunnerAgent,
               witness: runSnapshot ? undefined : operationWitness,
               allowIdleCurrentGeneration: runSnapshot ? true : options?.requireActiveTurn !== true,
-              ...(options?.recordRefusal ? { onRefused: predicate => logger.debug(
+              onRefused: options?.recordRefusal ? predicate => logger.debug(
                 '[PluginExec] Native launch runner authority refusal', { predicate, sessionId,
-                  ...(runSnapshot ? { executionRunId: invocationId } : {}) }) } : {}),
+                  ...(runSnapshot ? { executionRunId: invocationId } : {}) }) : undefined,
             });
           preparationStage = 'turn_authority';
           if (!authorizeOperation(witness)) {
@@ -17786,7 +17787,7 @@ export async function startDaemonSessionControlRuntime(
                   kind: pluginServiceOperation.data.kind === 'plugin_services.prepare_v1'
                     ? 'runner_plugin_services_prepare_refused' : 'runner_plugin_services_dispatch_refused',
                   operation: pluginServiceOperation.data.kind,
-                  cause: failure.cause,
+                  ...projectRunnerDaemonPluginServicesFailureDiagnostic(error),
                 }));
               }
               return {

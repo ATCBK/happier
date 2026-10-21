@@ -216,10 +216,8 @@ import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveMachineConnectionHandover } from './lifecycle/requestDaemonSelfRestart';
 import { createDaemonPeerMediationObservabilityRuntime } from './machine/peerMediationObservabilityRuntime';
 import { resolvePeerMediationTrustRoots as resolvePeerMediationTrustRootsFromSnapshot } from './peer/mediation/resolvePeerMediationTrustRoots';
-import {
-  createDaemonMachineIrohRuntime,
-  type DaemonMachineIrohRuntime,
-} from './peer/iroh/daemonMachineIrohRuntime';
+import type { DaemonMachineIrohRuntime } from './peer/iroh/daemonMachineIrohRuntime';
+import { prepareDaemonMachineIrohRuntime, createNativeRuntimeAbsentProviderBrokerError } from './startup/prepareDaemonMachineIrohRuntime';
 import { createWorkspaceMachineCarrierTunnelOpen } from './peer/iroh/workspaceMachineCarrierTunnelOpen';
 import { createProviderBrokerMachineCarrierTunnelOpen } from './peer/iroh/providerBrokerMachineCarrierTunnelOpen';
 import {
@@ -310,7 +308,7 @@ import {
 import { createProviderConnectionTeamCredentialSourceSnapshot } from '@/providers/broker/teamCredentialSourceSnapshot';
 import { createProviderConnectionCpxBridge } from '@/providers/broker/providerConnectionCpxBridge';
 import { createAccountConnectionBrokerSourceOpen, retireAccountConnectionBrokerSource } from '@/providers/broker/accountConnectionSource';
-import { openAccountConnectionProviderBrokerAccess } from '@/providers/broker/accountConnectionClient';
+import { openAccountConnectionProviderBrokerAccess, reportAccountConnectionProviderBrokerOpenFailure } from '@/providers/broker/accountConnectionClient';
 import { createDaemonAccountConnectionManagedConsumerOpen } from './providers/accountConnectionManagedConsumerComposition';
 import { collectProviderConnectionDnsEvidence } from '@/providers/registry/dnsEvidence';
 import { resolveProviderContributionRegistryView } from '@/providers/registry';
@@ -489,21 +487,22 @@ export async function startDaemon(
         // trusted-HTTPS-or-fail-closed decision, and it still fails closed for
         // an Iroh-only Home or a selected-Iroh identity, authentication or
         // descriptor-integrity failure. No fallback decision is made here.
-        if (applicationCarrierEligibility !== 'standard_only') {
-          const createdIrohRuntime = await createDaemonMachineIrohRuntime({
+        const createdIrohRuntime = await prepareDaemonMachineIrohRuntime({
+          applicationCarrierEligibility,
+          readRuntimeOptions: () => ({
             happyHomeDir: configuration.happyHomeDir,
             relayConfig: readIrohRelayConfigFromEnv(process.env),
-          });
-          if (createdIrohRuntime.available) {
-            preparedIrohState.machine = createdIrohRuntime;
-          } else {
-            if (createdIrohRuntime.reason === 'startup_failed') {
-              preparedIrohState.failedStartupCleanup = createdIrohRuntime.shutdown;
-            }
-            logger.warn('[DAEMON RUN] Iroh carrier is unavailable; the Home transport owner evaluates independently trusted HTTPS', {
-              reason: createdIrohRuntime.reason,
-            });
+          }),
+        });
+        if (createdIrohRuntime?.available) {
+          preparedIrohState.machine = createdIrohRuntime;
+        } else if (createdIrohRuntime) {
+          if (createdIrohRuntime.reason === 'startup_failed') {
+            preparedIrohState.failedStartupCleanup = createdIrohRuntime.shutdown;
           }
+          logger.warn('[DAEMON RUN] Iroh carrier is unavailable; the Home transport owner evaluates independently trusted HTTPS', {
+            reason: createdIrohRuntime.reason,
+          });
         }
         preparedIrohState.home = await prepareDaemonHomeIrohTransport({
           signal: homeTransportCancellation.signal,
@@ -1985,7 +1984,10 @@ export async function startDaemon(
           },
           openRemote: async (request, isCurrent) => {
             const runtime = machineIrohRuntime;
-            if (!runtime) return null;
+            if (!runtime) {
+              reportAccountConnectionProviderBrokerOpenFailure({ reason: 'native_runtime_absent' });
+              return null;
+            }
             return await openAccountConnectionProviderBrokerAccess({
               ...request,
               homeId: managedPolicyHomeId, accountId: externalActionAccountId, initiatorMachineId: machineId,
@@ -2177,9 +2179,7 @@ export async function startDaemon(
       ...(managedPolicyHomeId && externalActionAccountId ? {
         openAccountConnectionProviderBrokerAccess: async request => {
           const runtime = machineIrohRuntime;
-          if (!runtime) throw createProviderErrorV1('provider_endpoint_unavailable', {
-            connectionId: request.connectionId, machineId: request.targetMachineId,
-          });
+          if (!runtime) throw createNativeRuntimeAbsentProviderBrokerError(request);
           const openTunnel = createProviderBrokerMachineCarrierTunnelOpen({
             homeId: managedPolicyHomeId, accountId: externalActionAccountId, localMachineId: machineId,
             runtime, resolveTrustRoots: resolvePeerMediationTrustRoots,
