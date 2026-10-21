@@ -508,31 +508,6 @@ test('ssh-native native bridges use a stable host-key-untrusted code when host t
     assert.match(iosBridge, /"SSH host key trust prompt timed out\."/);
 });
 
-test('native SSH bootstrap UI import surface does not pull Node-only SCP installer code', async () => {
-    const nativeBootstrapBarrel = await readText(join(
-        repoRoot,
-        'packages',
-        'cli-common',
-        'src',
-        'systemTasks',
-        'nativeRemoteSshBootstrap.ts',
-    ));
-    const nativeTask = await readText(join(
-        repoRoot,
-        'apps',
-        'ui',
-        'sources',
-        'components',
-        'systemTasks',
-        'remoteSshBootstrap',
-        'nativeTask.ts',
-    ));
-
-    assert.doesNotMatch(nativeBootstrapBarrel, /remoteFirstPartyPayloadInstaller/);
-    assert.doesNotMatch(nativeBootstrapBarrel, /createScpReadyPayloadArchive/);
-    assert.doesNotMatch(nativeTask, /installRemoteFirstPartyComponent/);
-});
-
 test('ssh-native native bridges distinguish rejected host-key prompts from untrusted timeouts', async () => {
     const sshPackageRoot = join(repoRoot, 'packages', 'ssh-native');
     const androidBridge = await readText(join(

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readNativeSshTaskCredentials, runNativeRemoteSshBootstrapTask } from './nativeTask';
 
 import type { SystemTaskSpec } from '@happier-dev/protocol';
 import { SystemTaskExecutionError } from '@happier-dev/cli-common/systemTasks';
@@ -168,8 +169,6 @@ function createRemoteBootstrapSpec(overrides: Partial<SystemTaskSpec> = {}): Sys
 
 describe('runNativeRemoteSshBootstrapTask', () => {
     it('runs the shared bootstrap recipe over native SSH for remotes with an installed Happier CLI', async () => {
-        const loaded = await import('./nativeTask').catch(() => null);
-        expect(loaded).not.toBeNull();
 
         const commands: string[] = [];
         const nativeModule = {
@@ -213,7 +212,7 @@ describe('runNativeRemoteSshBootstrapTask', () => {
             cancelRequest: vi.fn(async () => undefined),
         } satisfies NativeSshModule;
 
-        await expect(loaded!.runNativeRemoteSshBootstrapTask({
+        await expect(runNativeRemoteSshBootstrapTask({
             taskId: 'task-a',
             nativeModule,
             spec: createRemoteBootstrapSpec(),
@@ -228,8 +227,6 @@ describe('runNativeRemoteSshBootstrapTask', () => {
 
     it('installs the remote CLI through the verified native self-download hook for fresh remotes', async () => {
         if (process.platform === 'win32') return; // Remote shell fixtures require a POSIX test host.
-        const loaded = await import('./nativeTask').catch(() => null);
-        expect(loaded).not.toBeNull();
 
         const nativeModule = {
             getAvailability: () => ({
@@ -304,7 +301,7 @@ describe('runNativeRemoteSshBootstrapTask', () => {
         };
 
         try {
-            await expect(loaded!.runNativeRemoteSshBootstrapTask({
+            await expect(runNativeRemoteSshBootstrapTask({
                 taskId: 'task-a',
                 nativeModule,
                 spec: createRemoteBootstrapSpec(),
@@ -325,8 +322,6 @@ describe('runNativeRemoteSshBootstrapTask', () => {
     });
 
     it('normalizes failed auth status probes as unauthenticated so pairing can continue', async () => {
-        const loaded = await import('./nativeTask').catch(() => null);
-        expect(loaded).not.toBeNull();
 
         const nativeModule = {
             getAvailability: () => ({
@@ -370,7 +365,7 @@ describe('runNativeRemoteSshBootstrapTask', () => {
                 readInstallationTextResult(options.command) ?? completeRemoteEnrollment(options)),
         };
 
-        await expect(loaded!.runNativeRemoteSshBootstrapTask({
+        await expect(runNativeRemoteSshBootstrapTask({
             taskId: 'task-a',
             nativeModule,
             spec: createRemoteBootstrapSpec(),
@@ -386,8 +381,6 @@ describe('runNativeRemoteSshBootstrapTask', () => {
 
     it('approves local terminal auth after the user accepts remote provisioning', async () => {
         const pairingWindow = { createdAtMs: Date.now(), expiresAtMs: Date.now() + 60_000 };
-        const loaded = await import('./nativeTask').catch(() => null);
-        expect(loaded).not.toBeNull();
 
         const nativeModule = {
             getAvailability: () => ({
@@ -436,7 +429,7 @@ describe('runNativeRemoteSshBootstrapTask', () => {
         };
         const approveLocalAuthRequest = vi.fn(async () => undefined);
 
-        await expect(loaded!.runNativeRemoteSshBootstrapTask({
+        await expect(runNativeRemoteSshBootstrapTask({
             taskId: 'task-a',
             nativeModule,
             spec: createRemoteBootstrapSpec(),
@@ -461,8 +454,6 @@ describe('runNativeRemoteSshBootstrapTask', () => {
     });
 
     it('installs optional relay runtime through the remote CLI over native SSH exec', async () => {
-        const loaded = await import('./nativeTask').catch(() => null);
-        expect(loaded).not.toBeNull();
 
         const commands: string[] = [];
         const nativeModule = {
@@ -511,7 +502,7 @@ describe('runNativeRemoteSshBootstrapTask', () => {
                 readInstallationTextResult(command) ?? { status: 0, stdout: '', stderr: '' }),
         };
 
-        await expect(loaded!.runNativeRemoteSshBootstrapTask({
+        await expect(runNativeRemoteSshBootstrapTask({
             taskId: 'task-a',
             nativeModule,
             spec: createRemoteBootstrapSpec({
@@ -536,10 +527,8 @@ describe('runNativeRemoteSshBootstrapTask', () => {
     });
 
     it('rejects mobile-unsupported SSH agent credentials before native execution', async () => {
-        const loaded = await import('./nativeTask').catch(() => null);
-        expect(loaded).not.toBeNull();
 
-        expect(() => loaded!.readNativeSshTaskCredentials(createRemoteBootstrapSpec({
+        expect(() => readNativeSshTaskCredentials(createRemoteBootstrapSpec({
             params: {
                 ...createRemoteBootstrapSpec().params as Record<string, unknown>,
                 ssh: {
@@ -787,10 +776,8 @@ describe('runNativeRemoteSshBootstrapTask', () => {
     });
 
     it('passes encrypted private keys to native SSH so the shared passphrase prompt can unlock them', async () => {
-        const loaded = await import('./nativeTask').catch(() => null);
-        expect(loaded).not.toBeNull();
 
-        const credentials = loaded!.readNativeSshTaskCredentials(createRemoteBootstrapSpec({
+        const credentials = readNativeSshTaskCredentials(createRemoteBootstrapSpec({
             params: {
                 ...createRemoteBootstrapSpec().params as Record<string, unknown>,
                 ssh: {
