@@ -49,7 +49,10 @@ vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return {
     ...actual,
-    spawnSync,
+    // macOS temp-directory ownership probes the real local process via ps.
+    spawnSync: (...args: Parameters<typeof actual.spawnSync>) => args[0] === 'ps'
+      ? actual.spawnSync(...args)
+      : spawnSync(...args),
   };
 });
 
@@ -251,6 +254,9 @@ describe('createLiveRemoteSshBootstrapTaskKind', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    const createdAtMs = Date.now();
+    REMOTE_REQUEST_PAIRING.createdAtMs = createdAtMs;
+    REMOTE_REQUEST_PAIRING.expiresAtMs = createdAtMs + 60_000;
     lastInstallRemoteFirstPartyDeps.current = null;
     lastOpenSshParams.current = null;
     openSshParamsCalls.length = 0;
@@ -630,7 +636,7 @@ describe('createLiveRemoteSshBootstrapTaskKind', () => {
       protocolVersion: 1,
       publicKey: Buffer.alloc(32, 3).toString('base64'),
       homeServerIdentityId: descriptor.homeServerIdentityId,
-      pairing: { secretB64Url: 'short-lived-v3-context', createdAtMs: 100, expiresAtMs: 200 },
+      pairing: { ...REMOTE_REQUEST_PAIRING, secretB64Url: 'short-lived-v3-context' },
       supportsTokenOnly: true,
       pairingRequirement: 'v3',
     } as const;

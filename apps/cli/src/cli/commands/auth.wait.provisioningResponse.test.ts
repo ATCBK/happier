@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -18,6 +18,9 @@ import {
   ensureProtectedLocalStateDirectory,
   writeProtectedLocalStateFileAtomic,
 } from '@/utils/fs/protectedLocalState';
+// Compile the real command graph during collection, outside finite hooks/tests.
+// Each test still reimports after resetting modules for its own Home state.
+import './auth/wait';
 
 function deterministicRandomBytes(length: number): Uint8Array {
   return new Uint8Array(length).fill(length);
@@ -37,9 +40,6 @@ describe('auth wait provisioning response', () => {
 
   let localHomeDir = '';
   let envScope = createEnvKeyScope(envKeys);
-
-  // Transform the real command graph outside the first contract's deadline.
-  beforeAll(async () => { await import('./auth/wait'); });
 
   beforeEach(async () => {
     envScope = createEnvKeyScope(envKeys);
@@ -264,7 +264,7 @@ describe('auth wait provisioning response', () => {
     }
   }, 20_000);
 
-  it('terminalizes the claimed request after credential persistence even when machine registration fails', async () => {
+  it('keeps ordinary credentials when registration retries exhaust the pairing lifetime', async () => {
     const keypair = tweetnacl.box.keyPair();
     const pairingSecret = new Uint8Array(32).fill(11);
     const createdAtMs = Date.now() - 60_000;
@@ -281,8 +281,25 @@ describe('auth wait provisioning response', () => {
       responseB64: Buffer.from(sealed).toString('base64'),
       machineRegistrationStatus: 503,
     });
+    let now = Date.now();
+    let registrationAttempts = 0;
+    app.addHook('onRequest', async request => {
+      if (request.method === 'POST' && request.url === '/v1/machines') {
+        registrationAttempts++;
+        // Let one real registration retry run, then expire the same request
+        // lifetime while its second HTTP failure is in flight.
+        if (registrationAttempts === 2) now = expiresAtMs;
+      }
+    });
     await app.ready();
     const restoreAxios = installAxiosFastifyAdapter({ app, origin: 'https://happier-auth.test' });
+    const controller = new AbortController();
+    let completion: Promise<void> | undefined;
+    onTestFinished(async () => {
+      controller.abort();
+      await completion?.catch(() => {});
+    });
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
 
     try {
       vi.doMock('@/features/serverFeaturesClient', () => ({
@@ -302,12 +319,14 @@ describe('auth wait provisioning response', () => {
       }));
       vi.resetModules();
       const { handleAuthWait } = await import('./auth/wait');
+      completion = handleAuthWait(['--public-key', Buffer.from(keypair.publicKey).toString('base64'), '--json'], controller.signal);
       await expect(
-        handleAuthWait(['--public-key', Buffer.from(keypair.publicKey).toString('base64'), '--json']),
+        completion,
       ).rejects.toMatchObject({
         message: expect.stringMatching(/credentials were saved/i),
         cause: { response: { status: 503 } },
       });
+      expect(registrationAttempts).toBe(2);
 
       const configMod = await import('@/configuration');
       configMod.reloadConfiguration();
@@ -320,6 +339,9 @@ describe('auth wait provisioning response', () => {
       expect(settings.machineId).toBeTruthy();
       expect(settings.machineIdConfirmedByServer).not.toBe(true);
     } finally {
+      controller.abort();
+      await completion?.catch(() => {});
+      clock.mockRestore();
       vi.doUnmock('@/features/serverFeaturesClient');
       restoreAxios();
       await app.close().catch(() => {});

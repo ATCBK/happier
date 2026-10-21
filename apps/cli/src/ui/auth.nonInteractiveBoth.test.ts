@@ -171,6 +171,10 @@ vi.mock('axios', async () => {
   return { default: axios };
 });
 
+// Transform the source graph during collection, before behavioral deadlines.
+// Per-case resetModules still isolates environment and module state.
+await import('./auth');
+
 describe.sequential('doAuth (non-interactive)', () => {
   const envKeys = [
     'HAPPIER_HOME_DIR',
