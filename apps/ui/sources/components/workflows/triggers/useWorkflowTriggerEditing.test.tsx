@@ -228,6 +228,7 @@ describe('workflow trigger editing lifetime', () => {
             accountId: 'account-b', active: false });
         const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
         const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+        const { listWorkflowTriggerSets } = await import('@/sync/domains/workflows/workflowTriggerActions');
         const hook = await renderHook(() => {
             const { binding } = useServerCredentialAccountScopeBinding(serverId);
             return { binding, ...useWorkflowTriggerEditing({ definitionId, sourceKey: 'saved', projectTarget,
@@ -235,6 +236,7 @@ describe('workflow trigger editing lifetime', () => {
         });
         await waitForHomeGovernance(() => expect(hook.getCurrent().status).toBe('ready'));
         const binding = hook.getCurrent().binding;
+        if (!binding) throw new Error('Expected the real addressed Account binding');
         const focusOtherHome = async () => {
             await act(async () => {
                 await setActiveServerId(otherServerId, { scope: 'tab' });
@@ -247,62 +249,98 @@ describe('workflow trigger editing lifetime', () => {
             });
         };
         if (unfocusedBeforeSave) await focusOtherHome();
+        const releaseWrite = createDeferred<void>();
         const pendingRead = createDeferred<void>();
-        if (delayedRead) {
-            let holdNextList = true;
-            listReply = async () => {
-                const page = listRows();
-                if (holdNextList) { holdNextList = false; await pendingRead.promise; }
-                return page;
-            };
-            await act(async () => hook.getCurrent().retry());
-            await waitForHomeGovernance(() => expect(holdNextList).toBe(false));
-        }
-        await act(async () => hook.getCurrent().setDraft(editWorkflowTriggerDraft(hook.getCurrent().draft,
-            { kind: 'add', clientId: 'new-trigger', trigger })));
-        await act(async () => { expect(await hook.getCurrent().save(definitionId, () => true)).toBe('saved'); });
-        const acknowledged = hook.getCurrent().captureSnapshot();
-        expect(acknowledged.rows).toMatchObject([{ trigger }]);
-        if (delayedRead) {
-            await act(async () => { pendingRead.resolve(); await pendingRead.promise; });
-            expect(hook.getCurrent().captureSnapshot()).toEqual(acknowledged);
-        }
-        if (!unfocusedBeforeSave) await focusOtherHome();
-        expect(hook.getCurrent().binding).toBe(binding);
-        expect(binding?.isCurrent()).toBe(true);
-        expect(hook.getCurrent().captureSnapshot()).toEqual(acknowledged);
-        expect(hook.getCurrent().dirty).toBe(false);
-        if (unfocusedBeforeSave && delayedRead) {
-            const saved = rows[0]!;
-            const releaseOldList = createDeferred<void>();
-            let oldListRequested = false;
-            listReply = async () => {
-                const page = listRows();
-                oldListRequested = true;
-                await releaseOldList.promise;
-                return page;
-            };
-            await act(async () => hook.getCurrent().retry());
-            await waitForHomeGovernance(() => expect(oldListRequested).toBe(true));
-            listReply = undefined;
+        const releaseOldList = createDeferred<void>();
+        const settling: Promise<unknown>[] = [];
+        try {
+            beforeWrite = () => releaseWrite.promise;
             await act(async () => hook.getCurrent().setDraft(editWorkflowTriggerDraft(hook.getCurrent().draft,
-                { kind: 'remove', triggerId: saved.triggers[0]!.id })));
-            await act(async () => { expect(await hook.getCurrent().save(definitionId, () => true)).toBe('saved'); });
-            expect(hook.getCurrent().captureSnapshot().rows).toEqual([]);
+                { kind: 'add', clientId: 'new-trigger', trigger })));
+            let saving!: ReturnType<ReturnType<typeof hook.getCurrent>['save']>;
+            await act(async () => {
+                saving = hook.getCurrent().save(definitionId, () => true);
+                settling.push(Promise.allSettled([saving]));
+            });
+            // Add must finish its census before we hold a stale observation. Holding
+            // that census would deadlock Save before it can reach the POST boundary.
+            await waitForHomeGovernance(() => expect(writes).toHaveLength(1));
+            let staleRead: ReturnType<typeof listWorkflowTriggerSets> | undefined;
+            if (delayedRead) {
+                let readStarted = false;
+                listReply = async () => {
+                    const page = listRows();
+                    readStarted = true;
+                    await pendingRead.promise;
+                    return page;
+                };
+                // Keep a logical borrower alive when acknowledgement retires the
+                // hook's read, so the stale physical response actually completes.
+                await act(async () => {
+                    hook.getCurrent().retry();
+                    staleRead = listWorkflowTriggerSets({ workflow: definitionId }, { accountLifetime: binding });
+                    settling.push(Promise.allSettled([staleRead]));
+                });
+                await waitForHomeGovernance(() => expect(readStarted).toBe(true));
+            }
+            await act(async () => { releaseWrite.resolve(); expect(await saving).toBe('saved'); });
+            const acknowledged = hook.getCurrent().captureSnapshot();
+            expect(acknowledged.rows).toMatchObject([{ trigger }]);
+            if (delayedRead) {
+                await act(async () => { pendingRead.resolve(); expect(await staleRead).toEqual([]); });
+                expect(hook.getCurrent().captureSnapshot()).toEqual(acknowledged);
+            }
+            if (!unfocusedBeforeSave) await focusOtherHome();
+            expect(hook.getCurrent().binding).toBe(binding);
+            expect(binding?.isCurrent()).toBe(true);
+            expect(hook.getCurrent().captureSnapshot()).toEqual(acknowledged);
             expect(hook.getCurrent().dirty).toBe(false);
-            await act(async () => { releaseOldList.resolve(); await releaseOldList.promise; });
+            if (unfocusedBeforeSave && delayedRead) {
+                const saved = rows[0]!;
+                let oldListRequested = false;
+                listReply = async () => {
+                    const page = listRows();
+                    oldListRequested = true;
+                    await releaseOldList.promise;
+                    return page;
+                };
+                let oldRead!: ReturnType<typeof listWorkflowTriggerSets>;
+                await act(async () => {
+                    hook.getCurrent().retry();
+                    oldRead = listWorkflowTriggerSets({ workflow: definitionId }, { accountLifetime: binding });
+                    settling.push(Promise.allSettled([oldRead]));
+                });
+                await waitForHomeGovernance(() => expect(oldListRequested).toBe(true));
+                listReply = undefined;
+                await act(async () => hook.getCurrent().setDraft(editWorkflowTriggerDraft(hook.getCurrent().draft,
+                    { kind: 'remove', triggerId: saved.triggers[0]!.id })));
+                await act(async () => { expect(await hook.getCurrent().save(definitionId, () => true)).toBe('saved'); });
+                expect(hook.getCurrent().captureSnapshot().rows).toEqual([]);
+                expect(hook.getCurrent().dirty).toBe(false);
+                await act(async () => {
+                    releaseOldList.resolve();
+                    expect(await oldRead).toMatchObject([{ automationId: saved.id }]);
+                });
+                expect(hook.getCurrent().captureSnapshot().rows).toEqual([]);
+            }
+            const staleSave = hook.getCurrent().save;
+            await act(async () => {
+                // The replacement Account owns a different Automation collection.
+                rows = [];
+                await home.switchAccount(serverId, 'replacement-account');
+            });
+            expect(binding?.isCurrent()).toBe(false);
             expect(hook.getCurrent().captureSnapshot().rows).toEqual([]);
+            await act(async () => { expect(await staleSave(definitionId, () => true)).toBe('stale'); });
+            expect(writes).toHaveLength(unfocusedBeforeSave && delayedRead ? 2 : 1);
+        } finally {
+            await act(async () => {
+                releaseWrite.resolve();
+                pendingRead.resolve();
+                releaseOldList.resolve();
+                await Promise.all(settling);
+            });
         }
-        const staleSave = hook.getCurrent().save;
-        await act(async () => {
-            // The replacement Account owns a different Automation collection.
-            rows = [];
-            await home.switchAccount(serverId, 'replacement-account');
-        });
-        expect(binding?.isCurrent()).toBe(false);
-        expect(hook.getCurrent().captureSnapshot().rows).toEqual([]);
-        await act(async () => { expect(await staleSave(definitionId, () => true)).toBe('stale'); });
-        expect(writes).toHaveLength(unfocusedBeforeSave && delayedRead ? 2 : 1);
     });
     it('keeps reads started during Save from replacing its receipt across default and addressed lifetimes', async () => {
         const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
@@ -316,37 +354,56 @@ describe('workflow trigger editing lifetime', () => {
         const binding = hook.getCurrent().binding;
         if (!binding) throw new Error('Expected the real addressed Account binding');
         const releaseWrite = createDeferred<void>();
-        beforeWrite = () => releaseWrite.promise;
-        await act(async () => hook.getCurrent().setDraft(editWorkflowTriggerDraft(hook.getCurrent().draft,
-            { kind: 'add', clientId: 'new-trigger', trigger })));
-        let saving!: ReturnType<ReturnType<typeof hook.getCurrent>['save']>;
-        await act(async () => { saving = hook.getCurrent().save(definitionId, () => true); });
-        await waitForHomeGovernance(() => expect(writes).toHaveLength(1));
         const releaseReads = createDeferred<void>();
-        let readsStarted = 0;
-        listReply = async () => {
-            const page = listRows();
-            readsStarted += 1;
-            await releaseReads.promise;
-            return page;
-        };
-        const ordinary = listWorkflowTriggerSets({ workflow: definitionId });
-        const addressed = listWorkflowTriggerSets({ workflow: definitionId }, { accountLifetime: binding });
-        await waitForHomeGovernance(() => expect(readsStarted).toBe(2));
-        await act(async () => { releaseWrite.resolve(); expect(await saving).toBe('saved'); });
-        const acknowledged = hook.getCurrent().captureSnapshot();
-        expect(acknowledged.rows).toMatchObject([{ trigger }]);
-        await act(async () => {
-            releaseReads.resolve();
-            expect(await ordinary).toEqual([]);
-            expect(await addressed).toEqual([]);
-        });
-        expect(hook.getCurrent().captureSnapshot()).toEqual(acknowledged);
-        // A new read after acknowledgement still has authority to observe deletion.
-        rows = [];
-        listReply = undefined;
-        await act(async () => { expect(await listWorkflowTriggerSets({ workflow: definitionId })).toEqual([]); });
-        expect(hook.getCurrent().captureSnapshot().rows).toEqual([]);
+        const settling: Promise<unknown>[] = [];
+        try {
+            beforeWrite = () => releaseWrite.promise;
+            await act(async () => hook.getCurrent().setDraft(editWorkflowTriggerDraft(hook.getCurrent().draft,
+                { kind: 'add', clientId: 'new-trigger', trigger })));
+            let saving!: ReturnType<ReturnType<typeof hook.getCurrent>['save']>;
+            await act(async () => {
+                saving = hook.getCurrent().save(definitionId, () => true);
+                settling.push(Promise.allSettled([saving]));
+            });
+            await waitForHomeGovernance(() => expect(writes).toHaveLength(1));
+            let readsStarted = 0;
+            listReply = async () => {
+                const page = listRows();
+                readsStarted += 1;
+                await releaseReads.promise;
+                return page;
+            };
+            const ordinary = listWorkflowTriggerSets({ workflow: definitionId });
+            const addressed = listWorkflowTriggerSets({ workflow: definitionId }, { accountLifetime: binding });
+            settling.push(Promise.allSettled([ordinary, addressed]));
+            // These are independent Action admissions borrowing one physical JSON
+            // acquisition. A mis-bound caller still fails its own Account admission.
+            await waitForHomeGovernance(() => expect(readsStarted).toBe(1));
+            await expect(listWorkflowTriggerSets({ workflow: definitionId }, {
+                accountLifetime: binding, context: { runtimeAccountId: 'wrong-account' },
+            })).rejects.toMatchObject({ rawCode: 'action_account_scope_changed' });
+            await act(async () => { releaseWrite.resolve(); expect(await saving).toBe('saved'); });
+            const acknowledged = hook.getCurrent().captureSnapshot();
+            expect(acknowledged.rows).toMatchObject([{ trigger }]);
+            await act(async () => {
+                releaseReads.resolve();
+                expect(await ordinary).toEqual([]);
+                expect(await addressed).toEqual([]);
+            });
+            expect(hook.getCurrent().captureSnapshot()).toEqual(acknowledged);
+            expect(readsStarted).toBe(1);
+            // A new read after acknowledgement still has authority to observe deletion.
+            rows = [];
+            listReply = undefined;
+            await act(async () => { expect(await listWorkflowTriggerSets({ workflow: definitionId })).toEqual([]); });
+            expect(hook.getCurrent().captureSnapshot().rows).toEqual([]);
+        } finally {
+            await act(async () => {
+                releaseWrite.resolve();
+                releaseReads.resolve();
+                await Promise.all(settling);
+            });
+        }
     });
     it('keeps an unfocused addressed Home independent of the focused Account trigger projection', async () => {
         seed(set);

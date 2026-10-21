@@ -27,6 +27,7 @@ import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { getVitestNodeBuiltin } from '@/dev/vitestNodeBuiltins';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import type { NativeComposerInputHandle } from '@/components/ui/forms/nativeComposerInput';
 
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -102,10 +103,12 @@ async function renderScreen(element: React.ReactElement, options?: Parameters<ty
         };
         // Native text refs are an OS boundary. The real AgentInput and
         // MultiTextInput own focus requests, restored selection and edits.
-        if (nativeElement.type !== 'TextInput') return null;
-        return { focus: promptFocus, blur: () => {}, setNativeProps: () => {},
+        if (nativeElement.type !== 'TextInput' && nativeElement.type !== 'HappierComposerInput') return null;
+        const input = { focus: promptFocus, blur: () => {}, setSelection: () => {}, setTextAndSelection: () => {},
+            offsetAtPoint: async () => null, setDropCaret: () => {},
             measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) =>
-                callback(0, 0, windowDimensions.width, 0) };
+                callback(0, 0, windowDimensions.width, 0) } satisfies NativeComposerInputHandle;
+        return { ...input, setNativeProps: () => {} };
     } });
     let retired = false;
     const retireContent = async () => {

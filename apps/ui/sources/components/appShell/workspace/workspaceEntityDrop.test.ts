@@ -50,7 +50,7 @@ describe('workspace entity Action admission', () => {
         // An unpublished Session screen is named by the destination catalog's one fallback, not by its stale tab label.
         expect(scene(null).paneTitle).toBe(t('session.untitled'));
         expect(scene(null).locateTab('anchor')).toEqual({ paneId: 'group:1', title: t('session.untitled') });
-        expect(createWorkspaceDropScene(h.workspace.state, h.catalog, { paneId: 'group:1' }).paneTitle).toBeNull();
+        expect(createWorkspaceDropScene(h.workspace.state, h.catalog, { paneId: 'group:1' }).paneTitle).toBe(t('session.untitled'));
     });
     it('applies an existing tab edge drop beside the hovered pane rather than its source pane', () => {
         const h = harness();
