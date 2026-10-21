@@ -300,6 +300,7 @@ describe('the server configuration registry', () => {
 
 /** A valid, non-default value for an entry, so a reader that ignored the overlay would fail. */
 function sampleValue(entry: (typeof SERVER_CONFIG_REGISTRY)[string]): unknown {
+    if (entry.key === 'HAPPIER_PUBLIC_PROFILE_REPORT_URL') return 'mailto:operator@home.example.test';
     switch (entry.type) {
         case 'boolean':
             return entry.default !== true;

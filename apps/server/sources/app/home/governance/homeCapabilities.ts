@@ -218,6 +218,7 @@ export type HomeGovernanceMutationRequest =
     | Readonly<{ operation: "set_home_role"; targetAccountId: string; nextHomeRole: HomeRoleV1 }>
     | Readonly<{ operation: "set_account_status"; targetAccountId: string; nextStatus: AccountStatusV1 }>
     | Readonly<{ operation: "erase_account"; targetAccountId: string }>
+    | Readonly<{ operation: "manage_public_profile"; targetAccountId: string }>
     | Readonly<{ operation: "sign_out_account_everywhere"; targetAccountId: string }>;
 
 export type HomeGovernanceAuthorizationResult =
@@ -234,6 +235,7 @@ function requestTargetAccountId(request: HomeGovernanceMutationRequest): string 
         case "set_home_role":
         case "set_account_status":
         case "erase_account":
+        case "manage_public_profile":
         case "sign_out_account_everywhere":
             return request.targetAccountId;
         default:
@@ -262,6 +264,7 @@ function isAuthorizedRequest(input: Readonly<{
         }
         case "set_account_status":
         case "sign_out_account_everywhere":
+        case "manage_public_profile":
             // Administering an owner Account at all is owner authority, whether
             // or not another active owner would remain.
             return target?.homeRole === "owner" ? authority.manageHomeRoles : authority.manageAccounts;

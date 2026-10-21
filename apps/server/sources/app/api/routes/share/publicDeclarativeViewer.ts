@@ -3,11 +3,8 @@
 import { createElement, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HappierUiEnvironmentProvider, type HappierUiTheme } from '@happier-dev/plugin-ui/environment';
-import { HappierMarkdown, HappierSpinner, HappierText } from '@happier-dev/plugin-ui/presentation';
-import { readDeclarativeText, renderDeclarativeNode, type DeclarativeRenderingHost } from '@happier-dev/plugin-ui/declarative';
+import { renderInertDeclarativeView, type InertDeclarativeLabels } from '@happier-dev/plugin-ui/declarative';
 import { normalizeSessionSurfaceDeclarativeDocumentV1 } from '@happier-dev/protocol/sessions/board';
-import { PluginDeclarativeNodeV2Schema } from '@happier-dev/protocol/plugins/contributions/ui/v2';
-import { readPluginDeclarativeDataFieldV1, readPluginDeclarativeDataRowsV1 } from '@happier-dev/protocol/plugins/contributions/ui/declarativeDataV1';
 
 /** The isolated public shell follows browser system colours; app styling is host-owned. */
 function readPublicViewerTheme(root: HTMLElement): HappierUiTheme {
@@ -28,26 +25,13 @@ function readPublicViewerTheme(root: HTMLElement): HappierUiTheme {
     };
 }
 
-const publicRenderingHost: DeclarativeRenderingHost = {
-    Text: HappierText,
-    renderIcon: () => null,
-    renderMarkdown: input => createElement(HappierMarkdown, input),
-    renderSpinner: color => createElement(HappierSpinner, { color, animationEnabled: false }),
-    toneAccessibilityLabel: tone => tone === 'success' ? 'Success' : tone === 'warning' ? 'Warning' : tone === 'danger' ? 'Error' : null,
-    incompleteText: 'More in source',
-    readDataNode: value => { const parsed = PluginDeclarativeNodeV2Schema.safeParse(value); return parsed.success ? parsed.data : null; },
-    readDataField: readPluginDeclarativeDataFieldV1,
-    readDataRows: readPluginDeclarativeDataRowsV1,
-    renderAction: () => null,
-};
+/** The anonymous shell is not localized yet; its labels stay this viewer's English copy. */
+const publicViewerLabels: InertDeclarativeLabels = { success: 'Success', warning: 'Warning', error: 'Error', incomplete: 'More in source' };
 
 /** Anonymous content never receives author Actions, Resources, settings or targeted surfaces. */
 export function buildPublicSessionDeclarativeView(document: unknown, theme: HappierUiTheme): ReactNode {
     const normalized = normalizeSessionSurfaceDeclarativeDocumentV1({ document, admittedHostActions: [] });
-    return renderDeclarativeNode(normalized.root, {
-        host: publicRenderingHost, presentationTheme: theme, minimumTouchTarget: 0,
-        localize: readDeclarativeText, resolveAction: () => null, renderField: () => null, renderCollectionList: () => null,
-    });
+    return renderInertDeclarativeView(normalized.root, theme, publicViewerLabels);
 }
 
 /** Mount and dispose one visible public visual through the same portable traversal as the app. */

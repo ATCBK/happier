@@ -108,6 +108,70 @@ describe("processImage publication contract", () => {
             .resolves.toEqual({ ok: false, reason: "source_mime_mismatch" });
     });
 
+    it.each([
+        { channels: 3 as const, alpha: 1, format: "jpeg", mimeType: "image/jpeg", extension: "jpg" },
+        { channels: 4 as const, alpha: 0.5, format: "png", mimeType: "image/png", extension: "png" },
+    ])("normalizes explicitly admitted $channels-channel WebP pixels into $format publication bytes", async ({ channels, alpha, format, mimeType, extension }) => {
+        const source = await sharp({
+            create: { width: 3000, height: 1500, channels, background: { r: 255, g: 0, b: 0, alpha } },
+        }).withMetadata({ orientation: 6 }).webp({ lossless: true }).toBuffer();
+
+        const result = await processImage(source, {
+            allowedSourceMimeTypes: ["image/png", "image/jpeg", "image/webp"],
+            expectedSourceMimeType: "image/webp",
+            maxEdge: 2560,
+        });
+
+        expect(result).toMatchObject({ format, mimeType, extension, width: 1280, height: 2560 });
+        const published = await sharp(result.bytes).metadata();
+        expect(published).toMatchObject({ format, width: result.width, height: result.height });
+        expect(published.orientation).toBeUndefined();
+        expect(published.exif).toBeUndefined();
+        expect(published.icc).toBeUndefined();
+        const pixel = await sharp(result.bytes).extract({ left: 0, top: 0, width: 1, height: 1 })
+            .ensureAlpha().raw().toBuffer();
+        expect(pixel[0]).toBeGreaterThanOrEqual(250);
+        expect(pixel[1]).toBeLessThanOrEqual(5);
+        expect(pixel[2]).toBeLessThanOrEqual(5);
+        expect(Math.abs(pixel[3] - alpha * 255)).toBeLessThanOrEqual(1);
+        expect(result.thumbhash.length).toBeGreaterThan(0);
+    });
+
+    it("keeps source admission, declared MIME and decode budget independent for WebP", async () => {
+        const webp = await sharp({ create: { width: 64, height: 32, channels: 3, background: "red" } })
+            .webp().toBuffer();
+        const allowedSourceMimeTypes = ["image/webp"] as const;
+
+        await expect(tryProcessImage(webp, { expectedSourceMimeType: "image/webp" }))
+            .resolves.toEqual({ ok: false, reason: "unsupported_format" });
+        await expect(tryProcessImage(webp, { allowedSourceMimeTypes, expectedSourceMimeType: "image/png" }))
+            .resolves.toEqual({ ok: false, reason: "source_mime_mismatch" });
+        await expect(tryProcessImage(await jpeg(64, 32), { allowedSourceMimeTypes }))
+            .resolves.toEqual({ ok: false, reason: "unsupported_format" });
+        await expect(tryProcessImage(webp, { allowedSourceMimeTypes, maxInputPixels: 64 * 32 - 1 }))
+            .resolves.toEqual({ ok: false, reason: "too_many_pixels" });
+        const admitted = await processImage(webp, { allowedSourceMimeTypes });
+        expect(admitted).toMatchObject({ width: 64, height: 32, format: "jpeg" });
+    });
+
+    it("preserves reviewed WebP pixels exactly when a caller requests lossless PNG output", async () => {
+        const sourcePixels = Buffer.from(Uint8Array.from({ length: 64 * 32 * 3 }, (_, index) => index * 17 % 256));
+        const source = await sharp(sourcePixels, { raw: { width: 64, height: 32, channels: 3 } })
+            .webp({ lossless: true }).toBuffer();
+
+        const result = await processImage(source, {
+            allowedSourceMimeTypes: ["image/webp"],
+            expectedSourceMimeType: "image/webp",
+            outputFormat: "png",
+            maxEdge: 2560,
+        });
+
+        expect(result).toMatchObject({ width: 64, height: 32, format: "png", mimeType: "image/png", extension: "png" });
+        const reviewedPixels = await sharp(source).raw().toBuffer();
+        const publishedPixels = await sharp(result.bytes).raw().toBuffer();
+        expect(publishedPixels.equals(reviewedPixels)).toBe(true);
+    });
+
     it("strips an unrelated trailing payload instead of republishing the input", async () => {
         const source = await jpeg(300, 300);
         const smuggled = Buffer.concat([source, Buffer.from("<?php echo 'payload'; ?>")]);

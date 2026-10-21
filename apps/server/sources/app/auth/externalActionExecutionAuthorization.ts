@@ -1213,6 +1213,13 @@ function isDiscussionActionHttpPreparation(verified: VerifiedExternalActionExecu
 function isAccountActionHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
     proof: ExternalActionExecutionRequestProof): boolean {
     const root = verified.binding.actionId;
+    if (root === 'usage.recap.compose' || root === 'usage.recap.export' || root === 'usage.recap.deliver') {
+        // The installed executor signs this consumed safe-view read under its
+        // unchanged recap root. No owner record or private Usage grant follows.
+        return verified.effectActionId === root && proof.method.toUpperCase() === 'GET'
+            && proof.body === undefined && proof.path === '/v1/account/public-profile/view'
+            && (proof.routeInput === undefined || sameManagedInput(proof.routeInput, {}));
+    }
     if (isMemoryExposureReadEffect(root, verified.effectActionId)) {
         if (proof.method.toUpperCase() !== 'GET' || proof.body !== undefined) return false;
         const url = new URL(proof.path, 'http://home.invalid');

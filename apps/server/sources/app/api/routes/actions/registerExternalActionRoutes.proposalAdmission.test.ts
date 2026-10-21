@@ -94,6 +94,25 @@ function verifyProposalCurrentness(authorization: ExternalActionExecutionAuthori
 }
 
 describe('installed Session proposal admission at the Home mint route', () => {
+    it.each(['usage.recap.compose', 'usage.recap.export', 'usage.recap.deliver'])('binds %s public-source reads to the captured Account without a private-read grant', async actionId => {
+        const { app, mint } = createApp('account');
+        try {
+            const input = { source: { kind: 'public_profile' }, ...(actionId.endsWith('.deliver') ? { intent: 'share' } : {}) };
+            const response = await mint(actionId, proposal(actionId, input));
+            expect(response.statusCode, response.body).toBe(200);
+            const authorization = ExternalActionExecutionAuthorizationV1Schema.parse(response.json());
+            const verify = (path: string, effect = actionId, method = 'GET', body?: unknown) =>
+                verifyExternalActionDomainExecutionRequest(signedRequestProof(authorization, path, body, effect, method));
+            expect(Boolean(await verify('/v1/account/public-profile/view'))).toBe(true);
+            for (const path of ['/v1/account/public-profile/view?accountId=other-account', '/v1/account/public-profile', '/v1/usage/query']) {
+                expect(await verify(path)).toBeNull();
+            }
+            expect(await verify('/v1/account/public-profile/view', 'usage.query')).toBeNull();
+            expect(await verify('/v1/account/public-profile/view', actionId, 'POST', {})).toBeNull();
+            storage.state.bound = false;
+            expect(await verify('/v1/account/public-profile/view')).toBeNull();
+        } finally { await app.close(); }
+    });
     beforeAll(async () => {
         vi.stubEnv('HANDY_MASTER_SECRET', 'proposal-admission-test-secret');
         vi.stubEnv('AUTH_REQUIRED_LOGIN_PROVIDERS', '');

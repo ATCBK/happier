@@ -15,8 +15,11 @@ import { loadSharp } from "./sharpRuntime";
  * image is not carried forward and no source metadata survives implicitly.
  */
 
-/** The formats the decoder accepts and the encoder produces. */
+/** The canonical formats the publication encoder produces. */
 export type ProcessedImageFormat = "png" | "jpeg";
+
+/** WebP source admission is explicit; existing avatar/logo callers stay PNG/JPEG-only. */
+export type ProcessImageSourceMimeType = "image/png" | "image/jpeg" | "image/webp";
 
 /**
  * `contain` bounds the longest edge and preserves the aspect ratio. `cover`
@@ -61,12 +64,16 @@ export type ProcessImageOptions = Readonly<{
     fit?: ProcessedImageFit;
     maxEdge?: number;
     maxInputPixels?: number;
+    /** Defaults to PNG/JPEG; prepared atmosphere callers explicitly admit WebP. */
+    allowedSourceMimeTypes?: readonly ProcessImageSourceMimeType[];
+    /** Explicit PNG output preserves reviewed pixels without another lossy encoding. */
+    outputFormat?: ProcessedImageFormat;
     /**
      * When a caller received a declared upload MIME, validate it against the
      * decoder's source format in this same metadata pass. This is source
      * admission only; the published MIME may differ after canonical re-encode.
      */
-    expectedSourceMimeType?: ProcessedImage["mimeType"];
+    expectedSourceMimeType?: ProcessImageSourceMimeType;
 }>;
 
 export type ProcessImageRejection =
@@ -103,8 +110,12 @@ export async function tryProcessImage(src: Buffer, options: ProcessImageOptions 
         return { ok: false, reason: "undecodable" };
     }
 
-    if (meta.format !== "png" && meta.format !== "jpeg") return { ok: false, reason: "unsupported_format" };
-    const sourceMimeType = meta.format === "png" ? "image/png" : "image/jpeg";
+    if (meta.format !== "png" && meta.format !== "jpeg" && meta.format !== "webp") {
+        return { ok: false, reason: "unsupported_format" };
+    }
+    const sourceMimeType = meta.format === "png" ? "image/png" : meta.format === "jpeg" ? "image/jpeg" : "image/webp";
+    const allowedSourceMimeTypes = options.allowedSourceMimeTypes ?? ["image/png", "image/jpeg"];
+    if (!allowedSourceMimeTypes.includes(sourceMimeType)) return { ok: false, reason: "unsupported_format" };
     if (options.expectedSourceMimeType !== undefined && options.expectedSourceMimeType !== sourceMimeType) {
         return { ok: false, reason: "source_mime_mismatch" };
     }
@@ -116,9 +127,10 @@ export async function tryProcessImage(src: Buffer, options: ProcessImageOptions 
     // does not depend on which stage the decoder chose to enforce its own limit.
     if (sourceWidth * sourceHeight > maxInputPixels) return { ok: false, reason: "too_many_pixels" };
 
-    // Alpha decides the output format: JPEG would flatten transparency onto an
-    // invented background, and PNG would triple the size of a photograph.
-    const transparent = meta.hasAlpha === true;
+    // Alpha decides the default output format: JPEG would flatten transparency
+    // onto an invented background, and PNG would triple a photograph's size.
+    // A reviewed picture copy can explicitly require lossless PNG instead.
+    const outputFormat = options.outputFormat ?? (meta.hasAlpha === true ? "png" : "jpeg");
 
     // A phone photograph is very often stored unrotated with an EXIF
     // orientation tag, and re-encoding deliberately drops all source metadata —
@@ -149,7 +161,7 @@ export async function tryProcessImage(src: Buffer, options: ProcessImageOptions 
     let width: number;
     let height: number;
     try {
-        const encoded = await (transparent ? resized.png() : resized.jpeg()).toBuffer({ resolveWithObject: true });
+        const encoded = await (outputFormat === "png" ? resized.png() : resized.jpeg()).toBuffer({ resolveWithObject: true });
         bytes = encoded.data;
         width = encoded.info.width;
         height = encoded.info.height;
@@ -161,9 +173,9 @@ export async function tryProcessImage(src: Buffer, options: ProcessImageOptions 
         ok: true,
         image: {
             bytes,
-            format: transparent ? "png" : "jpeg",
-            mimeType: transparent ? "image/png" : "image/jpeg",
-            extension: transparent ? "png" : "jpg",
+            format: outputFormat,
+            mimeType: outputFormat === "png" ? "image/png" : "image/jpeg",
+            extension: outputFormat === "png" ? "png" : "jpg",
             width,
             height,
             // Derived from the published bytes so the placeholder a client renders

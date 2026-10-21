@@ -16,6 +16,8 @@ import { sessionRoutes } from "./routes/session/sessionRoutes";
 import { registerDiscussionRoutes } from "./routes/discussions/registerDiscussionRoutes";
 import { connectRoutes } from "./routes/connect/connectRoutes";
 import { accountRoutes } from "./routes/account/accountRoutes";
+import { registerAccountPublicProfileRoutes } from "./routes/account/registerAccountPublicProfileRoutes";
+import { registerPublicProfileReadRoutes } from "./routes/account/registerPublicProfileReadRoutes";
 import { homeGovernanceRoutes } from "./routes/home/homeGovernanceRoutes";
 import { registerHomeIdentityRoutes } from "./routes/home/homeIdentityRoutes";
 import { changesRoutes } from "./routes/changes/changesRoutes";
@@ -194,6 +196,8 @@ export function registerApiRoutes(typed: Fastify, params: Readonly<{
     registerDiscussionRoutes(typed);
     registerEphemeralRunnerRoutes(typed);
     accountRoutes(typed);
+    registerAccountPublicProfileRoutes(typed);
+    registerPublicProfileReadRoutes(typed);
     homeGovernanceRoutes(typed);
     registerHomeIdentityRoutes(typed);
     registerHomeSettingsRoutes(typed, { authEmailDelivery: authEmail.delivery });
