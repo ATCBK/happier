@@ -146,8 +146,13 @@ operations have their own closed schemas; no input can supply an internal
 mutation role. Against a server missing either operation, current UI/CLI Action
 transport reports `unsupported_action`; it does not simulate release through an
 empty set or infer availability locally. Ordinary username set keeps its own
-older-server support. These changes do not advertise public-profile capability
-or add profile-only admission; Friends eligibility remains in force.
+older-server support. On current development servers, the existing shared
+username route eligibility admits claim, check and release when
+`account.publicProfiles` is enabled, independently of Friends and its identity
+provider requirements. When profiles are disabled, the existing Friends
+eligibility remains in force. This does not enable Friends discovery or
+relationships, and the same username policy, reservations and mutation owner
+still apply.
 
 The prospective predecessor inspected on 2026-10-21 was `../0.2` HEAD
 `8a088dd70f57ccf43fade3543fb6a3e874bee12a`, with clean scoped status and
