@@ -101,6 +101,8 @@ type CompactSearchFieldInputOptions = Readonly<{
     /** The input's accessible name when it differs from the placeholder. */
     accessibilityLabel?: string;
     autoFocus?: boolean;
+    /** The input itself, for an owner that moves focus (a menu's search focuses on open). */
+    inputRef?: React.Ref<React.ElementRef<typeof TextInput>>;
     onKeyPress?: React.ComponentProps<typeof TextInput>['onKeyPress'];
     onFocus?: () => void;
     onBlur?: () => void;
@@ -123,12 +125,18 @@ const CompactSearchFieldFrame = React.memo(function CompactSearchFieldFrame(prop
 }> & CompactSearchFieldInputOptions) {
     const { theme } = useUnistyles();
     const styles = compactSearchFieldStyles;
-    const inputRef = React.useRef<React.ElementRef<typeof TextInput>>(null);
+    const inputRef = React.useRef<React.ElementRef<typeof TextInput> | null>(null);
     // The whole drawn field is the touch target: a tap on the glass, the padding or the border
     // focuses the input. On phones it takes the shared native touch floor; pointer platforms keep
     // the rail's density.
     const nativeMinimumTargetSize = useHappierNativeMinimumInteractiveTargetSize();
     const focusInput = React.useCallback(() => inputRef.current?.focus?.(), []);
+    const ownerRef = props.inputRef;
+    const setInput = React.useCallback((node: React.ElementRef<typeof TextInput> | null) => {
+        inputRef.current = node;
+        if (typeof ownerRef === 'function') ownerRef(node);
+        else if (ownerRef) (ownerRef as React.MutableRefObject<React.ElementRef<typeof TextInput> | null>).current = node;
+    }, [ownerRef]);
     return (
         <View testID={props.testID ? `${props.testID}.layout` : undefined} style={props.style}>
             <HappierSearchFieldBox
@@ -143,7 +151,7 @@ const CompactSearchFieldFrame = React.memo(function CompactSearchFieldFrame(prop
                 trailing={props.trailing}
             >
                 <TextInput
-                    ref={inputRef}
+                    ref={setInput}
                     testID={props.testID}
                     placeholder={props.placeholder}
                     placeholderTextColor={theme.colors.input.placeholder}

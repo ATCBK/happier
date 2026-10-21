@@ -14,14 +14,13 @@ import { Item, type ItemProps } from '@/components/ui/lists/Item';
 import { useListPresentation } from '@/components/ui/lists/listPresentation';
 import { useResolvedItemDensity } from '@/components/ui/lists/useResolvedItemDensity';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
-import { TextInput } from '@/components/ui/text/Text';
+import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
 import { resolveFieldBoxColors } from '@/components/ui/forms/fieldBox';
 import { renderDropdownItemTriggerRightElement } from '@/components/ui/forms/dropdown/renderDropdownItemTriggerRightElement';
 import { KeyHint } from '@/components/ui/keyboard/KeyHint';
 import { useScrollRectIntoViewRegistry } from '@/components/ui/scroll/useScrollRectIntoView';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { Icon } from '@/components/ui/icons/Icon';
-import { Typography } from '@/constants/Typography';
 
 const DROPDOWN_ACTION_FRAME_FALLBACK_MS = 100;
 
@@ -630,25 +629,12 @@ export function DropdownMenu(props: DropdownMenuProps) {
             paddingTop: contentPadding,
             paddingBottom: rowVariant === 'slim' ? 4 : 8,
         }}>
-            <TextInput
-                ref={inputRef as any}
+            <CompactSearchField
+                inputRef={inputRef}
                 value={searchQuery}
                 onChangeText={handleSearchChange}
                 placeholder={props.searchPlaceholder ?? t('commandPalette.placeholder')}
-                placeholderTextColor={theme.colors.input.placeholder}
-                autoFocus={false}
-                autoCorrect={false}
-                autoCapitalize="none"
                 onKeyPress={handleKeyDown}
-                style={{
-                    borderRadius: theme.borderRadius.md,
-                    borderWidth: 1,
-                    borderColor: theme.colors.border.default,
-                    paddingHorizontal: rowVariant === 'slim' ? 10 : 12,
-                    paddingVertical: rowVariant === 'slim' ? 8 : 10,
-                    fontSize: Typography.variant('label').fontSize,
-                    color: theme.colors.text.primary,
-                }}
             />
         </View>
     ) : null;
