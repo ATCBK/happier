@@ -141,9 +141,7 @@ export function createUiFilesystemAction(account?: LazyActionAccountContext, del
                     return { ok: false, errorCode: 'target_unavailable', error: 'Copy destination differs from the admitted target' };
                 }
                 if (!account) return { ok: false, errorCode: 'target_unavailable', error: 'Copy requires captured Account custody' };
-                const [{ resolveMachineCarrierRoute }, { copyPreparedFilesystemFile }, { captureLazyActionAccountContext }, { callAdmittedFilesystemTransferActionRpc }] = await Promise.all([
-                    import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/machineCarrierHttpLease'),
-                    import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/preparedFilesystemCopy'),
+                const [{ captureLazyActionAccountContext }, { callAdmittedFilesystemTransferActionRpc, resolveMachineCarrierRoute, copyPreparedFilesystemFile }] = await Promise.all([
                     import('./actionAccountContext'),
                     import('@/sync/domains/transfers/runtime/transferRuntime'),
                 ]);

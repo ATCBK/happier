@@ -26,7 +26,7 @@ import {
     FilesystemWriteFileOutputSchema,
     isFilesystemWriteGuardErrorCode,
 } from '@happier-dev/protocol/actions/filesystemActionFamily';
-import { MACHINE_CARRIER_TRANSPORT_FAILED_ERROR_CODE, MACHINE_CARRIER_UNAVAILABLE_ERROR_CODE } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/machineCarrierHttpLease';
+import { MACHINE_CARRIER_TRANSPORT_FAILED_ERROR_CODE, MACHINE_CARRIER_UNAVAILABLE_ERROR_CODE } from '@/sync/domains/transfers/runtime/transferRuntime';
 import { invokeWorkspaceFileSystemAction } from './actionInvocation';
 import { callAdmittedFilesystemActionRpc } from '@/sync/ops/actions/filesystemActionDeps';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';

@@ -4,7 +4,7 @@ import { decodeBase64 } from '@/encryption/base64';
 import { machineScmChangeDiscard, type MachineScmCallOptions } from '@/sync/ops/scm/machineScm';
 import { workspaceWriteFile } from '@/sync/ops/workspaceFileSystem/fileReadWrite';
 import type { WorkspaceFileSystemTarget } from '@/sync/ops/workspaceFileSystem/directoryBrowsing';
-import { downloadBulkPayloadViaDirectExportToDestination } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/directTransferExportDownload';
+import { downloadBulkPayloadViaDirectExportToDestination } from '@/sync/domains/transfers/runtime/transferRuntime';
 import { publishPresentationNotice, readPresentationNotice, retirePresentationNotice, subscribePresentationNotices,
   type PresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { sendFileReviewNote } from './sendFileReviewNote';
