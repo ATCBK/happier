@@ -5,10 +5,9 @@ import type { JsonValue } from '../../identity.js';
 import type { PluginActionWorkflowBlockV1 } from './pluginActionDtoSupport.generated.js';
 
 export type UsageActionInputById = {
-    readonly "usage.prices.get": Record<string, never>;
-    readonly "usage.prices.refresh": Record<string, never>;
-    readonly "usage.calendar.export": {
+    readonly "usage.recap.deliver": {
         query: {
+            population?: 'all_personal_history' | 'public_eligible_personal' | undefined;
             granularity?: 'hour' | 'day' | 'week' | 'month' | undefined;
             timeZoneOffsetMinutes?: number | undefined;
             includeSeries?: boolean | undefined;
@@ -33,8 +32,62 @@ export type UsageActionInputById = {
             sources?: string[] | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
-            metric?: 'tokens' | 'cost' | undefined;
+            metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
             includeAccounting?: boolean | undefined;
+            includeQuotaHistory?: boolean | undefined;
+            includeSessionEvidence?: boolean | undefined;
+            includeTranscriptEvidence?: boolean | undefined;
+            includeWorkEvidence?: boolean | undefined;
+            breakdown?: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[] | undefined;
+            modelIds?: string[] | undefined;
+            workspaceIds?: string[] | undefined;
+            backendModes?: string[] | undefined;
+        };
+        intent: 'copy' | 'save' | 'share';
+        style?: 'daybreak' | 'sigil' | 'editorial' | 'glass' | 'holo' | 'skyline' | 'terminal' | undefined;
+        format?: 'square' | 'story' | 'link-preview' | undefined;
+        selectedFields?: ('tokens' | 'activeDays' | 'streak' | 'modelMix' | 'agentMix' | 'cache' | 'rhythm' | 'parallel' | 'night' | 'work' | 'coach' | 'highlights' | 'names' | 'dollars')[] | undefined;
+    } | {
+        source: {
+            kind: 'public_profile';
+        };
+        intent: 'copy' | 'save' | 'share';
+        style?: 'daybreak' | 'sigil' | 'editorial' | 'glass' | 'holo' | 'skyline' | 'terminal' | undefined;
+        format?: 'square' | 'story' | 'link-preview' | undefined;
+        selectedFields?: ('tokens' | 'activeDays' | 'streak' | 'agentMix' | 'rhythm' | 'parallel' | 'work' | 'highlights')[] | undefined;
+    };
+    readonly "usage.prices.get": Record<string, never>;
+    readonly "usage.prices.refresh": Record<string, never>;
+    readonly "usage.calendar.export": {
+        query: {
+            population?: 'all_personal_history' | 'public_eligible_personal' | undefined;
+            granularity?: 'hour' | 'day' | 'week' | 'month' | undefined;
+            timeZoneOffsetMinutes?: number | undefined;
+            includeSeries?: boolean | undefined;
+            includeInsights?: boolean | undefined;
+            includeActivity?: boolean | undefined;
+            includeLeaders?: boolean | undefined;
+            includeModelTimeline?: boolean | undefined;
+            includeMessageStats?: boolean | undefined;
+            activityResolution?: 'calendar' | 'weekdayHour' | 'both' | undefined;
+            topLimit?: number | undefined;
+            period?: {
+                startMs?: number | undefined;
+                endMs?: number | undefined;
+            } | {
+                relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
+                startMs?: undefined;
+                endMs?: undefined;
+            } | undefined;
+            agents?: string[] | undefined;
+            machines?: string[] | undefined;
+            projects?: string[] | undefined;
+            sources?: string[] | undefined;
+            session?: string | string[] | null | undefined;
+            costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
+            metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
+            includeAccounting?: boolean | undefined;
+            includeQuotaHistory?: boolean | undefined;
             includeSessionEvidence?: boolean | undefined;
             includeTranscriptEvidence?: boolean | undefined;
             includeWorkEvidence?: boolean | undefined;
@@ -66,6 +119,7 @@ export type UsageActionInputById = {
     };
     readonly "usage.recap.export": {
         query: {
+            population?: 'all_personal_history' | 'public_eligible_personal' | undefined;
             granularity?: 'hour' | 'day' | 'week' | 'month' | undefined;
             timeZoneOffsetMinutes?: number | undefined;
             includeSeries?: boolean | undefined;
@@ -90,8 +144,9 @@ export type UsageActionInputById = {
             sources?: string[] | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
-            metric?: 'tokens' | 'cost' | undefined;
+            metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
             includeAccounting?: boolean | undefined;
+            includeQuotaHistory?: boolean | undefined;
             includeSessionEvidence?: boolean | undefined;
             includeTranscriptEvidence?: boolean | undefined;
             includeWorkEvidence?: boolean | undefined;
@@ -103,9 +158,17 @@ export type UsageActionInputById = {
         style?: 'daybreak' | 'sigil' | 'editorial' | 'glass' | 'holo' | 'skyline' | 'terminal' | undefined;
         format?: 'square' | 'story' | 'link-preview' | undefined;
         selectedFields?: ('tokens' | 'activeDays' | 'streak' | 'modelMix' | 'agentMix' | 'cache' | 'rhythm' | 'parallel' | 'night' | 'work' | 'coach' | 'highlights' | 'names' | 'dollars')[] | undefined;
+    } | {
+        source: {
+            kind: 'public_profile';
+        };
+        style?: 'daybreak' | 'sigil' | 'editorial' | 'glass' | 'holo' | 'skyline' | 'terminal' | undefined;
+        format?: 'square' | 'story' | 'link-preview' | undefined;
+        selectedFields?: ('tokens' | 'activeDays' | 'streak' | 'agentMix' | 'rhythm' | 'parallel' | 'work' | 'highlights')[] | undefined;
     };
     readonly "usage.recap.compose": {
         query: {
+            population?: 'all_personal_history' | 'public_eligible_personal' | undefined;
             granularity?: 'hour' | 'day' | 'week' | 'month' | undefined;
             timeZoneOffsetMinutes?: number | undefined;
             includeSeries?: boolean | undefined;
@@ -130,8 +193,9 @@ export type UsageActionInputById = {
             sources?: string[] | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
-            metric?: 'tokens' | 'cost' | undefined;
+            metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
             includeAccounting?: boolean | undefined;
+            includeQuotaHistory?: boolean | undefined;
             includeSessionEvidence?: boolean | undefined;
             includeTranscriptEvidence?: boolean | undefined;
             includeWorkEvidence?: boolean | undefined;
@@ -143,9 +207,17 @@ export type UsageActionInputById = {
         style?: 'daybreak' | 'sigil' | 'editorial' | 'glass' | 'holo' | 'skyline' | 'terminal' | undefined;
         format?: 'square' | 'story' | 'link-preview' | undefined;
         selectedFields?: ('tokens' | 'activeDays' | 'streak' | 'modelMix' | 'agentMix' | 'cache' | 'rhythm' | 'parallel' | 'night' | 'work' | 'coach' | 'highlights' | 'names' | 'dollars')[] | undefined;
+    } | {
+        source: {
+            kind: 'public_profile';
+        };
+        style?: 'daybreak' | 'sigil' | 'editorial' | 'glass' | 'holo' | 'skyline' | 'terminal' | undefined;
+        format?: 'square' | 'story' | 'link-preview' | undefined;
+        selectedFields?: ('tokens' | 'activeDays' | 'streak' | 'agentMix' | 'rhythm' | 'parallel' | 'work' | 'highlights')[] | undefined;
     };
     readonly "usage.query": {
         queries: {
+            population?: 'all_personal_history' | 'public_eligible_personal' | undefined;
             granularity?: 'hour' | 'day' | 'week' | 'month' | undefined;
             timeZoneOffsetMinutes?: number | undefined;
             includeSeries?: boolean | undefined;
@@ -170,8 +242,9 @@ export type UsageActionInputById = {
             sources?: string[] | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
-            metric?: 'tokens' | 'cost' | undefined;
+            metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
             includeAccounting?: boolean | undefined;
+            includeQuotaHistory?: boolean | undefined;
             includeSessionEvidence?: boolean | undefined;
             includeTranscriptEvidence?: boolean | undefined;
             includeWorkEvidence?: boolean | undefined;
@@ -183,6 +256,7 @@ export type UsageActionInputById = {
     };
     readonly "usage.export": {
         query: {
+            population?: 'all_personal_history' | 'public_eligible_personal' | undefined;
             granularity?: 'hour' | 'day' | 'week' | 'month' | undefined;
             timeZoneOffsetMinutes?: number | undefined;
             includeSeries?: boolean | undefined;
@@ -207,8 +281,9 @@ export type UsageActionInputById = {
             sources?: string[] | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
-            metric?: 'tokens' | 'cost' | undefined;
+            metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
             includeAccounting?: boolean | undefined;
+            includeQuotaHistory?: boolean | undefined;
             includeSessionEvidence?: boolean | undefined;
             includeTranscriptEvidence?: boolean | undefined;
             includeWorkEvidence?: boolean | undefined;
@@ -222,6 +297,7 @@ export type UsageActionInputById = {
     };
     readonly "usage.coach.apply": {
         query: {
+            population?: 'all_personal_history' | 'public_eligible_personal' | undefined;
             granularity?: 'hour' | 'day' | 'week' | 'month' | undefined;
             timeZoneOffsetMinutes?: number | undefined;
             includeSeries?: boolean | undefined;
@@ -246,8 +322,9 @@ export type UsageActionInputById = {
             sources?: string[] | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
-            metric?: 'tokens' | 'cost' | undefined;
+            metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
             includeAccounting?: boolean | undefined;
+            includeQuotaHistory?: boolean | undefined;
             includeSessionEvidence?: boolean | undefined;
             includeTranscriptEvidence?: boolean | undefined;
             includeWorkEvidence?: boolean | undefined;
@@ -260,6 +337,7 @@ export type UsageActionInputById = {
     };
     readonly "usage.coach.undo": {
         query: {
+            population?: 'all_personal_history' | 'public_eligible_personal' | undefined;
             granularity?: 'hour' | 'day' | 'week' | 'month' | undefined;
             timeZoneOffsetMinutes?: number | undefined;
             includeSeries?: boolean | undefined;
@@ -284,8 +362,9 @@ export type UsageActionInputById = {
             sources?: string[] | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
-            metric?: 'tokens' | 'cost' | undefined;
+            metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
             includeAccounting?: boolean | undefined;
+            includeQuotaHistory?: boolean | undefined;
             includeSessionEvidence?: boolean | undefined;
             includeTranscriptEvidence?: boolean | undefined;
             includeWorkEvidence?: boolean | undefined;
@@ -444,6 +523,7 @@ export type UsageActionInputById = {
     };
     readonly "usage.coach.dismiss": {
         query: {
+            population?: 'all_personal_history' | 'public_eligible_personal' | undefined;
             granularity?: 'hour' | 'day' | 'week' | 'month' | undefined;
             timeZoneOffsetMinutes?: number | undefined;
             includeSeries?: boolean | undefined;
@@ -468,8 +548,9 @@ export type UsageActionInputById = {
             sources?: string[] | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
-            metric?: 'tokens' | 'cost' | undefined;
+            metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
             includeAccounting?: boolean | undefined;
+            includeQuotaHistory?: boolean | undefined;
             includeSessionEvidence?: boolean | undefined;
             includeTranscriptEvidence?: boolean | undefined;
             includeWorkEvidence?: boolean | undefined;
@@ -483,6 +564,7 @@ export type UsageActionInputById = {
     };
     readonly "usage.coach.snooze": {
         query: {
+            population?: 'all_personal_history' | 'public_eligible_personal' | undefined;
             granularity?: 'hour' | 'day' | 'week' | 'month' | undefined;
             timeZoneOffsetMinutes?: number | undefined;
             includeSeries?: boolean | undefined;
@@ -507,8 +589,9 @@ export type UsageActionInputById = {
             sources?: string[] | undefined;
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
-            metric?: 'tokens' | 'cost' | undefined;
+            metric?: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel' | undefined;
             includeAccounting?: boolean | undefined;
+            includeQuotaHistory?: boolean | undefined;
             includeSessionEvidence?: boolean | undefined;
             includeTranscriptEvidence?: boolean | undefined;
             includeWorkEvidence?: boolean | undefined;
@@ -522,6 +605,1478 @@ export type UsageActionInputById = {
     };
 };
 export type UsageActionResultById = {
+    readonly "usage.recap.deliver": {
+        kind: 'delivered';
+        compose: {
+            kind: 'composed';
+            v: 1;
+            style: 'daybreak' | 'sigil' | 'editorial' | 'glass' | 'holo' | 'skyline' | 'terminal';
+            format: 'square' | 'story' | 'link-preview';
+            selectedFields: ('tokens' | 'activeDays' | 'streak' | 'modelMix' | 'agentMix' | 'cache' | 'rhythm' | 'parallel' | 'night' | 'work' | 'coach' | 'highlights' | 'names' | 'dollars')[];
+            unavailableFields: ('tokens' | 'activeDays' | 'streak' | 'modelMix' | 'agentMix' | 'cache' | 'rhythm' | 'parallel' | 'night' | 'work' | 'coach' | 'highlights' | 'names' | 'dollars')[];
+            period: {
+                startMs: number;
+                endMs: number;
+                timeZoneOffsetMinutes: number;
+            };
+            asOfMs: number | null;
+            coverage: {
+                accounting: {
+                    status: 'unknown' | 'complete' | 'partial';
+                    reasons: ('missing_baseline' | 'counter_discontinuity' | 'ambiguous_overlap' | 'unattributed_model' | 'unpriced_tokens' | 'unknown_source' | 'incomplete_history' | 'ranked_truncation' | 'unknown_token_categories')[];
+                    missingDimensions: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
+                    range: {
+                        complete: boolean;
+                        startMs?: number | undefined;
+                        endMs?: number | undefined;
+                    };
+                    ranked: {
+                        dimension: 'agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine';
+                        totalEntries: number;
+                        returnedEntries: number;
+                        complete: boolean;
+                    }[];
+                } | null;
+                sourceCoverage: {
+                    status: 'unknown' | 'error' | 'partial' | 'available' | 'unsupported' | 'pending' | 'stale' | 'not_loaded';
+                    eventCount: number;
+                    historyComplete: boolean | null;
+                    asOfMs?: number | undefined;
+                }[];
+                sourceStatuses: {
+                    status: 'unknown' | 'error' | 'partial' | 'available' | 'unsupported' | 'pending' | 'stale' | 'not_loaded';
+                    asOfMs?: number | undefined;
+                }[];
+                pending: boolean;
+                night?: {
+                    detailStatus: 'unknown' | 'partial' | 'available';
+                } | undefined;
+                coach?: {
+                    currentness: 'unknown' | 'stale' | 'current';
+                    asOfMs: number | null;
+                    findings: ('unknown' | 'complete' | 'partial')[];
+                } | undefined;
+                intervals?: {
+                    method: 'witnessed_intervals_v1';
+                    status: 'partial' | 'complete_for_supplied_facts';
+                    detailStatus: 'unknown' | 'partial' | 'available';
+                    unknownEndCount: number;
+                    invalidIntervalCount: number;
+                } | undefined;
+            };
+            facts: {
+                tokens?: {
+                    input: number;
+                    output: number;
+                    reasoning: number;
+                    cacheRead: number;
+                    cacheWrite: number;
+                    total: number;
+                } | undefined;
+                activeDays?: number | undefined;
+                streak?: {
+                    longestDays: number;
+                } | undefined;
+                modelMix?: {
+                    tokens: number;
+                    events: number;
+                    name?: string | undefined;
+                }[] | undefined;
+                agentMix?: {
+                    tokens: number;
+                    events: number;
+                    name?: string | undefined;
+                    agentId?: string | undefined;
+                }[] | undefined;
+                cache?: {
+                    readTokens: number;
+                    writeTokens: number;
+                } | undefined;
+                rhythm?: {
+                    calendarDays: {
+                        date: string;
+                        eventCount: number;
+                    }[];
+                    weekdayHourBuckets: {
+                        weekday: number;
+                        hour: number;
+                        eventCount: number;
+                    }[];
+                } | undefined;
+                parallel?: {
+                    sumAgentMs: number;
+                    unionElapsedMs: number;
+                    maximumConcurrency: number;
+                } | undefined;
+                night?: {
+                    startHour: number;
+                    endHour: number;
+                    recordedActivityCount: number | null;
+                    observedBusyMs: number | null;
+                } | undefined;
+                work?: {
+                    linkedOutcomes: number;
+                    allocatedContributions: number;
+                    unallocatedContributions: number;
+                } | undefined;
+                coach?: {
+                    findings: {
+                        detectorId: string;
+                        evidenceCount: number;
+                    }[];
+                } | undefined;
+                highlights?: ({
+                    kind: 'observed_peak';
+                    bucketStartMs: number;
+                    bucketEndMs: number;
+                    tokens: number;
+                } | {
+                    kind: 'linked_outcomes';
+                    count: number;
+                })[] | undefined;
+                dollars?: {
+                    basis: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
+                    selected: {
+                        kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'mixed';
+                        currency: string;
+                        amountUsd: number;
+                    } | null;
+                    facts: {
+                        kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'unpriced';
+                        currency: string;
+                        amountUsd: number | null;
+                        tokens: {
+                            input: number;
+                            output: number;
+                            reasoning: number;
+                            cacheRead: number;
+                            cacheWrite: number;
+                            total: number;
+                        };
+                        eventCount: number;
+                        asOfMs: number;
+                        complete: boolean;
+                    }[];
+                } | undefined;
+            };
+            source?: 'public_profile' | undefined;
+            publicSnapshot?: {
+                v: 1;
+                computedAtMs: number;
+                period: {
+                    startMs: number;
+                    endMs: number;
+                    timeZoneOffsetMinutes: number;
+                };
+                coverage: {
+                    status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                    method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                };
+                fieldCoverage: Partial<Record<'calendar' | 'projects' | 'tokens' | 'peakParallel' | 'activeDays' | 'agentMix' | 'highlights' | 'name' | 'agentActiveDays' | 'weeklyAgentMix' | 'weeklyPeakParallel' | 'dayNightActivity' | 'machineKinds' | 'footprint' | 'avatar' | 'bio' | 'links' | 'since' | 'agentTime' | 'mergedPrs' | 'currentStreak' | 'bestStreak' | 'sourceSplit' | 'punch' | 'sessionDurations', {
+                    status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                    method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                }>>;
+                facts: {
+                    tokens?: number | undefined;
+                    activeDays?: number | undefined;
+                    agentTimeMs?: number | undefined;
+                    mergedPrs?: number | undefined;
+                    currentStreakDays?: number | undefined;
+                    bestStreakDays?: number | undefined;
+                    peakParallel?: number | undefined;
+                    calendar?: {
+                        date: string;
+                        level: 0 | 4 | 1 | 2 | 3 | null;
+                    }[] | undefined;
+                    agentMix?: {
+                        agentId: string;
+                        share: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                        tokens?: number | undefined;
+                    }[] | undefined;
+                    sourceSplit?: {
+                        execution: 'unknown' | 'happier' | 'outside';
+                        share: number;
+                        tokens?: number | undefined;
+                    }[] | undefined;
+                    punch?: {
+                        weekday: number;
+                        hour: number;
+                        level: 0 | 4 | 1 | 2 | 3 | null;
+                    }[] | undefined;
+                    highlights?: {
+                        kind: 'merged_prs' | 'peak_parallel' | 'active_days';
+                        count: number;
+                    }[] | undefined;
+                    footprint?: {
+                        status: 'insufficient_basis';
+                        reason: 'no_applicable_versioned_method';
+                    } | undefined;
+                    agentActiveDays?: {
+                        agentId: string;
+                        days: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    }[] | undefined;
+                    weeklyAgentMix?: {
+                        mix: {
+                            share: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                            agentId: string;
+                        }[];
+                        startMs: number;
+                        endMs: number;
+                    }[] | undefined;
+                    weeklyPeakParallel?: {
+                        peak: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                        startMs: number;
+                        endMs: number;
+                    }[] | undefined;
+                    sessionDurations?: {
+                        agentId: string;
+                        durationMs: number;
+                    }[] | undefined;
+                    machineKinds?: {
+                        kind: string;
+                        count: number;
+                        agentTimeShare: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    }[] | undefined;
+                    dayNightActivity?: {
+                        window: {
+                            startHour: number;
+                            endHour: number;
+                        };
+                        dayShare: number;
+                        nightShare: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    } | undefined;
+                };
+                lenses?: {
+                    execution: 'happier' | 'outside';
+                    facts: {
+                        tokens?: number | undefined;
+                        activeDays?: number | undefined;
+                        agentTimeMs?: number | undefined;
+                        mergedPrs?: number | undefined;
+                        currentStreakDays?: number | undefined;
+                        bestStreakDays?: number | undefined;
+                        peakParallel?: number | undefined;
+                        calendar?: {
+                            date: string;
+                            level: 0 | 4 | 1 | 2 | 3 | null;
+                        }[] | undefined;
+                        agentMix?: {
+                            agentId: string;
+                            share: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                            tokens?: number | undefined;
+                        }[] | undefined;
+                        sourceSplit?: {
+                            execution: 'unknown' | 'happier' | 'outside';
+                            share: number;
+                            tokens?: number | undefined;
+                        }[] | undefined;
+                        punch?: {
+                            weekday: number;
+                            hour: number;
+                            level: 0 | 4 | 1 | 2 | 3 | null;
+                        }[] | undefined;
+                        highlights?: {
+                            kind: 'merged_prs' | 'peak_parallel' | 'active_days';
+                            count: number;
+                        }[] | undefined;
+                        footprint?: {
+                            status: 'insufficient_basis';
+                            reason: 'no_applicable_versioned_method';
+                        } | undefined;
+                        agentActiveDays?: {
+                            agentId: string;
+                            days: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                        }[] | undefined;
+                        weeklyAgentMix?: {
+                            mix: {
+                                share: number;
+                                coverage: {
+                                    status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                    method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                                };
+                                agentId: string;
+                            }[];
+                            startMs: number;
+                            endMs: number;
+                        }[] | undefined;
+                        weeklyPeakParallel?: {
+                            peak: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                            startMs: number;
+                            endMs: number;
+                        }[] | undefined;
+                        sessionDurations?: {
+                            agentId: string;
+                            durationMs: number;
+                        }[] | undefined;
+                        machineKinds?: {
+                            kind: string;
+                            count: number;
+                            agentTimeShare: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                        }[] | undefined;
+                        dayNightActivity?: {
+                            window: {
+                                startHour: number;
+                                endHour: number;
+                            };
+                            dayShare: number;
+                            nightShare: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                        } | undefined;
+                    };
+                }[] | undefined;
+            } | undefined;
+        } | {
+            kind: 'unavailable';
+            reason: 'query_mismatch' | 'accounting_unavailable' | 'period_unavailable' | 'public_profile_source_unavailable' | 'public_profile_unavailable';
+        };
+    } | {
+        kind: 'cancelled';
+        compose: {
+            kind: 'composed';
+            v: 1;
+            style: 'daybreak' | 'sigil' | 'editorial' | 'glass' | 'holo' | 'skyline' | 'terminal';
+            format: 'square' | 'story' | 'link-preview';
+            selectedFields: ('tokens' | 'activeDays' | 'streak' | 'modelMix' | 'agentMix' | 'cache' | 'rhythm' | 'parallel' | 'night' | 'work' | 'coach' | 'highlights' | 'names' | 'dollars')[];
+            unavailableFields: ('tokens' | 'activeDays' | 'streak' | 'modelMix' | 'agentMix' | 'cache' | 'rhythm' | 'parallel' | 'night' | 'work' | 'coach' | 'highlights' | 'names' | 'dollars')[];
+            period: {
+                startMs: number;
+                endMs: number;
+                timeZoneOffsetMinutes: number;
+            };
+            asOfMs: number | null;
+            coverage: {
+                accounting: {
+                    status: 'unknown' | 'complete' | 'partial';
+                    reasons: ('missing_baseline' | 'counter_discontinuity' | 'ambiguous_overlap' | 'unattributed_model' | 'unpriced_tokens' | 'unknown_source' | 'incomplete_history' | 'ranked_truncation' | 'unknown_token_categories')[];
+                    missingDimensions: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
+                    range: {
+                        complete: boolean;
+                        startMs?: number | undefined;
+                        endMs?: number | undefined;
+                    };
+                    ranked: {
+                        dimension: 'agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine';
+                        totalEntries: number;
+                        returnedEntries: number;
+                        complete: boolean;
+                    }[];
+                } | null;
+                sourceCoverage: {
+                    status: 'unknown' | 'error' | 'partial' | 'available' | 'unsupported' | 'pending' | 'stale' | 'not_loaded';
+                    eventCount: number;
+                    historyComplete: boolean | null;
+                    asOfMs?: number | undefined;
+                }[];
+                sourceStatuses: {
+                    status: 'unknown' | 'error' | 'partial' | 'available' | 'unsupported' | 'pending' | 'stale' | 'not_loaded';
+                    asOfMs?: number | undefined;
+                }[];
+                pending: boolean;
+                night?: {
+                    detailStatus: 'unknown' | 'partial' | 'available';
+                } | undefined;
+                coach?: {
+                    currentness: 'unknown' | 'stale' | 'current';
+                    asOfMs: number | null;
+                    findings: ('unknown' | 'complete' | 'partial')[];
+                } | undefined;
+                intervals?: {
+                    method: 'witnessed_intervals_v1';
+                    status: 'partial' | 'complete_for_supplied_facts';
+                    detailStatus: 'unknown' | 'partial' | 'available';
+                    unknownEndCount: number;
+                    invalidIntervalCount: number;
+                } | undefined;
+            };
+            facts: {
+                tokens?: {
+                    input: number;
+                    output: number;
+                    reasoning: number;
+                    cacheRead: number;
+                    cacheWrite: number;
+                    total: number;
+                } | undefined;
+                activeDays?: number | undefined;
+                streak?: {
+                    longestDays: number;
+                } | undefined;
+                modelMix?: {
+                    tokens: number;
+                    events: number;
+                    name?: string | undefined;
+                }[] | undefined;
+                agentMix?: {
+                    tokens: number;
+                    events: number;
+                    name?: string | undefined;
+                    agentId?: string | undefined;
+                }[] | undefined;
+                cache?: {
+                    readTokens: number;
+                    writeTokens: number;
+                } | undefined;
+                rhythm?: {
+                    calendarDays: {
+                        date: string;
+                        eventCount: number;
+                    }[];
+                    weekdayHourBuckets: {
+                        weekday: number;
+                        hour: number;
+                        eventCount: number;
+                    }[];
+                } | undefined;
+                parallel?: {
+                    sumAgentMs: number;
+                    unionElapsedMs: number;
+                    maximumConcurrency: number;
+                } | undefined;
+                night?: {
+                    startHour: number;
+                    endHour: number;
+                    recordedActivityCount: number | null;
+                    observedBusyMs: number | null;
+                } | undefined;
+                work?: {
+                    linkedOutcomes: number;
+                    allocatedContributions: number;
+                    unallocatedContributions: number;
+                } | undefined;
+                coach?: {
+                    findings: {
+                        detectorId: string;
+                        evidenceCount: number;
+                    }[];
+                } | undefined;
+                highlights?: ({
+                    kind: 'observed_peak';
+                    bucketStartMs: number;
+                    bucketEndMs: number;
+                    tokens: number;
+                } | {
+                    kind: 'linked_outcomes';
+                    count: number;
+                })[] | undefined;
+                dollars?: {
+                    basis: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
+                    selected: {
+                        kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'mixed';
+                        currency: string;
+                        amountUsd: number;
+                    } | null;
+                    facts: {
+                        kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'unpriced';
+                        currency: string;
+                        amountUsd: number | null;
+                        tokens: {
+                            input: number;
+                            output: number;
+                            reasoning: number;
+                            cacheRead: number;
+                            cacheWrite: number;
+                            total: number;
+                        };
+                        eventCount: number;
+                        asOfMs: number;
+                        complete: boolean;
+                    }[];
+                } | undefined;
+            };
+            source?: 'public_profile' | undefined;
+            publicSnapshot?: {
+                v: 1;
+                computedAtMs: number;
+                period: {
+                    startMs: number;
+                    endMs: number;
+                    timeZoneOffsetMinutes: number;
+                };
+                coverage: {
+                    status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                    method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                };
+                fieldCoverage: Partial<Record<'calendar' | 'projects' | 'tokens' | 'peakParallel' | 'activeDays' | 'agentMix' | 'highlights' | 'name' | 'agentActiveDays' | 'weeklyAgentMix' | 'weeklyPeakParallel' | 'dayNightActivity' | 'machineKinds' | 'footprint' | 'avatar' | 'bio' | 'links' | 'since' | 'agentTime' | 'mergedPrs' | 'currentStreak' | 'bestStreak' | 'sourceSplit' | 'punch' | 'sessionDurations', {
+                    status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                    method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                }>>;
+                facts: {
+                    tokens?: number | undefined;
+                    activeDays?: number | undefined;
+                    agentTimeMs?: number | undefined;
+                    mergedPrs?: number | undefined;
+                    currentStreakDays?: number | undefined;
+                    bestStreakDays?: number | undefined;
+                    peakParallel?: number | undefined;
+                    calendar?: {
+                        date: string;
+                        level: 0 | 4 | 1 | 2 | 3 | null;
+                    }[] | undefined;
+                    agentMix?: {
+                        agentId: string;
+                        share: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                        tokens?: number | undefined;
+                    }[] | undefined;
+                    sourceSplit?: {
+                        execution: 'unknown' | 'happier' | 'outside';
+                        share: number;
+                        tokens?: number | undefined;
+                    }[] | undefined;
+                    punch?: {
+                        weekday: number;
+                        hour: number;
+                        level: 0 | 4 | 1 | 2 | 3 | null;
+                    }[] | undefined;
+                    highlights?: {
+                        kind: 'merged_prs' | 'peak_parallel' | 'active_days';
+                        count: number;
+                    }[] | undefined;
+                    footprint?: {
+                        status: 'insufficient_basis';
+                        reason: 'no_applicable_versioned_method';
+                    } | undefined;
+                    agentActiveDays?: {
+                        agentId: string;
+                        days: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    }[] | undefined;
+                    weeklyAgentMix?: {
+                        mix: {
+                            share: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                            agentId: string;
+                        }[];
+                        startMs: number;
+                        endMs: number;
+                    }[] | undefined;
+                    weeklyPeakParallel?: {
+                        peak: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                        startMs: number;
+                        endMs: number;
+                    }[] | undefined;
+                    sessionDurations?: {
+                        agentId: string;
+                        durationMs: number;
+                    }[] | undefined;
+                    machineKinds?: {
+                        kind: string;
+                        count: number;
+                        agentTimeShare: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    }[] | undefined;
+                    dayNightActivity?: {
+                        window: {
+                            startHour: number;
+                            endHour: number;
+                        };
+                        dayShare: number;
+                        nightShare: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    } | undefined;
+                };
+                lenses?: {
+                    execution: 'happier' | 'outside';
+                    facts: {
+                        tokens?: number | undefined;
+                        activeDays?: number | undefined;
+                        agentTimeMs?: number | undefined;
+                        mergedPrs?: number | undefined;
+                        currentStreakDays?: number | undefined;
+                        bestStreakDays?: number | undefined;
+                        peakParallel?: number | undefined;
+                        calendar?: {
+                            date: string;
+                            level: 0 | 4 | 1 | 2 | 3 | null;
+                        }[] | undefined;
+                        agentMix?: {
+                            agentId: string;
+                            share: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                            tokens?: number | undefined;
+                        }[] | undefined;
+                        sourceSplit?: {
+                            execution: 'unknown' | 'happier' | 'outside';
+                            share: number;
+                            tokens?: number | undefined;
+                        }[] | undefined;
+                        punch?: {
+                            weekday: number;
+                            hour: number;
+                            level: 0 | 4 | 1 | 2 | 3 | null;
+                        }[] | undefined;
+                        highlights?: {
+                            kind: 'merged_prs' | 'peak_parallel' | 'active_days';
+                            count: number;
+                        }[] | undefined;
+                        footprint?: {
+                            status: 'insufficient_basis';
+                            reason: 'no_applicable_versioned_method';
+                        } | undefined;
+                        agentActiveDays?: {
+                            agentId: string;
+                            days: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                        }[] | undefined;
+                        weeklyAgentMix?: {
+                            mix: {
+                                share: number;
+                                coverage: {
+                                    status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                    method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                                };
+                                agentId: string;
+                            }[];
+                            startMs: number;
+                            endMs: number;
+                        }[] | undefined;
+                        weeklyPeakParallel?: {
+                            peak: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                            startMs: number;
+                            endMs: number;
+                        }[] | undefined;
+                        sessionDurations?: {
+                            agentId: string;
+                            durationMs: number;
+                        }[] | undefined;
+                        machineKinds?: {
+                            kind: string;
+                            count: number;
+                            agentTimeShare: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                        }[] | undefined;
+                        dayNightActivity?: {
+                            window: {
+                                startHour: number;
+                                endHour: number;
+                            };
+                            dayShare: number;
+                            nightShare: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                        } | undefined;
+                    };
+                }[] | undefined;
+            } | undefined;
+        } | {
+            kind: 'unavailable';
+            reason: 'query_mismatch' | 'accounting_unavailable' | 'period_unavailable' | 'public_profile_source_unavailable' | 'public_profile_unavailable';
+        };
+    } | {
+        kind: 'unavailable';
+        compose: {
+            kind: 'composed';
+            v: 1;
+            style: 'daybreak' | 'sigil' | 'editorial' | 'glass' | 'holo' | 'skyline' | 'terminal';
+            format: 'square' | 'story' | 'link-preview';
+            selectedFields: ('tokens' | 'activeDays' | 'streak' | 'modelMix' | 'agentMix' | 'cache' | 'rhythm' | 'parallel' | 'night' | 'work' | 'coach' | 'highlights' | 'names' | 'dollars')[];
+            unavailableFields: ('tokens' | 'activeDays' | 'streak' | 'modelMix' | 'agentMix' | 'cache' | 'rhythm' | 'parallel' | 'night' | 'work' | 'coach' | 'highlights' | 'names' | 'dollars')[];
+            period: {
+                startMs: number;
+                endMs: number;
+                timeZoneOffsetMinutes: number;
+            };
+            asOfMs: number | null;
+            coverage: {
+                accounting: {
+                    status: 'unknown' | 'complete' | 'partial';
+                    reasons: ('missing_baseline' | 'counter_discontinuity' | 'ambiguous_overlap' | 'unattributed_model' | 'unpriced_tokens' | 'unknown_source' | 'incomplete_history' | 'ranked_truncation' | 'unknown_token_categories')[];
+                    missingDimensions: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
+                    range: {
+                        complete: boolean;
+                        startMs?: number | undefined;
+                        endMs?: number | undefined;
+                    };
+                    ranked: {
+                        dimension: 'agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine';
+                        totalEntries: number;
+                        returnedEntries: number;
+                        complete: boolean;
+                    }[];
+                } | null;
+                sourceCoverage: {
+                    status: 'unknown' | 'error' | 'partial' | 'available' | 'unsupported' | 'pending' | 'stale' | 'not_loaded';
+                    eventCount: number;
+                    historyComplete: boolean | null;
+                    asOfMs?: number | undefined;
+                }[];
+                sourceStatuses: {
+                    status: 'unknown' | 'error' | 'partial' | 'available' | 'unsupported' | 'pending' | 'stale' | 'not_loaded';
+                    asOfMs?: number | undefined;
+                }[];
+                pending: boolean;
+                night?: {
+                    detailStatus: 'unknown' | 'partial' | 'available';
+                } | undefined;
+                coach?: {
+                    currentness: 'unknown' | 'stale' | 'current';
+                    asOfMs: number | null;
+                    findings: ('unknown' | 'complete' | 'partial')[];
+                } | undefined;
+                intervals?: {
+                    method: 'witnessed_intervals_v1';
+                    status: 'partial' | 'complete_for_supplied_facts';
+                    detailStatus: 'unknown' | 'partial' | 'available';
+                    unknownEndCount: number;
+                    invalidIntervalCount: number;
+                } | undefined;
+            };
+            facts: {
+                tokens?: {
+                    input: number;
+                    output: number;
+                    reasoning: number;
+                    cacheRead: number;
+                    cacheWrite: number;
+                    total: number;
+                } | undefined;
+                activeDays?: number | undefined;
+                streak?: {
+                    longestDays: number;
+                } | undefined;
+                modelMix?: {
+                    tokens: number;
+                    events: number;
+                    name?: string | undefined;
+                }[] | undefined;
+                agentMix?: {
+                    tokens: number;
+                    events: number;
+                    name?: string | undefined;
+                    agentId?: string | undefined;
+                }[] | undefined;
+                cache?: {
+                    readTokens: number;
+                    writeTokens: number;
+                } | undefined;
+                rhythm?: {
+                    calendarDays: {
+                        date: string;
+                        eventCount: number;
+                    }[];
+                    weekdayHourBuckets: {
+                        weekday: number;
+                        hour: number;
+                        eventCount: number;
+                    }[];
+                } | undefined;
+                parallel?: {
+                    sumAgentMs: number;
+                    unionElapsedMs: number;
+                    maximumConcurrency: number;
+                } | undefined;
+                night?: {
+                    startHour: number;
+                    endHour: number;
+                    recordedActivityCount: number | null;
+                    observedBusyMs: number | null;
+                } | undefined;
+                work?: {
+                    linkedOutcomes: number;
+                    allocatedContributions: number;
+                    unallocatedContributions: number;
+                } | undefined;
+                coach?: {
+                    findings: {
+                        detectorId: string;
+                        evidenceCount: number;
+                    }[];
+                } | undefined;
+                highlights?: ({
+                    kind: 'observed_peak';
+                    bucketStartMs: number;
+                    bucketEndMs: number;
+                    tokens: number;
+                } | {
+                    kind: 'linked_outcomes';
+                    count: number;
+                })[] | undefined;
+                dollars?: {
+                    basis: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
+                    selected: {
+                        kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'mixed';
+                        currency: string;
+                        amountUsd: number;
+                    } | null;
+                    facts: {
+                        kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'unpriced';
+                        currency: string;
+                        amountUsd: number | null;
+                        tokens: {
+                            input: number;
+                            output: number;
+                            reasoning: number;
+                            cacheRead: number;
+                            cacheWrite: number;
+                            total: number;
+                        };
+                        eventCount: number;
+                        asOfMs: number;
+                        complete: boolean;
+                    }[];
+                } | undefined;
+            };
+            source?: 'public_profile' | undefined;
+            publicSnapshot?: {
+                v: 1;
+                computedAtMs: number;
+                period: {
+                    startMs: number;
+                    endMs: number;
+                    timeZoneOffsetMinutes: number;
+                };
+                coverage: {
+                    status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                    method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                };
+                fieldCoverage: Partial<Record<'calendar' | 'projects' | 'tokens' | 'peakParallel' | 'activeDays' | 'agentMix' | 'highlights' | 'name' | 'agentActiveDays' | 'weeklyAgentMix' | 'weeklyPeakParallel' | 'dayNightActivity' | 'machineKinds' | 'footprint' | 'avatar' | 'bio' | 'links' | 'since' | 'agentTime' | 'mergedPrs' | 'currentStreak' | 'bestStreak' | 'sourceSplit' | 'punch' | 'sessionDurations', {
+                    status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                    method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                }>>;
+                facts: {
+                    tokens?: number | undefined;
+                    activeDays?: number | undefined;
+                    agentTimeMs?: number | undefined;
+                    mergedPrs?: number | undefined;
+                    currentStreakDays?: number | undefined;
+                    bestStreakDays?: number | undefined;
+                    peakParallel?: number | undefined;
+                    calendar?: {
+                        date: string;
+                        level: 0 | 4 | 1 | 2 | 3 | null;
+                    }[] | undefined;
+                    agentMix?: {
+                        agentId: string;
+                        share: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                        tokens?: number | undefined;
+                    }[] | undefined;
+                    sourceSplit?: {
+                        execution: 'unknown' | 'happier' | 'outside';
+                        share: number;
+                        tokens?: number | undefined;
+                    }[] | undefined;
+                    punch?: {
+                        weekday: number;
+                        hour: number;
+                        level: 0 | 4 | 1 | 2 | 3 | null;
+                    }[] | undefined;
+                    highlights?: {
+                        kind: 'merged_prs' | 'peak_parallel' | 'active_days';
+                        count: number;
+                    }[] | undefined;
+                    footprint?: {
+                        status: 'insufficient_basis';
+                        reason: 'no_applicable_versioned_method';
+                    } | undefined;
+                    agentActiveDays?: {
+                        agentId: string;
+                        days: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    }[] | undefined;
+                    weeklyAgentMix?: {
+                        mix: {
+                            share: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                            agentId: string;
+                        }[];
+                        startMs: number;
+                        endMs: number;
+                    }[] | undefined;
+                    weeklyPeakParallel?: {
+                        peak: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                        startMs: number;
+                        endMs: number;
+                    }[] | undefined;
+                    sessionDurations?: {
+                        agentId: string;
+                        durationMs: number;
+                    }[] | undefined;
+                    machineKinds?: {
+                        kind: string;
+                        count: number;
+                        agentTimeShare: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    }[] | undefined;
+                    dayNightActivity?: {
+                        window: {
+                            startHour: number;
+                            endHour: number;
+                        };
+                        dayShare: number;
+                        nightShare: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    } | undefined;
+                };
+                lenses?: {
+                    execution: 'happier' | 'outside';
+                    facts: {
+                        tokens?: number | undefined;
+                        activeDays?: number | undefined;
+                        agentTimeMs?: number | undefined;
+                        mergedPrs?: number | undefined;
+                        currentStreakDays?: number | undefined;
+                        bestStreakDays?: number | undefined;
+                        peakParallel?: number | undefined;
+                        calendar?: {
+                            date: string;
+                            level: 0 | 4 | 1 | 2 | 3 | null;
+                        }[] | undefined;
+                        agentMix?: {
+                            agentId: string;
+                            share: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                            tokens?: number | undefined;
+                        }[] | undefined;
+                        sourceSplit?: {
+                            execution: 'unknown' | 'happier' | 'outside';
+                            share: number;
+                            tokens?: number | undefined;
+                        }[] | undefined;
+                        punch?: {
+                            weekday: number;
+                            hour: number;
+                            level: 0 | 4 | 1 | 2 | 3 | null;
+                        }[] | undefined;
+                        highlights?: {
+                            kind: 'merged_prs' | 'peak_parallel' | 'active_days';
+                            count: number;
+                        }[] | undefined;
+                        footprint?: {
+                            status: 'insufficient_basis';
+                            reason: 'no_applicable_versioned_method';
+                        } | undefined;
+                        agentActiveDays?: {
+                            agentId: string;
+                            days: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                        }[] | undefined;
+                        weeklyAgentMix?: {
+                            mix: {
+                                share: number;
+                                coverage: {
+                                    status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                    method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                                };
+                                agentId: string;
+                            }[];
+                            startMs: number;
+                            endMs: number;
+                        }[] | undefined;
+                        weeklyPeakParallel?: {
+                            peak: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                            startMs: number;
+                            endMs: number;
+                        }[] | undefined;
+                        sessionDurations?: {
+                            agentId: string;
+                            durationMs: number;
+                        }[] | undefined;
+                        machineKinds?: {
+                            kind: string;
+                            count: number;
+                            agentTimeShare: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                        }[] | undefined;
+                        dayNightActivity?: {
+                            window: {
+                                startHour: number;
+                                endHour: number;
+                            };
+                            dayShare: number;
+                            nightShare: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                        } | undefined;
+                    };
+                }[] | undefined;
+            } | undefined;
+        } | {
+            kind: 'unavailable';
+            reason: 'query_mismatch' | 'accounting_unavailable' | 'period_unavailable' | 'public_profile_source_unavailable' | 'public_profile_unavailable';
+        };
+        reason: 'render_target_unavailable' | 'render_failed' | 'compose_unavailable' | 'delivery_target_unavailable' | 'clipboard_unavailable';
+    } | {
+        kind: 'failed';
+        compose: {
+            kind: 'composed';
+            v: 1;
+            style: 'daybreak' | 'sigil' | 'editorial' | 'glass' | 'holo' | 'skyline' | 'terminal';
+            format: 'square' | 'story' | 'link-preview';
+            selectedFields: ('tokens' | 'activeDays' | 'streak' | 'modelMix' | 'agentMix' | 'cache' | 'rhythm' | 'parallel' | 'night' | 'work' | 'coach' | 'highlights' | 'names' | 'dollars')[];
+            unavailableFields: ('tokens' | 'activeDays' | 'streak' | 'modelMix' | 'agentMix' | 'cache' | 'rhythm' | 'parallel' | 'night' | 'work' | 'coach' | 'highlights' | 'names' | 'dollars')[];
+            period: {
+                startMs: number;
+                endMs: number;
+                timeZoneOffsetMinutes: number;
+            };
+            asOfMs: number | null;
+            coverage: {
+                accounting: {
+                    status: 'unknown' | 'complete' | 'partial';
+                    reasons: ('missing_baseline' | 'counter_discontinuity' | 'ambiguous_overlap' | 'unattributed_model' | 'unpriced_tokens' | 'unknown_source' | 'incomplete_history' | 'ranked_truncation' | 'unknown_token_categories')[];
+                    missingDimensions: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
+                    range: {
+                        complete: boolean;
+                        startMs?: number | undefined;
+                        endMs?: number | undefined;
+                    };
+                    ranked: {
+                        dimension: 'agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine';
+                        totalEntries: number;
+                        returnedEntries: number;
+                        complete: boolean;
+                    }[];
+                } | null;
+                sourceCoverage: {
+                    status: 'unknown' | 'error' | 'partial' | 'available' | 'unsupported' | 'pending' | 'stale' | 'not_loaded';
+                    eventCount: number;
+                    historyComplete: boolean | null;
+                    asOfMs?: number | undefined;
+                }[];
+                sourceStatuses: {
+                    status: 'unknown' | 'error' | 'partial' | 'available' | 'unsupported' | 'pending' | 'stale' | 'not_loaded';
+                    asOfMs?: number | undefined;
+                }[];
+                pending: boolean;
+                night?: {
+                    detailStatus: 'unknown' | 'partial' | 'available';
+                } | undefined;
+                coach?: {
+                    currentness: 'unknown' | 'stale' | 'current';
+                    asOfMs: number | null;
+                    findings: ('unknown' | 'complete' | 'partial')[];
+                } | undefined;
+                intervals?: {
+                    method: 'witnessed_intervals_v1';
+                    status: 'partial' | 'complete_for_supplied_facts';
+                    detailStatus: 'unknown' | 'partial' | 'available';
+                    unknownEndCount: number;
+                    invalidIntervalCount: number;
+                } | undefined;
+            };
+            facts: {
+                tokens?: {
+                    input: number;
+                    output: number;
+                    reasoning: number;
+                    cacheRead: number;
+                    cacheWrite: number;
+                    total: number;
+                } | undefined;
+                activeDays?: number | undefined;
+                streak?: {
+                    longestDays: number;
+                } | undefined;
+                modelMix?: {
+                    tokens: number;
+                    events: number;
+                    name?: string | undefined;
+                }[] | undefined;
+                agentMix?: {
+                    tokens: number;
+                    events: number;
+                    name?: string | undefined;
+                    agentId?: string | undefined;
+                }[] | undefined;
+                cache?: {
+                    readTokens: number;
+                    writeTokens: number;
+                } | undefined;
+                rhythm?: {
+                    calendarDays: {
+                        date: string;
+                        eventCount: number;
+                    }[];
+                    weekdayHourBuckets: {
+                        weekday: number;
+                        hour: number;
+                        eventCount: number;
+                    }[];
+                } | undefined;
+                parallel?: {
+                    sumAgentMs: number;
+                    unionElapsedMs: number;
+                    maximumConcurrency: number;
+                } | undefined;
+                night?: {
+                    startHour: number;
+                    endHour: number;
+                    recordedActivityCount: number | null;
+                    observedBusyMs: number | null;
+                } | undefined;
+                work?: {
+                    linkedOutcomes: number;
+                    allocatedContributions: number;
+                    unallocatedContributions: number;
+                } | undefined;
+                coach?: {
+                    findings: {
+                        detectorId: string;
+                        evidenceCount: number;
+                    }[];
+                } | undefined;
+                highlights?: ({
+                    kind: 'observed_peak';
+                    bucketStartMs: number;
+                    bucketEndMs: number;
+                    tokens: number;
+                } | {
+                    kind: 'linked_outcomes';
+                    count: number;
+                })[] | undefined;
+                dollars?: {
+                    basis: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
+                    selected: {
+                        kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'mixed';
+                        currency: string;
+                        amountUsd: number;
+                    } | null;
+                    facts: {
+                        kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'unpriced';
+                        currency: string;
+                        amountUsd: number | null;
+                        tokens: {
+                            input: number;
+                            output: number;
+                            reasoning: number;
+                            cacheRead: number;
+                            cacheWrite: number;
+                            total: number;
+                        };
+                        eventCount: number;
+                        asOfMs: number;
+                        complete: boolean;
+                    }[];
+                } | undefined;
+            };
+            source?: 'public_profile' | undefined;
+            publicSnapshot?: {
+                v: 1;
+                computedAtMs: number;
+                period: {
+                    startMs: number;
+                    endMs: number;
+                    timeZoneOffsetMinutes: number;
+                };
+                coverage: {
+                    status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                    method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                };
+                fieldCoverage: Partial<Record<'calendar' | 'projects' | 'tokens' | 'peakParallel' | 'activeDays' | 'agentMix' | 'highlights' | 'name' | 'agentActiveDays' | 'weeklyAgentMix' | 'weeklyPeakParallel' | 'dayNightActivity' | 'machineKinds' | 'footprint' | 'avatar' | 'bio' | 'links' | 'since' | 'agentTime' | 'mergedPrs' | 'currentStreak' | 'bestStreak' | 'sourceSplit' | 'punch' | 'sessionDurations', {
+                    status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                    method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                }>>;
+                facts: {
+                    tokens?: number | undefined;
+                    activeDays?: number | undefined;
+                    agentTimeMs?: number | undefined;
+                    mergedPrs?: number | undefined;
+                    currentStreakDays?: number | undefined;
+                    bestStreakDays?: number | undefined;
+                    peakParallel?: number | undefined;
+                    calendar?: {
+                        date: string;
+                        level: 0 | 4 | 1 | 2 | 3 | null;
+                    }[] | undefined;
+                    agentMix?: {
+                        agentId: string;
+                        share: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                        tokens?: number | undefined;
+                    }[] | undefined;
+                    sourceSplit?: {
+                        execution: 'unknown' | 'happier' | 'outside';
+                        share: number;
+                        tokens?: number | undefined;
+                    }[] | undefined;
+                    punch?: {
+                        weekday: number;
+                        hour: number;
+                        level: 0 | 4 | 1 | 2 | 3 | null;
+                    }[] | undefined;
+                    highlights?: {
+                        kind: 'merged_prs' | 'peak_parallel' | 'active_days';
+                        count: number;
+                    }[] | undefined;
+                    footprint?: {
+                        status: 'insufficient_basis';
+                        reason: 'no_applicable_versioned_method';
+                    } | undefined;
+                    agentActiveDays?: {
+                        agentId: string;
+                        days: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    }[] | undefined;
+                    weeklyAgentMix?: {
+                        mix: {
+                            share: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                            agentId: string;
+                        }[];
+                        startMs: number;
+                        endMs: number;
+                    }[] | undefined;
+                    weeklyPeakParallel?: {
+                        peak: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                        startMs: number;
+                        endMs: number;
+                    }[] | undefined;
+                    sessionDurations?: {
+                        agentId: string;
+                        durationMs: number;
+                    }[] | undefined;
+                    machineKinds?: {
+                        kind: string;
+                        count: number;
+                        agentTimeShare: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    }[] | undefined;
+                    dayNightActivity?: {
+                        window: {
+                            startHour: number;
+                            endHour: number;
+                        };
+                        dayShare: number;
+                        nightShare: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    } | undefined;
+                };
+                lenses?: {
+                    execution: 'happier' | 'outside';
+                    facts: {
+                        tokens?: number | undefined;
+                        activeDays?: number | undefined;
+                        agentTimeMs?: number | undefined;
+                        mergedPrs?: number | undefined;
+                        currentStreakDays?: number | undefined;
+                        bestStreakDays?: number | undefined;
+                        peakParallel?: number | undefined;
+                        calendar?: {
+                            date: string;
+                            level: 0 | 4 | 1 | 2 | 3 | null;
+                        }[] | undefined;
+                        agentMix?: {
+                            agentId: string;
+                            share: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                            tokens?: number | undefined;
+                        }[] | undefined;
+                        sourceSplit?: {
+                            execution: 'unknown' | 'happier' | 'outside';
+                            share: number;
+                            tokens?: number | undefined;
+                        }[] | undefined;
+                        punch?: {
+                            weekday: number;
+                            hour: number;
+                            level: 0 | 4 | 1 | 2 | 3 | null;
+                        }[] | undefined;
+                        highlights?: {
+                            kind: 'merged_prs' | 'peak_parallel' | 'active_days';
+                            count: number;
+                        }[] | undefined;
+                        footprint?: {
+                            status: 'insufficient_basis';
+                            reason: 'no_applicable_versioned_method';
+                        } | undefined;
+                        agentActiveDays?: {
+                            agentId: string;
+                            days: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                        }[] | undefined;
+                        weeklyAgentMix?: {
+                            mix: {
+                                share: number;
+                                coverage: {
+                                    status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                    method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                                };
+                                agentId: string;
+                            }[];
+                            startMs: number;
+                            endMs: number;
+                        }[] | undefined;
+                        weeklyPeakParallel?: {
+                            peak: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                            startMs: number;
+                            endMs: number;
+                        }[] | undefined;
+                        sessionDurations?: {
+                            agentId: string;
+                            durationMs: number;
+                        }[] | undefined;
+                        machineKinds?: {
+                            kind: string;
+                            count: number;
+                            agentTimeShare: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                        }[] | undefined;
+                        dayNightActivity?: {
+                            window: {
+                                startHour: number;
+                                endHour: number;
+                            };
+                            dayShare: number;
+                            nightShare: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                        } | undefined;
+                    };
+                }[] | undefined;
+            } | undefined;
+        } | {
+            kind: 'unavailable';
+            reason: 'query_mismatch' | 'accounting_unavailable' | 'period_unavailable' | 'public_profile_source_unavailable' | 'public_profile_unavailable';
+        };
+        reason: 'delivery_failed' | 'outcome_unobservable';
+        handoff?: 'presented' | undefined;
+    };
     readonly "usage.prices.get": {
         v: 1;
         models: Record<string, {
@@ -724,9 +2279,218 @@ export type UsageActionResultById = {
                     }[];
                 } | undefined;
             };
+            source?: 'public_profile' | undefined;
+            publicSnapshot?: {
+                v: 1;
+                computedAtMs: number;
+                period: {
+                    startMs: number;
+                    endMs: number;
+                    timeZoneOffsetMinutes: number;
+                };
+                coverage: {
+                    status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                    method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                };
+                fieldCoverage: Partial<Record<'calendar' | 'projects' | 'tokens' | 'peakParallel' | 'activeDays' | 'agentMix' | 'highlights' | 'name' | 'agentActiveDays' | 'weeklyAgentMix' | 'weeklyPeakParallel' | 'dayNightActivity' | 'machineKinds' | 'footprint' | 'avatar' | 'bio' | 'links' | 'since' | 'agentTime' | 'mergedPrs' | 'currentStreak' | 'bestStreak' | 'sourceSplit' | 'punch' | 'sessionDurations', {
+                    status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                    method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                }>>;
+                facts: {
+                    tokens?: number | undefined;
+                    activeDays?: number | undefined;
+                    agentTimeMs?: number | undefined;
+                    mergedPrs?: number | undefined;
+                    currentStreakDays?: number | undefined;
+                    bestStreakDays?: number | undefined;
+                    peakParallel?: number | undefined;
+                    calendar?: {
+                        date: string;
+                        level: 0 | 4 | 1 | 2 | 3 | null;
+                    }[] | undefined;
+                    agentMix?: {
+                        agentId: string;
+                        share: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                        tokens?: number | undefined;
+                    }[] | undefined;
+                    sourceSplit?: {
+                        execution: 'unknown' | 'happier' | 'outside';
+                        share: number;
+                        tokens?: number | undefined;
+                    }[] | undefined;
+                    punch?: {
+                        weekday: number;
+                        hour: number;
+                        level: 0 | 4 | 1 | 2 | 3 | null;
+                    }[] | undefined;
+                    highlights?: {
+                        kind: 'merged_prs' | 'peak_parallel' | 'active_days';
+                        count: number;
+                    }[] | undefined;
+                    footprint?: {
+                        status: 'insufficient_basis';
+                        reason: 'no_applicable_versioned_method';
+                    } | undefined;
+                    agentActiveDays?: {
+                        agentId: string;
+                        days: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    }[] | undefined;
+                    weeklyAgentMix?: {
+                        mix: {
+                            share: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                            agentId: string;
+                        }[];
+                        startMs: number;
+                        endMs: number;
+                    }[] | undefined;
+                    weeklyPeakParallel?: {
+                        peak: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                        startMs: number;
+                        endMs: number;
+                    }[] | undefined;
+                    sessionDurations?: {
+                        agentId: string;
+                        durationMs: number;
+                    }[] | undefined;
+                    machineKinds?: {
+                        kind: string;
+                        count: number;
+                        agentTimeShare: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    }[] | undefined;
+                    dayNightActivity?: {
+                        window: {
+                            startHour: number;
+                            endHour: number;
+                        };
+                        dayShare: number;
+                        nightShare: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    } | undefined;
+                };
+                lenses?: {
+                    execution: 'happier' | 'outside';
+                    facts: {
+                        tokens?: number | undefined;
+                        activeDays?: number | undefined;
+                        agentTimeMs?: number | undefined;
+                        mergedPrs?: number | undefined;
+                        currentStreakDays?: number | undefined;
+                        bestStreakDays?: number | undefined;
+                        peakParallel?: number | undefined;
+                        calendar?: {
+                            date: string;
+                            level: 0 | 4 | 1 | 2 | 3 | null;
+                        }[] | undefined;
+                        agentMix?: {
+                            agentId: string;
+                            share: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                            tokens?: number | undefined;
+                        }[] | undefined;
+                        sourceSplit?: {
+                            execution: 'unknown' | 'happier' | 'outside';
+                            share: number;
+                            tokens?: number | undefined;
+                        }[] | undefined;
+                        punch?: {
+                            weekday: number;
+                            hour: number;
+                            level: 0 | 4 | 1 | 2 | 3 | null;
+                        }[] | undefined;
+                        highlights?: {
+                            kind: 'merged_prs' | 'peak_parallel' | 'active_days';
+                            count: number;
+                        }[] | undefined;
+                        footprint?: {
+                            status: 'insufficient_basis';
+                            reason: 'no_applicable_versioned_method';
+                        } | undefined;
+                        agentActiveDays?: {
+                            agentId: string;
+                            days: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                        }[] | undefined;
+                        weeklyAgentMix?: {
+                            mix: {
+                                share: number;
+                                coverage: {
+                                    status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                    method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                                };
+                                agentId: string;
+                            }[];
+                            startMs: number;
+                            endMs: number;
+                        }[] | undefined;
+                        weeklyPeakParallel?: {
+                            peak: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                            startMs: number;
+                            endMs: number;
+                        }[] | undefined;
+                        sessionDurations?: {
+                            agentId: string;
+                            durationMs: number;
+                        }[] | undefined;
+                        machineKinds?: {
+                            kind: string;
+                            count: number;
+                            agentTimeShare: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                        }[] | undefined;
+                        dayNightActivity?: {
+                            window: {
+                                startHour: number;
+                                endHour: number;
+                            };
+                            dayShare: number;
+                            nightShare: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                        } | undefined;
+                    };
+                }[] | undefined;
+            } | undefined;
         } | {
             kind: 'unavailable';
-            reason: 'query_mismatch' | 'accounting_unavailable' | 'period_unavailable';
+            reason: 'query_mismatch' | 'accounting_unavailable' | 'period_unavailable' | 'public_profile_source_unavailable' | 'public_profile_unavailable';
         };
         file: {
             base64: string;
@@ -891,9 +2655,218 @@ export type UsageActionResultById = {
                     }[];
                 } | undefined;
             };
+            source?: 'public_profile' | undefined;
+            publicSnapshot?: {
+                v: 1;
+                computedAtMs: number;
+                period: {
+                    startMs: number;
+                    endMs: number;
+                    timeZoneOffsetMinutes: number;
+                };
+                coverage: {
+                    status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                    method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                };
+                fieldCoverage: Partial<Record<'calendar' | 'projects' | 'tokens' | 'peakParallel' | 'activeDays' | 'agentMix' | 'highlights' | 'name' | 'agentActiveDays' | 'weeklyAgentMix' | 'weeklyPeakParallel' | 'dayNightActivity' | 'machineKinds' | 'footprint' | 'avatar' | 'bio' | 'links' | 'since' | 'agentTime' | 'mergedPrs' | 'currentStreak' | 'bestStreak' | 'sourceSplit' | 'punch' | 'sessionDurations', {
+                    status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                    method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                }>>;
+                facts: {
+                    tokens?: number | undefined;
+                    activeDays?: number | undefined;
+                    agentTimeMs?: number | undefined;
+                    mergedPrs?: number | undefined;
+                    currentStreakDays?: number | undefined;
+                    bestStreakDays?: number | undefined;
+                    peakParallel?: number | undefined;
+                    calendar?: {
+                        date: string;
+                        level: 0 | 4 | 1 | 2 | 3 | null;
+                    }[] | undefined;
+                    agentMix?: {
+                        agentId: string;
+                        share: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                        tokens?: number | undefined;
+                    }[] | undefined;
+                    sourceSplit?: {
+                        execution: 'unknown' | 'happier' | 'outside';
+                        share: number;
+                        tokens?: number | undefined;
+                    }[] | undefined;
+                    punch?: {
+                        weekday: number;
+                        hour: number;
+                        level: 0 | 4 | 1 | 2 | 3 | null;
+                    }[] | undefined;
+                    highlights?: {
+                        kind: 'merged_prs' | 'peak_parallel' | 'active_days';
+                        count: number;
+                    }[] | undefined;
+                    footprint?: {
+                        status: 'insufficient_basis';
+                        reason: 'no_applicable_versioned_method';
+                    } | undefined;
+                    agentActiveDays?: {
+                        agentId: string;
+                        days: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    }[] | undefined;
+                    weeklyAgentMix?: {
+                        mix: {
+                            share: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                            agentId: string;
+                        }[];
+                        startMs: number;
+                        endMs: number;
+                    }[] | undefined;
+                    weeklyPeakParallel?: {
+                        peak: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                        startMs: number;
+                        endMs: number;
+                    }[] | undefined;
+                    sessionDurations?: {
+                        agentId: string;
+                        durationMs: number;
+                    }[] | undefined;
+                    machineKinds?: {
+                        kind: string;
+                        count: number;
+                        agentTimeShare: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    }[] | undefined;
+                    dayNightActivity?: {
+                        window: {
+                            startHour: number;
+                            endHour: number;
+                        };
+                        dayShare: number;
+                        nightShare: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    } | undefined;
+                };
+                lenses?: {
+                    execution: 'happier' | 'outside';
+                    facts: {
+                        tokens?: number | undefined;
+                        activeDays?: number | undefined;
+                        agentTimeMs?: number | undefined;
+                        mergedPrs?: number | undefined;
+                        currentStreakDays?: number | undefined;
+                        bestStreakDays?: number | undefined;
+                        peakParallel?: number | undefined;
+                        calendar?: {
+                            date: string;
+                            level: 0 | 4 | 1 | 2 | 3 | null;
+                        }[] | undefined;
+                        agentMix?: {
+                            agentId: string;
+                            share: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                            tokens?: number | undefined;
+                        }[] | undefined;
+                        sourceSplit?: {
+                            execution: 'unknown' | 'happier' | 'outside';
+                            share: number;
+                            tokens?: number | undefined;
+                        }[] | undefined;
+                        punch?: {
+                            weekday: number;
+                            hour: number;
+                            level: 0 | 4 | 1 | 2 | 3 | null;
+                        }[] | undefined;
+                        highlights?: {
+                            kind: 'merged_prs' | 'peak_parallel' | 'active_days';
+                            count: number;
+                        }[] | undefined;
+                        footprint?: {
+                            status: 'insufficient_basis';
+                            reason: 'no_applicable_versioned_method';
+                        } | undefined;
+                        agentActiveDays?: {
+                            agentId: string;
+                            days: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                        }[] | undefined;
+                        weeklyAgentMix?: {
+                            mix: {
+                                share: number;
+                                coverage: {
+                                    status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                    method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                                };
+                                agentId: string;
+                            }[];
+                            startMs: number;
+                            endMs: number;
+                        }[] | undefined;
+                        weeklyPeakParallel?: {
+                            peak: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                            startMs: number;
+                            endMs: number;
+                        }[] | undefined;
+                        sessionDurations?: {
+                            agentId: string;
+                            durationMs: number;
+                        }[] | undefined;
+                        machineKinds?: {
+                            kind: string;
+                            count: number;
+                            agentTimeShare: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                        }[] | undefined;
+                        dayNightActivity?: {
+                            window: {
+                                startHour: number;
+                                endHour: number;
+                            };
+                            dayShare: number;
+                            nightShare: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                        } | undefined;
+                    };
+                }[] | undefined;
+            } | undefined;
         } | {
             kind: 'unavailable';
-            reason: 'query_mismatch' | 'accounting_unavailable' | 'period_unavailable';
+            reason: 'query_mismatch' | 'accounting_unavailable' | 'period_unavailable' | 'public_profile_source_unavailable' | 'public_profile_unavailable';
         };
     };
     readonly "usage.recap.compose": {
@@ -1048,9 +3021,218 @@ export type UsageActionResultById = {
                 }[];
             } | undefined;
         };
+        source?: 'public_profile' | undefined;
+        publicSnapshot?: {
+            v: 1;
+            computedAtMs: number;
+            period: {
+                startMs: number;
+                endMs: number;
+                timeZoneOffsetMinutes: number;
+            };
+            coverage: {
+                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+            };
+            fieldCoverage: Partial<Record<'calendar' | 'projects' | 'tokens' | 'peakParallel' | 'activeDays' | 'agentMix' | 'highlights' | 'name' | 'agentActiveDays' | 'weeklyAgentMix' | 'weeklyPeakParallel' | 'dayNightActivity' | 'machineKinds' | 'footprint' | 'avatar' | 'bio' | 'links' | 'since' | 'agentTime' | 'mergedPrs' | 'currentStreak' | 'bestStreak' | 'sourceSplit' | 'punch' | 'sessionDurations', {
+                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+            }>>;
+            facts: {
+                tokens?: number | undefined;
+                activeDays?: number | undefined;
+                agentTimeMs?: number | undefined;
+                mergedPrs?: number | undefined;
+                currentStreakDays?: number | undefined;
+                bestStreakDays?: number | undefined;
+                peakParallel?: number | undefined;
+                calendar?: {
+                    date: string;
+                    level: 0 | 4 | 1 | 2 | 3 | null;
+                }[] | undefined;
+                agentMix?: {
+                    agentId: string;
+                    share: number;
+                    coverage: {
+                        status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                        method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                    };
+                    tokens?: number | undefined;
+                }[] | undefined;
+                sourceSplit?: {
+                    execution: 'unknown' | 'happier' | 'outside';
+                    share: number;
+                    tokens?: number | undefined;
+                }[] | undefined;
+                punch?: {
+                    weekday: number;
+                    hour: number;
+                    level: 0 | 4 | 1 | 2 | 3 | null;
+                }[] | undefined;
+                highlights?: {
+                    kind: 'merged_prs' | 'peak_parallel' | 'active_days';
+                    count: number;
+                }[] | undefined;
+                footprint?: {
+                    status: 'insufficient_basis';
+                    reason: 'no_applicable_versioned_method';
+                } | undefined;
+                agentActiveDays?: {
+                    agentId: string;
+                    days: number;
+                    coverage: {
+                        status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                        method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                    };
+                }[] | undefined;
+                weeklyAgentMix?: {
+                    mix: {
+                        share: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                        agentId: string;
+                    }[];
+                    startMs: number;
+                    endMs: number;
+                }[] | undefined;
+                weeklyPeakParallel?: {
+                    peak: number;
+                    coverage: {
+                        status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                        method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                    };
+                    startMs: number;
+                    endMs: number;
+                }[] | undefined;
+                sessionDurations?: {
+                    agentId: string;
+                    durationMs: number;
+                }[] | undefined;
+                machineKinds?: {
+                    kind: string;
+                    count: number;
+                    agentTimeShare: number;
+                    coverage: {
+                        status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                        method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                    };
+                }[] | undefined;
+                dayNightActivity?: {
+                    window: {
+                        startHour: number;
+                        endHour: number;
+                    };
+                    dayShare: number;
+                    nightShare: number;
+                    coverage: {
+                        status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                        method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                    };
+                } | undefined;
+            };
+            lenses?: {
+                execution: 'happier' | 'outside';
+                facts: {
+                    tokens?: number | undefined;
+                    activeDays?: number | undefined;
+                    agentTimeMs?: number | undefined;
+                    mergedPrs?: number | undefined;
+                    currentStreakDays?: number | undefined;
+                    bestStreakDays?: number | undefined;
+                    peakParallel?: number | undefined;
+                    calendar?: {
+                        date: string;
+                        level: 0 | 4 | 1 | 2 | 3 | null;
+                    }[] | undefined;
+                    agentMix?: {
+                        agentId: string;
+                        share: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                        tokens?: number | undefined;
+                    }[] | undefined;
+                    sourceSplit?: {
+                        execution: 'unknown' | 'happier' | 'outside';
+                        share: number;
+                        tokens?: number | undefined;
+                    }[] | undefined;
+                    punch?: {
+                        weekday: number;
+                        hour: number;
+                        level: 0 | 4 | 1 | 2 | 3 | null;
+                    }[] | undefined;
+                    highlights?: {
+                        kind: 'merged_prs' | 'peak_parallel' | 'active_days';
+                        count: number;
+                    }[] | undefined;
+                    footprint?: {
+                        status: 'insufficient_basis';
+                        reason: 'no_applicable_versioned_method';
+                    } | undefined;
+                    agentActiveDays?: {
+                        agentId: string;
+                        days: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    }[] | undefined;
+                    weeklyAgentMix?: {
+                        mix: {
+                            share: number;
+                            coverage: {
+                                status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                            };
+                            agentId: string;
+                        }[];
+                        startMs: number;
+                        endMs: number;
+                    }[] | undefined;
+                    weeklyPeakParallel?: {
+                        peak: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                        startMs: number;
+                        endMs: number;
+                    }[] | undefined;
+                    sessionDurations?: {
+                        agentId: string;
+                        durationMs: number;
+                    }[] | undefined;
+                    machineKinds?: {
+                        kind: string;
+                        count: number;
+                        agentTimeShare: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    }[] | undefined;
+                    dayNightActivity?: {
+                        window: {
+                            startHour: number;
+                            endHour: number;
+                        };
+                        dayShare: number;
+                        nightShare: number;
+                        coverage: {
+                            status: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            method: 'unknown' | 'runtime' | 'mixed' | 'logs' | 'context_only';
+                        };
+                    } | undefined;
+                };
+            }[] | undefined;
+        } | undefined;
     } | {
         kind: 'unavailable';
-        reason: 'query_mismatch' | 'accounting_unavailable' | 'period_unavailable';
+        reason: 'query_mismatch' | 'accounting_unavailable' | 'period_unavailable' | 'public_profile_source_unavailable' | 'public_profile_unavailable';
     };
     readonly "usage.query": {
         v: 1;
@@ -1075,8 +3257,9 @@ export type UsageActionResultById = {
                 sources: string[];
                 session: string | string[] | null;
                 costBasis: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
-                metric: 'tokens' | 'cost';
+                metric: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel';
                 includeAccounting: boolean;
+                includeQuotaHistory: boolean;
                 includeSessionEvidence: boolean;
                 includeTranscriptEvidence: boolean;
                 includeWorkEvidence: boolean;
@@ -1084,6 +3267,7 @@ export type UsageActionResultById = {
                 modelIds: string[];
                 workspaceIds: string[];
                 backendModes: string[];
+                population?: 'all_personal_history' | 'public_eligible_personal' | undefined;
                 includeInsights?: boolean | undefined;
                 includeActivity?: boolean | undefined;
                 includeLeaders?: boolean | undefined;
@@ -1110,8 +3294,9 @@ export type UsageActionResultById = {
                 sources: string[];
                 session: string | string[] | null;
                 costBasis: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
-                metric: 'tokens' | 'cost';
+                metric: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel';
                 includeAccounting: boolean;
+                includeQuotaHistory: boolean;
                 includeSessionEvidence: boolean;
                 includeTranscriptEvidence: boolean;
                 includeWorkEvidence: boolean;
@@ -1119,6 +3304,7 @@ export type UsageActionResultById = {
                 modelIds: string[];
                 workspaceIds: string[];
                 backendModes: string[];
+                population?: 'all_personal_history' | 'public_eligible_personal' | undefined;
                 includeInsights?: boolean | undefined;
                 includeActivity?: boolean | undefined;
                 includeLeaders?: boolean | undefined;
@@ -3095,8 +5281,9 @@ export type UsageActionResultById = {
                     sources: string[];
                     session: string | string[] | null;
                     costBasis: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
-                    metric: 'tokens' | 'cost';
+                    metric: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel';
                     includeAccounting: boolean;
+                    includeQuotaHistory: boolean;
                     includeSessionEvidence: boolean;
                     includeTranscriptEvidence: boolean;
                     includeWorkEvidence: boolean;
@@ -3104,6 +5291,7 @@ export type UsageActionResultById = {
                     modelIds: string[];
                     workspaceIds: string[];
                     backendModes: string[];
+                    population?: 'all_personal_history' | 'public_eligible_personal' | undefined;
                     includeInsights?: boolean | undefined;
                     includeActivity?: boolean | undefined;
                     includeLeaders?: boolean | undefined;
@@ -4441,6 +6629,33 @@ export type UsageActionResultById = {
                     contributionIds: string[];
                 }[];
             } | undefined;
+            mergedOutcomes?: {
+                period: {
+                    startMs: number;
+                    endMs: number;
+                };
+                timeZoneOffsetMinutes: number;
+                attributionBasis: 'contribution_count';
+                linkedMergedCount: number;
+                mergedInPeriodCount: number;
+                outsidePeriodMergedCount: number;
+                undatedMergedCount: number;
+                mergeWeeks: {
+                    bucketStartMs: number;
+                    bucketEndMs: number;
+                    count: number;
+                }[];
+                outcomes: {
+                    key: string;
+                    mergedAtMs: number | null;
+                    attribution: 'unknown' | 'mixed' | 'single';
+                    agentContributions: {
+                        agentId: string | null;
+                        contributionCount: number;
+                    }[];
+                    leadingAgentIds: (string | null)[];
+                }[];
+            } | undefined;
             howYouWork?: {
                 detailStatus: 'unknown' | 'partial' | 'available';
                 intervals: {
@@ -4580,6 +6795,599 @@ export type UsageActionResultById = {
                         method: 'tool_classification' | 'native_event';
                     }[];
                 } | undefined;
+                runLengths?: {
+                    method: 'closed_turn_wall_v1';
+                    coverage: 'partial' | 'complete_for_supplied_facts';
+                    sampleCount: number;
+                    openCount: number;
+                    croppedCount: number;
+                    invalidCount: number;
+                    byAgent: {
+                        agentId: string | null;
+                        sampleCount: number;
+                        medianMs: number;
+                        p90Ms: number;
+                        durationsMs: number[];
+                    }[];
+                } | null | undefined;
+                steering?: {
+                    coverage: 'partial' | 'complete_for_supplied_facts';
+                    inputsObserved: boolean;
+                    permissionsObserved: boolean;
+                    busyObserved: boolean;
+                    byAgent: {
+                        steeringCount: number | null;
+                        followUpCount: number | null;
+                        newTurnCount: number | null;
+                        permissionAnswerCount: number | null;
+                        pairedDecisionCount: number | null;
+                        decisionLatencyMs: number | null;
+                        busyMs: number | null;
+                        observedWaitMs: number | null;
+                        steersPerBusyHour: number | null;
+                        byAnsweringClient: {
+                            ios: number;
+                            android: number;
+                            web: number;
+                            desktop: number;
+                            unknown: number;
+                        };
+                        agentId: string | null;
+                    }[];
+                    hourly: {
+                        steeringCount: number | null;
+                        followUpCount: number | null;
+                        newTurnCount: number | null;
+                        permissionAnswerCount: number | null;
+                        pairedDecisionCount: number | null;
+                        decisionLatencyMs: number | null;
+                        busyMs: number | null;
+                        observedWaitMs: number | null;
+                        steersPerBusyHour: number | null;
+                        byAnsweringClient: {
+                            ios: number;
+                            android: number;
+                            web: number;
+                            desktop: number;
+                            unknown: number;
+                        };
+                        agentId: string | null;
+                        date: string;
+                        weekday: number;
+                        hour: number;
+                    }[];
+                } | null | undefined;
+                collaboration?: {
+                    coverage: 'partial';
+                    edges: {
+                        sourceAgentId: string | null;
+                        targetAgentId: string | null;
+                        relation: 'native' | 'spawn' | 'run' | 'review' | 'plan' | 'report' | 'replay' | 'handoff';
+                        count: number;
+                    }[];
+                    unknownTimestampCount: number;
+                    unknownSourceAgentCount: number;
+                    unknownTargetAgentCount: number;
+                } | null | undefined;
+                agentCalendar?: {
+                    period: {
+                        startMs: number;
+                        endMs: number;
+                    };
+                    timeZoneOffsetMinutes: number;
+                    costMode: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
+                    coverage: {
+                        accounting: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                        busy: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                        steering: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                    };
+                    periodSummary: {
+                        agents: {
+                            shares: {
+                                tokens: number | null;
+                                cost: number | null;
+                            };
+                            agentId: string | null;
+                            metrics: {
+                                tokens: number | null;
+                                eventCount: number | null;
+                                sessions: number | null;
+                                cost: {
+                                    amountUsd: number;
+                                    currency: string;
+                                    source: string;
+                                    kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'mixed';
+                                } | null;
+                                busyMs: number | null;
+                                steeringCount: number | null;
+                                peakParallel: number | null;
+                            };
+                            coverage: {
+                                accounting: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                busy: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                steering: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            };
+                        }[];
+                        totals: {
+                            tokens: number | null;
+                            eventCount: number | null;
+                            sessions: number | null;
+                            cost: {
+                                amountUsd: number;
+                                currency: string;
+                                source: string;
+                                kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'mixed';
+                            } | null;
+                            busyMs: number | null;
+                            steeringCount: number | null;
+                            peakParallel: number | null;
+                        };
+                        leaders: {
+                            tokens: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            eventCount: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            sessions: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            cost: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            busyMs: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            steeringCount: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            peakParallel: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                        };
+                    };
+                    days: {
+                        totals: {
+                            tokens: number | null;
+                            eventCount: number | null;
+                            sessions: number | null;
+                            cost: {
+                                amountUsd: number;
+                                currency: string;
+                                source: string;
+                                kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'mixed';
+                            } | null;
+                            busyMs: number | null;
+                            steeringCount: number | null;
+                            peakParallel: number | null;
+                        };
+                        agents: {
+                            agentId: string | null;
+                            metrics: {
+                                tokens: number | null;
+                                eventCount: number | null;
+                                sessions: number | null;
+                                cost: {
+                                    amountUsd: number;
+                                    currency: string;
+                                    source: string;
+                                    kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'mixed';
+                                } | null;
+                                busyMs: number | null;
+                                steeringCount: number | null;
+                                peakParallel: number | null;
+                            };
+                            coverage: {
+                                accounting: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                busy: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                steering: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            };
+                        }[];
+                        leaders: {
+                            tokens: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            eventCount: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            sessions: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            cost: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            busyMs: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            steeringCount: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            peakParallel: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                        };
+                        date: string;
+                        weekday: number;
+                        hour: number | null;
+                        startMs: number;
+                        endMs: number;
+                    }[];
+                    weeks: {
+                        totals: {
+                            tokens: number | null;
+                            eventCount: number | null;
+                            sessions: number | null;
+                            cost: {
+                                amountUsd: number;
+                                currency: string;
+                                source: string;
+                                kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'mixed';
+                            } | null;
+                            busyMs: number | null;
+                            steeringCount: number | null;
+                            peakParallel: number | null;
+                        };
+                        agents: {
+                            agentId: string | null;
+                            metrics: {
+                                tokens: number | null;
+                                eventCount: number | null;
+                                sessions: number | null;
+                                cost: {
+                                    amountUsd: number;
+                                    currency: string;
+                                    source: string;
+                                    kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'mixed';
+                                } | null;
+                                busyMs: number | null;
+                                steeringCount: number | null;
+                                peakParallel: number | null;
+                            };
+                            coverage: {
+                                accounting: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                busy: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                steering: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            };
+                        }[];
+                        leaders: {
+                            tokens: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            eventCount: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            sessions: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            cost: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            busyMs: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            steeringCount: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            peakParallel: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                        };
+                        date: string;
+                        weekday: number;
+                        hour: number | null;
+                        startMs: number;
+                        endMs: number;
+                    }[];
+                    hours: {
+                        totals: {
+                            tokens: number | null;
+                            eventCount: number | null;
+                            sessions: number | null;
+                            cost: {
+                                amountUsd: number;
+                                currency: string;
+                                source: string;
+                                kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'mixed';
+                            } | null;
+                            busyMs: number | null;
+                            steeringCount: number | null;
+                            peakParallel: number | null;
+                        };
+                        agents: {
+                            agentId: string | null;
+                            metrics: {
+                                tokens: number | null;
+                                eventCount: number | null;
+                                sessions: number | null;
+                                cost: {
+                                    amountUsd: number;
+                                    currency: string;
+                                    source: string;
+                                    kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'mixed';
+                                } | null;
+                                busyMs: number | null;
+                                steeringCount: number | null;
+                                peakParallel: number | null;
+                            };
+                            coverage: {
+                                accounting: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                busy: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                steering: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            };
+                        }[];
+                        leaders: {
+                            tokens: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            eventCount: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            sessions: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            cost: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            busyMs: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            steeringCount: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            peakParallel: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                        };
+                        date: string;
+                        weekday: number;
+                        hour: number | null;
+                        startMs: number;
+                        endMs: number;
+                    }[];
+                    weekdayHourBuckets: {
+                        totals: {
+                            tokens: number | null;
+                            eventCount: number | null;
+                            sessions: number | null;
+                            cost: {
+                                amountUsd: number;
+                                currency: string;
+                                source: string;
+                                kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'mixed';
+                            } | null;
+                            busyMs: number | null;
+                            steeringCount: number | null;
+                            peakParallel: number | null;
+                        };
+                        agents: {
+                            agentId: string | null;
+                            metrics: {
+                                tokens: number | null;
+                                eventCount: number | null;
+                                sessions: number | null;
+                                cost: {
+                                    amountUsd: number;
+                                    currency: string;
+                                    source: string;
+                                    kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'mixed';
+                                } | null;
+                                busyMs: number | null;
+                                steeringCount: number | null;
+                                peakParallel: number | null;
+                            };
+                            coverage: {
+                                accounting: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                busy: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                steering: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            };
+                        }[];
+                        leaders: {
+                            tokens: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            eventCount: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            sessions: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            cost: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            busyMs: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            steeringCount: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            peakParallel: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                        };
+                        weekday: number;
+                        hour: number;
+                    }[];
+                    hourOfDayBuckets: {
+                        totals: {
+                            tokens: number | null;
+                            eventCount: number | null;
+                            sessions: number | null;
+                            cost: {
+                                amountUsd: number;
+                                currency: string;
+                                source: string;
+                                kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'mixed';
+                            } | null;
+                            busyMs: number | null;
+                            steeringCount: number | null;
+                            peakParallel: number | null;
+                        };
+                        agents: {
+                            agentId: string | null;
+                            metrics: {
+                                tokens: number | null;
+                                eventCount: number | null;
+                                sessions: number | null;
+                                cost: {
+                                    amountUsd: number;
+                                    currency: string;
+                                    source: string;
+                                    kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'mixed';
+                                } | null;
+                                busyMs: number | null;
+                                steeringCount: number | null;
+                                peakParallel: number | null;
+                            };
+                            coverage: {
+                                accounting: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                busy: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                                steering: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                            };
+                        }[];
+                        leaders: {
+                            tokens: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            eventCount: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            sessions: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            cost: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            busyMs: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            steeringCount: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                            peakParallel: {
+                                status: 'unavailable' | 'empty' | 'leading' | 'tied' | 'unattributed';
+                                agentIds: string[];
+                                includesUnknown: boolean;
+                            };
+                        };
+                        hour: number;
+                    }[];
+                    agentActiveDays: {
+                        agentId: string | null;
+                        days: number;
+                        coverage: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                    }[];
+                    weeklyAgentMix: {
+                        mix: {
+                            agentId: string | null;
+                            share: number;
+                            coverage: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                        }[];
+                        startMs: number;
+                        endMs: number;
+                    }[];
+                    weeklyPeakParallel: {
+                        peak: number;
+                        coverage: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                        startMs: number;
+                        endMs: number;
+                    }[];
+                    dayNightActivity: {
+                        basis: 'recorded_activity';
+                        window: {
+                            startHour: number;
+                            endHour: number;
+                        };
+                        dayShare: number;
+                        nightShare: number;
+                        coverage: 'unknown' | 'partial' | 'complete_for_supplied_facts' | 'unavailable';
+                    } | null;
+                    machineKinds: {
+                        status: 'unavailable';
+                        reason: 'no_witnessed_kind';
+                    };
+                } | null | undefined;
             } | undefined;
             coach?: {
                 v: 1;
@@ -4883,6 +7691,7 @@ export type UsageActionResultById = {
                                     };
                                     accountId: string;
                                 } | null;
+                                accountScope?: 'workspace' | 'personal' | undefined;
                             } | {
                                 kind: 'provider';
                                 providerId: string | null;
@@ -4897,6 +7706,7 @@ export type UsageActionResultById = {
                                     };
                                     accountId: string;
                                 } | null;
+                                accountScope?: 'workspace' | 'personal' | undefined;
                             } | {
                                 kind: 'provider';
                                 providerId: string | null;
@@ -5212,6 +8022,7 @@ export type UsageActionResultById = {
                                 };
                                 accountId: string;
                             } | null;
+                            accountScope?: 'workspace' | 'personal' | undefined;
                         } | {
                             kind: 'provider';
                             providerId: string | null;
@@ -5226,6 +8037,7 @@ export type UsageActionResultById = {
                                 };
                                 accountId: string;
                             } | null;
+                            accountScope?: 'workspace' | 'personal' | undefined;
                         } | {
                             kind: 'provider';
                             providerId: string | null;
@@ -5264,8 +8076,9 @@ export type UsageActionResultById = {
                         sources: string[];
                         session: string | string[] | null;
                         costBasis: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
-                        metric: 'tokens' | 'cost';
+                        metric: 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel';
                         includeAccounting: boolean;
+                        includeQuotaHistory: boolean;
                         includeSessionEvidence: boolean;
                         includeTranscriptEvidence: boolean;
                         includeWorkEvidence: boolean;
@@ -5273,6 +8086,7 @@ export type UsageActionResultById = {
                         modelIds: string[];
                         workspaceIds: string[];
                         backendModes: string[];
+                        population?: 'all_personal_history' | 'public_eligible_personal' | undefined;
                         includeInsights?: boolean | undefined;
                         includeActivity?: boolean | undefined;
                         includeLeaders?: boolean | undefined;
@@ -5562,7 +8376,7 @@ export type UsageActionResultById = {
                                     kind: 'session';
                                 } | {
                                     kind: 'background_run';
-                                    intent: 'agent' | 'delegate' | 'plan' | 'review' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                                    intent: 'agent' | 'delegate' | 'review' | 'plan' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
                                 } | undefined;
                                 profileId?: string | undefined;
                                 workspaceWrites?: 'deny' | 'allow' | undefined;
@@ -5576,7 +8390,7 @@ export type UsageActionResultById = {
                                     kind: 'session';
                                 } | {
                                     kind: 'background_run';
-                                    intent: 'agent' | 'delegate' | 'plan' | 'review' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                                    intent: 'agent' | 'delegate' | 'review' | 'plan' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
                                 };
                                 engine?: {
                                     agentTargetKey: string;

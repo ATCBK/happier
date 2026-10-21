@@ -11,7 +11,14 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "account.credentials.forgetAll",
   "account.delete",
   "account.name.set",
+  "account.public_profile.pause",
+  "account.public_profile.publish",
+  "account.public_profile.refresh",
+  "account.public_profile.resume",
+  "account.public_profile.unpublish",
+  "account.public_profile.update",
   "account.signOut",
+  "account.username.release",
   "account.username.set",
   "action.invoke",
   "action.operations.cancel",
@@ -210,6 +217,9 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "home.identity.workos.adminPortalLink.create",
   "home.mailDelivery.test",
   "home.policy.set",
+  "home.public_profiles.handle_reclaim",
+  "home.public_profiles.restore",
+  "home.public_profiles.restrict",
   "home.reachNudge.dismiss",
   "home.reachability.iroh.set",
   "home.runtime.restart",
@@ -762,6 +772,7 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "usage.coach.snooze",
   "usage.coach.undo",
   "usage.prices.refresh",
+  "usage.recap.deliver",
   "usage.sources.consent.set",
   "usage.sources.dismiss",
   "usage.sources.history.delete",
@@ -854,11 +865,29 @@ export type GeneratedActions = Readonly<{
     readonly profile: Readonly<{
       readonly get: (input: PublicActionInputById["account.profile.get"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"account.profile.get">>;
     }> ;
+    readonly publicProfile: Readonly<{
+      readonly embed: Readonly<{
+        readonly get: (input: PublicActionInputById["account.public_profile.embed.get"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"account.public_profile.embed.get">>;
+      }> ;
+      readonly get: (input: PublicActionInputById["account.public_profile.get"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"account.public_profile.get">>;
+      readonly pause: (input: PublicActionInputById["account.public_profile.pause"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"account.public_profile.pause">>;
+      readonly preview: (input: PublicActionInputById["account.public_profile.preview"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"account.public_profile.preview">>;
+      readonly publish: (input: PublicActionInputById["account.public_profile.publish"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"account.public_profile.publish">>;
+      readonly refresh: (input: PublicActionInputById["account.public_profile.refresh"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"account.public_profile.refresh">>;
+      readonly report: Readonly<{
+        readonly get: (input: PublicActionInputById["account.public_profile.report.get"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"account.public_profile.report.get">>;
+      }> ;
+      readonly resume: (input: PublicActionInputById["account.public_profile.resume"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"account.public_profile.resume">>;
+      readonly unpublish: (input: PublicActionInputById["account.public_profile.unpublish"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"account.public_profile.unpublish">>;
+      readonly update: (input: PublicActionInputById["account.public_profile.update"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"account.public_profile.update">>;
+    }> ;
     readonly security: Readonly<{
       readonly get: (input: PublicActionInputById["account.security.get"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"account.security.get">>;
     }> ;
     readonly signOut: (input: PublicActionInputById["account.signOut"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"account.signOut">>;
     readonly username: Readonly<{
+      readonly check: (input: PublicActionInputById["account.username.check"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"account.username.check">>;
+      readonly release: (input: PublicActionInputById["account.username.release"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"account.username.release">>;
       readonly set: (input: PublicActionInputById["account.username.set"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"account.username.set">>;
     }> ;
   }> ;
@@ -1428,6 +1457,11 @@ export type GeneratedActions = Readonly<{
     }> ;
     readonly policy: Readonly<{
       readonly set: (input: PublicActionInputById["home.policy.set"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"home.policy.set">>;
+    }> ;
+    readonly publicProfiles: Readonly<{
+      readonly handleReclaim: (input: PublicActionInputById["home.public_profiles.handle_reclaim"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"home.public_profiles.handle_reclaim">>;
+      readonly restore: (input: PublicActionInputById["home.public_profiles.restore"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"home.public_profiles.restore">>;
+      readonly restrict: (input: PublicActionInputById["home.public_profiles.restrict"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"home.public_profiles.restrict">>;
     }> ;
     readonly reachability: Readonly<{
       readonly get: (input: PublicActionInputById["home.reachability.get"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"home.reachability.get">>;
@@ -3032,6 +3066,7 @@ export type GeneratedActions = Readonly<{
     readonly query: (input: PublicActionInputById["usage.query"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"usage.query">>;
     readonly recap: Readonly<{
       readonly compose: (input: PublicActionInputById["usage.recap.compose"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"usage.recap.compose">>;
+      readonly deliver: (input: PublicActionInputById["usage.recap.deliver"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"usage.recap.deliver">>;
       readonly export: (input: PublicActionInputById["usage.recap.export"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"usage.recap.export">>;
     }> ;
     readonly sources: Readonly<{
@@ -3263,11 +3298,29 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
       profile: {
         get: (input: PublicActionInputById["account.profile.get"], options?: ActionExecutionOptions) => execute("account.profile.get", input, options),
       },
+      publicProfile: {
+        embed: {
+          get: (input: PublicActionInputById["account.public_profile.embed.get"], options?: ActionExecutionOptions) => execute("account.public_profile.embed.get", input, options),
+        },
+        get: (input: PublicActionInputById["account.public_profile.get"], options?: ActionExecutionOptions) => execute("account.public_profile.get", input, options),
+        pause: (input: PublicActionInputById["account.public_profile.pause"], options?: ActionExecutionOptions) => execute("account.public_profile.pause", input, options),
+        preview: (input: PublicActionInputById["account.public_profile.preview"], options?: ActionExecutionOptions) => execute("account.public_profile.preview", input, options),
+        publish: (input: PublicActionInputById["account.public_profile.publish"], options?: ActionExecutionOptions) => execute("account.public_profile.publish", input, options),
+        refresh: (input: PublicActionInputById["account.public_profile.refresh"], options?: ActionExecutionOptions) => execute("account.public_profile.refresh", input, options),
+        report: {
+          get: (input: PublicActionInputById["account.public_profile.report.get"], options?: ActionExecutionOptions) => execute("account.public_profile.report.get", input, options),
+        },
+        resume: (input: PublicActionInputById["account.public_profile.resume"], options?: ActionExecutionOptions) => execute("account.public_profile.resume", input, options),
+        unpublish: (input: PublicActionInputById["account.public_profile.unpublish"], options?: ActionExecutionOptions) => execute("account.public_profile.unpublish", input, options),
+        update: (input: PublicActionInputById["account.public_profile.update"], options?: ActionExecutionOptions) => execute("account.public_profile.update", input, options),
+      },
       security: {
         get: (input: PublicActionInputById["account.security.get"], options?: ActionExecutionOptions) => execute("account.security.get", input, options),
       },
       signOut: (input: PublicActionInputById["account.signOut"], options?: ActionExecutionOptions) => execute("account.signOut", input, options),
       username: {
+        check: (input: PublicActionInputById["account.username.check"], options?: ActionExecutionOptions) => execute("account.username.check", input, options),
+        release: (input: PublicActionInputById["account.username.release"], options?: ActionExecutionOptions) => execute("account.username.release", input, options),
         set: (input: PublicActionInputById["account.username.set"], options?: ActionExecutionOptions) => execute("account.username.set", input, options),
       },
     },
@@ -3837,6 +3890,11 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
       },
       policy: {
         set: (input: PublicActionInputById["home.policy.set"], options?: ActionExecutionOptions) => execute("home.policy.set", input, options),
+      },
+      publicProfiles: {
+        handleReclaim: (input: PublicActionInputById["home.public_profiles.handle_reclaim"], options?: ActionExecutionOptions) => execute("home.public_profiles.handle_reclaim", input, options),
+        restore: (input: PublicActionInputById["home.public_profiles.restore"], options?: ActionExecutionOptions) => execute("home.public_profiles.restore", input, options),
+        restrict: (input: PublicActionInputById["home.public_profiles.restrict"], options?: ActionExecutionOptions) => execute("home.public_profiles.restrict", input, options),
       },
       reachability: {
         get: (input: PublicActionInputById["home.reachability.get"], options?: ActionExecutionOptions) => execute("home.reachability.get", input, options),
@@ -5441,6 +5499,7 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
       query: (input: PublicActionInputById["usage.query"], options?: ActionExecutionOptions) => execute("usage.query", input, options),
       recap: {
         compose: (input: PublicActionInputById["usage.recap.compose"], options?: ActionExecutionOptions) => execute("usage.recap.compose", input, options),
+        deliver: (input: PublicActionInputById["usage.recap.deliver"], options?: ActionExecutionOptions) => execute("usage.recap.deliver", input, options),
         export: (input: PublicActionInputById["usage.recap.export"], options?: ActionExecutionOptions) => execute("usage.recap.export", input, options),
       },
       sources: {

@@ -487,6 +487,7 @@ export type InventoryActionResultById = {
         ok: true;
         row: {
             atmosphere?: 'home' | {
+                behindSessions: boolean;
                 source: 'none' | 'planet' | 'picture';
                 planet: {
                     placement: 'corner' | 'side' | 'rise';
@@ -508,7 +509,6 @@ export type InventoryActionResultById = {
                     strength?: number | undefined;
                     dissolve?: 'haze' | 'ordered' | 'gradient' | 'shrink' | 'rows' | undefined;
                 }>;
-                behindSessions: boolean;
             } | undefined;
             hidden?: boolean | undefined;
             pinned?: boolean | undefined;
@@ -537,6 +537,7 @@ export type InventoryActionResultById = {
         ok: true;
         row: {
             atmosphere?: 'home' | {
+                behindSessions: boolean;
                 source: 'none' | 'planet' | 'picture';
                 planet: {
                     placement: 'corner' | 'side' | 'rise';
@@ -558,7 +559,6 @@ export type InventoryActionResultById = {
                     strength?: number | undefined;
                     dissolve?: 'haze' | 'ordered' | 'gradient' | 'shrink' | 'rows' | undefined;
                 }>;
-                behindSessions: boolean;
             } | undefined;
             hidden?: boolean | undefined;
             pinned?: boolean | undefined;
@@ -606,6 +606,7 @@ export type InventoryActionResultById = {
         };
         organization?: {
             atmosphere?: 'home' | {
+                behindSessions: boolean;
                 source: 'none' | 'planet' | 'picture';
                 planet: {
                     placement: 'corner' | 'side' | 'rise';
@@ -627,7 +628,6 @@ export type InventoryActionResultById = {
                     strength?: number | undefined;
                     dissolve?: 'haze' | 'ordered' | 'gradient' | 'shrink' | 'rows' | undefined;
                 }>;
-                behindSessions: boolean;
             } | undefined;
             hidden?: boolean | undefined;
             pinned?: boolean | undefined;

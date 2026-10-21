@@ -146,6 +146,8 @@ export type WorkflowsActionInputById = {
     readonly "workflow.run.summaries": {
         sourceArtifactIds: string[];
         recent: number;
+    } | {
+        automationIds: string[];
     };
     readonly "workflow.run.get": {
         runId: string;
@@ -3911,6 +3913,18 @@ export type WorkflowsActionResultById = {
             needsYouRunId: string | null;
         }[];
         remainingSourceArtifactIds: string[];
+    } | {
+        automationSummaries: {
+            automationId: string;
+            lastRun: {
+                id: string;
+                state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
+                workflowCustodyState: 'pending' | 'settled' | null;
+                attentionRequired: boolean;
+                createdAt: string;
+            } | null;
+        }[];
+        remainingAutomationIds: string[];
     };
     readonly "workflow.run.get": {
         run: {

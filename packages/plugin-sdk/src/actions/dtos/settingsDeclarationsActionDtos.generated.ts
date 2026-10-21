@@ -18,6 +18,9 @@ export type SettingsDeclarationsActionInputById = {
             serverId: string;
             projectKey: string;
         } | {
+            kind: 'public_profile_draft';
+            serverId: string;
+        } | {
             kind: 'team';
             serverId: string;
             teamId: string;
@@ -40,6 +43,9 @@ export type SettingsDeclarationsActionInputById = {
             kind: 'project';
             serverId: string;
             projectKey: string;
+        } | {
+            kind: 'public_profile_draft';
+            serverId: string;
         } | {
             kind: 'team';
             serverId: string;
@@ -104,6 +110,9 @@ export type SettingsDeclarationsActionInputById = {
             serverId: string;
             projectKey: string;
         } | {
+            kind: 'public_profile_draft';
+            serverId: string;
+        } | {
             kind: 'team';
             serverId: string;
             teamId: string;
@@ -133,6 +142,8 @@ export type SettingsDeclarationsActionInputById = {
         input?: {
             kind: 'atmosphere_picture_add';
             source: {
+                kind: 'picked';
+            } | {
                 kind: 'url';
                 url: string;
             } | {
@@ -168,6 +179,26 @@ export type SettingsDeclarationsActionInputById = {
             kind: 'diagnostics_revocation';
             key: string;
             revision: number;
+        } | undefined;
+        target?: {
+            kind: 'home';
+            serverId: string;
+        } | {
+            kind: 'project';
+            serverId: string;
+            projectKey: string;
+        } | {
+            kind: 'public_profile_draft';
+            serverId: string;
+        } | {
+            kind: 'team';
+            serverId: string;
+            teamId: string;
+        } | {
+            kind: 'team_identity_connection';
+            serverId: string;
+            teamId: string;
+            connectionId: string;
         } | undefined;
     };
     readonly "actions.policy.get": {
@@ -224,7 +255,7 @@ export type SettingsDeclarationsActionResultById = {
             sensitive: boolean;
             description?: string | undefined;
             storageScope?: 'account' | 'local' | undefined;
-            targetKinds?: ('home' | 'project' | 'team' | 'team_identity_connection')[] | undefined;
+            targetKinds?: ('home' | 'project' | 'public_profile_draft' | 'team' | 'team_identity_connection')[] | undefined;
             targetRequired?: boolean | undefined;
             allowedValues?: (string | number | boolean | null)[] | undefined;
             operation?: {
