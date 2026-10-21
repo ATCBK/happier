@@ -39,6 +39,9 @@ import { useExistingSessionCapabilitiesChip } from "@/components/sessions/capabi
 import { executeSessionLifecycleAction } from "@/components/sessions/actions/sessionActionExecution";
 import { type SessionConnectedServiceAuthSwitchResult, setSessionConnectedServiceAuthBinding } from "@/sync/ops/connectedServices/sessionAuthSwitch";
 import { resolveResumeFailurePresentation } from "@/sync/domains/session/resume/resolveResumeFailurePresentation";
+import { resolvePortableServerIdentityForRoutingId } from "@/sync/domains/server/resolvePortableServerIdentityForRoutingId";
+import { alertActionFailure } from "@/utils/errors/alertActionFailure";
+import { readRpcErrorCode } from "@happier-dev/protocol/rpcErrors";
 import { deriveSessionIntentionalRestartSignals, resolveSessionIntentionalRestartRecoveryEvidenceAtMs, type SessionIntentionalRestartSignal } from "@/components/sessions/agentInput/hooks/sessionIntentionalRestartSignal";
 import { useSessionIntentionalRestartSourceEvents } from "@/components/sessions/transcript/source/appSessionTranscriptSource";
 import { SESSION_COMPOSER_SUGGESTION_KINDS, type ComposerReferenceSearchHost } from "@/components/autocomplete/composerSuggestionKinds";
@@ -4556,10 +4559,12 @@ export function useSessionComposerController({
         const silent = opts?.silent === true;
         const resumeMachineId = reachableMachineTarget?.machineId ?? ownerMetadata?.machineId ?? null;
         const resumeDirectory = reachableMachineTarget?.basePath ?? ownerMetadata?.path ?? null;
+        // Capture the attempted Home before asynchronous admission can change the selected profile.
+        const targetHome = resolvePortableServerIdentityForRoutingId(sessionRouteServerId);
 
-        const maybeAlert = (message: string) => {
+        const maybeAlert = (message: string, code: string | null = null) => {
             if (silent) return;
-            Modal.alert(t('common.error'), message);
+            alertActionFailure({ reason: message, code, context: { phase: 'session.open', targetHome } });
         };
 
         if (sessionMachineAccessRemoved) return false;
@@ -4645,7 +4650,7 @@ export function useSessionComposerController({
                 if (presentation.kind === 'directory_missing') {
                     setDirectoryRecovery({ scopeKey: sessionAccountScopeKey, busy: false });
                 } else {
-                    maybeAlert(presentation.message);
+                    maybeAlert(presentation.message, presentation.errorCode ?? null);
                 }
                 return false;
             }
@@ -4655,7 +4660,7 @@ export function useSessionComposerController({
             // On success, the session will become active and UI will update automatically
             return true;
         } catch (error) {
-            maybeAlert(t('session.resumeFailed'));
+            maybeAlert(t('session.resumeFailed'), readRpcErrorCode(error));
             return false;
         }
     }, [actionExecutor, agentId, handlePendingActivationRequest, pendingActivationPresentation, sessionAccountLifetime, sessionAccountScopeKey, sessionRouteServerId, executionRunsEnabled, isMachineReachable, isResumable, reachableMachineTarget, router, session, sessionActionDefaultBackend, sessionId, sessionMachineAccessRemoved]);

@@ -31,6 +31,7 @@ import { act, renderHook } from '@/dev/testkit/hooks/renderHook';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { SessionStopResultSchema, isSessionStopConfirmed } from '@happier-dev/protocol/sessions/control/contract';
 import { readSessionExplicitStopV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
+import { writeSessionExplicitStopV1ToMetadata } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
 
 // A real product platform is required for executing-client evidence. The
 // generic Node RN stub intentionally has no client category.
@@ -157,6 +158,85 @@ function installActionSettings(actions: unknown) {
 }
 
 describe('default Action executor mode and catalog contracts', () => {
+  it.each(['manual-profile', 'exact-descriptor'] as const)(
+    'resumes an owned stopped Session through the actual verified custom-localhost Home transport (%s)', async descriptorKind => {
+    await connection?.dispose();
+    const serverUrl = 'http://happier-resume-owner.localhost:3028';
+    const identity = 'srv_resume_verified_home';
+    const credentials = { token: createAccountTokenForTests('alice', { currentAccount: true }) };
+    serverId = await homes.addHome({ name: 'Resume Home', serverUrl, serverIdentityId: identity,
+      accountId: 'alice', credentials });
+    const { reconcileServerProfileHomeConnectionDescriptor } = await import('@/sync/domains/server/serverProfiles');
+    if (descriptorKind === 'exact-descriptor') {
+      expect(await reconcileServerProfileHomeConnectionDescriptor({ serverUrl, observedServerIdentityId: identity,
+        descriptor: { v: 1, homeServerIdentityId: identity, canonicalServerUrl: serverUrl, revision: 1,
+          endpoints: [{ kind: 'https', url: serverUrl }] }, observation: 'exact',
+      })).toMatchObject({ kind: 'applied' });
+    }
+    connection = await restoreServerAccountForTest({ serverUrl, serverIdentityId: identity, accountId: 'alice', credentials,
+      request: homes.request, configureSocket: configureSessionSocket });
+    storage.getState().activateProfileScope({ serverId: connection.serverId, accountId: 'alice' });
+    await storage.getState().activateSettingsScope({ serverId: connection.serverId, accountId: 'alice' });
+    homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+    const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable } = await import('@/sync/runtime/orchestration/connectionManager');
+    const { areServerProfileIdentifiersEquivalent } = await import('@/sync/domains/server/serverProfiles');
+    expect(isAppliedActiveServerRuntimeAvailable()).toBe(true);
+    expect(areServerProfileIdentifiersEquivalent(getAppliedActiveServerSnapshot().serverId, serverId)).toBe(true);
+    const machineRow = createPlainMachineRowFixture({ id: 'machine-a', accountId: 'alice' });
+    const machine = createMachineFixture({ id: machineRow.id, activeAt: machineRow.activeAt });
+    storage.getState().applyMachines([machine], true, { sourceServerId: serverId });
+    homes.answer(serverId, '/v1/machines', { body: [machineRow] });
+    homes.answer(serverId, '/v1/machines?includeRevoked=true', { body: [machineRow] });
+    homes.answer(serverId, '/v1/machines/machine-a', { body: { machine: machineRow } });
+    const access = bindMachineAccessActionHttpRequestV1('machines.access.grants.list', { serverId, machineId: machineRow.id });
+    homes.answer(serverId, access.path, { body: MachineAccessGrantsListResponseV1Schema.parse({
+      machineId: machineRow.id, custodian: machineRow.access!.custodian, access: machineRow.access,
+      canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
+    }) });
+    const hold = writeSessionExplicitStopV1ToMetadata({}, {
+      v: 1, cause: 'explicit_stop', requestId: 'verified-home-stop', requestedAtMs: 1000,
+    });
+    const sessionId = 'verified-home-resume';
+    const readSession = installSession(sessionId, { machineId: machineRow.id, flavor: 'claude', claudeSessionId: 'native-existing',
+      ...hold });
+    const stoppedRow = SessionCurrentProjectionRecordV1Schema.parse({ ...readSession(), active: false });
+    homes.answer(serverId, `/v2/sessions/${sessionId}`, { body: { session: stoppedRow } });
+    homes.answer(serverId, `/v2/sessions/${sessionId}?accessProjectionVersion=1`, { body: { session: stoppedRow } });
+    storage.getState().applySessions([{ ...storage.getState().sessions[sessionId]!, active: false }]);
+    daemonAnswer = request => {
+      if (request.method.endsWith(`:${RPC_METHODS.SPAWN_HAPPY_SESSION}`)
+        || request.method.endsWith(`:${RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE}`)) return { type: 'success', sessionId };
+      if (request.method.endsWith(`:${RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT}`)) {
+        return createExistingSessionDirectoryPreflightResult(request.params);
+      }
+      return { ok: true };
+    };
+    const result = await createDefaultActionExecutor().execute('session.open', {
+      sessionId, serverId, intent: 'resume',
+    }, { ...context(), expectedAccountId: 'alice' });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'opened', sessionId } });
+    const starts = outgoing.filter(request => request.method.endsWith(`:${RPC_METHODS.SPAWN_HAPPY_SESSION}`)
+      || request.method.endsWith(`:${RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE}`));
+    expect(starts).toHaveLength(1);
+    expect(starts[0]!.params).toMatchObject({ sessionId, directory: '/repo', resume: 'native-existing' });
+    const reads = [...homes.requestsFor(`/v2/sessions/${sessionId}`),
+      ...homes.requestsFor(`/v2/sessions/${sessionId}?accessProjectionVersion=1`)];
+    expect(reads.length).toBeGreaterThan(0);
+    expect(reads.every(request => request.serverId === serverId)).toBe(true);
+    // A still-applied carrier is not permission to override the Home supervisor's
+    // independent unavailable fact. This refusal must issue no second native start.
+    storage.setState({ endpointStatus: 'offline' });
+    expect(isAppliedActiveServerRuntimeAvailable()).toBe(true);
+    expect(await createDefaultActionExecutor().execute('session.open', {
+      sessionId, serverId, intent: 'resume',
+    }, { ...context(), expectedAccountId: 'alice' })).toMatchObject({
+      ok: false, errorCode: 'action_failed', error: 'No verified transport is available for the target Home',
+    });
+    expect(outgoing.filter(request => request.method.endsWith(`:${RPC_METHODS.SPAWN_HAPPY_SESSION}`)
+      || request.method.endsWith(`:${RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE}`))).toHaveLength(1);
+    expect(storage.getState().sessions[sessionId]?.metadata?.sessionExplicitStopV1).toMatchObject({ requestId: 'verified-home-stop' });
+  });
+
   it('sends structured ordinary input to an exact cold Session on the active Home without warming the Session store', async () => {
     installSession('cold-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
     storage.setState({ sessions: {} });

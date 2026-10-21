@@ -2254,6 +2254,40 @@ describe('SessionView (direct sessions)', () => {
     ));
   });
 
+  it('keeps a refused Home Resume held and exposes its original Action code in Technical details', async () => {
+    const { setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
+    await setServerProfileIdentityForUrl('https://server-route-1', 'srv_resume_original_home');
+    storageState.sessions.s1 = createSessionFixture({
+      ...storageState.sessions.s1, active: false,
+      metadata: writeSessionExplicitStopV1ToMetadata({
+        machineId: 'machine-1', host: 'happy-host', path: '/tmp',
+        flavor: 'codex', codexSessionId: 'native-session-1',
+      }, { v: 1, cause: 'explicit_stop', requestId: 'held-resume-1', requestedAtMs: 1000 }),
+    });
+    const screen = await renderSessionViewAndSettle();
+    const action = findAgentInput(screen).props.connectionStatus?.action;
+    expect(action?.label).toBe((await import('@/text')).t('session.pendingActivation.actions.resume'));
+    // Home reachability is an independent real store fact, not Machine activity. The real
+    // scoped request owner must refuse before any native dispatch; no executor is substituted.
+    storage.setState({ endpointStatus: 'offline' });
+    await act(async () => { await action.onPress(); });
+    await waitForHomeGovernance(() => expect(modalAlertSpy).toHaveBeenCalled());
+    const { t } = await import('@/text');
+    const buttons = modalAlertSpy.mock.calls[0]?.[2];
+    expect(Array.isArray(buttons)).toBe(true);
+    const details = buttons.find((button: import('@/modal/types').AlertButton) => button.text === t('approvals.technicalDetails'));
+    expect(details).toBeTruthy();
+    await act(async () => { details.onPress(); });
+    expect(JSON.parse(modalAlertSpy.mock.calls[1]?.[1])).toEqual({
+      code: 'action_failed', phase: 'session.open', targetHome: 'srv_resume_original_home',
+    });
+    expect(storage.getState().sessions.s1.active).toBe(false);
+    expect(storage.getState().sessions.s1.metadata?.sessionExplicitStopV1).toMatchObject({ requestId: 'held-resume-1' });
+    expect(externalRpcRequests.filter(request => request.method === RPC_METHODS.SPAWN_HAPPY_SESSION
+      || request.method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE)).toEqual([]);
+    expect(resumeSessionSpy).not.toHaveBeenCalled();
+  });
+
   it('surfaces generic usage-limit recovery actions and status for provider runtime issues', async () => {
     await enableUsageLimitRecoveryHome();
     settingByKeyState.current.usageLimitRecoverySettingsV1 = { v: 1, mode: 'ask', resumePromptMode: 'off' };

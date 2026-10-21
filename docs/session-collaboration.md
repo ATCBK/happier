@@ -853,6 +853,12 @@ does not substitute Ask Happier merely because the queue is empty. Rendering
 that action does not clear a person Stop or start work; the explicit click uses
 the ordinary present-user Session resume owner. Higher-priority queue, guard,
 Provider-binding and restart recovery retain their existing precedence.
+Empty and non-empty queues use that same Resume Action. In development source,
+its failure presentation retains the returned Action code behind the existing
+Technical details disclosure, with the attempted operation and captured immutable
+Home identity (or an explicit unknown identity). It does not disclose private
+transport material, substitute a local profile id for a Home, waive carrier
+verification or clear a held Session after a failed attempt.
 
 Answer policy belongs to the existing executable participant row. The
 `discussion.participant.policy.set` Action changes that row; invitation defaults

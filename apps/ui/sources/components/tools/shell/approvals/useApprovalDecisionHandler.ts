@@ -17,6 +17,7 @@ import { captureLazyActionAccountContext, type LazyActionAccountContext } from '
 import { TeamLinkDelivery } from '@/components/settings/teams/TeamLinkDelivery';
 import { Modal } from '@/modal';
 import { HappyError } from '@/utils/errors/errors';
+import { alertActionFailure } from '@/utils/errors/alertActionFailure';
 import { recordResourceProposalDeclines } from '@/components/approvals/resourceProposal/recordResourceProposalDeclines';
 import { t } from '@/text';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
@@ -94,14 +95,7 @@ export function presentRecordedApprovalFailure(failure: Readonly<{ errorCode?: s
 export function alertApprovalFailure(error: unknown, fallbackMessage = t('approvals.decisionError')): void {
     const { reason, code } = presentApprovalFailure(error, fallbackMessage);
     const disclosedCode = code && !(error instanceof ApprovalExecutionError) ? code : null;
-    if (!disclosedCode) {
-        Modal.alert(t('common.error'), reason);
-        return;
-    }
-    Modal.alert(t('common.error'), reason, [
-        { text: t('approvals.technicalDetails'), onPress: () => Modal.alert(t('approvals.technicalDetails'), disclosedCode) },
-        { text: t('common.ok'), style: 'cancel' },
-    ]);
+    alertActionFailure({ reason, code: disclosedCode });
 }
 
 /** Distinguishes a settled effect failure from a decision that could not be saved. */

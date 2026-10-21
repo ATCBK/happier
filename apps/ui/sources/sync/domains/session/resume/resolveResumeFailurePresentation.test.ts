@@ -11,6 +11,16 @@ describe('session resume failure presentation', () => {
     it('keeps validation diagnostics out of generic resume alerts', () => {
         expect(resolveResumeFailurePresentation({
             errorCode: 'SPAWN_VALIDATION_FAILED', errorMessage: 'Private validation details',
-        }, 'Resume failed')).toEqual({ kind: 'alert', message: 'Resume failed' });
+        }, 'Resume failed')).toEqual({ kind: 'alert', message: 'Resume failed', errorCode: 'SPAWN_VALIDATION_FAILED' });
+    });
+
+    it('retains the original Action refusal code for deliberate Technical details', () => {
+        // This is the existing Action normalizer's result for the typed Home carrier refusal;
+        // the recovery surface must not throw away the code while retaining only its prose.
+        expect(resolveResumeFailurePresentation({
+            errorCode: 'action_failed', errorMessage: 'No verified transport is available for the target Home',
+        }, 'Resume failed')).toEqual({
+            kind: 'alert', message: 'No verified transport is available for the target Home', errorCode: 'action_failed',
+        });
     });
 });
