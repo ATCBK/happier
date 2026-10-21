@@ -253,7 +253,8 @@ async function setup(options: Readonly<{
   if (!workerStatusMethod) throw new Error('missing_worker_status_method');
   remote.mockImplementation(async ({ machineId, method, payload: params }) => {
     if (options.liveFeeds && method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) return new Promise(() => {});
-    if (options.liveFeeds && method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_SNAPSHOT) return {
+    if (options.liveFeeds && (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_SNAPSHOT
+      || method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH)) return {
       protocolVersion: 1, snapshot: { v: 1, machineId, generatedAt: 1, refreshState: 'idle', entries: [], diagnostics: [] },
     };
     if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_START) {
@@ -269,7 +270,7 @@ async function setup(options: Readonly<{
       explanation: machineId === 'pool-worker' ? 'load_unknown' : 'not_accepting',
     };
     await options.beforeBindingRead?.(machineId);
-    if (actualFails) throw new Error('owner_unavailable');
+    if (actualFails && (!options.liveFeeds || params?.projection === 'managed_bindings')) throw new Error('owner_unavailable');
     if (options.candidateFails && machineId === worker.machineId) throw new Error('candidate_unavailable');
     return {
     protocolVersion: 1,
@@ -424,6 +425,37 @@ async function setup(options: Readonly<{
 }
 
 describe('Service Runs on through the placement and relocation Actions', () => {
+  it.each(['devbox', 'hz-build-1'])('keeps canonical Start progress over failed binding reads on %s and refreshes on settlement', async machineId => {
+    const h = await setup({ running: false, actualFails: true, liveFeeds: true, sharedObservation: true, waitEnabled: false });
+    const workspace = { serverId: h.serverId, machineId: 'devbox', workspaceId: 'checkout', rootPath: '/src/happier' };
+    let operation = ActionOperationSnapshotV1Schema.parse({ version: 1, operationId: 'external-start', revision: 1,
+      actionId: 'localServices.launcher.start', state: 'running', scope: { accountId: 'artifact-account', machineId },
+      title: 'Start server', createdAt: 10, startedAt: 11, cancellation: 'unsupported',
+      domainRef: { kind: 'projectService', purpose: 'start', sourceWorkspace: { serverId: h.serverId, refId: 'checkout' },
+        workspace, declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'server' } } },
+      progress: { kind: 'phase', phase: 'copying', label: 'Copying current files' } });
+    try {
+      await vi.waitFor(() => expect(h.screen.findByTestId('service-row-status-unavailable')).toBeTruthy());
+      await act(async () => publishActionOperationObservation({ serverId: h.serverId, machineId, observation: 'available', snapshots: [operation] }));
+      await vi.waitFor(() => expect(h.screen.getTextContent()).toContain('projectWorkers.copying'));
+      expect(h.screen.findByTestId('service-row-start')).toBeNull();
+      expect(h.screen.findByTestId('service-row-status-unavailable')).toBeNull();
+      expect(h.screen.findByTestId('placement.move.operation')).toBeNull();
+      for (const phase of ['preparing', 'starting'] as const) {
+        operation = ActionOperationSnapshotV1Schema.parse({ ...operation, revision: operation.revision + 1,
+          progress: { kind: 'phase', phase, label: phase } });
+        await act(async () => publishActionOperationObservation({ serverId: h.serverId, machineId, observation: 'available', snapshots: [operation] }));
+        await vi.waitFor(() => expect(h.screen.getTextContent()).toContain(phase === 'preparing' ? 'projectWorkers.preparing' : 'localServices.row.startingOn'));
+      }
+      h.setActualFails(false);
+      await act(async () => h.setRunning(true));
+      operation = ActionOperationSnapshotV1Schema.parse({ ...operation, revision: operation.revision + 1, state: 'succeeded', settledAt: 20 });
+      await act(async () => publishActionOperationObservation({ serverId: h.serverId, machineId, observation: 'available', snapshots: [operation] }));
+      await vi.waitFor(() => expect(h.screen.findByTestId('service-row-status-running'), JSON.stringify({ text: h.screen.getTextContent(),
+        calls: remote.mock.calls.slice(-10).map(([call]) => ({ machineId: call.machineId, method: call.method, payload: call.payload })) })).toBeTruthy());
+    } finally { await h.screen.unmount(); }
+  });
+
   it.each(['worker', 'pool', 'primary', 'override', 'unavailable'] as const)('addresses normal Start from current saved placement (%s)', async destination => {
     const starts: Readonly<{ machineId: string; params: unknown }>[] = [];
     const { createDefaultRuntimeActionExecutor } = await import('@/sync/ops/actions/defaultRuntimeActionExecutor');
@@ -670,6 +702,9 @@ describe('Service Runs on through the placement and relocation Actions', () => {
     const operation: ActionOperationSnapshotV1 = { version: 1, operationId: 'moving-stale-feed', revision: 1,
       actionId: 'projects.service.relocate', state: 'running', scope: { accountId: 'artifact-account', machineId: 'devbox' },
       title: 'Move server', createdAt: 1, startedAt: 1, cancellation: 'supported',
+      domainRef: { kind: 'projectService', purpose: 'relocation', sourceWorkspace: { serverId, refId: 'checkout' },
+        workspace: { serverId, machineId: 'devbox', workspaceId: 'checkout', rootPath: '/src/happier' },
+        declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'server' } } },
       progress: { kind: 'phase', phase: 'copying', label: 'Copying current files' } };
     await act(async () => {
       publishActionOperationObservation({ serverId, machineId: 'devbox', observation: 'available', snapshots: [operation] });
@@ -680,6 +715,20 @@ describe('Service Runs on through the placement and relocation Actions', () => {
     expect(screen.findByTestId('service-row-status-running')).toBeNull();
     expect(screen.findByTestId('service-row-copy-address')).toBeNull();
     expect(screen.findByTestId('service-row-open')).toBeNull();
+    // A Move back to SOURCE executes a native Start there. Its newer child
+    // operation must not replace the enclosing Move's progress/recovery owner.
+    await act(async () => publishActionOperationObservation({ serverId, machineId: 'devbox', observation: 'available', snapshots: [
+      ActionOperationSnapshotV1Schema.parse({ ...operation, operationId: 'move-native-start', actionId: 'localServices.launcher.start',
+        createdAt: 2, startedAt: 2, cancellation: 'unsupported',
+        domainRef: { ...operation.domainRef, purpose: 'start' }, progress: { kind: 'phase', phase: 'starting', label: 'Starting service' } }),
+    ] }));
+    expect(screen.getTextContent()).toContain('projectWorkers.copying');
+    expect(screen.findByTestId('placement.move.inspect')).toBeTruthy();
+    await act(async () => publishActionOperationObservation({ serverId, machineId: 'devbox', observation: 'available', snapshots: [
+      { ...operation, revision: 2, state: 'succeeded', settledAt: 3 },
+    ] }));
+    await vi.waitFor(() => expect(screen.getTextContent()).toContain('localServices.row.startingOn'));
+    expect(screen.findByTestId('placement.move.inspect')).toBeNull();
     await screen.unmount();
   });
   it('renders the owning reason when the front door refuses the settings read', async () => {

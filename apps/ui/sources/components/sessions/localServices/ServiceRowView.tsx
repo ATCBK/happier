@@ -403,8 +403,8 @@ export function ServiceRowView(props: Readonly<{
     const relocation = useProjectServicePlacementObservation(declaration?.selection.kind === 'manifest' ? declaration.selection.name : '',
         undefined, { declarationWorkspaceRefId: declaration?.workspaceRefId, absent: row.status === 'stopped' });
     const recoverable = relocation.stoppedBeforeStart;
-    const relocating = relocation.relocating;
-    const operationText = recoverable ? t('localServices.rowStatus.stopped') : relocating ? relocation.progressText : null;
+    const operationActive = relocation.active;
+    const operationText = recoverable ? t('localServices.rowStatus.stopped') : operationActive ? relocation.progressText : null;
     // A refused action reads in place under its own row, never in a dialog over the page.
     const runner = useLocalServiceActionRunner({ presentation: 'inline',
         observedNativeBinding: row.target.sourceClass?.kind === 'managed_service'
@@ -412,14 +412,14 @@ export function ServiceRowView(props: Readonly<{
     const primary = row.primaryAction;
     // The one decision of what this entry offers, shared with the Processes port menu (plan 30 RU-3).
     const offered = resolveLocalServiceEntryActions(row, props);
-    const canOpen = !relocating && offered.open !== null;
-    const canStart = !relocating && !runner.failure?.awaitingNativeStart && offered.start !== null;
+    const canOpen = !operationActive && offered.open !== null;
+    const canStart = !operationActive && !runner.failure?.awaitingNativeStart && offered.start !== null;
     const startLabel = t('localServices.actions.startA11y');
-    const canTerminate = !relocating && offered.terminateDetected;
+    const canTerminate = !operationActive && offered.terminateDetected;
     const canForget = offered.forget;
-    const canStop = !relocating && offered.stopManaged;
-    const canRestart = !relocating && offered.restartManaged;
-    const addressValue = relocating ? null : offered.address;
+    const canStop = !operationActive && offered.stopManaged;
+    const canRestart = !operationActive && offered.restartManaged;
+    const addressValue = operationActive ? null : offered.address;
 
     /**
      * Two pending ids for one row, because feedback belongs where the user acted.
@@ -430,6 +430,7 @@ export function ServiceRowView(props: Readonly<{
      * put both spinners on screen for the same dispatch.
      */
     const inlinePendingId = `${row.id}:inline`;
+    const startPendingId = `${row.id}:start`;
     const menuPendingId = `${row.id}:menu`;
 
     const handleOpen = React.useCallback(async () => {
@@ -445,12 +446,12 @@ export function ServiceRowView(props: Readonly<{
         if (!canStart || primary?.kind !== 'start') return undefined;
         if (recoverable) relocation.clear();
         return runner.run({
-            id: inlinePendingId,
+            id: startPendingId,
             failureTitle: t('localServices.actions.failureTitle.start', { service: row.title }),
             observeNativeStart: true,
             action: async () => props.onStartLauncherTarget?.(primary.target),
         });
-    }, [canStart, inlinePendingId, primary, props, recoverable, relocation.clear, row.title, runner]);
+    }, [canStart, startPendingId, primary, props, recoverable, relocation.clear, row.title, runner]);
 
     const handleTerminate = React.useCallback(() => {
         void (async () => {
@@ -568,7 +569,7 @@ export function ServiceRowView(props: Readonly<{
     const pending = runner.pendingId === menuPendingId;
     // A row that can only be started (a package script) or not acted on at all has nothing to
     // grow into: it stays a plain row, with ▶ as its one control.
-    const hasPublicLink = !relocating && Boolean(props.publicPreviewState && props.publicPreviewActions)
+    const hasPublicLink = !operationActive && Boolean(props.publicPreviewState && props.publicPreviewActions)
         && hasLocalServicePublicPreviewSurface(row.target);
     // A row grows only into what it has to show: its address, its link, where it runs (plan 32: Runs
     // on is reachable on every service, stopped or address-less). A live service with no address — a
@@ -581,9 +582,9 @@ export function ServiceRowView(props: Readonly<{
     const offline = props.offline === true;
     const machineName = props.machineName ?? null;
     // While its own Start is in flight the row reads as Starting (lab STATES 1), then returns to what the feed says.
-    const shown = runner.pendingId === inlinePendingId && primary?.kind === 'start' ? { ...row, status: 'starting' as const } : row;
+    const shown = runner.pendingId === startPendingId ? { ...row, status: 'starting' as const } : row;
     const title = <ServiceRowTitle row={shown} operationText={operationText} offline={offline} animationEnabled={props.animationEnabled} testID={props.testID} />;
-    const subtitle = relocating ? undefined : <ServiceRowFacts row={shown} machineName={machineName} startedByName={props.startedByName ?? null}
+    const subtitle = operationActive ? undefined : <ServiceRowFacts row={shown} machineName={machineName} startedByName={props.startedByName ?? null}
         unavailableMachineName={props.unavailableMachineName ?? null} testID={props.testID} />;
     const identity = <ServiceMark row={row} testID={`${props.testID}-identity`} />;
     // One tap: a running row's signature action sits on the row itself, like ▶ on a row that can be
@@ -631,7 +632,7 @@ export function ServiceRowView(props: Readonly<{
     const rowControl = openControl ?? startControl ?? (overflowOnRow ? overflowControl : null);
     // "Share a link" sits in the action line beside Copy address (services lab O); an issued link and
     // the reasons a link cannot be made are the public-preview block's below it.
-    const shareOffer = !relocating && props.publicPreviewActions
+    const shareOffer = !operationActive && props.publicPreviewActions
         ? resolveLocalServicePublicLinkOffer({
             state: props.publicPreviewState,
             launchTarget: row.target,
@@ -666,9 +667,9 @@ export function ServiceRowView(props: Readonly<{
             {actionBar}
             {props.placement}
             <LocalServicePublicPreviewControls
-                launchTargets={relocating ? [] : [row.target]}
-                state={relocating ? null : props.publicPreviewState}
-                actions={relocating ? undefined : props.publicPreviewActions}
+                launchTargets={operationActive ? [] : [row.target]}
+                state={operationActive ? null : props.publicPreviewState}
+                actions={operationActive ? undefined : props.publicPreviewActions}
                 capabilityDisabledReasons={props.publicPreviewCapabilityDisabledReasons}
                 shareInActionLine
                 testID={`${props.testID}-public-preview`}

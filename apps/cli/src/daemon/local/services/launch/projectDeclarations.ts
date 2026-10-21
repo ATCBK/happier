@@ -25,7 +25,7 @@ import { DaemonLocalServiceLauncherStartResponseV1Schema, LocalServiceNativePrer
 import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { isPluginError } from '@happier-dev/plugin-sdk';
 import { stopProjectManagedService, type RestartProjectManagedService } from '../actions/executor';
-import { createProjectServiceDeclarationTargetIdV1, type ProjectServiceDeclarationRefV1 } from '@happier-dev/protocol/local/services/actions/v1';
+import { createProjectServiceDeclarationTargetIdV1, LocalServiceManagedServiceActionTargetV1Schema, type ProjectServiceDeclarationRefV1 } from '@happier-dev/protocol/local/services/actions/v1';
 import type { ProjectManifestFileSnapshot } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestDocument';
 import type { WorkspaceSyncWorkerTargetBasis } from '@/workspaces/sync/workspaceSyncPreparation';
 import type { ProjectServiceStartChoice } from '@/workspaces/execution/projectServicePlacement';
@@ -493,6 +493,44 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
     }
 
     async function startManagedDeclaration(selected: SelectedDeclaration, request: DaemonLocalServiceLauncherStartRequestV1, ingress?: RpcHandlerContext, context?: ActionContext, executeCanonicalAction?: CanonicalPoolRead): Promise<LocalServiceLauncherStartExecutionOutcome> {
+        const { workspace, declaration } = request;
+        if (!ingress || !context || !workspace || !declaration) {
+            return executeManagedDeclaration(selected, request, ingress, context, executeCanonicalAction);
+        }
+        const runtime = await input.resolveRuntime(ingress);
+        if (!runtime) return { status: 'denied', reasonCode: 'project_service_runtime_unavailable' };
+        let outcome: LocalServiceLauncherStartExecutionOutcome | undefined;
+        let uncertainError: unknown;
+        // The native receiver owns Start observation for UI, approved CLI and Move.
+        // Finite setup keeps its own review/output custody beneath this Service operation.
+        const observed = await runtime.operationRuntime.observeExecution({ actionId: 'localServices.launcher.start', input: request,
+            rpcContext: ingress, ...(context.actionRequestId ? { actionRequestId: context.actionRequestId } : {}),
+            execute: async operation => {
+                operation.operationOwnerUpdate.update({ state: 'running', domainRef: { kind: 'projectService', purpose: 'start',
+                    sourceWorkspace: { serverId: workspace.serverId, refId: workspace.workspaceId }, workspace, declaration } });
+                operation.operationProgress.update({ phase: 'preparing', label: 'Preparing service' });
+                try {
+                    outcome = await executeManagedDeclaration(selected, request, ingress, { ...context, ...operation,
+                        signal: context.signal ? AbortSignal.any([context.signal, operation.signal]) : operation.signal }, executeCanonicalAction);
+                    return outcome.status === 'succeeded' ? { ok: true, result: outcome }
+                        : { ok: false, errorCode: outcome.reasonCode, error: outcome.reasonCode };
+                } catch (error) {
+                    if (isProjectNativeProcessUncertain(error) || error instanceof ProjectNativeEnvironmentUncertainError) {
+                        uncertainError = error;
+                        return { ok: false, errorCode: 'outcome_uncertain', error: 'outcome_uncertain' };
+                    }
+                    throw error;
+                }
+            } });
+        if (uncertainError) throw uncertainError;
+        if (outcome) return outcome;
+        if (!observed.ok) return { status: 'failed', reasonCode: observed.errorCode };
+        const target = LocalServiceManagedServiceActionTargetV1Schema.safeParse(observed.result && typeof observed.result === 'object'
+            && 'currentTarget' in observed.result ? observed.result.currentTarget : undefined);
+        return { status: 'succeeded', ...(target.success ? { currentTarget: target.data } : {}) };
+    }
+
+    async function executeManagedDeclaration(selected: SelectedDeclaration, request: DaemonLocalServiceLauncherStartRequestV1, ingress?: RpcHandlerContext, context?: ActionContext, executeCanonicalAction?: CanonicalPoolRead): Promise<LocalServiceLauncherStartExecutionOutcome> {
         let lease: PluginRuntimeLease | undefined;
         const nativeInvocations = new Set<ProjectNativeEffectCaptureForHost>();
         let uncertain = false;
@@ -511,9 +549,11 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
                 if (!source) return;
                 const eligibility = await source.runtime.workerAdmission.observeServiceEligibility(source.manifest.workspace?.memoryDemand);
                 if (!eligibility.eligible) throw new ServiceStartRefusal(eligibility.reason ?? 'project_service_admission_unavailable');
+                context.operationProgress?.update({ phase: 'copying', label: 'Copying current files' });
                 await source.runtime.prepareDequeue!({ workspace: source.basis.source, choice: source.choice, basis: source.basis, signal });
             };
             await prepareCopy(initial.kind === 'source' ? initial.signal : initial.preparation.signal!);
+            context.operationProgress?.update({ phase: 'preparing', label: 'Preparing service' });
             let current = initial.kind === 'source' || initial.source ? await reviewTarget(nativeInvocations, request, ingress, context, executeCanonicalAction) : initial;
             unchanged(current);
             let setupInput: ProjectSetupExecutionInput | undefined;
@@ -609,6 +649,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
             if (!isCurrent()) throw new ServiceStartRefusal('native_adapter_retired');
             const builtinNative = current.builtinNative;
             const releaseNativeLifecycle = current.releaseNativeLifecycle;
+            context.operationProgress?.update({ phase: 'starting', label: 'Starting service' });
             const handle = await registry.projectManagedServices.superviseProject({ workspace: current.plan.workspace, declaration: current.declaration,
                 cwd: current.command.kind === 'literal' ? current.command.cwd : current.command.resolution.cwd,
                 requester: { serverId: current.runtime.serverId, accountId: ingress.machineAdmission!.actorAccountId,

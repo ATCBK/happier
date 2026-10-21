@@ -185,6 +185,10 @@ describe('ServiceRowView', () => {
         await act(async () => { void pressTestInstanceAsync(screen.findByTestId('row-start'), 'row-start'); });
         expect(screen.getTextContent()).toContain('Starting');
         expect(screen.getTextContent()).toContain('Starting on devbox');
+        await screen.update(<ServiceRowView row={{ ...row, status: 'unavailable', primaryAction: null,
+            reasonCode: 'project_service_binding_unavailable' }} machineName="devbox" onStartLauncherTarget={start} testID="row" />);
+        expect(screen.findByTestId('row-status-starting')).toBeTruthy();
+        expect(screen.findByTestId('row-status-unavailable')).toBeNull();
         await act(async () => { settle({ status: 'succeeded' }); await Promise.resolve(); });
         expect(screen.getTextContent()).not.toContain('Starting');
     });

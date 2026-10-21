@@ -36,7 +36,7 @@ import { computeDaemonSpawnRequestKey, createSpawnRequestCoalescer } from '@/dae
 describe('finite host operation custody', () => {
   // Open's native registrar owns observation across direct and relay calls;
   // its composed settlement keeper exercises this same outer adapter.
-  it.each(listActionSpecs().filter(spec => spec.operation && spec.id !== 'projects.open').map(spec => spec.id))(
+  it.each(listActionSpecs().filter(spec => spec.operation && spec.id !== 'projects.open' && spec.id !== 'localServices.launcher.start').map(spec => spec.id))(
     'supplies the incumbent runner acceptance to the admitted %s effect', async actionId => {
       const runtime = createHostActionOperationRuntime({ machineId: 'machine', resolveAccountId: async () => 'requester',
         generateOperationId: () => 'replayed-operation' });

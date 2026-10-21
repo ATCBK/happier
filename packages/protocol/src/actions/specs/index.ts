@@ -178,6 +178,8 @@ function createRuntimeActionSpecFor<
       voiceClientToolName: actionId.replaceAll('.', '_'), mcpToolName: actionId.replaceAll('.', '_') } } : {}),
     ...(actionId === 'localServices.launcher.start' ? {
       executionPlacement: 'machine' as const,
+      operation: { version: 1 as const, visibility: 'activity' as const, progress: 'reported' as const,
+        presentation: { onStart: 'current' as const } },
       bindings: { rpcMethod: RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_START, voiceClientToolName: actionId.replaceAll('.', '_'),
         mcpToolName: actionId.replaceAll('.', '_') },
     } : {}),

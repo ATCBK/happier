@@ -549,7 +549,11 @@ describe('action operation canonical execution observer', () => {
     await runner.observe(request);
     expect(starts).toBe(1);
   });
-  it.each(['stop_unconfirmed', 'outcome_uncertain'])('keeps service relocation %s running without replay or false cancellation', async (errorCode) => {
+  it.each([
+    ['projects.service.relocate', 'stop_unconfirmed'],
+    ['projects.service.relocate', 'outcome_uncertain'],
+    ['localServices.launcher.start', 'outcome_uncertain'],
+  ])('keeps %s %s running without replay or false cancellation', async (actionId, errorCode) => {
     const store = createActionOperationStore();
     const runner = createActionOperationRunner({ store, generateOperationId: () => 'service-move',
       resolveAction: actionId => ({ actionId, title: 'Move service', operation: {
@@ -557,7 +561,7 @@ describe('action operation canonical execution observer', () => {
       } }),
     });
     let effects = 0;
-    const request = { actionId: 'projects.service.relocate', requestId: 'move-request',
+    const request = { actionId, requestId: 'move-request',
       input: { currentTarget: 'old-instance', destination: 'new-machine' }, scope,
       cancellation: 'supported' as const,
       execute: async () => { effects += 1; return { ok: false as const, errorCode, error: errorCode }; },

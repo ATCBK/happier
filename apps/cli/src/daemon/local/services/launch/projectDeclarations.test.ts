@@ -98,7 +98,8 @@ import { readCarrierMutation } from '@/api/artifacts/accountArtifactStore.testki
 import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { createTargetedActionRpcRequestV1, TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions/actionRpcTransport';
-import { ACTION_OPERATION_REQUEST_ID_MAX_LENGTH_V1 } from '@happier-dev/protocol/actions/operations/v1';
+import { ACTION_OPERATION_REQUEST_ID_MAX_LENGTH_V1, ActionOperationSnapshotV1Schema, projectActionOperationSnapshotForV1Reader, type ActionOperationSnapshotV1 } from '@happier-dev/protocol/actions/operations/v1';
+import { ActionOperationSnapshotV1Schema as PredecessorOperationSchema } from '@/daemon/actionOperations/testFixtures/predecessorActionOperationV1';
 
 class ObservedSetupPty implements PtyProcess {
     readonly pid = 3456;
@@ -174,6 +175,37 @@ describe('accepted Project Service declaration starter', () => {
         expect(h.copies()).toBe(0);
         expect(h.setupProcesses).toEqual([]);
         expect(h.owner.listProjectServices()).toEqual([]);
+    });
+
+    it('publishes a SOURCE-linked Start operation across real clean copy, preparation and native launch', async () => {
+        const h = await fixture(false, undefined, true, 'portable');
+        let releaseCopy!: () => void;
+        const copying = new Promise<void>(resolve => { releaseCopy = resolve; });
+        h.afterCopy(() => copying);
+        const review = await h.routes.startTarget!(h.request, h.ingress, h.context);
+        if (!review.reviewedEffectDigest) throw new Error('Expected service review');
+        const request = { ...h.request, expectedEffectDigest: review.reviewedEffectDigest };
+        const completion = h.operationRuntime.runActionOperation({ actionId: 'localServices.launcher.start', input: request, context: h.context,
+            execute: async context => ({ ok: true, result: await h.routes.startTarget!(request, h.ingress, context) }) });
+        const scope = { accountId: 'owner', machineId: h.targetWorkspace.machineId };
+        try {
+            await expect.poll(() => h.copies()).toBe(1);
+            const start = h.operationRuntime.store.list(scope).items.find(item => item.actionId === 'localServices.launcher.start');
+            expect(start).toMatchObject({ state: 'running', progress: { phase: 'copying' },
+                domainRef: { kind: 'projectService', purpose: 'start', sourceWorkspace: { serverId: 'home', refId: h.workspace.id },
+                    declaration: h.request.declaration } });
+            expect(ActionOperationSnapshotV1Schema.safeParse(start).success).toBe(true);
+            releaseCopy();
+            expect(await completion).toMatchObject({ ok: true, result: { status: 'succeeded' } });
+            expect(h.operationRuntime.store.get(scope, start!.operationId)).toMatchObject({ state: 'succeeded', progress: { phase: 'starting' } });
+            expect(h.operationSnapshots.some(item => item.actionId === 'localServices.launcher.start'
+                && item.progress?.kind === 'phase' && item.progress.phase === 'preparing')).toBe(true);
+            expect(h.operationSnapshots.filter(item => item.actionId === 'localServices.launcher.start')
+                .every(item => ActionOperationSnapshotV1Schema.safeParse(item).success)).toBe(true);
+            expect(h.operationSnapshots.filter(item => item.actionId === 'localServices.launcher.start')
+                .every(item => PredecessorOperationSchema.safeParse(projectActionOperationSnapshotForV1Reader(item)).success)).toBe(true);
+            expect(new Set(h.operationSnapshots.filter(item => item.actionId === 'localServices.launcher.start').map(item => item.operationId)).size).toBe(1);
+        } finally { releaseCopy(); h.setupProcesses.forEach(process => process.pty.exit(0)); await completion; }
     });
 
     it.each([false, true])('binds Auto Service approval to the native worker before publication (withdrawn=%s)', async withdrawn => {
@@ -388,9 +420,12 @@ describe('accepted Project Service declaration starter', () => {
         } }, stopProcessTree: async () => {}, probeProcessGroup: () => 'absent',
             config: { bufferMaxBytes: 1_000_000, bufferMaxEvents: 1000,
                 bufferRetentionMs: 600_000, urlParseBufferLimit: 32_768, maxWriteChunkBytes: 16_384, defaultCols: 80, defaultRows: 24 }, env: {}, platform: 'linux' });
+        const operationSnapshots: ActionOperationSnapshotV1[] = [];
+        let operationIndex = 0;
         const operationRuntime = createHostActionOperationRuntime({ machineId: targetWorkspace.machineId,
             custodyBinding: { serverId: homeId, installationId: 'installation' }, resolveAccountId: async () => 'owner',
-            ...(workerExecution ? { generateOperationId: () => 'setup-operation' } : {}) });
+            publishSnapshot: snapshot => operationSnapshots.push(snapshot),
+            ...(workerExecution ? { generateOperationId: () => ++operationIndex === 1 ? 'service-start-operation' : `setup-operation${operationIndex === 2 ? '' : `-${operationIndex}`}` } : {}) });
         const owner = createManagedServicesOwner({ processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon',
             ...(supervisorPlatform ? { platform: supervisorPlatform } : {}) }),
             // Plugin dependency installation is unreachable for literal Project commands.
@@ -464,7 +499,7 @@ describe('accepted Project Service declaration starter', () => {
             projectManagedServices: owner,
             runTargets: () => discoverLocalServiceRunTargets({ roots: [], acceptedWorkspaceRefs: [targetWorkspace] }) });
         const routes = createLocalServiceLauncherRoutes({ feed, history, ...starter });
-        return { root, workspace, targetRoot, targetWorkspace, serverIdentityId, projectDefinitionActionFor, manifest, starter, routes, history, request, ingress, context, owner, post, setupProcesses, operationRuntime, runtime, admissionDrain, prepareBetween,
+        return { root, workspace, targetRoot, targetWorkspace, serverIdentityId, projectDefinitionActionFor, manifest, starter, routes, history, request, ingress, context, owner, post, setupProcesses, operationRuntime, operationSnapshots, runtime, admissionDrain, prepareBetween,
             async createRuntimeActionExecutor(relocateService?: LocalServicesRuntimeActionRoutes['relocateService'], actionRoutes?: LocalServicesRuntimeActionRoutes['actionRoutes'], launcherRoutes = routes, runtimeIngress = ingress) {
                 const featureGate = createLocalServicesDaemonFeatureGate({ env: {}, resolveServerFeaturesSnapshot: () => ({ status: 'ready',
                     features: FeaturesResponseSchema.parse({ features: { localServices: { enabled: true, inventory: { enabled: true },
@@ -891,6 +926,9 @@ describe('accepted Project Service declaration starter', () => {
             establishmentFailure: { cause: 'port_in_use', port: address.port, sameProject: true, exitCode: 1,
                 lastStderrLine: `Error: listen EADDRINUSE: address already in use 127.0.0.1:${address.port}` } });
         expect(f.owner.listProjectServices()).toEqual([]);
+        expect(f.operationRuntime.store.list({ accountId: 'owner', machineId: f.targetWorkspace.machineId }).items
+            .find(item => item.actionId === 'localServices.launcher.start')).toMatchObject({ state: 'failed',
+                error: { errorCode: 'plugin_managed_service_establishment_failed' } });
         expect(occupant.exitCode).toBeNull();
     });
 
@@ -1999,6 +2037,8 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
         const scope = { accountId: 'owner', machineId: h.targetWorkspace.machineId };
         await expect.poll(() => h.operationRuntime.store.get(scope, 'setup-operation')?.setupReview?.code).toBe('project_setup_consent_required');
         const pending = h.operationRuntime.store.get(scope, 'setup-operation')!;
+        expect(h.operationRuntime.store.list(scope).items.find(item => item.actionId === 'localServices.launcher.start'))
+            .toMatchObject({ state: 'running', progress: { phase: 'preparing' } });
         expect(h.copies()).toBe(1);
         expect(h.setupProcesses).toEqual([]);
         expect(h.owner.listProjectServices()).toEqual([]);
@@ -2013,7 +2053,8 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
         h.setupProcesses[0]!.pty.exit(0);
         expect(await completion).toMatchObject({ status: 'succeeded' });
         expect(h.runtime.workerAdmission.dependencies()).toEqual([]);
-        expect(h.operationRuntime.store.list(scope).items).toHaveLength(1);
+        expect(h.operationRuntime.store.list(scope).items.map(item => item.actionId).sort())
+            .toEqual(['localServices.launcher.start', 'projects.prepare']);
         await h.owner.listProjectServices()[0]?.stop();
     });
 
@@ -2282,6 +2323,14 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
             ...(policy === 'waived-agent' ? { 'localServices.launcher.start': ['agent'] } : {}),
         } });
         const h = await fixture();
+        // The peer cannot supply native approval review. Substitute only that
+        // Machine transport; independent Start policy must still refuse Restart.
+        vi.spyOn(machineRpcBoundary, 'callExactMachineRpc').mockImplementation(async call => {
+            expect(call.method).toBe(RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT);
+            return DaemonLocalServiceLauncherSnapshotResponseV1Schema.parse({ protocolVersion: 1,
+                snapshot: { v: 1, machineId: h.workspace.machineId, updatedAt: 1, targets: [] },
+                startReview: { ok: false, errorCode: 'approval_context_unavailable', error: 'approval_context_unavailable' } });
+        });
         const review = await h.routes.startTarget!(h.request, h.ingress, h.context);
         if (!review.reviewedEffectDigest) throw new Error('Expected current Service review');
         const start = { ...h.request, expectedEffectDigest: review.reviewedEffectDigest };

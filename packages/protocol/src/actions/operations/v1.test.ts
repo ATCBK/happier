@@ -129,13 +129,15 @@ describe('Action operation v1 contract', () => {
     expect(ActionOperationDomainRefV1Schema.safeParse({ ...domainRef,
       bootstrapTask: { ...domainRef.bootstrapTask, controller: domainRef.controller, resource: domainRef.resource } }).success).toBe(false);
   });
-  it('retains only the qualified service relocation attempt without claiming a native lifetime', () => {
-    const domainRef = { kind: 'projectService', purpose: 'relocation',
+  it.each(['start', 'relocation'] as const)('retains only the qualified service %s attempt without claiming a native lifetime', purpose => {
+    const domainRef = { kind: 'projectService', purpose,
       workspace: { serverId: 'home', machineId: 'selected-worker', workspaceId: 'selected-ref', rootPath: '/selected' },
       declaration: { workspaceRefId: 'selected-ref', selection: { kind: 'manifest', name: 'web' } } };
-    const operation = { ...baseSnapshot, actionId: 'projects.service.relocate', state: 'running', startedAt: 110,
+    const operation = { ...baseSnapshot, actionId: purpose === 'start' ? 'localServices.launcher.start' : 'projects.service.relocate', state: 'running', startedAt: 110,
       domainRef, observation: { kind: 'outcome_uncertain', code: 'outcome_uncertain' } };
-    expect(ActionOperationSnapshotV1Schema.parse(operation).domainRef).toEqual(domainRef);
+    const parsed = ActionOperationSnapshotV1Schema.parse(operation);
+    expect(parsed.domainRef).toEqual(domainRef);
+    expect(projectActionOperationSnapshotForV1Reader(parsed)).not.toHaveProperty('domainRef');
     expect(ActionOperationDomainRefV1Schema.safeParse({ ...domainRef,
       declaration: { ...domainRef.declaration, workspaceRefId: 'source-ref' } }).success).toBe(false);
     expect(ActionOperationDomainRefV1Schema.safeParse({ ...domainRef, managedServiceId: 'unobserved-native' }).success).toBe(false);

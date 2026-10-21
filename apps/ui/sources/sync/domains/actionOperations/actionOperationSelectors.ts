@@ -106,6 +106,16 @@ function compareOperations(a: ActionOperationProjection, b: ActionOperationProje
     return (b.snapshot.settledAt ?? b.snapshot.createdAt) - (a.snapshot.settledAt ?? a.snapshot.createdAt);
 }
 
+/** An active Move owns its nested native Start and the Service's recovery controls. */
+export function compareProjectServiceActionOperations(a: ActionOperationProjection, b: ActionOperationProjection): number {
+    if (!isActionOperationTerminal(a.snapshot.state) && !isActionOperationTerminal(b.snapshot.state)) {
+        const aMove = a.snapshot.actionId === 'projects.service.relocate';
+        const bMove = b.snapshot.actionId === 'projects.service.relocate';
+        if (aMove !== bMove) return aMove ? -1 : 1;
+    }
+    return compareOperations(a, b);
+}
+
 function isUnseen(
     state: ActionOperationStoreSnapshot,
     operation: Pick<ActionOperationProjection, 'serverId' | 'snapshot'>,
@@ -266,16 +276,17 @@ export function createActionOperationSelectors(): ActionOperationSelectors {
             const { snapshot } = operation;
             const domain = snapshot.domainRef;
             if (operation.serverId !== serverId || snapshot.scope.accountId !== query.accountId
-                || snapshot.scope.machineId !== query.machineId || snapshot.actionId !== 'projects.service.relocate'
+                || (snapshot.actionId !== 'projects.service.relocate' && snapshot.actionId !== 'localServices.launcher.start')
+                || (snapshot.actionId === 'projects.service.relocate' && snapshot.scope.machineId !== query.machineId)
                 || domain?.kind !== 'projectService' || domain.declaration.selection.kind !== 'manifest') continue;
             const sourceMatches = domain.sourceWorkspace
                 ? areServerProfileIdentifiersEquivalent(domain.sourceWorkspace.serverId, serverId) && domain.sourceWorkspace.refId === query.refId
                 : areServerProfileIdentifiersEquivalent(domain.workspace.serverId, serverId) && domain.workspace.machineId === query.machineId
                     && domain.workspace.workspaceId === query.refId;
             if (!sourceMatches) continue;
-            // selectAll orders active work first, then most recent settled work.
             const name = domain.declaration.selection.name;
-            if (!services.has(name)) services.set(name, operation);
+            const selected = services.get(name);
+            if (!selected || compareProjectServiceActionOperations(operation, selected) < 0) services.set(name, operation);
         }
         const next = [...services.values()];
         const previous = serviceCache.get(key) ?? EMPTY_OPERATIONS;

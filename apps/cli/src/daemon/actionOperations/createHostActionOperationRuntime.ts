@@ -359,8 +359,9 @@ export async function runHostActionOperation(
   const context: RpcActionExecutorContext = request.context;
   // Every native Open route converges on registerProjectOpenRpcHandlers. Its
   // receiving-host observer owns the operation even when a Machine relay
-  // cannot carry this private context; observing here would join itself.
-  if (request.actionId === 'projects.open') return request.execute(context);
+  // cannot carry this private context. Declared Service Start likewise observes
+  // at its native declaration receiver; an outer observer would join itself.
+  if (request.actionId === 'projects.open' || request.actionId === 'localServices.launcher.start') return request.execute(context);
   if (context.operationAcceptance?.actionId === request.actionId) return request.execute(context);
   return observeExecution({ actionId: request.actionId, input: request.input, rpcContext: rpcContext ?? context,
     ...(context.actionRequestId ? { actionRequestId: context.actionRequestId } : {}),

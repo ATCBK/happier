@@ -205,7 +205,7 @@ export const ActionOperationDomainRefV1Schema = lazyZodSchema(() => z.discrimina
   }),
   z.strictObject({
     kind: z.literal('projectService'),
-    purpose: z.literal('relocation'),
+    purpose: z.enum(['start', 'relocation']),
     /** Original checkout remains stable while native custody changes Machines. */
     sourceWorkspace: z.optional(WorkspaceExecutionConfigAddressV1Schema),
     destinationWorkspace: z.optional(WorkspaceAddressV1Schema),

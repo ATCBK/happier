@@ -50,7 +50,7 @@ function materialCategory(snapshot: ActionOperationSnapshotV1): LiveWorkCategory
   if (snapshot.actionId === 'machines.managed.power.set' || snapshot.actionId === 'machines.managed.delete') return 'finite';
   if (snapshot.actionId === 'projects.prepare' || snapshot.actionId === 'session.spawn_new' || snapshot.actionId === 'session.fork'
     || snapshot.actionId === 'machines.managed.acquire' || snapshot.domainRef?.kind === 'systemTask') return 'setup';
-  if (snapshot.actionId === 'projects.service.relocate') return 'service';
+  if (snapshot.actionId === 'projects.service.relocate' || snapshot.actionId === 'localServices.launcher.start') return 'service';
   return null;
 }
 
