@@ -709,7 +709,9 @@ plugin catalogs keep their existing recovery path; an optional MCP omission or
 the broad `mcp_request_auth_unavailable` diagnostic alone is not a definite
 startup refusal. A host continuation refusal (runner exit 78) reaches this same
 failure reader before requester custody is released, even though it suppresses
-automatic respawn. Only the same occurrence's failed primary Session issue and
+automatic respawn. This observation also runs with
+`HAPPIER_DAEMON_SESSION_RESPAWN_ENABLED=false`; explicit Stop still suppresses it.
+Only the same occurrence's failed primary Session issue and
 exact activation stamp can settle the input. An unavailable Home observation or
 stale target leaves it waiting. A generic Agent error without that terminal
 runner evidence does not establish a continuation refusal. Runner failure logs
