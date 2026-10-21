@@ -3,10 +3,8 @@ import type { MachineResourceReasonV1 } from '@happier-dev/protocol/machines/res
 import { storage } from '@/sync/domains/state/storageStore';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { resolveServerScopedMachines } from '@/sync/domains/machines/resolveServerScopedMachines';
-import { subscribeMachineRequestReachability } from '@/sync/domains/machines/reachability/machineReachability';
+import { useMachinePresenceSnapshot } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { collectMachineAttention } from '@/components/machines/attention/collectMachineAttention';
-import { sessionListRuntimeClock } from '@/hooks/session/sessionListRuntimeClock';
-import { readMachineStatusNextRefreshAtMs } from '@/utils/sessions/machineUtils';
 import { useActiveServerAccountScope } from '@/sync/store/hooks';
 import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -31,9 +29,9 @@ export function useMachineResourceFleetAttention(): MachineResourceFleetAttentio
         return resolveServerScopedMachines({ serverId, activeServerId: serverId, activeMachines: Object.values(state.machines),
             machineListByServerId: state.machineListByServerId, machineListStatusByServerId: state.machineListStatusByServerId }) ?? [];
     }, [serverId]);
-    const getSnapshot = React.useCallback(() => {
+    const readSnapshot = React.useCallback((nowMs: number) => {
         const machines = [...readMachines()].sort((left, right) => left.id.localeCompare(right.id));
-        const attention = collectMachineAttention([{ serverId, accountScope: scope, serverName: '', status: 'idle', machines }]);
+        const attention = collectMachineAttention([{ serverId, accountScope: scope, serverName: '', status: 'idle', machines }], nowMs);
         const needsYou: MachineResourceKey[] = [];
         const look: { machineKey: string; reasonKey: string }[] = [];
         let lastAutomaticActionAt: number | null = null;
@@ -50,25 +48,8 @@ export function useMachineResourceFleetAttention(): MachineResourceFleetAttentio
         // Only the published consumer projection participates in subscription equality.
         return JSON.stringify({ accountScope: scope, needsYou, look, reportingMachineKeys: attention.reportingMachineKeys, lastAutomaticActionAt, headline });
     }, [readMachines, serverId, scope]);
-    const subscribe = React.useCallback((listener: () => void) => {
-        const token = {};
-        const refresh = () => {
-            const nowMs = Date.now();
-            let next: number | null = null;
-            for (const machine of readMachines()) {
-                const at = readMachineStatusNextRefreshAtMs(machine, nowMs);
-                if (at !== null) next = next === null ? at : Math.min(next, at);
-            }
-            if (next === null) sessionListRuntimeClock.clearWake(token);
-            else sessionListRuntimeClock.requestWake(token, next);
-            listener();
-        };
-        const stopStore = storage.subscribe(refresh);
-        const stopReachability = subscribeMachineRequestReachability(refresh);
-        const stopClock = sessionListRuntimeClock.subscribe(refresh);
-        refresh();
-        return () => { stopStore(); stopReachability(); stopClock(); sessionListRuntimeClock.clearWake(token); };
-    }, [readMachines]);
-    const signature = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+    // Share presence's source-cached snapshot and expiry subscription. React's
+    // consistency reads must not sample a new wall time before that source wakes.
+    const signature = useMachinePresenceSnapshot(readMachines, readSnapshot);
     return React.useMemo(() => JSON.parse(signature) as MachineResourceFleetAttention, [signature]);
 }

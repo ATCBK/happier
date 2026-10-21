@@ -124,7 +124,7 @@ export function useMachinePresenceMembership(serverId: string | null): MachinePr
 }
 
 /** React reads one immutable projection until one of its subscribed sources moves. */
-function useMachinePresenceSnapshot<T>(
+export function useMachinePresenceSnapshot<T>(
     readMachines: Parameters<typeof useMachinePresenceSubscription>[0],
     readSnapshot: (nowMs: number) => T,
 ): T {

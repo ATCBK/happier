@@ -32,6 +32,32 @@ function setMachines(machines: Machine[]) {
 }
 
 describe('always-on Machine resource attention', () => {
+    it('holds the snapshot across repeated React reads until the presence clock publishes expiry', async () => {
+        vi.useFakeTimers();
+        vi.stubEnv('EXPO_PUBLIC_HAPPIER_MACHINE_ONLINE_GRACE_MS', '60000');
+        const now = Date.now();
+        vi.setSystemTime(now);
+        const serverId = setMachines([resourceMachine('expires', 'needs_you', { activeAt: now - 59_500 })]);
+        let renders = 0;
+        const hook = await renderHook(() => { renders += 1; return useMachineResourceFleetAttention(); });
+        const snapshot = hook.getCurrent();
+        expect(snapshot.needsYou).toEqual([{ serverId, machineId: 'expires' }]);
+        // A busy browser can cross the lease between React's consistency reads,
+        // before the queued shared-clock callback is allowed to run.
+        vi.setSystemTime(now + 501);
+        await hook.rerender();
+        expect(hook.getCurrent()).toBe(snapshot);
+        const settledRenders = renders;
+        await act(async () => {
+            for (let index = 0; index < 10; index += 1) storage.setState({ isDataReady: index % 2 === 0 });
+        });
+        expect(renders).toBe(settledRenders);
+        await act(async () => { await vi.advanceTimersByTimeAsync(501); });
+        expect(hook.getCurrent().needsYou).toEqual([]);
+        expect(hook.getCurrent()).not.toBe(snapshot);
+        expect(renders).toBe(settledRenders + 1);
+        await hook.unmount();
+    });
     it('expires held attention at the shared presence grace boundary without another heartbeat or RPC', async () => {
         vi.useFakeTimers();
         vi.stubEnv('EXPO_PUBLIC_HAPPIER_MACHINE_ONLINE_GRACE_MS', '60000');
