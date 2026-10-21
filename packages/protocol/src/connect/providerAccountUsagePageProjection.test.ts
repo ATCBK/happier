@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Session } from 'node:inspector/promises';
 import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema } from './providerAccountUsagePrimitives.js';
-import { buildProviderAccountUsagePageProjectionV1, unpackProviderAccountUsagePageProjectionV1, StoredProviderAccountUsagePageProjectionV1Schema, ProviderAccountUsagePageProjectionMetadataV1Schema, ProviderAccountUsagePageProjectionWriteV1Schema, PROVIDER_ACCOUNT_USAGE_PAGE_ENCODING } from './providerAccountUsagePageProjection.js';
+import { buildProviderAccountUsagePageProjectionV1, packProviderAccountUsagePageProjectionV1, unpackProviderAccountUsagePageProjectionV1, StoredProviderAccountUsagePageProjectionV1Schema, ProviderAccountUsagePageProjectionMetadataV1Schema, ProviderAccountUsagePageProjectionWriteV1Schema, PROVIDER_ACCOUNT_USAGE_PAGE_ENCODING } from './providerAccountUsagePageProjection.js';
 import { openProviderAccountUsagePageProjectionV1, openProviderAccountUsagePageProjectionReadV1, sealProviderAccountUsagePageProjectionV1 } from './providerAccountUsagePageProjectionCrypto.js';
 import { sealAccountScopedBlobCiphertext } from '../crypto/accountScopedCipher.js';
 import { deriveProviderAccountUsagePace, deriveProviderAccountUsageUnusedCapacity, deriveProviderAccountUsageEarlierWindowCurves, hasProviderAccountUsageWitnessedReset } from './deriveProviderAccountUsagePace.js';
@@ -22,6 +22,47 @@ const range = { startAtMs: 0, endAtMs: 1200 };
 const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
 
 describe('B page projection', () => {
+  it('normalizes a shared admitted meter once while retaining every accepted observation', () => {
+    const entries = Array.from({ length: 1000 }, (_, index) => {
+      const snapshot = sample(100 + index, 10);
+      return { id: String(index), observedAtMs: snapshot.fetchedAtMs, snapshot };
+    });
+    const projection = buildProviderAccountUsagePageProjectionV1({ recordId: entries[0]!.snapshot.recordId,
+      range, history: { entries, nextCursor: null } });
+    const packed = packProviderAccountUsagePageProjectionV1(projection);
+    const opened = unpackProviderAccountUsagePageProjectionV1(packed);
+    expect(new Set(opened.history.entries.map(entry => entry.snapshot.meters[0])).size).toBe(1);
+    let enumerations = 0;
+    // Transparent input instrumentation: retain the real packing/validation path
+    // and count repeated object-rest work on the same admitted dictionary meter.
+    const meter = new Proxy(opened.history.entries[0]!.snapshot.meters[0]!, {
+      ownKeys(target) { enumerations++; return Reflect.ownKeys(target); },
+    });
+    for (const entry of opened.history.entries) entry.snapshot.meters[0] = meter;
+    const repacked = packProviderAccountUsagePageProjectionV1(opened);
+    expect(enumerations).toBe(1);
+    expect(repacked).toEqual(packed);
+    expect(unpackProviderAccountUsagePageProjectionV1(repacked)).toEqual(projection);
+  });
+
+  it('interns equal distinct meters and observes changed readings on the next packing invocation', () => {
+    const shared = sample(100, 10).meters[0]!;
+    const snapshots = [sample(100, 10), sample(200, 10), sample(300, 20)];
+    snapshots[0]!.meters[0] = shared;
+    snapshots[1]!.meters[0] = { ...shared };
+    const projection = buildProviderAccountUsagePageProjectionV1({ recordId: snapshots[0]!.recordId, range,
+      history: { entries: snapshots.map((snapshot, index) => ({ id: String(index), observedAtMs: snapshot.fetchedAtMs, snapshot })), nextCursor: null } });
+    const first = packProviderAccountUsagePageProjectionV1(projection);
+    expect(first.meters).toHaveLength(2);
+    expect(unpackProviderAccountUsagePageProjectionV1(first).history.entries.map(entry => entry.snapshot.meters[0]!.used))
+      .toEqual([10, 10, 20]);
+    Object.assign(shared, { used: 30, remaining: 70, utilizationPct: 30 });
+    const second = packProviderAccountUsagePageProjectionV1(projection);
+    expect(second.meters).toHaveLength(3);
+    expect(unpackProviderAccountUsagePageProjectionV1(second).history.entries.map(entry => entry.snapshot.meters[0]!.used))
+      .toEqual([30, 10, 20]);
+  });
+
   it.each(['plain', 'e2ee'] as const)('admits the HTTP %s read and refuses malformed envelopes and protected bodies', accountMode => {
     const projection = buildProviderAccountUsagePageProjectionV1({ recordId: history.entries[0]!.snapshot.recordId, range, history });
     const last = history.entries.at(-1)!;

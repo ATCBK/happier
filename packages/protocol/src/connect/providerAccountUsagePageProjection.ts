@@ -144,6 +144,9 @@ export function packProviderAccountUsagePageProjectionV1(input: ProviderAccountU
   const subscriptions: z.infer<typeof SubscriptionMaterialSchema>[] = [];
   const baseKeys = new Map<string, number>();
   const meterKeys = new Map<string, number>();
+  // Opened dictionaries share admitted meter objects across observations. Reuse
+  // their index within this synchronous pack; later invocations read them anew.
+  const meterIndexesByObject = new WeakMap<ProviderAccountUsageSnapshotV1['meters'][number], number>();
   const definitionKeys = new Map<string, number>();
   const subscriptionKeys = new Map<string, number>();
   const intern = <T>(value: T, values: T[], keys: Map<string, number>) => {
@@ -162,14 +165,18 @@ export function packProviderAccountUsagePageProjectionV1(input: ProviderAccountU
     const subscriptionMaterial = subscription ? (({ observedAtMs: _at, ...value }) => value)(subscription) : null;
     const baseIndex = intern(base, bases, baseKeys);
     const meterIndexes = snapshotMeters.map(meter => {
+      const existing = meterIndexesByObject.get(meter);
+      if (existing !== undefined) return existing;
       const { used, limit, utilizationPct, resetsAt, remaining, remainingPct, usedPct, resetAtMs, details, ...definition } = meter;
       const { remainingPct: detailsRemainingPct, ...detailDefinition } = details;
       const definitionIndex = intern({ ...definition, details: detailDefinition }, meterDefinitions, definitionKeys);
-      return intern<z.infer<typeof MeterReadingSchema>>([definitionIndex, used, limit, utilizationPct, resetsAt, {
+      const index = intern<z.infer<typeof MeterReadingSchema>>([definitionIndex, used, limit, utilizationPct, resetsAt, {
         ...(remaining !== undefined ? { remaining } : {}), ...(remainingPct !== undefined ? { remainingPct } : {}),
         ...(usedPct !== undefined ? { usedPct } : {}), ...(resetAtMs !== undefined ? { resetAtMs } : {}),
         ...(detailsRemainingPct !== undefined ? { detailsRemainingPct } : {}),
       }], meters, meterKeys);
+      meterIndexesByObject.set(meter, index);
+      return index;
     });
     const subscriptionIndex = subscriptionMaterial ? intern(subscriptionMaterial, subscriptions, subscriptionKeys) : null;
     const key = JSON.stringify([baseIndex, meterIndexes, subscriptionIndex]);
