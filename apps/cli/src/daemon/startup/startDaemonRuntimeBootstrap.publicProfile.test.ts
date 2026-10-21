@@ -17,7 +17,7 @@ describe('native public-profile bootstrap composition', () => {
   });
 
   it('starts native Account refresh with Connected Services disabled and retires its real loop', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     vi.stubEnv('HAPPIER_MACHINE_TRANSFER_DIRECT_PEER_SERVER_ENABLED', 'false');
     vi.stubEnv('HAPPIER_MACHINE_TRANSFER_TAILSCALE_SERVE_ENABLED', 'false');
     const lifetime = new AbortController();
@@ -49,16 +49,17 @@ describe('native public-profile bootstrap composition', () => {
     const runtime = await startDaemonRuntimeBootstrap(params);
     try {
       await vi.advanceTimersByTimeAsync(0);
-      expect(account.requests).toEqual([
-        { method: 'GET', path: '/v1/account/public-profile' },
-        { method: 'GET', path: '/v1/account/public-profile' },
-      ]);
+      await vi.waitFor(() => expect(account.refreshes).toHaveLength(1), { interval: 0 });
+      expect(account.refreshes).toHaveLength(1);
+      expect(account.refreshes[0]?.snapshot.facts.tokens).toBe(10);
       expect(runtime.connectedServiceRefreshCoordinator).toBeNull();
       expect(runtime.connectedServiceQuotasCoordinator).toBeNull();
+      const requestsBeforeRetirement = account.requests.length;
       lifetime.abort();
       await runtime.publicProfileRefreshHandle?.stop();
       await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1_000);
-      expect(account.requests).toHaveLength(2);
+      expect(account.requests).toHaveLength(requestsBeforeRetirement);
+      expect(account.refreshes).toHaveLength(1);
     } finally {
       lifetime.abort();
       await runtime.publicProfileRefreshHandle?.stop();

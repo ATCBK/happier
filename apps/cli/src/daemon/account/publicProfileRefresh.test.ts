@@ -10,7 +10,8 @@ describe('native Account public-profile refresh participant', () => {
   const handles: ReturnType<typeof startPublicProfileRefresh>[] = [];
   const fixtures: Awaited<ReturnType<typeof createNativePublicProfileRefreshFixture>>[] = [];
   beforeEach(() => {
-    vi.useFakeTimers();
+    // Only the daemon clock is virtual; Fastify's OS task queue stays real.
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     vi.setSystemTime(new Date('2026-10-21T12:00:00Z'));
   });
   afterEach(async () => {
@@ -38,32 +39,90 @@ describe('native Account public-profile refresh participant', () => {
     return { ...account, scheduler, start, lifetime, setOnline: (value: boolean) => { online = value; } };
   }
 
-  it('checks at startup and retries the real shared preparation refusal only on the daily cadence', async () => {
+  it('refreshes due published facts at startup and daily through the real Usage builder and snapshot HTTP owner', async () => {
     const f = await fixture();
+    const before = f.readOwner();
     f.start();
     await vi.advanceTimersByTimeAsync(0);
-    expect(f.requests).toEqual([
-      { method: 'GET', path: '/v1/account/public-profile' },
-      { method: 'GET', path: '/v1/account/public-profile' },
+    await vi.waitFor(() => expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters.written).toBe(1), { interval: 0 });
+    expect(f.refreshes).toHaveLength(1);
+    expect(f.refreshes[0]).toMatchObject({ query: { population: 'public_eligible_personal' },
+      snapshot: { computedAtMs: Date.now(), facts: { tokens: 10 } } });
+    expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters.written).toBe(1);
+    const after = f.readOwner();
+    if (before.kind !== 'ready' || after.kind !== 'ready') throw new Error('Expected remote published record');
+    expect(after.record.layout).toEqual(before.record.layout);
+    expect(after.record.appearance).toEqual(before.record.appearance);
+    expect(f.requests.filter(request => request.method !== 'GET' && request.path !== '/v2/usage/query')).toEqual([
+      { method: 'PUT', path: '/v1/account/public-profile/snapshot' },
     ]);
-    expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters).toMatchObject({ written: 0, suppressed: 1 });
+    expect(Object.keys(f.refreshes[0]!).sort()).toEqual(['query', 'snapshot']);
+    expect(JSON.stringify(f.refreshes)).not.toMatch(/private-|98765|87654|reportedUsd|estimatedUsd/);
     await vi.advanceTimersByTimeAsync(DAY_MS - 1);
-    expect(f.requests).toHaveLength(2);
+    expect(f.refreshes).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);
-    expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters).toMatchObject({ written: 0, suppressed: 2 });
-    expect(f.requests).toHaveLength(4);
-    expect(f.requests.every(request => request.method === 'GET')).toBe(true);
+    await vi.waitFor(() => expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters.written).toBe(2), { interval: 0 });
+    expect(f.refreshes).toHaveLength(2);
+    expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters.written).toBe(2);
+    f.setSettings({ v: 1, actions: { 'account.public_profile.refresh': { enabled: false } } });
+    await vi.advanceTimersByTimeAsync(DAY_MS);
+    await vi.waitFor(() => expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters.suppressed).toBe(1), { interval: 0 });
+    expect(f.refreshes).toHaveLength(2);
   });
 
   it('uses the stored snapshot computation time for the exact first daily deadline', async () => {
     const f = await fixture();
     f.setComputedAt(Date.now() - DAY_MS + 123);
     f.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters.suppressed).toBe(1), { interval: 0 });
     await vi.advanceTimersByTimeAsync(122);
-    expect(f.requests).toHaveLength(1);
+    expect(f.refreshes).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
-    expect(f.requests).toHaveLength(3);
+    await vi.waitFor(() => expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters.written).toBe(1), { interval: 0 });
+    expect(f.refreshes).toHaveLength(1);
+    expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters.written).toBe(1);
+  });
+
+  it('uses real source computedAt, not a delayed HTTP acknowledgement, for the next daily deadline', async () => {
+    const f = await fixture();
+    const startedAt = Date.now();
+    f.setSourceLag(500);
+    const pending = f.holdNextRefreshAck();
+    f.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await pending.accepted;
+    expect(f.refreshes[0]?.snapshot.computedAtMs).toBe(startedAt - 500);
     expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters.written).toBe(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    pending.release();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters.written).toBe(1), { interval: 0 });
+    expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters.written).toBe(1);
+    await vi.advanceTimersByTimeAsync(DAY_MS - 1_501);
+    expect(f.refreshes).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters.written).toBe(2), { interval: 0 });
+    expect(f.refreshes).toHaveLength(2);
+  });
+
+  it('keeps previous facts after a real Usage HTTP refusal and retries only on the daily cadence', async () => {
+    const f = await fixture();
+    const before = f.readOwner();
+    f.setUsageAvailable(false);
+    f.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters.suppressed).toBe(1), { interval: 0 });
+    expect(f.refreshes).toEqual([]);
+    expect(f.readOwner()).toEqual(before);
+    expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters).toMatchObject({ written: 0, suppressed: 1 });
+    const reads = f.requests.length;
+    await vi.advanceTimersByTimeAsync(DAY_MS - 1);
+    expect(f.requests).toHaveLength(reads);
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters.suppressed).toBe(2), { interval: 0 });
+    expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters).toMatchObject({ written: 0, suppressed: 2 });
+    expect(f.refreshes).toEqual([]);
   });
 
   it('defers offline and wakes on reconnect without resuming a paused remote profile', async () => {
@@ -78,15 +137,16 @@ describe('native Account public-profile refresh participant', () => {
     f.setOnline(true);
     loop.resume();
     await vi.advanceTimersByTimeAsync(0);
-    expect(f.requests).toHaveLength(2);
+    await vi.waitFor(() => expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters.written).toBe(1), { interval: 0 });
+    expect(f.refreshes).toHaveLength(1);
     loop.pause();
     f.pauseProfile();
     await vi.advanceTimersByTimeAsync(DAY_MS);
     loop.resume();
     await vi.advanceTimersByTimeAsync(0);
-    expect(f.requests).toHaveLength(3);
-    expect(f.requests.every(request => request.method === 'GET')).toBe(true);
-    expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters.written).toBe(0);
+    await vi.waitFor(() => expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters.suppressed).toBe(1), { interval: 0 });
+    expect(f.refreshes).toHaveLength(1);
+    expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters.written).toBe(1);
   });
 
   it.each([
@@ -98,6 +158,7 @@ describe('native Account public-profile refresh participant', () => {
     f.setSettings(settings);
     f.start();
     await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(f.scheduler.getSnapshot().purposes.accountMaintenance?.counters.suppressed).toBe(1), { interval: 0 });
     // Only the maintenance read reaches the Account; native policy rejects
     // refresh before shared preparation can issue its own read.
     expect(f.requests).toEqual([{ method: 'GET', path: '/v1/account/public-profile' }]);

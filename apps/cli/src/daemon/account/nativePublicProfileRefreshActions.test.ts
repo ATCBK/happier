@@ -26,10 +26,22 @@ describe('native public-profile Account Action adapter', () => {
     expect(f.requests).toEqual([]);
   });
 
-  it('runs Allowed CLI refresh through the captured Account binding and refuses the missing shared snapshot producer', async () => {
+  it('runs Allowed CLI refresh through real Usage computation and acknowledges only the facts-only HTTP snapshot effect', async () => {
     const f = await fixture({ v: 1, approvalWaivedSurfaces: { 'account.public_profile.refresh': ['cli'] } });
+    await expect(f.actions.refresh(context())).resolves.toMatchObject({ ok: true,
+      result: { kind: 'updated', record: { state: 'published', snapshot: { facts: { tokens: 10 } } } } });
+    expect(f.refreshes).toHaveLength(1);
+    expect(Object.keys(f.refreshes[0]!).sort()).toEqual(['query', 'snapshot']);
+    expect(f.requests.filter(request => request.method !== 'GET' && request.path !== '/v2/usage/query')).toEqual([
+      { method: 'PUT', path: '/v1/account/public-profile/snapshot' },
+    ]);
+  });
+
+  it('returns the shared typed refusal when the real Usage HTTP source is unavailable', async () => {
+    const f = await fixture({ v: 1, approvalWaivedSurfaces: { 'account.public_profile.refresh': ['cli'] } });
+    f.setUsageAvailable(false);
     await expect(f.actions.refresh(context())).resolves.toMatchObject({ ok: false,
       errorCode: 'public_profile_preparation_unavailable', details: { reason: 'usage_unavailable' } });
-    expect(f.requests).toEqual([{ method: 'GET', path: '/v1/account/public-profile' }]);
+    expect(f.refreshes).toEqual([]);
   });
 });
