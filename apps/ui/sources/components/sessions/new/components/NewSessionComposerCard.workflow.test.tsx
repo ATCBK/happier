@@ -8,7 +8,7 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { useNewSessionWorkflowStart } from '../hooks/useNewSessionWorkflowStart';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { act } from 'react-test-renderer';
-import { flattenTestStyle } from '@/dev/testkit';
+import { createMachineFixture, flattenTestStyle } from '@/dev/testkit';
 import Color from 'color';
 import { activateStorageAccountScope } from '@/dev/testkit/mocks/storage';
 import { GlassRuntimeEnvironmentProvider } from '@/components/ui/glass/glassRuntimeEnvironment';
@@ -70,6 +70,30 @@ function panelProps(): NewSessionSimplePanelProps {
 }
 
 describe('New workflow entry', () => {
+    it('does not observe Machine inventory while no unsettled Workflow project needs a Where label', async () => {
+        const store = getStorage(), previous = store.getState();
+        const props = { ...panelProps(), selectedMachineId: 'machine-1', targetServerId: 'server-a' };
+        let renders = 0;
+        const hook = await renderHook(() => {
+            renders++;
+            return useNewSessionWorkflowStart({ panelProps: props, prompt: 'Keep this brief' });
+        });
+        try {
+            const settled = renders;
+            await act(async () => store.getState().applyMachines([createMachineFixture({ id: 'unrelated-machine' })], false,
+                { sourceServerId: 'server-a', sourceAccountId: 'account-a' }));
+            expect(renders).toBe(settled);
+            expect(hook.getCurrent().composer).toBeNull();
+            // The current picker choice is not the retained request: without an unsettled request,
+            // even this Machine has no Workflow Where presentation to refresh.
+            await act(async () => store.getState().applyMachines([createMachineFixture({ id: 'machine-1' })], false,
+                { sourceServerId: 'server-a', sourceAccountId: 'account-a' }));
+            expect(renders).toBe(settled);
+        } finally {
+            await hook.unmount();
+            store.setState(previous, true);
+        }
+    });
     it('names the exact Provider model on the real composer chip using picker presentation', async () => {
         const { DaemonProviderModelProjectionGroupV1Schema } = await import('@happier-dev/protocol/rpc');
         const { AgentIcon } = await import('@/agents/registry/AgentIcon');

@@ -29,6 +29,36 @@ afterEach(async () => {
 });
 
 describe('reactive Machine presence', () => {
+    it('observes only the requested Machine name/home and remains inert without a retained target', async () => {
+        const previous = storage.getState();
+        const machine = createMachineFixture({ id: 'machine', activeAt: Date.now(), metadata: {
+            ...createMachineFixture().metadata!, displayName: 'Retained computer', homeDir: '/home/retained',
+        } });
+        storage.getState().applyMachines([machine], true, { sourceServerId: serverId });
+        let renders = 0;
+        const hook = await renderHook((id: string | null) => {
+            renders++;
+            return useMachinePresenceSummary(serverId, id);
+        }, { initialProps: null as string | null });
+        try {
+            const inactive = renders;
+            await act(async () => storage.getState().applyMachines([createMachineFixture({ id: 'other' })], false, { sourceServerId: serverId }));
+            expect(renders).toBe(inactive);
+            expect(await hook.rerender('machine')).toMatchObject({ name: 'Retained computer', homeDir: '/home/retained' });
+            const admitted = hook.getCurrent(), active = renders;
+            await act(async () => storage.getState().applyMachines([createMachineFixture({ id: 'other', updatedAt: 2 })], false, { sourceServerId: serverId }));
+            expect(renders).toBe(active);
+            expect(hook.getCurrent()).toBe(admitted);
+            await act(async () => storage.getState().applyMachines([{ ...machine, metadata: { ...machine.metadata!,
+                displayName: 'Renamed retained computer', homeDir: '/home/renamed',
+            } }], false, { sourceServerId: serverId }));
+            expect(hook.getCurrent()).toMatchObject({ name: 'Renamed retained computer', homeDir: '/home/renamed' });
+            expect(await hook.rerender(null)).toMatchObject({ name: null, homeDir: null });
+        } finally {
+            await hook.unmount();
+            storage.setState(previous, true);
+        }
+    });
     it('publishes membership immediately from an already admitted exact Home Account lifetime', async () => {
         const previous = storage.getState();
         storage.getState().applyMachines([createMachineFixture({ id: 'machine', activeAt: Date.now() })], true,

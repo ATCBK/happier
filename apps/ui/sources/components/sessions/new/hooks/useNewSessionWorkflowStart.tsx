@@ -14,8 +14,7 @@ import { t } from '@/text';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
-import { useMachineListForServer } from '@/sync/domains/state/storage';
-import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { createWorkflowStartWhereChip } from '@/components/workflows/run/workflowStartWhereChip';
 import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -48,7 +47,7 @@ export function useNewSessionWorkflowStart(params: Readonly<{ panelProps: NewSes
     // (A first press still in flight keeps the page's controls in place: only an unknown outcome swaps them.)
     const retained = runNow.retainedRequest?.unresolved === true && runNow.retainedRequest.input.runId === pendingRunId.current
         ? runNow.retainedRequest : null;
-    const machines = useMachineListForServer(scope?.serverId ?? '');
+    const retainedMachine = useMachinePresenceSummary(scope?.serverId, retained?.project?.machineId);
     const select = React.useCallback((next: WorkflowStartSelection) => {
         setSelection({ value: next, lifetime: captureActiveServerAccountScopeLifetime() });
         setValues({}); setRawTextValues({}); pendingRunId.current = null; clearRefusal();
@@ -102,12 +101,11 @@ export function useNewSessionWorkflowStart(params: Readonly<{ panelProps: NewSes
         pendingRunId.current = null;
         router.push(createWorkflowRunRoute(admitted.run.id, lifetime.scope.serverId) as never);
     }, [props.selectedMachineId, props.selectedPath, retained, router, runNow, selection, targetIsCurrent, workflowDecision?.state]);
-    const retainedMachine = retained?.project ? machines?.find((machine) => machine.id === retained.project?.machineId) : undefined;
     const retainedWhere = React.useMemo(() => retained?.project === undefined ? null : [createWorkflowStartWhereChip({
-        target: retained.project, machineName: retainedMachine ? getMachineDisplayName(retainedMachine) : retained.project.machineId,
-        machineHomeDir: retainedMachine?.metadata?.homeDir ?? null,
+        target: retained.project, machineName: retainedMachine.name ?? retained.project.machineId,
+        machineHomeDir: retainedMachine.homeDir,
         testID: 'new-session-workflow-where-chip', testIDPrefix: 'new-session-workflow-where',
-    })], [retained, retainedMachine]);
+    })], [retained, retainedMachine.name, retainedMachine.homeDir]);
     const composer = selection === null ? null : <WorkflowRunComposer key={selection.id}
         surfaceGroup={params.surfaceGroup}
         definition={selection.definition} sourceArtifactId={selection.source.kind === 'saved' ? selection.source.definitionId : null}
