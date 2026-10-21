@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { MachineProvisionerContributionV1Schema, MachineProvisionerOptionsResultV1Schema } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 import { ManagedCredentialSelectionV1Schema } from '@happier-dev/protocol/machines/managed/managedMachineV1';
@@ -75,6 +76,15 @@ describe('managed configurator draft owner', () => {
         // What the person typed wins over the default; an unfilled field is still seeded.
         const edited = setManagedConfiguratorOptionsSelectors(draft, { size: { cpu: 8 } });
         expect(managedConfiguratorOptionsSelectors(edited, action.inputSchema!, hints)).toEqual({ size: { cpu: 8, memoryBytes: 4 * 1024 ** 3 } });
+    });
+    it('resolves the Cua sandbox options request from the generated bundled manifest projection, not null', () => {
+        const projected = JSON.parse(readFileSync(new URL('../../../../../../cli/assets/bundled-plugin-manifests/machine-cua.json', import.meta.url), 'utf8'));
+        const descriptor = MachineProvisionerContributionV1Schema.parse(projected.contributes.machineProvisioners.find((entry: { id: string }) => entry.id === 'local-sandbox'));
+        const action = PluginActionContributionV2Schema.parse(projected.contributes.actions.find((entry: { id: string }) => entry.id === descriptor.actions.options));
+        const hints = normalizePluginActionInputHintsV2(action.inputHints);
+        const draft = createManagedConfiguratorDraft({ provisioner: { contribution: { pluginId: projected.id, localId: descriptor.id }, occurrenceId: 'cua', descriptor },
+            controller, name: 'Sandbox' });
+        expect(managedConfiguratorOptionsSelectors(draft, action.inputSchema!, hints)).toEqual({ size: { cpu: 2, memoryBytes: 4 * 1024 ** 3 } });
     });
     it('shows the Cua sandbox memory in GiB while the stored and submitted value stays bytes, and leaves unlabelled integers raw', () => {
         const descriptor = MachineProvisionerContributionV1Schema.parse(CUA_PLUGIN.manifest.contributes.machineProvisioners?.find(entry => entry.id === 'local-sandbox'));
