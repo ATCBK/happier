@@ -24,6 +24,10 @@ export function createStoppableSpeech(registerPlaybackStopper: VoicePlaybackStop
   });
 
   const registerPlayback: VoicePlaybackStopperRegistrar = (stopper) => {
+    if (controller.signal.aborted) {
+      stopper();
+      return () => {};
+    }
     stopPlayback = stopper;
     return () => {
       if (stopPlayback === stopper) stopPlayback = null;

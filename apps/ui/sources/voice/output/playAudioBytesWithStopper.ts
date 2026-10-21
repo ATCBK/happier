@@ -194,6 +194,10 @@ export async function playAudioBytesWithStopper(opts: {
       safeResolve();
     };
     clearStopper = opts.registerPlaybackStopper(stopPlayback);
+    if (settled) {
+      clearStopper();
+      return;
+    }
 
     const progress: NativePlaybackProgress = { loaded: false, playing: false };
     subscription = player.addListener('playbackStatusUpdate', (status: unknown) => {

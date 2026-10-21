@@ -1,6 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { createVoicePlaybackController } from '@/voice/runtime/VoicePlaybackController';
+import { createStoppableSpeech } from '@/voice/output/stoppableSpeech';
 
 const fileDelete = vi.fn(() => new Promise<void>(() => {}));
+const fileWrite = vi.fn<(content: Uint8Array) => Promise<void>>().mockResolvedValue(undefined);
+const playbackPlay = vi.fn<() => void>();
+const playbackRemove = vi.fn<() => void>();
 const playbackState: {
   playbackStatusListener: ((status: any) => void) | null;
 } = {
@@ -37,7 +44,7 @@ vi.mock('expo-file-system', () => ({
     constructor(base: string, name: string) {
       this.uri = `${base}${name}`;
     }
-    async write(_content: Uint8Array) {}
+    write(content: Uint8Array) { return fileWrite(content); }
     delete = fileDelete;
   },
 }));
@@ -48,14 +55,49 @@ vi.mock('expo-audio', () => ({
       playbackState.playbackStatusListener = cb;
       return { remove() {} };
     },
-    play: () => undefined,
-    remove() {},
+    play: playbackPlay,
+    remove: playbackRemove,
   }),
 }));
 
 import { playAudioBytesWithStopper } from '@/voice/output/playAudioBytesWithStopper';
 
 describe('playAudioBytesWithStopper (native)', () => {
+  beforeEach(() => {
+    fileWrite.mockReset().mockResolvedValue(undefined);
+    playbackPlay.mockReset();
+    playbackRemove.mockReset();
+  });
+
+  it('does not start audio when speech is interrupted while its native file is being prepared', async () => {
+    const writeStarted = createDeferred<void>();
+    const finishWrite = createDeferred<void>();
+    fileWrite.mockImplementationOnce(async () => {
+      writeStarted.resolve();
+      await finishWrite.promise;
+    });
+    // A defective late start must settle too, so the assertion observes it without hanging.
+    playbackPlay.mockImplementationOnce(() => playbackState.playbackStatusListener?.({ didJustFinish: true }));
+    const controller = createVoicePlaybackController();
+    const speech = createStoppableSpeech(controller.registerStopper);
+    try {
+      const playback = playAudioBytesWithStopper({
+        bytes: new Uint8Array([1]).buffer,
+        format: 'wav',
+        registerPlaybackStopper: speech.registerPlayback,
+      });
+      await writeStarted.promise;
+      controller.interrupt();
+      finishWrite.resolve();
+
+      await expect(playback).resolves.toBeUndefined();
+      expect(playbackPlay).not.toHaveBeenCalled();
+      expect(playbackRemove).toHaveBeenCalledOnce();
+    } finally {
+      speech.dispose();
+    }
+  });
+
   it('resolves promptly when playback finishes even if temp-file cleanup stalls', async () => {
     playbackState.playbackStatusListener = null;
     fileDelete.mockClear();
