@@ -1,7 +1,7 @@
-import { ManagedResourceDependencyV1Schema } from '@happier-dev/protocol/machines/managed/managedDependencyV1';
+import { ManagedResourceDependencyV1Schema, type ManagedResourceDependencyV1 } from '@happier-dev/protocol/machines/managed/managedDependencyV1';
 
 /** Safe removal-review bytes at the Home/daemon boundary; no launch or credential material. */
-export function createManagedResourceDependencyFixture(intentRevision = 7) {
+export function createManagedResourceDependencyFixture(intentRevision = 7): ManagedResourceDependencyV1 {
     const provider = { pluginId: 'example.compute', localId: 'cloud' };
     return ManagedResourceDependencyV1Schema.parse({
         managedId: 'managed-1', homeId: 'home-1', custodianAccountId: 'account-owner', intentRevision,

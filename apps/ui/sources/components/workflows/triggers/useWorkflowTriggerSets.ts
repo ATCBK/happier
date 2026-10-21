@@ -12,7 +12,12 @@ import { useActiveHomeSettling } from '@/components/navigation/connectionStatus/
 const EMPTY_SETS: readonly WorkflowTriggerSetV1[] = [];
 
 /** Read lifecycle only; the existing Account Automation projection remains the row owner. */
-export function useWorkflowTriggerSets(request: WorkflowTriggerListRequestV1 | null, accountLifetime?: ServerAccountScopeLifetime | null) {
+export function useWorkflowTriggerSets(request: WorkflowTriggerListRequestV1 | null, accountLifetime?: ServerAccountScopeLifetime | null): {
+    sets: readonly WorkflowTriggerSetV1[];
+    status: 'loading' | 'ready' | 'failed';
+    retry: () => void;
+    acknowledge: (written: WorkflowTriggerSetV1) => void;
+} {
     const addressed = accountLifetime !== undefined;
     const activeLifetime = useActiveServerAccountScopeLifetime();
     const lifetime = addressed ? accountLifetime ?? null : activeLifetime;

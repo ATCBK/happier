@@ -7,7 +7,11 @@ import { getActiveServerId } from '@/sync/domains/server/serverProfiles';
 import { useSettingsSelector } from '@/sync/domains/state/storage';
 import { useAcpCatalogForServer } from '@/sync/store/useAcpCatalog';
 
-export function useSlimProfileAgentEntries(machineId: string | null, serverId?: string | null) {
+export function useSlimProfileAgentEntries(machineId: string | null, serverId?: string | null): {
+    entries: ReturnType<typeof getResolvedBackendCatalogEntries>;
+    projection: ReturnType<typeof useDaemonMergedProjectionInputs>;
+    serverId: string;
+} {
     const enabledAgentIds = useEnabledAgentIds();
     const settings = useSettingsSelector((settings) => ({
         backendEnabledByTargetKey: settings.backendEnabledByTargetKey,

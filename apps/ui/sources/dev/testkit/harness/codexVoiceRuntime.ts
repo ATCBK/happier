@@ -1,5 +1,5 @@
 import { expect, vi } from 'vitest';
-import type { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import type { PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { Machine, Session } from '@/sync/domains/state/storageTypes';
 import type { BundledRealtimeProviderRuntimeHost } from '@/voice/registry/bundledConversationRuntimeContract';
 import type { installVoiceWebRtcBrowserBoundary } from './voiceWebRtcHarness';
@@ -71,7 +71,7 @@ export async function createCodexVoiceRuntimeEnvironment() {
         }) }, settingsDefaults),
     });
     let nextTranscriptSeq = 0;
-    let daemonProjection: ReturnType<typeof PluginProjectionV2Schema.parse> | null = null;
+    let daemonProjection: PluginProjectionV2 | null = null;
     const rpcBoundary = { sessionRpc: vi.fn<(input: CodexVoiceRpcRequest & Readonly<{ sessionId: string }>) => Promise<unknown>>() };
     const machineRpcBoundary = { machineRpc: vi.fn<(input: CodexVoiceRpcRequest & Readonly<{ machineId: string }>) => Promise<unknown>>() };
     let homeResponse: (input: URL | RequestInfo, init?: RequestInit) => Response | null | Promise<Response | null> = () => null;
@@ -212,8 +212,8 @@ export async function createCodexVoiceRuntimeEnvironment() {
     return {
         entry, providerId, accountConnection, activeServerId: accountConnection.home.id,
         serverSessions, serverMachines, sessionHttp, transcriptRequest, rpcBoundary, machineRpcBoundary,
-        get daemonProjection() { return daemonProjection; },
-        set daemonProjection(value) { daemonProjection = value; },
+        get daemonProjection(): PluginProjectionV2 | null { return daemonProjection; },
+        set daemonProjection(value: PluginProjectionV2 | null) { daemonProjection = value; },
         get homeResponse() { return homeResponse; },
         set homeResponse(value) { homeResponse = value; },
         configureVoice, publishSessions, publishMachines, createRuntime,

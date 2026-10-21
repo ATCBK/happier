@@ -1,6 +1,7 @@
 import { GuardStopWarningPushDataV1Schema, isGuardStopWarningCurrentV1 } from '@happier-dev/protocol/activity/webhookPayload';
 import type { GuardStopWarningPushDataV1 } from '@happier-dev/protocol/activity/webhookPayload';
 import type { MachineGuardViewV1 } from '@happier-dev/protocol/machines/guard/guardRpcV1';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ActivityInteractionCommand } from '@/activity/actions/resolveActivityInteractionCommand';
 import { fetchMachineGuardViewViaAction } from '@/sync/domains/machines/guard/machineGuardRpc';
 import { resolveServerCredentialAccountScope } from '@/sync/domains/scope/serverCredentialAccountScope';
@@ -24,7 +25,7 @@ function warningCurrent(warning: GuardStopWarningPushDataV1, view: MachineGuardV
 }
 
 /** Direct controls never replay a withdrawn or replaced warning on the same Session/terminal. */
-export async function executeGuardStopWarningAction(command: Extract<ActivityInteractionCommand, { kind: 'executeAction' }>, signal?: AbortSignal) {
+export async function executeGuardStopWarningAction(command: Extract<ActivityInteractionCommand, { kind: 'executeAction' }>, signal?: AbortSignal): Promise<ActionExecuteResult | null> {
     const warning = command.guardWarning;
     const serverId = command.target.serverId;
     if (!warning || !serverId || signal?.aborted) return null;

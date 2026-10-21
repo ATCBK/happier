@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { CapabilityId } from '@happier-dev/protocol';
 
 import { useMachineCapabilitiesCache } from '@/hooks/server/useMachineCapabilitiesCache';
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
@@ -7,7 +8,7 @@ import { useScopedPluginSettingsDaemonTargetBinding } from '@/sync/domains/machi
 import { MARKETPLACE_CAPABILITY_ID } from './pluginMarketplaceModel';
 
 /** The marketplace capability read: which plugins a machine has installed, and their state. */
-export const MARKETPLACE_CAPABILITY_REQUEST = Object.freeze({ requests: [{ id: MARKETPLACE_CAPABILITY_ID }] });
+export const MARKETPLACE_CAPABILITY_REQUEST: Readonly<{ requests: { id: CapabilityId }[] }> = Object.freeze({ requests: [{ id: MARKETPLACE_CAPABILITY_ID }] });
 
 /**
  * The machine the Plugins surfaces administer and its marketplace capability snapshot: the one

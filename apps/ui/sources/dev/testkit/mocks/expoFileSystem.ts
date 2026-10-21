@@ -1,5 +1,24 @@
 import { vi } from 'vitest';
 
+export interface ExpoFileSystemFileMockFile {
+    readonly uri: string;
+    readonly exists: boolean;
+    readonly size: number;
+    create(): void;
+    delete(): void;
+    copy(destination: ExpoFileSystemFileMockFile): void;
+    write(content: string | Uint8Array, options?: { append?: boolean }): void;
+    text(): Promise<string>;
+    bytes(): Promise<Uint8Array<ArrayBuffer>>;
+    open(): {
+        offset: number | null;
+        readonly size: number | null;
+        readBytes(length: number): Uint8Array<ArrayBuffer>;
+        writeBytes(bytes: Uint8Array): void;
+        close(): void;
+    };
+}
+
 /** Modern Expo File/Directory boundary with observable bytes and exact URI custody. */
 export function createExpoFileSystemFileMock(cacheUri = 'file:///cache') {
     const files = new Map<string, number[]>();
@@ -34,7 +53,7 @@ export function createExpoFileSystemFileMock(cacheUri = 'file:///cache') {
         }
         create() {}
     }
-    class File {
+    class File implements ExpoFileSystemFileMockFile {
         readonly uri: string;
         constructor(parent: { uri: string } | string, name?: string) {
             const uri = typeof parent === 'string' ? parent : parent.uri;
@@ -44,7 +63,7 @@ export function createExpoFileSystemFileMock(cacheUri = 'file:///cache') {
         get size() { return files.get(this.uri)?.length ?? 0; }
         create() { create(this.uri); }
         delete() { deleteFile(this.uri); }
-        copy(destination: File) { copies(this.uri, destination.uri); }
+        copy(destination: ExpoFileSystemFileMockFile) { copies(this.uri, destination.uri); }
         write(content: string | Uint8Array, options?: { append?: boolean }) {
             if (!files.has(this.uri)) create(this.uri);
             const bytes = typeof content === 'string' ? new TextEncoder().encode(content) : content;

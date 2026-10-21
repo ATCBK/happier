@@ -11,7 +11,7 @@ import { resolveExecutionRunAvailableBackends } from '@/sync/domains/executionRu
 export function useWorkspaceScmDiffSummaryBinding(params: Readonly<{
     machineId: string; rootPath: string; serverId: string;
     comparison: SessionScmReviewComparison | null; output: ScmDiffSummaryOutputKind;
-}>) {
+}>): ReturnType<typeof useScmDiffSummaryBinding> {
     const owner = useMachinePresenceSummary(params.serverId, params.machineId);
     const machineReachable = owner.reachability === 'reachable';
     const enabled = useFeatureEnabled('execution.runs', { scopeKind: 'spawn', serverId: params.serverId }) === true;

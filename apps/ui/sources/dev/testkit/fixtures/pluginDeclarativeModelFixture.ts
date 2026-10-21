@@ -1,6 +1,6 @@
 import { buildQualifiedPluginContributionKey, createPluginContributionIdentity } from '@happier-dev/protocol/plugins/contribution-identity';
 import { normalizePluginDeclarativeDocumentV1 } from '@happier-dev/protocol/plugins/contributions/ui/declarativeDocument';
-import { PluginDeclarativeProjectedModelV1Schema } from '@happier-dev/protocol/plugins/contributions/ui/declarativeProjectedModelV1';
+import { PluginDeclarativeProjectedModelV1Schema, type PluginDeclarativeProjectedModelV1 } from '@happier-dev/protocol/plugins/contributions/ui/declarativeProjectedModelV1';
 
 /** Build a static fixture through the real document normalizer and wire schema. */
 export function createPluginDeclarativeModelFixture(input: Readonly<{
@@ -8,7 +8,7 @@ export function createPluginDeclarativeModelFixture(input: Readonly<{
     localId: string;
     occurrenceId: string;
     document: Parameters<typeof normalizePluginDeclarativeDocumentV1>[0]['document'];
-}>) {
+}>): PluginDeclarativeProjectedModelV1 {
     const identity = createPluginContributionIdentity({ pluginId: input.pluginId, localId: input.localId });
     const normalized = normalizePluginDeclarativeDocumentV1({
         pluginId: input.pluginId,

@@ -86,41 +86,41 @@ type ReanimatedLayoutAnimationMock = Readonly<{
     initialValuesV?: Record<string, unknown>;
 }>;
 
+export type ReanimatedLayoutAnimationBuilderMock = ReanimatedLayoutAnimationMock & {
+    springify: (duration?: number) => ReanimatedLayoutAnimationBuilderMock;
+    stiffness: (value: number) => ReanimatedLayoutAnimationBuilderMock;
+    damping: (value: number) => ReanimatedLayoutAnimationBuilderMock;
+    mass: (value: number) => ReanimatedLayoutAnimationBuilderMock;
+    dampingRatio: (value: number) => ReanimatedLayoutAnimationBuilderMock;
+    easing: (value: unknown) => ReanimatedLayoutAnimationBuilderMock;
+    duration: (value: number) => ReanimatedLayoutAnimationBuilderMock;
+    delay: (value: number) => ReanimatedLayoutAnimationBuilderMock;
+    reduceMotion: (value: string) => ReanimatedLayoutAnimationBuilderMock;
+    withInitialValues: (value: Record<string, unknown>) => ReanimatedLayoutAnimationBuilderMock;
+    build: () => () => Record<string, unknown>;
+};
+
 /**
  * A chainable stand-in for `LinearTransition` / `FadeIn` and friends.
  *
  * Each modifier returns a NEW recorder, mirroring the real builders closely enough that a shared
  * module-scope constant cannot be mutated by a later caller.
  */
-function createLayoutAnimationBuilderMock(presetName: string) {
-    type Builder = ReanimatedLayoutAnimationMock & {
-        springify: (duration?: number) => Builder;
-        stiffness: (value: number) => Builder;
-        damping: (value: number) => Builder;
-        mass: (value: number) => Builder;
-        dampingRatio: (value: number) => Builder;
-        easing: (value: unknown) => Builder;
-        duration: (value: number) => Builder;
-        delay: (value: number) => Builder;
-        reduceMotion: (value: string) => Builder;
-        withInitialValues: (value: Record<string, unknown>) => Builder;
-        build: () => () => Record<string, unknown>;
-    };
-
-    const make = (record: ReanimatedLayoutAnimationMock): Builder => Object.freeze({
+function createLayoutAnimationBuilderMock(presetName: string): ReanimatedLayoutAnimationBuilderMock {
+    const make = (record: ReanimatedLayoutAnimationMock): ReanimatedLayoutAnimationBuilderMock => Object.freeze({
         ...record,
-        springify: (): Builder => make({ ...record, type: 'spring' }),
-        stiffness: (value: number): Builder => make({ ...record, stiffnessV: value }),
-        damping: (value: number): Builder => make({ ...record, dampingV: value }),
-        mass: (value: number): Builder => make({ ...record, massV: value }),
-        dampingRatio: (value: number): Builder => make({ ...record, dampingRatioV: value }),
-        easing: (value: unknown): Builder => make({ ...record, easingV: value }),
-        duration: (value: number): Builder => make({ ...record, durationV: value }),
-        delay: (value: number): Builder => make({ ...record, delayV: value }),
-        withInitialValues: (value: Record<string, unknown>): Builder => make({ ...record, initialValuesV: value }),
-        reduceMotion: (value: string): Builder => make({ ...record, reduceMotionV: value }),
+        springify: (): ReanimatedLayoutAnimationBuilderMock => make({ ...record, type: 'spring' }),
+        stiffness: (value: number): ReanimatedLayoutAnimationBuilderMock => make({ ...record, stiffnessV: value }),
+        damping: (value: number): ReanimatedLayoutAnimationBuilderMock => make({ ...record, dampingV: value }),
+        mass: (value: number): ReanimatedLayoutAnimationBuilderMock => make({ ...record, massV: value }),
+        dampingRatio: (value: number): ReanimatedLayoutAnimationBuilderMock => make({ ...record, dampingRatioV: value }),
+        easing: (value: unknown): ReanimatedLayoutAnimationBuilderMock => make({ ...record, easingV: value }),
+        duration: (value: number): ReanimatedLayoutAnimationBuilderMock => make({ ...record, durationV: value }),
+        delay: (value: number): ReanimatedLayoutAnimationBuilderMock => make({ ...record, delayV: value }),
+        withInitialValues: (value: Record<string, unknown>): ReanimatedLayoutAnimationBuilderMock => make({ ...record, initialValuesV: value }),
+        reduceMotion: (value: string): ReanimatedLayoutAnimationBuilderMock => make({ ...record, reduceMotionV: value }),
         build: () => () => ({ initialValues: {}, animations: {} }),
-    }) as Builder;
+    }) as ReanimatedLayoutAnimationBuilderMock;
 
     return make({ presetName });
 }

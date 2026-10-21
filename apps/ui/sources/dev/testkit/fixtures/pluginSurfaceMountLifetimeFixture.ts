@@ -1,7 +1,10 @@
-import { createBoundPluginSurfaceController } from '@/components/plugins/surfaces/boundPluginSurfaceController';
+import {
+    createBoundPluginSurfaceController,
+    type BoundPluginSurfaceController,
+} from '@/components/plugins/surfaces/boundPluginSurfaceController';
 
 /** A physical renderer lifetime supplied by the real incumbent mount owner. */
-export function createPluginSurfaceMountLifetimeFixture(accountId = 'account-a') {
+export function createPluginSurfaceMountLifetimeFixture(accountId = 'account-a'): BoundPluginSurfaceController {
     return createBoundPluginSurfaceController({
         facts: {
             pluginId: 'acme.preview',

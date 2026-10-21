@@ -5,7 +5,7 @@ import { ENCRYPTED_DATA_KEY_V1_BYTES } from '@happier-dev/protocol/crypto/encryp
 import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 import { SessionCurrentProjectionRecordV1Schema, type SessionCurrentProjectionRecordV1 } from '@happier-dev/protocol/sessions/listing/response';
-import { V2SessionByIdResponseSchema, V2SessionRecordSchema, type V2SessionRecord } from '@happier-dev/protocol/sessions/control/contract';
+import { V2SessionByIdResponseSchema, V2SessionRecordSchema, type V2SessionRecord, type V2SessionByIdResponse } from '@happier-dev/protocol/sessions/control/contract';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { ABSENT_SESSION_FOLLOW_FACTS_V1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import { projectViewerReadStateV1 } from '@happier-dev/protocol/sessions/personal/readState';
@@ -140,7 +140,7 @@ export function createPlainV2SessionRecordFixture(overrides: Partial<Pick<V2Sess
 export function createPlainSessionCurrentProjectionRecordFixture(
     overrides: Parameters<typeof createPlainV2SessionRecordFixture>[0]
         & Partial<Pick<SessionCurrentProjectionRecordV1, 'responsibleAccountId' | 'responsibleAccount'>> = {},
-) {
+): SessionCurrentProjectionRecordV1 {
     const { responsibleAccountId = null, responsibleAccount = null, ...recordOverrides } = overrides;
     const record = createPlainV2SessionRecordFixture(recordOverrides);
     return SessionCurrentProjectionRecordV1Schema.parse({
@@ -151,7 +151,7 @@ export function createPlainSessionCurrentProjectionRecordFixture(
 }
 
 /** A current plaintext Home response for a seeded Session, including recipient privacy. */
-export function createPlainSessionByIdResponseFixture(session: Session) {
+export function createPlainSessionByIdResponseFixture(session: Session): V2SessionByIdResponse {
     if (session.encryptionMode !== 'plain') {
         throw new Error('A plaintext Session HTTP fixture cannot serialize an encrypted Session');
     }

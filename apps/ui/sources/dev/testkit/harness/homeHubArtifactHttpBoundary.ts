@@ -3,7 +3,7 @@ import { ARTIFACT_PLAIN_DATA_KEY_MARKER, decodePlainArtifactStoredContent, encod
 import { AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema } from '@happier-dev/protocol/account/authoringMemory';
 import { type ArtifactCallerAccessV1, type ArtifactAccessGrantRowV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { deriveArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
-import { buildHomeHubArtifactIdV1, HOME_HUB_ARTIFACT_KIND_V1, HOME_HUB_DEFAULT_LAYOUT, HomeHubLayoutV1Schema } from '@happier-dev/protocol/home';
+import { buildHomeHubArtifactIdV1, HOME_HUB_ARTIFACT_KIND_V1, HOME_HUB_DEFAULT_LAYOUT, HomeHubLayoutV1Schema, type HomeHubLayoutV1 } from '@happier-dev/protocol/home';
 import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import type { FetchedMachineRow } from '@/sync/engine/machines/syncMachines';
@@ -16,7 +16,7 @@ export function createHomeHubArtifactHttpBoundary(
     accountId: string,
     profile: ReturnType<typeof AccountProfileSchema.parse> | (() => ReturnType<typeof AccountProfileSchema.parse>) = AccountProfileSchema.parse({ id: accountId }),
     options?: Readonly<{ machines?: readonly FetchedMachineRow[] }>,
-) {
+): ReturnType<typeof createLayoutArtifactHttpBoundary<HomeHubLayoutV1>> {
     const boundary = createLayoutArtifactHttpBoundary(accountId, { artifactId: buildHomeHubArtifactIdV1(accountId), kind: HOME_HUB_ARTIFACT_KIND_V1,
         defaultLayout: HOME_HUB_DEFAULT_LAYOUT, parseLayout: value => HomeHubLayoutV1Schema.parse(value) });
     return { ...boundary, request: async (input: RequestInfo | URL, init?: RequestInit) => {

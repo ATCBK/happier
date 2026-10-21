@@ -1,10 +1,10 @@
 import * as React from 'react';
 import { useSession } from '@/sync/domains/state/storage';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
-import { deriveSessionCoordinatorControls } from '@/sync/ops/sessions/sessionCoordinatorFollowControls';
+import { deriveSessionCoordinatorControls, type SessionCoordinatorControls } from '@/sync/ops/sessions/sessionCoordinatorFollowControls';
 
 /** Server-proved, viewer-scoped counts; no client graph or role-based coordinator flag. */
-export function useSessionCoordinatorControls(address: SessionAddress) {
+export function useSessionCoordinatorControls(address: SessionAddress): SessionCoordinatorControls {
     const session = useSession(address.sessionId, address.serverId);
     const managedSessions = session?.managedSessions;
     const receivedRuleCount = session?.receivedRuleCount;

@@ -10,7 +10,7 @@ import type { WorkflowDefinitionV1 } from '@happier-dev/protocol/workflows/workf
 
 export function createWorkflowAutomationDetailFixture(params: Readonly<{
     id: string; revision: number; triggerId?: string; workflowDefinitionId?: string; definition?: WorkflowDefinitionV1;
-}>) {
+}>): AutomationDefinitionDetail {
     return AutomationDefinitionDetailSchema.parse({ id: params.id, name: 'Daily review', description: null, enabled: true,
         workflowDefinitionId: params.workflowDefinitionId ?? null, scopeSessionId: null, targetType: null, existingSessionId: null,
         templateVersion: params.revision, lastRunAt: null, createdAt: 1, updatedAt: 1,
@@ -26,7 +26,14 @@ export function createWorkflowAutomationDetailFixture(params: Readonly<{
 }
 
 /** Automation HTTP persistence beneath real Workflow admission, trigger policy and codecs. */
-export function createWorkflowAutomationHttpBoundary() {
+export function createWorkflowAutomationHttpBoundary(): {
+    creates: Array<ReturnType<typeof AutomationDefinitionCreateRequestSchema.parse>>;
+    reconciles: Array<Readonly<{ automationId: string; input: ReturnType<typeof AutomationDefinitionReconcileRequestSchema.parse> }>>;
+    rows: Map<string, AutomationDefinitionDetail>;
+    respondWith(response: ((method: string, input: unknown) => Response | undefined) | undefined): void;
+    clear(): void;
+    handle(url: URL, init?: RequestInit): Promise<Response | undefined>;
+} {
     const rows = new Map<string, AutomationDefinitionDetail>();
     const creates: Array<ReturnType<typeof AutomationDefinitionCreateRequestSchema.parse>> = [];
     const reconciles: Array<Readonly<{ automationId: string; input: ReturnType<typeof AutomationDefinitionReconcileRequestSchema.parse> }>> = [];

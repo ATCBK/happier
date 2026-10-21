@@ -37,7 +37,13 @@ const ACCOUNT_SCHEDULES = { scope: 'account_all' } as const;
  * know whether anything is scheduled before it draws its own heading (the Session's "Writes here")
  * reads it here and hands the result to `ScheduledWorkflowRows`.
  */
-export function useScheduledWorkflowRows(sessionId?: string) {
+export function useScheduledWorkflowRows(sessionId?: string): {
+    available: boolean;
+    rows: readonly ScheduledWorkflowRow[];
+    status: ReturnType<typeof useWorkflowTriggerSets>['status'];
+    retry: ReturnType<typeof useWorkflowTriggerSets>['retry'];
+    serverId: string | null;
+} {
     const scope = useActiveServerAccountScope();
     const access = useWorkflowsDestinationAccess();
     const available = access.kind === 'workflows' || access.kind === 'triggersOnly';
