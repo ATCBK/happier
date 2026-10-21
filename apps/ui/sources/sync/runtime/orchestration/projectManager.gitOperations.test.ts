@@ -27,7 +27,7 @@ function createSession(id: string, machineId: string, path: string) {
 }
 
 describe('projectManager git operation in-flight state', () => {
-    it('projects one queued, progressing, then classified terminal write outcome to sibling sessions', () => {
+    it('projects one progressing, then classified terminal write outcome to sibling sessions, with queued confirmation not yet an operation', () => {
         projectManager.clear();
         projectManager.addSession(createSession('s1', 'm1', '/repo') as any);
         projectManager.addSession(createSession('s2', 'm1', '/repo') as any);
@@ -40,7 +40,9 @@ describe('projectManager git operation in-flight state', () => {
             log: projectManager.getSessionProjectScmOperationLog('s2'),
             machine: 'Workstation', provider: 'GitHub', machineReachable: true,
         });
-        expect(read()).toMatchObject({ phase: 'queued', action: 'push' });
+        // A queued operation still awaits the person's confirmation, so siblings see no write in progress.
+        expect(projectManager.getSessionProjectScmInFlightOperation('s2')).toMatchObject({ phase: 'queued', operation: 'push' });
+        expect(read()).toBeNull();
         expect(projectManager.updateSessionProjectScmOperationProgress('s1', started.operation.id, 'Pushing to origin')).toBe(true);
         expect(read()).toMatchObject({ phase: 'running', action: 'push', progressText: 'Pushing to origin' });
         projectManager.appendSessionProjectScmOperation('s1', {
@@ -48,7 +50,8 @@ describe('projectManager git operation in-flight state', () => {
             detail: 'Remote rejected the push', errorCode: 'REMOTE_NON_FAST_FORWARD',
         });
         projectManager.finishSessionProjectScmOperation('s1', started.operation.id);
-        expect(read()).toMatchObject({ phase: 'failed', action: 'push', cause: 'rejected-non-fast-forward' });
+        // A rejected push is an outcome that needs the person to choose how to reconcile, not a bare failure.
+        expect(read()).toMatchObject({ phase: 'needs_input', action: 'push', outcome: { errorCode: 'REMOTE_NON_FAST_FORWARD' } });
     });
 
     it('locks operations per project and exposes lock state to sibling sessions', () => {

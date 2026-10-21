@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionExecuteFailureSchema, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { standardCleanup } from '@/dev/testkit';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { Modal } from '@/modal';
 import { storage } from '@/sync/domains/state/storageStore';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
@@ -19,13 +20,15 @@ function chooseTarget() {
 
 describe('available session handoff entry', () => {
     const initial = storage.getState();
-    beforeEach(() => {
+    beforeEach(async () => {
+        // The picker submission holds the real sync user-request lease.
+        await loadSyncSingletonForTests();
         vi.mocked(Modal.show).mockClear();
         storage.setState({ profileScope: { serverId: 'home-a', accountId: 'account-a' } });
     });
     afterEach(() => { standardCleanup(); storage.setState(initial, true); });
 
-    it('returns the actual unavailability reason without opening a picker or transferring', async () => {
+    it('surfaces the actual unavailability reason and takes no action without opening a picker or transferring', async () => {
         const execute = vi.fn(async (): Promise<ActionExecuteResult> => ({ ok: false, errorCode: 'unexpected', error: 'Unexpected transfer' }));
         const availability = resolveSessionHandoffUiAvailability({ sessionId: 'session-a', serverId: 'home-a',
             session: createSessionFixture({ id: 'session-a', serverId: 'home-a' }),
@@ -41,7 +44,8 @@ describe('available session handoff entry', () => {
         });
         // Settle the old behavior's picker, so a missing admission check fails an assertion, not a timeout.
         vi.mocked(Modal.show).mock.calls[0]?.[0].onRequestClose?.();
-        await expect(result).resolves.toMatchObject({ ok: false, errorCode: 'runtime_direct_peer_unavailable' });
+        // The flow takes no action; the reason is the resolved availability asserted above.
+        await expect(result).resolves.toBeNull();
         expect(Modal.show).not.toHaveBeenCalled();
         expect(execute).not.toHaveBeenCalled();
     });

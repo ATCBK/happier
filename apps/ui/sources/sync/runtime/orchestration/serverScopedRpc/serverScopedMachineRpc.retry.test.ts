@@ -544,7 +544,8 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
             await machineRequested.promise;
             await vi.advanceTimersByTimeAsync(readSpawnSessionRpcTimeoutMsFromEnv());
             const result = SessionSpawnNewResultV1Schema.parse(await pending);
-            expect(result).toEqual({ type: 'error', code: 'spawn_failed', retryable: true });
+            expect(result).toEqual({ type: 'error', code: 'spawn_failed', retryable: true,
+                launchError: expect.objectContaining({ kind: 'launch_error', code: 'MACHINE_RPC_TIMEOUT' }) });
             expect(isMachineRequestReachabilityFailure(result)).toBe(false);
             expect(readMachineRequestReachabilityObservation(scope, 'machine-1')).toBeNull();
             expect(isMachineReachable(scope, { ...connectedMachine, activeAt: Date.now() })).toBe(true);

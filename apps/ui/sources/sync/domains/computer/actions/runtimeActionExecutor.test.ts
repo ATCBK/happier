@@ -6,7 +6,7 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { useComputerSessionControl } from '@/components/computer/useComputerSessionControl';
 
 import { createComputerRuntimeActionExecutor, type ComputerMachineRpc } from './runtimeActionExecutor';
-import type { ComputerTargetsListResponseV1 } from '@happier-dev/protocol/computer/v1';
+import type { ComputerControlStatusResponseV1 } from '@happier-dev/protocol/computer/v1';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 const target = { kind: 'window', displayId: ':77', pid: 123, windowId: 456 } as const;
@@ -41,19 +41,19 @@ describe('computer runtime Actions from Happier', () => {
         const accountA = captureActiveServerAccountScopeLifetime();
         expect(accountA?.isCurrent()).toBe(true);
         if (!accountA) throw new Error('Expected the canonical Account A lifetime');
-        const pendingA = createDeferred<ComputerTargetsListResponseV1>();
+        const pendingA = createDeferred<ComputerControlStatusResponseV1>();
         const selectionB = { ...selected, sourceId: 'computer:account-b', consentGranted: true,
             approvalDisplay: { ...selected.approvalDisplay, target: { kind: 'window' as const, title: 'Account B window' } } };
         let targetReads = 0;
         let readinessReads = 0;
         // The delayed machine RPC is the external network boundary. Its old reply
         // may arrive after cancellation; publication below it stays canonical.
+        // Native control status carries the OS grants, so it is the readiness read.
         const machine: ComputerMachineRpc = async ({ actionId }) => {
             if (actionId === 'computer.target.get') return ++targetReads === 1 ? selected : selectionB;
-            if (actionId === 'computer.targets.list') return ++readinessReads === 1 ? await pendingA.promise
-                : { targets: [{ target }], grants: { capture: 'granted', input: 'granted' } };
-            if (actionId === 'computer.control.status') return { target, sourceId: selectionB.sourceId,
-                controller: 'human', controlEpoch: 2, stopping: false, uncertain: false };
+            if (actionId === 'computer.control.status') return ++readinessReads === 1 ? await pendingA.promise
+                : { target, sourceId: selectionB.sourceId, controller: 'human', controlEpoch: 2, stopping: false, uncertain: false,
+                    grants: { capture: 'granted', input: 'granted' } };
             throw new Error(`Unexpected Computer RPC: ${actionId}`);
         };
         const executor = executorWith(machine, accountA);
@@ -71,7 +71,8 @@ describe('computer runtime Actions from Happier', () => {
             readerB = await renderHook(() => useComputerSessionControl({ scope, execute: executorB.execute }));
             expect(readerB.getCurrent().selection?.sourceId).toBe(selectionB.sourceId);
             expect(readerB.getCurrent().presence.kind).toBe('human');
-            await act(async () => { pendingA.resolve({ targets: [], grants: { capture: 'denied', input: 'denied' } }); });
+            await act(async () => { pendingA.resolve({ target, sourceId: selected.sourceId, controller: 'agent', controlEpoch: 1,
+                stopping: false, uncertain: false, grants: { capture: 'denied', input: 'denied' } }); });
             expect(readerB.getCurrent().selection?.sourceId).toBe(selectionB.sourceId);
             expect(readerB.getCurrent().targetTitle).toBe('Account B window');
             expect(readerB.getCurrent().presence.kind).toBe('human');

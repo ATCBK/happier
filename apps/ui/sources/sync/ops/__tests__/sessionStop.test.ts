@@ -14,6 +14,7 @@ vi.mock('../../runtime/orchestration/serverScopedRpc/resolvePreferredServerIdFor
 
 vi.mock('../../runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', () => ({
   sessionRpcWithServerScope: mockSessionRpcWithServerScope,
+  sessionRpcWithServerAccountScope: mockSessionRpcWithServerScope,
 }));
 
 // ops.ts imports ./sync, which pulls in Expo-native modules in node/vitest.
@@ -25,6 +26,31 @@ vi.mock('../../sync', () => ({
       getMachineEncryption: () => null,
     },
   },
+}));
+
+// Explicit Stop persists its hold through the Session metadata owner under the Home's
+// Account authority (sessions.ts); those two Account/sync boundaries are stubbed here
+// so these tests keep exercising the Stop transport strategy.
+vi.mock('../actions/actionAccountContext', () => ({
+  captureLazyActionAccountContext: async (serverId: string) => ({
+    accountLifetime: { scope: { serverId, accountId: 'account-1' }, isCurrent: () => true },
+    dispose: () => {},
+  }),
+}));
+
+vi.mock('../../runtime/getSyncSingleton', () => ({
+  getSyncSingleton: () => ({ patchSessionMetadataWithRetry: async () => undefined }),
+}));
+
+vi.mock('../../runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope')>()),
+  runWithServerRequestAuthorityForServerAccountScope: async (_params: unknown, operation: (authority: unknown) => Promise<unknown>) => await operation({}),
+}));
+
+vi.mock('../../runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority')>()),
+  // The Home Session read is a network boundary; these cases have no published Session snapshot.
+  readSessionSnapshotForAuthority: async () => ({ session: null }),
 }));
 
 import { sessionStop } from '../../ops';
@@ -47,12 +73,12 @@ describe('sessionStop', () => {
       code: 'session_stop_control_unavailable',
       recovery: 'retry_when_runtime_available',
     });
-    expect(mockSessionRpcWithServerScope).toHaveBeenCalledWith({
+    expect(mockSessionRpcWithServerScope).toHaveBeenCalledWith(expect.objectContaining({
       method: 'killSession',
       payload: {},
-      serverId: 'server-a',
+      scope: { serverId: 'server-a', accountId: 'account-1' },
       sessionId: 'sid-1',
-    });
+    }));
   });
 
   it('does not fall back to session-end when the errorCode is missing (legacy message-only)', async () => {

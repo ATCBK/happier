@@ -16,6 +16,7 @@ const { mockSessionRpcWithServerScope, mockMachineRpcWithServerScope, mockStorag
 
 vi.mock('../../runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', () => ({
   sessionRpcWithServerScope: mockSessionRpcWithServerScope,
+  sessionRpcWithServerAccountScope: mockSessionRpcWithServerScope,
 }));
 
 vi.mock('../../runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
@@ -37,6 +38,31 @@ vi.mock('../../sync', () => ({
       getMachineEncryption: () => null,
     },
   },
+}));
+
+// Explicit Stop persists its hold through the Session metadata owner under the Home's
+// Account authority (sessions.ts); those two Account/sync boundaries are stubbed here
+// so these tests keep exercising the Stop transport strategy.
+vi.mock('../actions/actionAccountContext', () => ({
+  captureLazyActionAccountContext: async (serverId: string) => ({
+    accountLifetime: { scope: { serverId, accountId: 'account-1' }, isCurrent: () => true },
+    dispose: () => {},
+  }),
+}));
+
+vi.mock('../../runtime/getSyncSingleton', () => ({
+  getSyncSingleton: () => ({ patchSessionMetadataWithRetry: async () => undefined }),
+}));
+
+vi.mock('../../runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope')>()),
+  runWithServerRequestAuthorityForServerAccountScope: async (_params: unknown, operation: (authority: unknown) => Promise<unknown>) => await operation({}),
+}));
+
+vi.mock('../../runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority')>()),
+  // The Home Session read is a network boundary; these cases have no published Session snapshot.
+  readSessionSnapshotForAuthority: async () => ({ session: null }),
 }));
 
 import { sessionStopWithServerScope } from '../../ops';
@@ -163,12 +189,12 @@ describe('sessionStopWithServerScope', () => {
       payload: { sessionId: 'sid-old-daemon' },
       serverId: 'server-a',
     }));
-    expect(mockSessionRpcWithServerScope).toHaveBeenCalledWith({
+    expect(mockSessionRpcWithServerScope).toHaveBeenCalledWith(expect.objectContaining({
       method: 'killSession',
       payload: {},
-      serverId: 'server-a',
+      scope: { serverId: 'server-a', accountId: 'account-1' },
       sessionId: 'sid-old-daemon',
-    });
+    }));
   });
 
   it('falls back to the live runner when the server reports missing exact machine control', async () => {
@@ -194,12 +220,12 @@ describe('sessionStopWithServerScope', () => {
       code: 'session_stop_requested',
       recovery: 'wait_for_inactive',
     });
-    expect(mockSessionRpcWithServerScope).toHaveBeenCalledWith({
+    expect(mockSessionRpcWithServerScope).toHaveBeenCalledWith(expect.objectContaining({
       method: 'killSession',
       payload: {},
-      serverId: 'server-a',
+      scope: { serverId: 'server-a', accountId: 'account-1' },
       sessionId: 'sid-missing-machine-control',
-    });
+    }));
   });
 
   it('does not fall back through a genuine forbidden machine response', async () => {
@@ -254,12 +280,12 @@ describe('sessionStopWithServerScope', () => {
       code: 'session_stop_requested',
       recovery: 'wait_for_inactive',
     });
-    expect(mockSessionRpcWithServerScope).toHaveBeenCalledWith({
+    expect(mockSessionRpcWithServerScope).toHaveBeenCalledWith(expect.objectContaining({
       method: 'killSession',
       payload: {},
-      serverId: 'server-a',
+      scope: { serverId: 'server-a', accountId: 'account-1' },
       sessionId: 'sid-old-daemon-envelope',
-    });
+    }));
   });
 
   it('falls back to session kill RPC when daemon machine stop reports the session was not found', async () => {
@@ -290,12 +316,12 @@ describe('sessionStopWithServerScope', () => {
       code: 'session_stop_requested',
       recovery: 'wait_for_inactive',
     });
-    expect(mockSessionRpcWithServerScope).toHaveBeenCalledWith({
+    expect(mockSessionRpcWithServerScope).toHaveBeenCalledWith(expect.objectContaining({
       method: 'killSession',
       payload: {},
-      serverId: 'server-a',
+      scope: { serverId: 'server-a', accountId: 'account-1' },
       sessionId: 'sid-stale-machine-target',
-    });
+    }));
   });
 
   it('treats the released runner Stop response as request acknowledgement without patching inactive', async () => {
@@ -420,12 +446,12 @@ describe('sessionStopWithServerScope', () => {
       code: 'session_stop_requested',
       recovery: 'wait_for_inactive',
     });
-    expect(mockSessionRpcWithServerScope).toHaveBeenCalledWith({
+    expect(mockSessionRpcWithServerScope).toHaveBeenCalledWith(expect.objectContaining({
       method: 'killSession',
       payload: {},
-      serverId: 'server-a',
+      scope: { serverId: 'server-a', accountId: 'account-1' },
       sessionId: 'sid-untracked-runner',
-    });
+    }));
   });
 
   it('preserves tracked-runner evidence when the fallback runner route is also unavailable', async () => {
