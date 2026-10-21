@@ -19,6 +19,7 @@ import { mapCodexRolloutLineToExternalMessages, readCodexRolloutLineTimestampMs 
 import {
   describeCodexRolloutFileSetResourceIdentity,
   inventoryCodexRootSessionRolloutFiles,
+  codexRolloutObservationInventories,
   type CodexRolloutFile,
   type CodexSessionRolloutResourceIdentity,
 } from '../../../rollout/discovery/sessionsForHome.js';
@@ -1110,6 +1111,9 @@ async function resolveBestHomesWithFiles(params: Readonly<{
     throwIfCodexExternalSessionInvocationStopped(params);
     const inventory = await inventoryCodexRootSessionRolloutFiles({
       codexHome: entry.codexHome,
+      observationInventory: params.observation
+        ? codexRolloutObservationInventories.observe(entry.codexHome, params.observation.lifetime)
+        : codexRolloutObservationInventories.read(entry.codexHome),
       remoteSessionIds: params.remoteSessionIds,
       signal: params.signal ?? new AbortController().signal,
       deadlineAtMs: params.deadlineAtMs,

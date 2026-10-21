@@ -12,6 +12,7 @@ import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixtu
 import type { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import type { createMemoryExternalTranscriptSources } from './externalTranscriptSources';
 import { openDeepIndexDb } from './deepIndex/deepIndexDb';
+import { externalMemoryStorageId } from './externalTranscriptIndex';
 import type { Disposable } from '@happier-dev/plugin-sdk';
 import { createInitialCodexExternalSessionIndexCursor, encodeCodexExternalSessionIndexCursor } from '../../../../../packages/plugins/codex/src/agent/surfaces/sessions/external/candidates';
 
@@ -23,10 +24,11 @@ await import('@/plugins/testkit/admittedRuntime');
 await import('./externalTranscriptSources');
 
 type ConfigureInventory = (next: (page: number) => string | null,
-  options?: Readonly<{ available?: boolean; watchedFiles?: number; candidates?: boolean }>) => void;
+  options?: Readonly<{ available?: boolean; watchedFiles?: number; candidates?: boolean; headId?: string; unavailableIds?: readonly string[] }>) => void;
 
 async function withInventory(run: (sources: ReturnType<typeof createMemoryExternalTranscriptSources>, configure: ConfigureInventory,
-  signal: AbortSignal, settings: ReturnType<typeof normalizeMemorySettings>, demands: WeakRef<Disposable>[], db: ReturnType<typeof openDeepIndexDb>) => Promise<void>) {
+  signal: AbortSignal, settings: ReturnType<typeof normalizeMemorySettings>, demands: WeakRef<Disposable>[], db: ReturnType<typeof openDeepIndexDb>,
+  notifyTopology: () => void) => Promise<void>) {
   const directory = await mkdtemp(join(tmpdir(), 'happier-memory-inventory-'));
   const db = openDeepIndexDb({ dbPath: join(directory, 'index.sqlite') });
   const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
@@ -39,10 +41,12 @@ async function withInventory(run: (sources: ReturnType<typeof createMemoryExtern
   const { createExternalSessionObservationDaemonProjection } = await import('@/api/session/external/leases/createExternalSessionObservationDaemonProjection');
   let runtime: Awaited<ReturnType<typeof createAuthoredAdmittedPluginRuntimeFixture>> | undefined;
   let sources: ReturnType<typeof createMemoryExternalTranscriptSources> | undefined;
+  const topologyChanges = new Map<string, (changedFile?: string) => void>();
   const observation = createExternalSessionObservationDaemonProjection({
     publishField: async () => { throw new Error('Native inventory must not fabricate a Happier Session'); },
     // Replace only OS attachments; admission, resource sharing and disposal stay real.
-    watchFile: () => () => {}, watchTopologyDirectory: () => () => {},
+    watchFile: () => () => {},
+    watchTopologyDirectory: (path, onChange) => { topologyChanges.set(path, onChange); return () => { topologyChanges.delete(path); }; },
   });
   try {
     runtime = await createRuntime({ controller: pluginReloadController,
@@ -65,21 +69,27 @@ let next = () => null;
 let available = true;
 let watchedFiles = 0;
 let candidates = false;
+let headId = 'fixture-0';
+let unavailableIds = new Set();
 export function configure(value, options = {}) {
   next = value; available = options.available ?? true; watchedFiles = options.watchedFiles ?? 0; candidates = options.candidates ?? false;
+  headId = options.headId ?? 'fixture-0';
+  unavailableIds = new Set(options.unavailableIds ?? []);
 }
 export function createFixtureAgentRuntime() { return { sessions: {} }; }
 export const externalSessions = {
     async resolveSource({ source }) { return available ? { ok: true, value: { source, ...(watchedFiles ? { accountingSource: {
       resourceKey: 'synthetic-accounting', changeObservation: 'watch_file_changes', watchFileChanges: {
-        files: Array.from({ length: watchedFiles }, (_, index) => '/synthetic/inventory-' + index + '.jsonl'), topologyDirectories: [],
+        files: Array.from({ length: watchedFiles }, (_, index) => '/synthetic/inventory-' + index + '.jsonl'), topologyDirectories: ['/synthetic'],
       },
     } } : {}) } } : { ok: false, code: 'unavailable', retryable: true }; },
     async listCandidates({ cursor }) {
       const page = cursor ? JSON.parse(Buffer.from(cursor, 'base64url').toString()).rolloutOffset : 0;
-      return { ok: true, value: { candidates: candidates ? [{ remoteSessionId: 'fixture-' + page, updatedAtMs: Date.now() }] : [], nextCursor: next(page) } };
+      return { ok: true, value: { candidates: candidates ? [{ remoteSessionId: page === 0 ? headId : 'fixture-' + page, updatedAtMs: Date.now() }] : [], nextCursor: next(page) } };
     },
-    async resolveLinkIdentity({ source, remoteSessionId }) { return { ok: true, value: { source, remoteSessionId, linkData: {} } }; },
+    async resolveLinkIdentity({ source, remoteSessionId }) { return unavailableIds.has(remoteSessionId)
+      ? { ok: false, code: 'unavailable', retryable: true }
+      : { ok: true, value: { source, remoteSessionId, linkData: {} } }; },
     async resolveLinkedIdentity({ source, remoteSessionId, linkData }) { return { ok: true, value: { source, remoteSessionId, linkData } }; },
     async pageTranscript() { return { ok: true, value: { items: [], nextCursor: null } }; },
     async readAfterTranscript() { return { ok: true, value: { outcome: 'already_current' } }; },
@@ -111,7 +121,11 @@ export function activate(api) {
     const settings = normalizeMemorySettings({ v: 1, enabled: true, conversationSearch: { indexExternal: { enabled: true, agents: [agentId] } } });
     expect(settings.conversationSearch.indexExternal).toMatchObject({ enabled: true, agents: [agentId] });
     await sources.refresh(settings, signal);
-    await run(sources, configure, signal, settings, demands, db);
+    await run(sources, configure, signal, settings, demands, db, () => {
+      const notify = topologyChanges.get('/synthetic');
+      if (!notify) throw new Error('Synthetic source has no admitted topology watcher');
+      notify('/synthetic/new-sibling.jsonl');
+    });
   } finally {
     await sources?.dispose();
     await observation.dispose();
@@ -127,6 +141,55 @@ export function activate(api) {
 const cursor = (page: number) => encodeCodexExternalSessionIndexCursor({ ...createInitialCodexExternalSessionIndexCursor(), rolloutOffset: page });
 
 describe('native inventory cursor lifetime', () => {
+  it('does not complete initial coverage when a listed native identity could not be read', async () => {
+    await withInventory(async (sources, configure, signal, _settings, _demands, db) => {
+      configure(page => page === 0 ? cursor(1) : null, { candidates: true, unavailableIds: ['fixture-1'] });
+      await sources.inventory(signal);
+      await sources.inventory(signal);
+      for (const candidate of sources.take(sources.getReadySourceCount())) {
+        db.setExternalSourceState({ sessionId: externalMemoryStorageId(candidate.source),
+          source: candidate.source, cursor: JSON.stringify({ type: 'tail' }), nextOrdinal: 1 });
+        sources.noteSyncResult(candidate.source, 'current');
+      }
+      expect(sources.getIndexSources(db)).toMatchObject([{ state: 'indexing' }]);
+    });
+  });
+  it('discovers new siblings during a retained crawl without starving its initial coverage', async () => {
+    await withInventory(async (sources, configure, signal, settings, _demands, db, notifyTopology) => {
+      const lastPage = 6;
+      const next = (page: number) => page < lastPage ? cursor(page + 1) : null;
+      configure(next, { watchedFiles: 1, candidates: true });
+      await sources.refresh(settings, signal);
+      await sources.inventory(signal);
+      configure(next, { watchedFiles: 1, candidates: true, headId: 'new-sibling' });
+      notifyTopology();
+      const changed = await sources.inventory(signal);
+      expect(sources.take(1).map(candidate => candidate.source.nativeSessionId)).toEqual(['new-sibling']);
+      const ids = () => sources.take(sources.getReadySourceCount()).map(candidate => candidate.source.nativeSessionId);
+      expect(ids()).toContain('new-sibling');
+      expect(changed?.completeSources.size).toBe(0);
+      // More structural writes must not reset either active continuation. The
+      // initial crawl gets one of every two pages under the existing allowance.
+      for (let page = 0; page < lastPage * 2; page++) {
+        notifyTopology();
+        await sources.inventory(signal);
+      }
+      expect(ids()).toEqual(expect.arrayContaining(Array.from({ length: lastPage }, (_, index) => `fixture-${index + 1}`)));
+      const visited = sources.take(sources.getReadySourceCount());
+      for (const candidate of visited) {
+        db.setExternalSourceState({ sessionId: externalMemoryStorageId(candidate.source),
+          source: candidate.source, cursor: JSON.stringify({ type: 'tail' }), nextOrdinal: 1 });
+        sources.noteSyncResult(candidate.source, 'current');
+      }
+      expect(sources.getIndexSources(db)).toMatchObject([{ state: 'ready' }]);
+      let completed = await sources.inventory(signal);
+      for (let page = 0; page < (lastPage + 1) * 2 && completed?.completeSources.size !== 1; page++) {
+        completed = await sources.inventory(signal);
+      }
+      expect(completed?.completeSources.size).toBe(1);
+      expect(await sources.inventory(signal)).toBeNull();
+    });
+  });
   it('reports a configured but unreadable native source as unavailable and recovers when it returns', async () => {
     await withInventory(async (sources, configure, signal, settings, _demands, db) => {
         configure(() => null, { available: false });

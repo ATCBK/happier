@@ -435,6 +435,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
       }
       try {
         return await readByteBoundedTranscript(request.maxSerializedBytes, maxBytes => pageCodexExternalSessionTranscript({
+          observation: request.observation,
           source: validation.value.codexSource,
           env,
           remoteSessionId: request.remoteSessionId,
@@ -467,6 +468,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
       if (!validation.ok) return validation;
       try {
         return await readByteBoundedTranscript(request.maxSerializedBytes, maxBytes => readAfterCodexExternalSessionTranscript({
+          observation: request.observation,
           source: validation.value.codexSource,
           env,
           remoteSessionId: request.remoteSessionId,

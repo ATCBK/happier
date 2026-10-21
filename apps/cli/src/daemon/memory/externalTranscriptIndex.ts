@@ -1,4 +1,4 @@
-import type { AgentExternalSessionTranscriptItem, AgentExternalSessionTerminalObservation } from '@happier-dev/plugin-sdk/sessions/external';
+import type { AgentExternalSessionTranscriptItem, AgentExternalSessionTerminalObservation, AgentExternalSessionsPageTranscriptRequest } from '@happier-dev/plugin-sdk/sessions/external';
 import type { MemoryContentPolicyV1, MemorySettingsV1 } from '@happier-dev/protocol/memory/memorySettings';
 import type { MemoryExternalTranscriptSourceV1 } from '@happier-dev/protocol/memory/memorySearch';
 import { MemoryNativeReadFailureReasonV1Schema, type MemoryIndexSourceStatusV1 } from '@happier-dev/protocol/memory/memoryStatus';
@@ -62,6 +62,7 @@ export type MemoryExternalSourceReader = Readonly<{
   sourceKey: string;
   source: AgentExternalSessionSource;
   reader: Pick<BoundedAgentExternalSessionsContribution, 'pageTranscript' | 'readAfterTranscript' | 'listCandidates' | 'resolveLinkIdentity'>;
+  observation?: AgentExternalSessionsPageTranscriptRequest['observation'];
 }>;
 
 type Frontier = Readonly<{ type: 'page' | 'tail'; cursor?: string; tailCursor?: string }>;
@@ -116,6 +117,7 @@ export async function syncExternalMemoryTranscriptOnce(input: Readonly<{
     nowMs: input.nowMs, enabledAtMs: policy.enabledAtMs, historyDays: external.historyDays });
   input.db.pruneSessionArtifacts({ sessionId, policyKey, ...(effectiveCutoff === null ? {} : { createdAtCutoffMs: effectiveCutoff }) });
   const operation = { source: input.native.source, remoteSessionId: input.source.nativeSessionId,
+    ...(input.native.observation ? { observation: input.native.observation } : {}),
     maxItems: EXTERNAL_SESSIONS_INVOCATION_POLICY.pageTranscript.maxItems,
     maxSerializedBytes: EXTERNAL_SESSIONS_INVOCATION_POLICY.pageTranscript.maxSerializedBytes, signal: input.signal };
   let pageCursor: string | undefined;

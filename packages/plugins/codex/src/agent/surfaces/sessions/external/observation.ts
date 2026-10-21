@@ -17,6 +17,8 @@ import {
 import {
   inventoryCodexRootSessionRolloutFiles,
   CodexRolloutObservationInventory,
+  CodexRolloutObservationInventories,
+  codexRolloutObservationInventories,
   type CodexRolloutFile,
 } from '../../../rollout/discovery/sessionsForHome.js';
 import {
@@ -244,10 +246,11 @@ function successfulFacts(params: Readonly<{
 export function createCodexExternalSessionObservationContribution(params: Readonly<{
   env?: NodeJS.ProcessEnv;
   now?: () => number;
+  inventories?: CodexRolloutObservationInventories;
 }> = {}): AgentExternalSessionObservationContribution {
   const readEnv = () => params.env ?? process.env;
   const now = params.now ?? Date.now;
-  const inventories = new WeakMap<AbortSignal, Map<string, CodexRolloutObservationInventory>>();
+  const inventories = params.inventories ?? new CodexRolloutObservationInventories();
 
   return Object.freeze({
     describeResource(request) {
@@ -337,21 +340,9 @@ export function createCodexExternalSessionObservationContribution(params: Readon
 
       const lifetime = request.observation?.lifetime;
       lifetime?.throwIfAborted();
-      let demandInventories = lifetime ? inventories.get(lifetime) : undefined;
-      if (lifetime && !demandInventories) {
-        demandInventories = new Map();
-        inventories.set(lifetime, demandInventories);
-        const owned = demandInventories;
-        lifetime.addEventListener('abort', () => {
-          for (const inventory of owned.values()) inventory.clear();
-          owned.clear();
-        }, { once: true });
-      }
-      let observationInventory = demandInventories?.get(home.codexHome);
-      if (!observationInventory) {
-        observationInventory = new CodexRolloutObservationInventory();
-        demandInventories?.set(home.codexHome, observationInventory);
-      }
+      const observationInventory = lifetime
+        ? inventories.observe(home.codexHome, lifetime)
+        : new CodexRolloutObservationInventory();
 
       const inventory = await inventoryCodexRootSessionRolloutFiles({
         observationInventory,
@@ -481,4 +472,4 @@ export function createCodexExternalSessionObservationContribution(params: Readon
 }
 
 export const codexExternalSessionObservationContribution =
-  createCodexExternalSessionObservationContribution();
+  createCodexExternalSessionObservationContribution({ inventories: codexRolloutObservationInventories });

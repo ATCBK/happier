@@ -473,6 +473,43 @@ export class CodexRolloutObservationInventory {
   }
 }
 
+/** The existing observation demand owns these facts. Transcript reads may use
+ * them only while that demand is live, and still validate native file versions. */
+export class CodexRolloutObservationInventories {
+  private readonly demands = new Map<AbortSignal, Map<string, CodexRolloutObservationInventory>>();
+
+  observe(codexHome: string, lifetime: AbortSignal): CodexRolloutObservationInventory {
+    lifetime.throwIfAborted();
+    let homes = this.demands.get(lifetime);
+    if (!homes) {
+      homes = new Map();
+      this.demands.set(lifetime, homes);
+      const owned = homes;
+      lifetime.addEventListener('abort', () => {
+        for (const inventory of owned.values()) inventory.clear();
+        owned.clear();
+        this.demands.delete(lifetime);
+      }, { once: true });
+    }
+    let inventory = homes.get(codexHome);
+    if (!inventory) {
+      inventory = new CodexRolloutObservationInventory();
+      homes.set(codexHome, inventory);
+    }
+    return inventory;
+  }
+
+  read(codexHome: string): CodexRolloutObservationInventory | undefined {
+    for (const homes of this.demands.values()) {
+      const inventory = homes.get(codexHome);
+      if (inventory) return inventory;
+    }
+    return undefined;
+  }
+}
+
+export const codexRolloutObservationInventories = new CodexRolloutObservationInventories();
+
 export async function inventoryCodexRootSessionRolloutFiles(params: Readonly<{
   codexHome: string;
   remoteSessionIds: readonly string[];

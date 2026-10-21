@@ -1705,7 +1705,9 @@ export function createExternalSessionObservationReconciler(
     return {
         reconcileLink,
 
-        async registerAccountingSource(input: ExternalSessionAccountingSourceDemand): Promise<Disposable> {
+        async registerAccountingSource(input: ExternalSessionAccountingSourceDemand): Promise<Disposable & Readonly<{
+            observation: Readonly<{ lifetime: AbortSignal }>;
+        }>> {
             if (disposed || input.resource.retirementSignal?.aborted) {
                 throw new Error('External accounting observation authority is retired');
             }
@@ -1737,7 +1739,8 @@ export function createExternalSessionObservationReconciler(
                 await release();
                 throw error;
             }
-            return Object.freeze({ dispose: release });
+            return Object.freeze({ dispose: release,
+                observation: Object.freeze({ lifetime: resource.observationLifetime.signal }) });
         },
 
         async reconcileResource(

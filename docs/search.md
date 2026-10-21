@@ -380,7 +380,12 @@ share its existing allowance with initial backfill, so active conversations
 cannot starve initial history and completed conversations need not wait behind
 the whole initial backlog. An observation with native ids prioritizes those
 conversations; a file notification without ids refreshes completed peers in
-that source. The configured tick allowance and interval remain unchanged;
+that source. A replacement retains refresh priority through all of its new
+pages, rather than returning its unfinished replacement to the initial backlog.
+Structural changes during a crawl alternate a fresh discovery continuation with
+the retained initial-coverage continuation, within the same page allowance.
+Fresh discovery can admit new siblings without restarting initial history; only
+an uninterrupted complete inventory proves absence. The configured tick allowance and interval remain unchanged;
 large windows can require substantially longer than thirty minutes.
 
 Memory requests native identities and activity without optional title enrichment.

@@ -27,8 +27,12 @@ type NativeInventory = {
   native: MemoryExternalSourceReader;
   candidates: Map<string, MemoryExternalTranscriptCandidate>;
   pending: Map<string, MemoryExternalTranscriptCandidate> | null;
+  pendingIdentitiesComplete: boolean;
   cursor?: string;
   seenCursorDigests: Set<string>;
+  refresh: { cursor?: string; seenCursorDigests: Set<string> } | null;
+  refreshRequested: boolean;
+  preferRefresh: boolean;
   needsInventory: boolean;
   failed: boolean;
   initialInventoryComplete: boolean;
@@ -42,14 +46,16 @@ export function createMemoryExternalTranscriptTraversal() {
   const candidates = new Map<string, Entry>();
   let preferRefresh = true;
   return {
-    replace(next: readonly MemoryExternalTranscriptCandidate[]) {
+    replace(next: readonly MemoryExternalTranscriptCandidate[], refreshIds?: ReadonlySet<string>) {
       const retainedIds = new Set(next.map(candidate => externalMemoryStorageId(candidate.source)));
       for (const id of candidates.keys()) if (!retainedIds.has(id)) candidates.delete(id);
       for (const candidate of next) {
         const id = externalMemoryStorageId(candidate.source);
         const existing = candidates.get(id);
-        if (existing) existing.candidate = candidate;
-        else candidates.set(id, { candidate, refresh: false });
+        if (existing) {
+          existing.candidate = candidate;
+          if (refreshIds?.has(id)) existing.refresh = true;
+        } else candidates.set(id, { candidate, refresh: refreshIds?.has(id) ?? false });
       }
     },
     size() { return candidates.size; },
@@ -69,7 +75,13 @@ export function createMemoryExternalTranscriptTraversal() {
     },
     noteSyncResult(source: MemoryExternalTranscriptSourceV1, state: 'current' | 'more' | 'removed' | 'error', failure?: Pick<MemoryIndexSourceStatusV1, 'errorCode' | 'errorReason'>) {
       const entry = candidates.get(externalMemoryStorageId(source));
-      if (entry) { entry.state = state; entry.failure = state === 'error' ? failure : undefined; }
+      if (entry) {
+        entry.state = state;
+        entry.failure = state === 'error' ? failure : undefined;
+        // Replacement first clears the old index and returns more. Keep that
+        // requested refresh ahead of the backlog until its new pages complete.
+        if (state !== 'more') entry.refresh = false;
+      }
     },
     getIndexSources(db: Pick<DeepIndexDbHandle, 'getExternalSourceState'> | null): MemoryIndexSourceStatusV1[] {
       const groups = new Map<string, MemoryIndexSourceStatusV1>();
@@ -109,7 +121,6 @@ export function createMemoryExternalTranscriptTraversal() {
         if (!next) break;
         const [id, entry] = next;
         selected.add(id);
-        entry.refresh = false;
         candidates.delete(id);
         candidates.set(id, entry);
         result.push(entry.candidate);
@@ -178,6 +189,7 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
         && (sourceKey === undefined || state.native.sourceKey === sourceKey)
         && (changed || state.pending === null)) {
         state.needsInventory = true;
+        if (changed && state.pending !== null) state.refreshRequested = true;
         completeSources.delete(key);
       }
     }
@@ -255,7 +267,8 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
           },
         }) : null;
         next.push({ native: { agentId, sourceKey: descriptor.configuredSourceKey ?? descriptor.sourceKey,
-          source: resolved.descriptor.source, reader: boundary.externalSessions }, demand });
+          source: resolved.descriptor.source, reader: boundary.externalSessions,
+          ...(demand?.observation ? { observation: demand.observation } : {}) }, demand });
       }
       operationSignal.throwIfAborted();
     } catch (error) { await Promise.all(next.map(record => record.demand?.dispose())); throw error; }
@@ -270,8 +283,11 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
       // Refreshing observation demand must not restart an in-progress crawl.
       // A replaced reader or physical source does require fresh absence proof.
       if (previous?.native.reader === native.reader
+        && previous.native.observation?.lifetime === native.observation?.lifetime
         && JSON.stringify(previous.native.source) === JSON.stringify(native.source)) continue;
-      inventories.set(key, { native, candidates: new Map(), pending: null, seenCursorDigests: new Set(), needsInventory: true, failed: false, initialInventoryComplete: false });
+      inventories.set(key, { native, candidates: new Map(), pending: null, pendingIdentitiesComplete: true, seenCursorDigests: new Set(),
+        refresh: null, refreshRequested: false, preferRefresh: true,
+        needsInventory: true, failed: false, initialInventoryComplete: false });
       inventoryChanged = true;
       completeSources.delete(key);
     }
@@ -288,18 +304,30 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
     const cutoff = resolveMemoryCoverageCreatedAtCutoffMs({ nowMs: Date.now(), enabledAtMs: 0,
       historyDays: indexSettings.conversationSearch.indexExternal.historyDays });
     let changed = inventoryChanged;
+    const refreshIds = new Set<string>();
     inventoryChanged = false;
     for (const { native } of records) {
       const key = JSON.stringify([native.agentId, native.sourceKey]);
       const state = inventories.get(key)!;
       if (state.needsInventory && state.pending === null) {
         state.pending = new Map();
+        state.pendingIdentitiesComplete = true;
         state.cursor = undefined;
         state.seenCursorDigests.clear();
         state.needsInventory = false;
         completeSources.delete(key);
       }
       if (state.pending === null) continue;
+      if (state.refreshRequested && state.refresh === null) {
+        state.refresh = { seenCursorDigests: new Set() };
+        state.refreshRequested = false;
+        state.preferRefresh = true;
+      }
+      // New siblings can precede an opaque crawl's frontier. Alternate fresh
+      // discovery with retained coverage without restarting either on writes.
+      const refresh = state.refresh && state.preferRefresh ? state.refresh : null;
+      if (state.refresh) state.preferRefresh = !state.preferRefresh;
+      const cursor = refresh ? refresh.cursor : state.cursor;
       changed = true;
       try {
         // Consume one existing bounded native page per source, then let the
@@ -311,7 +339,7 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
           maxSerializedBytes: EXTERNAL_SESSIONS_INVOCATION_POLICY.listCandidates.maxSerializedBytes,
           includeTitles: false,
           ...(cutoff === null ? {} : { updatedAfterMs: cutoff }),
-          ...(state.cursor ? { cursor: state.cursor } : {}), signal });
+          ...(cursor ? { cursor } : {}), signal });
         signal.throwIfAborted();
         if (!page.ok) throw memoryExternalSourceReadError(native, page);
         state.failed = false;
@@ -324,36 +352,50 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
           const identity = await native.reader.resolveLinkIdentity({ source: native.source,
             remoteSessionId: candidate.remoteSessionId, ...(candidate.linkData ? { linkData: candidate.linkData } : {}), signal });
           signal.throwIfAborted();
-          if (!identity.ok) { state.needsInventory = true; continue; }
+          if (!identity.ok) { state.needsInventory = true; state.pendingIdentitiesComplete = false; continue; }
           const source = { type: 'external_transcript' as const,
             agentId: native.agentId, sourceKey: native.sourceKey, nativeSessionId: identity.value.remoteSessionId };
-          state.pending.set(externalMemoryStorageId(source), { native: { ...native, source: identity.value.source }, source });
+          const id = externalMemoryStorageId(source);
+          if (refresh && !state.pending.has(id) && !state.candidates.has(id)) refreshIds.add(id);
+          state.pending.set(id, { native: { ...native, source: identity.value.source }, source });
         }
         if (page.value.nextCursor) {
           // Opaque cursors may carry a whole native directory snapshot. Keep
           // only its digest for cycle detection, preserving JavaScript code units.
           const digest = createHash('sha256').update(page.value.nextCursor, 'utf16le').digest('base64url');
-          if (state.seenCursorDigests.has(digest)) throw new Error('memory_external_inventory_cursor_stalled');
-          state.cursor = page.value.nextCursor;
-          state.seenCursorDigests.add(digest);
+          const position = refresh ?? state;
+          if (position.seenCursorDigests.has(digest)) throw new Error('memory_external_inventory_cursor_stalled');
+          position.cursor = page.value.nextCursor;
+          position.seenCursorDigests.add(digest);
+        } else if (refresh) {
+          state.refresh = null;
+          if (page.value.searchIncomplete) state.needsInventory = true;
         } else {
           // Preparation describes the native inventory chunk, including its
           // terminal page. Its exhausted cursor establishes inventory completion.
           if (!state.needsInventory && !page.value.searchIncomplete) {
             state.candidates = state.pending;
+            // This full traversal also covers the older refresh request.
+            state.refresh = null;
+            state.refreshRequested = false;
             completeSources.add(key);
-            state.initialInventoryComplete = true;
           } else {
             // Changes during a crawl or an incomplete page cannot prove absence.
             state.candidates = new Map([...state.candidates, ...state.pending]);
             state.needsInventory = true;
           }
+          // A later topology change does not erase completed initial coverage.
+          // Only the uninterrupted full crawl above may prove absence.
+          if (!page.value.searchIncomplete && state.pendingIdentitiesComplete) state.initialInventoryComplete = true;
           state.pending = null;
         }
       } catch (error) {
         signal.throwIfAborted();
-        state.candidates = new Map([...state.candidates, ...(state.pending ?? [])]);
-        state.pending = null;
+        if (refresh) state.refresh = null;
+        else {
+          state.candidates = new Map([...state.candidates, ...(state.pending ?? [])]);
+          state.pending = null;
+        }
         state.needsInventory = true;
         state.failed = true;
         state.failure = memoryExternalSourceFailure(error);
@@ -370,7 +412,7 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
     }
     if (!changed) return null;
     const candidates = new Map([...inventories.values()].flatMap(state => [...state.candidates, ...(state.pending ?? [])]));
-    traversal.replace([...candidates.values()]);
+    traversal.replace([...candidates.values()], refreshIds);
     return { current: new Set(candidates.keys()), completeSources, configuredSourceKeys };
   };
 

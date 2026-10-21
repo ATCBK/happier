@@ -315,6 +315,54 @@ describe('external memory transcript ingestion', () => {
     traversal.replace(candidates);
     expect(nextId()).toEqual(['alpha']);
   });
+  it('rebuilds a rewritten Claude conversation while unrelated initial history continues', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-memory-rewrite-priority-'));
+    const db = openDeepIndexDb({ dbPath: join(dir, 'deep.sqlite') });
+    try {
+      const project = join(dir, 'projects', 'project');
+      await mkdir(project, { recursive: true });
+      const row = (id: string, text: string) => JSON.stringify({ type: 'user', uuid: id,
+        sessionId: id, timestamp: new Date().toISOString(), message: { role: 'user', content: text } }) + '\n';
+      const rewrittenPath = join(project, 'rewritten.jsonl');
+      await writeFile(rewrittenPath, row('rewritten', 'quartz original conversation'));
+      for (let index = 0; index < 6; index++) {
+        await writeFile(join(project, `backfill-${index}.jsonl`), row(`backfill-${index}`, 'zircon initial history'));
+      }
+      const reader = createBoundedAgentExternalSessionsContribution({ contribution: createClaudeExternalSessionsContribution({ env: {} }),
+        identity: { pluginId: 'fixture.claude', agentId: 'claude', occurrenceId: 'current',
+          contributionQualifiedId: 'fixture.claude/agents/claude', sourceCustody: { kind: 'development', registeredRootId: 'fixture-root' } },
+        retirementSignal: new AbortController().signal, isCurrent: () => true,
+        createInvocationExec: async () => createUnavailablePluginServices().exec });
+      const native: MemoryExternalSourceReader = { agentId: 'claude', sourceKey: 'local',
+        source: { kind: 'claudeConfig', configDir: dir }, reader };
+      const candidate = (nativeSessionId: string) => ({ native,
+        source: { type: 'external_transcript' as const, agentId: 'claude', sourceKey: 'local', nativeSessionId } });
+      const rewritten = candidate('rewritten');
+      const settings = normalizeMemorySettings({ enabled: true, indexMode: 'deep', backfillPolicy: 'all_history',
+        coveragePolicy: { type: 'full' }, conversationSearch: { indexExternal: { enabled: true, agents: ['claude'] } } });
+      const traversal = createMemoryExternalTranscriptTraversal();
+      const operation = { db, settings, nowMs: Date.now(), signal: new AbortController().signal,
+        onSourceResult: traversal.noteSyncResult };
+      traversal.replace([rewritten]);
+      await syncExternalMemoryTranscriptsBatch({ ...operation, candidates: traversal.take(1) });
+      const search = (query: string) => db.search({ query, scope: { type: 'global' }, maxResults: 10,
+        includeExternal: true, includeSessions: false });
+      expect(search('quartz')).toHaveLength(1);
+      traversal.replace([rewritten, ...Array.from({ length: 6 }, (_, index) => candidate(`backfill-${index}`))]);
+      // Same native identity and record count; only the readable text changes.
+      await writeFile(rewrittenPath, row('rewritten', 'garnet replacement conversation'));
+      traversal.changed('claude', 'local', ['rewritten']);
+      // One tick advances initial history, one detects replacement, and the
+      // next two must serve both backfill and the requested reconstruction.
+      for (let tick = 0; tick < 4; tick++) {
+        await syncExternalMemoryTranscriptsBatch({ ...operation, candidates: traversal.take(1) });
+      }
+      expect(search('quartz')).toEqual([]);
+      expect(search('garnet')).toHaveLength(1);
+      expect(search('zircon').length).toBeGreaterThan(0);
+      expect(search('zircon').length).toBeLessThan(6);
+    } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
+  });
   it('shares each worker tick budget across persistent Happier and native candidates without starving either', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'happier-memory-mixed-tick-'));
     const db = openDeepIndexDb({ dbPath: join(dir, 'deep.sqlite') });

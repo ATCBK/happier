@@ -1436,6 +1436,7 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
                     );
                     return await params.contribution.pageTranscript({
                         ...(request.projection ? { projection: request.projection } : {}),
+                        ...(request.observation ? { observation: request.observation } : {}),
                         source: parsedSource,
                         remoteSessionId,
                         direction: request.direction,
@@ -1479,6 +1480,7 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
                     );
                     return await params.contribution.readAfterTranscript({
                         ...(request.projection ? { projection: request.projection } : {}),
+                        ...(request.observation ? { observation: request.observation } : {}),
                         source: parsedSource,
                         remoteSessionId,
                         cursor,

@@ -20,7 +20,7 @@ import type { ExecService } from './exec.js';
 import type { JsonValue } from './identity.js';
 import type { SessionMessageRole, SessionSchema } from './services/sessions.js';
 import type { UsageObservationCost, UsageObservationScope, UsageObservationTokens } from './usage.js';
-import type { AgentExternalSessionObservationResourceDescriptorV1, AgentExternalSessionObservationWatchFileChangesV1 } from './externalSessionObservation.js';
+import type { AgentExternalSessionObservationReconcileResourceRequest, AgentExternalSessionObservationResourceDescriptorV1, AgentExternalSessionObservationWatchFileChangesV1 } from './externalSessionObservation.js';
 
 /**
  * Public author shape for one admitted External Session transcript record.
@@ -434,6 +434,8 @@ export type AgentExternalSessionsResolvedIdentity = Readonly<{
 
 export type AgentExternalSessionsPageTranscriptRequest = AgentExternalSessionsInvocation & Readonly<{
     maxSerializedBytes: number;
+    /** Optional process-local watch facts; safely ignorable, never path authority. */
+    observation?: AgentExternalSessionObservationReconcileResourceRequest['observation'];
     /** Forward terminal catch-up may include ordered nonvisual source evidence. */
     projection?: 'terminal';
     source: AgentExternalSessionSource;
@@ -444,6 +446,8 @@ export type AgentExternalSessionsPageTranscriptRequest = AgentExternalSessionsIn
 }>;
 export type AgentExternalSessionsReadAfterTranscriptRequest = AgentExternalSessionsInvocation & Readonly<{
     maxSerializedBytes: number;
+    /** Optional process-local watch facts; safely ignorable, never path authority. */
+    observation?: AgentExternalSessionObservationReconcileResourceRequest['observation'];
     /** Terminal consumers also receive ordered nonvisual source evidence. */
     projection?: 'terminal';
     source: AgentExternalSessionSource;
