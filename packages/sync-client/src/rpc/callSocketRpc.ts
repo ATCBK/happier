@@ -22,6 +22,37 @@ export type SocketRpcSocket = SocketRpcAckScope & Readonly<{
   emit(event: string, ...args: unknown[]): unknown;
   timeout?(timeoutMs: number): SocketRpcAckScope;
 }>;
+
+function prepareSocketRpcEmission(socket: SocketRpcSocket, nativeTimeout: number | undefined) {
+  // Socket.IO 4.8.3: timeout() returns the physical socket even through the
+  // scoped pool; undefined clears the per-emit override without adding a timer.
+  // sendBuffer is public, but acks is private. Keep that boundary here: emit
+  // buffers synchronously, and invoking its ACK wrapper also clears its timer.
+  type BufferedSocket = SocketRpcAckScope & {
+    sendBuffer?: { id?: number; data?: unknown[] }[];
+    acks?: Record<number, ((error: Error) => void) | undefined>;
+  };
+  const scope: BufferedSocket = socket.timeout ? Reflect.apply(socket.timeout, socket, [nativeTimeout]) : socket;
+  // Non-Socket.IO adapters retain their raw callback convention for unbounded
+  // deadlines; only a native socket needs its physical scope for buffer custody.
+  const emission = nativeTimeout !== undefined || Array.isArray(scope.sendBuffer) ? scope : socket;
+  const bufferStart = scope.sendBuffer?.length ?? 0;
+  return {
+    emission,
+    rejectBuffered: (event: string, payload: unknown): boolean => {
+      const buffer = scope.sendBuffer;
+      const index = buffer?.findIndex((packet, index) => index >= bufferStart && packet.data?.[0] === event && packet.data[1] === payload) ?? -1;
+      if (!buffer || index < 0) return false;
+      const [packet] = buffer.splice(index, 1);
+      if (packet.id !== undefined && scope.acks) {
+        const ack = scope.acks[packet.id];
+        delete scope.acks[packet.id];
+        ack?.(createRpcCallError({ error: 'Socket did not dispatch RPC', errorCode: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE }));
+      }
+      return true;
+    },
+  };
+}
 export async function emitWithAckCancellable<T>(params: Readonly<{
   socket: SocketRpcSocket; event: string; payload: unknown;
   timeoutMs?: number | null; signal?: AbortSignal; requestId?: string; onIssued?: () => void;
@@ -37,7 +68,7 @@ export async function emitWithAckCancellable<T>(params: Readonly<{
     // Socket.IO's native timer overflows above this platform boundary; the
     // existing acknowledgement race owns those longer authored deadlines.
     const nativeTimeout = timeout !== undefined && timeout <= 2_147_483_647 ? timeout : undefined;
-    const emission = nativeTimeout !== undefined && params.socket.timeout ? params.socket.timeout(nativeTimeout) : params.socket;
+    const { emission, rejectBuffered } = prepareSocketRpcEmission(params.socket, nativeTimeout);
     const emit = emission.emit;
     const emitWithAck = emission.emitWithAck;
     if (!emitWithAck && !emit) throw new Error('Socket acknowledgement scope cannot emit');
@@ -46,7 +77,6 @@ export async function emitWithAckCancellable<T>(params: Readonly<{
       waitForResultOnCancel: params.waitForResultOnCancel,
       emitCancel: (requestId) => { params.socket.emit(SOCKET_RPC_EVENTS.CANCEL, { requestId }); },
       issue: () => {
-        issued = true;
         const result = emitWithAck
           ? emitWithAck.call(emission, params.event, params.payload)
           : new Promise<unknown>((resolve, reject) => {
@@ -56,6 +86,13 @@ export async function emitWithAckCancellable<T>(params: Readonly<{
                 } else resolve(args[0]);
               });
             });
+        if (rejectBuffered(params.event, params.payload)) {
+          // Its native ACK was rejected during cleanup. Consume that promise;
+          // this synchronous refusal must never acquire issued/cancel custody.
+          void result.catch(() => {});
+          throw createRpcCallError({ error: 'Socket did not dispatch RPC', errorCode: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE });
+        }
+        issued = true;
         return raceSocketIoAckTimeout(result as Promise<T>, timeout, params.waitForResultOnCancel ? undefined : params.signal);
       },
     });

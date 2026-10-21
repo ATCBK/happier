@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import { Server } from 'socket.io';
+import { Server, type Socket as ServerSocket } from 'socket.io';
 import { io } from 'socket.io-client';
 import { afterEach, expect, it, vi } from 'vitest';
 import { callSocketRpc, emitWithAckCancellable, type SocketRpcAckScope } from './callSocketRpc.js';
@@ -31,7 +31,7 @@ let server: Server;
 let destroy: (() => Promise<void>) | undefined;
 async function setup() {
   const http = createServer();
-  server = new Server(http, { path: '/v1/updates/' });
+  server = new Server(http, { path: '/v1/updates/', pingInterval: 15_000, pingTimeout: 45_000 });
   await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
   const address = http.address();
   if (!address || typeof address === 'string') throw new Error('No address');
@@ -44,6 +44,50 @@ afterEach(async () => {
   vi.useRealTimers();
   await destroy?.();
   if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
+});
+it.each([undefined, null, 10_000])('settles an expired-heartbeat emit as notSent without retaining or replaying it (%s)', async timeoutMs => {
+  const socket = await setup();
+  const received: string[] = [];
+  const listen = (remote: ServerSocket) => {
+    remote.on('rpc-call', (payload: { requestId: string }, ack: (value: string) => void) => {
+      received.push(payload.requestId);
+      ack(payload.requestId);
+    });
+    remote.on('rpc-cancel', () => { received.push('cancel'); });
+  };
+  server.sockets.sockets.forEach(listen);
+  server.on('connection', listen);
+  await expect(emitWithAckCancellable({ socket, event: 'rpc-call', payload: { requestId: 'healthy' } })).resolves.toBe('healthy');
+  const disconnected = new Promise<string>(resolve => socket.once('disconnect', resolve));
+  const controller = new AbortController();
+  const now = Date.now();
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 60_001);
+  let failure: unknown;
+  const pending = emitWithAckCancellable({ socket, event: 'rpc-call', payload: { requestId: 'expired' },
+    requestId: 'expired', signal: controller.signal, timeoutMs,
+  }).catch((error: unknown) => { failure = error; });
+  clock.mockRestore();
+  try {
+    // One event-loop turn observes prompt settlement without imposing an RPC budget.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(readRpcErrorCode(failure)).toBe(RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE);
+    expect(readRpcRequestDisposition(failure)).toBe('notSent');
+    expect(socket.sendBuffer).toEqual([]);
+    expect(socket).toHaveProperty('acks', {});
+    expect(await disconnected).toBe('ping timeout');
+    controller.abort();
+    await pending;
+    expect(socket.sendBuffer).toEqual([]);
+    expect(socket).toHaveProperty('acks', {});
+    await new Promise<void>((resolve, reject) => {
+      socket.once('connect', resolve); socket.once('connect_error', reject); socket.connect();
+    });
+    await expect(emitWithAckCancellable({ socket, event: 'rpc-call', payload: { requestId: 'fresh' } })).resolves.toBe('fresh');
+    expect(received).toEqual(['healthy', 'fresh']);
+  } finally {
+    controller.abort();
+    await pending;
+  }
 });
 it('fails closed against a relay without answering-client routing instead of delivering to an arbitrary app', async () => {
   const socket = await setup();
