@@ -222,6 +222,16 @@ it('displays native ceiling utilization and the unverifiable count without inven
   const phone = await mount({ answer, params: { id: 'processes', page: 'owner', owner: answer.owners[0].rowId }, waitForRows: false });
   expect(phone.screen.findByTestId('machine-processes-ceiling-throttles')).not.toBeNull();
 });
+it('lists the one process of a single-process owner on its phone page, so it can be opened', async () => {
+  const answer = createProcessesAnswer();
+  const { screen } = await mount({ answer, params: { id: 'processes', page: 'owner', owner: 'service:website' }, waitForRows: false });
+  const row = await vi.waitFor(() => {
+    const found = screen.findByTestId('machine-processes-owner-row-p:website');
+    expect(found).not.toBeNull();
+    return found;
+  });
+  expect(textOf(row)).toContain('1.2 GB');
+});
 type Screen = Awaited<ReturnType<typeof mount>>['screen'];
 /** The row's menu owner (DropdownMenu): choose an item the way a press on it does. */
 function chooseMenuItem(screen: Screen, key: string, itemId: string) {
