@@ -1725,9 +1725,13 @@ export function insertMountedComposerAttachmentReferences(input: Readonly<{
         ? { start: firstEdit.position.offset, end: firstEdit.position.offset } : firstEdit.range;
     const text = working.text.slice(range.start, working.text.length - (snapshot.text.length - range.end));
     const edit = { ...firstEdit, text };
-    return applyMountedComposerPresentationTransaction({ ref: input.ref, scope: input.scope,
+    const result = applyMountedComposerPresentationTransaction({ ref: input.ref, scope: input.scope,
         transaction: { expectedRevision: snapshot.revision,
             operations: [edit, ...inserted.map(reference => ({ kind: 'reference.insert' as const, reference }))] } });
+    if (result.status === 'applied') {
+        tryFocusVisualSessionComposer(readScopedMountedComposerTarget(input.ref, input.scope));
+    }
+    return result;
 }
 
 /** Upload drafts live outside the portable document; their chips still use its transaction owner. */
