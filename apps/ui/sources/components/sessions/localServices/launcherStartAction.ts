@@ -144,7 +144,7 @@ export function useLocalServiceLauncherStartAction(
     const serverId = normalizeNonEmptyString(context.serverId);
     const runtimeActionExecute = context.runtimeActionExecute ?? undefined;
     const applyLauncherSnapshot = context.applyLauncherSnapshot;
-    const resolveDestination = useProjectServiceStartDestination();
+    const executeStart = useProjectServiceStartDestination();
 
     return React.useMemo(() => {
         if (!runtimeActionExecute) {
@@ -158,27 +158,25 @@ export function useLocalServiceLauncherStartAction(
                 || (target.source === 'package_script' && !(target.workspace && target.declaration))) {
                 return undefined;
             }
-            const selected = choice === undefined ? resolveDestination?.(target, context.signal) : undefined;
-            if (selected) {
-                const resolved = await selected;
-                if (!resolved || !isLocalServiceActionAdmissionCurrent(context)) return undefined;
-                choice = resolved;
-            }
-            const request = buildLocalServiceLauncherStartRequest({
-                target,
-                machineId,
-                sessionId,
-                workspaceId,
-                choice,
-                expectedEffectDigest,
-            });
-            if (!normalizeNonEmptyString(request.machineId) || !normalizeNonEmptyString(request.targetId)) {
-                return undefined;
-            }
-            return executeLocalServiceLauncherStartWithReview({ request, target,
-                ...(sessionId ? { defaultSessionId: sessionId } : {}),
-                context: { ...context, runtimeActionExecute, serverId, applyLauncherSnapshot } });
+            const dispatch = async (choice?: ProjectExecutionChoiceV1) => {
+                if (!isLocalServiceActionAdmissionCurrent(context)) return undefined;
+                const request = buildLocalServiceLauncherStartRequest({
+                    target,
+                    machineId,
+                    sessionId,
+                    workspaceId,
+                    choice,
+                    expectedEffectDigest,
+                });
+                if (!normalizeNonEmptyString(request.machineId) || !normalizeNonEmptyString(request.targetId)) {
+                    return undefined;
+                }
+                return executeLocalServiceLauncherStartWithReview({ request, target,
+                    ...(sessionId ? { defaultSessionId: sessionId } : {}),
+                    context: { ...context, runtimeActionExecute, serverId, applyLauncherSnapshot } });
+            };
+            return executeStart ? executeStart(target, choice, dispatch, context.signal) : dispatch(choice);
         };
-    }, [applyLauncherSnapshot, machineId, runtimeActionExecute, serverId, sessionId, workspaceId, resolveDestination,
+    }, [applyLauncherSnapshot, machineId, runtimeActionExecute, serverId, sessionId, workspaceId, executeStart,
         context.expectedAccountId, context.signal, context.isCurrent, context.reviewEffect, context.reviewSetupConsent, context.onApprovalPending]);
 }

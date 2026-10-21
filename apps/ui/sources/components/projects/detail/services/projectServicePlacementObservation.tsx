@@ -11,7 +11,7 @@ import { actionOperationStore } from '@/sync/domains/actionOperations/actionOper
 import { actionOperationSelectors, compareProjectServiceActionOperations } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { useActionOperationStopControl } from '@/components/inbox/actionOperations/useActionOperationStopControl';
 import { useServerCredentialAccountScopeBinding, type ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { useServerScopedMachine } from '@/sync/store/hooks';
+import { useActiveServerAccountScope, useArtifacts, useServerScopedMachine } from '@/sync/store/hooks';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { t } from '@/text';
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
@@ -23,6 +23,10 @@ import { executeProjectWorkerActionV1 } from '@/sync/ops/actions/projectWorkerAc
 import { resolveMachinePool } from '@/sync/ops/machinePools';
 import { randomUUID } from '@/platform/randomUUID';
 import { LocalServiceManagedServiceActionTargetV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
+import { LocalServiceStartApprovalReviewV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
+import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { useApprovalArtifact } from '@/components/approvals/useApprovalArtifact';
 
 export type ProjectServicePlacementOperationAttachment = Readonly<{
   operationId: string;
@@ -36,6 +40,7 @@ type OperationObservation = Readonly<{
 type Entry = Readonly<{ attachment: ProjectServicePlacementOperationAttachment; observation?: OperationObservation; bindingObserved?: boolean }>;
 type ManagedSelection = Readonly<{ scopeKey: string; draft: ManagedMachineSelectionDraft; purpose: 'start' | 'move' }>;
 type ManagedContinuation = ReturnType<typeof useProjectServiceManagedMachine>;
+type ApprovedStart = Readonly<{ serviceName: string; machineId: string; requestId: string }>;
 type ObservationContext = Readonly<{
   source: ProjectServiceSource;
   entries: ReadonlyMap<string, Entry>;
@@ -43,6 +48,9 @@ type ObservationContext = Readonly<{
   clear: (serviceName: string) => void;
   acknowledgeBinding: (serviceName: string, operationId: string) => void;
   pendingRequests: ReadonlySet<string>;
+  approvedStarts: ReadonlyMap<string, ApprovedStart>;
+  startRequests: ReadonlyMap<string, ProjectExecutionChoiceV1 | null>;
+  observeStartPlacement: (name: string, choice: ProjectExecutionChoiceV1 | null) => void;
   executeMove: (serviceName: string, destination: ProjectExecutionChoiceV1,
     execute: (signal: AbortSignal, onApprovalPending: (registration: ActionApprovalRegistration) => void) => Promise<ServiceRelocationOutcome>) => Promise<ServiceRelocationOutcome | null>;
   runtimeActionExecute?: FrontDoorRuntimeActionExecute;
@@ -51,9 +59,11 @@ type ObservationContext = Readonly<{
   selectManaged: (name: string, scopeKey: string, draft: ManagedMachineSelectionDraft | null, purpose: 'start' | 'move') => void;
   observeManaged: (name: string, scopeKey: string) => () => void;
   resolveStart: (target: LocalServiceLaunchTarget, signal?: AbortSignal) => Promise<ProjectExecutionChoiceV1 | null> | undefined;
+  executeStart: (target: LocalServiceLaunchTarget, choice: ProjectExecutionChoiceV1 | undefined,
+    execute: (choice?: ProjectExecutionChoiceV1) => Promise<unknown>, signal?: AbortSignal) => Promise<unknown>;
 }>;
 const Context = React.createContext<ObservationContext | null>(null);
-const StartContext = React.createContext<ObservationContext['resolveStart'] | undefined>(undefined);
+const StartContext = React.createContext<ObservationContext['executeStart'] | undefined>(undefined);
 
 /** List and pushed detail can coexist; one owner retains their service's single purchase/start intent. */
 function ServiceManagedMachineObserver(props: Readonly<{
@@ -118,6 +128,43 @@ function ServiceMoveApprovalObserver(props: Readonly<{
   return null;
 }
 
+/** Header-only socket updates wake the existing exact-Home Artifact body reader. */
+function ServiceStartApprovalObserver(props: Readonly<{
+  artifactId: string;
+  source: ProjectServiceSource;
+  binding: ServerCredentialAccountScopeBinding;
+  publish: (artifactId: string, start: ApprovedStart | null) => void;
+}>) {
+  const { artifact } = useApprovalArtifact({ artifactId: props.artifactId, serverId: props.source.serverId,
+    scope: props.binding.scope, observeWhileUnfocused: true });
+  React.useLayoutEffect(() => {
+    let start: ApprovedStart | null = null;
+    const parsed = artifact?.isDecrypted !== false && typeof artifact?.body === 'string'
+      ? approvalArtifactBodyMatchesHeaderV1(artifact.header ?? {}, artifact.body) : null;
+    if (props.binding.isCurrent() && parsed?.family === 'built_in' && parsed.request.v === 2
+      && parsed.request.actionId === 'localServices.launcher.start'
+      && (parsed.request.status === 'approved' || parsed.request.status === 'executing')
+      && parsed.request.executionOriginV1.accountId === props.binding.accountId
+      && areServerProfileIdentifiersEquivalent(parsed.request.executionOriginV1.serverIdentityId
+        ?? parsed.request.executionOriginV1.serverId, props.source.serverId)) {
+      const preview = parsed.request.preview;
+      const review = LocalServiceStartApprovalReviewV1Schema.safeParse(preview && typeof preview === 'object'
+        && 'serviceStartReview' in preview ? preview.serviceStartReview : undefined);
+      const declaration = review.success ? review.data.request.declaration : null;
+      if (review.success && sameStrictJsonValue(review.data.request, parsed.request.actionArgs)
+        && declaration?.selection.kind === 'manifest' && declaration.workspaceRefId === props.source.refId
+        && review.data.request.workspace?.machineId === props.source.machineId
+        && areServerProfileIdentifiersEquivalent(review.data.target.serverId, props.source.serverId)) {
+        start = { serviceName: declaration.selection.name, machineId: review.data.target.machineId,
+          requestId: parsed.request.executionOriginV1.requestId };
+      }
+    }
+    props.publish(props.artifactId, start);
+  }, [artifact, props.artifactId, props.binding, props.publish, props.source.machineId, props.source.refId, props.source.serverId]);
+  React.useEffect(() => () => props.publish(props.artifactId, null), [props.artifactId, props.publish]);
+  return null;
+}
+
 function ScopedObservationProvider(props: Readonly<{
   source: ProjectServiceSource;
   binding: ServerCredentialAccountScopeBinding | null;
@@ -125,6 +172,34 @@ function ScopedObservationProvider(props: Readonly<{
   children: React.ReactNode;
 }>) {
   const [retainedEntries, setEntries] = React.useState<ReadonlyMap<string, Entry>>(() => new Map());
+  const artifacts = useArtifacts();
+  const activeScope = useActiveServerAccountScope();
+  const [approvalObservations, setApprovalObservations] = React.useState<ReadonlyMap<string, ApprovedStart>>(() => new Map());
+  const publishApproval = React.useCallback((artifactId: string, start: ApprovedStart | null) => setApprovalObservations(current => {
+    const previous = current.get(artifactId);
+    if (previous?.serviceName === start?.serviceName && previous?.machineId === start?.machineId
+      && previous?.requestId === start?.requestId) return current;
+    const next = new Map(current);
+    if (start) next.set(artifactId, start); else next.delete(artifactId);
+    return next;
+  }), []);
+  const approvalIds = React.useMemo(() => props.binding?.isCurrent() && activeScope?.accountId === props.binding.accountId
+    && areServerProfileIdentifiersEquivalent(activeScope.serverId, props.source.serverId)
+    ? artifacts.filter(artifact => artifact.header?.actionId === 'localServices.launcher.start'
+      && (artifact.header.approvalStatus === 'approved' || artifact.header.approvalStatus === 'executing')).map(artifact => artifact.id)
+    : [], [activeScope, artifacts, props.binding, props.source.serverId]);
+  const previousApprovedStarts = React.useRef<ReadonlyMap<string, ApprovedStart>>(new Map());
+  const approvedStarts = React.useMemo(() => {
+    const result = new Map<string, ApprovedStart>();
+    for (const id of approvalIds) {
+      const start = approvalObservations.get(id);
+      if (start && !result.has(start.serviceName)) result.set(start.serviceName, start);
+    }
+    const previous = previousApprovedStarts.current;
+    if (previous.size === result.size && [...result].every(([name, start]) => previous.get(name) === start)) return previous;
+    previousApprovedStarts.current = result;
+    return result;
+  }, [approvalIds, approvalObservations]);
   const cleared = React.useRef(new Set<string>());
   const received = useProjectServiceActionOperations({ ...props.source, accountId: props.binding?.accountId ?? null });
   const entries = React.useMemo(() => {
@@ -156,6 +231,12 @@ function ScopedObservationProvider(props: Readonly<{
   entriesRef.current = entries;
   const requests = React.useRef(new Map<string, AbortController>());
   const [pendingRequests, setPendingRequests] = React.useState<ReadonlySet<string>>(() => new Set());
+  const [startRequests, setStartRequests] = React.useState<ReadonlyMap<string, ProjectExecutionChoiceV1 | null>>(() => new Map());
+  const observedPlacements = React.useRef(new Map<string, ProjectExecutionChoiceV1>());
+  const observeStartPlacement = React.useCallback((name: string, choice: ProjectExecutionChoiceV1 | null) => {
+    if (choice) observedPlacements.current.set(name, choice);
+    else observedPlacements.current.delete(name);
+  }, []);
   const [approvals, setApprovals] = React.useState<ReadonlyMap<string, ActionApprovalRegistration>>(() => new Map());
   React.useEffect(() => {
     const abort = () => { for (const request of requests.current.values()) request.abort(); requests.current.clear(); };
@@ -226,6 +307,24 @@ function ScopedObservationProvider(props: Readonly<{
       return { kind: 'workers' as const, destination: { kind: 'machine' as const, machineId: resolved.machineId } };
     })();
   }, [props.binding, props.source.machineId, props.source.refId, props.source.serverId]);
+  const executeStart = React.useCallback<ObservationContext['executeStart']>(async (target, choice, execute, signal) => {
+    const declaration = target.declaration;
+    if (!target.workspace || declaration?.selection.kind !== 'manifest'
+      || declaration.workspaceRefId !== props.source.refId || target.workspace.machineId !== props.source.machineId
+      || !areServerProfileIdentifiersEquivalent(target.workspace.serverId, props.source.serverId)) return execute(choice);
+    const name = declaration.selection.name;
+    // This is the existing local Start invocation's lifetime. Native operations
+    // take over its presentation as soon as they are observed.
+    setStartRequests(current => new Map(current).set(name, choice ?? observedPlacements.current.get(name) ?? null));
+    try {
+      const resolved = choice ?? await resolveStart(target, signal);
+      if (!resolved || signal?.aborted || !props.binding?.isCurrent()) return undefined;
+      setStartRequests(current => new Map(current).set(name, resolved));
+      return await execute(resolved);
+    } finally {
+      setStartRequests(current => { const next = new Map(current); next.delete(name); return next; });
+    }
+  }, [props.binding, props.source.machineId, props.source.refId, props.source.serverId, resolveStart]);
   React.useEffect(() => {
     const retirement = props.binding?.onRetire(() => setEntries(new Map()));
     return () => retirement?.dispose();
@@ -286,10 +385,12 @@ function ScopedObservationProvider(props: Readonly<{
     return new Map(current).set(serviceName, { ...entry, observation });
   }), []);
   const source = React.useMemo(() => props.source, [props.source.serverId, props.source.refId, props.source.machineId]);
-  const context = React.useMemo(() => ({ source, entries, attach, clear, acknowledgeBinding, executeMove, pendingRequests, resolveStart, managedSelections, managedContinuations, selectManaged, observeManaged,
+  const context = React.useMemo(() => ({ source, entries, attach, clear, acknowledgeBinding, executeMove, pendingRequests, approvedStarts, startRequests, observeStartPlacement, executeStart, resolveStart, managedSelections, managedContinuations, selectManaged, observeManaged,
     runtimeActionExecute: props.runtimeActionExecute }),
-    [source, attach, clear, acknowledgeBinding, executeMove, pendingRequests, entries, resolveStart, managedSelections, managedContinuations, selectManaged, observeManaged, props.runtimeActionExecute]);
-  return <StartContext.Provider value={resolveStart}><Context.Provider value={context}>
+    [source, attach, clear, acknowledgeBinding, executeMove, pendingRequests, approvedStarts, startRequests, observeStartPlacement, executeStart, entries, resolveStart, managedSelections, managedContinuations, selectManaged, observeManaged, props.runtimeActionExecute]);
+  return <StartContext.Provider value={executeStart}><Context.Provider value={context}>
+    {props.binding ? approvalIds.map(artifactId => <ServiceStartApprovalObserver key={artifactId} artifactId={artifactId}
+      source={source} binding={props.binding!} publish={publishApproval} />) : null}
     {[...approvals].map(([serviceName, registration]) => <ServiceMoveApprovalObserver key={serviceName}
       source={props.source} serviceName={serviceName} registration={registration} />)}
     {[...managedSelections].map(([name, selection]) => <ServiceManagedMachineObserver key={name} source={props.source}
@@ -327,10 +428,9 @@ export function useProjectServicePlacementObservation(serviceName: string, manag
   const declarationWorkspaceRefId = native?.declarationWorkspaceRefId;
   const entry = declarationWorkspaceRefId === undefined || declarationWorkspaceRefId === context?.source.refId
     || (domain?.kind === 'projectService' && domain.declaration?.workspaceRefId === declarationWorkspaceRefId) ? candidate : undefined;
+  const localStart = context?.startRequests.get(serviceName);
   const destination = entry?.attachment.destination;
-  const destinationMachineId = destination?.kind === 'primary' ? context?.source.machineId
-    : destination?.destination.kind === 'machine' ? destination.destination.machineId : null;
-  const destinationMachine = useServerScopedMachine(context?.source.serverId ?? '', destinationMachineId ?? '');
+  const approvedStart = context?.approvedStarts.get(serviceName);
   // The received record is already Account-qualified. Use it while the shared
   // observer mounts so an externally initiated Start never flashes Move copy.
   const operation = entry?.observation?.operation ?? (entry ? actionOperationSelectors.selectById(actionOperationStore.getSnapshot(), {
@@ -366,8 +466,20 @@ export function useProjectServicePlacementObservation(serviceName: string, manag
   // overrides native row facts; a succeeded operation's last phase is historical.
   const active = entry !== undefined && snapshot?.state !== 'succeeded' && !stoppedBeforeStart && !failedBeforeStop;
   const relocating = active && !starting;
+  // The Artifact may still say executing while its native operation has already
+  // settled. It must never revive pre-admission feedback for that same request.
+  const approvalPending = approvedStart !== undefined && snapshot?.requestId !== approvedStart.requestId;
+  const startPending = !active && !awaitingBinding && (native?.absent || native?.bindingPending || !native?.managedServiceId)
+    && (context?.startRequests.has(serviceName) === true || approvalPending);
+  const shownDestination = startPending ? localStart : destination;
+  const destinationMachineId = shownDestination?.kind === 'primary' ? context?.source.machineId
+    : shownDestination?.destination.kind === 'machine' ? shownDestination.destination.machineId
+    : startPending ? approvedStart?.machineId ?? null : null;
+  const destinationMachine = useServerScopedMachine(context?.source.serverId ?? '', destinationMachineId ?? '');
   const destinationName = (destinationMachine ? getMachineDisplayName(destinationMachine) : null) ?? t('projectServices.otherMachine');
-  const progressText = awaitingBinding ? t('common.loading') : !active ? null : unknown ? t(starting ? 'localServices.actions.failure.outcomeUnknown' : 'projectServices.moveUnknown')
+  const progressText = awaitingBinding ? `${t('common.loading')} · ${t('localServices.row.onMachine', { machine: destinationName })}`
+    : startPending ? t('localServices.row.startingOn', { machine: destinationName })
+    : !active ? null : unknown ? t(starting ? 'localServices.actions.failure.outcomeUnknown' : 'projectServices.moveUnknown')
     : phase === 'stopping' ? t('localServices.rowStatus.stopping')
     : phase === 'stopped' ? t('localServices.rowStatus.stopped')
     : phase === 'copying' ? t('projectWorkers.copying', { machine: destinationName })
@@ -381,7 +493,7 @@ export function useProjectServicePlacementObservation(serviceName: string, manag
     if (managedScopeKey) context?.selectManaged(serviceName, managedScopeKey, draft, purpose);
   }, [context?.selectManaged, managedScopeKey, serviceName]);
   return { hasOwner: context !== null, attachment: starting || snapshot?.state === 'succeeded' ? null : entry?.attachment ?? null,
-    operation: operation ?? null, active, awaitingBinding, relocating, progressText, stoppedBeforeStart, failedBeforeStop, stop: entry?.observation?.stop ?? null, attach, clear,
+    operation: operation ?? null, active: active || startPending, awaitingBinding, relocating, progressText, stoppedBeforeStart, failedBeforeStop, stop: entry?.observation?.stop ?? null, attach, clear,
     executeMove, requestPending: context?.pendingRequests.has(serviceName) ?? false,
     managed, selectManaged, runtimeActionExecute: context?.runtimeActionExecute };
 }
@@ -389,4 +501,12 @@ export function useProjectServicePlacementObservation(serviceName: string, manag
 /** The ordinary Service Start button consumes an ephemeral selection before its existing native request. */
 export function useProjectServiceStartDestination() {
   return React.useContext(StartContext);
+}
+
+/** Keep the placement owner's last observation available during Start's fresh admission read. */
+export function useProjectServiceStartPlacementObservation(name: string, choice: ProjectExecutionChoiceV1 | null) {
+  const observe = React.useContext(Context)?.observeStartPlacement;
+  React.useLayoutEffect(() => {
+    observe?.(name, choice);
+  }, [name, choice, observe]);
 }

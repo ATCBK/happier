@@ -6,7 +6,7 @@ import type {
   ProjectServicePlacementV1,
 } from '@happier-dev/protocol/workspaces/projectServicePlacementV1';
 import { executeServiceRelocationAction, type ServiceRelocationOutcome } from './serviceRelocationAction';
-import { ProjectServicePlacementObservationProvider, useProjectServicePlacementObservation } from './projectServicePlacementObservation';
+import { ProjectServicePlacementObservationProvider, useProjectServicePlacementObservation, useProjectServiceStartPlacementObservation } from './projectServicePlacementObservation';
 import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 import type { ProjectExecutionChoiceV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 import { projectExecutionChoicesEqualV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
@@ -90,6 +90,7 @@ export function useProjectServicePlacement(
   const ready = setting.state.kind === 'ready' ? setting.state.value : null;
   const actual = ready?.actual ?? null;
   const desiredPlacement = ready?.placement ?? null;
+  useProjectServiceStartPlacementObservation(serviceName, desiredPlacement?.runsOn ?? null);
   const displayChoice: ProjectExecutionChoiceV1 | null = actual?.status === 'present'
     ? actual.target.machineId === source.machineId ? { kind: 'primary' }
       : { kind: 'workers', destination: { kind: 'machine', machineId: actual.target.machineId } }
