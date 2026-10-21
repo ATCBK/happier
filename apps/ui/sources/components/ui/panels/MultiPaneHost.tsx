@@ -179,6 +179,10 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
 
     const detailsDocked = layout.details === 'docked' && detailsPresence.present;
     const rightDocked = layout.right === 'docked' && rightPresence.present;
+    // The details drawer is inset by a docked side column's width, so it covers the main column only:
+    // the column beside it stays live (T-INTEL H-T1). Only what an overlay actually covers is its underlay.
+    const rightBesideDetailsOverlay = rightDocked && !rightInMain;
+    const rightUnderDetailsOverlay = detailsModalActive && !rightBesideDetailsOverlay;
     const shouldHideDockedMainRegion = hideMain === true;
     const mainWidthPx = props.mainDockWidthPx ?? DEFAULT_SESSION_WIDTH_PX;
     // Hide/show (lab H1): the column slides toward its own edge and back (`overlay.panel`, a fade alone
@@ -270,7 +274,11 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
                     {...(Platform.OS === 'web' && shouldHideDockedMainRegion ? { inert: true, 'aria-hidden': true } : {})}
                     style={mainLeaving ? { position: 'absolute', top: 0, bottom: 0, ...(mirrored ? { right: 0 } : { left: 0 }), width: slideWidthPx, overflow: 'hidden', zIndex: 1, backgroundColor: theme.colors.surface.base }
                         : shouldHideDockedMainRegion ? { position: 'absolute', width: 0, height: '100%', overflow: 'hidden', opacity: 0, zIndex: -1 }
-                        : layout.main === 'overlay' ? { position: 'absolute', top: 0, right: 0, bottom: 0, width: mainWidthPx, zIndex: overlayZIndexBase + 5, backgroundColor: theme.colors.surface.base }
+                        // The main column as a drawer is a layer like the other pane overlays: its leading corners
+                        // round and it carries their elevation, so it reads as lifted over the editor (lab F10).
+                        : layout.main === 'overlay' ? { position: 'absolute', top: 0, right: 0, bottom: 0, width: mainWidthPx, zIndex: overlayZIndexBase + 5, backgroundColor: theme.colors.surface.base,
+                            borderTopLeftRadius: PANE_OVERLAY_CORNER_RADIUS_PX, borderBottomLeftRadius: PANE_OVERLAY_CORNER_RADIUS_PX,
+                            overflow: 'hidden', ...shadowLevelStyle(theme.colors.shadowLevels[6]) }
                             : { flex: mirrored ? undefined : 1, width: mirrored ? mainWidthPx : undefined, minWidth: 0, minHeight: 0, position: 'relative' }}>
                     <Animated.View ref={mainSlideNodeRef} style={mainSlideStyle}>
                     <RetainedPanelSurface isActive={!shouldHideDockedMainRegion || mainLeaving} mode="flow" testID="multi-pane-main-retained">
@@ -391,11 +399,11 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
                     overlayZIndex={overlayZIndexBase + 3}
                     overlayFocusRef={rightModalBoundary.setOverlayFocusRef}
                     overlayProps={rightModalOverlayProps}
-                    underlayProps={mainModalActive ? mainModalBoundary.underlayProps : detailsModalActive ? detailsModalBoundary.underlayProps : undefined}
+                    underlayProps={mainModalActive ? mainModalBoundary.underlayProps : rightUnderDetailsOverlay ? detailsModalBoundary.underlayProps : undefined}
                     nativeAccessibilityFocusAnchor={rightNativeAccessibilityFocusAnchor}
                     nativeBackLayer={rightNativeBackLayer}
                     focusEligible={rightInMain ? rightInMainVisible && mainFocusEligible
-                        : layout.right === 'docked' ? !detailsModalActive && !mainModalActive : rightOverlayFocusEligible}
+                        : layout.right === 'docked' ? !rightUnderDetailsOverlay && !mainModalActive : rightOverlayFocusEligible}
                 >
                     {rightPresence.node}
                 </PaneColumn>

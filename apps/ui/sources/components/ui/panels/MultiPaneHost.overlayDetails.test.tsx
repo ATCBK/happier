@@ -42,13 +42,13 @@ describe('MultiPaneHost (overlayDetails)', () => {
 });
 
 describe('MultiPaneHost (presentation under an overlay)', () => {
-    it('keeps the docked panes presented, though not focusable, while the details overlay is open', async () => {
+    it('keeps the docked panes presented while the details overlay is open; only the main column it covers stops taking input', async () => {
         const seen: Record<string, { presented: boolean; focusable: boolean }> = {};
         const Probe = (props: { name: string }) => {
             seen[props.name] = { presented: useLayoutPresentationActive(), focusable: usePluginSurfaceFocusEligibility() };
             return React.createElement(props.name);
         };
-        await renderScreen(<MultiPaneHost
+        const screen = await renderScreen(<MultiPaneHost
                 main={<Probe name="main" />}
                 rightPane={<Probe name="right" />}
                 detailsPane={<Probe name="details" />}
@@ -60,11 +60,18 @@ describe('MultiPaneHost (presentation under an overlay)', () => {
                 onCommitRightDockWidthPx={() => {}}
                 onCommitDetailsDockWidthPx={() => {}}
             />);
+        // The drawer is inset by the docked side column's width: it covers the main column only, so
+        // the column beside it (Problems, References) stays live (T-INTEL H-T1).
         expect(seen).toEqual({
             main: { presented: true, focusable: false },
-            right: { presented: true, focusable: false },
+            right: { presented: true, focusable: true },
             details: { presented: true, focusable: true },
         });
+        const rightBoundary = screen.tree.findByProps({ testID: 'multi-pane-right-docked' }).parent!;
+        expect(rightBoundary.props.pointerEvents).not.toBe('none');
+        expect(rightBoundary.props.inert).toBeUndefined();
+        const mainUnderlay = screen.tree.findByProps({ testID: 'multi-pane-main-underlay' });
+        expect(mainUnderlay.props.pointerEvents).toBe('none');
     });
 });
 
