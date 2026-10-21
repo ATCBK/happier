@@ -10,6 +10,17 @@ const user = (overrides: Partial<UserTextMessage> = {}): UserTextMessage => ({
 });
 
 describe('resolveTranscriptMessageDisplayText', () => {
+    it('shows readable markers to human readers, but retains tokens for the Markdown chip renderer', () => {
+        const token = '[Auth](happier-ref:session:s1)';
+        const message = user({
+            text: `Compare ${token} and [unbound](happier-ref:session:s2)`,
+            meta: { happierStructuredInputV1: { v: 1, mentions: [{ kind: 'happier.session', ref: 'session:s1', token, label: 'Auth' }] } },
+        });
+        expect(resolveTranscriptMessageDisplayText(message).text).toBe('Compare @Session "Auth" and unbound');
+        expect(resolveTranscriptMessageDisplayText(message, { preserveInlineReferences: true }).text).toBe(message.text);
+        expect(resolveTranscriptMessageDisplayText(agent({ text: message.text })).text).toBe('Compare Auth and unbound');
+    });
+
     it('prepares the exact source input for Markdown rendering rather than hidden message scaffolding', () => {
         expect(resolveTranscriptMessageDisplayText(user({ displayText: '**display override**' })).text).toBe('**display override**');
         expect(resolveTranscriptMessageDisplayText(user({

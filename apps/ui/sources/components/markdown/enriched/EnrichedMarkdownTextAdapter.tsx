@@ -1,5 +1,13 @@
 import * as React from 'react';
+import { INLINE_REFERENCE_HREF_PREFIX_V1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 import { Platform, type StyleProp, type TextStyle } from 'react-native';
+import { useUnistyles } from 'react-native-unistyles';
+import { readIconSvgCssUrl } from '@/components/ui/icons/iconSvgMarkup';
+import { resolveReferenceChipIconName } from '@/components/ui/referenceChip/referenceChipIcon';
+import { referenceChipLinkRule, type ReferenceChipInks } from '@/components/ui/referenceChip/referenceChipStyles';
+import { nativeReferenceChipColor, nativeReferenceChipGlyph } from '@/components/ui/referenceChip/nativeReferenceChip';
+import { NATIVE_REFERENCE_CHIP_ANATOMY } from '@/components/ui/forms/multiTextInputTypography';
+import { Typography } from '@/constants/Typography';
 import { EnrichedMarkdownText, type EnrichedMarkdownTextProps } from 'react-native-enriched-markdown';
 import { useHappierTextSelectability } from '@happier-dev/plugin-ui/presentation';
 
@@ -10,7 +18,6 @@ import {
     sanitizeEnrichedMarkdownWithInlineReferences,
 } from './enrichedMarkdownLinkHandling';
 import {
-    MARKDOWN_INLINE_REFERENCE_HREF_PREFIX,
     readMarkdownInlineReferenceTarget,
     type MarkdownInlineReference,
     type MarkdownInlineReferences,
@@ -129,13 +136,24 @@ type EnrichedMarkdownTextAdapterProps = Readonly<{
 
 /**
  * The colours of the inline references in one run. The package draws a link with its own inline style,
- * so on web one scoped rule per resolved reference paints it; native draws the label in the link colour.
+ * so web uses one scoped rule per resolved reference; native consumes the same resolved presentation.
  * A reference that carries a severity reads as ink on its tint with the severity's dot leading the label
- * (Walkthrough lab WT5-R6): colour marks the severity, the words stay text.
+ * (Walkthrough lab WT5-R6): colour marks the severity, the words stay text. Every other reference is the
+ * shared reference chip (`referenceChipStyles`), led by its glyph or picture.
  */
-function useWebInlineReferenceStyle(scope: string, references: ReadonlyMap<string, MarkdownInlineReference>, ink: string): void {
-    const css = React.useMemo(() => [...references.entries()].map(([href, reference]) => {
+function useWebInlineReferenceStyle(scope: string, references: ReadonlyMap<string, MarkdownInlineReference>, ink: string, inks: ReferenceChipInks): void {
+    const css = React.useMemo(() => [...(Platform.OS === 'web' ? references.entries() : [])].map(([href, reference]) => {
         const selector = `[data-happier-md-refs="${scope}"] a[href="${href.replace(/["\\]/g, (char) => `\\${char}`)}"]`;
+        if (!reference.severity) {
+            const icon = resolveReferenceChipIconName({ ref: href.slice(INLINE_REFERENCE_HREF_PREFIX_V1.length), glyph: reference.glyph });
+            return referenceChipLinkRule(selector, {
+                color: reference.foreground,
+                background: reference.background,
+                inks,
+                thumbnailUri: reference.thumbnail?.uri ?? null,
+                glyphUrl: icon ? readIconSvgCssUrl(icon) : null,
+            });
+        }
         const rule = `${selector} {`
             + ` color: ${reference.severity ? ink : reference.foreground} !important; background-color: ${reference.background} !important;`
             + ' text-decoration: none !important; border-radius: 6px; padding: 1px 6px; font-size: 0.86em; font-weight: 600;'
@@ -146,7 +164,7 @@ function useWebInlineReferenceStyle(scope: string, references: ReadonlyMap<strin
             ? `${rule}\n${selector}::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 4px;`
                 + ` margin-right: 5px; vertical-align: 1px; background-color: ${reference.foreground}; }`
             : rule;
-    }).join('\n'), [ink, references, scope]);
+    }).join('\n'), [ink, inks, references, scope]);
     React.useLayoutEffect(() => {
         if (Platform.OS !== 'web' || typeof document === 'undefined' || !css) return undefined;
         const style = document.createElement('style');
@@ -169,7 +187,7 @@ export const EnrichedMarkdownTextAdapter = React.memo((props: EnrichedMarkdownTe
     const inlineReferences = props.inlineReferences;
     const handleLinkPress = React.useCallback((event: { url: string }) => {
         // A cited reference belongs to its owner; it is never opened as a URL.
-        if (event.url.startsWith(MARKDOWN_INLINE_REFERENCE_HREF_PREFIX)) {
+        if (event.url.startsWith(INLINE_REFERENCE_HREF_PREFIX_V1)) {
             const target = inlineReferences ? readMarkdownInlineReferenceTarget(event.url, inlineReferences.scheme) : null;
             if (target) inlineReferences?.onPress?.(target);
             return;
@@ -190,16 +208,35 @@ export const EnrichedMarkdownTextAdapter = React.memo((props: EnrichedMarkdownTe
     const sanitizedMarkdown = sanitized.markdown;
     const referenceScope = React.useId();
     // The words take the ink of the prose they sit in.
-    useWebInlineReferenceStyle(referenceScope, sanitized.references, String(styleBundle.markdownStyle.paragraph?.color ?? 'inherit'));
-    // Native draws every link of a run in one colour, so a run that cites a severity reference writes its
-    // links in the prose ink: the severity is said by the label's words, never by link blue.
+    const { theme } = useUnistyles();
+    const chipInks = React.useMemo<ReferenceChipInks>(() => ({
+        secondary: theme.colors.text.secondary, tertiary: theme.colors.text.tertiary,
+        accent: theme.colors.accent.blue, focus: theme.colors.border.focus,
+    }), [theme.colors.accent.blue, theme.colors.border.focus, theme.colors.text.secondary, theme.colors.text.tertiary]);
+    useWebInlineReferenceStyle(referenceScope, sanitized.references, String(styleBundle.markdownStyle.paragraph?.color ?? 'inherit'), chipInks);
+    // Ordinary native links share the run's link colour; chips carry their own resolved inks.
     const markdownStyle = React.useMemo(() => {
         const base = styleBundle.markdownStyle;
         const citesSeverity = [...sanitized.references.values()].some((reference) => reference.severity);
-        return Platform.OS !== 'web' && citesSeverity && base.link && base.paragraph?.color
-            ? { ...base, link: { ...base.link, color: base.paragraph.color } }
-            : base;
-    }, [sanitized.references, styleBundle.markdownStyle]);
+        if (Platform.OS === 'web') return base;
+        const referenceChips = JSON.stringify({
+            anatomy: Object.fromEntries(Object.entries(NATIVE_REFERENCE_CHIP_ANATOMY)
+                .map(([name, value]) => [name, value * styleBundle.uiFontScale])),
+            fontSize: base.paragraph?.fontSize,
+            fontFamily: Typography.default('medium').fontFamily,
+            references: Object.fromEntries([...sanitized.references].map(([href, reference]) => [href, {
+                label: reference.label,
+                glyph: nativeReferenceChipGlyph(href.slice(INLINE_REFERENCE_HREF_PREFIX_V1.length), reference.glyph, Platform.OS, reference.thumbnail != null),
+                thumbnail: reference.thumbnail?.uri ?? '',
+                foreground: nativeReferenceChipColor(reference.foreground),
+                background: nativeReferenceChipColor(reference.background),
+                glyphInk: nativeReferenceChipColor(chipInks.secondary),
+            }])),
+        });
+        return { ...base, link: { ...base.link, referenceChips,
+            ...(citesSeverity && base.paragraph?.color ? { color: base.paragraph.color } : {}),
+        } };
+    }, [chipInks.secondary, sanitized.references, styleBundle.markdownStyle, styleBundle.uiFontScale]);
     const flavor = React.useMemo(
         () => resolveEnrichedMarkdownFlavor(sanitizedMarkdown),
         [sanitizedMarkdown],

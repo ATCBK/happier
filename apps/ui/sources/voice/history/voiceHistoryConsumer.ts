@@ -4,6 +4,7 @@ import {
 } from '@happier-dev/protocol/messages/structured/conversationTurnOriginV1';
 
 import type { Message } from "@happier-dev/session-core/messages";
+import { prepareTranscriptMessageBody } from '@/components/sessions/transcript/messageDisplayText';
 import type { SessionDeleteResult } from '@/sync/ops/sessions';
 import { compareTranscriptMessagesOldestFirst } from "@happier-dev/session-core/messages";
 import type { TranscriptOlderPageLoadResult } from "@happier-dev/session-core/messages";
@@ -133,7 +134,7 @@ export function projectVoiceHistoryRows(
       return [{
         id: message.id,
         role: message.kind === 'user-text' ? 'user' : 'assistant',
-        text: message.text,
+        text: prepareTranscriptMessageBody(message).text ?? '',
         createdAt: message.createdAt,
         providerLabel: resolveProviderLabel(source),
         source,

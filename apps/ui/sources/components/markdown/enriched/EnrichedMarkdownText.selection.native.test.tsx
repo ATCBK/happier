@@ -3,6 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { activateStorageAccountScope } from '@/dev/testkit/runtime/storageRuntime';
+import { NATIVE_REFERENCE_CHIP_ANATOMY } from '@/components/ui/forms/multiTextInputTypography';
 
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('expo-router', async () => {
@@ -21,6 +22,7 @@ vi.mock('../../../../node_modules/react-native-enriched-markdown/src/EnrichedMar
 vi.mock('react-native-enriched-markdown', async () => await vi.importActual<typeof import('react-native-enriched-markdown')>(
     '../../../../node_modules/react-native-enriched-markdown/src/native/EnrichedMarkdownText',
 ));
+vi.unmock('@/components/ui/icons/Icon');
 
 const { EnrichedMarkdownTextAdapter } = await import('./EnrichedMarkdownTextAdapter');
 const { ArtifactPassageSelection } = await import('@/components/artifacts/ArtifactPassageSelection');
@@ -29,6 +31,36 @@ let home: Awaited<ReturnType<typeof activateStorageAccountScope>> | null = null;
 afterEach(() => { standardCleanup(); home?.dispose(); home = null; navigation.push.mockClear(); resetSessionDraftRepositoryForTests(); });
 
 describe('installed enriched native selection carrier', () => {
+    it('passes bound chip presentation through the installed native style carrier and retains destination presses', async () => {
+        const onPress = vi.fn();
+        const picture = { label: 'Image #2', glyph: 'preview' as const, thumbnail: { uri: 'file:///preview.png' }, foreground: '#112233', background: '#11223312' };
+        const screen = await renderScreen(<EnrichedMarkdownTextAdapter
+            markdown="See [old](happier-ref:attachment:picture) and [unbound](happier-ref:session:missing)."
+            profile="default" selectable streamingAnimated={false} agentTexMath={false}
+            inlineReferences={{ resolve: (ref) => ref === 'attachment:picture' ? picture : null, onPress }} />);
+        const native = screen.findByType('NativeMarkdownText');
+        const chips = JSON.parse(native.props.markdownStyle.link.referenceChips);
+        expect(chips.references['happier-ref:attachment:picture']).toMatchObject({
+            label: 'Image #2', thumbnail: 'file:///preview.png', foreground: 0xff112233,
+        });
+        expect(Object.keys(chips.references)).toEqual(['happier-ref:attachment:picture']);
+        expect(native.props.markdown).toBe('See [Image #2](happier-ref:attachment:picture) and unbound.');
+        await act(async () => native.props.onLinkPress({ nativeEvent: { url: 'happier-ref:attachment:picture' } }));
+        expect(onPress).toHaveBeenCalledWith('attachment:picture');
+        const { storage } = await import('@/sync/domains/state/storage');
+        const previousSettings = storage.getState().localSettings;
+        try {
+            await act(async () => storage.setState({ localSettings: { ...previousSettings, uiFontScale: 1.25 } }));
+            expect(JSON.parse(screen.findByType('NativeMarkdownText').props.markdownStyle.link.referenceChips).anatomy.height)
+                .toBe(NATIVE_REFERENCE_CHIP_ANATOMY.height * 1.25);
+        } finally {
+            await act(async () => storage.setState({ localSettings: previousSettings }));
+        }
+        await act(async () => screen.update(<EnrichedMarkdownTextAdapter markdown="Plain [site](https://example.com)" profile="default"
+            selectable streamingAnimated={false} agentTexMath={false} />));
+        expect(JSON.parse(screen.findByType('NativeMarkdownText').props.markdownStyle.link.referenceChips).references).toEqual({});
+    });
+
     it('preserves actual rendered text and UTF-16 selection through the real dependency wrapper and app adapter', async () => {
         const selected = vi.fn();
         const screen = await renderScreen(<EnrichedMarkdownTextAdapter markdown="😀 **same**. 😀 **same**." profile="default"

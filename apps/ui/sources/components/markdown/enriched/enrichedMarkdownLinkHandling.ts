@@ -1,8 +1,9 @@
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
-import { splitMarkdownIntoBlockSources } from '../streaming/splitMarkdownIntoBlockSources';
+import { INLINE_REFERENCE_HREF_PREFIX_V1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
+import { projectInlineReferenceLabelsV1 } from '@happier-dev/protocol/sessions/messages/sessionInputReferenceProjectionV1';
+import { parseMarkdownSyntax, splitMarkdownIntoBlockSources } from '../streaming/splitMarkdownIntoBlockSources';
 import { hasMarkdownPathCharacterReference, resolveWorkspaceFileReference } from '@/utils/workspaceFileReferences/resolveWorkspaceFileReference';
 import {
-    buildMarkdownInlineReferenceHref,
     type MarkdownInlineReference,
     type MarkdownInlineReferences,
 } from '../markdownInlineReferences';
@@ -48,6 +49,7 @@ export function normalizeMarkdownLinkUrl(raw: string, options: MarkdownLinkNorma
     const candidate = lowerTrimmed.startsWith('www.') ? `https://${trimmed}` : trimmed;
     const lower = candidate.toLowerCase();
 
+    if (lower.startsWith(INLINE_REFERENCE_HREF_PREFIX_V1)) return null;
     if (lower.startsWith('javascript:') || lower.startsWith('data:')) return null;
     if (/\s|[\u0000-\u001F\u007F]/.test(candidate)) return null;
     if (isExternallyOpenableMarkdownLink(candidate) || lower.startsWith('file://')) return candidate;
@@ -136,11 +138,15 @@ function resolveInlineReferenceLink(
     references: MarkdownInlineReferences | undefined,
     resolved: Map<string, MarkdownInlineReference>,
 ): string | null {
-    if (!references || !destination.startsWith(`${references.scheme}:`)) return null;
-    const target = destination.slice(references.scheme.length + 1);
+    if (!references) return null;
+    const prefixed = destination.startsWith(INLINE_REFERENCE_HREF_PREFIX_V1);
+    const ref = prefixed ? destination.slice(INLINE_REFERENCE_HREF_PREFIX_V1.length) : destination;
+    if (!prefixed && (!references.scheme || !destination.startsWith(`${references.scheme}:`))) return null;
+    if (references.scheme && !ref.startsWith(`${references.scheme}:`)) return null;
+    const target = references.scheme ? ref.slice(references.scheme.length + 1) : ref;
     const reference = target ? references.resolve(target) : null;
     if (!reference) return null;
-    const href = buildMarkdownInlineReferenceHref(references.scheme, target);
+    const href = `${INLINE_REFERENCE_HREF_PREFIX_V1}${ref}`;
     resolved.set(href, reference);
     const label = reference.label.replace(/[[\]\\]/g, (char) => `\\${char}`);
     return `[${label}](${href})`;
@@ -154,8 +160,22 @@ function normalizeExplicitMarkdownLinks(
 ): string {
     let out = '';
     const closingDelimiters = indexClosingMarkdownDelimiters(markdown);
+    const codeRanges = new Map<number, number>();
+    if (references || markdown.includes(INLINE_REFERENCE_HREF_PREFIX_V1)) {
+        parseMarkdownSyntax(markdown).iterate({ enter(node) {
+            if (node.name !== 'InlineCode' && node.name !== 'FencedCode' && node.name !== 'CodeBlock') return;
+            codeRanges.set(node.from, node.to);
+            return false;
+        } });
+    }
     for (let index = 0; index < markdown.length; index += 1) {
         const char = markdown[index];
+        const codeEnd = codeRanges.get(index);
+        if (codeEnd !== undefined) {
+            out += projectInlineReferenceLabelsV1(markdown.slice(index, codeEnd));
+            index = codeEnd - 1;
+            continue;
+        }
         if (char !== '[' || markdown[index - 1] === '!') {
             out += char;
             continue;

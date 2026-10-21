@@ -262,7 +262,7 @@ describe('TranscriptRollbackActionButton', () => {
         );
         expect(writeExistingSessionDraftSpy).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: 'session-1',
-            patch: { text: 'edit this prompt' },
+            patch: { text: 'edit this prompt', mentions: [] },
         }));
         await screen.unmount();
     });

@@ -17,6 +17,39 @@ const openExternalUrl = vi.fn(async (_url: string) => undefined);
 vi.mock('@/utils/url/openExternalUrl', () => ({ openExternalUrl: (url: string) => openExternalUrl(url) }));
 
 describe('MarkdownView inline references', () => {
+    it('follows Markdown code boundaries rather than treating an unmatched backtick as code', async () => {
+        const { sanitizeEnrichedMarkdownWithInlineReferences } = await import('./enriched/enrichedMarkdownLinkHandling');
+        const resolve = () => ({ label: 'Chip', foreground: '#111', background: '#eee' });
+        expect(sanitizeEnrichedMarkdownWithInlineReferences('Literal ` and [bound](happier-ref:session:s1)', { scheme: 'session', resolve }).markdown)
+            .toBe('Literal ` and [Chip](happier-ref:session:s1)');
+        expect(sanitizeEnrichedMarkdownWithInlineReferences('~~~md\n[code](happier-ref:session:s1)\n~~~', { scheme: 'session', resolve }).markdown)
+            .toBe('~~~md\ncode\n~~~');
+    });
+
+    it('keeps tokens in inline and fenced code as readable text without resolving them', async () => {
+        const { sanitizeEnrichedMarkdownWithInlineReferences } = await import('./enriched/enrichedMarkdownLinkHandling');
+        const resolve = vi.fn(() => ({ label: 'Chip', foreground: '#111', background: '#eee' }));
+        const result = sanitizeEnrichedMarkdownWithInlineReferences(
+            '`[code](happier-ref:file:src/a.ts)`\n\n```md\n[fenced](happier-ref:file:src/b.ts)\n```', { scheme: 'file', resolve },
+        );
+        expect(result.markdown).toBe('`code`\n\n```md\nfenced\n```');
+        expect(result.references.size).toBe(0);
+        expect(resolve).not.toHaveBeenCalled();
+    });
+
+    it('resolves an already-prefixed reference once and keeps unowned links inert', async () => {
+        const { sanitizeEnrichedMarkdownWithInlineReferences } = await import('./enriched/enrichedMarkdownLinkHandling');
+        const reference = { label: 'Current title', glyph: 'conversations' as const, thumbnail: { uri: 'data:image/png;base64,aA==' }, foreground: '#111', background: '#eee' };
+        const resolve = vi.fn((ref: string) => ref === 's1' ? reference : null);
+        const result = sanitizeEnrichedMarkdownWithInlineReferences(
+            'See [old](happier-ref:session:s1) and [unbound](happier-ref:session:s2).', { scheme: 'session', resolve },
+        );
+        expect(result.markdown).toBe('See [Current title](happier-ref:session:s1) and unbound.');
+        expect(result.references.get('happier-ref:session:s1')).toEqual(reference);
+        expect(resolve).toHaveBeenCalledWith('s1');
+        expect(sanitizeEnrichedMarkdownWithInlineReferences('[lookalike](happier-ref:file:src/@a.ts)').markdown).toBe('lookalike');
+    });
+
     it('draws a cited reference inline with the owner’s label and hands its press to the owner, never opening it', async () => {
         const { MarkdownView } = await import('./MarkdownView');
         const onPress = vi.fn();

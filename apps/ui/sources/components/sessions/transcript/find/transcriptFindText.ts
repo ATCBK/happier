@@ -34,7 +34,8 @@ function projectStructuredBlocks(blocks: readonly StructuredFindTextBlock[]): Tr
 /** Message identity and reveal stay with the transcript model; display text stays with render owners. */
 export function projectTranscriptFindText(message: Message, context?: TranscriptFindTextContext): readonly TranscriptFindTextBlock[] {
     if (message.kind === 'user-text' || message.kind === 'agent-text') {
-        const { text } = resolveTranscriptMessageDisplayText(message, context);
+        // Find keeps renderer-source offsets; its Markdown projection removes destinations.
+        const { text } = resolveTranscriptMessageDisplayText(message, { ...context, preserveInlineReferences: true });
         if (text === null) return [];
         const structured = projectStructuredMessageFindText(message, context);
         if (structured !== null) return projectStructuredBlocks(structured);

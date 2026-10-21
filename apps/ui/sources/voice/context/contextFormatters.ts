@@ -3,6 +3,7 @@ import {
     formatPermissionRequestSummary,
 } from "@happier-dev/protocol/activity/agentRequestSummary";
 import { Session } from "@/sync/domains/state/storageTypes";
+import { prepareTranscriptMessageBody } from '@/components/sessions/transcript/messageDisplayText';
 import { Message } from "@happier-dev/session-core/messages";
 import { storage } from '@/sync/domains/state/storage';
 import { resolveSessionListPreferredSessionMetadataFromState } from '@/sync/domains/session/listing/sessionListLookupState';
@@ -324,10 +325,12 @@ function formatMessageWithPrefs(message: Message, prefs?: VoiceContextFormatterP
     // Lines
     let lines: string[] = [];
     if (message.kind === 'agent-text') {
-        const text = resolved.voiceShareFilePaths ? message.text : redactVoicePathLikeString(message.text);
+        const readable = prepareTranscriptMessageBody(message).text ?? '';
+        const text = resolved.voiceShareFilePaths ? readable : redactVoicePathLikeString(readable);
         lines.push(`Coding assistant: \n<text>${text}</text>`);
     } else if (message.kind === 'user-text') {
-        const text = resolved.voiceShareFilePaths ? message.text : redactVoicePathLikeString(message.text);
+        const readable = prepareTranscriptMessageBody(message).text ?? '';
+        const text = resolved.voiceShareFilePaths ? readable : redactVoicePathLikeString(readable);
         lines.push(`User sent message: \n<text>${text}</text>`);
     } else if (message.kind === 'tool-call' && resolved.voiceShareToolNames) {
         const toolDescription = message.tool.description ? ` - ${message.tool.description}` : '';

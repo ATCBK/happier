@@ -7,15 +7,20 @@ import {
     type UnsupportedContentKind,
     type UnsupportedContentPresentation,
 } from '@happier-dev/session-core/messages';
-import { parseHappierMetaEnvelope } from './structured/happierMetaEnvelope';
-import { AttachmentsMessageMetaV1Schema, type AttachmentsMessageMetaV1 } from '@/sync/domains/attachments/attachmentsMessageMeta';
+import { parseHappierMetaEnvelope, readTranscriptAttachmentsMeta } from './structured/happierMetaEnvelope';
+export { readTranscriptAttachmentsMeta } from './structured/happierMetaEnvelope';
 import { resolveUnsupportedContentLabel } from '@/sync/domains/messages/resolveUnsupportedContentLabel';
+import { scanInlineReferenceTokensV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
+import { projectInlineReferenceLabelsV1 } from '@happier-dev/protocol/sessions/messages/sessionInputReferenceProjectionV1';
+import { resolveMessageStructuredReferences } from './references/messageStructuredReferences';
 
 export type TranscriptMessageDisplayOptions = Readonly<{
     debugInformationEnabled?: boolean;
     thinkingDisplayMode?: Settings['sessionThinkingDisplayMode'];
     /** Selection callers already know whether an attachment row replaced the legacy suffix. */
     hasAttachmentBlockToStrip?: boolean;
+    /** Only the Markdown chip renderer consumes the token-bearing source. */
+    preserveInlineReferences?: boolean;
 }>;
 
 export type TranscriptMessageDisplayText = Readonly<{
@@ -47,7 +52,7 @@ export function resolveTranscriptMessageDisplayText(
 /** Body preprocessing is shared with copy selection, which has its own eligibility contract. */
 export function prepareTranscriptMessageBody(
     message: UserTextMessage | AgentTextMessage,
-    options: Pick<TranscriptMessageDisplayOptions, 'hasAttachmentBlockToStrip'> = {},
+    options: Pick<TranscriptMessageDisplayOptions, 'hasAttachmentBlockToStrip' | 'preserveInlineReferences'> = {},
 ): Pick<TranscriptMessageDisplayText, 'text' | 'isVoiceAgentTurn'> {
     const isVoiceAgentTurn = parseHappierMetaEnvelope(message.meta)?.kind === 'voice_agent_turn.v1';
     let text: string | null;
@@ -57,15 +62,26 @@ export function prepareTranscriptMessageBody(
         text = stripLegacyAttachmentsBlock(message.text);
     } else text = message.text;
     if (text !== null && message.kind === 'agent-text' && message.isThinking) text = unwrapLegacyThinkingWrapper(text);
+    if (text !== null && !(message.kind === 'user-text' && options.preserveInlineReferences)) {
+        text = readableMessageText(text, message.kind === 'user-text' ? message.meta : undefined);
+    }
     return { text, isVoiceAgentTurn };
 }
 
-export function readTranscriptAttachmentsMeta(meta: unknown): AttachmentsMessageMetaV1 | null {
-    const primary = parseHappierMetaEnvelope(meta);
-    const envelope = primary?.kind === 'attachments.v1' ? primary : parseHappierMetaEnvelope(meta, 'happierAttachments');
-    if (envelope?.kind !== 'attachments.v1') return null;
-    const parsed = AttachmentsMessageMetaV1Schema.safeParse(envelope.payload);
-    return parsed.success && parsed.data.attachments.length > 0 ? parsed.data : null;
+/** Human readers never disclose token syntax; only typed message records supply markers. */
+export function readableMessageText(text: string, meta?: unknown): string {
+    if (meta == null) return projectInlineReferenceLabelsV1(text);
+    const tokens = scanInlineReferenceTokensV1(text);
+    if (tokens.length === 0) return text;
+    const { inline } = resolveMessageStructuredReferences({ text, meta });
+    const chunks: string[] = [];
+    let cursor = 0;
+    for (const token of tokens) {
+        chunks.push(text.slice(cursor, token.start), inline.get(token.ref)?.marker ?? token.label);
+        cursor = token.end;
+    }
+    chunks.push(text.slice(cursor));
+    return chunks.join('');
 }
 
 export function resolveUnsupportedContentText(params: Readonly<{

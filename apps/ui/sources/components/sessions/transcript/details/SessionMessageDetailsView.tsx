@@ -1,6 +1,7 @@
 import { isSubAgentTranscriptToolName } from '@happier-dev/protocol/tools/v2/subAgentFamilies';
 import type { ParticipantRecipientV1 } from '@happier-dev/protocol/messages/structured/participantMessageV1';
 import * as React from 'react';
+import { prepareTranscriptMessageBody } from '../messageDisplayText';
 import { useServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { View } from 'react-native';
 import type { TextStyle, ViewStyle } from 'react-native';
@@ -327,7 +328,7 @@ export const SessionMessageDetailsView = React.memo((props: Readonly<{
                         browserContextState={props.browserContextState}
                     />
                 ) : props.message.kind === 'agent-text' || props.message.kind === 'user-text' ? (
-                    <TextFullView text={props.message.text} />
+                    <TextFullView text={prepareTranscriptMessageBody(props.message).text ?? ''} />
                 ) : null}
             </Deferred>
         </View>

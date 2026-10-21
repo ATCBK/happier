@@ -88,6 +88,11 @@ export const REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_REQUIRED_FILES = Obj
     'lib/module/web/wasm/md4c.js',
     'ios/utils/ENRMTailFadeInAnimator.m',
     'android/src/main/java/com/swmansion/enriched/markdown/utils/text/TailFadeInAnimator.kt',
+    'ios/attachments/ENRMReferenceAttachment.h',
+    'ios/attachments/ENRMReferenceAttachment.m',
+    'android/src/main/java/com/swmansion/enriched/markdown/spans/ReferenceChipSpan.kt',
+    'ios/renderer/LinkRenderer.m',
+    'android/src/main/java/com/swmansion/enriched/markdown/renderer/LinkRenderer.kt',
 ]);
 
 export const REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_REQUIRED_MARKERS = Object.freeze([
@@ -130,6 +135,11 @@ export const REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_REQUIRED_MARKERS = O
     ['lib/module/web/wasm/md4c.js', 'export default createMd4cModule'],
     ['ios/utils/ENRMTailFadeInAnimator.m', 'ENRMActiveFadeRange'],
     ['android/src/main/java/com/swmansion/enriched/markdown/utils/text/TailFadeInAnimator.kt', 'activeRanges'],
+    ['ios/attachments/ENRMReferenceAttachment.m', 'drawChipWithWidth'],
+    ['ios/attachments/ENRMReferenceAttachment.m', 'ENRMReferenceText'],
+    ['android/src/main/java/com/swmansion/enriched/markdown/spans/ReferenceChipSpan.kt', 'class ReferenceChipSpan'],
+    ['ios/renderer/LinkRenderer.m', 'referenceChips'],
+    ['android/src/main/java/com/swmansion/enriched/markdown/renderer/LinkRenderer.kt', 'ReferenceChipSpan'],
 ]);
 
 export const REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_FORBIDDEN_MARKERS = Object.freeze([

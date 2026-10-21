@@ -3,6 +3,18 @@ import type { Message } from '@happier-dev/session-core/messages';
 import { projectTranscriptFindText } from './transcriptFindText';
 
 describe('projectTranscriptFindText', () => {
+    it('finds reference labels at their original Markdown offsets, including code literals', () => {
+        const token = '[Auth](happier-ref:session:s1)';
+        const text = `Open ${token} after, or \`${token}\`.`;
+        const result = projectTranscriptFindText({ kind: 'user-text', id: 'u', localId: null, createdAt: 1, text,
+            meta: { happierStructuredInputV1: { v: 1, mentions: [{ kind: 'happier.session', ref: 'session:s1', token, label: 'Auth' }] } },
+        })[0]!;
+        expect(result.text).toBe('Open Auth after, or Auth.');
+        const hits = [...result.text.matchAll(/Auth/g)].map(hit => result.sourceOffsets[hit.index]);
+        expect(hits).toEqual([...text.matchAll(/Auth/g)].map(hit => hit.index));
+        expect(result.sourceOffsets[result.text.indexOf('after')]).toBe(text.indexOf('after'));
+    });
+
     it('uses the same Markdown display input for user overrides and agent messages', () => {
         const user: Message = { kind: 'user-text', id: 'u', localId: null, createdAt: 1, text: 'private source', displayText: ' visible 😀 ' };
         const agent: Message = { kind: 'agent-text', id: 'a', localId: null, createdAt: 2, text: '**visible**' };

@@ -1,6 +1,8 @@
 import type { Message } from "@happier-dev/session-core/messages";
+import { readableMessageText } from '@/components/sessions/transcript/messageDisplayText';
 
 export function normalizeActivityPreviewText(value: string): string {
+    value = readableMessageText(value);
     return value.replace(/\s+/g, ' ').trim();
 }
 

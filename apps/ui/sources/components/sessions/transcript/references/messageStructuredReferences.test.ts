@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { MENTION_KIND_V1, buildMentionRefForKindV1 } from '@happier-dev/protocol';
+import { MENTION_KIND_V1, buildMentionRefForKindV1, type MentionRefV1 } from '@happier-dev/protocol';
+import { formatInlineReferenceTokenV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
+import { buildComposerReferenceMentionPayloadV1 } from '@happier-dev/protocol/runtime/input/composerReferenceProviderV1';
 
 import { resolveMessageStructuredReferences } from './messageStructuredReferences';
 
@@ -25,6 +27,79 @@ function fileMention(path: string, token: string) {
 }
 
 describe('resolveMessageStructuredReferences', () => {
+    it('projects every built-in mention and qualified contributed item through typed identity and portable glyphs', () => {
+        const mentions: MentionRefV1[] = ([
+            [MENTION_KIND_V1.file, 'src/components/', 'components/'],
+            [MENTION_KIND_V1.session, 's1', 'Auth fix'],
+            [MENTION_KIND_V1.skill, 'review', 'review'],
+            [MENTION_KIND_V1.vendorPlugin, 'inspector', 'Inspector'],
+            [MENTION_KIND_V1.workflow, 'w1', 'Release'],
+            [MENTION_KIND_V1.widget, 'qualified-instance', 'Overview'],
+        ] as const).map(([kind, opaque, label]) => {
+            const ref = buildMentionRefForKindV1(kind, opaque);
+            return { kind, ref, label, token: formatInlineReferenceTokenV1({ label, ref }) };
+        });
+        const contributed = buildComposerReferenceMentionPayloadV1({ reference: { pluginId: 'example.issues', localId: 'issues' },
+            candidate: { id: 'issue-42', label: 'Issue #42' } });
+        mentions.push({ ...contributed, token: formatInlineReferenceTokenV1({ label: contributed.label!, ref: contributed.ref }) });
+        const text = mentions.map(mention => mention.token).join(' ');
+        const projection = resolveMessageStructuredReferences({ text, meta: metaWithMentions(mentions) });
+        expect([...projection.inline.values()].map(({ label, glyph }) => [label, glyph])).toEqual([
+            ['components/', 'file'], ['Auth fix', 'conversations'], ['review', 'terminal'], ['Inspector', 'settings'],
+            ['Release', 'action'], ['Overview', 'board'], ['Issue #42', 'mention'],
+        ]);
+        expect(projection.row).toEqual([]);
+    });
+
+    it('binds inline tokens to typed records, excludes their paths from the legacy scan, and deduplicates the row', () => {
+        const ref = buildMentionRefForKindV1(MENTION_KIND_V1.file, 'src/@notes/a.ts');
+        const token = `[a.ts](happier-ref:${ref})`;
+        const result = resolveMessageStructuredReferences({
+            text: `Open ${token}, then @src/@notes/a.ts and @README.md`,
+            meta: metaWithMentions([{ ...fileMention('src/@notes/a.ts', token), label: 'a.ts' }]),
+        });
+        expect(result.inline.get(ref)).toMatchObject({ ref, kind: MENTION_KIND_V1.file, label: 'a.ts', path: 'src/@notes/a.ts' });
+        expect(result.row).toEqual([{ kind: 'file', path: 'README.md' }]);
+        expect(resolveMessageStructuredReferences({ text: token, meta: undefined }).inline.size).toBe(0);
+        expect(resolveMessageStructuredReferences({ text: token, meta: undefined }).row).toEqual([]);
+    });
+
+    it('numbers only images by attachment order and binds them by id', () => {
+        const result = resolveMessageStructuredReferences({
+            text: '[second](happier-ref:attachment:b) [first](happier-ref:attachment:a) [doc](happier-ref:attachment:c)',
+            meta: { happier: { kind: 'attachments.v1', payload: { attachments: [
+                { id: 'a', name: 'a.png', path: '/a.png', mimeType: 'image/png', sizeBytes: 1 },
+                { id: 'c', name: 'notes.txt', path: '/notes.txt', mimeType: 'text/plain', sizeBytes: 2 },
+                { id: 'b', name: 'b.png', path: '/b.png', mimeType: 'image/png', sizeBytes: 3 },
+            ] } } },
+        });
+        expect(result.inline.get('attachment:b')).toMatchObject({ label: 'Image #2', imageNumber: 2, attachmentId: 'b' });
+        expect(result.inline.get('attachment:a')).toMatchObject({ label: 'Image #1', imageNumber: 1 });
+        expect(result.inline.get('attachment:c')).toMatchObject({ label: 'notes.txt' });
+        expect(result.row).toEqual([]);
+    });
+
+    it('uses the message image order for SessionMedia-backed plugin pictures and upload pictures', () => {
+        const result = resolveMessageStructuredReferences({
+            text: '[upload](happier-ref:attachment:upload) [camera](happier-ref:attachment:camera)',
+            meta: {
+                happier: { kind: 'session_media.v1', payload: { media: [{ id: 'm1', role: 'input', category: 'attachment',
+                    mediaKind: 'image', mimeType: 'image/png', name: 'camera.png', path: '.happier/uploads/camera.png',
+                    sizeBytes: 42, origin: { source: 'user-upload' } }] } },
+                happierAttachments: { kind: 'attachments.v1', payload: { attachments: [
+                    { id: 'upload', name: 'upload.png', path: '/upload.png', mimeType: 'image/png', sizeBytes: 1 },
+                ] } },
+                happierStructuredInputV1: { v: 1, composerAttachments: [{ v: 1, instanceId: 'camera',
+                    attachment: { pluginId: 'example.camera', localId: 'capture' }, key: 'camera', value: {},
+                    presentation: { label: 'Camera', typeLabel: 'Picture' }, content: { kind: 'sessionMedia', mediaId: 'm1' } }],
+                    imageInputs: [{ id: 'upload', kind: 'localImage', path: '/upload.png' }],
+                },
+            },
+        });
+        expect(result.inline.get('attachment:camera')).toMatchObject({ label: 'Image #2', imageNumber: 2, mediaId: 'm1' });
+        expect(result.inline.get('attachment:upload')).toMatchObject({ label: 'Image #1', imageNumber: 1 });
+    });
+
     it('renders a session reference only from the envelope, never from matching text (INV-5)', () => {
         const text = 'compare with @session:release-prep-a1b2c3';
 
@@ -34,12 +109,12 @@ describe('resolveMessageStructuredReferences', () => {
         });
         const withoutEnvelope = resolveMessageStructuredReferences({ meta: undefined, text });
 
-        expect(withEnvelope).toEqual([
+        expect(withEnvelope.row).toEqual([
             { kind: 'session', sessionId: 'sess_42', label: 'Release prep' },
         ]);
         // Identical text, no envelope entry: plain text. This is the whole point of INV-5 —
         // an agent that merely writes a session-looking token cannot manufacture a link.
-        expect(withoutEnvelope).toEqual([]);
+        expect(withoutEnvelope.row).toEqual([]);
     });
 
     it('renders a quoted file token the legacy text scan cannot parse', () => {
@@ -50,15 +125,15 @@ describe('resolveMessageStructuredReferences', () => {
             text,
         });
 
-        expect(references).toEqual([{ kind: 'file', path: 'my file.ts' }]);
-        expect(resolveMessageStructuredReferences({ meta: undefined, text })).toEqual([]);
+        expect(references.row).toEqual([{ kind: 'file', path: 'my file.ts' }]);
+        expect(resolveMessageStructuredReferences({ meta: undefined, text }).row).toEqual([]);
     });
 
     it('keeps the legacy text scan for files so pre-envelope messages still render', () => {
         expect(resolveMessageStructuredReferences({
             meta: undefined,
             text: 'see @src/api.ts and @README.md',
-        })).toEqual([
+        }).row).toEqual([
             { kind: 'file', path: 'src/api.ts' },
             { kind: 'file', path: 'README.md' },
         ]);
@@ -70,7 +145,7 @@ describe('resolveMessageStructuredReferences', () => {
             text: 'see @src/api.ts twice: @src/api.ts',
         });
 
-        expect(references).toEqual([{ kind: 'file', path: 'src/api.ts' }]);
+        expect(references.row).toEqual([{ kind: 'file', path: 'src/api.ts' }]);
     });
 
     it('leaves a well-formed unknown kind inert and never reinterprets it as a known one', () => {
@@ -82,7 +157,7 @@ describe('resolveMessageStructuredReferences', () => {
             text: '@acme:1 @session:real',
         });
 
-        expect(references).toEqual([{ kind: 'session', sessionId: 'sess_real', label: null }]);
+        expect(references.row).toEqual([{ kind: 'session', sessionId: 'sess_real', label: null }]);
     });
 
     it('drops a file reference whose path escapes the workspace', () => {
@@ -97,7 +172,7 @@ describe('resolveMessageStructuredReferences', () => {
             text: '@x',
         });
 
-        expect(references).toEqual([]);
+        expect(references.row).toEqual([]);
     });
 
     // D-4 precedence itself is pinned where a legacy arm actually exists — the protocol owner
@@ -128,6 +203,6 @@ describe('resolveMessageStructuredReferences', () => {
             text: '@session:bad @session:ok',
         });
 
-        expect(references).toEqual([{ kind: 'session', sessionId: 'sess_ok', label: null }]);
+        expect(references.row).toEqual([{ kind: 'session', sessionId: 'sess_ok', label: null }]);
     });
 });

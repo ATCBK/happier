@@ -22,11 +22,12 @@ import { motionTokens } from '@/components/ui/motion/motionTokens';
 import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
 import { FindHighlightedText } from '@/components/ui/text/FindHighlightedText';
 import { MarkdownFindDecorationContext, projectLeafRanges } from './rendering/MarkdownFindDecorationContext';
-import { projectMarkdownFindSpans } from '@/components/markdown/rendering/markdownFindProjection';
+import { projectMarkdownFindSpans, projectPlainFindText, projectReadableInlineReferenceFindText } from '@/components/markdown/rendering/markdownFindProjection';
 import type { MarkdownImageResolver, MarkdownImageDocument } from './markdownImages';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { MarkdownWorkspaceFileLinksContext } from './rendering/MarkdownLinkPolicyContext';
 import { MarkdownImageBlock } from './MarkdownImageBlock';
+import { projectInlineReferenceLabelsV1 } from '@happier-dev/protocol/sessions/messages/sessionInputReferenceProjectionV1';
 
 // Option type for callback
 export type Option = {
@@ -97,10 +98,14 @@ export const MarkdownBlockView = React.memo((props: MarkdownBlockViewProps) => {
     } else if (block.type === 'numbered-list') {
         return <RenderNumberedListBlock items={block.items} first={props.first} last={props.last} selectable={props.selectable} onLinkPress={props.onLinkPress} textStyle={props.textStyle} variant={props.variant} streamingReveal={props.streamingReveal} streamingRevealPreset={props.streamingRevealPreset} />;
     } else if (block.type === 'code-block') {
+        const content = projectInlineReferenceLabelsV1(block.content);
+        const findRanges = content !== block.content && props.findRanges
+            ? projectLeafRanges(projectReadableInlineReferenceFindText(projectPlainFindText(block.content)), 0, props.findRanges)
+            : props.findRanges;
         if (props.variant === 'thinking') {
-            return <RenderThinkingCodeBlock content={block.content} language={block.language} first={props.first} last={props.last} selectable={props.selectable} textStyle={props.textStyle} findRanges={props.findRanges} />;
+            return <RenderThinkingCodeBlock content={content} language={block.language} first={props.first} last={props.last} selectable={props.selectable} textStyle={props.textStyle} findRanges={findRanges} />;
         }
-        return <RenderCodeBlock content={block.content} language={block.language} first={props.first} last={props.last} selectable={props.selectable} findRanges={props.findRanges} />;
+        return <RenderCodeBlock content={content} language={block.language} first={props.first} last={props.last} selectable={props.selectable} findRanges={findRanges} />;
     } else if (block.type === 'mermaid') {
         return <MermaidRenderer content={block.content} />;
     } else if (block.type === 'options') {

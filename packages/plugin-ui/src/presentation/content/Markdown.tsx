@@ -2,6 +2,8 @@ import type { ReactElement } from 'react';
 import type { ReviewFinding } from '@happier-dev/plugin-sdk/reviews';
 
 import { HappierText } from '../text/Text.js';
+import type { HappierIconName } from './Icon.js';
+import type { HappierRenderableImageSource } from './renderableImage.js';
 
 /** Caller-owned citations; the host renders their presentation and routes presses back to that caller. */
 export type MarkdownInlineReference = Readonly<{
@@ -9,10 +11,14 @@ export type MarkdownInlineReference = Readonly<{
   foreground: string;
   background: string;
   severity?: ReviewFinding['severity'];
+  glyph?: HappierIconName;
+  /** Resolved by the caller; Markdown never fetches a reference thumbnail. */
+  thumbnail?: HappierRenderableImageSource;
 }>;
 
 export type MarkdownInlineReferences = Readonly<{
-  scheme: string;
+  /** Optional authored shorthand, such as finding:. Prefixed links resolve their full ref. */
+  scheme?: string;
   resolve: (target: string) => MarkdownInlineReference | null;
   onPress?: (target: string) => void;
 }>;

@@ -43,10 +43,34 @@ index 797de6a..653c960 100644
      int selectionEnd;
      };
 diff --git a/node_modules/react-native-enriched-markdown/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/Props.h b/node_modules/react-native-enriched-markdown/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/Props.h
-index c9e1984..4f75d3a 100644
 --- a/node_modules/react-native-enriched-markdown/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/Props.h
 +++ b/node_modules/react-native-enriched-markdown/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/Props.h
-@@ -1857,6 +1857,7 @@ static inline folly::dynamic toDynamic(const EnrichedMarkdownMarkdownStyleStruct
+@@ -857,6 +857,7 @@ static inline folly::dynamic toDynamic(const EnrichedMarkdownMarkdownStyleCodeBl
+ #endif
+ 
+ struct EnrichedMarkdownMarkdownStyleLinkStruct {
++  std::string referenceChips{};
+   std::string fontFamily{};
+   SharedColor color{};
+   bool underline{false};
+@@ -867,6 +868,7 @@ struct EnrichedMarkdownMarkdownStyleLinkStruct {
+ 
+   folly::dynamic toDynamic() const {
+     folly::dynamic result = folly::dynamic::object();
++    result["referenceChips"] = referenceChips;
+     result["fontFamily"] = fontFamily;
+     result["color"] = ::facebook::react::toDynamic(color);
+     result["underline"] = underline;
+@@ -877,6 +879,8 @@ struct EnrichedMarkdownMarkdownStyleLinkStruct {
+ 
+ static inline void fromRawValue(const PropsParserContext& context, const RawValue &value, EnrichedMarkdownMarkdownStyleLinkStruct &result) {
+   auto map = (std::unordered_map<std::string, RawValue>)value;
++  auto chip = map.find("referenceChips");
++  if (chip != map.end()) fromRawValue(context, chip->second, result.referenceChips);
+ 
+   auto tmp_fontFamily = map.find("fontFamily");
+   if (tmp_fontFamily != map.end()) {
+@@ -1857,6 +1861,7 @@ static inline folly::dynamic toDynamic(const EnrichedMarkdownMarkdownStyleStruct
  struct EnrichedMarkdownMd4cFlagsStruct {
    bool underline{false};
    bool latexMath{false};
@@ -54,7 +78,7 @@ index c9e1984..4f75d3a 100644
  
  
  #ifdef RN_SERIALIZABLE_STATE
-@@ -1866,6 +1867,7 @@ struct EnrichedMarkdownMd4cFlagsStruct {
+@@ -1866,6 +1871,7 @@ struct EnrichedMarkdownMd4cFlagsStruct {
      folly::dynamic result = folly::dynamic::object();
      result["underline"] = underline;
      result["latexMath"] = latexMath;
@@ -62,7 +86,7 @@ index c9e1984..4f75d3a 100644
      return result;
    }
  #endif
-@@ -1882,6 +1884,10 @@ static inline void fromRawValue(const PropsParserContext& context, const RawValu
+@@ -1882,6 +1888,10 @@ static inline void fromRawValue(const PropsParserContext& context, const RawValu
    if (tmp_latexMath != map.end()) {
      fromRawValue(context, tmp_latexMath->second, result.latexMath);
    }
@@ -73,7 +97,32 @@ index c9e1984..4f75d3a 100644
  }
  
  static inline std::string toString(const EnrichedMarkdownMd4cFlagsStruct &value) {
-@@ -4153,6 +4159,7 @@ static inline folly::dynamic toDynamic(const EnrichedMarkdownTextMarkdownStyleSt
+@@ -3153,6 +3163,7 @@ static inline folly::dynamic toDynamic(const EnrichedMarkdownTextMarkdownStyleCo
+ #endif
+ 
+ struct EnrichedMarkdownTextMarkdownStyleLinkStruct {
++  std::string referenceChips{};
+   std::string fontFamily{};
+   SharedColor color{};
+   bool underline{false};
+@@ -3163,6 +3174,7 @@ struct EnrichedMarkdownTextMarkdownStyleLinkStruct {
+ 
+   folly::dynamic toDynamic() const {
+     folly::dynamic result = folly::dynamic::object();
++    result["referenceChips"] = referenceChips;
+     result["fontFamily"] = fontFamily;
+     result["color"] = ::facebook::react::toDynamic(color);
+     result["underline"] = underline;
+@@ -3173,6 +3185,8 @@ struct EnrichedMarkdownTextMarkdownStyleLinkStruct {
+ 
+ static inline void fromRawValue(const PropsParserContext& context, const RawValue &value, EnrichedMarkdownTextMarkdownStyleLinkStruct &result) {
+   auto map = (std::unordered_map<std::string, RawValue>)value;
++  auto chip = map.find("referenceChips");
++  if (chip != map.end()) fromRawValue(context, chip->second, result.referenceChips);
+ 
+   auto tmp_fontFamily = map.find("fontFamily");
+   if (tmp_fontFamily != map.end()) {
+@@ -4153,6 +4167,7 @@ static inline folly::dynamic toDynamic(const EnrichedMarkdownTextMarkdownStyleSt
  struct EnrichedMarkdownTextMd4cFlagsStruct {
    bool underline{false};
    bool latexMath{false};
@@ -81,7 +130,7 @@ index c9e1984..4f75d3a 100644
  
  
  #ifdef RN_SERIALIZABLE_STATE
-@@ -4162,6 +4169,7 @@ struct EnrichedMarkdownTextMd4cFlagsStruct {
+@@ -4162,6 +4177,7 @@ struct EnrichedMarkdownTextMd4cFlagsStruct {
      folly::dynamic result = folly::dynamic::object();
      result["underline"] = underline;
      result["latexMath"] = latexMath;
@@ -89,7 +138,7 @@ index c9e1984..4f75d3a 100644
      return result;
    }
  #endif
-@@ -4178,6 +4186,10 @@ static inline void fromRawValue(const PropsParserContext& context, const RawValu
+@@ -4178,6 +4194,10 @@ static inline void fromRawValue(const PropsParserContext& context, const RawValu
    if (tmp_latexMath != map.end()) {
      fromRawValue(context, tmp_latexMath->second, result.latexMath);
    }
@@ -116,7 +165,6 @@ index 16137fa..0eb4004 100644
          if (permissiveAutolinksField) {
            md4cFlags.permissiveAutolinks = env->GetBooleanField(flags, permissiveAutolinksField) == JNI_TRUE;
 diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdown.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdown.kt
-index dceb56a..e93812a 100644
 --- a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdown.kt
 +++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdown.kt
 @@ -59,7 +59,7 @@ class EnrichedMarkdown
@@ -183,7 +231,6 @@ index dceb56a..e93812a 100644
  
          onTaskListItemPressCallback = { taskIndex, checked, itemText ->
 diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownInternalText.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownInternalText.kt
-index 7551656..e3faca0 100644
 --- a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownInternalText.kt
 +++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownInternalText.kt
 @@ -44,7 +44,8 @@ class EnrichedMarkdownInternalText
@@ -196,7 +243,7 @@ index 7551656..e3faca0 100644
  
      init {
        setupAsMarkdownTextView()
-@@ -52,14 +53,15 @@ class EnrichedMarkdownInternalText
+@@ -52,14 +53,16 @@ class EnrichedMarkdownInternalText
          createSelectionActionModeCallback(
            this,
            getCustomItemTexts = { contextMenuItemTexts },
@@ -210,12 +257,13 @@ index 7551656..e3faca0 100644
  
 -    fun applyStyledText(styledText: CharSequence) {
 +    fun applyStyledText(styledText: CharSequence, markdown: String) {
++      (styledText as? android.text.Spanned)?.getSpans(0, styledText.length, com.swmansion.enriched.markdown.spans.ReferenceChipSpan::class.java)?.forEach { it.registerTextView(this) }
        text = styledText
 +      renderedMarkdown = markdown
  
        if (movementMethod !is LinkLongPressMovementMethod) {
          movementMethod = LinkLongPressMovementMethod.createInstance()
-@@ -86,7 +88,7 @@ class EnrichedMarkdownInternalText
+@@ -86,7 +89,7 @@ class EnrichedMarkdownInternalText
  
      fun setContextMenuItems(
        items: List<String>,
@@ -240,7 +288,6 @@ index 89a3153..9065346 100644
      return view
    }
 diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownText.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownText.kt
-index aa9614e..fa3ca90 100644
 --- a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownText.kt
 +++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownText.kt
 @@ -56,7 +56,8 @@ class EnrichedMarkdownText
@@ -273,7 +320,7 @@ index aa9614e..fa3ca90 100644
              }
            }
          } catch (e: Exception) {
-@@ -223,10 +224,11 @@ class EnrichedMarkdownText
+@@ -223,10 +224,12 @@ class EnrichedMarkdownText
        }
      }
  
@@ -282,6 +329,7 @@ index aa9614e..fa3ca90 100644
        val tailStart = previousTextLength
  
        text = styledText
++      (text as? android.text.Spanned)?.getSpans(0, text.length, com.swmansion.enriched.markdown.spans.ReferenceChipSpan::class.java)?.forEach { it.registerTextView(this) }
 +      renderedMarkdown = markdown
  
        if (movementMethod !is LinkLongPressMovementMethod) {
@@ -1012,10 +1060,34 @@ index 797de6a..653c960 100644
      int selectionEnd;
      };
 diff --git a/node_modules/react-native-enriched-markdown/ios/generated/ReactCodegen/EnrichedMarkdownTextSpec/Props.h b/node_modules/react-native-enriched-markdown/ios/generated/ReactCodegen/EnrichedMarkdownTextSpec/Props.h
-index c9e1984..4f75d3a 100644
 --- a/node_modules/react-native-enriched-markdown/ios/generated/ReactCodegen/EnrichedMarkdownTextSpec/Props.h
 +++ b/node_modules/react-native-enriched-markdown/ios/generated/ReactCodegen/EnrichedMarkdownTextSpec/Props.h
-@@ -1857,6 +1857,7 @@ static inline folly::dynamic toDynamic(const EnrichedMarkdownMarkdownStyleStruct
+@@ -857,6 +857,7 @@ static inline folly::dynamic toDynamic(const EnrichedMarkdownMarkdownStyleCodeBl
+ #endif
+ 
+ struct EnrichedMarkdownMarkdownStyleLinkStruct {
++  std::string referenceChips{};
+   std::string fontFamily{};
+   SharedColor color{};
+   bool underline{false};
+@@ -867,6 +868,7 @@ struct EnrichedMarkdownMarkdownStyleLinkStruct {
+ 
+   folly::dynamic toDynamic() const {
+     folly::dynamic result = folly::dynamic::object();
++    result["referenceChips"] = referenceChips;
+     result["fontFamily"] = fontFamily;
+     result["color"] = ::facebook::react::toDynamic(color);
+     result["underline"] = underline;
+@@ -877,6 +879,8 @@ struct EnrichedMarkdownMarkdownStyleLinkStruct {
+ 
+ static inline void fromRawValue(const PropsParserContext& context, const RawValue &value, EnrichedMarkdownMarkdownStyleLinkStruct &result) {
+   auto map = (std::unordered_map<std::string, RawValue>)value;
++  auto chip = map.find("referenceChips");
++  if (chip != map.end()) fromRawValue(context, chip->second, result.referenceChips);
+ 
+   auto tmp_fontFamily = map.find("fontFamily");
+   if (tmp_fontFamily != map.end()) {
+@@ -1857,6 +1861,7 @@ static inline folly::dynamic toDynamic(const EnrichedMarkdownMarkdownStyleStruct
  struct EnrichedMarkdownMd4cFlagsStruct {
    bool underline{false};
    bool latexMath{false};
@@ -1023,7 +1095,7 @@ index c9e1984..4f75d3a 100644
  
  
  #ifdef RN_SERIALIZABLE_STATE
-@@ -1866,6 +1867,7 @@ struct EnrichedMarkdownMd4cFlagsStruct {
+@@ -1866,6 +1871,7 @@ struct EnrichedMarkdownMd4cFlagsStruct {
      folly::dynamic result = folly::dynamic::object();
      result["underline"] = underline;
      result["latexMath"] = latexMath;
@@ -1031,7 +1103,7 @@ index c9e1984..4f75d3a 100644
      return result;
    }
  #endif
-@@ -1882,6 +1884,10 @@ static inline void fromRawValue(const PropsParserContext& context, const RawValu
+@@ -1882,6 +1888,10 @@ static inline void fromRawValue(const PropsParserContext& context, const RawValu
    if (tmp_latexMath != map.end()) {
      fromRawValue(context, tmp_latexMath->second, result.latexMath);
    }
@@ -1042,7 +1114,32 @@ index c9e1984..4f75d3a 100644
  }
  
  static inline std::string toString(const EnrichedMarkdownMd4cFlagsStruct &value) {
-@@ -4153,6 +4159,7 @@ static inline folly::dynamic toDynamic(const EnrichedMarkdownTextMarkdownStyleSt
+@@ -3153,6 +3163,7 @@ static inline folly::dynamic toDynamic(const EnrichedMarkdownTextMarkdownStyleCo
+ #endif
+ 
+ struct EnrichedMarkdownTextMarkdownStyleLinkStruct {
++  std::string referenceChips{};
+   std::string fontFamily{};
+   SharedColor color{};
+   bool underline{false};
+@@ -3163,6 +3174,7 @@ struct EnrichedMarkdownTextMarkdownStyleLinkStruct {
+ 
+   folly::dynamic toDynamic() const {
+     folly::dynamic result = folly::dynamic::object();
++    result["referenceChips"] = referenceChips;
+     result["fontFamily"] = fontFamily;
+     result["color"] = ::facebook::react::toDynamic(color);
+     result["underline"] = underline;
+@@ -3173,6 +3185,8 @@ struct EnrichedMarkdownTextMarkdownStyleLinkStruct {
+ 
+ static inline void fromRawValue(const PropsParserContext& context, const RawValue &value, EnrichedMarkdownTextMarkdownStyleLinkStruct &result) {
+   auto map = (std::unordered_map<std::string, RawValue>)value;
++  auto chip = map.find("referenceChips");
++  if (chip != map.end()) fromRawValue(context, chip->second, result.referenceChips);
+ 
+   auto tmp_fontFamily = map.find("fontFamily");
+   if (tmp_fontFamily != map.end()) {
+@@ -4153,6 +4167,7 @@ static inline folly::dynamic toDynamic(const EnrichedMarkdownTextMarkdownStyleSt
  struct EnrichedMarkdownTextMd4cFlagsStruct {
    bool underline{false};
    bool latexMath{false};
@@ -1050,7 +1147,7 @@ index c9e1984..4f75d3a 100644
  
  
  #ifdef RN_SERIALIZABLE_STATE
-@@ -4162,6 +4169,7 @@ struct EnrichedMarkdownTextMd4cFlagsStruct {
+@@ -4162,6 +4177,7 @@ struct EnrichedMarkdownTextMd4cFlagsStruct {
      folly::dynamic result = folly::dynamic::object();
      result["underline"] = underline;
      result["latexMath"] = latexMath;
@@ -1058,7 +1155,7 @@ index c9e1984..4f75d3a 100644
      return result;
    }
  #endif
-@@ -4178,6 +4186,10 @@ static inline void fromRawValue(const PropsParserContext& context, const RawValu
+@@ -4178,6 +4194,10 @@ static inline void fromRawValue(const PropsParserContext& context, const RawValu
    if (tmp_latexMath != map.end()) {
      fromRawValue(context, tmp_latexMath->second, result.latexMath);
    }
@@ -1283,11 +1380,13 @@ index 2639759..b84f50b 100644
  }
  
 diff --git a/node_modules/react-native-enriched-markdown/ios/renderer/LinkRenderer.m b/node_modules/react-native-enriched-markdown/ios/renderer/LinkRenderer.m
-index 8c37b26..80e8346 100644
 --- a/node_modules/react-native-enriched-markdown/ios/renderer/LinkRenderer.m
 +++ b/node_modules/react-native-enriched-markdown/ios/renderer/LinkRenderer.m
-@@ -6,7 +6,7 @@
+@@ -4,9 +4,10 @@
+ #import "RendererFactory.h"
+ #import "StyleConfig.h"
  #import <React/RCTFont.h>
++#import "ENRMReferenceAttachment.h"
  
  @implementation LinkRenderer {
 -  RendererFactory *_rendererFactory;
@@ -1295,6 +1394,32 @@ index 8c37b26..80e8346 100644
    StyleConfig *_config;
  }
  
+@@ -35,6 +36,18 @@
+ 
+   // 2. Extract configuration
+   NSString *url = node.attributes[@"url"] ?: @"";
++#if !TARGET_OS_OSX
++  NSDictionary *chip = _config.referenceChips[@"references"][url];
++  if (chip) {
++    UIFont *font = [output attribute:NSFontAttributeName atIndex:start effectiveRange:NULL];
++    ENRMReferenceAttachment *attachment = [[ENRMReferenceAttachment alloc] initWithLabel:chip[@"label"] presentation:chip style:_config.referenceChips font:font];
++    [output replaceCharactersInRange:range withAttributedString:[NSAttributedString attributedStringWithAttachment:attachment]];
++    range = NSMakeRange(start, 1);
++    [output addAttribute:NSLinkAttributeName value:url range:range];
++    [context registerLinkRange:range url:url];
++    return;
++  }
++#endif
+   RCTUIColor *linkColor = [_config linkColor];
+   NSNumber *underlineStyle = @([_config linkUnderline] ? NSUnderlineStyleSingle : NSUnderlineStyleNone);
+   NSString *linkFontFamily = [_config linkFontFamily];
+@@ -84,4 +97,4 @@
+   [context registerLinkRange:range url:url];
+ }
+ 
+-@end
+\ No newline at end of file
++@end
 diff --git a/node_modules/react-native-enriched-markdown/ios/renderer/ListItemRenderer.m b/node_modules/react-native-enriched-markdown/ios/renderer/ListItemRenderer.m
 index 3d31558..755c070 100644
 --- a/node_modules/react-native-enriched-markdown/ios/renderer/ListItemRenderer.m
@@ -1399,20 +1524,30 @@ index ebbcdb4..00b54f2 100644
  #ifdef __cplusplus
  extern "C" {
 diff --git a/node_modules/react-native-enriched-markdown/ios/utils/ContextMenuUtils.mm b/node_modules/react-native-enriched-markdown/ios/utils/ContextMenuUtils.mm
-index 519da52..8a092d6 100644
 --- a/node_modules/react-native-enriched-markdown/ios/utils/ContextMenuUtils.mm
 +++ b/node_modules/react-native-enriched-markdown/ios/utils/ContextMenuUtils.mm
-@@ -14,7 +14,8 @@ NSMutableArray<UIAction *> *_Nullable ENRMBuildContextMenuActions(NSArray<NSStri
+@@ -1,4 +1,5 @@
+ #import "ContextMenuUtils.h"
++#import "ENRMReferenceAttachment.h"
+ #import "ENRMMenuAction.h"
+ 
+ #if !TARGET_OS_OSX
+@@ -14,9 +15,11 @@ NSMutableArray<UIAction *> *_Nullable ENRMBuildContextMenuActions(NSArray<NSStri
      return nil;
    }
  
 -  NSString *selectedText = [textView.text substringWithRange:selectedRange];
-+  NSString *renderedText = [textView.text copy];
-+  NSString *selectedText = [renderedText substringWithRange:selectedRange];
-   NSUInteger selectionStart = selectedRange.location;
-   NSUInteger selectionEnd = NSMaxRange(selectedRange);
+-  NSUInteger selectionStart = selectedRange.location;
+-  NSUInteger selectionEnd = NSMaxRange(selectedRange);
++  NSAttributedString *text = textView.attributedText;
++  NSString *renderedText = ENRMReferenceText(text, NSMakeRange(0, text.length));
++  NSString *selectedText = ENRMReferenceText(text, selectedRange);
++  NSUInteger selectionStart = ENRMReferenceText(text, NSMakeRange(0, selectedRange.location)).length;
++  NSUInteger selectionEnd = selectionStart + selectedText.length;
  
-@@ -26,7 +27,7 @@ NSMutableArray<UIAction *> *_Nullable ENRMBuildContextMenuActions(NSArray<NSStri
+   NSMutableArray<UIAction *> *actions = [NSMutableArray arrayWithCapacity:itemTexts.count];
+   [itemTexts enumerateObjectsUsingBlock:^(NSString *itemText, NSUInteger index, BOOL *_) {
+@@ -26,7 +29,7 @@ NSMutableArray<UIAction *> *_Nullable ENRMBuildContextMenuActions(NSArray<NSStri
                                             image:image
                                        identifier:nil
                                           handler:^(__kindof UIAction *_) {
@@ -1421,7 +1556,7 @@ index 519da52..8a092d6 100644
                                           }]];
    }];
    return actions;
-@@ -43,14 +44,15 @@ NSArray<NSMenuItem *> *_Nullable ENRMBuildContextMenuItems(NSArray<NSString *> *
+@@ -43,14 +46,15 @@ NSArray<NSMenuItem *> *_Nullable ENRMBuildContextMenuItems(NSArray<NSString *> *
    }
  
    NSRange selectedRange = textView.selectedRange;
@@ -1656,10 +1791,17 @@ index 2bc6e14..4c94f9d 100644
  @property (nonatomic) ENRMSpoilerOverlay spoilerOverlay;
  
 diff --git a/node_modules/react-native-enriched-markdown/lib/module/EnrichedMarkdownNativeComponent.ts b/node_modules/react-native-enriched-markdown/lib/module/EnrichedMarkdownNativeComponent.ts
-index 06024b4..9d9aee7 100644
 --- a/node_modules/react-native-enriched-markdown/lib/module/EnrichedMarkdownNativeComponent.ts
 +++ b/node_modules/react-native-enriched-markdown/lib/module/EnrichedMarkdownNativeComponent.ts
-@@ -202,6 +202,8 @@ export interface ContextMenuItemConfig {
+@@ -50,6 +50,7 @@ interface CodeBlockStyleInternal extends BaseBlockStyleInternal {
+ }
+ 
+ interface LinkStyleInternal {
++  referenceChips: string;
+   fontFamily: string;
+   color: ColorValue;
+   underline: boolean;
+@@ -202,6 +203,8 @@ export interface ContextMenuItemConfig {
  export interface OnContextMenuItemPressEvent {
    itemText: string;
    selectedText: string;
@@ -1668,7 +1810,7 @@ index 06024b4..9d9aee7 100644
    selectionStart: CodegenTypes.Int32;
    selectionEnd: CodegenTypes.Int32;
  }
-@@ -224,6 +226,8 @@ export interface Md4cFlagsInternal {
+@@ -224,6 +227,8 @@ export interface Md4cFlagsInternal {
     * @default true
     */
    latexMath: boolean;
@@ -1678,10 +1820,17 @@ index 06024b4..9d9aee7 100644
  
  export interface NativeProps extends ViewProps {
 diff --git a/node_modules/react-native-enriched-markdown/lib/module/EnrichedMarkdownTextNativeComponent.ts b/node_modules/react-native-enriched-markdown/lib/module/EnrichedMarkdownTextNativeComponent.ts
-index e238ecf..dde0b29 100644
 --- a/node_modules/react-native-enriched-markdown/lib/module/EnrichedMarkdownTextNativeComponent.ts
 +++ b/node_modules/react-native-enriched-markdown/lib/module/EnrichedMarkdownTextNativeComponent.ts
-@@ -202,6 +202,8 @@ export interface ContextMenuItemConfig {
+@@ -50,6 +50,7 @@ interface CodeBlockStyleInternal extends BaseBlockStyleInternal {
+ }
+ 
+ interface LinkStyleInternal {
++  referenceChips: string;
+   fontFamily: string;
+   color: ColorValue;
+   underline: boolean;
+@@ -202,6 +203,8 @@ export interface ContextMenuItemConfig {
  export interface OnContextMenuItemPressEvent {
    itemText: string;
    selectedText: string;
@@ -1690,7 +1839,7 @@ index e238ecf..dde0b29 100644
    selectionStart: CodegenTypes.Int32;
    selectionEnd: CodegenTypes.Int32;
  }
-@@ -224,6 +226,8 @@ export interface Md4cFlagsInternal {
+@@ -224,6 +227,8 @@ export interface Md4cFlagsInternal {
     * @default true
     */
    latexMath: boolean;
@@ -2623,18 +2772,27 @@ index 7c5aece..be08a13 100644
  //# sourceMappingURL=styleUtils.d.ts.map
 \ No newline at end of file
 diff --git a/node_modules/react-native-enriched-markdown/lib/typescript/src/types/MarkdownStyle.d.ts b/node_modules/react-native-enriched-markdown/lib/typescript/src/types/MarkdownStyle.d.ts
-index b2c9fb9..0dd8295 100644
 --- a/node_modules/react-native-enriched-markdown/lib/typescript/src/types/MarkdownStyle.d.ts
 +++ b/node_modules/react-native-enriched-markdown/lib/typescript/src/types/MarkdownStyle.d.ts
-@@ -208,6 +208,7 @@ export interface Md4cFlags {
+@@ -41,6 +41,8 @@ interface CodeBlockStyle extends BaseBlockStyle {
+     padding?: number;
+ }
+ interface LinkStyle {
++  /** Resolved native inline chip presentation, keyed by href. */
++  referenceChips?: string;
+     fontFamily?: string;
+     color?: string;
+     underline?: boolean;
+@@ -208,6 +210,7 @@ export interface Md4cFlags {
       * @default true
       */
      latexMath?: boolean;
 +    texMathBackslashDelimiters?: boolean;
  }
  export {};
- //# sourceMappingURL=MarkdownStyle.d.ts.map
+-//# sourceMappingURL=MarkdownStyle.d.ts.map
 \ No newline at end of file
++//# sourceMappingURL=MarkdownStyle.d.ts.map
 diff --git a/node_modules/react-native-enriched-markdown/lib/typescript/src/types/MarkdownTextProps.d.ts b/node_modules/react-native-enriched-markdown/lib/typescript/src/types/MarkdownTextProps.d.ts
 index b912aa6..b662c08 100644
 --- a/node_modules/react-native-enriched-markdown/lib/typescript/src/types/MarkdownTextProps.d.ts
@@ -2827,10 +2985,17 @@ index 5bf4501..980dfbe 100644
      capabilities: RenderCapabilities;
      renderChildren: (node: ASTNode) => ReactNode;
 diff --git a/node_modules/react-native-enriched-markdown/src/EnrichedMarkdownNativeComponent.ts b/node_modules/react-native-enriched-markdown/src/EnrichedMarkdownNativeComponent.ts
-index 06024b4..9d9aee7 100644
 --- a/node_modules/react-native-enriched-markdown/src/EnrichedMarkdownNativeComponent.ts
 +++ b/node_modules/react-native-enriched-markdown/src/EnrichedMarkdownNativeComponent.ts
-@@ -202,6 +202,8 @@ export interface ContextMenuItemConfig {
+@@ -50,6 +50,7 @@ interface CodeBlockStyleInternal extends BaseBlockStyleInternal {
+ }
+ 
+ interface LinkStyleInternal {
++  referenceChips: string;
+   fontFamily: string;
+   color: ColorValue;
+   underline: boolean;
+@@ -202,6 +203,8 @@ export interface ContextMenuItemConfig {
  export interface OnContextMenuItemPressEvent {
    itemText: string;
    selectedText: string;
@@ -2839,7 +3004,7 @@ index 06024b4..9d9aee7 100644
    selectionStart: CodegenTypes.Int32;
    selectionEnd: CodegenTypes.Int32;
  }
-@@ -224,6 +226,8 @@ export interface Md4cFlagsInternal {
+@@ -224,6 +227,8 @@ export interface Md4cFlagsInternal {
     * @default true
     */
    latexMath: boolean;
@@ -2849,10 +3014,17 @@ index 06024b4..9d9aee7 100644
  
  export interface NativeProps extends ViewProps {
 diff --git a/node_modules/react-native-enriched-markdown/src/EnrichedMarkdownTextNativeComponent.ts b/node_modules/react-native-enriched-markdown/src/EnrichedMarkdownTextNativeComponent.ts
-index e238ecf..dde0b29 100644
 --- a/node_modules/react-native-enriched-markdown/src/EnrichedMarkdownTextNativeComponent.ts
 +++ b/node_modules/react-native-enriched-markdown/src/EnrichedMarkdownTextNativeComponent.ts
-@@ -202,6 +202,8 @@ export interface ContextMenuItemConfig {
+@@ -50,6 +50,7 @@ interface CodeBlockStyleInternal extends BaseBlockStyleInternal {
+ }
+ 
+ interface LinkStyleInternal {
++  referenceChips: string;
+   fontFamily: string;
+   color: ColorValue;
+   underline: boolean;
+@@ -202,6 +203,8 @@ export interface ContextMenuItemConfig {
  export interface OnContextMenuItemPressEvent {
    itemText: string;
    selectedText: string;
@@ -2861,7 +3033,7 @@ index e238ecf..dde0b29 100644
    selectionStart: CodegenTypes.Int32;
    selectionEnd: CodegenTypes.Int32;
  }
-@@ -224,6 +226,8 @@ export interface Md4cFlagsInternal {
+@@ -224,6 +227,8 @@ export interface Md4cFlagsInternal {
     * @default true
     */
    latexMath: boolean;
@@ -2940,10 +3112,18 @@ index ad339ba..326e53d 100644
    if (Platform.OS === 'web') return color;
    return processColor(color) ?? undefined;
 diff --git a/node_modules/react-native-enriched-markdown/src/types/MarkdownStyle.ts b/node_modules/react-native-enriched-markdown/src/types/MarkdownStyle.ts
-index c05a97a..59f97c6 100644
 --- a/node_modules/react-native-enriched-markdown/src/types/MarkdownStyle.ts
 +++ b/node_modules/react-native-enriched-markdown/src/types/MarkdownStyle.ts
-@@ -232,4 +232,5 @@ export interface Md4cFlags {
+@@ -48,6 +48,8 @@ interface CodeBlockStyle extends BaseBlockStyle {
+ }
+ 
+ interface LinkStyle {
++  /** Resolved native inline chip presentation, keyed by href. */
++  referenceChips?: string;
+   fontFamily?: string;
+   color?: string;
+   underline?: boolean;
+@@ -232,4 +234,5 @@ export interface Md4cFlags {
     * @default true
     */
    latexMath?: boolean;
@@ -4145,3 +4325,612 @@ index 3a297c5..95da4b2 100644
    callbacks: RendererCallbacks;
    capabilities: RenderCapabilities;
    renderChildren: (node: ASTNode) => ReactNode;
+diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/renderer/LinkRenderer.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/renderer/LinkRenderer.kt
+--- a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/renderer/LinkRenderer.kt
++++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/renderer/LinkRenderer.kt
+@@ -3,6 +3,7 @@ package com.swmansion.enriched.markdown.renderer
+ import android.text.SpannableStringBuilder
+ import com.swmansion.enriched.markdown.parser.MarkdownASTNode
+ import com.swmansion.enriched.markdown.spans.LinkSpan
++import com.swmansion.enriched.markdown.spans.ReferenceChipSpan
+ import com.swmansion.enriched.markdown.utils.text.span.SPAN_FLAGS_EXCLUSIVE_EXCLUSIVE
+ 
+ class LinkRenderer(
+@@ -18,6 +19,10 @@ class LinkRenderer(
+     val url = node.getAttribute("url") ?: return
+ 
+     factory.renderWithSpan(builder, { factory.renderChildren(node, builder, onLinkPress, onLinkLongPress) }) { start, end, blockStyle ->
++      val chips = config.style.linkStyle.chips
++      chips.optJSONObject("references")?.optJSONObject(url)?.let { reference ->
++        builder.setSpan(ReferenceChipSpan(factory.context, reference, chips), start, end, SPAN_FLAGS_EXCLUSIVE_EXCLUSIVE)
++      }
+       builder.setSpan(
+         LinkSpan(url, onLinkPress, onLinkLongPress, factory.styleCache, blockStyle, factory.context),
+         start,
+diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/spans/ImageSpan.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/spans/ImageSpan.kt
+--- a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/spans/ImageSpan.kt
++++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/spans/ImageSpan.kt
+@@ -48,25 +48,10 @@ class ImageSpan(
+   }
+ 
+   private fun loadImage() {
+-    if (imageUrl.startsWith("http")) {
+-      ImageDownloader.download(context, imageUrl) { bitmap ->
+-        if (bitmap != null) {
+-          sourceDrawable = bitmap.toDrawable(context.resources)
+-          wrapAndAssignDrawable()
+-        }
+-      }
+-    } else {
+-      val path = imageUrl.removePrefix("file://")
+-      try {
+-        val cached = ImageCache.getOriginal(imageUrl)
+-        val bitmap = cached ?: ImageDownloader.decodeFileDownsampled(context, path)
+-        if (bitmap != null) {
+-          if (cached == null) ImageCache.putOriginal(imageUrl, bitmap)
+-          sourceDrawable = bitmap.toDrawable(context.resources)
+-          wrapAndAssignDrawable()
+-        }
+-      } catch (e: Exception) {
+-        Log.w(TAG, "Failed to load local image: $path", e)
++    ImageDownloader.download(context, imageUrl) { bitmap ->
++      if (bitmap != null) {
++        sourceDrawable = bitmap.toDrawable(context.resources)
++        wrapAndAssignDrawable()
+       }
+     }
+   }
+diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/styles/LinkStyle.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/styles/LinkStyle.kt
+--- a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/styles/LinkStyle.kt
++++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/styles/LinkStyle.kt
+@@ -6,7 +6,9 @@ data class LinkStyle(
+   val fontFamily: String,
+   val color: Int,
+   val underline: Boolean,
++  val referenceChips: String = "",
+ ) {
++  val chips: org.json.JSONObject by lazy { if (referenceChips.isEmpty()) org.json.JSONObject() else org.json.JSONObject(referenceChips) }
+   companion object {
+     fun fromReadableMap(
+       map: ReadableMap,
+@@ -15,7 +17,7 @@ data class LinkStyle(
+       val fontFamily = parser.parseString(map, "fontFamily")
+       val color = parser.parseColor(map, "color")
+       val underline = map.getBoolean("underline")
+-      return LinkStyle(fontFamily, color, underline)
++      return LinkStyle(fontFamily, color, underline, if (map.hasKey("referenceChips")) map.getString("referenceChips") ?: "" else "")
+     }
+   }
+ }
+diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/utils/text/ImageDownloader.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/utils/text/ImageDownloader.kt
+--- a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/utils/text/ImageDownloader.kt
++++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/utils/text/ImageDownloader.kt
+@@ -15,6 +15,9 @@ import okhttp3.Response
+ import java.io.File
+ import java.io.IOException
+ import java.util.concurrent.TimeUnit
++import java.util.concurrent.Executors
++import android.net.Uri
++import android.util.Base64
+ 
+ object ImageDownloader {
+   private const val TAG = "ImageDownloader"
+@@ -28,6 +31,7 @@ object ImageDownloader {
+   private var maxTargetWidth: Int = 0
+ 
+   private val inFlight = HashMap<String, MutableList<(Bitmap?) -> Unit>>()
++  private val localDecoder = Executors.newSingleThreadExecutor()
+ 
+   private fun getClient(context: Context): OkHttpClient =
+     client ?: synchronized(this) {
+@@ -66,6 +70,26 @@ object ImageDownloader {
+       inFlight[url] = mutableListOf(callback)
+     }
+ 
++    if (!url.startsWith("http://") && !url.startsWith("https://")) {
++      localDecoder.execute {
++        val bitmap = try {
++          when {
++            url.startsWith("data:") -> decodeDownsampled(Base64.decode(url.substringAfter(","), Base64.DEFAULT), context.resources.displayMetrics.widthPixels)
++            url.startsWith("content:") -> context.contentResolver.openInputStream(Uri.parse(url))?.use { decodeDownsampled(it.readBytes(), context.resources.displayMetrics.widthPixels) }
++            else -> decodeFileDownsampled(context, Uri.decode(url.removePrefix("file://")))
++          }
++        } catch (error: Exception) {
++          Log.w(TAG, "Failed to decode local image", error)
++          null
++        } catch (error: OutOfMemoryError) {
++          Log.e(TAG, "OOM decoding local image", error)
++          null
++        }
++        bitmap?.let { ImageCache.putOriginal(url, it) }
++        dispatchCallbacks(url, bitmap)
++      }
++      return
++    }
+     val request = Request.Builder().url(url).build()
+     getClient(context).newCall(request).enqueue(
+       object : Callback {
+diff --git a/node_modules/react-native-enriched-markdown/ios/styles/StyleConfig.h b/node_modules/react-native-enriched-markdown/ios/styles/StyleConfig.h
+--- a/node_modules/react-native-enriched-markdown/ios/styles/StyleConfig.h
++++ b/node_modules/react-native-enriched-markdown/ios/styles/StyleConfig.h
+@@ -144,6 +144,7 @@
+ - (void)setH6TextAlign:(NSTextAlignment)newValue;
+ - (UIFont *)h6Font;
+ // Link properties
++@property (nonatomic, copy) NSDictionary *referenceChips;
+ - (NSString *)linkFontFamily;
+ - (void)setLinkFontFamily:(NSString *)newValue;
+ - (RCTUIColor *)linkColor;
+diff --git a/node_modules/react-native-enriched-markdown/ios/styles/StyleConfig.mm b/node_modules/react-native-enriched-markdown/ios/styles/StyleConfig.mm
+--- a/node_modules/react-native-enriched-markdown/ios/styles/StyleConfig.mm
++++ b/node_modules/react-native-enriched-markdown/ios/styles/StyleConfig.mm
+@@ -397,6 +397,7 @@ static inline NSString *normalizedFontWeight(NSString *fontWeight)
+   copy->_linkFontFamily = [_linkFontFamily copy];
+   copy->_linkColor = [_linkColor copy];
+   copy->_linkUnderline = _linkUnderline;
++  copy.referenceChips = self.referenceChips;
+   copy->_strongFontFamily = [_strongFontFamily copy];
+   copy->_strongFontWeight = [_strongFontWeight copy];
+   copy->_strongColor = [_strongColor copy];
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/ENRMImageDownloader.m b/node_modules/react-native-enriched-markdown/ios/utils/ENRMImageDownloader.m
+--- a/node_modules/react-native-enriched-markdown/ios/utils/ENRMImageDownloader.m
++++ b/node_modules/react-native-enriched-markdown/ios/utils/ENRMImageDownloader.m
+@@ -71,6 +71,20 @@ static inline NSUInteger ENRMImageByteCost(RCTUIImage *image)
+     return;
+   }
+ 
++  if (nsURL.isFileURL || [nsURL.scheme isEqualToString:@"data"]) {
++    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
++      NSData *data = [NSData dataWithContentsOfURL:nsURL];
++#if !TARGET_OS_OSX
++      RCTUIImage *image = data ? [RCTUIImage imageWithData:data] : nil;
++#else
++      RCTUIImage *image = data ? [[RCTUIImage alloc] initWithData:data] : nil;
++#endif
++      if (image) [[ENRMImageAttachment originalImageCache] setObject:image forKey:url cost:ENRMImageByteCost(image)];
++      [self dispatchCallbacksForURL:url image:image];
++    });
++    return;
++  }
++
+   [[_session dataTaskWithURL:nsURL
+            completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+ #if !TARGET_OS_OSX
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/HTMLGenerator.m b/node_modules/react-native-enriched-markdown/ios/utils/HTMLGenerator.m
+--- a/node_modules/react-native-enriched-markdown/ios/utils/HTMLGenerator.m
++++ b/node_modules/react-native-enriched-markdown/ios/utils/HTMLGenerator.m
+@@ -1,4 +1,5 @@
+ #import "HTMLGenerator.h"
++#import "ENRMReferenceAttachment.h"
+ #import "BlockquoteBorder.h"
+ #import "CodeBackground.h"
+ #import "ENRMFeatureFlags.h"
+@@ -460,7 +461,9 @@ static void generateInlineHTML(NSMutableString *html, NSAttributedString *attrib
+ 
+                         if ([text containsString:kObjectReplacementChar]) {
+                           id attachment = attrs[NSAttachmentAttributeName];
+-                          if ([attachment isKindOfClass:[ENRMImageAttachment class]]) {
++                          if ([attachment isKindOfClass:ENRMReferenceAttachment.class]) {
++                            [html appendString:escapeHTML(((ENRMReferenceAttachment *)attachment).label)];
++                          } else if ([attachment isKindOfClass:[ENRMImageAttachment class]]) {
+                             ENRMImageAttachment *img = (ENRMImageAttachment *)attachment;
+                             if (img.imageURL) {
+                               if (img.isInline) {
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/MarkdownAccessibilityElementBuilder.m b/node_modules/react-native-enriched-markdown/ios/utils/MarkdownAccessibilityElementBuilder.m
+--- a/node_modules/react-native-enriched-markdown/ios/utils/MarkdownAccessibilityElementBuilder.m
++++ b/node_modules/react-native-enriched-markdown/ios/utils/MarkdownAccessibilityElementBuilder.m
+@@ -1,4 +1,5 @@
+ #import "MarkdownAccessibilityElementBuilder.h"
++#import "ENRMReferenceAttachment.h"
+ #import "AccessibilityInfo.h"
+ #include <TargetConditionals.h>
+ 
+@@ -106,7 +107,7 @@ static const CGFloat kFocusRectPadding = 2.0;
+     }
+ 
+     BOOL isImg = item[@"altText"] != nil;
+-    NSString *label = isImg ? item[@"altText"] : [fullText substringWithRange:itemRange];
++    NSString *label = isImg ? item[@"altText"] : ENRMReferenceText(textView.attributedText, itemRange);
+     [elements addObject:[self createElementForRange:itemRange
+                                                type:isImg ? ElementTypeImage : ElementTypeLink
+                                                text:label
+@@ -447,4 +448,4 @@ static const CGFloat kFocusRectPadding = 2.0;
+ 
+ #endif
+ 
+-@end
+\ No newline at end of file
++@end
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/MarkdownExtractor.m b/node_modules/react-native-enriched-markdown/ios/utils/MarkdownExtractor.m
+--- a/node_modules/react-native-enriched-markdown/ios/utils/MarkdownExtractor.m
++++ b/node_modules/react-native-enriched-markdown/ios/utils/MarkdownExtractor.m
+@@ -1,4 +1,5 @@
+ #import "MarkdownExtractor.h"
++#import "ENRMReferenceAttachment.h"
+ #import "BlockquoteBorder.h"
+ #import "ENRMFeatureFlags.h"
+ #import "ENRMImageAttachment.h"
+@@ -146,6 +147,10 @@ NSString *_Nullable extractMarkdownFromAttributedString(NSAttributedString *attr
+ 
+                         // Images and Thematic Breaks
+                         NSTextAttachment *attachment = attrs[NSAttachmentAttributeName];
++                        if ([attachment isKindOfClass:ENRMReferenceAttachment.class]) {
++                          [result appendString:((ENRMReferenceAttachment *)attachment).label];
++                          return;
++                        }
+                         if ([attachment isKindOfClass:[ENRMImageAttachment class]]) {
+                           ENRMImageAttachment *img = (ENRMImageAttachment *)attachment;
+                           if (!img.imageURL)
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/PasteboardUtils.m b/node_modules/react-native-enriched-markdown/ios/utils/PasteboardUtils.m
+--- a/node_modules/react-native-enriched-markdown/ios/utils/PasteboardUtils.m
++++ b/node_modules/react-native-enriched-markdown/ios/utils/PasteboardUtils.m
+@@ -1,4 +1,5 @@
+ #import "PasteboardUtils.h"
++#import "ENRMReferenceAttachment.h"
+ #import "ENRMImageAttachment.h"
+ #import "HTMLGenerator.h"
+ #import "MarkdownExtractor.h"
+@@ -92,7 +93,7 @@ void copyAttributedStringToPasteboard(NSAttributedString *attributedString, NSSt
+ 
+   NSMutableDictionary *items = [NSMutableDictionary dictionary];
+ 
+-  items[kUTIPlainText] = attributedString.string;
++  items[kUTIPlainText] = ENRMReferenceText(attributedString, NSMakeRange(0, attributedString.length));
+ 
+   if (markdown.length > 0) {
+     items[kUTIMarkdown] = markdown;
+@@ -127,7 +128,11 @@ NSString *_Nullable markdownForRange(NSAttributedString *attributedText, NSRange
+ 
+   // Full selection: use cached markdown directly
+   BOOL isFullSelection = (range.location == 0 && range.length >= attributedText.length - 1);
+-  if (isFullSelection) {
++  __block BOOL hasReferences = NO;
++  [attributedText enumerateAttribute:NSAttachmentAttributeName inRange:range options:0 usingBlock:^(id value, NSRange run, BOOL *stop) {
++    if ([value isKindOfClass:ENRMReferenceAttachment.class]) { hasReferences = YES; *stop = YES; }
++  }];
++  if (isFullSelection && !hasReferences) {
+     return cachedMarkdown;
+   }
+ 
+diff --git a/node_modules/react-native-enriched-markdown/ios/utils/StylePropsUtils.h b/node_modules/react-native-enriched-markdown/ios/utils/StylePropsUtils.h
+--- a/node_modules/react-native-enriched-markdown/ios/utils/StylePropsUtils.h
++++ b/node_modules/react-native-enriched-markdown/ios/utils/StylePropsUtils.h
+@@ -482,6 +482,13 @@ BOOL applyMarkdownStyleToConfig(StyleConfig *config, const MarkdownStyle &newSty
+ 
+   // ── Link ───────────────────────────────────────────────────────────────────
+ 
++  if (newStyle.link.referenceChips != oldStyle.link.referenceChips) {
++    NSString *json = [NSString stringWithUTF8String:newStyle.link.referenceChips.c_str()];
++    id value = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
++    config.referenceChips = [value isKindOfClass:NSDictionary.class] ? value : @{};
++    changed = YES;
++  }
++
+   if (newStyle.link.fontFamily != oldStyle.link.fontFamily) {
+     if (!newStyle.link.fontFamily.empty()) {
+       NSString *fontFamily = [[NSString alloc] initWithUTF8String:newStyle.link.fontFamily.c_str()];
+diff --git a/node_modules/react-native-enriched-markdown/lib/module/normalizeMarkdownStyle.js b/node_modules/react-native-enriched-markdown/lib/module/normalizeMarkdownStyle.js
+--- a/node_modules/react-native-enriched-markdown/lib/module/normalizeMarkdownStyle.js
++++ b/node_modules/react-native-enriched-markdown/lib/module/normalizeMarkdownStyle.js
+@@ -159,7 +159,8 @@ const DEFAULT_NORMALIZED_STYLE = Object.freeze({
+   link: {
+     fontFamily: '',
+     color: normalizeColor('#2563EB'),
+-    underline: true
++    underline: true,
++    referenceChips: ''
+   },
+   strong: {
+     fontFamily: '',
+@@ -296,4 +297,4 @@ export const normalizeMarkdownStyle = style => {
+   if (structuralCache.length > LRU_MAX) structuralCache.pop();
+   return finalResult;
+ };
+-//# sourceMappingURL=normalizeMarkdownStyle.js.map
+\ No newline at end of file
++//# sourceMappingURL=normalizeMarkdownStyle.js.map
+diff --git a/node_modules/react-native-enriched-markdown/lib/typescript/src/types/MarkdownStyleInternal.d.ts b/node_modules/react-native-enriched-markdown/lib/typescript/src/types/MarkdownStyleInternal.d.ts
+--- a/node_modules/react-native-enriched-markdown/lib/typescript/src/types/MarkdownStyleInternal.d.ts
++++ b/node_modules/react-native-enriched-markdown/lib/typescript/src/types/MarkdownStyleInternal.d.ts
+@@ -38,6 +38,7 @@ interface CodeBlockStyleInternal extends BaseBlockStyleInternal {
+     padding: number;
+ }
+ interface LinkStyleInternal {
++  referenceChips: string;
+     fontFamily: string;
+     color: string;
+     underline: boolean;
+@@ -152,4 +153,4 @@ export interface MarkdownStyleInternal {
+     spoiler: SpoilerStyleInternal;
+ }
+ export {};
+-//# sourceMappingURL=MarkdownStyleInternal.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=MarkdownStyleInternal.d.ts.map
+diff --git a/node_modules/react-native-enriched-markdown/src/normalizeMarkdownStyle.ts b/node_modules/react-native-enriched-markdown/src/normalizeMarkdownStyle.ts
+--- a/node_modules/react-native-enriched-markdown/src/normalizeMarkdownStyle.ts
++++ b/node_modules/react-native-enriched-markdown/src/normalizeMarkdownStyle.ts
+@@ -132,7 +132,7 @@ const DEFAULT_NORMALIZED_STYLE = Object.freeze({
+     borderWidth: 1,
+     padding: 16,
+   },
+-  link: { fontFamily: '', color: normalizeColor('#2563EB')!, underline: true },
++  link: { fontFamily: '', color: normalizeColor('#2563EB')!, underline: true, referenceChips: '' },
+   strong: { fontFamily: '', fontWeight: 'bold', color: undefined },
+   em: {
+     fontFamily: '',
+diff --git a/node_modules/react-native-enriched-markdown/src/types/MarkdownStyleInternal.ts b/node_modules/react-native-enriched-markdown/src/types/MarkdownStyleInternal.ts
+--- a/node_modules/react-native-enriched-markdown/src/types/MarkdownStyleInternal.ts
++++ b/node_modules/react-native-enriched-markdown/src/types/MarkdownStyleInternal.ts
+@@ -50,6 +50,7 @@ interface CodeBlockStyleInternal extends BaseBlockStyleInternal {
+ }
+ 
+ interface LinkStyleInternal {
++  referenceChips: string;
+   fontFamily: string;
+   color: string;
+   underline: boolean;
+diff --git a/node_modules/react-native-enriched-markdown/ios/attachments/ENRMReferenceAttachment.h b/node_modules/react-native-enriched-markdown/ios/attachments/ENRMReferenceAttachment.h
+new file mode 100644
+--- /dev/null
++++ b/node_modules/react-native-enriched-markdown/ios/attachments/ENRMReferenceAttachment.h
+@@ -0,0 +1,10 @@
++#import "ENRMUIKit.h"
++
++@interface ENRMReferenceAttachment : NSTextAttachment
++@property (nonatomic, copy, readonly) NSString *label;
++- (instancetype)initWithLabel:(NSString *)label presentation:(NSDictionary *)presentation
++                       style:(NSDictionary *)style font:(UIFont *)font;
++@end
++
++/** Readable text and offsets for copy, selection and accessibility (not the attachment character). */
++FOUNDATION_EXPORT NSString *ENRMReferenceText(NSAttributedString *text, NSRange range);
+diff --git a/node_modules/react-native-enriched-markdown/ios/attachments/ENRMReferenceAttachment.m b/node_modules/react-native-enriched-markdown/ios/attachments/ENRMReferenceAttachment.m
+new file mode 100644
+--- /dev/null
++++ b/node_modules/react-native-enriched-markdown/ios/attachments/ENRMReferenceAttachment.m
+@@ -0,0 +1,125 @@
++#import "ENRMReferenceAttachment.h"
++#import "ENRMImageDownloader.h"
++#include <TargetConditionals.h>
++
++NSString *ENRMReferenceText(NSAttributedString *text, NSRange range)
++{
++  NSMutableString *result = [NSMutableString new];
++  [text enumerateAttribute:NSAttachmentAttributeName inRange:range options:0 usingBlock:^(id value, NSRange run, BOOL *stop) {
++    [result appendString:[value isKindOfClass:ENRMReferenceAttachment.class]
++        ? ((ENRMReferenceAttachment *)value).label : [text.string substringWithRange:run]];
++  }];
++  return result;
++}
++
++@implementation ENRMReferenceAttachment {
++  NSDictionary *_presentation;
++  NSDictionary *_anatomy;
++  UIFont *_font;
++  CGFloat _scale;
++  CGFloat _width;
++  CGFloat _height;
++  RCTUIImage *_thumbnail;
++  __weak NSTextContainer *_container;
++}
++
++- (instancetype)initWithLabel:(NSString *)label presentation:(NSDictionary *)presentation
++                       style:(NSDictionary *)style font:(UIFont *)font
++{
++  if ((self = [super init])) {
++    _label = [label copy];
++    _presentation = presentation;
++    _anatomy = style[@"anatomy"];
++    CGFloat fontSize = [style[@"fontSize"] doubleValue];
++    _scale = fontSize > 0 ? font.pointSize / fontSize : 1;
++#if !TARGET_OS_OSX
++    _font = [UIFont fontWithName:style[@"fontFamily"] size:font.pointSize] ?: [UIFont systemFontOfSize:font.pointSize weight:UIFontWeightMedium];
++#else
++    _font = font;
++#endif
++    _height = MAX([_anatomy[@"height"] doubleValue] * _scale, font.lineHeight);
++    CGFloat labelWidth = MIN([_anatomy[@"maxLabelWidth"] doubleValue] * _scale,
++                            ceil([label sizeWithAttributes:@{NSFontAttributeName:_font}].width));
++    _width = labelWidth + ([ _anatomy[@"paddingLeft"] doubleValue] + [_anatomy[@"paddingRight"] doubleValue]
++                            + [_anatomy[@"glyphSize"] doubleValue] + [_anatomy[@"gap"] doubleValue]) * _scale;
++    self.bounds = CGRectMake(0, (font.capHeight - _height) / 2, _width, _height);
++#if !TARGET_OS_OSX
++    [self drawChipWithWidth:_width];
++    NSString *uri = presentation[@"thumbnail"];
++    if (uri.length) {
++      __weak typeof(self) weakSelf = self;
++      [[ENRMImageDownloader shared] downloadURL:uri completion:^(RCTUIImage *image) {
++        ENRMReferenceAttachment *owner = weakSelf;
++        if (!owner || !image) return;
++        owner->_thumbnail = image;
++        [owner drawChipWithWidth:owner.bounds.size.width];
++        NSLayoutManager *layout = owner->_container.layoutManager;
++        [layout.textStorage enumerateAttribute:NSAttachmentAttributeName inRange:NSMakeRange(0, layout.textStorage.length)
++                                       options:0 usingBlock:^(id value, NSRange range, BOOL *stop) {
++          if (value == owner) { [layout invalidateDisplayForCharacterRange:range]; *stop = YES; }
++        }];
++      }];
++    }
++#endif
++  }
++  return self;
++}
++
++- (CGRect)attachmentBoundsForTextContainer:(NSTextContainer *)container proposedLineFragment:(CGRect)line
++                            glyphPosition:(CGPoint)position characterIndex:(NSUInteger)index
++{
++  _container = container;
++  CGFloat width = MIN(_width, line.size.width);
++  return CGRectMake(0, (_font.capHeight - _height) / 2, width, _height);
++}
++
++- (RCTUIImage *)imageForBounds:(CGRect)bounds textContainer:(NSTextContainer *)container characterIndex:(NSUInteger)index
++{
++  _container = container;
++#if !TARGET_OS_OSX
++  if (bounds.size.width != self.bounds.size.width) [self drawChipWithWidth:bounds.size.width];
++#endif
++  self.bounds = bounds;
++  return self.image;
++}
++
++#if !TARGET_OS_OSX
++static UIColor *chipInk(NSNumber *value)
++{
++  uint32_t argb = value.unsignedIntValue;
++  return [UIColor colorWithRed:((argb >> 16) & 255) / 255.0 green:((argb >> 8) & 255) / 255.0
++                         blue:(argb & 255) / 255.0 alpha:((argb >> 24) & 255) / 255.0];
++}
++
++/** The only drawing function for a transcript chip; anatomy and ink arrive from the shared JS owner. */
++- (void)drawChipWithWidth:(CGFloat)width
++{
++  if (width <= 0 || _height <= 0) return;
++  self.image = [[[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(width, _height)] imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
++    CGRect box = CGRectMake(0, 0, width, self->_height);
++    [chipInk(self->_presentation[@"background"]) setFill];
++    [[UIBezierPath bezierPathWithRoundedRect:box cornerRadius:[self->_anatomy[@"radius"] doubleValue] * self->_scale] fill];
++    CGFloat left = [self->_anatomy[@"paddingLeft"] doubleValue] * self->_scale;
++    CGFloat size = [self->_anatomy[@"glyphSize"] doubleValue] * self->_scale;
++    CGRect glyph = CGRectMake(left, (self->_height - size) / 2, size, size);
++    if (self->_thumbnail) {
++      CGContextSaveGState(ctx.CGContext);
++      [[UIBezierPath bezierPathWithRoundedRect:glyph cornerRadius:[self->_anatomy[@"thumbnailRadius"] doubleValue] * self->_scale] addClip];
++      CGFloat cover = MAX(size / self->_thumbnail.size.width, size / self->_thumbnail.size.height);
++      CGSize imageSize = CGSizeMake(self->_thumbnail.size.width * cover, self->_thumbnail.size.height * cover);
++      [self->_thumbnail drawInRect:CGRectMake(CGRectGetMidX(glyph) - imageSize.width / 2, CGRectGetMidY(glyph) - imageSize.height / 2, imageSize.width, imageSize.height)];
++      CGContextRestoreGState(ctx.CGContext);
++    } else {
++      UIImage *symbol = [UIImage systemImageNamed:self->_presentation[@"glyph"]];
++      [[symbol imageWithTintColor:chipInk(self->_presentation[@"glyphInk"]) renderingMode:UIImageRenderingModeAlwaysOriginal] drawInRect:glyph];
++    }
++    CGFloat labelX = CGRectGetMaxX(glyph) + [self->_anatomy[@"gap"] doubleValue] * self->_scale;
++    NSMutableParagraphStyle *paragraph = [NSMutableParagraphStyle new];
++    paragraph.lineBreakMode = NSLineBreakByTruncatingTail;
++    [self.label drawInRect:CGRectMake(labelX, (self->_height - self->_font.lineHeight) / 2,
++                                    MAX(0, width - labelX - [self->_anatomy[@"paddingRight"] doubleValue] * self->_scale), self->_font.lineHeight)
++           withAttributes:@{NSFontAttributeName:self->_font, NSForegroundColorAttributeName:chipInk(self->_presentation[@"foreground"]), NSParagraphStyleAttributeName:paragraph}];
++  }];
++}
++#endif
++@end
+diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/spans/ReferenceChipSpan.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/spans/ReferenceChipSpan.kt
+new file mode 100644
+--- /dev/null
++++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/spans/ReferenceChipSpan.kt
+@@ -0,0 +1,83 @@
++package com.swmansion.enriched.markdown.spans
++
++import android.content.Context
++import android.graphics.Bitmap
++import android.graphics.Canvas
++import android.graphics.Paint
++import android.graphics.Path
++import android.graphics.RectF
++import android.graphics.Typeface
++import android.text.TextPaint
++import android.text.TextUtils
++import android.text.style.ReplacementSpan
++import android.widget.TextView
++import com.facebook.react.common.assets.ReactFontManager
++import com.swmansion.enriched.markdown.utils.text.ImageDownloader
++import org.json.JSONObject
++import java.lang.ref.WeakReference
++import kotlin.math.ceil
++import kotlin.math.max
++
++/** Retains the readable characters and the incumbent LinkSpan's destination/accessible action. */
++class ReferenceChipSpan(
++  context: Context,
++  private val reference: JSONObject,
++  style: JSONObject,
++) : ReplacementSpan() {
++  private val anatomy = style.getJSONObject("anatomy")
++  private val density = context.resources.displayMetrics.density
++  private val baseFontSize = style.optDouble("fontSize", anatomy.getDouble("baseFontSize")).toFloat() * density
++  private val typeface = ReactFontManager.getInstance().getTypeface(style.optString("fontFamily"), Typeface.NORMAL, context.assets)
++  private var thumbnail: Bitmap? = null
++  private var view = WeakReference<TextView>(null)
++
++  init {
++    val uri = reference.optString("thumbnail")
++    if (uri.isNotEmpty()) ImageDownloader.download(context, uri) { image ->
++      thumbnail = image
++      view.get()?.invalidate()
++    }
++  }
++
++  fun registerTextView(textView: TextView) { view = WeakReference(textView) }
++  private fun metric(name: String, paint: Paint) = anatomy.getDouble(name).toFloat() * density * paint.textSize / baseFontSize
++  private fun label(paint: Paint) = TextUtils.ellipsize(reference.getString("label"), TextPaint(paint).apply { typeface = this@ReferenceChipSpan.typeface }, metric("maxLabelWidth", paint), TextUtils.TruncateAt.END).toString()
++  private fun width(paint: Paint): Float = Paint(paint).apply { typeface = this@ReferenceChipSpan.typeface }.measureText(label(paint)) + metric("paddingLeft", paint) + metric("paddingRight", paint) + metric("glyphSize", paint) + metric("gap", paint)
++
++  override fun getSize(paint: Paint, text: CharSequence, start: Int, end: Int, fm: Paint.FontMetricsInt?): Int {
++    val metrics = paint.fontMetricsInt
++    val height = max(metric("height", paint), (metrics.descent - metrics.ascent).toFloat())
++    fm?.apply {
++      ascent = minOf(metrics.ascent, ((metrics.ascent + metrics.descent - height) / 2).toInt())
++      descent = maxOf(metrics.descent, ascent + ceil(height).toInt())
++      top = minOf(metrics.top, ascent); bottom = maxOf(metrics.bottom, descent)
++    }
++    return ceil(width(paint)).toInt()
++  }
++
++  /** One drawing function, using the composer owner's anatomy and the resolved theme inks. */
++  override fun draw(canvas: Canvas, text: CharSequence, start: Int, end: Int, x: Float, top: Int, y: Int, bottom: Int, paint: Paint) {
++    val ink = Paint(paint).apply { isAntiAlias = true; isUnderlineText = false; typeface = this@ReferenceChipSpan.typeface }
++    val height = max(metric("height", ink), ink.fontMetrics.descent - ink.fontMetrics.ascent)
++    val center = y + (ink.fontMetrics.ascent + ink.fontMetrics.descent) / 2
++    val box = RectF(x, center - height / 2, x + width(ink), center + height / 2)
++    ink.color = reference.getLong("background").toInt()
++    canvas.drawRoundRect(box, metric("radius", ink), metric("radius", ink), ink)
++    val size = metric("glyphSize", ink)
++    val glyph = RectF(x + metric("paddingLeft", ink), center - size / 2, x + metric("paddingLeft", ink) + size, center + size / 2)
++    val image = thumbnail
++    if (image != null) {
++      canvas.save()
++      canvas.clipPath(Path().apply { addRoundRect(glyph, metric("thumbnailRadius", ink), metric("thumbnailRadius", ink), Path.Direction.CW) })
++      val cover = max(size / image.width, size / image.height)
++      val w = image.width * cover; val h = image.height * cover
++      canvas.drawBitmap(image, null, RectF(glyph.centerX() - w / 2, center - h / 2, glyph.centerX() + w / 2, center + h / 2), ink)
++      canvas.restore()
++    } else {
++      val glyphPaint = Paint(ink).apply { color = reference.getLong("glyphInk").toInt(); textSize = size; typeface = Typeface.DEFAULT }
++      canvas.drawText(reference.optString("glyph"), glyph.left, center - (glyphPaint.fontMetrics.ascent + glyphPaint.fontMetrics.descent) / 2, glyphPaint)
++    }
++    ink.color = reference.getLong("foreground").toInt()
++    canvas.drawText(label(ink), glyph.right + metric("gap", ink), y.toFloat(), ink)
++  }
++}
+diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/utils/text/conversion/MarkdownExtractor.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/utils/text/conversion/MarkdownExtractor.kt
+--- a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/utils/text/conversion/MarkdownExtractor.kt
++++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/utils/text/conversion/MarkdownExtractor.kt
+@@ -11,6 +11,7 @@ import com.swmansion.enriched.markdown.spans.EmphasisSpan
+ import com.swmansion.enriched.markdown.spans.HeadingSpan
+ import com.swmansion.enriched.markdown.spans.ImageSpan
+ import com.swmansion.enriched.markdown.spans.LinkSpan
++import com.swmansion.enriched.markdown.spans.ReferenceChipSpan
+ import com.swmansion.enriched.markdown.spans.OrderedListSpan
+ import com.swmansion.enriched.markdown.spans.StrikethroughSpan
+ import com.swmansion.enriched.markdown.spans.StrongSpan
+@@ -32,7 +33,7 @@ object MarkdownExtractor {
+     val spannable = textView.text as? Spannable ?: return null
+ 
+     val isFullSelection = start == 0 && end >= textView.text.length - 1
+-    if (isFullSelection && textView is EnrichedMarkdownText) {
++    if (isFullSelection && textView is EnrichedMarkdownText && spannable.getSpans(start, end, ReferenceChipSpan::class.java).isEmpty()) {
+       val original = textView.currentMarkdown
+       if (original.isNotEmpty()) return original
+     }
+@@ -88,6 +89,10 @@ object MarkdownExtractor {
+     state: ExtractionState,
+     headingAccumulator: HeadingAccumulator,
+   ): Boolean {
++    if (spannable.getSpans(segmentStart, segmentEnd, ReferenceChipSpan::class.java).isNotEmpty()) {
++      result.append(segmentText)
++      return true
++    }
+     // Check for thematic breaks first (uses " \n" as placeholder)
+     val thematicBreakSpans = spannable.getSpans(segmentStart, segmentEnd, ThematicBreakSpan::class.java)
+     if (thematicBreakSpans.isNotEmpty()) {

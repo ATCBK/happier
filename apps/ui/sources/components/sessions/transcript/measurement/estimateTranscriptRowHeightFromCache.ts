@@ -158,7 +158,7 @@ function committedRowPaintsChromeBeyondTheBubble(
     if (resolveMessageComposerAttachments(message.meta).length > 0) return true;
     if (primaryEnvelope !== null && findStructuredMessageRenderer(primaryEnvelope.kind) !== null) return true;
     const text = message.displayText ?? message.text ?? '';
-    return resolveMessageStructuredReferences({ meta: message.meta, text }).length > 0;
+    return resolveMessageStructuredReferences({ meta: message.meta, text }).row.length > 0;
 }
 
 /**

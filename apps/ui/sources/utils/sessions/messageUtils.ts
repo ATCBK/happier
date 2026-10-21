@@ -1,8 +1,12 @@
 import { type DecryptedMessage } from '@/sync/domains/state/storageTypes';
 import { type ToolCall } from "@happier-dev/session-core/messages";
-import { stripMarkdown } from '@happier-dev/protocol/messages/markdownPlainText';
+import { stripMarkdown as stripMarkdownSource } from '@happier-dev/protocol/messages/markdownPlainText';
+import { readableMessageText } from '@/components/sessions/transcript/messageDisplayText';
 
-export { stripMarkdown };
+/** Preview callers can receive unbound token text, including inside literal code. */
+export function stripMarkdown(text: string): string {
+  return stripMarkdownSource(readableMessageText(text));
+}
 
 /**
  * Gets a readable summary of tool calls

@@ -26,6 +26,7 @@ type ThemeColors = Readonly<{
 }>;
 
 export type EnrichedMarkdownStyleBundle = Readonly<{
+    uiFontScale: number;
     markdownStyle: MarkdownStyle;
     containerStyle: NonNullable<EnrichedMarkdownTextProps['containerStyle']>;
 }>;
@@ -330,6 +331,7 @@ export function buildEnrichedMarkdownStyle(params: Readonly<{
     };
 
     return {
+        uiFontScale,
         markdownStyle,
         containerStyle: {
             width: '100%',

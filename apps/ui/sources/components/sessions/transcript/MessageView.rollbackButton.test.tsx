@@ -147,10 +147,6 @@ vi.mock('@/components/sessions/transcript/references/StructuredReferencesRow', (
     StructuredReferencesRow: () => null,
 }));
 
-vi.mock('@/sync/domains/attachments/attachmentsMessageMeta', () => ({
-    AttachmentsMessageMetaV1Schema: { safeParse: () => ({ success: false }) },
-}));
-
 vi.mock('@/components/sessions/attachments/messages/AttachmentsMessageRow', () => ({
     AttachmentsMessageRow: () => null,
 }));
@@ -177,10 +173,6 @@ vi.mock('@/sync/domains/sessionFork/forkInitialPromptV1', () => ({
 
 vi.mock('@/sync/ops', () => ({
     forkSession: vi.fn(),
-}));
-
-vi.mock('@/components/sessions/transcript/structured/happierMetaEnvelope', () => ({
-    parseHappierMetaEnvelope: () => null,
 }));
 
 vi.mock('@happier-dev/agents', async (importOriginal) => {

@@ -14,6 +14,18 @@ vi.mock('expo-clipboard', () => clipboard);
 afterEach(standardCleanup);
 
 describe('MarkdownView nested code blocks', () => {
+    it('renders and copies token labels in code while keeping Find offsets on their labels', async () => {
+        storage.getState().applySettingsLocal({ filesDiffSyntaxHighlightingMode: 'off' });
+        const markdown = '```md\nRead [Auth](happier-ref:session:s1) after\n```';
+        const start = markdown.indexOf('Auth');
+        const screen = await renderScreen(<MarkdownView markdown={markdown} findSourceRanges={[{ start, end: start + 4, current: true }]} />);
+        expect(screen.getTextContent()).not.toContain('happier-ref:');
+        expect(screen.findAllHostsByTestId('find-match-current').map(node => node.children.join('')).join('')).toBe('Auth');
+        const copy = screen.findAllByProps({ accessibilityLabel: t('common.copy') }).find(node => typeof node.type === 'string');
+        await pressTestInstanceAsync(copy!, 'copy reference code label');
+        expect(clipboard.setStringAsync).toHaveBeenLastCalledWith('Read Auth after');
+    });
+
     it('keeps code Find marks after custom options in the same special segment', async () => {
         storage.getState().applySettingsLocal({ filesDiffSyntaxHighlightingMode: 'off' });
         const markdown = '<options>\n<option>choose</option>\n</options>\n```ts\nneedle\n```';

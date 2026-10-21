@@ -6,15 +6,10 @@
  */
 export type { MarkdownInlineReference, MarkdownInlineReferences } from '@happier-dev/plugin-ui/components';
 
-/** The internal destination a resolved reference renders with; the link handling owner never opens it. */
-export const MARKDOWN_INLINE_REFERENCE_HREF_PREFIX = 'happier-ref:';
-
-export function buildMarkdownInlineReferenceHref(scheme: string, target: string): string {
-    return `${MARKDOWN_INLINE_REFERENCE_HREF_PREFIX}${scheme}:${target}`;
-}
+import { INLINE_REFERENCE_HREF_PREFIX_V1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 
 /** The owner's target of a rendered reference link, or null when the link is not this owner's reference. */
-export function readMarkdownInlineReferenceTarget(href: string, scheme: string): string | null {
-    const prefix = buildMarkdownInlineReferenceHref(scheme, '');
+export function readMarkdownInlineReferenceTarget(href: string, scheme?: string): string | null {
+    const prefix = `${INLINE_REFERENCE_HREF_PREFIX_V1}${scheme ? `${scheme}:` : ''}`;
     return href.startsWith(prefix) && href.length > prefix.length ? href.slice(prefix.length) : null;
 }

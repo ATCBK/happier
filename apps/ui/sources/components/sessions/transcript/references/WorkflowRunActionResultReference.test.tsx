@@ -191,6 +191,20 @@ afterEach(async () => {
 });
 
 describe('inline transcript workflow Run result', () => {
+    it('promotes a membership-only row through the existing exact reader before showing its private title', async () => {
+        const run = createWorkflowRunSummaryFixture({ id: RUN_ID, ownerAccountId: ACCOUNT_ID, revision: 2,
+            origin: { kind: 'direct', originSessionId: 'session-1' } });
+        storage.getState().applyWorkflowRunListPage({ windowId: 'attention', runs: [run], projection: 'membership',
+            metadataByRunId: {}, mode: 'replace', nextCursor: null });
+        await answerRun('running', 2);
+        const screen = await renderCardRow(); await settle();
+        expect(home.requestsFor(STORAGE_ROUTE).map(request => request.input)).toEqual([
+            expect.objectContaining({ operation: 'list', request: WorkflowRunListRequestV1Schema.parse({ runIds: [RUN_ID], invocationProvenance: [] }) }),
+        ]);
+        expect(collectHostText(screen.tree)).toContain('Release audit');
+        expect(collectHostText(screen.tree)).not.toContain('workflows.run.untitled');
+    });
+
     it('mounts the exact Run card and refreshes that Run into the Account store once', async () => {
         await answerRun('running');
         const screen = await renderCardRow();
@@ -200,7 +214,7 @@ describe('inline transcript workflow Run result', () => {
         // The observed HTTP request comes through real Account Action admission.
         // It remains the exact lean list, without detail or invocation history.
         expect(home.requestsFor(STORAGE_ROUTE).map(request => request.input)).toEqual([
-            expect.objectContaining({ operation: 'list', request: WorkflowRunListRequestV1Schema.parse({ runId: RUN_ID, limit: 1 }) }),
+            expect.objectContaining({ operation: 'list', request: WorkflowRunListRequestV1Schema.parse({ runIds: [RUN_ID], invocationProvenance: [] }) }),
         ]);
         expect(storage.getState().workflowRunsById[workflowRunStoreKey(RUN_ID)]?.summary?.state).toBe('running');
         expect(screen.findByTestId(`transcript-workflow-run-${RUN_ID}-state`)).toBeTruthy();

@@ -4,6 +4,7 @@ import { parseMarkdownTableSources } from '@/components/markdown/parseMarkdownBl
 import { parseMarkdownSyntax } from '@/components/markdown/streaming/splitMarkdownIntoBlockSources';
 import { splitMarkdownRenderSegments } from '@/components/markdown/rendering/splitMarkdownRenderSegments';
 import { normalizeLooseListContinuations } from '@/components/markdown/rendering/normalizeLooseListContinuations';
+import { scanInlineReferenceTokensV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 
 type SyntaxNode = ReturnType<typeof parseMarkdownSyntax>['topNode'];
 
@@ -280,11 +281,34 @@ function projectMarkdownFindDisplay(markdown: string): MarkdownFindDisplay {
 }
 
 export function projectMarkdownFindSpans(markdown: string): readonly TranscriptFindMarkdownSpan[] {
-    return projectMarkdownFindDisplay(markdown).spans;
+    return projectMarkdownFindDisplay(markdown).spans.map(projectReadableInlineReferenceFindText);
+}
+
+/** Literal code can contain a full token. Keep its label and original source mapping. */
+export function projectReadableInlineReferenceFindText<T extends FindDisplayText>(span: T): T {
+    const tokens = scanInlineReferenceTokensV1(span.text);
+    if (tokens.length === 0) return span;
+    const indices: number[] = [];
+    const chunks: string[] = [];
+    let cursor = 0;
+    for (const token of tokens) {
+        chunks.push(span.text.slice(cursor, token.start), token.label);
+        for (let index = cursor; index < token.start; index++) indices.push(index);
+        let labelCursor = token.start + 1;
+        for (let index = 0; index < token.label.length; index++) {
+            if (span.text[labelCursor] === '\\' && /[\\[\]]/.test(span.text[labelCursor + 1] ?? '')) labelCursor++;
+            indices.push(labelCursor++);
+        }
+        cursor = token.end;
+    }
+    chunks.push(span.text.slice(cursor));
+    for (let index = cursor; index < span.text.length; index++) indices.push(index);
+    return { ...span, text: chunks.join(''), sourceOffsets: indices.map(index => span.sourceOffsets[index]!),
+        sourceEnds: indices.map(index => span.sourceEnds[index]!) };
 }
 
 export function projectMarkdownFindText(markdown: string): FindDisplayText {
-    const { spans } = projectMarkdownFindDisplay(markdown);
+    const spans = projectMarkdownFindSpans(markdown);
     return {
         text: spans.map((span) => span.text).join(''),
         sourceOffsets: spans.flatMap((span) => span.sourceOffsets),

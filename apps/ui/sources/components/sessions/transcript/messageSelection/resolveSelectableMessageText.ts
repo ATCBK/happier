@@ -1,4 +1,4 @@
-import { prepareTranscriptMessageBody } from '../messageDisplayText';
+import { prepareTranscriptMessageBody, readableMessageText } from '../messageDisplayText';
 import type { Message } from "@happier-dev/session-core/messages";
 import { readStreamSegmentMetaV1 } from "@happier-dev/session-core/reducer";
 
@@ -28,7 +28,7 @@ export function resolveSelectableMessageText(input: {
 
     if (message.kind === 'user-text') {
         const text = input.isStructuredOnly
-            ? message.text
+            ? readableMessageText(message.text, message.meta)
             : prepareTranscriptMessageBody(message, input).text;
         if (text == null) return null;
         return normalizeResolvedText({ role: 'user', text });
@@ -37,7 +37,7 @@ export function resolveSelectableMessageText(input: {
     if (message.kind === 'agent-text') {
         if (isAgentTextMessageActivelyStreamingForSelection(message)) return null;
         const text = input.isStructuredOnly
-            ? message.text
+            ? readableMessageText(message.text)
             : prepareTranscriptMessageBody(message).text;
         if (text == null) return null;
         return normalizeResolvedText({ role: 'assistant', text });

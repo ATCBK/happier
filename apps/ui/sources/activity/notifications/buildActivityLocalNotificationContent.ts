@@ -1,5 +1,6 @@
 import { PUSH_NOTIFICATION_ANDROID_CHANNEL_IDS, PUSH_NOTIFICATION_CATEGORY_IDS } from '@happier-dev/protocol/push/pushNotificationActions';
 import { buildReadyNotificationContent } from '@happier-dev/protocol/push/readyNotificationContent';
+import { prepareTranscriptMessageBody } from '@/components/sessions/transcript/messageDisplayText';
 import { resolveActivityRemoteAlertEventForPersonalEventV2 } from '@happier-dev/protocol/push/activityRemoteAlert';
 import { restrictAttentionPreviewBehavior } from '@happier-dev/protocol/account/settings/accountRemoteAlertPolicy';
 import { summarizeToolInputForNotification, type AgentRequestKind } from '@happier-dev/protocol/activity/agentRequestSummary';
@@ -122,7 +123,7 @@ export function buildActivityLocalNotificationContent(params: Readonly<{
         const preview = previewBehavior === 'include_preview'
             ? event.event === 'human_message'
                 ? event.messages?.filter((message) => message.kind === 'user-text')
-                    .map((message) => normalizeActivityPreviewText(message.text)).filter(Boolean).join(' ')
+                    .map((message) => normalizeActivityPreviewText(prepareTranscriptMessageBody(message).text ?? '')).filter(Boolean).join(' ')
                 : buildActivityPreviewText({ messages: event.messages })
             : null;
         const fallback = event.event === 'failed' ? t('session.follow.notificationBody.failed')

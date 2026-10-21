@@ -1,33 +1,19 @@
 import * as React from 'react';
-import { MENTION_KIND_V1, readMentionRefOpaqueForKindV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
+import { MENTION_KIND_V1, buildMentionRefV1, parseMentionRefV1, readMentionRefOpaqueForKindV1, type MentionRefV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
 import { readHappierStructuredInputV1FromMeta } from '@happier-dev/protocol/sessions/userMessageRpc';
 import { readStructuredInputMentionSourcesV1 } from '@happier-dev/protocol/runtime/input/structuredInputV1';
+import { INLINE_REFERENCE_ATTACHMENT_SCHEME_V1, scanInlineReferenceTokensV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
+import { readComposerReferenceMentionV1 } from '@happier-dev/protocol/runtime/input/composerReferenceProviderV1';
+import { formatSessionInputMentionMarkerV1 } from '@happier-dev/protocol/sessions/messages/sessionInputReferenceProjectionV1';
+import type { MarkdownInlineReference } from '@/components/markdown/markdownInlineReferences';
+import { parseHappierMetaEnvelope, readTranscriptAttachmentsMeta } from '../structured/happierMetaEnvelope';
+import { parseSessionMediaMessageMeta } from '@/sync/domains/session/media/sessionMediaMessageMeta';
+import { resolveSessionMediaInlineRenderableImageMimeType } from '@/components/sessions/media/presentation';
 
 import { extractWorkspaceFileMentions } from '@/components/sessions/linkedFiles/extractWorkspaceFileMentions';
 import { isSafeWorkspaceRelativePath } from '@/utils/path/isSafeWorkspaceRelativePath';
 
-/**
- * The one projection behind the transcript's structured-references row (D-6). Both
- * `MessageView` branches — the user bubble and the agent block — consume it, so the two
- * previously duplicated scans became one owner with one contract.
- *
- * Two sources feed it, and the difference between them is a product invariant, not an
- * implementation detail:
- *
- * - **Sessions come only from the envelope (INV-5).** A message whose text merely contains a
- *   lookalike token is plain text. Scanning for them would let any agent output that mentions
- *   `@session:...` render a navigable link the user never authored.
- * - **Files additionally keep the text scan, permanently (D-5).** A pre-envelope message and a
- *   post-envelope message with zero mentions are indistinguishable, so there is no point at
- *   which the scan can be retired. It also still covers a path the user typed by hand rather
- *   than picking. The envelope is what covers what the scan cannot parse — a quoted token like
- *   `@"my file.ts"` (`extractWorkspaceFileMentions` requires `/^[A-Za-z0-9._/-]+\/?$/`).
- *
- * A well-formed reference of an unknown kind is skipped here and left untouched in the
- * envelope (INV-4): it is never reinterpreted as a file or a session. That covers the
- * plugin-contributed `composerReference` kind too — it has its own presentation owner
- * and must not fall through to this one.
- */
+/** One detection for inline chips, legacy rows and the hand-typed file scan (O1). */
 
 export type TranscriptFileReference = Readonly<{
     kind: 'file';
@@ -43,7 +29,58 @@ export type TranscriptSessionReference = Readonly<{
 
 export type TranscriptStructuredReference = TranscriptFileReference | TranscriptSessionReference;
 
+export type InlineMessageReference = Readonly<{
+    ref: string;
+    kind: string;
+    label: string;
+    marker: string;
+    glyph: NonNullable<MarkdownInlineReference['glyph']>;
+    path?: string;
+    sessionId?: string;
+    attachmentId?: string;
+    mediaId?: string;
+    imageNumber?: number;
+}>;
+
+export type MessageStructuredReferences = Readonly<{
+    inline: ReadonlyMap<string, InlineMessageReference>;
+    row: readonly TranscriptStructuredReference[];
+    /** Message image order, keyed by upload id or canonical session-media:<id>. */
+    imageNumbers: ReadonlyMap<string, number>;
+}>;
+
 const NO_REFERENCES: readonly TranscriptStructuredReference[] = Object.freeze([]);
+const NO_PROJECTION: MessageStructuredReferences = Object.freeze({ inline: new Map(), row: NO_REFERENCES, imageNumbers: new Map() });
+
+function projectMention(mention: MentionRefV1, tokenLabel: string): InlineMessageReference | null {
+    const ref = parseMentionRefV1(mention.ref);
+    if (!ref) return null;
+    const base = { ref: mention.ref, kind: mention.kind, label: mention.label ?? tokenLabel,
+        marker: formatSessionInputMentionMarkerV1({ ...mention, label: mention.label ?? tokenLabel }) };
+    switch (mention.kind) {
+        case MENTION_KIND_V1.file: {
+            const path = readMentionRefOpaqueForKindV1(MENTION_KIND_V1.file, mention.ref);
+            if (path === null || !isSafeWorkspaceRelativePath(path)) return null;
+            return { ...base, path, glyph: 'file' };
+        }
+        case MENTION_KIND_V1.session: {
+            const sessionId = readMentionRefOpaqueForKindV1(MENTION_KIND_V1.session, mention.ref);
+            return sessionId === null ? null : { ...base, sessionId, glyph: 'conversations' };
+        }
+        case MENTION_KIND_V1.skill:
+            return ref.scheme === 'skill' ? { ...base, glyph: 'terminal' } : null;
+        case MENTION_KIND_V1.vendorPlugin:
+            return ref.scheme === 'vendorPlugin' ? { ...base, glyph: 'settings' } : null;
+        case MENTION_KIND_V1.workflow:
+            return ref.scheme === 'workflow' ? { ...base, glyph: 'action' } : null;
+        case MENTION_KIND_V1.widget:
+            return ref.scheme === 'widget' ? { ...base, glyph: 'board' } : null;
+        default: {
+            const contributed = readComposerReferenceMentionV1(mention);
+            return contributed ? { ...base, glyph: 'mention' } : null;
+        }
+    }
+}
 
 /**
  * D-26: a reference repeated at several composer positions is one row. Identity is
@@ -58,14 +95,63 @@ function referenceIdentity(reference: TranscriptStructuredReference): string {
 
 export function resolveMessageStructuredReferences(
     input: Readonly<{ meta: unknown; text: string }>,
-): readonly TranscriptStructuredReference[] {
+): MessageStructuredReferences {
     const envelope = readHappierStructuredInputV1FromMeta(input.meta);
     // D-4 precedence lives at one owner: with `mentions` present the legacy per-kind arrays
     // and meta-root aliases are ignored entirely.
     const { mentions } = readStructuredInputMentionSourcesV1(envelope);
+    const tokens = scanInlineReferenceTokensV1(input.text);
+    const inline = new Map<string, InlineMessageReference>();
+    const attachments = readTranscriptAttachmentsMeta(input.meta)?.attachments ?? [];
+    const primary = parseHappierMetaEnvelope(input.meta);
+    const media = parseSessionMediaMessageMeta(primary?.kind === 'session_media.v1' ? primary : parseHappierMetaEnvelope(input.meta, 'happierMedia'));
+    const mediaById = new Map((media?.inlineImages ?? []).filter(item => item.status !== 'unavailable').map(item => [item.id, item]));
+    const imageNumbers = new Map<string, number>();
+    const addImage = (id: string) => { if (!imageNumbers.has(id)) imageNumbers.set(id, imageNumbers.size + 1); };
+    for (const image of envelope?.imageInputs ?? []) addImage(image.id);
+    for (const attachment of attachments) {
+        if (resolveSessionMediaInlineRenderableImageMimeType(attachment)) addImage(attachment.id ?? attachment.path);
+    }
+    for (const attachment of envelope?.composerAttachments ?? []) {
+        if (attachment.content && mediaById.has(attachment.content.mediaId)) addImage(`session-media:${attachment.content.mediaId}`);
+    }
+    const attachmentReferences = new Map<string, InlineMessageReference>();
+    for (const attachment of attachments) {
+        const imageNumber = imageNumbers.get(attachment.id ?? attachment.path);
+        if (!attachment.id) continue;
+        const ref = buildMentionRefV1(INLINE_REFERENCE_ATTACHMENT_SCHEME_V1, attachment.id);
+        const folder = attachment.mimeType === 'inode/directory';
+        attachmentReferences.set(ref, {
+            ref, kind: 'attachment', attachmentId: attachment.id, path: attachment.path,
+            label: imageNumber ? `Image #${imageNumber}` : attachment.name,
+            marker: imageNumber ? `[Image #${imageNumber}]` : `[${folder ? 'Folder' : 'File'}: ${attachment.name}]`,
+            glyph: imageNumber ? 'preview' : 'file', ...(imageNumber ? { imageNumber } : {}),
+        });
+    }
+    for (const attachment of envelope?.composerAttachments ?? []) {
+        const ref = buildMentionRefV1(INLINE_REFERENCE_ATTACHMENT_SCHEME_V1, attachment.instanceId);
+        const imageNumber = attachment.content ? imageNumbers.get(`session-media:${attachment.content.mediaId}`) : undefined;
+        attachmentReferences.set(ref, {
+            ref, kind: 'attachment', attachmentId: attachment.instanceId,
+            label: imageNumber ? `Image #${imageNumber}` : attachment.presentation.label,
+            marker: imageNumber ? `[Image #${imageNumber}]` : `[File: ${attachment.presentation.label}]`,
+            glyph: attachment.presentation.icon ?? (imageNumber ? 'preview' : 'file'),
+            ...(imageNumber ? { imageNumber } : {}),
+            ...(attachment.content ? { mediaId: attachment.content.mediaId } : {}),
+        });
+    }
+    for (const token of tokens) {
+        const mention = mentions.find((entry) => entry.ref === token.ref && entry.token === input.text.slice(token.start, token.end));
+        const reference = mention ? projectMention(mention, token.label) : attachmentReferences.get(token.ref);
+        if (reference) inline.set(token.ref, reference);
+    }
 
     const references: TranscriptStructuredReference[] = [];
     const seen = new Set<string>();
+    for (const reference of inline.values()) {
+        if (reference.kind === MENTION_KIND_V1.file) seen.add(`file\u0000${reference.path}`);
+        if (reference.kind === MENTION_KIND_V1.session) seen.add(`session\u0000${reference.sessionId}`);
+    }
     const add = (reference: TranscriptStructuredReference): void => {
         const identity = referenceIdentity(reference);
         if (seen.has(identity)) return;
@@ -74,6 +160,7 @@ export function resolveMessageStructuredReferences(
     };
 
     for (const mention of mentions) {
+        if (scanInlineReferenceTokensV1(mention.token).length > 0) continue;
         // The kind decides first, and `readMentionRefOpaqueForKindV1` then requires the ref's
         // scheme to match that kind. A reference whose kind this build does not know — or whose
         // ref disagrees with its kind — produces no row instead of falling through to a known
@@ -89,11 +176,18 @@ export function resolveMessageStructuredReferences(
         }
     }
 
-    for (const path of extractWorkspaceFileMentions(input.text)) {
+    let cursor = 0;
+    const scanText: string[] = [];
+    for (const token of tokens) {
+        scanText.push(input.text.slice(cursor, token.start), ' ');
+        cursor = token.end;
+    }
+    scanText.push(input.text.slice(cursor));
+    for (const path of extractWorkspaceFileMentions(scanText.join(''))) {
         add({ kind: 'file', path });
     }
 
-    return references.length === 0 ? NO_REFERENCES : references;
+    return inline.size === 0 && references.length === 0 && imageNumbers.size === 0 ? NO_PROJECTION : { inline, row: references, imageNumbers };
 }
 
 /**
@@ -102,12 +196,12 @@ export function resolveMessageStructuredReferences(
  */
 export function useMessageStructuredReferences(
     input: Readonly<{ meta: unknown; text: string; enabled?: boolean }>,
-): readonly TranscriptStructuredReference[] {
+): MessageStructuredReferences {
     const enabled = input.enabled !== false;
     const meta = input.meta;
     const text = input.text;
     return React.useMemo(
-        () => (enabled ? resolveMessageStructuredReferences({ meta, text }) : NO_REFERENCES),
+        () => (enabled ? resolveMessageStructuredReferences({ meta, text }) : NO_PROJECTION),
         [enabled, meta, text],
     );
 }

@@ -6,6 +6,9 @@ import { t } from '@/text';
 import type { SessionRollbackCodeMode, SessionRollbackTarget } from '@happier-dev/protocol';
 import type { CheckpointCodeRollbackDialogConfirmValue } from './CheckpointCodeRollbackDialog';
 import { showCheckpointCodeRollbackDialog } from './CheckpointCodeRollbackDialog';
+import { storage } from '@/sync/domains/state/storage';
+import { hydrateComposerDraftReferencesFromMessage } from '@/components/sessions/composer/composerScopeAdapters';
+import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 
 type TranscriptRollbackExecutor = Pick<ReturnType<typeof createDefaultActionExecutor>, 'execute'>;
 
@@ -62,6 +65,14 @@ export async function executeTranscriptRollbackAction(params: Readonly<{
     sessionId: string;
     target?: SessionRollbackTarget;
 }>): Promise<void> {
+    const target = params.target;
+    const source = target?.type === 'before_user_message'
+        ? Object.values(storage.getState().sessionMessages[params.sessionId]?.messagesById ?? {})
+            .find(message => message.kind === 'user-text' && message.seq === target.userMessageSeq)
+        : null;
+    const restored = typeof params.restoredDraftText === 'string'
+        ? hydrateComposerDraftReferencesFromMessage({ text: params.restoredDraftText,
+            meta: source?.kind === 'user-text' ? source.meta : undefined }) : null;
     const checkpoint = params.checkpointCodeRollback;
     const checkpointChoice = checkpoint
         ? params.checkpointChoice ?? await showCheckpointCodeRollbackDialog({
@@ -133,14 +144,15 @@ export async function executeTranscriptRollbackAction(params: Readonly<{
         return;
     }
 
-    const restoredDraftText = typeof params.restoredDraftText === 'string' ? params.restoredDraftText : null;
+    const restoredDraftText = restored?.text ?? null;
     if (restoredDraftText && restoredDraftText.trim().length > 0) {
         const scope = getActiveServerAccountScope();
         if (scope) {
             writeExistingSessionDraft({
                 scope,
                 sessionId: params.sessionId,
-                patch: { text: restoredDraftText },
+                patch: { text: restoredDraftText,
+                    mentions: restored?.mentions.map(mention => StrictJsonValueSchema.parse(mention)) ?? [] },
                 materializationIntent: 'seeded',
             });
         }

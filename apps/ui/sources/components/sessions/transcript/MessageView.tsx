@@ -36,6 +36,7 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { Text } from '@/components/ui/text/Text';
 import { useMessageStructuredReferences } from '@/components/sessions/transcript/references/messageStructuredReferences';
 import { StructuredReferencesRow } from '@/components/sessions/transcript/references/StructuredReferencesRow';
+import { useMessageInlineReferences } from '@/components/sessions/transcript/references/useMessageInlineReferences';
 import { ComposerAttachmentFallbackRow } from '@/components/sessions/transcript/composerAttachments/ComposerAttachmentFallbackRow';
 import { useMessageComposerAttachments } from '@/components/sessions/transcript/composerAttachments/messageComposerAttachments';
 import { useTranscriptMotion } from '@/components/sessions/transcript/motion/TranscriptMotionContext';
@@ -720,6 +721,7 @@ function UserTextBlock(props: {
 
   const messageDisplay = React.useMemo(() => resolveTranscriptMessageDisplayText(props.message, {
     debugInformationEnabled: props.messageDisplayCommon.debugInformationEnabled,
+    preserveInlineReferences: true,
   }), [props.message, props.messageDisplayCommon.debugInformationEnabled]);
   const isVoiceAgentTurn = messageDisplay.isVoiceAgentTurn;
   // An answer another session returned here is quoted as information, not drawn as the person's bubble.
@@ -761,11 +763,26 @@ function UserTextBlock(props: {
 
   // One projection for both branches (D-6). Sessions come only from the envelope (INV-5);
   // files additionally keep the permanent text scan (D-5).
-  const structuredReferences = useMessageStructuredReferences({
+  const structuredReferenceProjection = useMessageStructuredReferences({
     meta: props.message.meta,
     text: renderedMarkdownText,
   });
+  const structuredReferences = structuredReferenceProjection.row;
   const composerAttachments = useMessageComposerAttachments(props.message.meta);
+  // D5: a message composed with inline references shows its pictures numbered above the text and
+  // its chips in place; a legacy (0.2) message keeps today's composition.
+  const inlineComposition = structuredReferenceProjection.inline.size > 0
+    || (attachmentsMeta?.attachments.some((attachment) => attachment.id !== undefined) ?? false);
+  const inlinePictureKeys = React.useMemo(() => [
+    ...(attachmentsMeta?.attachments ?? []).map((attachment) => ({ path: attachment.path, numberKey: attachment.id ?? attachment.path })),
+    ...(sessionMediaMeta?.inlineMedia ?? []).flatMap((media) => ('path' in media ? [{ path: media.path, numberKey: `session-media:${media.id}` }] : [])),
+  ], [attachmentsMeta, sessionMediaMeta]);
+  const { inlineReferences, pictures: inlinePictures } = useMessageInlineReferences({
+    projection: structuredReferenceProjection,
+    pictures: inlinePictureKeys,
+    serverId: props.serverId,
+    openPath: handleOpenAttachmentPath,
+  });
 
   const handleOptionPress = React.useCallback((option: Option) => {
     fireAndForget((async () => {
@@ -929,9 +946,8 @@ function UserTextBlock(props: {
     );
   }
 
-  const bubbleContent = (
+  const bubblePictures = (
           <>
-            <MarkdownView codeBlockStateKey={JSON.stringify([props.sessionId, props.message.id])} markdown={renderedMarkdownText} findActive={findActive} findSourceRanges={findSourceRanges} renderCacheKey={buildMessageMarkdownRenderCacheKey(props.message.id, props.messageRevision)} onOptionPress={handleOptionPress} onOptionLongPress={handleOptionLongPress} onLinkPress={handleMarkdownLinkPress} selectable={true} profile="transcript" textStyle={styles.transcriptMarkdownText} />
             {attachmentsMeta ? (
               <AttachmentsInlineImages
                 sessionId={props.sessionId}
@@ -939,6 +955,7 @@ function UserTextBlock(props: {
                 onOpenPath={handleOpenAttachmentPath}
                 fileOpenEnabled={props.canOpenFiles}
                 mediaPreviewEnabled={props.canPreviewMedia}
+                {...(inlineComposition ? { numbers: inlinePictures.numbers, ringedPath: inlinePictures.ringedPath, onPreviewLoaded: inlinePictures.onPreviewLoaded } : {})}
               />
             ) : null}
             {sessionMediaMeta ? (
@@ -948,8 +965,15 @@ function UserTextBlock(props: {
                 onOpenPath={handleOpenAttachmentPath}
                 fileOpenEnabled={props.canOpenFiles}
                 mediaPreviewEnabled={props.canPreviewMedia}
+                {...(inlineComposition ? { numbers: inlinePictures.numbers, ringedPath: inlinePictures.ringedPath, onPreviewLoaded: inlinePictures.onPreviewLoaded } : {})}
               />
             ) : null}
+          </>
+  );
+  const bubbleContent = (
+          <>
+            <MarkdownView codeBlockStateKey={JSON.stringify([props.sessionId, props.message.id])} markdown={renderedMarkdownText} findActive={findActive} findSourceRanges={findSourceRanges} renderCacheKey={buildMessageMarkdownRenderCacheKey(props.message.id, props.messageRevision)} onOptionPress={handleOptionPress} onOptionLongPress={handleOptionLongPress} onLinkPress={handleMarkdownLinkPress} selectable={true} profile="transcript" textStyle={styles.transcriptMarkdownText} inlineReferences={inlineReferences} />
+            {inlineComposition ? null : bubblePictures}
             {nonImageAttachments.length > 0 ? (
               <AttachmentsMessageRow
                 attachments={nonImageAttachments}
@@ -1015,6 +1039,9 @@ function UserTextBlock(props: {
           </ReturnedAnswerQuote>
           ) : (
           <View style={styles.userMessageBubbleAligner}>
+          {inlineComposition && (attachmentsMeta || sessionMediaMeta) ? (
+            <View style={styles.userMessagePictures} testID={`transcript-message-pictures:${props.message.id}`}>{bubblePictures}</View>
+          ) : null}
           <UserMessageBubble
             discarded={isDiscarded}
             attention={{ sessionAddress: transcriptSource.sessionId === props.sessionId ? normalizeSessionAddress(transcriptSource.serverId, props.sessionId) : null, routeMessageId: buildMessageRouteId(props.message), seq: resolveTranscriptMessageSeq(props.message), radius: TRANSCRIPT_MESSAGE_HIGHLIGHT_RADIUS }}
@@ -1284,11 +1311,12 @@ function AgentTextBlock(props: {
         'aria-atomic': false,
       }
     : null;
-  const structuredReferencesDeferred = useMessageStructuredReferences({
+  const structuredReferenceProjectionDeferred = useMessageStructuredReferences({
     meta: props.message.meta,
     text: markdown,
     enabled: messageDisplay.text !== null && !shouldRenderStreamingPlain,
   });
+  const structuredReferencesDeferred = structuredReferenceProjectionDeferred.row;
   const agentSessionMediaMeta = React.useMemo(() => {
     const primaryEnvelope = parseHappierMetaEnvelope(props.message.meta);
     const envelope = primaryEnvelope?.kind === 'session_media.v1'
@@ -1728,6 +1756,13 @@ const styles = StyleSheet.create((theme) => ({
       alignSelf: 'stretch',
       position: 'relative',
       paddingBottom: theme.transcript.messageGap,
+    },
+    userMessagePictures: {
+      // D5 / lab T1: numbered pictures sit above the bubble, right-aligned with it.
+      alignSelf: 'flex-end',
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      marginBottom: theme.space.s6,
     },
     userMessageBubbleAligner: {
       // Hug + right-align the bubble within the full-width wrapper. The bubble itself stays

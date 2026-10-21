@@ -1,4 +1,5 @@
 import { buildMessageRouteId } from "@happier-dev/session-core/messages";
+import { prepareTranscriptMessageBody } from '../messageDisplayText';
 import type { Message } from "@happier-dev/session-core/messages";
 import type { SessionMessageHistoryRemoteRow } from '@/sync/engine/sessions/fetchUserMessageHistoryPage';
 
@@ -22,11 +23,11 @@ function roleForMessage(message: Message): TranscriptNavigationRole {
 
 function textForMessage(message: Message): string | null {
     if (message.kind === 'user-text') {
-        return message.displayText ?? message.text;
+        return prepareTranscriptMessageBody(message).text;
     }
     if (message.kind === 'agent-text') {
         // Thinking is never a reply preview: it is provider reasoning, not what the agent said.
-        return message.isThinking === true ? null : message.text;
+        return message.isThinking === true ? null : prepareTranscriptMessageBody(message).text;
     }
     if (message.kind === 'tool-call') {
         return message.tool.description ?? message.tool.name;
