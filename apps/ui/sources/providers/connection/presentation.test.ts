@@ -16,6 +16,21 @@ const base = DaemonProviderConnectionViewV1Schema.parse({
 });
 
 describe('provider connection presentation', () => {
+    it.each([
+        { accountEnabled: true, enabledMachineIds: [] },
+        { accountEnabled: false, enabledMachineIds: ['another-machine'] },
+    ])('keeps connection enablement distinct from inspected-machine access and idle custody: %j', (grants) => {
+        const presentation = presentProviderConnection({ ...base,
+            grants: { ...base.grants, ...grants, effectiveState: 'absent', machineState: 'absent' },
+            authorized: false,
+            runtime: { ...base.runtime, health: 'not_checked', gateway: { status: 'idle', reachability: 'not_checked' } },
+        });
+        expect(presentation).toMatchObject({ enabled: true, status: 'notChecked' });
+        expect(presentProviderConnection({ ...base,
+            grants: { ...base.grants, accountEnabled: false, enabledMachineIds: [] },
+        })).toMatchObject({ enabled: false, status: 'disabled' });
+    });
+
     it('collapses only one automatic default to the provider name', () => {
         expect(presentProviderConnection(base).title).toBe('Acme');
         expect(presentProviderConnection({ ...base, role: 'named', displayName: 'Work' }).subtitle)

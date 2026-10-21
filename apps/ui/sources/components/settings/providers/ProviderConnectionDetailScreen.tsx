@@ -930,12 +930,7 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
     const managedTargetMachineName = managedDeployment
         ? machineRows.find((row) => row.target.machineId === managedDeployment.targetMachineId)?.displayName ?? null
         : null;
-    // Without a computer only the Account read exists: its grant is the connection's on/off.
-    const connectionEnabled = !machineId
-        ? connection.grants.accountEnabled
-        : connection.grants.effectiveState === undefined
-            ? connection.authorized
-            : connection.grants.effectiveState === 'valid';
+    const connectionEnabled = presentation.enabled;
     // Healthy, untested or off says nothing here: test results live in the Test row, off in the switch.
     const statusQuiet = presentation.status === 'available' || presentation.status === 'notChecked'
         || presentation.status === 'disabled';

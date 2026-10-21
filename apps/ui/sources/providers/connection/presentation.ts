@@ -42,14 +42,18 @@ export function presentProviderConnectionIdentity(connection: Pick<DaemonProvide
 export function presentProviderConnection(connection: DaemonProviderConnectionViewV1): Readonly<{
     title: string;
     subtitle: string;
+    enabled: boolean;
     status: ProviderConnectionPresentationStatus;
 }> {
     const identity = presentProviderConnectionIdentity(connection);
+    // Connection-wide controls admit Account access or clear all grants. The
+    // inspected machine's effective access and on-demand process are separate facts.
+    const enabled = connection.grants.accountEnabled || connection.grants.enabledMachineIds.length > 0;
     const status: ProviderConnectionPresentationStatus = connection.sourceStatus === 'unavailable'
         ? 'sourceUnavailable'
         : connection.authorizationError?.code === 'provider_endpoint_unreachable'
             ? 'unreachable'
-            : !connection.grants.accountEnabled && connection.grants.enabledMachineIds.length === 0
+            : !enabled
                 ? 'disabled'
                 : connection.runtime.health === 'available'
                     ? 'available'
@@ -63,6 +67,7 @@ export function presentProviderConnection(connection: DaemonProviderConnectionVi
     return {
         title: identity.title,
         subtitle: identity.subtitle,
+        enabled,
         status,
     };
 }

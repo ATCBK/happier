@@ -563,6 +563,9 @@ describe('ProviderConnectionDetailScreen', () => {
             displayName: saved.displayName, displayNameMode: saved.displayNameMode, role: saved.role,
             deployment: { kind: 'managedLocal', targetMachineId: 'machine-a', effects: null },
             gatewayPlacement: saved.gatewayPlacement,
+            // The connection is enabled on its hub, not the machine inspected by this page.
+            grants: { accountEnabled: true, enabledMachineIds: ['machine-b'], accountState: 'valid',
+                machineState: 'absent', effectiveState: 'absent' },
             managedLocalOption: { targetMachineId: 'machine-a', connectedAccountPurposes: [{ purpose: 'upstream',
                 service: { pluginId: 'happier.connected-account.openai', localId: 'openai' }, required: false }] },
             runtime: { health: 'available', modelCount: 3, checkedAt: 1, endpoints: [],
@@ -601,6 +604,9 @@ describe('ProviderConnectionDetailScreen', () => {
             expect.objectContaining({ machineId: 'machine-b', online: true }),
         ]));
         await flushHookEffects();
+        const gatewayEnableAction = (findComposite(screen, 'provider-connection-menu', 'actions')?.props.actions as
+            Array<{ id: string; title: string }>).find(action => action.id === 'gatewayEnabled');
+        expect(gatewayEnableAction?.title).toBe('settingsProvidersCollection.gateway.turnOff');
         expect(providerHarness.state.requests.some(request => request.method === RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE
             && request.machineId === 'machine-b')).toBe(true);
         await waitForHomeGovernance(() => {
