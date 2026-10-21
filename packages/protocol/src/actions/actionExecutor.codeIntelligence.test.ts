@@ -4,9 +4,39 @@ import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.
 import { getActionSpec } from './actionSpecs.js';
 import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
 import { isPluginSurfaceExcludedActionId } from './pluginActionSurface.js';
+import { resolveApprovalRequestApproveAdmission } from './actionApprovalPresentation.js';
+import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
 import { DaemonWorkspaceFileSearchRequestSchema, DaemonWorkspaceFileSearchResponseSchema } from '../machines/workspaceFiles.js';
 
 describe('search-backed code Actions', () => {
+  it('presents real semantic approvals using fields from each operation rather than positional-query operands', async () => {
+    const target = { machineId: 'machine', rootPath: '/repo', path: 'a.ts' };
+    const files = [{ path: 'a.ts', expectedHash: 'a'.repeat(64), edits: [] }];
+    const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } };
+    const cases = [
+      { id: 'code.rename.apply', input: { ...target, files }, field: 'files' },
+      { id: 'code.file.rename.apply', input: { ...target, files: [{ ...files[0], renameTo: 'b.ts' }] }, field: 'files' },
+      { id: 'code.codeAction.apply', input: { ...target, operation: { kind: 'codeAction', expectedHash: 'a'.repeat(64),
+        action: { serverId: 'fixture/server', title: 'Fix', range, files, hasCommand: false } } }, field: 'operation' },
+      { id: 'code.file.rename.preview', input: { ...target, newPath: 'b.ts' }, field: 'newPath' },
+      { id: 'code.rename.preview', input: { ...target, line: 1, symbol: 'old', newName: 'next' }, field: 'line' },
+    ] as const;
+    for (const item of cases) {
+      let request: ApprovalRequest | undefined;
+      const executor = createActionExecutor({
+        approvalsCreate: async ({ request: value }) => { request = value; return { artifactId: 'approval' }; },
+        isActionApprovalRequired: (id, context, input) => isApprovalRequiredByActionsSettings(id,
+          { v: 1, actions: { [item.id]: { approvalRequiredSurfaces: ['ui'] } } }, context, undefined, undefined, input),
+      });
+      await executor.execute(item.id, item.input, { surface: 'ui', authority: 'present_user', actionRequestId: 'review-request',
+        serverId: 'home', runtimeAccountId: 'account', externalActionTarget: { kind: 'machine', machineId: 'machine' } });
+      if (!request) throw new Error(`Expected actual approval for ${item.id}`);
+      const admission = resolveApprovalRequestApproveAdmission(request);
+      expect(admission, item.id).toMatchObject({ status: 'available' });
+      expect(admission.presentation.rows, item.id).toEqual(expect.arrayContaining([expect.objectContaining({ path: item.field })]));
+    }
+  });
+
   it('keeps reviewed semantic writes behind real agent approval', async () => {
     const requests: unknown[] = [];
     let applied = false;
