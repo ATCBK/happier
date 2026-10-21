@@ -9,6 +9,7 @@ import {
   FeaturesResponseSchema, type ActionsSettingsV1,
 } from '@happier-dev/protocol';
 import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions';
+import { ACCOUNT_SECURITY_PATH_V1, AccountSecurityGetResponseV1Schema } from '@happier-dev/protocol/auth/accountSecurity';
 import { signExternalActionMachineRpcRequestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { verifyExternalActionMachineRpcExecution } from '../../../../server/sources/app/auth/externalActionExecutionAuthorization';
 import { parseSessionListQueryActionResultV1 } from '@happier-dev/protocol/sessions/awareness/action';
@@ -69,9 +70,30 @@ import { resolveCliAgentStartContextV1 } from '@/session/actions/resolveCliAgent
 import { resolveRolesSnapshotV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
 import { inheritedCodexInput } from '@/session/actions/sessionSpawnNew.agent.testkit';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
-import { ActionCurrentSessionScopeFailureDetailsV1Schema } from '@happier-dev/protocol/actions/executor/sessionListAccess';
+import { ActionCurrentSessionScopeFailureDetailsV1Schema, isLedSubtreeSessionLifecycleActionId } from '@happier-dev/protocol/actions/executor/sessionListAccess';
 import { createDiscussionActionDeps } from '@/discussions/discussionActionDeps';
 import { bindDiscussionDraftReply } from '@/discussions/bindDiscussionDraftReply';
+import { registerAuthoredAccountActionRelease } from '@/plugins/runtime/accountPluginActions.testkit';
+import { withTempDir } from '@/testkit/fs/tempDir';
+import { reloadConfiguration } from '@/configuration';
+import { readStoredCredentialsForServerId, writeStoredCredentialsForServerId } from '@/persistence';
+import * as daemonControlHttp from '@/daemon/controlHttp';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { executeAppliedDaemonPluginActionWithController } from '@/plugins/daemon/controlRoutes';
+import { createCommittedContributedActionInvoker, createCommittedContributedActionDefinitionLister,
+  createCommittedContributedActionSchemaReader } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { PLUGIN_MANIFEST as triageManifest } from '@happier-dev/plugins-triage/manifest';
+import { loadCurrentBundledPluginLocatorResult } from '@/plugins/projection/registry/builtIn/locators';
+import { projectLoadedPluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createClientActionMachineRpcExecutor } from '@/plugins/runtime/invocation/actions/clientActionMachineRpc';
+import { UiContributedActionExecuteRequestV1Schema } from '@happier-dev/protocol/plugins/actions/clientInvocationV1';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { resolveInvocationAuthority } from '@happier-dev/protocol/actions/invocationAuthority';
+import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 
 const processIdentity = vi.hoisted(() => vi.fn());
 vi.mock('@/daemon/processIdentity', () => ({ readProcessIdentityByPid: processIdentity }));
@@ -98,7 +120,67 @@ beforeAll(async () => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); });
 afterAll(() => vi.unstubAllEnvs());
 
-async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Promise<void>, bypassActionInterception = false) {
+async function admittedClientActionFixture() {
+  let effects = 0;
+  const bundled = loadCurrentBundledPluginLocatorResult();
+  const contributes = createResolvedContributionRegistry(projectLoadedPluginContributes({ loadResult: {
+    loadedPlugins: bundled.loadedPlugins.filter(plugin => plugin.pluginId === triageManifest.id)
+      .map(plugin => ({ ...plugin, manifest: normalizePluginManifestV2(triageManifest) })), diagnosticsByPluginId: {},
+  }, provenance: 'first_party' }));
+  const executeClientAction = createClientActionMachineRpcExecutor(() => ({
+    hasConnectedClientRpcHandler: () => true,
+    // Only the answering UI socket is substituted. Its public ingress schema,
+    // Machine-side source admission, descriptor and invocation remain real.
+    callConnectedClientRpc: async (_method, raw, options) => {
+      UiContributedActionExecuteRequestV1Schema.parse(JSON.parse(JSON.stringify(raw)));
+      options.onIssued();
+      effects++;
+      return { ok: true, result: { ok: true, result: { v: 1, kind: 'createTask', draftId: 'client-draft' } } };
+    },
+  }));
+  const runtime = await createAdmittedPluginRuntimeFixture({ runtimeOptions: {
+    contributes, pluginIds: [triageManifest.id], executeClientAction,
+  } });
+  return { runtime, action: { pluginId: triageManifest.id, localId: 'tasks/open-create-v1' }, effects: () => effects };
+}
+
+function installClientMachineControlHttp(clientAction: Pick<Awaited<ReturnType<typeof admittedClientActionFixture>>, 'runtime'>) {
+  const list = createCommittedContributedActionDefinitionLister({
+    tryAcquireRuntimeRegistryLease: () => clientAction.runtime.lease,
+  });
+  const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+    listContributedActionDefinitions: list,
+    readContributedActionSchemas: createCommittedContributedActionSchemaReader(list),
+    invokeContributedAction: createCommittedContributedActionInvoker({
+      acquireRuntimeRegistryLease: () => clientAction.runtime.controller.acquireRuntimeRegistry(),
+    }),
+  });
+  // Mirror only controlServer.ts's HTTP dispatch branch: its three supported
+  // built-ins enter the full core executor; qualified effects use the final
+  // contributed dispatcher. All metadata, admission and policy remain real.
+  vi.spyOn(daemonControlHttp, 'daemonPost').mockImplementation(async (_path, body) => {
+    if (!body || typeof body !== 'object' || !('actionId' in body) || typeof body.actionId !== 'string'
+      || !('input' in body) || !('surface' in body)
+      || (body.surface !== 'agent' && body.surface !== 'mcp' && body.surface !== 'cli')) throw new Error('Expected plugin control request');
+    if (body.actionId === 'action.spec.search' || body.actionId === 'action.spec.get' || body.actionId === 'action.invoke') {
+      const outcome = await executor.execute(body.actionId, body.input, {
+        surface: body.surface,
+        authority: resolveInvocationAuthority({ credential: 'terminal', surface: body.surface, terminalPolicy: 'allowed' }),
+        actionCaller: { kind: 'host' },
+        ...('defaultSessionId' in body && typeof body.defaultSessionId === 'string' ? { defaultSessionId: body.defaultSessionId } : {}),
+      });
+      return { matched: true, result: outcome.ok ? { ok: true, result: StrictJsonValueSchema.parse(outcome.result) }
+        : { ok: false, errorCode: outcome.errorCode, error: outcome.error } };
+    }
+    return await executeAppliedDaemonPluginActionWithController({ actionId: body.actionId, input: body.input, surface: body.surface,
+      ...('defaultSessionId' in body && typeof body.defaultSessionId === 'string' ? { defaultSessionId: body.defaultSessionId } : {}),
+    }, clientAction.runtime.controller);
+  });
+}
+
+async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Promise<void>, bypassActionInterception = false,
+  accountRelease = false, accountCurrentProcess = true,
+  clientAction?: Awaited<ReturnType<typeof admittedClientActionFixture>>) {
   storage.state.sessionId = sessionId;
   storage.state.bound = true;
   storage.state.publisherBound = true;
@@ -119,6 +201,9 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
   const actionsSettingsProvider = createActionSettingsProvider({ scopeKey });
   const app: Fastify = createAuthenticatedTestApp({ authentication: 'real' });
   app.addHook('onRequest', async (request, reply) => {
+    if (accountRelease && (request.url.startsWith('/v1/artifacts') || request.url.includes('account.plugins.availability'))) {
+      expect(request.headers.authorization).toBe(`Bearer ${token}`);
+    }
     if (request.url.endsWith('/execution-authorization') && authorizationStatus) {
       cancelAuthorization?.();
       return reply.code(authorizationStatus).send({ error: 'private-error-body' });
@@ -175,10 +260,16 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
     currentnessRefused ? reply.code(401).send({ error: 'private-error-body' }) : createAccountEncryptionCurrentnessFixture());
   app.get('/v2/account/settings', { preHandler: app.authenticate }, async () => ({ version: settingsVersion, content: { t: 'plain', v: rawSettings } }));
   app.get('/v1/account/profile', { preHandler: app.authenticate }, async () => ({ id: storage.account.id }));
+  if (accountRelease) app.get(ACCOUNT_SECURITY_PATH_V1, { preHandler: app.authenticate }, async () => AccountSecurityGetResponseV1Schema.parse({
+    v: 1, encryptionMode: 'plain', terminalPresentUserPolicy: 'allowed', nativeEmail: null,
+    password: { status: 'not_enrolled', revision: null },
+  }));
   app.get('/v1/machines/:machineId', { preHandler: app.authenticate }, async request => ({
     machine: { id: (request.params as { machineId: string }).machineId },
   }));
-  app.get('/v1/artifacts', { preHandler: app.authenticate }, async () => []);
+  const authoredAccount = accountRelease ? await registerAuthoredAccountActionRelease(app, storage.account.id) : null;
+  if (!authoredAccount) app.get('/v1/artifacts', { preHandler: app.authenticate }, async () => []);
+  if (authoredAccount) app.get('/v1/account/encryption', { preHandler: app.authenticate }, async () => ({ mode: 'plain', updatedAt: 1 }));
   app.get('/v1/account/entity-rows/acp', { preHandler: app.authenticate }, async () =>
     AcpCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
       content: { t: 'plain', v: { v: 1, definitions: [] } } }));
@@ -188,7 +279,8 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
     })) }));
   app.post('/v2/sessions/query', { preHandler: app.authenticate }, async (request, reply) => {
     const query = SessionListQueryV1Schema.parse(request.body);
-    expect(query.underSessionId === sessionId || (nestedReportId !== undefined && query.underSessionId === childId)).toBe(true);
+    expect(query.underSessionId === undefined || query.underSessionId === sessionId
+      || (members.has(childId) && query.underSessionId === childId)).toBe(true);
     await observeSubtreeQuery?.();
     const nextStatus = nextSubtreeStatuses.get(query.storage);
     if (nextStatus !== undefined) {
@@ -250,13 +342,24 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
     return { authorization, target };
   };
   const execute = createDaemonSessionAccountActionExecutor({ serverId, serverHttpBaseUrl, token, credentials,
-    machineId: storage.state.machineId,
-    prepareExternalActionAuthorization: ({ operation, sessionActionOrigin }) => prepare(operation, sessionActionOrigin),
-    createExecutor: () => {
+    ...(accountRelease ? {} : { machineId: storage.state.machineId,
+      prepareExternalActionAuthorization: ({ operation, sessionActionOrigin }: Parameters<NonNullable<Parameters<typeof createDaemonSessionAccountActionExecutor>[0]['prepareExternalActionAuthorization']>>[0]) => prepare(operation, sessionActionOrigin) }),
+    createExecutor: (_depth, _current, _post, options) => {
       const executor = createCliActionExecutor({ token, credentials, sessionId: '', mode: 'plain', ctx: null,
         serverId, serverIdentityId: storage.state.homeId, serverHttpBaseUrl,
         externalActionMachineRequestPrivateKey: installation.secretKey, externalActionMachineInstallationId: storage.state.installationId,
         actionsSettingsProvider,
+        ...(accountRelease && accountCurrentProcess ? { pluginActionExecutionOwner: 'current_process' as const,
+          invokeContributedAction: createCommittedContributedActionInvoker() } : {}),
+        ...(clientAction ? {
+          listContributedActionDefinitions: createCommittedContributedActionDefinitionLister({
+            tryAcquireRuntimeRegistryLease: () => clientAction.runtime.lease,
+          }),
+          invokeContributedAction: createCommittedContributedActionInvoker({
+            acquireRuntimeRegistryLease: () => clientAction.runtime.controller.acquireRuntimeRegistry(),
+          }),
+        } : {}),
+        ...options,
       });
       return { execute: (actionId, input, context) => executor.execute(actionId, input,
         bypassActionInterception ? { ...context, bypassActionInterception: true } : context) };
@@ -266,7 +369,7 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
     actionId, input, requestId: 'signed-observation', surface: 'agent',
     witness: { turnId: 'turn', inputId: 'input', userMessageSeq: 1, userMessageSeqs: [1], workDepth: 0, callerPermissionMode: 'default',
       agentStartCaller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 } } });
-  return { credentials, app, observations, members, prepare, execute, operation, actionsSettingsProvider, lifecycleEffects,
+  return { credentials, app, observations, members, prepare, execute, operation, actionsSettingsProvider, lifecycleEffects, authoredAccount,
     failAuthorization: (status?: 401 | 403 | 503, cancel?: () => void) => {
       authorizationStatus = status; cancelAuthorization = cancel;
     },
@@ -333,6 +436,215 @@ it('admits the addressed reply policy read under its original signed Account roo
       { method: 'GET', path, status: 200, signed: true, bearer: false },
     ]);
   } finally { await f.close(); }
+});
+
+it('classifies the actual contributed Account definition before requiring Machine authorization at the capability receiver', async () => {
+  const f = await fixture(1, undefined, false, true, false);
+  vi.stubGlobal('fetch', async () => Response.json(FeaturesResponseSchema.parse({ features: { sessions: { enabled: true } },
+    capabilities: { serverIdentity: { serverIdentityId: storage.state.homeId } } })));
+  try {
+    const outcome = await f.execute(f.operation('action.invoke', {
+      action: { pluginId: f.authoredAccount!.pluginId, localId: 'echo' }, input: { key: 'receiver' },
+    }), { sessionId, isCurrent: async () => true });
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({ ok: true, result: { key: 'receiver', surface: 'agent' } });
+    expect(f.observations.some(observation => observation.path.includes('action.invoke/execution-authorization'))).toBe(false);
+  } finally { await f.close(); }
+});
+
+it('reads the enabled Account Action descriptor through the current-process capability factory', async () => {
+  const f = await fixture(1, undefined, false, true);
+  try {
+    const id = `${f.authoredAccount!.pluginId}/actions/echo`;
+    const outcome = await f.execute(f.operation('action.spec.get', { id }), { sessionId, isCurrent: async () => true });
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({ ok: true, result: { actionSpec: { id, executionPlacement: 'account' } } });
+  } finally { await f.close(); }
+});
+
+it('keeps a real client descriptor readable without granting client invocation Account placement', async () => {
+  const clientAction = await admittedClientActionFixture();
+  const f = await fixture(1, undefined, false, true, true, clientAction);
+  vi.stubGlobal('fetch', async () => Response.json(FeaturesResponseSchema.parse({ features: { sessions: { enabled: true } },
+    capabilities: { serverIdentity: { serverIdentityId: storage.state.homeId } } })));
+  try {
+    const id = `${clientAction.action.pluginId}/actions/${clientAction.action.localId}`;
+    const descriptor = await f.execute(f.operation('action.spec.get', { id }), { sessionId, isCurrent: async () => true });
+    expect(descriptor, JSON.stringify(descriptor)).toMatchObject({ ok: true, result: { actionSpec: { id, executionPlacement: 'client' } } });
+    expect(await f.execute(f.operation('action.invoke', { action: clientAction.action, input: {} }),
+      { sessionId, isCurrent: async () => true }))
+      .toMatchObject({ ok: false, errorCode: 'target_unavailable', details: { reason: 'external_authorization_missing' } });
+    expect(clientAction.effects()).toBe(0);
+  } finally { await clientAction.runtime.dispose(); await f.close(); }
+});
+
+it('preserves an existing client Action at the credentialed native Agent entry', async () => {
+  await withTempDir('credentialed-agent-client-', async homeDir => {
+    const previousEnv = process.env;
+    process.env = { ...previousEnv, HAPPIER_HOME_DIR: homeDir };
+    reloadConfiguration();
+    const clientAction = await admittedClientActionFixture();
+    const f = await fixture(1, undefined, false, true, true, clientAction);
+    await writeStoredCredentialsForServerId(serverId, f.credentials);
+    const credentials = await readStoredCredentialsForServerId(serverId);
+    if (!credentials) throw new Error('Missing captured Account credentials');
+    installClientMachineControlHttp(clientAction);
+    const features = FeaturesResponseSchema.parse({ features: { sessions: { enabled: true } },
+      capabilities: { serverIdentity: { serverIdentityId: storage.state.homeId } } });
+    vi.stubGlobal('fetch', async () => Response.json(features));
+    const witness = { turnId: 'native-client-turn', callerPermissionMode: 'default',
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'default' } };
+    const runtime = createHappierMcpServer({ sessionId,
+      getServerBinding: () => ({ serverId, serverUrl: serverHttpBaseUrl }),
+      getServerFeaturesSnapshot: () => ({ status: 'ready', provenance: 'authenticated', features }),
+      rpcHandlerManager: new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' }), updateMetadata() {},
+      getWorkDepth: () => 0, getHostTurnWorkDepth: () => 0, getPermissionMode: () => 'default',
+      getActiveTurnPermissionWitness: () => witness,
+    }, { credentials, actionsSettingsProvider: f.actionsSettingsProvider, pluginToolCatalog: [] });
+    try {
+      const outcome = await runtime.executeTool({ toolName: 'action_execute', args: {
+        actionId: 'action.invoke', input: { action: clientAction.action, input: {} },
+      } });
+      expect(outcome, JSON.stringify(outcome)).toMatchObject({ ok: true, result: { v: 1, kind: 'createTask', draftId: 'client-draft' } });
+      expect(clientAction.effects()).toBe(1);
+    } finally {
+      await runtime.mcp.close(); await clientAction.runtime.dispose(); await f.close();
+      process.env = previousEnv; reloadConfiguration();
+    }
+  });
+});
+
+it('retains original Home authorization and direct committed execution for an actual Machine Action', async () => {
+  const f = await fixture(1, undefined, false, true);
+  vi.stubGlobal('fetch', async () => Response.json(FeaturesResponseSchema.parse({ features: { sessions: { enabled: true } },
+    capabilities: { serverIdentity: { serverIdentityId: storage.state.homeId } } })));
+  const pluginId = f.authoredAccount!.pluginId;
+  const machine = await createAuthoredAdmittedPluginRuntimeFixture({ plugins: [{
+    manifest: createPluginManifestV2Fixture({ id: pluginId, contributes: { actions: [{ id: 'echo', title: 'Machine echo',
+      scopes: ['global'], surfaces: ['agent', 'cli'], dangerLevel: 'safe', execution: { target: 'daemon' },
+      inputSchema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'], additionalProperties: false },
+      inputHints: { fields: [{ path: 'key', title: 'Key', widget: 'select', options: [{ value: 'machine', label: 'Machine' }] }] },
+    }] } }),
+    files: { 'daemon.mjs': `let effects = 0;
+export function activate(api) {
+  api.actions.register('echo', async (input, context) => ({ key: input.key, surface: context.surface, effects: ++effects }));
+}` },
+  }] });
+  const list = createCommittedContributedActionDefinitionLister({ tryAcquireRuntimeRegistryLease: () => machine.lease });
+  const invoke = createCommittedContributedActionInvoker({ acquireRuntimeRegistryLease: () => machine.controller.acquireRuntimeRegistry() });
+  const createExecutor = (options?: Readonly<{ accountPluginActions: true }>,
+    pluginActionExecutionOwner: 'current_process' | 'daemon_control' = 'current_process') => createCliActionExecutor({
+    token: f.credentials.token, credentials: f.credentials, sessionId: '', mode: 'plain', ctx: null,
+    serverId, serverIdentityId: storage.state.homeId, serverHttpBaseUrl,
+    externalActionMachineRequestPrivateKey: installation.secretKey, externalActionMachineInstallationId: storage.state.installationId,
+    actionsSettingsProvider: f.actionsSettingsProvider, pluginActionExecutionOwner,
+    listContributedActionDefinitions: list, invokeContributedAction: invoke, ...options,
+  });
+  const receiver = (authorized: boolean) => createDaemonSessionAccountActionExecutor({ serverId, serverHttpBaseUrl,
+    credentials: f.credentials, token: f.credentials.token, machineId: storage.state.machineId,
+    ...(authorized ? { prepareExternalActionAuthorization: ({ operation, sessionActionOrigin }: Parameters<NonNullable<Parameters<typeof createDaemonSessionAccountActionExecutor>[0]['prepareExternalActionAuthorization']>>[0]) => f.prepare(operation, sessionActionOrigin) } : {}),
+    createExecutor: (_depth, _current, _post, options) => createExecutor(options),
+  });
+  const operation = f.operation('action.invoke', { action: { pluginId, localId: 'echo' }, input: { key: 'machine' } });
+  try {
+    expect(await f.execute(f.operation('action.spec.get', { id: `${pluginId}/actions/echo` }),
+      { sessionId, isCurrent: async () => true })).toMatchObject({ ok: true, result: { actionSpec: { executionPlacement: 'account' } } });
+    // A real Account selection can disappear after classification while an
+    // independently admitted Machine handler still owns the same public id.
+    f.authoredAccount!.setBundledFallback();
+    expect(await createExecutor({ accountPluginActions: true }).execute('action.invoke', operation.input,
+      { surface: 'agent', authority: 'account_automation', defaultSessionId: sessionId }))
+      .toMatchObject({ ok: false, errorCode: 'plugin_action_execution_placement_unavailable' });
+    expect(await receiver(false)(operation, { sessionId, isCurrent: async () => true }))
+      .toMatchObject({ ok: false, errorCode: 'target_unavailable', details: { reason: 'external_authorization_missing' } });
+    const outcome = await receiver(true)(operation, { sessionId, isCurrent: async () => true });
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({ ok: true, result: { key: 'machine', surface: 'agent', effects: 1 } });
+    installClientMachineControlHttp({ runtime: machine });
+    const choices = await createExecutor(undefined, 'daemon_control').execute('action.options.resolve', {
+      actionId: `${pluginId}/actions/echo`, fieldPath: 'key',
+    }, { surface: 'agent', defaultSessionId: sessionId });
+    expect(choices, JSON.stringify(choices)).toMatchObject({ ok: true, result: {
+      actionId: `${pluginId}/actions/echo`, fieldPath: 'key', options: [{ value: 'machine', label: 'Machine' }],
+    } });
+  } finally { await machine.dispose(); await f.close(); }
+});
+
+it('executes an authored Account Action through restricted Agent capability custody without a selected Machine', async () => {
+  await withTempDir('restricted-agent-account-', async homeDir => {
+    const previousEnv = process.env;
+    process.env = { ...previousEnv, HAPPIER_HOME_DIR: homeDir };
+    reloadConfiguration();
+    const clientAction = await admittedClientActionFixture();
+    const f = await fixture(1, undefined, false, true, true, clientAction);
+    const command = 'node /runtime/.runner-snapshots/restricted-account/dist/index.mjs';
+    const runner = { pid: process.pid, processStartTimeMs: 23349,
+      processCommandHash: hashProcessCommand(command), snapshotIdentity: 'snapshot:restricted-account' };
+    processIdentity.mockResolvedValue({ pid: runner.pid, processStartTimeMs: runner.processStartTimeMs, command });
+    const path = await createAgentRuntimeDaemonServiceAuthorityPath(configuration);
+    const authority = { happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
+      path, sessionId, runner, retainedAgent: createAgentSessionRunnerFactoryBinding({
+        v: 1, pluginId: 'acme.plugin', pluginVersion: '1.2.3', agentId: 'acme-agent', localAgentId: 'acme-agent',
+        sourceCustody: { kind: 'managed', immutableGenerationId: `sha256:${'1'.repeat(64)}`, installSource: 'localPath' },
+        locator: { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
+        normalizedModulePath: '/immutable/acme/runtime.mjs', loadMode: 'immutable-js',
+      }) };
+    await publishAgentRuntimeDaemonServiceAuthority({ ...authority, httpPort: 31002, capability: 'B'.repeat(43) });
+    process.env.HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE = path;
+    await writeStoredCredentialsForServerId(serverId, f.credentials);
+    const runnerCredentials = { token: await auth.createToken(storage.account.id, { sessionId },
+      { kind: 'ephemeral_session_runner', authority: 'session_runtime' }), encryption: null };
+    // The daemon-control HTTP boundary exposes only its actual Machine catalog:
+    // this external plugin is enabled in Home, not installed on a Machine.
+    installClientMachineControlHttp(clientAction);
+    let current = true;
+    const capabilities: AgentRuntimeDaemonServiceRequestV1[] = [];
+    const features = FeaturesResponseSchema.parse({ features: { sessions: { enabled: true } },
+      capabilities: { serverIdentity: { serverIdentityId: storage.state.homeId } } });
+    vi.stubGlobal('fetch', async (_url: unknown, init?: RequestInit) => {
+      if (!init?.body) return Response.json(features);
+      const request = AgentRuntimeDaemonServiceRequestV1Schema.parse(JSON.parse(String(init.body)));
+      capabilities.push(request);
+      expect(request.context).toEqual({ token: 'B'.repeat(43), sessionId });
+      if (request.operation.kind !== 'action.execute') throw new Error('Expected Action capability');
+      const outcome = await f.execute(request.operation, { sessionId, isCurrent: async () => current });
+      return Response.json({ ok: true, result: { kind: 'action.execution', requestId: request.operation.requestId, outcome } });
+    });
+    const witness = { turnId: 'turn', inputId: 'input', userMessageSeq: 1, userMessageSeqs: [1], callerPermissionMode: 'default',
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'default' },
+      agentStartCaller: { kind: 'session' as const, sessionId, starterDepth: 0, turnDepth: 0 } };
+    const runtime = createHappierMcpServer({ sessionId,
+      getServerBinding: () => ({ serverId, serverUrl: serverHttpBaseUrl }),
+      getServerFeaturesSnapshot: () => ({ status: 'ready', provenance: 'authenticated', features }),
+      rpcHandlerManager: new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' }),
+      updateMetadata() {}, getWorkDepth: () => 0, getHostTurnWorkDepth: () => 0, getPermissionMode: () => 'default',
+      getActiveTurnAdmissionWitness: () => witness, getActiveTurnPermissionWitness: () => witness,
+    }, { authorityScope: 'session', sessionCredentials: runnerCredentials, actionsSettingsProvider: f.actionsSettingsProvider });
+    try {
+      const invoke = () => runtime.executeTool({ toolName: 'action_execute', args: {
+        actionId: 'action.invoke', input: { action: { pluginId: f.authoredAccount!.pluginId, localId: 'echo' }, input: { key: 'restricted' } },
+      } });
+      const outcome = await invoke();
+      expect(capabilities[0]?.operation).toMatchObject({ kind: 'action.execute', actionId: 'action.spec.get' });
+      expect(outcome, JSON.stringify(outcome)).toMatchObject({ ok: true, result: { key: 'restricted', surface: 'agent' } });
+      expect(capabilities.some(request => request.operation.kind === 'action.execute' && request.operation.actionId === 'action.invoke')).toBe(true);
+      expect(f.observations.some(observation => observation.path.includes('action.invoke/execution-authorization'))).toBe(false);
+      const clientStart = capabilities.length;
+      const clientOutcome = await runtime.executeTool({ toolName: 'action_execute', args: {
+        actionId: 'action.invoke', input: { action: clientAction.action, input: {} },
+      } });
+      expect(clientOutcome, JSON.stringify(clientOutcome)).toMatchObject({ ok: true, result: { v: 1, kind: 'createTask', draftId: 'client-draft' } });
+      expect(clientAction.effects()).toBe(1);
+      expect(capabilities.slice(clientStart).every(request => request.operation.kind === 'action.execute'
+        && request.operation.actionId === 'action.spec.get')).toBe(true);
+      current = false;
+      expect(await invoke()).toMatchObject({ ok: false, errorCode: 'target_unavailable' });
+    } finally {
+      await runtime.mcp.close();
+      await removeAgentRuntimeDaemonServiceAuthorityIfOwned({ ...authority, capabilityDigest: hashPrivateBearer('B'.repeat(43)) });
+      await clientAction.runtime.dispose();
+      await f.close();
+      process.env = previousEnv;
+      reloadConfiguration();
+    }
+  });
 });
 
 it.each([503, 401, 403] as const)('keeps Home mint availability distinct from authorization denial (%s), then recovers', async status => {
@@ -1042,10 +1354,10 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
     if (actionId === 'session.stop' || actionId === 'session.archive') {
       const method = `${storage.state.machineId}:${RPC_METHODS.STOP_SESSION}`;
       const params = { sessionId: childId };
-      const execution = { v: 1 as const, authorization: prepared.authorization, effectActionId: actionId,
+      const execution = { v: 1 as const, authorization: prepared.authorization, effectActionId: 'session.stop',
         target: prepared.target, installationId: storage.state.installationId,
         machineSignature: signExternalActionMachineRpcRequestV1({ authorizationToken: prepared.authorization.token,
-          effectActionId: actionId, target: prepared.target, installationId: storage.state.installationId,
+          effectActionId: 'session.stop', target: prepared.target, installationId: storage.state.installationId,
           method, requestId: op.requestId, params, privateKey: installation.secretKey }) };
       expect(await verifyExternalActionMachineRpcExecution(execution, { method, params, requestId: op.requestId,
         resolveCurrentSessionMachine: async () => storage.state.bound ? storage.state.machineId : null })).not.toBeNull();
@@ -1061,8 +1373,24 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
       return f.app.inject({ method: 'POST', url: '/v2/sessions/query', payload: body, headers: authorization.headers });
     };
     const { underSessionId: _root, ...unscopedQuery } = query;
-    for (const [body, effect] of [[{ ...query, underSessionId: childId }, op.actionId],
-      [unscopedQuery, op.actionId], [query, 'session.list']] as const) {
+    if (actionId === 'session.status.get') {
+      // The server's isSessionTargetPreparationHttpPurpose admits the named
+      // selector phase under the same signed root; native resource access and
+      // the eventual exact effect target remain independently enforced.
+      expect((await signedQuery({ ...query, underSessionId: childId })).statusCode).toBe(200);
+      expect((await signedQuery(unscopedQuery)).statusCode).toBe(200);
+    }
+    if (isLedSubtreeSessionLifecycleActionId(actionId)) {
+      // The unchanged lifecycle root may observe a still-led nested cascade.
+      expect((await signedQuery({ ...query, underSessionId: childId })).statusCode).toBe(200);
+      f.members.delete(childId);
+      expect((await signedQuery({ ...query, underSessionId: childId })).statusCode).toBe(401);
+      f.members.add(childId);
+    }
+    const outsideRoot = isLedSubtreeSessionLifecycleActionId(actionId) ? 'c123456789012345678901239' : childId;
+    const denied = actionId === 'session.status.get' ? [[query, 'session.list']] as const
+      : [[{ ...query, underSessionId: outsideRoot }, op.actionId], [unscopedQuery, op.actionId], [query, 'session.list']] as const;
+    for (const [body, effect] of denied) {
       const refused = await signedQuery(body, effect);
       expect(refused.statusCode).toBe(401);
       expect(refused.json()).toMatchObject({ error: 'invalid_token' });
