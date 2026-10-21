@@ -226,6 +226,28 @@ describe('useWorkspaceFileEditorState autosave', () => {
         expect(hook.getCurrent().isEditingFile).toBe(false);
     });
 
+    it('ends Saving when the write lands, so Saved shows while the slow re-read still runs', async () => {
+        const reread = createDeferred<void>();
+        const hook = await createHarness({ autoSave: false, refreshAll: () => reread.promise });
+        await act(async () => hook.getCurrent().onEditorChange('edited'));
+        hook.getCurrent().editorHandleRef.current = { getValue: () => 'edited', flushPendingChange: async () => {} };
+        writeRpcSpy.mockResolvedValueOnce({ success: true, hash: 'h2' });
+        let saved: Promise<boolean> | undefined;
+        await act(async () => { saved = hook.getCurrent().saveFileEdits(); await Promise.resolve(); });
+        await act(async () => { for (let i = 0; i < 20 && hook.getCurrent().savedAtMs === null; i += 1) await Promise.resolve(); });
+        expect(hook.getCurrent()).toMatchObject({ editorStatus: 'clean', editorDirty: false });
+        expect(hook.getCurrent().savedAtMs).not.toBeNull();
+        // A Save pressed during the re-read waits for it rather than being dropped.
+        await act(async () => hook.getCurrent().onEditorChange('edited again'));
+        hook.getCurrent().editorHandleRef.current = { getValue: () => 'edited again', flushPendingChange: async () => {} };
+        writeRpcSpy.mockResolvedValueOnce({ success: true, hash: 'h3' });
+        let second: Promise<boolean> | undefined;
+        await act(async () => { second = hook.getCurrent().saveFileEdits(); await Promise.resolve(); });
+        expect(writtenRequests()).toHaveLength(1);
+        await act(async () => { reread.resolve(); expect(await saved).toBe(true); expect(await second).toBe(true); });
+        expect(writtenRequests().map(request => request.content)).toEqual(['edited', 'edited again']);
+    });
+
     it('normalizes saved bytes without replacing the admitted editor text or undo seed', async () => {
         const hook = await createHarness({ autoSave: false, fileText: 'base\r\n',
             encoding: { hasBom: true, editable: true, eol: 'crlf', mixedEol: true } });
@@ -641,7 +663,8 @@ describe('useWorkspaceFileEditorState autosave', () => {
         const hook = await createHarness({ refreshAll: () => refresh.promise });
         await act(async () => hook.getCurrent().onEditorChange('hello changed'));
         await act(async () => { vi.advanceTimersByTime(100); });
-        expect(hook.getCurrent().isSavingEdits).toBe(true);
+        // The write landed: Saved shows while the re-read runs, which still holds the one-write-at-a-time lock.
+        expect(hook.getCurrent().editorStatus).toBe('clean');
         expect(hook.getCurrent().editorOriginalHash).toBe('h2');
         await act(async () => hook.getCurrent().onEditorChange('hello changed during refresh'));
         await act(async () => { vi.advanceTimersByTime(100); });

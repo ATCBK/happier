@@ -85,6 +85,7 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
     const [pendingStart, setPendingStart] = React.useState(false);
     const editorHandleRef = React.useRef<TextEditorHandle | null>(null);
     const saving = React.useRef<AbortController | null>(null);
+    const rereadAfterSave = React.useRef<Promise<void> | null>(null);
     const setAside = React.useRef<SetAside | null>(null);
     // An exact pre-write observation is superseded by the returned write version. No TTL.
     const supersededDisk = React.useRef<{ text: string | null; hash: string | null } | null>(null);
@@ -258,7 +259,9 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
     }, [updateRefusal]);
 
     const saveEdits = React.useCallback(async (automatic: boolean, shown?: Readonly<{ hash: string; encoding?: Encoding }>): Promise<boolean> => {
-        if (!isCurrentOwner() || !editing.current || !editorSurfaceEnabled || saving.current) return false;
+        if (!isCurrentOwner() || !editing.current || !editorSurfaceEnabled) return false;
+        if (saving.current && rereadAfterSave.current && !automatic) await rereadAfterSave.current.catch(() => undefined);
+        if (!isCurrentOwner() || !editing.current || saving.current) return false;
         if (automatic && (latest.current.unreachable || refusalRef.current || conflictNow())) return false;
         backToEditing(); retireUndo(); const identity = new AbortController(); saving.current = identity;
         const isCurrentSave = () => saving.current === identity && !identity.signal.aborted && isCurrentOwner() && latest.current.mountedRef.current;
@@ -286,7 +289,13 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
             text.current = live; setEditorDirty(live !== sent); liveValue.publish(live);
             updateRefusal(null); setSavedAtMs(Date.now()); target.publishSavedFile?.({ text: normalized, hash: response.hash });
             if (Platform.OS !== 'web') void hapticsSuccess();
-            persist(); succeeded = true; await target.refreshAll(); return true;
+            // The write landed: Saving ends here and Saved shows now. The re-read that follows (page facts, change
+            // marks) can take seconds on a slow machine; it still holds the save lock so no second write races it,
+            // and a Save pressed meanwhile waits for it instead of being dropped.
+            persist(); succeeded = true; setIsSavingEdits(false);
+            const reread = target.refreshAll(); rereadAfterSave.current = reread;
+            try { await reread; } finally { if (rereadAfterSave.current === reread) rereadAfterSave.current = null; }
+            return true;
         } catch (error) {
             if (succeeded) return true;
             if (isCurrentSave()) {
