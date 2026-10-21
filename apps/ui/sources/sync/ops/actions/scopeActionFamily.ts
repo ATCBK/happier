@@ -8,6 +8,8 @@ import type { WorkflowLibraryViewController } from '@/components/workflows/libra
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+import type { UniversalSearchScopeSeed } from '@/components/appShell/search/UniversalSearchRuntimeContext';
+import type { WorkspaceSymbolSearchInput } from '@/components/appShell/search/workspaceSymbolSearchSource';
 
 export type SessionListScopeActionController = Pick<SessionListViewFilterController,
   'filters' | 'updateFilters' | 'resetFilters' | 'viewContext' | 'viewContextKey' | 'corpusStorage'
@@ -115,6 +117,8 @@ export type FileViewActionOwner = Readonly<{
   availableModes: readonly FileViewMode[];
   blameAvailable: boolean;
   changesScopeAvailable: boolean;
+  /** Presented page facts, independent of DOM focus; the page retains the document holder. */
+  search?: Readonly<{ scope: UniversalSearchScopeSeed; symbols?: WorkspaceSymbolSearchInput }>;
   set(patch: Omit<ScopeActionInputById['file.view.set'], 'tabId'>): boolean | Promise<boolean>;
 }>;
 const fileViewOwners = new Map<string, () => FileViewActionOwner>();

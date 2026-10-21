@@ -6,6 +6,8 @@ import { expect, it, vi } from 'vitest';
 import { installModalComponentCommonModuleMocks } from '@/modal/components/modalComponentTestHelpers';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import type { WorkspaceNavigationContextValue } from '@/components/appShell/workspace/WorkspaceNavigationContext';
+import type { FileViewActionOwner } from '@/sync/ops/actions/scopeActionFamily';
+import type { WorkspaceSymbolSearchInput } from '@/components/appShell/search/workspaceSymbolSearchSource';
 
 const route = vi.hoisted(() => ({ pathname: '/', params: {} as Record<string, string> }));
 
@@ -140,5 +142,85 @@ it('reopens Search through the app-shell shortcut after its route-modal host ret
         await act(async () => root.unmount());
         storage.setState({ settings: before });
         container.remove();
+    }
+});
+
+it('uses the presented File page for global quick open and symbols without focusing its DOM', async () => {
+    const restoreLocks = installBrowserStorageLockBoundary();
+    const homes = await serveActionHomes({ homes: [{ key: 'home', serverUrl: 'https://workspace-search-presented-file.test',
+        accountId: 'alice', currentAccount: true,
+        settings: { commandPaletteEnabled: true, keyboardShortcutsV2Enabled: true } }], route: () => undefined });
+    const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const { registerFileViewActionOwner } = await import('@/sync/ops/actions/scopeActionFamily');
+    const { resolveKeyboardPlatform } = await import('@/keyboard/runtime');
+    const { t } = await import('@/text');
+    let disconnect: (() => Promise<unknown>) | undefined;
+    let release: (() => void) | undefined;
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    const initial = storage.getState();
+    try {
+        disconnect = await homes.restoreActiveConnection();
+        const account = storage.getState().profileScope!;
+        const workspace = { serverId: account.serverId, machineId: 'studio', rootPath: '/repo' };
+        const searchScope = { ...workspace, accountId: account.accountId, sessionId: null };
+        applyProjectAccountRowsFixture(storage, { workspaceRefs: [{ id: 'presented-project', ...workspace,
+            label: null, createdAtMs: 1 }] });
+        storage.setState({ isDataReady: true, settings: { ...settingsDefaults,
+            commandPaletteEnabled: true, keyboardShortcutsV2Enabled: true } });
+        // No File route or focused element supplies scope. This is the mounted
+        // page's existing command bridge, not a second Search registry.
+        route.pathname = '/'; route.params = {};
+        const symbols: WorkspaceSymbolSearchInput = {
+            target: { kind: 'workspaceFile', scope: workspace, path: 'notes.md', workspaceRefId: 'presented-project',
+                sessionId: null, serverId: account.serverId, accountId: account.accountId },
+            resolverKey: 'presented-notes', language: 'markdown', isDark: false, unavailableHint: 'Unavailable',
+            accountLifetime: captureActiveServerAccountScopeLifetime()!, isCurrent: () => true,
+            getText: () => '# Presented heading\n', flushPendingChange() {},
+        };
+        const owner = {
+            tabId: 'notes.md', active: true, serverId: account.serverId, accountId: account.accountId,
+            mode: 'view', blame: false, availableModes: ['view'], blameAvailable: false,
+            changesScopeAvailable: false, set: () => false, search: { scope: searchScope, symbols },
+        } satisfies FileViewActionOwner;
+        release = registerFileViewActionOwner('presented-file-test', () => owner);
+        let runtime!: ReturnType<typeof useUniversalSearchRuntime>;
+        function SearchOpener() { runtime = useUniversalSearchRuntime(); return null; }
+        await act(async () => root.render(<InjectedAuthProvider credentials={null}><ModalProvider>
+            <CommandPaletteProvider><SearchOpener /><button data-testid="outside-file">Outside the File page</button></CommandPaletteProvider>
+        </ModalProvider></InjectedAuthProvider>));
+        container.querySelector<HTMLButtonElement>('[data-testid="outside-file"]')!.focus();
+        const command = ['macos', 'ios'].includes(resolveKeyboardPlatform());
+        await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'p', code: 'KeyP', ctrlKey: !command, metaKey: command, bubbles: true, cancelable: true,
+        })));
+        await vi.waitFor(() => expect(document.querySelector('[data-testid="universal-search-host"]')).not.toBeNull());
+        await vi.waitFor(() => expect(document.querySelector('[data-testid="universal-search-host"]')?.textContent).toContain('repo'));
+        const input = document.querySelector<HTMLInputElement>('[data-testid="universal-search-host"] input')!;
+        await act(async () => {
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '@');
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        await vi.waitFor(() => expect(document.querySelector('[data-testid="universal-search-host"]')?.textContent).toContain('Presented heading'));
+        await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'Escape', code: 'Escape', bubbles: true, cancelable: true,
+        })));
+        await vi.waitFor(() => expect(document.querySelector('[data-testid="universal-search-host"]')).toBeNull());
+        // An explicitly addressed caller must not inherit the presented file's
+        // scope or symbols (terminal Jump has the same exclusion at ingress).
+        await act(async () => runtime.open('@', {
+            accountId: account.accountId, serverId: account.serverId,
+            sessionId: null, machineId: null, rootPath: null,
+        }, { source: 'files' }));
+        await vi.waitFor(() => expect(document.querySelector('[data-testid="universal-search-host"]')?.textContent)
+            .toContain(t('universalSearch.quickOpen.symbolsNeedFile')));
+    } finally {
+        release?.();
+        await act(async () => root.unmount());
+        route.pathname = '/'; route.params = {};
+        container.remove();
+        try { await disconnect?.(); }
+        finally { await homes.dispose(); restoreLocks(); storage.setState(initial, true); }
     }
 });

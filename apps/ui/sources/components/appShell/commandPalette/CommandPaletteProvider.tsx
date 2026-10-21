@@ -496,6 +496,10 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
 
     const showCommandPalette = useCallback((initialQuery?: string, requestedScope?: UniversalSearchScopeSeed, options?: UniversalSearchOpenOptions) => {
         const activeAccountScope = captureActiveServerAccountScopeLifetime()?.scope;
+        // The presented pane owns file Search, even when focus is in shell chrome.
+        // Explicit callers and terminal Jump keep their addressed scope.
+        const presentedFile = !requestedScope && !options?.terminals ? readActiveFileViewActionOwner()?.search : undefined;
+        const symbols = options?.symbols ?? presentedFile?.symbols;
         // A Jump is about the session it was opened from, which need not be the route's session (a
         // split workspace shows several); its pane scope names that session exactly.
         const terminalSession = options?.terminals ? parseSessionPaneScopeId(options.terminals.scopeId) : null;
@@ -505,7 +509,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
             : null;
         const activeMachineTarget = ambientSessionId ? readMachineControlTargetForSession(ambientSessionId) : null;
         const invocationScope = resolveUniversalSearchInvocationScope({
-            requestedScope,
+            requestedScope: requestedScope ?? presentedFile?.scope,
             ambientScope: {
                 accountId: activeAccountScope?.accountId ?? null,
                 serverId: terminalSession?.address?.serverId ?? activeSession?.serverId ?? activeAccountScope?.serverId ?? null,
@@ -517,7 +521,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
         if (Platform.OS !== 'web') {
             if (universalSearchRouteActive || universalSearchRouteOpenRequestedRef.current) return;
             universalSearchRouteOpenRequestedRef.current = true;
-            routeSymbolsRef.current = options?.symbols;
+            routeSymbolsRef.current = symbols;
             router.push({
                 pathname: UNIVERSAL_SEARCH_ROUTE,
                 params: {
@@ -548,9 +552,9 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
             onRequestClose: clearOpenPalette,
             onHostUnmount: clearOpenPalette,
             props: {
-                commands: buildCommands(invocationScope.sessionId, invocationScope, options?.symbols),
+                commands: buildCommands(invocationScope.sessionId, invocationScope, symbols),
                 openWorkspaceFile,
-                ...(options?.symbols ? { symbols: options.symbols } : {}),
+                ...(symbols ? { symbols } : {}),
                 ...(initialQuery ? { initialQuery } : {}),
                 ...(options?.source ? { initialSource: options.source } : {}),
                 ...(options?.replace ? { initialReplace: true } : {}),
@@ -563,7 +567,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
             id: modalId,
             activeSessionId: invocationScope.sessionId,
             scope: invocationScope,
-            ...(options?.symbols ? { symbols: options.symbols } : {}),
+            ...(symbols ? { symbols } : {}),
         };
         setPaletteOpen(true);
     }, [activeSessionId, buildCommands, openWorkspaceFile, router, universalSearchRouteActive]);
