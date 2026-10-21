@@ -162,6 +162,7 @@ type _AuthorFormFieldKeysAreCurated = Assert<IsEqual<keyof FormProps['hints']['f
   | 'description'
   | 'placeholder'
   | 'defaultValue'
+  | 'unit'
   | 'widget'
   | 'inputType'
   | 'contextMode'
