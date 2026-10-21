@@ -6,6 +6,7 @@ import { useOptionalAuth } from '@/auth/context/AuthContext';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getActiveServerHomeCarrier, getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { captureAccountEncryptionObservationForHome } from '@/sync/http/accountEncryptionObservationBinding';
 import { createServerFetchAtEndpoint } from '@/sync/http/client';
 import { createScmReviewedMarksOperations } from '@/sync/ops/scmDiffSummary/reviewedMarks';
 import type { ScmDiffSummaryHost } from '@/sync/ops/scmDiffSummary/results';
@@ -63,6 +64,12 @@ export function useScmReviewedMarks(params: Readonly<{
                 && current.serverUrl === server.serverUrl && current.generation === server.generation
                 && getActiveServerHomeCarrier() === carrier;
         };
+        const accountEncryptionObservation = captureAccountEncryptionObservationForHome({
+            serverId: server.serverId,
+            endpointUrl: server.serverUrl,
+            credentials,
+            isCurrent: shouldContinue,
+        });
         const request = createServerFetchAtEndpoint({
             endpointUrl: server.serverUrl,
             serverId: server.serverId,
@@ -70,6 +77,7 @@ export function useScmReviewedMarks(params: Readonly<{
             ...(carrier ? { homeCarrier: carrier } : {}),
             credentials,
             isCurrent: shouldContinue,
+            ...(accountEncryptionObservation ? { accountEncryptionObservation } : {}),
         });
         const operations = createScmReviewedMarksOperations({ ...selected, credentials, request, shouldContinue,
             getSelection: () => {
