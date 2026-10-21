@@ -7,7 +7,17 @@ const UI_SOURCES_ROOT = join(__dirname, '..', '..');
 
 const ALLOWED_DIRECT_ACCOUNT_WRITE_FILES = new Set([
     'components/onboarding/checklists/remoteSsh/persistRemoteHostAfterRemoteSshCompletion.ts',
+    // New Session writes its preferences against the Account settings scope it captured at render
+    // (88b3a562c4), which a hook-bound writer cannot carry across the async creation flow.
+    'components/sessions/new/NewSessionScreen.tsx',
+    'components/sessions/new/hooks/screenModel/useNewSessionBackendTargetState.ts',
+    'components/sessions/new/hooks/useCreateNewSession.ts',
+    'components/sessions/new/hooks/useNewSessionScreenModel.tsx',
     'components/sessions/new/modules/newSessionDraftLifecycle.ts',
+    // Machine-administration target memory is written against the controller scope that selected it.
+    'components/settings/machines/managed/useManagedControllerScope.tsx',
+    'sync/domains/machines/administration/selectionPreferences.ts',
+    'sync/domains/machines/administration/useTargetSelection.ts',
     'sync/ops/actions/defaultActionExecutor.ts',
     'sync/store/settingsWriters.ts',
     'voice/persistence/invalidatePersistentVoiceTranscript.ts',
@@ -23,6 +33,33 @@ const ALLOWED_DIRECT_LOCAL_WRITE_FILES = new Set([
     'sync/store/settingsWriters.ts',
     'sync/store/domains/settings.ts',
     'sync/domains/settings/localSettings.ts',
+    // Device-local view state and acknowledgements are written on the storage store directly so they
+    // persist even when Account Settings writes are Off (378b0932b8, d5803bb586). They are not Setting
+    // declarations, so the Setting writer hooks do not apply.
+    'auth/context/AuthContext.tsx',
+    'components/appShell/panes/AppPaneProvider.tsx',
+    'components/appShell/panes/PaneColumnsHost.tsx',
+    'components/appShell/workspace/useWorkspaceState.ts',
+    'components/artifacts/ArtifactsBrowserScreen.tsx',
+    'components/dev/terminal/phone/TerminalPhoneSpecimen.tsx',
+    'components/machines/vitals/MachineVitalsRangeBar.tsx',
+    'components/navigation/shell/SidebarNavigator.tsx',
+    'components/navigation/shell/appRail/AppRailMachines.tsx',
+    'components/onboarding/personalize/usePersonalizeFlow.ts',
+    'components/sessions/bots/BotsPopoverContent.tsx',
+    'components/sessions/composerBanners/ComposerBannerCollapseProvider.tsx',
+    'components/sessions/model/useSessionListStorageKind.ts',
+    'components/sessions/shell/SessionView.tsx',
+    'components/sessions/shell/useSessionListViewState.tsx',
+    'components/settings/connectedServices/ConnectedServicesSettingsView.tsx',
+    'components/settings/session/SessionComposerSettingsView.tsx',
+    'components/settings/shell/SettingsShell.tsx',
+    'components/terminal/embedded/EmbeddedTerminalPane.native.tsx',
+    'components/terminal/embedded/keys/TerminalArrowPad.tsx',
+    'components/terminal/qa/TerminalQaScreen.native.tsx',
+    'sync/api/account/apiConnectedMetadataCatalog.ts',
+    'sync/ops/actions/petChooseAction.ts',
+    'sync/store/hooks.ts',
 ]);
 
 /**
@@ -37,6 +74,9 @@ const ALLOWED_RAW_LOCAL_PROJECTION_FILES = new Set([
     // The one catalogued local-only compatibility projection: device/tab Home selection is owned
     // by the device-global Home-view state and must never enter Account-settings sync.
     'hooks/server/useHomeViewSelectionSettings.ts',
+    // The answering client's own encryption requirement is a local-only projection of the Account
+    // requirement it sets (c973795686); it is not a server-backed Account write.
+    'sync/ops/settings/setClientEncryptionRequirement.ts',
     // Test, development and Voice-QA harnesses that install fixture settings into a throwaway runtime.
     // They ship in the source tree but are never a product write path for a real Account.
     'components/sessions/files/views/sessionFilesViewTestkit.ts',

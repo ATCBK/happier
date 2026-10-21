@@ -22,7 +22,7 @@ const POLICY = {
 };
 
 describe('externalSessionsSettingsV1 account persistence', () => {
-    it('migrates absent intent to default-off and preserves current policies through rehydration', () => {
+    it('migrates absent intent to default-off and preserves current policies through rehydration, projecting stored objects to their known fields', () => {
         const migrated = settingsParse({
             schemaVersion: 7,
         });
@@ -47,7 +47,6 @@ describe('externalSessionsSettingsV1 account persistence', () => {
             v: 1,
             keepPassivelyFollowingAfterRestart: true,
             autoLinkSourcePolicies: [POLICY],
-            futureField: { revision: 2 },
         });
     });
 

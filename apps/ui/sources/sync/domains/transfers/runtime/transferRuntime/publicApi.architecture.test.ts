@@ -25,14 +25,18 @@ async function listFilesRecursively(directory: string): Promise<string[]> {
 describe('transferRuntime (public API)', () => {
     it('freezes the transferRuntime index runtime exports', async () => {
         expect(Object.keys(transferRuntime).sort()).toEqual([
+            'MACHINE_CARRIER_TRANSPORT_FAILED_ERROR_CODE',
+            'MACHINE_CARRIER_UNAVAILABLE_ERROR_CODE',
             'callAdmittedFilesystemTransferActionRpc',
             'callDaemonWorkspaceStatFileRpc',
             'callDaemonWorkspaceWriteFileRpc',
             'captureComposerContentSubmission',
             'claimComposerContent',
             'classifyTransferFailure',
+            'copyPreparedFilesystemFile',
             'createSessionAttachmentTransferRouting',
             'createTransferManifestHasher',
+            'downloadBulkPayloadViaDirectExportToDestination',
             'downloadDaemonSessionAttachmentToDestination',
             'downloadDaemonWorkspaceFileToBase64',
             'downloadDaemonWorkspaceFileToDestination',
@@ -44,6 +48,7 @@ describe('transferRuntime (public API)', () => {
             'prepareBulkJsonPayloadForUpload',
             'readFoundSkillBundle',
             'releaseComposerContent',
+            'resolveMachineCarrierRoute',
             'resolveSessionFileTransferAvailability',
             'resolveTransferAvailability',
             'resolveTransferRouteDecision',

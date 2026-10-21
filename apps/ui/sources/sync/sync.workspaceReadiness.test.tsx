@@ -41,7 +41,7 @@ describe('Sync workspace readiness', () => {
         const record = { address, revision: 1, createdAt: 1, updatedAt: 1, content: await cipher.seal(address, document) };
         const { profileDefaults } = await import('./domains/profiles/profile');
         let exactReads = 0;
-        network.setHttpResponder(async input => {
+        network.setHttpResponder(async (input, init) => {
             const path = new URL(String(input)).pathname;
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse({ features: { sessions: { enabled: true, drafts: { enabled: true } } } }));
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
@@ -52,9 +52,13 @@ describe('Sync workspace readiness', () => {
             if (path === '/v1/account/project-rows/list') return Response.json(createPlainProjectAccountRowListFixture());
             if (path === '/v2/account/session-drafts/list') return Response.json({ items: [record] });
             if (path === '/v2/account/session-drafts/read') return Response.json({ status: 'present', record });
-            if (path === '/v2/sessions/offscreen-draft') {
-                exactReads += 1;
-                return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id: address.sessionId }) });
+            if (path === '/v2/sessions/read-batch') {
+                // Draft pages read their Sessions' encryption contexts as one finite batch.
+                const requested: string[] = JSON.parse(String(init?.body)).sessionIds;
+                if (requested.includes(address.sessionId)) exactReads += 1;
+                return Response.json({ results: requested.map(sessionId => ({ sessionId,
+                    detail: { status: 200, body: { session: createPlainSessionCurrentProjectionRecordFixture({ id: sessionId }) } },
+                    turns: { status: 200, body: { v: 1, sessionId, updatedAt: 1, turns: [] } } })) });
             }
             if (path === '/v2/sessions' || path === '/v2/sessions/active') return Response.json({ sessions: [], nextCursor: null, hasNext: false });
             if (path === '/v2/cursor') return Response.json({ cursor: 0 });

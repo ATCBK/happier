@@ -40,6 +40,7 @@ describe('LOCAL_SETTING_DEFINITIONS appPaneScopesV1', () => {
         });
 
         expect(parsed['session:one']).toEqual({
+            mainHidden: false,
             right: {
                 isOpen: true,
                 activeTabId: 'git',

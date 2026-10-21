@@ -2224,7 +2224,9 @@ describe('sync socket offline tracking', () => {
 
     await (sync as any).resumeSync('socket-reconnect');
 
-    expect(fetchCurrentChangesCursorMock).toHaveBeenCalledTimes(1);
+    // /v2/cursor is also the scoped connection's readiness probe, which names its method; the snapshot-base
+    // capture is the one cursor read that does not.
+    expect(fetchCurrentChangesCursorMock.mock.calls.filter(([, init]) => !(init as RequestInit | undefined)?.method)).toHaveLength(1);
     const serverScope = getActiveServerSnapshot().serverId;
     const instanceId = globalThis.sessionStorage?.getItem(WEB_SYNC_INSTANCE_ID_SESSION_KEY) ?? undefined;
     expect(loadChangesCursor({ serverScope, accountId: 'test', instanceId })).toBe('12');
