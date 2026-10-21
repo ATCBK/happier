@@ -390,6 +390,22 @@ describe('Home atmosphere picture and Project mutations', () => {
         expect(await pictureStore.list()).toEqual(before);
     });
 
+    it('does not persist or select decoded pixels after retirement during image preparation', async () => {
+        let current = true;
+        vi.stubGlobal('createImageBitmap', async () => ({ width: 16, height: 8, close() {} }));
+        vi.stubGlobal('document', { createElement: () => ({ width: 0, height: 0, getContext: () => ({ drawImage() {} }),
+            toBlob: (done: (blob: Blob) => void) => { current = false; done(new Blob(['retired-pixels'], { type: 'image/webp' })); } }) });
+        onTestFinished(() => { vi.unstubAllGlobals(); });
+        const { pictureStore } = await import('@/components/atmosphere/pictureStore.web');
+        const before = await pictureStore.list();
+        const owner = createOwner(undefined, false, true, settingsDefaults, undefined, undefined, undefined,
+            { isCurrent: () => current }, undefined, { ...services(), pickAtmospherePicture: async () => new Blob(['picked']) });
+        expect(await owner.action({ actionId: 'settings.invoke', input: { anchor: 'appearance.atmospherePictureAdd',
+            input: { kind: 'atmosphere_picture_add', source: { kind: 'picked' } } } })).toMatchObject({ status: 'cancelled' });
+        expect(await pictureStore.list()).toEqual(before);
+        expect(owner.account().homeAtmosphere).toEqual(settingsDefaults.homeAtmosphere);
+    });
+
     it('acquires URL and exact Machine binary bytes through their real owners and refuses remove via the add anchor', async () => {
         const encoded = new Blob(['prepared-webp'], { type: 'image/webp' });
         const decode = vi.fn(async (data: Blob) => {
@@ -478,6 +494,23 @@ describe('Home atmosphere picture and Project mutations', () => {
         expect(row.content).toMatchObject({ t: 'plain', v: { value: { pinned: true, label: 'Keep me', atmosphere: { source: 'none' } } } });
         expect(await owner.action({ actionId: 'settings.reset', input: { anchor: 'appearance.projectAtmosphere', target } }))
             .toEqual({ anchor: 'appearance.projectAtmosphere', value: 'home' });
+        // The same Project row/CAS owner selects acquired bytes; it must never select them in Home.
+        vi.stubGlobal('createImageBitmap', async () => ({ width: 16, height: 8, close() {} }));
+        vi.stubGlobal('document', { createElement: () => ({ width: 0, height: 0, getContext: () => ({ drawImage() {} }),
+            toBlob: (done: (blob: Blob) => void) => done(new Blob(['project-picture'], { type: 'image/webp' })) }) });
+        vi.stubGlobal('fetch', async () => new Response(new Blob(['source-picture'], { type: 'image/png' })));
+        onTestFinished(() => { vi.unstubAllGlobals(); });
+        expect(await owner.action({ actionId: 'settings.invoke', input: { anchor: 'appearance.atmospherePictureAdd', target,
+            input: { kind: 'atmosphere_picture_add', source: { kind: 'url', url: 'https://example.test/project.png' } } } }))
+            .toMatchObject({ status: 'completed' });
+        expect(row.content).toMatchObject({ t: 'plain', v: { value: { pinned: true, label: 'Keep me', atmosphere: {
+            source: 'picture', picture: { ref: { kind: 'user', localId: expect.any(String) } },
+        } } } });
+        expect(owner.account().homeAtmosphere).toEqual(settingsDefaults.homeAtmosphere);
+        const { pictureStore } = await import('@/components/atmosphere/pictureStore.web');
+        const acquired = (await pictureStore.list()).filter(picture => picture.kind === 'user');
+        onTestFinished(async () => { for (const picture of acquired) await pictureStore.remove(picture.localId); });
+        await owner.action({ actionId: 'settings.reset', input: { anchor: 'appearance.projectAtmosphere', target } });
         const writes = requests.length;
         expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.projectAtmosphere', target: { ...target, serverId: 'other-home' }, value: 'home' } }))
             .toMatchObject({ errorCode: 'setting_target_mismatch' });

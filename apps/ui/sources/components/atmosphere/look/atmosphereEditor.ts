@@ -6,8 +6,16 @@ import type {
 import { useSetting } from '@/sync/store/hooks';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
+import type { SettingsDeclarationTargetV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
+import type { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 
 const homeAtmosphereSetting = { anchor: 'appearance.homeAtmosphere' } as const;
+
+/** Acquisition remains an admitted Settings operation bound to this editor's captured owner. */
+export type AtmospherePictureActions = Readonly<{
+  target: Extract<SettingsDeclarationTargetV1, { kind: 'project' | 'public_profile_draft' }>;
+  executorOptions?: NonNullable<Parameters<typeof useMountedActionExecution>[1]>['executorOptions'];
+}>;
 
 /**
  * What the Look panel edits: the value it shows and one write that applies an edit (from
@@ -17,6 +25,7 @@ const homeAtmosphereSetting = { anchor: 'appearance.homeAtmosphere' } as const;
 export type AtmosphereEditor = Readonly<{
   value: AtmospherePresentation;
   update(edit: (current: AtmospherePresentation) => AtmospherePresentation): void;
+  pictureActions?: AtmospherePictureActions;
   sameAsHome?: boolean;
   resetToHome?: () => void;
 }>;

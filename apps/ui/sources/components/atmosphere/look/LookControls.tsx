@@ -478,6 +478,7 @@ export function PictureControls(
         }
       >
         <PicturePicker
+          pictureActions={props.editor.pictureActions}
           columns={presentation === 'page' ? 6 : 4}
           pictures={pictures}
           selected={ref}

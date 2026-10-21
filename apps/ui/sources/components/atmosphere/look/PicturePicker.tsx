@@ -18,8 +18,7 @@ import { useMountedActionExecution } from '@/components/approvals/useMountedActi
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { t } from '@/text';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
-import { nativePickImages } from '@/utils/files/nativePickImages';
-import { storeUserAtmospherePicture } from '../atmosphereSettings';
+import type { AtmospherePictureActions } from './atmosphereEditor';
 import type { PictureInfo } from '../pictureStore.types';
 import type { PictureRef } from './atmosphereEdits';
 import { PictureImagePreview } from './lookPreviews';
@@ -52,13 +51,6 @@ function AddThumbnail() {
   );
 }
 
-/** Bytes picked from this device's library or files, as the store accepts them. */
-async function pickPictureBytes(): Promise<Blob | string | null> {
-  const [picked] = await nativePickImages({ multiple: false });
-  if (!picked) return null;
-  return picked.kind === 'web' ? picked.file : picked.uri;
-}
-
 /**
  * The built-in pictures (and plugin pictures) as thumbnails, this device's own pictures after them,
  * then "Your picture…". Choosing one selects it; the line below credits the chosen picture or, for
@@ -69,12 +61,18 @@ export const PicturePicker = React.memo(function PicturePicker(
     pictures: readonly AtmospherePicture[];
     selected: PictureRef | null;
     onSelect: (ref: PictureRef) => void;
+    pictureActions?: AtmospherePictureActions;
     /** Thumbnails per row: four in the Look panel, more across a Settings page. */
     columns?: number;
     testID?: string;
   }>,
 ) {
   const { onSelect } = props;
+  const scope = useAccountSettingsScope();
+  const execution = useMountedActionExecution(props.pictureActions?.target.serverId ?? scope, {
+    executorOptions: props.pictureActions?.executorOptions,
+    retainInvocation: true,
+  });
   const userPictures = useUserPictures();
   const options = React.useMemo(
     (): Array<SelectionTile<string>> => [
@@ -105,19 +103,32 @@ export const PicturePicker = React.memo(function PicturePicker(
         : `${USER_PREFIX}${props.selected.localId}`;
   const add = React.useCallback(async () => {
     try {
-      const bytes = await pickPictureBytes();
-      if (bytes === null) return;
-      onSelect({
-        kind: 'user',
-        localId: await storeUserAtmospherePicture(bytes),
+      const result = await execution.execute('settings.invoke', {
+        anchor: 'appearance.atmospherePictureAdd',
+        ...(props.pictureActions ? { target: props.pictureActions.target } : {}),
+        input: { kind: 'atmosphere_picture_add', source: { kind: 'picked' } },
       });
+      if (!result.ok && result.errorCode !== 'approval_rejected' && result.errorCode !== 'approval_canceled' && execution.isCurrent()) {
+        await Modal.alertAsync(t('common.error'), t('common.unavailable'));
+      }
     } catch (error) {
+      if (!execution.isCurrent()) return;
       await Modal.alertAsync(
         t('common.error'),
         error instanceof Error ? error.message : String(error),
       );
     }
-  }, [onSelect]);
+  }, [execution.execute, execution.isCurrent, props.pictureActions]);
+  const remove = React.useCallback(async (localId: string) => {
+    const result = await execution.execute('settings.invoke', {
+      anchor: 'appearance.atmospherePictureRemove',
+      ...(props.pictureActions ? { target: props.pictureActions.target } : {}),
+      input: { kind: 'atmosphere_picture_remove', localId },
+    });
+    if (!result.ok && result.errorCode !== 'approval_rejected' && result.errorCode !== 'approval_canceled' && execution.isCurrent()) {
+      await Modal.alertAsync(t('common.error'), t('common.unavailable'));
+    }
+  }, [execution.execute, execution.isCurrent, props.pictureActions]);
   const onChange = React.useCallback(
     (id: string | null) => {
       if (id === null) return;
@@ -157,7 +168,7 @@ export const PicturePicker = React.memo(function PicturePicker(
       {chosenBuiltin ? (
         <PictureCredit picture={chosenBuiltin} />
       ) : chosenUser ? (
-        <UserPictureLine localId={chosenUser} />
+        <UserPictureLine localId={chosenUser} onRemove={remove} />
       ) : null}
     </View>
   );
@@ -190,18 +201,7 @@ function PictureCredit(props: Readonly<{ picture: AtmospherePicture }>) {
   );
 }
 
-function UserPictureLine(props: Readonly<{ localId: string }>) {
-  const scope = useAccountSettingsScope();
-  const execution = useMountedActionExecution(scope);
-  const remove = async () => {
-    const result = await execution.execute('settings.invoke', {
-      anchor: 'appearance.atmospherePictureRemove',
-      input: { kind: 'atmosphere_picture_remove', localId: props.localId },
-    });
-    if (!result.ok && result.errorCode !== 'approval_rejected' && result.errorCode !== 'approval_canceled' && execution.isCurrent()) {
-      await Modal.alertAsync(t('common.error'), t('common.unavailable'));
-    }
-  };
+function UserPictureLine(props: Readonly<{ localId: string; onRemove(localId: string): Promise<void> }>) {
   return (
     <View style={styles.line}>
       <Text style={styles.lineTitle} numberOfLines={1}>
@@ -215,7 +215,7 @@ function UserPictureLine(props: Readonly<{ localId: string }>) {
         label={t('common.remove')}
         accessibilityLabel={t('settingsAppearance.glassControls.atmospherePictureRemove')}
         testID="atmosphere-picture-remove"
-        onPress={remove}
+        onPress={() => props.onRemove(props.localId)}
       />
     </View>
   );

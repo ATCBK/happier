@@ -42,6 +42,7 @@ import { BUILT_IN_SETTINGS_DECLARATIONS_V1, readBuiltInSettingDeclarationV1, res
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { ProjectAtmosphereSchema } from '@happier-dev/protocol/account/settings/accountSettings';
 import { normalizeProjectAtmosphere, readAtmospherePresentationSetting, editAtmospherePresentationSetting } from '@/components/atmosphere/atmosphereSettings';
+import { readProjectAtmosphereSetting, mutateProjectAtmosphereSetting } from '@/components/atmosphere/projectAtmosphereSettings';
 import { atmospherePresentation, DEFAULT_HOME_ATMOSPHERE } from '@happier-dev/protocol/account/settings/accountSettings';
 import { MachineStorageViewSettingKeySchema, MachineStorageViewSettingChangeSchema,
     readMachineStorageViewSetting, buildMachineStorageViewSettingMutation } from '@/sync/domains/settings/registry/local/machineStorageViewSetting';
@@ -532,19 +533,18 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
             const requested = actionId === 'settings.set' ? SettingsDeclarationActionInputSchemasV1['settings.set'].parse(input).value : undefined;
             const admitted = requested === 'home' ? { success: true as const, data: 'home' as const } : ProjectAtmosphereSchema.safeParse(requested);
             if (actionId === 'settings.set' && !admitted.success) return refuse('invalid_setting_value');
-            const snapshot = await rowsOwner.read(context?.signal);
-            if (!isCurrent() || snapshot.scope.serverId !== target.serverId || snapshot.scope.accountId !== owner.accountScope?.accountId
-                || snapshot.status !== 'ready' || snapshot.coverage !== 'complete') return refuse('setting_not_bound');
-            const row = snapshot.organizations.find(row => row.key.serverId === target.serverId && row.key.projectKey === target.projectKey);
-            if (actionId === 'settings.get') return { anchor: ref.anchor, value: row?.value.atmosphere ?? 'home' };
+            const projectContext = { rows: rowsOwner, scope: owner.accountScope, target, signal: context?.signal, isCurrent };
+            if (actionId === 'settings.get') {
+                const current = await readProjectAtmosphereSetting(projectContext);
+                return current ? { anchor: ref.anchor, value: current.value } : refuse('setting_not_bound');
+            }
             if (!admitted.success) return refuse('invalid_setting_value');
             const atmosphere = admitted.data === 'home' ? 'home' : normalizeProjectAtmosphere(admitted.data);
-            const result = await rowsOwner.mutateOrganization({ serverId: target.serverId, projectKey: target.projectKey,
-                expectedRevision: row?.revision ?? 'absent', signal: context?.signal,
-                mutate: value => { if (!isCurrent()) throw new RejectedSettingMutation(); return { ...value, atmosphere }; } });
-            if (!isCurrent()) return refuse('setting_not_bound');
-            return result.status === 'updated' ? { anchor: ref.anchor, value: result.value.atmosphere ?? 'home' }
-                : refuse('project_account_mutation_conflict');
+            const result = await mutateProjectAtmosphereSetting({ ...projectContext,
+                readHome: async () => (await owner.readAccountSettings()).homeAtmosphere,
+                edit: atmosphere === 'home' ? 'home' : () => atmosphere });
+            return result.status === 'updated' ? { anchor: ref.anchor, value: result.value }
+                : refuse(result.status === 'unavailable' ? 'setting_not_bound' : 'project_account_mutation_conflict');
         }
         if (binding.scope === 'team') {
             const execute = owner.mutationServices?.executeSettingsOwnerAction;

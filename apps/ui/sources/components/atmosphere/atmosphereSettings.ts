@@ -91,10 +91,15 @@ export function atmosphereFieldStorageBinding(anchor: string): SettingStorageBin
 }
 
 /** The one way a user picture enters this device's store (the Look picker and the Settings Action). */
-export async function storeUserAtmospherePicture(data: Blob | string): Promise<string> {
+export function storeUserAtmospherePicture(data: Blob | string): Promise<string>;
+export function storeUserAtmospherePicture(data: Blob | string, isCurrent: () => boolean): Promise<string | null>;
+export async function storeUserAtmospherePicture(data: Blob | string, isCurrent: () => boolean = () => true): Promise<string | null> {
     const { pictureStore } = await import('./pictureStore');
+    if (!isCurrent()) return null;
+    const prepared = await pictureStore.prepare(data);
+    if (!isCurrent()) return null;
     const localId = randomUUID();
-    await pictureStore.put({ localId, kind: 'user', data: await pictureStore.prepare(data) });
+    await pictureStore.put({ localId, kind: 'user', data: prepared });
     return localId;
 }
 
@@ -106,7 +111,10 @@ export async function invokeAtmospherePictureOperation(operation: 'add' | 'remov
     }
     if (!context.isCurrent()) return { status: 'cancelled' };
     const { pictureStore } = await import('./pictureStore');
+    if (!context.isCurrent()) return { status: 'cancelled' };
     if (input?.kind === 'atmosphere_picture_add') {
+        const projectRows = context.target?.kind === 'project' ? context.services?.projectAccountRows : undefined;
+        if (context.target?.kind === 'project' && (!projectRows || !context.accountScope)) return { status: 'unavailable', reason: 'project_account_unavailable' };
         let data: Blob | string;
         if (input.source.kind === 'picked') {
             const pick = context.services?.pickAtmospherePicture;
@@ -127,14 +135,20 @@ export async function invokeAtmospherePictureOperation(operation: 'add' | 'remov
             data = `data:application/octet-stream;base64,${result.content}`;
         }
         if (!context.isCurrent()) return { status: 'cancelled' };
-        const localId = await storeUserAtmospherePicture(data);
-        if (!context.isCurrent()) return { status: 'cancelled' };
+        const localId = await storeUserAtmospherePicture(data, context.isCurrent);
+        if (localId === null || !context.isCurrent()) return { status: 'cancelled' };
         const select = <T extends AtmospherePresentation>(value: T): T => ({ ...value, source: 'picture',
             picture: { ...value.picture, ref: { kind: 'user', localId } } });
         if (context.target?.kind === 'public_profile_draft') {
             const draft = context.services?.publicProfileAtmosphereDraft;
             if (!draft?.isCurrent() || draft.serverId !== context.target.serverId) return { status: 'cancelled' };
             await draft.update(value => context.isCurrent() && draft.isCurrent() ? select(value) : value);
+        } else if (context.target?.kind === 'project' && projectRows) {
+            const { mutateProjectAtmosphereSetting } = await import('./projectAtmosphereSettings');
+            const result = await mutateProjectAtmosphereSetting({ rows: projectRows, scope: context.accountScope, target: context.target,
+                signal: context.signal, isCurrent: context.isCurrent, readHome: async () => (await context.readSettings()).homeAtmosphere, edit: select });
+            if (result.status !== 'updated') return { status: 'unavailable', reason: result.status === 'conflict'
+                ? 'project_account_mutation_conflict' : 'project_account_unavailable' };
         } else {
             await context.mutateSettings(settings => ({ homeAtmosphere: select(settings.homeAtmosphere) }));
         }

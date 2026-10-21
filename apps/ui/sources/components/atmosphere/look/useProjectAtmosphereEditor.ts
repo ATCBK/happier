@@ -8,6 +8,7 @@ import { t } from '@/text';
 import type { ProjectAtmosphere, AtmospherePresentation } from '@happier-dev/protocol/account/settings/accountSettings';
 import type { AtmosphereEditor } from './atmosphereEditor';
 import { projectAtmosphereEdit } from './projectAtmosphereEdit';
+import { mutateProjectAtmosphereSetting } from '../projectAtmosphereSettings';
 
 /** Look edits the existing private Project organization row through its captured-Account CAS owner. */
 export function useProjectAtmosphereEditor(project: Readonly<{ serverId: string; projectKey: string }>): AtmosphereEditor {
@@ -23,26 +24,19 @@ export function useProjectAtmosphereEditor(project: Readonly<{ serverId: string;
             try {
                 if (!scope || scope.serverId !== project.serverId || scope.accountId !== account.accountId) throw new Error('project_account_scope_changed');
                 const rows = createUiProjectAccountRowsClient(account);
-                const snapshot = await rows.read();
-                account.assertCurrent();
-                if (snapshot.scope.serverId !== project.serverId || snapshot.scope.accountId !== account.accountId
-                    || snapshot.status !== 'ready' || snapshot.coverage !== 'complete') throw new Error('project_account_unavailable');
-                const row = snapshot.organizations.find(row => row.key.serverId === project.serverId && row.key.projectKey === project.projectKey);
-                const result = await rows.mutateOrganization({ ...project, expectedRevision: row?.revision ?? 'absent',
-                    mutate: value => {
-                        account.assertCurrent();
-                        return { ...value, atmosphere: edit === 'home' ? 'home'
-                            : projectAtmosphereEdit(storage.getState().settings.homeAtmosphere, value.atmosphere, edit) };
-                    } });
+                const result = await mutateProjectAtmosphereSetting({ rows, scope, target: project, edit,
+                    isCurrent: () => { try { account.assertCurrent(); return true; } catch { return false; } },
+                    readHome: async () => storage.getState().settings.homeAtmosphere });
                 if (result.status !== 'updated') throw new Error('project_account_mutation_conflict');
             } finally { account.dispose(); }
         };
         pending.current = pending.current.then(run).catch(() => { Modal.alert(t('common.error'), t('errors.tryAgain')); });
     }, [project.projectKey, project.serverId]);
-    return React.useMemo(() => ({
+    return React.useMemo<AtmosphereEditor>(() => ({
         value: projectAtmosphereEdit(home, override, value => value),
+        pictureActions: { target: { kind: 'project', serverId: project.serverId, projectKey: project.projectKey } },
         update: (edit: (value: AtmospherePresentation) => AtmospherePresentation) => write(current => ({ ...current, ...edit(current) })),
         sameAsHome: override === undefined || override === 'home',
         resetToHome: () => write('home'),
-    }), [home, override, write]);
+    }), [home, override, project.projectKey, project.serverId, write]);
 }
