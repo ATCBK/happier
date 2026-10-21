@@ -99,10 +99,9 @@ export function useWebOverlayFocusContainment(options: WebOverlayFocusContainmen
             const returnTarget = returnTargetRef.current;
             returnTargetRef.current = null;
 
-            // A higher retained overlay can make this shell inert while this
-            // lower overlay is being retired. It must not steal focus back
-            // from the currently interactive overlay.
-            if (isWithinInertSubtree(container)) return;
+            // An inert ancestor means a higher overlay owns this subtree. The shell's own
+            // inert flag can instead be its ordinary close, with focus still needing release.
+            if (isReleasedFocusSuppressed(container)) return;
 
             const restoreReleasedFocus = () => {
                 // Becoming docked releases containment, not the still-open editor's focus.
@@ -133,7 +132,7 @@ export function useWebOverlayFocusContainment(options: WebOverlayFocusContainmen
             queueMicrotask(() => {
                 const focused = document.activeElement;
                 if (focused && focused !== document.body && !container.contains(focused)) return;
-                if (isWithinInertSubtree(container)) return;
+                if (isReleasedFocusSuppressed(container)) return;
                 restoreReleasedFocus();
             });
         };
@@ -216,6 +215,15 @@ function listFocusableElements(container: HTMLElement): HTMLElement[] {
 
 function isWithinInertSubtree(element: HTMLElement): boolean {
     return element.closest('[inert]') != null;
+}
+
+function isReleasedFocusSuppressed(container: HTMLElement): boolean {
+    if (container.parentElement?.closest('[inert]')) return true;
+    if (!container.hasAttribute('inert')) return false;
+    // A self-hidden shell must not reclaim focus another overlay already took.
+    const focused = document.activeElement;
+    return focused != null && focused !== document.body && focused !== document.documentElement
+        && !container.contains(focused);
 }
 
 function isEligibleFocusTarget(target: FocusReturnTarget): target is HTMLElement {

@@ -18,6 +18,7 @@ type OverlayHarnessProps = Readonly<{
     includeTrigger?: boolean;
     /** The shell stays in the document after release, as a modal does while it animates out. */
     retainedShell?: boolean;
+    hiddenOnRelease?: boolean;
     focusReturn?: WebOverlayFocusReturnStrategy;
 }>;
 
@@ -80,22 +81,39 @@ describe('useWebOverlayFocusContainment', () => {
         expect(document.activeElement).toBe(trigger);
     });
 
-    it('keeps focus on the trigger when the released overlay stays mounted to animate out', async () => {
+    it('keeps focus on the trigger when the released overlay stays mounted and inert to animate out', async () => {
         // React restores the element that was focused before a commit once the commit's DOM work is done;
         // a shell still in the document would take focus back from the trigger the release just focused.
         const harness = await mountHarness((props: OverlayHarnessProps) => <OverlayHarness {...props} />, {
             active: false,
             includeTrigger: true,
             retainedShell: true,
+            hiddenOnRelease: true,
         });
         const trigger = getElement<HTMLButtonElement>('overlay-trigger');
         trigger.focus();
-        await harness.render({ active: true, includeTrigger: true, retainedShell: true });
+        await harness.render({ active: true, includeTrigger: true, retainedShell: true, hiddenOnRelease: true });
         getElement<HTMLButtonElement>('overlay-last-action').focus();
 
-        await harness.render({ active: false, includeTrigger: true, retainedShell: true });
+        await harness.render({ active: false, includeTrigger: true, retainedShell: true, hiddenOnRelease: true });
 
+        expect(getElement('overlay-shell').hasAttribute('inert')).toBe(true);
         expect(document.activeElement).toBe(trigger);
+    });
+
+    it.each([false, true])('does not return focus from a retired lower overlay while the higher overlay owns it (self inert: %s)', async (lowerSelfInert) => {
+        const harness = await mountHarness((props: NestedOverlayHarnessProps) => <NestedOverlayHarness {...props} />, {
+            lowerActive: true,
+            topActive: false,
+            lowerSelfInert,
+        });
+        await harness.render({ lowerActive: true, topActive: true, lowerSelfInert });
+        const topAction = getElement<HTMLButtonElement>('nested-top-last-action');
+        topAction.focus();
+        await harness.render({ lowerActive: false, topActive: true, lowerSelfInert });
+        expect(document.activeElement).toBe(topAction);
+        dispatchTab();
+        expect(document.activeElement).toBe(getElement('nested-top-first-action'));
     });
 
     it('uses the pane fallback when the captured trigger disconnects before close', async () => {
@@ -173,7 +191,7 @@ function OverlayHarness(props: OverlayHarnessProps): React.ReactElement {
             {props.includeTrigger ? <button data-testid="overlay-trigger">Trigger</button> : null}
             <button ref={fallbackRef} data-testid="overlay-pane-fallback">Pane fallback</button>
             {props.active || props.retainedShell ? (
-                <div ref={shellRef} data-testid="overlay-shell" tabIndex={-1}>
+                <div ref={shellRef} data-testid="overlay-shell" tabIndex={-1} inert={!props.active && props.hiddenOnRelease || undefined}>
                     <button data-testid="overlay-first-action">First</button>
                     <button data-testid="overlay-last-action">Last</button>
                 </div>
@@ -185,6 +203,7 @@ function OverlayHarness(props: OverlayHarnessProps): React.ReactElement {
 type NestedOverlayHarnessProps = Readonly<{
     lowerActive: boolean;
     topActive: boolean;
+    lowerSelfInert?: boolean;
 }>;
 
 function NestedOverlayHarness(props: NestedOverlayHarnessProps): React.ReactElement {
@@ -207,9 +226,9 @@ function NestedOverlayHarness(props: NestedOverlayHarnessProps): React.ReactElem
     return (
         <>
             <button data-testid="nested-trigger">Trigger</button>
-            <div inert={props.topActive || undefined}>
+            <div inert={props.topActive && !props.lowerSelfInert || undefined}>
                 {props.lowerActive ? (
-                    <div ref={lowerShellRef} data-testid="nested-lower-shell" tabIndex={-1}>
+                    <div ref={lowerShellRef} data-testid="nested-lower-shell" tabIndex={-1} inert={props.topActive && props.lowerSelfInert || undefined}>
                         <button data-testid="nested-lower-first-action">Lower first</button>
                         <button data-testid="nested-lower-last-action">Lower last</button>
                     </div>
