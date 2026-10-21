@@ -209,6 +209,28 @@ describe('DetailsTabGroupPanel with one tab (lab session-D)', () => {
     expect(screen.findHostByTestId('peek-header.root')).not.toBeNull();
   });
 
+  it('lends nothing when the pane has no controls to lend, so a phone header still folds a lone quiet button into ⋯ (lab FV2bp)', async () => {
+    // A phone pane's launchers live in the screen bar: its own controls render nothing here.
+    const screen = await renderScreen(
+      <SurfaceStateSizeProvider size="phone">
+        <DetailsTabGroupPanel
+          pane={pane}
+          group={group([tab('bin', 'firmware.bin')])}
+          collapseSingleTabStrip
+          testIds={testIds}
+          renderHeaderActions={() => null}
+          renderTabContent={() => (
+            <DetailsTabHeader testID="bin-header" title="firmware.bin"
+              buttons={[{ label: 'Add to commit', onPress: () => {}, testID: 'bin-stage' }]} />
+          )}
+        />
+      </SurfaceStateSizeProvider>,
+    );
+    expect(screen.findAllHostsByTestId('strip-tab-bin')).toHaveLength(0);
+    expect(screen.findAllHostsByTestId('bin-stage')).toHaveLength(0);
+    expect(screen.findAllHostsByTestId('bin-header.menu')).not.toHaveLength(0);
+  });
+
   it('keeps the phone strip when it carries the screen’s own leading control', async () => {
     const screen = await renderScreen(
       <SurfaceStateSizeProvider size="phone">

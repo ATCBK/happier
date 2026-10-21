@@ -179,12 +179,12 @@ export const DetailsTabGroupPanel = React.memo((props: DetailsTabGroupPanelProps
     const lendsControls = props.collapseSingleTabStrip === true && !phoneStripCarriesLeading && !forceEmptyState && !restoreChipOnStrip && props.group.tabs.length === 1;
     const headerActionsScopeKey = `details-group:${React.useId()}`;
     const { renderHeaderLeadingActions, renderHeaderActions } = props;
-    const renderLentControls = React.useCallback(() => (
-        <>
-            {renderHeaderLeadingActions ? renderHeaderLeadingActions() : null}
-            {renderHeaderActions ? renderHeaderActions() : null}
-        </>
-    ), [renderHeaderActions, renderHeaderLeadingActions]);
+    // Nothing to lend lends nothing: an empty fragment would read as pane controls and keep a header's row (FV2bp).
+    const renderLentControls = React.useCallback(() => {
+        const leading = renderHeaderLeadingActions ? renderHeaderLeadingActions() : null;
+        const trailing = renderHeaderActions ? renderHeaderActions() : null;
+        return leading == null && trailing == null ? null : <>{leading}{trailing}</>;
+    }, [renderHeaderActions, renderHeaderLeadingActions]);
     useStackHeaderActionsPublisher(headerActionsScopeKey, lendsControls ? renderLentControls : null);
     const controlsTakenByTab = useStackHeaderActionsClaimed(headerActionsScopeKey);
     const showStrip = !(lendsControls && controlsTakenByTab);
