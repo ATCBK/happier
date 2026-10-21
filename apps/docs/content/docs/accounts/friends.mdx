@@ -11,6 +11,12 @@ Friends is a social layer on top of Happier sessions:
 
 The server advertises Friends and GitHub OAuth availability via `GET /v1/features`. The UI uses that endpoint to decide whether to show Friends at all, and whether to offer GitHub connect.
 
+Username availability checks, explicit release and the stored manual-choice
+protection described below are **0.3 development** behavior. They are not a
+claim of availability on stable or preview servers. Friends still follows the
+server's Friends and identity policy; choosing a username does not publish a
+public profile.
+
 ## Identity model (one username, regardless of how you got it)
 
 Happier uses a single, unique identifier for discovery: `account.username`.
@@ -28,7 +34,7 @@ When a user connects GitHub:
 1. The server completes the OAuth flow and fetches `GET https://api.github.com/user` (scope is `read:user`).
 2. The server links the GitHub account to the Happier account (1 GitHub account → 1 Happier account).
 3. The server **does not overwrite** an existing `account.username`.
-4. If `account.username` is empty, the server tries to set it to the GitHub `login` (lowercased), **but only if that username is not already taken**.
+4. If `account.username` is empty, the server tries to set it to the GitHub `login` (lowercased), **but only if that username is not already taken**. In 0.3 development this also requires auto-fill to remain enabled and the name to pass the shared claim policy, including reserved names and release holds.
 
 If the GitHub login username is already taken (or invalid under your server’s username policy), GitHub can still connect successfully, but the app will prompt the user to pick a different `@username` before Friends setup is complete.
 
@@ -36,7 +42,31 @@ Disconnecting GitHub:
 
 - Always removes the GitHub link.
 - Keeps a custom username.
-- Clears `account.username` only when it matches the GitHub login (treated as “GitHub-derived”).
+- On older servers, clears `account.username` when it matches the GitHub login (treated as “GitHub-derived”).
+- In 0.3 development, clears a matching name only while provider auto-fill is still enabled. A manual choice survives disconnect even when it matches the GitHub login. Names retained during upgrade are preserved because their original source cannot be proven.
+
+### Choosing or releasing a username (0.3 development)
+
+You have one username on each Account service. Choosing a name, including saving
+the same name again, prevents a later provider connection from replacing it.
+Releasing it also prevents provider auto-fill from silently claiming another.
+
+Availability checks return the normalized spelling and may offer alternatives
+when a name is taken. An alternative is a suggestion, not a reservation: another
+person can claim it before you save. Existing holders can retain their names
+even when a newer reserved-name or claim policy would refuse a new claim.
+
+Explicit release removes your username from your Account and holds that name
+for 30 days. During the hold, nobody can claim it, including you. Repeating the
+release does not restart the 30 days. Changing to a different name does not
+create this hold. Release affects the same identity used by Friends; it does
+not delete your Account, usage history or provider connection.
+
+The check and release Actions require a server that implements them. An older
+server returns an unsupported-operation result; ordinary username editing keeps
+its existing support. Automated release asks for approval by default, with the
+usual per-surface controls in **Settings → Actions**. An approval override does
+not bypass the server's identity policy or make an unavailable name claimable.
 
 ## Username-only mode (no GitHub required)
 
@@ -116,5 +146,12 @@ Optional:
   - Errors:
     - `400 { "error": "friends-disabled" }` when Friends is disabled
     - `400 { "error": "username-disabled" }` when username-based friends are disabled and the user has no GitHub identity
-    - `400 { "error": "invalid-username" }` when the username fails validation
-    - `409 { "error": "username-taken" }` when the username is already in use
+    - `400 { "error": "invalid-username" }` when the username fails validation, including a new reserved-name claim in 0.3 development
+    - `409 { "error": "username-taken" }` when the username is already in use or under a release hold in 0.3 development
+- In 0.3 development, `POST /v1/account/username/check` checks availability without reserving a name, and `POST /v1/account/username/release` explicitly releases the current name. Both require authentication and the same Friends/identity eligibility as username editing.
+
+## Related
+
+- [Account security](/accounts/account-security)
+- [Sharing sessions](/accounts/session-sharing)
+- [Public profiles](/accounts/public-profiles) — the separate development contract for explicit anonymous disclosure.

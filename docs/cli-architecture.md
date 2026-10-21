@@ -59,6 +59,23 @@ retain that call's own ACK for partial results and Undo edits. The existing
 deadline and transport-loss handling still apply; ordinary callers keep their
 immediate cancellation behavior.
 
+## Public-profile maintenance (0.3 development source)
+
+The native daemon bootstrap attaches `daemon/account/publicProfileRefresh.ts`
+through the existing server-work scheduler. It uses the captured Account's
+shared Action executor, not a second publication writer. Published, unrestricted
+profiles become due 24 hours after snapshot computation; startup and reconnect
+wake the participant, offline scheduling pauses it, and Account retirement or
+shutdown aborts and drains its work. Requester Session bootstrap does not attach
+this Account maintenance participant.
+
+Refresh requires the canonical refresh Action to be Allowed for the **CLI**
+surface; UI or Agent approval waivers do not transfer. It refreshes permitted
+facts only and cannot apply private drafts, publish or resume. The development
+data-preparation and public rendering integration is incomplete, so this wiring
+does not establish a working automatic-publication workflow. Unavailable
+preparation returns a typed refusal rather than uploading invented totals.
+
 ## On-demand language intelligence (0.3 development source)
 
 `src/lsp/languageServerDefinitions.ts` reads `languageServers` from the current

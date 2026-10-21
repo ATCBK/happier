@@ -15,6 +15,7 @@
     "device-linking-and-restore",
     "session-sharing",
     "friends",
+    "public-profiles",
     "participant-routing"
   ]
 }

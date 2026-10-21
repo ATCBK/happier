@@ -105,6 +105,20 @@ revoked and the account is **Retired**, and **Retry deletion** completes the res
 member who sees this state is told a Home owner or the server operator can finish
 it.
 
+### Public-profile moderation in development
+
+[Public profiles](/accounts/public-profiles) have a separate, incomplete 0.3
+integration. The approved operator flow restricts or restores publication with a
+reason through Home authority and Activity; ordinary Account writes cannot lift
+that restriction. Restricting content must not disable the Account or release
+its username. Explicit handle reclaim is a separate privileged identity action
+with a reason and owner notice, not automatic inactive-name harvesting.
+
+Current source has publication lifecycle, operator restriction/restore and
+report-contact configuration, while the complete owner/operator UI journey is
+still integration work. The existing People actions alone do not establish
+public-profile support.
+
 ## Policies
 
 **Policies** contains sign-in, admission and encryption. Owners change
