@@ -125,6 +125,36 @@ describe('native device model operations through the real installer', () => {
         expect(nativeDialogs.alert).not.toHaveBeenCalled();
     });
 
+    it('ignores a previous pack outcome after a follower commits another selection', async () => {
+        const artifactStarted = createDeferred<AbortSignal>();
+        const response = createDeferred<Response>();
+        vi.stubGlobal('fetch', vi.fn(async (url: string, options: RequestInit) => {
+            if (String(url).includes('manifest')) return Response.json(manifest);
+            if (!options.signal) throw new Error('Expected native transfer signal');
+            artifactStarted.resolve(options.signal);
+            return response.promise;
+        }));
+        const props = { ...input, manifestUrl: 'https://example.test/manifest.json' };
+        const starter = await renderHook(useLocalNeuralModelPackState, { initialProps: props });
+        let operation!: Promise<void>;
+        await act(async () => { operation = starter.getCurrent().prepareModel(); });
+        const signal = await artifactStarted.promise;
+        await starter.unmount();
+        const follower = await renderHook(useLocalNeuralModelPackState, { initialProps: props });
+        try {
+            await vi.waitFor(() => expect(follower.getCurrent().modelStatus).toBe('downloading'));
+            await follower.rerender({ ...props, packId: 'other-pack' });
+            expect(signal.aborted).toBe(true);
+        } finally {
+            response.resolve(new Response(new Uint8Array([1])));
+            await act(async () => { await operation; });
+        }
+        expect(follower.getCurrent().modelStatus).toBe('idle');
+        expect(follower.getCurrent().downloadProgress).toBeNull();
+        expect(follower.getCurrent().installed).toBe(false);
+        expect(nativeDialogs.alert).not.toHaveBeenCalled();
+    });
+
     it('cancels mounted native preparation through settings.invoke without removing model files', async () => {
         const account = await createVoiceSettingsAccountTestHarness(settingsParse({ voice: { providerId: 'local_conversation',
             providers: { local_conversation: { schemaVersion: 1, config: { stt: { provider: 'local_neural',
