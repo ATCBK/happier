@@ -51,7 +51,7 @@ describe('public-profile CLI captured Account binding', () => {
       published.push(body);
       return { kind: 'updated', record: null };
     });
-    const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'account.public_profile.publish': ['cli'] } });
+    let actionsSettings = ActionsSettingsV1Schema.parse({ v: 1 });
     const executor = createActionExecutor({ ...createAccountServerActionDeps({ token: 'captured', serverId: 'home',
       serverHttpBaseUrl: 'http://profile-home.test', isCredentialCurrent: async () => true }),
       isActionApprovalRequired: (id, context, input) => isApprovalRequiredByActionsSettings(id, actionsSettings, context, undefined, undefined, input),
@@ -63,6 +63,12 @@ describe('public-profile CLI captured Account binding', () => {
     await expect(executor.execute('account.public_profile.preview', candidate, context)).resolves.toMatchObject({ ok: true,
       result: { kind: 'ready', view: { snapshot: { facts: { tokens: 10 } } } } });
     expect(published).toEqual([]);
+    // A human CLI caller still needs the ordinary Action approval. This thin
+    // transport has no approval host, so the default must fail before a write.
+    await expect(executor.execute('account.public_profile.publish', { ...candidate, intent: 'publish' }, context))
+      .resolves.toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+    expect(published).toEqual([]);
+    actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'account.public_profile.publish': ['cli'] } });
     await expect(executor.execute('account.public_profile.publish', { ...candidate, intent: 'publish' }, context))
       .resolves.toMatchObject({ ok: true, result: { kind: 'updated' } });
     expect(published).toHaveLength(1);

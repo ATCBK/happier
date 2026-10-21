@@ -99,17 +99,27 @@ describe('public-profile Actions through the shared executor', () => {
     expect(requests).toEqual([]);
   });
 
-  it('reports unavailable eligible source preparation without uploading preview data', async () => {
+  it.each([
+    { missing: 'report', reason: 'report_contact_unconfigured' },
+    { missing: 'ingress', reason: 'public_ingress_unconfigured' },
+    { missing: 'usage', reason: 'usage_unavailable' },
+  ] as const)('reports $reason from the strict owner context without uploading preview data', async ({ missing, reason }) => {
     const requests: unknown[] = [];
+    const canonicalContext = owner().context;
+    // Actual server context: a claimed handle and configured service still
+    // have null URLs when the canonical report contact is unconfigured.
+    const read = PublicProfileOwnerReadV1Schema.parse({ kind: 'absent', context: { ...canonicalContext,
+      ...(missing === 'ingress' ? { service: null } : {}), ...(missing !== 'usage' ? { urls: null } : {}),
+    } });
     const homeDomainAction: NonNullable<ActionExecutorDeps['homeDomainAction']> = async args => {
-      requests.push(args.actionId); return owner();
+      requests.push(args.actionId); return read;
     };
     const executor = createActionExecutor({ homeDomainAction, isActionApprovalRequired: approvalRequired,
       publicProfileActions: bindPublicProfileActionPorts({ homeDomainAction, assertCurrent: () => {} }),
     } as ActionExecutorDeps);
     await expect(executor.execute('account.public_profile.preview', { policy: DEFAULT_PUBLIC_PROFILE_POLICY_V1, metadataSelection: {},
       query: normalizeUsageQuery({ period: { relative: '90days' } }), layout, appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1 }, context))
-      .resolves.toMatchObject({ ok: true, result: { kind: 'unavailable', reason: 'usage_unavailable' } });
+      .resolves.toMatchObject({ ok: true, result: { kind: 'unavailable', reason } });
     expect(requests).toEqual(['account.public_profile.get']);
   });
 

@@ -47,7 +47,7 @@ export const ACCOUNT_PROFILE_ACTION_SPECS_V1 = Object.freeze([
   homeDomainActionRow({
     id: 'account.username.set', approval: { result: 'required', flow: 'deferred' }, title: 'Set your username',
     approvalPolicy: { uiConfirmation: 'direct' },
-    description: 'Set your own username when this Home’s Friends policy permits it.',
+    description: 'Set your own username when this Home supports public profiles or its Friends policy permits it.',
     safety: 'danger', sideEffectClass: 'write', cliPath: ['account', 'username', 'set'],
     path: '/v1/account/username', inputSchema: AccountUsernameUpdateRequestV1Schema,
     outputSchema: AccountUsernameUpdateResponseV1Schema,

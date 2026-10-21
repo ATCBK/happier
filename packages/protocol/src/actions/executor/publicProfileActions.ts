@@ -173,7 +173,10 @@ export async function preparePublicProfileAction(actionId: PublicProfilePreparat
     } };
   }
   if (!owner.context.handle) return unavailable('username_required');
-  if (!owner.context.service || !owner.context.urls) return unavailable('public_ingress_unconfigured');
+  if (!owner.context.service) return unavailable('public_ingress_unconfigured');
+  // The canonical context supplies URLs only when the configured service and
+  // claimed handle also have an admitted report contact.
+  if (!owner.context.urls) return unavailable('report_contact_unconfigured');
   if (actionId === 'account.public_profile.refresh' || actionId === 'account.public_profile.resume') {
     if (!record?.policy || !record.query || record.state !== (actionId === 'account.public_profile.resume' ? 'paused' : 'published')) {
       return unavailable('not_published');
