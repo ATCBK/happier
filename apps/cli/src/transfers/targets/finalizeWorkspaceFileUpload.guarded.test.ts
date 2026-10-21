@@ -7,6 +7,8 @@ import { TransferSessionStore, createTransferSessionLifecycle, finalizeUploadTra
   openUploadTransferSession, writeUploadTransferChunk } from '@happier-dev/transfers/node';
 import { resolveWorkspaceFileUploadTarget } from './resolveWorkspaceFileUploadTarget';
 import { finalizeWorkspaceFileUpload } from './finalizeWorkspaceFileUpload';
+import { writeFileForRpc } from '@/rpc/handlers/fileSystem/writeFileForRpc';
+import { OS_USER_FILESYSTEM_ACCESS_POLICY } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -20,6 +22,22 @@ async function fixture() {
 }
 
 describe('guarded upload finalization', () => {
+  it.each(['', '   '])('preserves a supplied invalid hash %j across inline and upload writes', async (expectedHash) => {
+    const { root, destPath, tempPath } = await fixture();
+    await writeFile(destPath, 'agent bytes');
+    const inline = await writeFileForRpc({ path: destPath,
+      content: Buffer.from('mine').toString('base64'), expectedHash }, { workingDirectory: root,
+      accessPolicy: OS_USER_FILESYSTEM_ACCESS_POLICY, getAdditionalAllowedWriteDirs: () => [] });
+    expect(inline).toMatchObject({ success: false, errorCode: 'hash_mismatch' });
+    await writeFile(tempPath, 'mine');
+    const resolved = resolveWorkspaceFileUploadTarget({ workingDirectory: root, path: destPath,
+      overwrite: true, sizeBytes: 4, expectedHash });
+    if (!resolved.success) throw new Error(resolved.error);
+    expect(await resolved.target.finalizeUpload({ uploadId: 'blank-hash', tempPath,
+      sizeBytes: 4, sha256: sha256('mine') })).toMatchObject({ success: false, errorCode: 'hash_mismatch' });
+    expect(await readFile(destPath, 'utf8')).toBe('agent bytes');
+  });
+
   it('returns the typed conflict without replacing a changed destination', async () => {
     const { root, destPath, tempPath } = await fixture();
     await writeFile(destPath, 'agent wrote');
