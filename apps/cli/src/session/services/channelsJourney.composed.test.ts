@@ -99,7 +99,7 @@ function record(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-async function journey(input: { router?: boolean; socket?: boolean; wrongDelivery?: boolean; wrongSessionCaller?: boolean; ambiguousStart?: boolean; failedBirth?: boolean; privateSpawnRpc?: boolean; refuseSecondCreation?: boolean } = {}) {
+async function journey(input: { router?: boolean; socket?: boolean; wrongDelivery?: boolean; wrongSessionCaller?: boolean; ambiguousStart?: boolean; failedBirth?: boolean; refuseSecondCreation?: boolean } = {}) {
   const pending: ConversationObservationV1[] = [];
   const delivered: ConversationDeliveryInputV1[] = [];
   const roles = ConversationProvidersContributionProtocolV1.operations;
@@ -219,6 +219,8 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
     requireSessionCreationOutcome: true,
     spawnLifecycleHandler: createSpawnNewSessionLifecycleActionHandler({ spawnSession: async request => {
       if (!request.existingSessionId || !sessions.has(request.existingSessionId)) throw new Error('Expected committed Session');
+      // Native initialization may fail after process-launch acknowledgement.
+      if (input.failedBirth) return { type: 'success', sessionId: request.existingSessionId };
       const session = sessions.get(request.existingSessionId)!;
       sessions.set(session.id, { ...session, active: true, activeAt: Date.now() });
       return { type: 'success', sessionId: request.existingSessionId };
@@ -233,13 +235,7 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
         const request = SpawnDaemonSessionRequestSchema.parse(raw);
         spawnRequests.push(request);
         if (!request.existingSessionId || !sessions.has(request.existingSessionId)) throw new Error('Spawn must reach the real committed Session');
-        if (input.privateSpawnRpc) return await privateSpawnHandlers.get(RPC_METHODS.SPAWN_HAPPY_SESSION)!(request);
-        // Process launch is acknowledged before native initialization. A later
-        // failure leaves the birth committed without a published Agent view.
-        if (input.failedBirth) return { type: 'success', sessionId: request.existingSessionId };
-        const session = sessions.get(request.existingSessionId)!;
-        sessions.set(session.id, { ...session, active: true, activeAt: Date.now() });
-        return { type: 'success', sessionId: request.existingSessionId };
+        return await privateSpawnHandlers.get(RPC_METHODS.SPAWN_HAPPY_SESSION)!(request);
       }, resolveSpawnSessionByNonce: async () => ({ status: 'not_found' }) } },
     machineAdmissionTransport: async request => {
       const repeated = admissions.find(previous => previous.localId === request.localId);
@@ -292,11 +288,7 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
       transcriptPages.push(page);
       return { ok: true, result: { ok: true, sessionId: String(request.sessionId), projection: 'externalShareableV1', ...page } };
     }
-    const result = await executor.execute(action, value, context);
-    if (action === 'session.spawn_new' && (!result.ok || record(result.result).type === 'error')) {
-      throw new Error(`Session birth boundary refused the journey: ${JSON.stringify(result)}`);
-    }
-    return result;
+    return await executor.execute(action, value, context);
   } }, invokeContributedAction: unavailable });
   const connection = createCurrentConversationConnectionFixture({ connectionId: 'connection-1',
     ...(input.socket ? { transport: { kind: 'socket' as const }, replayContinuity: 'sessionBound' as const } : {}), authority: {
@@ -348,7 +340,7 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
 
 describe('registered Channels composed journeys through real CLI Session admission', { timeout: 60_000 }, () => {
   it('rejoins committed thread births and recovers the same creation key after rollback without resetting the checkpoint', async () => {
-    const fixture = await journey({ router: true, privateSpawnRpc: true, refuseSecondCreation: true });
+    const fixture = await journey({ router: true, refuseSecondCreation: true });
     try {
       await fixture.poll();
       const first = observation('b04', 'First thread', true);

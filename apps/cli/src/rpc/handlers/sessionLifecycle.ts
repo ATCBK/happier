@@ -641,9 +641,10 @@ export function registerPrivateSpawnSessionRpcHandlers(params: Readonly<{
             return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
                 errorMessage: 'Prepared Session handoff runner was not launched' };
         }
-        // Resume preserves the daemon's existing-runner identity or pending
-        // launch nonce; its caller owns readiness observation.
-        if (providerSafe || parsed.data.type === 'resume-session') {
+        // Resume and seeded-row attach preserve an existing Session identity.
+        // Their creator already owns birth settlement; this RPC only launches
+        // its runner and must not require a second fresh-create outcome.
+        if (providerSafe || parsed.data.type === 'resume-session' || parsed.data.existingSessionId) {
             return response;
         }
         return await settlePrimaryFreshSpawn(response);

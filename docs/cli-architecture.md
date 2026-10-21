@@ -88,6 +88,11 @@ nonce and returns `pending`; callers retry with the same creation key to recover
 that launch. A proven refusal remains a definite error, and cancellation of a
 proven unsent request remains cancelled.
 
+Seeded creation commits the Session before launching its runner. The private
+spawn transport accepts that existing-row attach without requiring another
+fresh-create outcome; ordinary fresh creation still requires its authoritative
+create-or-rejoin settlement. This is unreleased 0.3 source behavior.
+
 Fresh daemon admission resolves an omitted connected-account choice through
 `resolveSessionSpawnConnectedServicesDefaultsPayload`, the same fresh Account
 purpose-catalog owner used by CLI and Workflow creators before they commit their
