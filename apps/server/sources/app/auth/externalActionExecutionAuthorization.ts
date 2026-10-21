@@ -55,6 +55,8 @@ import { ProjectServiceRelocateInputV1Schema, isProjectServiceMoveChildInputV1, 
 import { readDiscussionSecondOpinionModelChildV1, isDiscussionSecondOpinionModelRpcMethodV1 } from '@happier-dev/protocol/discussions/secondOpinionActions';
 import { TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions/actionRpcTransport';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import type { SessionInputSourceSessionV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { isSessionInputSourceCurrentInTx, readSessionMessageReplyInTx } from '@/app/session/messages/sessionMessageReply';
 
 import { auth, type VerifiedApiTokenPrincipal } from "./auth";
 import { isAutomationOriginRunPublisherTx } from '@/app/automations/automationTriggerCauseChain';
@@ -272,7 +274,32 @@ export async function readCurrentExternalActionHandoffBindingInTx(reader: Tx, in
 type IssuedAcquireNativeFactPurpose = Readonly<{ kind: 'issued-managed-acquire-native-fact'; report: ManagedControllerReportV1 }>;
 type IssuedHandoffContinuationPurpose = Readonly<{ kind: 'issued-handoff-continuation' }>;
 type IssuedIntentNativeFactPurpose = Readonly<{ kind: 'issued-managed-intent-native-fact'; report: ManagedControllerIntentReportV1 }>;
-type ExternalActionVerificationPurpose = IssuedAcquireNativeFactPurpose | IssuedHandoffContinuationPurpose | IssuedIntentNativeFactPurpose;
+type RetainedDiscussionPublicationPurpose = Readonly<{ kind: 'retained-discussion-publication'; source: SessionInputSourceSessionV1 }>;
+type ExternalActionVerificationPurpose = IssuedAcquireNativeFactPurpose | IssuedHandoffContinuationPurpose | IssuedIntentNativeFactPurpose
+    | RetainedDiscussionPublicationPurpose;
+
+/** Root verification only: final publication still opens the approved Artifact at its trusted host. */
+async function isRetainedDiscussionPublicationSourceCurrentInTx(reader: Tx,
+    binding: ExternalActionExecutionAuthorizationBindingV1, source: SessionInputSourceSessionV1): Promise<boolean> {
+    const original = binding.sessionActionOrigin;
+    const installation = binding.sessionActionSource;
+    if (!('authentication' in binding) || !['discussion.post', 'discussion.reply'].includes(binding.actionId)
+        || binding.target.kind !== 'machine' || binding.target.machineId !== binding.machineId
+        || !original || !installation || installation.machineId !== binding.machineId
+        || installation.installationId !== binding.installationId
+        || !source.sourceInputId || !source.discussionAddressing
+        || source.sourceSessionId !== original.caller.sessionId
+        || source.sourceInputId !== original.sourceInputId || source.sourceTurnId !== original.sourceTurnId
+        || source.discussionAddressing.participantSessionId !== source.sourceSessionId
+        || !await isSessionInputSourceCurrentInTx(reader, binding.accountId, source)) return false;
+    const retained = await readSessionMessageReplyInTx(reader, { accountId: binding.accountId,
+        sessionId: source.sourceSessionId, localId: source.sourceInputId,
+        authentication: { env: process.env, authority: 'account_automation', tokenEpoch: binding.authentication.tokenEpoch,
+            ...(binding.authentication.evidence ? { authenticationEvidence: binding.authentication.evidence } : {}) } });
+    return retained.status === 'available' && retained.progress.mode === 'return' && !retained.progress.workflow
+        && retained.progress.acceptedTurnId === source.sourceTurnId
+        && sameStrictJsonValue(retained.progress.discussion, source.discussionAddressing);
+}
 
 /** Retirement closes effects, not reports of the one already-submitted native tuple. */
 async function isIssuedIntentNativeFactReportInTx(reader: Tx, binding: ExternalActionExecutionAuthorizationBindingV1,
@@ -369,6 +396,8 @@ async function readCurrentExternalActionPrincipal(
         && !await isIssuedAcquireNativeFactReportInTx(reader, binding, purpose.report)) return null;
     if (purpose?.kind === 'issued-managed-intent-native-fact'
         && !await isIssuedIntentNativeFactReportInTx(reader, binding, purpose.report)) return null;
+    if (purpose?.kind === 'retained-discussion-publication'
+        && !await isRetainedDiscussionPublicationSourceCurrentInTx(reader, binding, purpose.source)) return null;
     if (binding.handoffAdmission) {
         if (!(isOriginalAccountHandoffAction(binding.actionId) || binding.actionId === 'session.spawn_new' && binding.handoffContinuation)
             || !PublicActionIdSchema.safeParse(binding.actionId).success && !binding.handoffContinuation
@@ -750,6 +779,13 @@ async function verifyCommon(
                 && !isDocDecisionPreparationEffect(binding.actionId, effectActionId.data))) return refuseExternalActionExecutionRequest('effect_family');
     if (binding.serverIdentityId !== await getOrCreateServerIdentityId()) return refuseExternalActionExecutionRequest('server_identity');
     const currentnessBody = ExternalActionExecutionAuthorizationVerifyRequestV1Schema.safeParse(proof.body);
+    const retainedDiscussionSource = currentnessBody.success ? currentnessBody.data.retainedDiscussionSource : undefined;
+    if (retainedDiscussionSource && (proof.method.toUpperCase() !== 'POST'
+        || proof.path !== bindExternalActionExecutionAuthorizationVerifyHttpPathV1(binding.actionId)
+        || effectActionId.data !== binding.actionId
+        || !await isRetainedDiscussionPublicationSourceCurrentInTx(db, binding, retainedDiscussionSource))) {
+        return refuseExternalActionExecutionRequest('verification_purpose');
+    }
     const custodyTarget = currentnessBody.success ? currentnessBody.data.managedFiniteWakeTarget : undefined;
     const readCustody = custodyTarget ? async () => {
         const { readCurrentManagedFiniteWakeCustodyInTx } = await import('@/app/machines/managed/managedWake');
@@ -775,7 +811,8 @@ async function verifyCommon(
         ? { kind: 'issued-managed-acquire-native-fact', report: report.data }
         : intentReport?.success && await isIssuedIntentNativeFactReportInTx(db, binding, intentReport.data)
             ? { kind: 'issued-managed-intent-native-fact', report: intentReport.data }
-            : isHandoffChildIssue ? { kind: 'issued-handoff-continuation' } : undefined;
+            : isHandoffChildIssue ? { kind: 'issued-handoff-continuation' }
+                : retainedDiscussionSource ? { kind: 'retained-discussion-publication', source: retainedDiscussionSource } : undefined;
     if (!purpose && !await hasCurrentExternalActionSessionSource(binding, proof.resolveCurrentSessionMachine)) return refuseExternalActionExecutionRequest('source_before_principal');
 
     const machine = await db.machine.findFirst({

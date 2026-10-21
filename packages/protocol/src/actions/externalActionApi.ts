@@ -12,6 +12,7 @@ import { WorkflowProjectTargetV1Schema } from '../workflows/workflowWorkspaceV1.
 import type { ProjectAccountRowCipherV1 } from '../projects/projectAccountRowCipherV1.js';
 import type { PromptArtifactRefV1 } from '../prompts/library/promptArtifactRefsV1.js';
 import { SessionActionRpcOriginV1Schema } from '../rpc/socket.js';
+import { SessionInputSourceSessionV1Schema } from '../sessions/messages/sessionInputAdmission.js';
 import { SessionGoalControlFailureV1Schema } from '../sessions/work/state/sessionWorkStateRpc.js';
 import { MachineInstallationProofV1Schema, MachineInstallationPublicKeySchema } from '../machines/identity/installationIdentity.js';
 import { ManagedWakeTargetV1Schema } from '../machines/managed/managedIntentV1.js';
@@ -1437,9 +1438,14 @@ export type ExternalActionExecutionAuthorizationRequestV1 = z.infer<typeof Exter
 export const ExternalActionExecutionAuthorizationVerifyRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   managedFiniteWakeTarget: z.optional(ManagedWakeTargetV1Schema),
+  retainedDiscussionSource: z.optional(SessionInputSourceSessionV1Schema),
 }).check(z.superRefine((value, context) => {
   if (value.managedFiniteWakeTarget && value.managedFiniteWakeTarget.origin.kind !== 'finite-command') {
     context.addIssue({ code: 'custom', path: ['managedFiniteWakeTarget'], message: 'Controller custody requires an original finite-command target' });
+  }
+  if (value.retainedDiscussionSource && (!value.retainedDiscussionSource.sourceInputId
+    || !value.retainedDiscussionSource.discussionAddressing || value.managedFiniteWakeTarget)) {
+    context.addIssue({ code: 'custom', path: ['retainedDiscussionSource'], message: 'Retained Discussion currentness requires its exact original input and addressed message' });
   }
 })));
 export const ExternalActionExecutionAuthorizationVerifyResponseV1Schema = lazyZodSchema(() => z.strictObject({ ok: z.literal(true) }));

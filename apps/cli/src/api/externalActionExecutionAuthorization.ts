@@ -5,6 +5,7 @@ import { EXTERNAL_ACTION_EFFECT_ACTION_HEADER, EXTERNAL_ACTION_EXECUTION_AUTHORI
 import { computeExternalActionRequestEnvelopeDigestV1, encodeExternalActionResolvedTargetV1, signExternalActionMachineRequestV1, signExternalActionMachineRpcRequestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import type { ActionExecutorContext, ExternalActionExecutionAuthorizationV1, ExternalActionMachineRpcExecutionV1, ExternalActionRequestEnvelope, ExternalActionTargetV1 } from '@happier-dev/protocol';
 import type { ActionRequiredAuthority } from '@happier-dev/protocol/actions/metadata';
+import type { SessionInputSourceSessionV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { SOCKET_RPC_EVENTS, SessionActionRpcOriginV1Schema, type WorkspaceSyncSourceWriterTargetRoutingV1 } from '@happier-dev/protocol/socketRpc';
 import { signMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
@@ -1353,12 +1354,14 @@ export async function verifyExternalActionExecutionAuthorizationCurrent(input: R
   installationId: string;
   serverHttpBaseUrl: string;
   managedFiniteWakeTarget?: ManagedWakeTargetV1;
+  retainedDiscussionSource?: SessionInputSourceSessionV1;
   signal?: AbortSignal;
 }>): Promise<boolean> {
   const path = bindExternalActionExecutionAuthorizationVerifyHttpPathV1(
     input.authorization.binding.actionId,
   );
-  const body = { v: 1 as const, ...(input.managedFiniteWakeTarget ? { managedFiniteWakeTarget: input.managedFiniteWakeTarget } : {}) };
+  const body = { v: 1 as const, ...(input.managedFiniteWakeTarget ? { managedFiniteWakeTarget: input.managedFiniteWakeTarget } : {}),
+    ...(input.retainedDiscussionSource ? { retainedDiscussionSource: input.retainedDiscussionSource } : {}) };
   const headers = createExternalActionAuthorizedRequestHeaders({
     authorization: input.authorization,
     effectActionId: input.effectActionId,

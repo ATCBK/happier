@@ -28,6 +28,7 @@ import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtim
 import { readInstallationIdentityIfExistsSync } from '@/daemon/identity/store';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { ApprovalStaleReason } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
+import type { SessionInputSourceSessionV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 
 import type { ResolveExternalActionTarget } from './executeExternalAction';
 import { rethrowRequesterHomeReadFailure } from "@/daemon/sessionEncryption/requesterCurrentness";
@@ -51,6 +52,20 @@ export type DaemonApprovalExecutionOriginCurrentness = (args: Readonly<{
 
 async function readCurrentPluginSourceCustody(pluginId: string): Promise<PluginSourceCustodyV1 | null> {
   return readAuthoritativePluginSlotOccurrence(pluginId)?.sourceCustody ?? null;
+}
+
+/** Reviewed publication retains its original input, not a fresh Agent turn. */
+function readRetainedDiscussionPublicationSource(origin: ApprovalExecutionOriginV1,
+  request: Parameters<DaemonApprovalExecutionOriginCurrentness>[0]['request']): SessionInputSourceSessionV1 | null {
+  return origin.caller.kind === 'session'
+    && request?.v === 2 && request.actionId === origin.actionId
+    && (request.actionId === 'discussion.post' || request.actionId === 'discussion.reply')
+    && (request.status === 'approved' || request.status === 'executing')
+    && request.decision?.kind === 'approve' && request.decision.authority === 'present_user'
+    && request.execution === undefined
+    && origin.sessionInputSource?.sourceSessionId === origin.caller.sessionId
+    && Boolean(origin.sessionInputSource.sourceInputId && origin.sessionInputSource.sourceTurnId)
+    ? origin.sessionInputSource : null;
 }
 
 /**
@@ -77,6 +92,7 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
     authorization: NonNullable<ApprovalExecutionOriginV1['externalActionExecutionAuthorization']>;
     effectActionId: string;
     target: NonNullable<ApprovalExecutionOriginV1['target']>;
+    retainedDiscussionSource?: SessionInputSourceSessionV1;
     signal?: AbortSignal;
   }>) => Promise<boolean>;
   resolveCurrentPluginSourceCustody?: (pluginId: string) => Promise<PluginSourceCustodyV1 | null>;
@@ -134,6 +150,7 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
           ? currentMachineOrigin.serverIdentityId !== origin.serverIdentityId
           : origin.serverId !== input.serverId) return stale('home_changed');
       const externalAuthorization = origin.externalActionExecutionAuthorization;
+      const retainedDiscussionSource = readRetainedDiscussionPublicationSource(origin, request);
       // Requester identity in editable Artifact content is not an immutable
       // subject unless the original installation signed that exact subject.
       if (request?.v === 2 && request.requesterConfirmation && !externalAuthorization) return stale('credential_changed');
@@ -182,6 +199,10 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
           authorization: externalAuthorization,
           effectActionId: origin.actionId,
           target: origin.target,
+          // Generic retained publications keep their incumbent local caller
+          // exemption. Only an addressed original can prove this Home purpose.
+          ...(retainedDiscussionSource?.discussionAddressing
+            ? { retainedDiscussionSource } : {}),
           ...(signal ? { signal } : {}),
         })) return stale('credential_changed');
         // The managed child is executed on a new guest, while its accepted
@@ -257,15 +278,7 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
       // Posting a person's reviewed Discussion body consumes durable original
       // input custody, not a new Agent turn. The publisher still reopens the
       // executing Artifact and Home rechecks its source and owning Machine.
-      const retainedDiscussionPublication = origin.caller.kind === 'session'
-        && request?.v === 2 && request.actionId === origin.actionId
-        && (request.actionId === 'discussion.post' || request.actionId === 'discussion.reply')
-        && (request.status === 'approved' || request.status === 'executing')
-        && request.decision?.kind === 'approve' && request.decision.authority === 'present_user'
-        && request.execution === undefined
-        && origin.sessionInputSource?.sourceSessionId === origin.caller.sessionId
-        && Boolean(origin.sessionInputSource.sourceInputId && origin.sessionInputSource.sourceTurnId);
-      if (origin.caller.kind === 'session' && !hasVerifiedManagedGuestSource && !retainedDiscussionPublication) {
+      if (origin.caller.kind === 'session' && !hasVerifiedManagedGuestSource && !retainedDiscussionSource) {
         if (!input.isSessionCallerCurrent) return stale('session_changed');
         if (!await input.isSessionCallerCurrent({ caller: origin.caller,
           ...(signal ? { signal } : {}) })) return stale('session_changed');
@@ -469,7 +482,7 @@ export function createDaemonApprovalExecutionOriginCurrentnessFromCredentials(in
     ...(installationIdentity
       ? {
           externalActionMachinePublicKey: installationIdentity.publicKey,
-          verifyExternalExecutionAuthorization: async ({ authorization, effectActionId, target, signal }) =>
+          verifyExternalExecutionAuthorization: async ({ authorization, effectActionId, target, retainedDiscussionSource, signal }) =>
             await verifyExternalActionExecutionAuthorizationCurrent({
               authorization,
               effectActionId,
@@ -477,6 +490,7 @@ export function createDaemonApprovalExecutionOriginCurrentnessFromCredentials(in
               privateKey: installationIdentity.privateKey,
               installationId: installationIdentity.installationId,
               serverHttpBaseUrl: input.serverApiUrl,
+              ...(retainedDiscussionSource ? { retainedDiscussionSource } : {}),
               ...(signal ? { signal } : {}),
             }),
         }

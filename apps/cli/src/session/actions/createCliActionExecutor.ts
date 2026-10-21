@@ -441,6 +441,13 @@ export function createCliActionExecutor(
       return resolvedContext ? await base.continueConfidentialApprovalRequest(input, resolvedContext)
         : actionStartTargetUnavailableV1(context, 'cli_context', 'requester_projection_unavailable');
     },
-    replayApprovedApprovalRequest: async (args) => await base.replayApprovedApprovalRequest(args),
+    replayApprovedApprovalRequest: async (args) => await base.replayApprovedApprovalRequest({ ...args,
+      // These facts come from this actual credentialed Home, not editable
+      // Artifact metadata or an RPC caller's claimed Account. The existing
+      // admitted callerAuthority remains separate and is not upgraded here.
+      currentAccount: runtimeAccountId && params.serverId && params.serverIdentityId ? {
+        accountId: runtimeAccountId, serverId: params.serverId, serverIdentityId: params.serverIdentityId,
+      } : undefined,
+    }),
   };
 }

@@ -2556,6 +2556,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     artifactId: string;
     signal?: AbortSignal;
     callerAuthority?: ActionRequiredAuthority;
+    /** Current credential-bound host facts, never read from the approval or RPC operands. */
+    currentAccount?: Readonly<{ accountId: string; serverId: string; serverIdentityId: string }>;
   }>) => Promise<ActionExecuteResult>;
 }> {
   const isSameHome = (targetServerId: unknown, currentServerId: string | null | undefined, ctx: ActionExecutorContext): boolean =>
@@ -3522,6 +3524,18 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           }
         : {}),
     };
+    if (sessionDiscussionPublication && (actionId === 'discussion.post' || actionId === 'discussion.reply')
+      && executionContext.presentUserApproval && origin?.success && originIsCurrent
+      && isPresentUserHostInvocation(args.ctx)
+      && args.ctx.runtimeAccountId === origin.data.accountId
+      && origin.data.serverIdentityId && args.ctx.serverIdentityId === origin.data.serverIdentityId) {
+      // The current reviewer owns the Account-qualified resource/key reads.
+      // The retired Agent's signed HTTP carrier cannot perform fresh reads;
+      // its immutable provenance stays on the Artifact and Session context.
+      // Publication still requires the host to reopen that exact approved body.
+      const { externalActionExecutionAuthorization: _originalHttpCarrier, ...reviewedContext } = executionContext;
+      executionContext = reviewedContext;
+    }
     // The verified origin binds its creator-local profile to this Home even
     // when that profile does not exist on the deciding device. Keep this
     // comparison evidence private to this replay; never rewrite stored refs,
@@ -3725,6 +3739,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     artifactId: string;
     signal?: AbortSignal;
     callerAuthority?: ActionRequiredAuthority;
+    currentAccount?: Readonly<{ accountId: string; serverId: string; serverIdentityId: string }>;
   }>): Promise<ActionExecuteResult> => {
     try {
       const artifactId = normalizeId(args.artifactId);
@@ -3822,6 +3837,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         artifactServerId,
         ctx: {
           ...(args.signal ? { signal: args.signal } : {}),
+          ...(args.currentAccount ? {
+            surface: 'cli' as const,
+            runtimeAccountId: args.currentAccount.accountId,
+            serverId: args.currentAccount.serverId,
+            serverIdentityId: args.currentAccount.serverIdentityId,
+          } : {}),
           ...(args.callerAuthority === 'present_user'
             ? { authority: 'present_user' as const } : {}),
         },
