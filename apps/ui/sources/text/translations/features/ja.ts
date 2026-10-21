@@ -3132,6 +3132,7 @@ const filesPaneTranslations = { ja: {
             changesNotShown: ({ count }) => String(count) + " 件の変更。プレビューを表示できません",
             cannotRename: "この名前は変更できません。",
             noFixes: "ここには修正がありません。",
+            noInfo: "ここに表示する情報はありません。",
             nothingToChange: "変更するものはありません。",
             renameUnavailable: "名前の変更にはこのファイルの言語サーバーが必要です。",
             fixesUnavailable: "修正にはこのファイルの言語サーバーが必要です。",

@@ -3154,6 +3154,7 @@ const filesPaneTranslations = { ru: {
             changesNotShown: ({ count }) => "Изменений: " + String(count) + "; просмотр недоступен",
             cannotRename: "Это имя нельзя переименовать.",
             noFixes: "Здесь нет исправлений.",
+            noInfo: "Здесь нечего показать.",
             nothingToChange: "Нечего менять.",
             renameUnavailable: "Для переименования нужен языковой сервер для этого файла.",
             fixesUnavailable: "Для исправлений нужен языковой сервер для этого файла.",

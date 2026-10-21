@@ -18,6 +18,8 @@ export type CodeIntelligencePaneProducer = Readonly<{
   machineUnreachable: boolean;
   openReference: (row: CodeReferenceRow) => void;
   openProblem: (item: LanguageIntelligenceDiagnostic) => void;
+  /** The page's own Check problems (the `code.showProblems` command), so the tab never has a second path. */
+  checkProblems: () => void;
   ask: Readonly<{ label: string; run: () => Promise<boolean> }> | null;
 }>;
 

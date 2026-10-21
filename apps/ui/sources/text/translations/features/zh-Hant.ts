@@ -3127,6 +3127,7 @@ const filesPaneTranslations = { 'zh-Hant': {
             changesNotShown: ({ count }) => String(count) + " 處變更；無法顯示預覽",
             cannotRename: "此名稱無法重新命名。",
             noFixes: "這裡沒有修復。",
+            noInfo: "這裡沒有可顯示的內容。",
             nothingToChange: "沒有需要變更的內容。",
             renameUnavailable: "重新命名需要此檔案的語言伺服器。",
             fixesUnavailable: "修復需要此檔案的語言伺服器。",

@@ -3134,6 +3134,7 @@ const filesPaneTranslations = { ca: {
             changesNotShown: ({ count }) => String(count) + " " + (count === 1 ? "canvi" : "canvis") + "; no es pot mostrar la previsualització",
             cannotRename: "No es pot canviar el nom d’aquest nom.",
             noFixes: "No hi ha correccions aquí.",
+            noInfo: "No hi ha res a mostrar aquí.",
             nothingToChange: "No hi ha res a canviar.",
             renameUnavailable: "Canviar el nom necessita un servidor de llenguatge per a aquest fitxer.",
             fixesUnavailable: "Les correccions necessiten un servidor de llenguatge per a aquest fitxer.",

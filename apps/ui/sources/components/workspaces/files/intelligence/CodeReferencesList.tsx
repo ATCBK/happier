@@ -190,12 +190,15 @@ const styles = StyleSheet.create((theme) => ({
     fontVariant: ['tabular-nums'],
   },
   code: {
-    ...Typography.mono(),
+    // The meta step's metrics, then the code face: a variant carries Inter, so mono must come last.
     ...Typography.variant('meta'),
+    ...Typography.mono(),
     flex: 1,
     color: theme.colors.text.secondary,
   },
   match: {
+    // A nested app Text takes the default face again: the marked name stays in the line's code face.
+    ...Typography.mono(),
     color: theme.colors.text.primary,
     backgroundColor: theme.colors.surface.selected,
   },

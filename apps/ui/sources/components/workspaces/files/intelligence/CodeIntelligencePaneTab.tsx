@@ -127,20 +127,15 @@ export function CodeIntelligencePaneTab(
     ? groupCodeProblems(diagnostics.items, snapshot.servers)
     : [];
   return (
-    <ScrollView
-      style={styles.scroll}
-      contentContainerStyle={[styles.content, styles.fill]}
-      testID="code-problems-pane"
-    >
+    // The list owns its scroll so its Ask stays pinned at the panel foot (lab LS1 L2).
+    <View style={styles.scroll} testID="code-problems-pane">
       <CodeProblemsList
         groups={groups}
         state={diagnostics?.state ?? 'idle'}
         count={diagnostics?.count ?? null}
         progress={progressLine}
         onOpen={producer.openProblem}
-        onCheck={() => {
-          void producer.controller.checkProblems();
-        }}
+        onCheck={producer.checkProblems}
         asked={asked}
         ask={
           producer.ask
@@ -160,7 +155,7 @@ export function CodeIntelligencePaneTab(
             : null
         }
       />
-    </ScrollView>
+    </View>
   );
 }
 
@@ -171,9 +166,6 @@ const styles = StyleSheet.create((theme) => ({
   },
   content: {
     paddingTop: theme.space.s8,
-  },
-  fill: {
-    flexGrow: 1,
   },
   empty: {
     paddingTop: theme.space.s8,

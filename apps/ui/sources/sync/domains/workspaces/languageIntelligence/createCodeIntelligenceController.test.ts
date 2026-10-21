@@ -362,6 +362,32 @@ describe('on-demand language intelligence controller', () => {
         } finally { controller.dispose(); }
     });
 
+    it.each([true, false])('says its servers are restarting while a Restart runs, then shows what came back (restart succeeds: %s)', async (succeeds) => {
+        const server = { serverId: 'ts', label: 'TS', state: 'ready' as const, loading: false, generation: 'g1' };
+        let finish!: () => void;
+        const controller = createCodeIntelligenceController({
+            scope: { serverId: 'home', machineId: 'machine', rootPath: '/repo' }, path: 'a.ts', languageId: 'typescript',
+            accountLifetime: { scope: { serverId: 'home', accountId: 'account' }, isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
+            getText: () => 'const value = 1;', query: async () => result, openLocation() {},
+            languageServer: {
+                sync: async request => ({ status: 'ok', generation: 'root', ...('version' in request.op ? { version: request.op.version } : {}),
+                    servers: [server], capabilities: { hover: true, definition: true, references: true, documentSymbol: true, diagnostics: 'pull', acceptsExternalChanges: true } }),
+                query: async request => ({ status: 'ok', kind: 'diagnostics', generation: 'root', version: request.version, diagnostics: [], hasMore: false }),
+                restart: () => new Promise(resolve => { finish = () => resolve(succeeds ? { status: 'ok' } : { status: 'unavailable', reason: 'session_unavailable' }); }),
+                watch: (_request, signal) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })),
+            },
+        });
+        try {
+            await controller.checkProblems();
+            const restarting = controller.restart();
+            await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+            expect(controller.getSnapshot().servers?.map(item => item.state)).toEqual(['restarting']);
+            finish();
+            await restarting;
+            await vi.waitFor(() => expect(controller.getSnapshot().servers?.map(item => item.state)).toEqual(['ready']));
+        } finally { controller.dispose(); }
+    });
+
     it.each(['crashed', 'loading'] as const)('keeps a capable server answer authoritative while another server is %s', async other => {
         const server = { serverId: 'lang:server', label: 'Language', state: 'ready' as const, loading: false, generation: 'g1' };
         const range = { start: { line: 0, character: 6 }, end: { line: 0, character: 9 } };

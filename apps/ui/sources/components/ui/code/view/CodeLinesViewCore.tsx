@@ -140,7 +140,7 @@ function resolvePointerToken(event: CodePointerEvent, lines: ReadonlyMap<string,
     const code = target.closest('[data-code-text]') as Element | null;
     const id = code?.getAttribute('data-code-text');
     const line = id ? lines.get(id) : null;
-    if (!code || !line || line.renderIsHeaderLine || line.newLine === null || line.kind === 'remove') return null;
+    if (!code || !line || line.renderIsHeaderLine || line.newLine === null || line.kind === 'remove' || !line.renderCodeText.trim()) return null;
     const x = event.clientX ?? event.nativeEvent?.clientX;
     const y = event.clientY ?? event.nativeEvent?.clientY;
     if (typeof x !== 'number' || typeof y !== 'number') return null;
@@ -241,12 +241,17 @@ export function CodeLinesViewCore(
         const token = intelligenceLines ? resolvePointerToken(event, intelligenceLines) : null;
         if (token) onActivateToken?.(token.lineId, token.offset16, { via: 'modifier', rect: token.rect }, token.newLine);
     }, [intelligenceLines, onActivateToken]);
+    // Resolve while the touch still targets the code, but commit through the row's Pressability click.
+    // Opening a sheet on pointerup retargets that touch's compatibility click to its dismiss layer.
+    const pendingTouchToken = React.useRef<ReturnType<typeof resolvePointerToken>>(null);
     const handleTokenTouch = React.useCallback((event: CodePointerEvent) => {
-        if ((event.pointerType ?? event.nativeEvent?.pointerType) !== 'touch' || rangeGesturesEnabled) return;
+        pendingTouchToken.current = null;
+        if ((event.pointerType ?? event.nativeEvent?.pointerType) !== 'touch') return;
         if (typeof window !== 'undefined' && window.getSelection?.()?.isCollapsed === false) return;
         const token = intelligenceLines ? resolvePointerToken(event, intelligenceLines) : null;
-        if (token) onActivateToken?.(token.lineId, token.offset16, { via: 'touch', rect: token.rect }, token.newLine);
-    }, [intelligenceLines, onActivateToken, rangeGesturesEnabled]);
+        if (!token || !onActivateToken) return;
+        pendingTouchToken.current = token;
+    }, [intelligenceLines, onActivateToken]);
     // Native rows resolve a tap themselves (tap-to-name); they report no anchor rect.
     const onRowActivateToken = React.useCallback((lineId: string, offset16: number) => {
         const newLine = intelligenceLines?.get(lineId)?.newLine;
@@ -269,10 +274,15 @@ export function CodeLinesViewCore(
         };
         const onClick = (event: MouseEvent) => { if (owns(event.target)) tokenClickRef.current(event as unknown as CodePointerEvent); };
         const onPointerUp = (event: PointerEvent) => { if (owns(event.target)) tokenTouchRef.current(event as unknown as CodePointerEvent); };
+        const clearTouch = () => { pendingTouchToken.current = null; };
         document.addEventListener('click', onClick, true);
+        document.addEventListener('pointerdown', clearTouch, true);
+        document.addEventListener('pointercancel', clearTouch, true);
         document.addEventListener('pointerup', onPointerUp, true);
         return () => {
             document.removeEventListener('click', onClick, true);
+            document.removeEventListener('pointerdown', clearTouch, true);
+            document.removeEventListener('pointercancel', clearTouch, true);
             document.removeEventListener('pointerup', onPointerUp, true);
         };
     }, [intelligenceEnabled, lineNativeIdPrefix]);

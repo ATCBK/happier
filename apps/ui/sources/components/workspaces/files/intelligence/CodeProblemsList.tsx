@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import type { LanguageIntelligenceDiagnostic } from '@happier-dev/protocol/machines/languageIntelligence';
@@ -31,6 +31,7 @@ export type CodeProblemsListProps = Readonly<{
 /**
  * The problems in files you have open (LS1 L2, LS4): by server when more than one speaks, then by
  * file, `glyph · message · line:col`; one Ask at the foot. "No problems" only from a confirmed answer.
+ * The list scrolls inside the panel and the Ask stays at its foot, so a long list never hides it.
  */
 export function CodeProblemsList(
   props: CodeProblemsListProps,
@@ -48,105 +49,105 @@ export function CodeProblemsList(
   const empty = props.count === 0 && props.state === 'ready';
   return (
     <View style={styles.container} testID="code-problems">
-      <Text variant="meta" style={styles.caption}>
-        {t('files.pane.intelligence.problemsScope')}
-      </Text>
-      {props.state === 'idle' ? (
-        <View style={styles.state}>
-          <Text variant="body" style={styles.stateText}>
-            {t('files.pane.intelligence.problemsIdle')}
-          </Text>
-          <View style={styles.stateAction}>
-            <RoundButton
-              size="small"
-              display="secondary"
-              title={t('files.pane.intelligence.checkProblems')}
-              onPress={props.onCheck}
-              testID="code-problems-check"
-            />
-          </View>
-        </View>
-      ) : props.state === 'checking' ||
-        (props.progress && props.count === null) ? (
-        <View style={styles.state} testID="code-problems-checking">
-          <Text variant="body" style={styles.stateText}>
-            {props.progress?.text ?? t('files.pane.intelligence.checking')}
-          </Text>
-          {props.progress?.detail ? (
-            <Text variant="meta" style={styles.caption}>
-              {props.progress.detail}
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+        <Text variant="meta" style={styles.caption}>
+          {t('files.pane.intelligence.problemsScope')}
+        </Text>
+        {props.state === 'idle' ? (
+          <View style={styles.state}>
+            <Text variant="body" style={styles.stateText}>
+              {t('files.pane.intelligence.problemsIdle')}
             </Text>
-          ) : null}
-        </View>
-      ) : empty ? (
-        <View style={styles.state} testID="code-problems-none">
-          <Text variant="body" style={styles.stateText}>
-            {t('files.pane.intelligence.noProblems')}
-          </Text>
-        </View>
-      ) : null}
-      {props.groups.map((group) => (
-        <View key={group.serverId}>
-          {sectioned ? (
-            <Text variant="label" emphasis="medium" style={styles.section}>
-              {group.serverLabel}
-            </Text>
-          ) : null}
-          {group.files.map((file) => (
-            <View key={file.path}>
-              <View style={styles.fileRow}>
-                <FileIcon fileName={file.path} size={14} appearance="line" />
-                <Text variant="label" numberOfLines={1} style={styles.fileName}>
-                  {file.path.split('/').at(-1) ?? file.path}
-                </Text>
-                <Text variant="meta" style={styles.count}>
-                  {file.items.length}
-                </Text>
-              </View>
-              {file.items.map((item, index) => {
-                const selected = props.selected === item;
-                return (
-                  <HappierPressable
-                    key={`${item.range.start.line}:${item.range.start.character}:${index}`}
-                    accessibilityRole="button"
-                    testID={`code-problem-${file.path}:${item.range.start.line + 1}`}
-                    selected={selected}
-                    onPress={() => props.onOpen(item)}
-                    style={({ hovered, pressed }) => [
-                      styles.row,
-                      selected || pressed
-                        ? styles.rowSelected
-                        : hovered
-                          ? styles.rowHovered
-                          : null,
-                    ]}
-                  >
-                    <View style={styles.glyph}>
-                      <Icon
-                        name={
-                          item.severity === 'error'
-                            ? 'x-circle'
-                            : 'warning-circle'
-                        }
-                        size={14}
-                        color={severityColor(item.severity)}
-                      />
-                    </View>
-                    <Text variant="body" style={styles.message}>
-                      {item.message}
-                      <Text
-                        variant="meta"
-                        style={styles.position}
-                      >{`  ${item.range.start.line + 1}:${item.range.start.character + 1}`}</Text>
-                    </Text>
-                  </HappierPressable>
-                );
-              })}
+            <View style={styles.stateAction}>
+              <RoundButton
+                size="small"
+                display="secondary"
+                title={t('files.pane.intelligence.checkProblems')}
+                onPress={props.onCheck}
+                testID="code-problems-check"
+              />
             </View>
-          ))}
-        </View>
-      ))}
-      <View style={styles.spacer} />
+          </View>
+        ) : props.state === 'checking' || props.progress ? (
+          <View style={styles.state} testID="code-problems-checking">
+            <Text variant="body" style={styles.stateText}>
+              {props.progress?.text ?? t('files.pane.intelligence.checking')}
+            </Text>
+            {props.progress?.detail ? (
+              <Text variant="meta" style={styles.stateDetail}>
+                {props.progress.detail}
+              </Text>
+            ) : null}
+          </View>
+        ) : empty ? (
+          <View style={styles.state} testID="code-problems-none">
+            <Text variant="body" style={styles.stateText}>
+              {t('files.pane.intelligence.noProblems')}
+            </Text>
+          </View>
+        ) : null}
+        {props.groups.map((group) => (
+          <View key={group.serverId}>
+            {sectioned ? (
+              <Text variant="label" emphasis="medium" style={styles.section}>
+                {group.serverLabel}
+              </Text>
+            ) : null}
+            {group.files.map((file) => (
+              <View key={file.path}>
+                <View style={styles.fileRow}>
+                  <FileIcon fileName={file.path} size={14} appearance="line" />
+                  <Text variant="label" numberOfLines={1} style={styles.fileName}>
+                    {file.path.split('/').at(-1) ?? file.path}
+                  </Text>
+                  <Text variant="meta" style={styles.count}>
+                    {file.items.length}
+                  </Text>
+                </View>
+                {file.items.map((item, index) => {
+                  const selected = props.selected === item;
+                  return (
+                    <HappierPressable
+                      key={`${item.range.start.line}:${item.range.start.character}:${index}`}
+                      accessibilityRole="button"
+                      testID={`code-problem-${file.path}:${item.range.start.line + 1}`}
+                      selected={selected}
+                      onPress={() => props.onOpen(item)}
+                      style={({ hovered, pressed }) => [
+                        styles.row,
+                        selected || pressed
+                          ? styles.rowSelected
+                          : hovered
+                            ? styles.rowHovered
+                            : null,
+                      ]}
+                    >
+                      <View style={styles.glyph}>
+                        <Icon
+                          name={
+                            item.severity === 'error'
+                              ? 'x-circle'
+                              : 'warning-circle'
+                          }
+                          size={14}
+                          color={severityColor(item.severity)}
+                        />
+                      </View>
+                      <Text variant="body" style={styles.message}>
+                        {item.message}
+                        <Text
+                          variant="meta"
+                          style={styles.position}
+                        >{`  ${item.range.start.line + 1}:${item.range.start.character + 1}`}</Text>
+                      </Text>
+                    </HappierPressable>
+                  );
+                })}
+              </View>
+            ))}
+          </View>
+        ))}
+      </ScrollView>
       {props.asked ? (
         <View style={styles.footer} testID="code-problems-asked">
           <Icon
@@ -186,6 +187,13 @@ const styles = StyleSheet.create((theme) => ({
   container: {
     flex: 1,
     minHeight: 0,
+  },
+  scroll: {
+    flex: 1,
+    minHeight: 0,
+  },
+  scrollContent: {
+    paddingTop: theme.space.s8,
     paddingBottom: theme.space.s12,
   },
   caption: {
@@ -200,6 +208,10 @@ const styles = StyleSheet.create((theme) => ({
   },
   stateText: {
     color: theme.colors.text.secondary,
+  },
+  // The detail sits in the state block's own inset, under its sentence.
+  stateDetail: {
+    color: theme.colors.text.tertiary,
   },
   stateAction: {
     flexDirection: 'row',
@@ -251,16 +263,13 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.text.tertiary,
     fontVariant: ['tabular-nums'],
   },
-  spacer: {
-    flexGrow: 1,
-  },
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: theme.space.s6,
     paddingHorizontal: theme.space.s16,
-    paddingTop: theme.space.s12,
+    paddingVertical: theme.space.s12,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border.subtle,
   },

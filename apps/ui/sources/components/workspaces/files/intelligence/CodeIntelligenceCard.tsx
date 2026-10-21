@@ -205,7 +205,9 @@ export function CodeIntelligenceCard(
         ) : (
           <FloatingOverlay
             maxHeight={Math.min(maxHeight, CARD_MAX_HEIGHT)}
-            role="menu"
+            // A card at a name reads over dense code: the panel coat keeps the lines under it from
+            // showing through its text (the rename and fix card at a name carries the same coat).
+            role="panel"
             edgeFades={{ top: true, bottom: true }}
           >
             <View
@@ -363,6 +365,14 @@ function CodeIntelligenceAnswer(
           </Text>
         </View>
       ) : null}
+      {/* A command or a tap always answers: with nothing to say, it says so once instead of an empty card. */}
+      {!hasAnswer && !model.progress && !model.searching ? (
+        <View style={styles.block} testID="code-hover-card-empty">
+          <Text variant="meta" style={styles.tertiaryText}>
+            {t('files.pane.intelligence.noInfo')}
+          </Text>
+        </View>
+      ) : null}
     </>
   );
 }
@@ -378,6 +388,10 @@ function CodeIntelligenceFooter(
   const definitionKey = useKeyboardShortcutLabel('code.goToDefinition');
   const referencesKey = useKeyboardShortcutLabel('code.findReferences');
   const quickFixKey = useKeyboardShortcutLabel('code.quickFix');
+  // Without a name there is nothing to look up: no actions that would do nothing.
+  const named = Boolean(props.model.name);
+  const fixable = Boolean(props.model.diagnostic && props.onQuickFix);
+  if (!named && !fixable) return null;
   return (
     <View
       style={[
@@ -395,7 +409,7 @@ function CodeIntelligenceFooter(
           testID="code-hover-card-fix"
         />
       ) : null}
-      {props.model.outsidePath ? null : (
+      {props.model.outsidePath || !named ? null : (
         <FooterAction
           label={t('files.pane.intelligence.goToDefinition')}
           shortcut={definitionKey}
@@ -403,12 +417,14 @@ function CodeIntelligenceFooter(
           testID="code-hover-card-definition"
         />
       )}
-      <FooterAction
-        label={t('files.pane.intelligence.findReferences')}
-        shortcut={referencesKey}
-        onPress={props.onReferences}
-        testID="code-hover-card-references"
-      />
+      {named ? (
+        <FooterAction
+          label={t('files.pane.intelligence.findReferences')}
+          shortcut={referencesKey}
+          onPress={props.onReferences}
+          testID="code-hover-card-references"
+        />
+      ) : null}
       <View style={styles.footerSpacer} />
       {props.model.sourceLabel ? (
         <Text variant="meta" numberOfLines={1} style={styles.tertiaryText}>

@@ -169,6 +169,7 @@ export type FilesPaneTranslations = Readonly<{
         changesNotShown: (params: Readonly<{ count: number }>) => string;
         cannotRename: string;
         noFixes: string;
+        noInfo: string;
         nothingToChange: string;
         renameUnavailable: string;
         fixesUnavailable: string;
@@ -305,8 +306,8 @@ export const filesPaneTranslationsEnglish = { en: {
             problemsCount: ({ count }) => String(count) + " " + (count === 1 ? "problem" : "problems"),
             askAgent: ({ agent, count }) => "Ask " + agent + " to fix " + String(count) + " " + (count === 1 ? "problem" : "problems"),
             saveAndAskAgent: ({ agent, count }) => "Save and ask " + agent + " to fix " + String(count) + " " + (count === 1 ? "problem" : "problems"),
-            ask: ({ count }) => "Ask to fix " + String(count) + " " + (count === 1 ? "problem" : "problems"),
-            saveAndAsk: ({ count }) => "Save and ask to fix " + String(count) + " " + (count === 1 ? "problem" : "problems"),
+            ask: ({ count }) => "Ask an agent to fix " + String(count) + " " + (count === 1 ? "problem" : "problems"),
+            saveAndAsk: ({ count }) => "Save and ask an agent to fix " + String(count) + " " + (count === 1 ? "problem" : "problems"),
             referencesEmpty: "Find references on a name in a file to see where it is used.",
             problemsEmpty: "Open a file to check it for problems.",
             fix: "Fix",
@@ -343,6 +344,7 @@ export const filesPaneTranslationsEnglish = { en: {
             changesNotShown: ({ count }) => String(count) + " " + (count === 1 ? "change" : "changes") + "; the preview can’t be shown",
             cannotRename: "This name can’t be renamed.",
             noFixes: "No fixes here.",
+            noInfo: "Nothing to show here.",
             nothingToChange: "Nothing to change.",
             renameUnavailable: "Renaming needs a language server for this file.",
             fixesUnavailable: "Fixes need a language server for this file.",

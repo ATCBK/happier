@@ -3127,6 +3127,7 @@ const filesPaneTranslations = { 'zh-Hans': {
             changesNotShown: ({ count }) => String(count) + " 处更改；无法显示预览",
             cannotRename: "此名称无法重命名。",
             noFixes: "这里没有修复。",
+            noInfo: "这里没有可显示的内容。",
             nothingToChange: "没有需要更改的内容。",
             renameUnavailable: "重命名需要此文件的语言服务器。",
             fixesUnavailable: "修复需要此文件的语言服务器。",

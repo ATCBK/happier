@@ -8,7 +8,6 @@ import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneSco
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { machinePageHref } from '@/components/machines/page/machinePageHref';
 import { usePaneMainColumn } from '@/components/appShell/panes/mainColumn/usePaneMainColumn';
-import { useOptionalUniversalSearchRuntime } from '@/components/appShell/search/UniversalSearchRuntimeContext';
 import type { WorkspaceSymbolSearchInput } from '@/components/appShell/search/workspaceSymbolSearchSource';
 import type {
   Rect,
@@ -259,7 +258,6 @@ export function useFilePageCodeIntelligence(
   const pane = useAppPaneScope(input.scopeId);
   const mainColumn = usePaneMainColumn();
   const phone = useDeviceType() === 'phone';
-  const searchRuntime = useOptionalUniversalSearchRuntime();
   const interaction = React.useMemo(() => createCardInteraction(), []);
   React.useEffect(() => () => interaction.dispose(), [interaction]);
   const editSets = React.useMemo(() => createEditSetStore(), []);
@@ -540,6 +538,11 @@ export function useFilePageCodeIntelligence(
   const restart = React.useCallback(() => {
     void controller?.restart();
   }, [controller]);
+  // One Check problems for the ⋯ entry, the shortcut's menu twin and the Problems tab's own button.
+  const checkProblems = React.useCallback(() => {
+    showProblems();
+    void controller?.checkProblems();
+  }, [controller, showProblems]);
   // A missing managed server installs where every Machine install lives (the Machine's installables).
   const machineId = input.scope?.machineId ?? null;
   const serverId = input.scope?.serverId;
@@ -665,50 +668,6 @@ export function useFilePageCodeIntelligence(
   );
   // The page takes the tabs when it becomes active and keeps them while it stays open: choosing
   // Problems in the page's own column makes the page inactive, and the tab must not vanish with it.
-  const publication = React.useRef<Readonly<{ scopeId: string; producer: CodeIntelligencePaneProducer }> | null>(null);
-  React.useEffect(() => {
-    const current = publication.current;
-    const release = () => {
-      if (current) releaseCodeIntelligencePaneProducer(current.scopeId, current.producer);
-      publication.current = null;
-    };
-    if (!controller) return release();
-    const producer: CodeIntelligencePaneProducer = {
-      controller,
-      path: input.filePath,
-      machineName: input.machineName,
-      machineUnreachable: input.machineUnreachable,
-      openReference,
-      openProblem,
-      ask: askModel,
-    };
-    const scopeId = input.scopeId;
-    if (input.active) {
-      release();
-      publishCodeIntelligencePaneProducer(scopeId, producer);
-      publication.current = { scopeId, producer };
-      return;
-    }
-    // Stepped back: refresh what it offers (its Ask follows its problems) while it still owns the tabs.
-    if (current?.scopeId === scopeId && refreshCodeIntelligencePaneProducer(scopeId, current.producer, producer))
-      publication.current = { scopeId, producer };
-    else release();
-  }, [
-    askModel,
-    controller,
-    input.active,
-    input.filePath,
-    input.machineName,
-    input.machineUnreachable,
-    input.scopeId,
-    openProblem,
-    openReference,
-  ]);
-
-  React.useEffect(() => () => {
-    const current = publication.current;
-    if (current) releaseCodeIntelligencePaneProducer(current.scopeId, current.producer);
-  }, []);
 
   // ⌘P / @ from this page lists this document's symbols (the Search owner's existing holder input).
   const symbols = React.useMemo<WorkspaceSymbolSearchInput | null>(() => {
@@ -757,60 +716,68 @@ export function useFilePageCodeIntelligence(
     theme.dark,
     workspaceRefId,
   ]);
-  const searchSeed = React.useMemo(
+  const publication = React.useRef<Readonly<{ scopeId: string; producer: CodeIntelligencePaneProducer }> | null>(null);
+  React.useEffect(() => {
+    const current = publication.current;
+    const release = () => {
+      if (current) releaseCodeIntelligencePaneProducer(current.scopeId, current.producer);
+      publication.current = null;
+    };
+    if (!controller) return release();
+    const producer: CodeIntelligencePaneProducer = {
+      controller,
+      path: input.filePath,
+      machineName: input.machineName,
+      machineUnreachable: input.machineUnreachable,
+      openReference,
+      openProblem,
+      checkProblems,
+      ask: askModel,
+    };
+    const scopeId = input.scopeId;
+    if (input.active) {
+      release();
+      publishCodeIntelligencePaneProducer(scopeId, producer);
+      publication.current = { scopeId, producer };
+      return;
+    }
+    // Stepped back: refresh what it offers (its Ask follows its problems) while it still owns the tabs.
+    if (current?.scopeId === scopeId && refreshCodeIntelligencePaneProducer(scopeId, current.producer, producer))
+      publication.current = { scopeId, producer };
+    else release();
+  }, [
+    askModel,
+    checkProblems,
+    controller,
+    input.active,
+    input.filePath,
+    input.machineName,
+    input.machineUnreachable,
+    input.scopeId,
+    openProblem,
+    openReference,
+  ]);
+
+  React.useEffect(() => () => {
+    const current = publication.current;
+    if (current) releaseCodeIntelligencePaneProducer(current.scopeId, current.producer);
+  }, []);
+
+  const search = React.useMemo(
     () =>
       input.scope
         ? {
-            accountId: input.accountId,
-            serverId: input.scope.serverId,
-            sessionId: workspaceRefId ? null : input.sessionId,
-            machineId: input.scope.machineId,
-            rootPath: input.scope.rootPath,
+            scope: {
+              accountId: input.accountId,
+              serverId: input.scope.serverId,
+              sessionId: workspaceRefId ? null : input.sessionId,
+              machineId: input.scope.machineId,
+              rootPath: input.scope.rootPath,
+            },
+            ...(symbols ? { symbols } : {}),
           }
         : undefined,
-    [input.accountId, input.scope, input.sessionId, workspaceRefId],
-  );
-  useKeyboardShortcutHandlers(
-    React.useMemo(
-      () =>
-        input.active && searchRuntime && searchSeed
-          ? {
-              // Text in files and Replace start in this page's folder, like quick open below.
-              'search.textInFiles': () => {
-                searchRuntime.open(undefined, searchSeed, {
-                  source: 'fileContent',
-                });
-                return 'handled' as const;
-              },
-              'search.replaceInFiles': () => {
-                searchRuntime.open(undefined, searchSeed, {
-                  source: 'fileContent',
-                  replace: true,
-                });
-                return 'handled' as const;
-              },
-              ...(symbols
-                ? {
-                    'search.symbols': () => {
-                      searchRuntime.open(undefined, searchSeed, {
-                        source: 'symbols',
-                        symbols,
-                      });
-                      return 'handled' as const;
-                    },
-                    'search.files': () => {
-                      searchRuntime.open(undefined, searchSeed, {
-                        source: 'files',
-                        symbols,
-                      });
-                      return 'handled' as const;
-                    },
-                  }
-                : {}),
-            }
-          : {},
-      [input.active, searchRuntime, searchSeed, symbols],
-    ),
+    [input.accountId, input.scope, input.sessionId, workspaceRefId, symbols],
   );
 
   // F2 / Alt+Enter, the ⋯ menu and the card's Fix: the name at the editor's caret, else the name last pointed at.
@@ -875,13 +842,10 @@ export function useFilePageCodeIntelligence(
                 interaction.open({ anchor, via: 'command', references: false });
             },
             'code.restart': restart,
-            'code.showProblems': () => {
-              showProblems();
-              void controller.checkProblems();
-            },
+            'code.showProblems': checkProblems,
           }
         : undefined,
-    [controller, input.editorHandleRef, interaction, openEditSet, restart, showProblems],
+    [checkProblems, controller, input.editorHandleRef, interaction, openEditSet, restart],
   );
 
   const saveThisFile = React.useCallback(async () => {
@@ -945,6 +909,7 @@ export function useFilePageCodeIntelligence(
     editSetLayer,
     menuCommands,
     symbols,
+    search,
     showProblems,
   };
 }

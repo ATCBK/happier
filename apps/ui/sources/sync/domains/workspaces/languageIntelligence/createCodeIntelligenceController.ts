@@ -273,7 +273,17 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
             // An unrelated incapable/failed server must not overturn that decision.
             return { capable: true, symbols: response.symbols, state: 'ready', loading: false };
         },
-        restart: () => document?.restart() ?? Promise.resolve({ status: 'unavailable' as const, reason: 'session_unavailable' as const }),
+        async restart() {
+            if (!document) return { status: 'unavailable' as const, reason: 'session_unavailable' as const };
+            // P7-R11: the restart is said at once ("Starting …" through the one state note); the sync that
+            // follows a successful restart names what came back, and a refused restart leaves things as they were.
+            const before = snapshot.servers;
+            const restarting = before?.map(server => ({ ...server, state: 'restarting' as const, loading: false }));
+            if (restarting?.length && available()) publish({ ...snapshot, servers: restarting });
+            const response = await document.restart();
+            if (response.status !== 'ok' && available() && snapshot.servers === restarting) publish({ ...snapshot, servers: before });
+            return response;
+        },
         cancel: (): void => { abortPending(); if (snapshot.status === 'searching' || snapshot.status === 'loading') publish({ ...snapshot, status: snapshot.result ? 'ready' : 'idle' }); },
         dismiss: (): void => { abortPending(); publish({ ...snapshot, status: 'idle', selection: null, querySelection: null, kind: null, result: null, reason: undefined }); },
         dispose: (): void => { abortPending(); stopText?.(); document?.dispose(); retirement.dispose(); disposed = true; listeners.clear(); },

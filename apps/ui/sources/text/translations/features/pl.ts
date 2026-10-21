@@ -3145,6 +3145,7 @@ const filesPaneTranslations = { pl: {
             changesNotShown: ({ count }) => "Zmiany: " + String(count) + "; nie można pokazać podglądu",
             cannotRename: "Tej nazwy nie można zmienić.",
             noFixes: "Brak poprawek.",
+            noInfo: "Nie ma tu nic do pokazania.",
             nothingToChange: "Nic do zmiany.",
             renameUnavailable: "Zmiana nazwy wymaga serwera języka dla tego pliku.",
             fixesUnavailable: "Poprawki wymagają serwera języka dla tego pliku.",

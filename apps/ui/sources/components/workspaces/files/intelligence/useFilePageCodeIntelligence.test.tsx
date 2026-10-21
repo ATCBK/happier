@@ -38,6 +38,7 @@ const { createWorkspaceSymbolSearchSource } = await import('@/components/appShel
 const { useWorkspaceFileEditorState } = await import('../details/workspaceFileDetails/useWorkspaceFileEditorState');
 const { useWorkspaceFileEditorCommands } = await import('../details/workspaceFileDetails/useWorkspaceFileEditorCommands');
 const { useCodeIntelligencePaneProducer } = await import('./codeIntelligencePaneStore');
+const { CodeIntelligencePaneTab } = await import('./CodeIntelligencePaneTab');
 const { registerComposerPresentationTarget } = await import('@/components/sessions/presentation/sessionComposerPresentationTargets');
 const { storage } = await import('@/sync/domains/state/storage');
 const actionBoundary = getWorkspaceFileDetailsActionBoundary();
@@ -292,6 +293,37 @@ describe('File-page intelligence composition', () => {
             expect(hook.getCurrent()?.path).toBe('src/a.ts');
         } finally { await hook.unmount(); }
     });
+    it.each([true, false])('checks the page for problems from the Problems tab button like the page command (page active: %s)', async (pageActive) => {
+        machine.query.mockResolvedValue({ status: 'ok', kind: 'diagnostics', diagnostics: [], hasMore: false });
+        let setActive: (value: boolean) => void = () => {};
+        const hook = await renderHook(() => {
+            const [active, set] = React.useState(true);
+            setActive = set;
+            return useFilePageCodeIntelligence(input({ active }));
+        }, { wrapper: PageWrapper });
+        try {
+            const screen = await renderScreen(<PageWrapper><CodeIntelligencePaneTab scopeId="intelligence-page" kind="problems" active /></PageWrapper>);
+            await vi.waitFor(() => expect(screen.findAllByTestId('code-problems-check').length).toBeGreaterThan(0));
+            // Pressing a control in the side column moves pane focus off the File page.
+            if (!pageActive) await act(async () => { setActive(false); });
+            await act(async () => { screen.findAllByTestId('code-problems-check')[0]?.props.onPress(); });
+            await vi.waitFor(() => expect(machine.query).toHaveBeenCalledWith('m1', expect.objectContaining({ kind: 'diagnostics' }), expect.anything()));
+        } finally { await hook.unmount(); }
+    });
+
+    it('says there is nothing to show, without actions, when Info at cursor finds no name', async () => {
+        const noop = () => {};
+        const screen = await renderScreen(<CodeIntelligenceCard open anchor={{ x: 10, y: 10, width: 4, height: 16 }}
+            model={{ name: null, names: [], hover: null, diagnostic: null, outsidePath: null, progress: null, searching: false,
+                sourceLabel: null, references: null }}
+            onRequestClose={noop} onDefinition={noop} onReferences={noop} onCopyName={noop} onCopyPath={noop}
+            onChooseName={noop} onOpenReference={noop} />);
+        await vi.waitFor(() => expect(screen.findAllByTestId('code-hover-card').length).toBeGreaterThan(0));
+        expect(screen.findAllByTestId('code-hover-card-empty').length).toBeGreaterThan(0);
+        expect(screen.findAllByTestId('code-hover-card-definition')).toHaveLength(0);
+        expect(screen.findAllByTestId('code-hover-card-references')).toHaveLength(0);
+    });
+
     it('leads the fix list with the fixes for the problem, before whole-file source actions', async () => {
         const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } };
         const action = (title: string, kind: string) => ({ serverId: 'ts', title, kind, range, files: [], hasCommand: false });
