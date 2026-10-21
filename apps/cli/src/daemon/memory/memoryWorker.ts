@@ -1525,16 +1525,13 @@ export async function startMemoryWorker(params: Readonly<{
         const source = { type: 'happier_session' as const, sessionId };
         if (!settings.enabled || (settings.indexMode === 'hints' && !settings.hints.enabled)) return { source, state: 'disabled' };
         if (!indexesQualified || !tier1 || (settings.indexMode === 'deep' && !deep)) return { source, state: 'indexing' };
-        const cursors = tier1.getSessionCursors({ sessionId, nowMs: Date.now() });
-        const observed = candidateObservedSeqBySessionId.get(sessionId);
-        const indexed = settings.indexMode === 'deep' ? cursors.lastDeepIndexedSeq : cursors.lastHintedSeq;
         const pending = editedSessionIds.has(sessionId) || [...activeIndexOperations].some(operation => operation.sessionIds.has(sessionId));
         const queueStatus = tier1.getMemorySessionIndexStatus(sessionId);
-        const failed = queueStatus === 'failed'
-          || (settings.indexMode === 'deep' && cursors.consecutiveDeepFailures > 0);
-        return { source, state: pending ? 'indexing' : failed ? 'error'
-          : (observed !== undefined || queueStatus === 'indexed' || queueStatus === 'empty')
-            && indexed >= Math.max(observed ?? 0, cursors.lastObservedSeq) ? 'ready' : 'indexing' };
+        // The completed queue outcome owns coverage. Inventory sequences also
+        // include non-message events and cannot be compared with a transcript
+        // frontier to reopen an exhausted scan. This projection is read-only.
+        return { source, state: pending ? 'indexing' : queueStatus === 'failed' ? 'error'
+          : queueStatus === 'indexed' || queueStatus === 'empty' ? 'ready' : 'indexing' };
       });
       return [...sessions, ...externalSources.getIndexSources(indexesQualified ? deep : null).map(row =>
         !settings.enabled || !settings.conversationSearch.indexExternal.enabled ? { ...row, state: 'disabled' as const } : row)];

@@ -11,6 +11,68 @@ import { encodeBase64, encryptLegacy } from '@/api/encryption';
 await import('@/api/api');
 
 describe('memoryWorker', () => {
+  it('reads status without joining an index writer or mutating its cursor', async () => {
+    vi.doMock('@/session/transport/http/sessionsHttp', () => ({
+      fetchSessionsPage: async () => ({ sessions: [], nextCursor: null, hasNext: false }),
+    }));
+    const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
+    await writeMemorySettingsToDisk({ enabled: true, indexMode: 'deep', backfillPolicy: 'all_history', coveragePolicy: { type: 'full' } });
+    const { startMemoryWorker } = await import('./memoryWorker');
+    const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1' });
+    const { openSqliteDatabaseSync } = await import('../persistence/sqliteSync');
+    const { registerMachineMemoryRpcHandlers } = await import('@/api/machine/rpcHandlers.memory');
+    const { RpcHandlerManager } = await import('@/api/rpc/RpcHandlerManager');
+    const { RPC_METHODS } = await import('@happier-dev/protocol/rpc/methods');
+    const { MemoryStatusV1Schema } = await import('@happier-dev/protocol/memory/memoryStatus');
+    const { openSummaryShardIndexDb } = await import('./summaryShardIndexDb');
+    const retained = openSummaryShardIndexDb({ dbPath: worker.getTier1DbPath()! });
+    retained.recordMemorySessionIndexState({ sessionId: 'retained', status: 'empty', updatedAtMs: Date.now() });
+    retained.getSessionCursors({ sessionId: 'retained', nowMs: Date.now() });
+    retained.close();
+    const writer = openSqliteDatabaseSync(worker.getTier1DbPath()!);
+    const deepWriter = openSqliteDatabaseSync(worker.getDeepDbPath()!);
+    const manager = new RpcHandlerManager({ scopePrefix: 'machine_1', encryptionMode: 'plain', logger: () => {} });
+    registerMachineMemoryRpcHandlers({ rpcHandlerManager: manager, memoryWorker: worker });
+    writer.exec('BEGIN IMMEDIATE');
+    deepWriter.exec('BEGIN IMMEDIATE');
+    const started = performance.now();
+    try {
+      // SQLite WAL permits this read while another connection owns the writer.
+      // Reopening schema/migration code or ensuring a cursor tries to write.
+      const result = await manager.handleRequest({ method: `machine_1:${RPC_METHODS.DAEMON_MEMORY_STATUS}`, params: {} });
+      console.info('R233_STATUS_LOCK', JSON.stringify({ elapsedMs: performance.now() - started,
+        readable: MemoryStatusV1Schema.safeParse(result).success }));
+      expect(MemoryStatusV1Schema.parse(result).sources).toContainEqual({
+        source: { type: 'happier_session', sessionId: 'retained' }, state: 'ready',
+      });
+    } finally { writer.exec('ROLLBACK'); deepWriter.exec('ROLLBACK'); writer.close(); deepWriter.close(); await worker.stop(); }
+  });
+  it.each(['empty', 'indexed'] as const)('publishes completed %s queue coverage when the inventory sequence includes non-message events', async status => {
+    vi.doMock('@/session/transport/http/sessionsHttp', () => ({
+      fetchSessionsPage: async () => ({ sessions: [], nextCursor: null, hasNext: false }),
+    }));
+    const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
+    await writeMemorySettingsToDisk({ enabled: true, indexMode: 'deep', backfillPolicy: 'all_history',
+      coveragePolicy: { type: 'full' }, deep: { minChunkMessages: 1 } });
+    const { startMemoryWorker } = await import('./memoryWorker');
+    const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1' });
+    try {
+      const { openSummaryShardIndexDb } = await import('./summaryShardIndexDb');
+      const db = openSummaryShardIndexDb({ dbPath: worker.getTier1DbPath()! });
+      // Retained qa-r232 shape: source metadata observed a later sequence,
+      // while the completed transcript scan has no remaining message rows.
+      db.markDeepIndexSuccess({ sessionId: 'covered', seqTo: status === 'indexed' ? 1 : 0, nowMs: Date.now() });
+      db.recordMemorySessionIndexState({ sessionId: 'covered', status, lastObservedSeq: 7, updatedAtMs: Date.now() });
+      db.close();
+      const { openSqliteDatabaseSync } = await import('../persistence/sqliteSync');
+      const fixture = openSqliteDatabaseSync(worker.getTier1DbPath()!);
+      fixture.exec("UPDATE session_cursors SET lastObservedSeq=7 WHERE sessionId='covered'");
+      fixture.close();
+      expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: 'covered' }, state: 'ready' });
+      await worker.noteSessionTranscriptRevised?.({ sessionId: 'covered', seq: 7 });
+      expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: 'covered' }, state: 'indexing' });
+    } finally { await worker.stop(); }
+  });
   it('publishes Session readiness only after the latest observed cursor and revisions are indexed', async () => {
     let resume = () => {};
     let started = () => {};
