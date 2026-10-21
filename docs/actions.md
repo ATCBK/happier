@@ -230,6 +230,14 @@ The settings writer reads the shared approval policy, including contributed
 Action declarations and the Source Control confirmation preference; it clears
 only that surface's approval override or waiver and preserves neighbouring settings.
 
+The development Account reader normalizes predecessor `session_agent` policy to
+`agent` at the shared Action-settings owner, including explicit Require, disable
+and tool-exposure preferences. Existing UI/voice aliases use that same reader;
+valid current tool-exposure keys take precedence over aliases. Writers retain
+only current surface names. This forward reader remains while 0.2-created
+Account settings are supported; it does not change dangerous defaults or add a
+0.3-to-0.2 rollback writer.
+
 UI writes and effects enter the Action executor so the same intent has one
 enabled, surface, authority and approval policy. UI reads may use the shared
 domain transport or retained subscription when an equivalent typed read Action
@@ -3578,6 +3586,18 @@ Native Action acquisition requests outputs explicitly and uses the Protocol
 freezing the contract. Section replies must retain the requested Action and path;
 failed reads refuse that contract, and caller cancellation remains cancellation.
 
+In 0.3 development, full Action discovery also carries the serializable
+`completion` declaration from the Action spec. `freezeWorkflowActionContractV1`
+is the single Workflow contract projection for direct CLI/UI admission, daemon
+trigger claims and contributed Actions. It preserves that declaration and uses
+its terminal schema as the Workflow output schema; undeclared Actions retain
+their immediate output. Executable completion functions stay at the Action
+owner. The existing execution-run observer waits for terminal evidence, so
+downstream steps receive plans and explicit per-engine failures rather than
+successful Start references. Stored readers remain tolerant; existing accepted
+snapshots are immutable and are not reinterpreted or backfilled. A fresh start
+freezes the current contract, including when starting from a saved definition.
+
 Workflow string inputs can declare `enum` choices in the canonical
 [`WorkflowInputDefinitionSchema`](../packages/protocol/src/workflows/workflowV1.ts).
 The daemon's input binder checks occurrence evidence, constants and defaults
@@ -3622,7 +3642,12 @@ provenance, so defaults, explicit Ask-first settings and waivers apply separatel
 
 The existing server routing selects the lexicographically first eligible socket
 id advertising the method in that Account's machine/method room, excluding the
-calling socket. Action inputs still address their exact Session, composer or
+calling socket, or refuses multiple receivers when the invocation requires one.
+Next and conversation search use the generic client room independently of the
+invoking-Session view; both require one receiver.
+Daemon availability advertisements are hints, and the server's current
+registration selection decides absence rather than a daemon-local negative.
+Action inputs still address their exact Session, composer or
 mounted surface where supported; delivery does not elect a device or retarget
 an absent view. Browser automation retains its separate exact-view controller
 custody and interrupted-completion contract. Contributed plugin client Actions
