@@ -456,6 +456,11 @@ export {
   type WidgetGroupContentState,
 } from './layout/widgetGroupLayout.js';
 export {
+  HappierPublicProfile,
+  type HappierPublicProfileLabels,
+  type HappierPublicProfileProps,
+} from './account/PublicProfile.js';
+export {
   HappierPageChromeProvider,
   useHappierPageChrome,
   type HappierPageChrome,
@@ -1251,3 +1256,4 @@ export {
   type HappierLinkDeliveryButtonProps,
   type HappierLinkDeliveryProps,
 } from './sharing/LinkDelivery.js';
+export * from './usage/charts/index.js';

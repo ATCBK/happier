@@ -3,6 +3,20 @@ export type AtmosphereLook = 'original' | 'fine' | 'painted-fine' | 'halftone' |
 export type AtmosphereDissolveStyle = 'ordered' | 'gradient' | 'haze' | 'shrink' | 'rows';
 export type AtmosphereTransitionKind = 'crossfade' | 'resettle' | 'ripple';
 export type AtmosphereRgb = readonly [number, number, number];
+export const ATMOSPHERE_PICTURE_MAX_EDGE: 2560;
+export const ATMOSPHERE_HORIZON_FADE_FROM: 0.58;
+export type AtmosphereBackdropPicture = Pick<AtmospherePicture, 'hour' | 'grades' | 'dark' | 'horizon' | 'focus' | 'adjust'>;
+export type AtmosphereSourceGrade = Readonly<{ from: number; to: number; hz?: number; horizon?: number }>;
+export function pictureBackdropProps(input: Readonly<{
+  picture: AtmosphereBackdropPicture | null; look: AtmosphereEffectiveLook; theme: AtmosphereTheme;
+  page: AtmosphereRgb; layout: 'horizon' | 'wallpaper'; horizonAt: number;
+}>): Readonly<{
+  look: AtmosphereLook; params: Readonly<Record<string, number>>; dissolve: AtmosphereDissolve | null;
+  focus: AtmosphereFocus; horizon?: AtmosphereHorizon; grade: AtmosphereSourceGrade | null;
+  adjust: AtmosphereAdjustment | null; page: AtmosphereRgb; theme: AtmosphereTheme;
+}>;
+export function backdropBandGrade(grade: AtmosphereSourceGrade | null | undefined, crop: AtmosphereCrop,
+  horizon?: AtmosphereHorizon): AtmosphereGrade | null | undefined;
 
 /** Platform-decoded, cropped and sampled device-pixel source; no JPEG decoder is needed by the core. */
 export interface AtmospherePixels {

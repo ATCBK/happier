@@ -27,6 +27,10 @@
       "types": "./atmosphere.d.mts",
       "default": "./atmosphere.mjs"
     },
+    "./atmosphere-haze": {
+      "types": "./atmosphere-haze.d.mts",
+      "default": "./atmosphere-haze.mjs"
+    },
     "./product-story": {
       "happier-source": "./src/product-story.ts",
       "types": "./dist/product-story.d.ts",
@@ -43,6 +47,8 @@
     "planet-placement.d.mts",
     "atmosphere.mjs",
     "atmosphere.d.mts",
+    "atmosphere-haze.mjs",
+    "atmosphere-haze.d.mts",
     "package.json"
   ],
   "scripts": {
@@ -52,6 +58,9 @@
     "prepack": "node ../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json",
     "typecheck": "../../apps/stack/bin/hstack-exec --script=typecheck:local",
     "typecheck:local": "node ../../scripts/workspaces/runTypeScriptCli.mjs --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "color": "^5.0.0"
   },
   "devDependencies": {
     "typescript": "^5.9.2"

@@ -2,6 +2,34 @@
  * This module has no DOM or worker dependency. Glyph masks come from the platform.
  */
 /* ═══════════════ shared maths ═══════════════ */
+/** The existing device preparation edge, shared with reviewed publication media. */
+export const ATMOSPHERE_PICTURE_MAX_EDGE = 2560;
+export const ATMOSPHERE_HORIZON_FADE_FROM = 0.58;
+
+/** One presentation decision for web, native and static server adapters. */
+export function pictureBackdropProps(input) {
+  const { picture, look, theme } = input;
+  const hour = picture ? (picture.grades[theme === 'dark' ? picture.dark || 'night' : 'light'] ?? picture.hour) : null;
+  const grade = picture && hour !== null && Math.abs(picture.hour - hour) > 0.05
+    ? { from: picture.hour, to: hour, horizon: picture.horizon.src } : null;
+  const horizon = picture?.horizon && picture.horizon.src != null
+    ? { ...picture.horizon, at: input.layout === 'wallpaper' ? 0.86 : input.horizonAt } : picture?.horizon;
+  return {
+    look: look.effect,
+    params: { ...look.params, strength: look.strength, mute: ATMOSPHERE_PALETTE.mute[theme] },
+    dissolve: input.layout === 'horizon'
+      ? { style: look.fade, from: look.from ?? ATMOSPHERE_HORIZON_FADE_FROM, to: look.to ?? 1 } : null,
+    focus: picture?.focus ?? { x: 0.5, y: 0.5 },
+    ...(horizon ? { horizon } : {}), grade, adjust: picture?.adjust ?? null, page: input.page, theme,
+  };
+}
+
+/** Map a source-space grading horizon after the platform computes its canonical crop. */
+export function backdropBandGrade(grade, crop, horizon) {
+  if (!grade || grade.hz !== undefined) return grade;
+  return { from: grade.from, to: grade.to, hz: crop.toBand(grade.horizon ?? horizon?.src ?? 0.55) };
+}
+
 const clamp = (x, a = 0, b = 1) => (x < a ? a : x > b ? b : x);
 const sstep = (a, b, x) => {
   const t = clamp((x - a) / (b - a));
