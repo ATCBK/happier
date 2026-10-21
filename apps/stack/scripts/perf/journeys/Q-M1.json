@@ -1,0 +1,14 @@
+{
+  "id": "Q-M1",
+  "intent": "Clock-fixed M1 continuous counts: fresh ordinary restore to the original Home shell, then early and later consecutive five-minute Home windows on the same document with the same visible Capacity and saved-tab corpus. One pre-document hook lifetime; phase marks separate network windows. Shell presence and elapsed time do not assert ordinary inventory hydration. Whole-run React/store/profile counters remain explicitly aggregate.",
+  "readiness": "Original Home shell marker only; actual ordinary Machine/Session inventory hydration is independently observed and never inferred from elapsed time.",
+  "prepare": [],
+  "steps": [
+    { "op": "open", "path": "/restore/manual", "when": "cold" },
+    { "op": "open", "when": "warm" },
+    { "op": "restore", "when": "cold" },
+    { "op": "home" },
+    { "op": "idle", "ms": 300000 },
+    { "op": "idle", "ms": 300000 }
+  ]
+}

@@ -146,11 +146,25 @@ Round-4 collector details:
   automation overhead. Shared process samples include all clients, not per-lane
   CPU/RSS, peaks or allocated DB backends. Suppressed pings cannot establish
   poll rates; missing operation/constructor counts remain unavailable.
-- Current bundles use schema 3. Comparisons keep schema versions separate as
+- Current bundles use schema 4. Comparisons keep schema versions separate as
   well as journey/cache/UI/instrumentation mode: legacy unbracketed requests,
   terminal-only telemetry and delayed rotating-log reads cannot be silently
   pooled with corrected captures. Fixed/exact Session route-class metrics are
   included in comparisons; a missing legacy metric stays unavailable.
+- Clock mapping uses only coherent native `Network.requestWillBeSent`
+  `wallTime`/`timestamp` pairs, including preparation traffic. There is no
+  renderer `Date.now()` / `Performance.getMetrics` calibration: a queued renderer
+  response is not a simultaneous sample. A request's start is its native wall
+  time; its response/completion uses that request's own offset, so later pairs
+  cannot shift its lifetime. Socket timestamps use the preceding native pair
+  (the first pair for earlier frames), and are buffered until a pair is known.
+  Missing pairs are explicit collection errors, never epoch-zero fallback.
+  Network records retain original native wall/monotonic timestamps; bundle
+  `clock.nativePairs` retains the raw numeric evidence and unmapped counts.
+  Schema-2/3 clock-dependent membership/correlation is not certified and cannot
+  generally be repaired: filtered-out starts and original native walls were not
+  retained. Redo the cohort; do not pool it with schema 4. Controller shell
+  durations and profile-wide CPU remain distinct from exact-window evidence.
 
 Other lanes add small JSON journey files with `id`, `intent`, `prepare` and
 `steps`. Operations are `open` (optional path), `home`, `idle` (milliseconds),

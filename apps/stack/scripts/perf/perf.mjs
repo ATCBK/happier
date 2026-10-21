@@ -200,12 +200,13 @@ async function journey(id) {
     if (!server.records.some(record => record.role !== 'daemon' && record.module === 'web-latency')) gaps.push('No server trace records; zero DB/request counts are not established');
     if (!server.daemon.length) gaps.push('No daemon operation records; zero RPC/poll counts are not established');
     if (!browserResult.attribution.mappedFrames) gaps.push('Source maps absent/unreadable; CPU attribution is generated script/symbol only');
-    const bundle = { version: 3, journey: id, intent: definition.intent, cache: options.cache, uiMode: options['ui-mode'],
+    const bundle = { version: 4, journey: id, intent: definition.intent, cache: options.cache, uiMode: options['ui-mode'],
       captureMode: options['capture-mode'], instrumentation: browserResult.react.instrumentation,
       concurrentLaneLoad: { before: lanesBefore, after: lanesAfter },
       status: gaps.length ? 'INCOMPLETE' : 'CAPTURED', gaps, url: safeUrl(options.url), session,
       pageId: capture.cdp.pageId, startMs: browserResult.startMs, endMs: browserResult.endMs, durationMs: browserResult.durationMs,
       observedUi: browserResult.observedUi,
+      clock: browserResult.clock,
       viewport: { declared: viewportDeclaration ?? null, observations: viewports },
       readiness: { selector: options['home-selector'], meaning: definition.readiness ?? 'Lane-declared selector only; J1 default is a shell marker, not proof of hydrated Home' },
       counts, socketEventsPerSecond: browserResult.socketEventsPerSecond,
@@ -249,7 +250,7 @@ async function journey(id) {
       viewport: { declared: viewportDeclaration ?? null, observations: viewports }, marks, hostBefore, hostAfter, windowHostStart, windowHostEnd });
     const partialStore = browserResult ? summarizeSyncPerformanceSummaries(browserResult.telemetry) : null;
     const storeMeasured = partialStore?.events.some(event => event.name === 'sync.performance.scenario.perf-capture-end');
-    await writeJson(join(output, 'bundle.json'), { version: 3, journey: id, status: 'FAILED', failedPhase: phase,
+    await writeJson(join(output, 'bundle.json'), { version: 4, journey: id, status: 'FAILED', failedPhase: phase,
       eligible: false, cache: options.cache, uiMode: options['ui-mode'], captureMode: options['capture-mode'],
       startMs: browserResult?.startMs, endMs: browserResult?.endMs, durationMs: browserResult?.durationMs,
       counts: { requests: Number.isFinite(browserResult?.startMs) ? browserResult.network.requests : null,
@@ -260,6 +261,7 @@ async function journey(id) {
         storeNotifications: storeMeasured ? partialStore.events.find(event => event.name === 'sync.store.storage.notify')?.count ?? 0 : null,
         selectorEvaluations: storeMeasured ? partialStore.events.filter(event => event.name.startsWith('sync.store.storage.selector.')).reduce((sum, event) => sum + event.count, 0) : null },
       instrumentation: browserResult?.react?.instrumentation,
+      clock: browserResult?.clock,
       concurrentLaneLoad: { before: lanesBefore, after: lanesAfter },
       gaps: ['Failed journey: partial evidence is diagnostic only; never accepted timing/count comparison evidence'] });
     throw error;

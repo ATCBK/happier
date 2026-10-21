@@ -46,6 +46,8 @@ test('capture composes CDP events, safe network records, telemetry and mapped CP
   });
   t.after(() => { ownedSocket?.destroy(); server.close(); });
   const epoch = Date.now();
+  const rendererDelayMs = 15827;
+  let rendererClockRequests = 0;
   const map = 'data:application/json;base64,' + Buffer.from(JSON.stringify({ version: 3, sources: ['src/Owner.ts'], names: ['realOwner'], mappings: 'AAAAA' })).toString('base64');
   server.on('upgrade', (request, socket) => {
     ownedSocket = socket;
@@ -73,19 +75,24 @@ test('capture composes CDP events, safe network records, telemetry and mapped CP
         if (message.method === 'Debugger.enable') send({ method: 'Debugger.scriptParsed', params: { scriptId: '1', url: 'http://app.test/bundle.js', sourceMapURL: map } });
         if (message.method === 'Page.addScriptToEvaluateOnNewDocument') result.identifier = 'probe';
         if (message.method === 'Performance.getMetrics') result.metrics = [{ name: 'Timestamp', value: 10 }];
-        if (message.method === 'Runtime.evaluate') result = { result: { value: message.params.expression === 'Date.now()' ? epoch
+        // OS/CDP boundary simulation: the renderer clock is sampled 15.827s
+        // later than Performance.Timestamp, without spending that wall time.
+        if (message.method === 'Runtime.evaluate' && message.params.expression === 'Date.now()') rendererClockRequests++;
+        if (message.method === 'Runtime.evaluate') result = { result: { value: message.params.expression === 'Date.now()' ? epoch + rendererDelayMs
           : message.params.expression === 'location.href' ? 'http://app.test/'
           : message.params.expression.includes('.collect()') ? { commits: 2, renders: 3, components: {}, longTasks: [], renderers: [{ version: '19' }], telemetryAvailable: true,
             telemetry: { events: [{ name: 'sync.store.storage.notify', count: 2 }] } } : undefined } };
         if (message.method === 'Profiler.start') {
           const timestamp = 10 + (Date.now() - epoch) / 1000;
+          send({ method: 'Network.webSocketFrameReceived', params: { timestamp, response: { opcode: 1, payloadData: '42["before-native-pair",{}]' } } });
           send({ method: 'Network.requestWillBeSent', params: { requestId: 'n', wallTime: Date.now() / 1000, timestamp,
             request: { method: 'GET', url: 'http://app.test/v1/data?key=never-save' }, initiator: { type: 'script', stack: { callFrames: [] } } } });
           send({ method: 'Network.responseReceived', params: { requestId: 'n', timestamp, response: { status: 200, headers: { 'x-request-id': 'returned-id' },
             timing: { requestTime: timestamp, sendStart: 0, receiveHeadersStart: 0 } } } });
           send({ method: 'Network.loadingFinished', params: { requestId: 'n', timestamp, encodedDataLength: 25 } });
           for (const [requestId, delta] of [['canceled', 0], ['unknown-failure', 0], ['late', 0], ['outside', 1000]]) send({ method: 'Network.requestWillBeSent', params: {
-            requestId, wallTime: Date.now() / 1000 + delta, timestamp: timestamp + delta, request: { method: 'GET', url: 'http://app.test/v1/data' }, initiator: { type: 'script' } } });
+            requestId, wallTime: Date.now() / 1000 + delta + (requestId === 'outside' ? .5 : 0), timestamp: timestamp + delta,
+            request: { method: 'GET', url: 'http://app.test/v1/data' }, initiator: { type: 'script' } } });
           send({ method: 'Network.loadingFailed', params: { requestId: 'canceled', timestamp, canceled: true, errorText: 'net::ERR_ABORTED' } });
           send({ method: 'Network.loadingFailed', params: { requestId: 'unknown-failure', timestamp, errorText: 'never-save private URL or diagnostic' } });
           send({ method: 'Runtime.bindingCalled', params: { name: '__happierPerfTelemetry', payload: '{"events":[{"name":"sync.store.storage.notify","count":3}]}' } });
@@ -107,6 +114,12 @@ test('capture composes CDP events, safe network records, telemetry and mapped CP
     await capture.begin();
     const result = await capture.finish();
     assert.equal(result.network.requests, 4);
+    assert.equal(result.network.records.find(row => row.requestId === 'n').startMs,
+      result.network.records.find(row => row.requestId === 'n').nativeWallTime * 1000,
+      'membership uses the native coherent wall clock, not a delayed renderer sample');
+    assert.equal(result.clock.rendererRoundTripUsed, false);
+    assert.equal(rendererClockRequests, 0, 'a delayed renderer must never be the wall/monotonic clock source');
+    assert.ok(result.clock.nativePairs.length >= 5);
     assert.equal(result.network.encodedBytes, 25);
     assert.equal(result.network.encodedBytesObserved, 75);
     assert.equal(result.network.dispositions.canceled, 1);
@@ -118,7 +131,7 @@ test('capture composes CDP events, safe network records, telemetry and mapped CP
     assert.equal(result.network.records.find(row => row.requestId === 'unknown-failure').failureCode, 'unclassified');
     assert.equal(result.network.records.find(row => row.requestId === 'n').serverRequestId, 'returned-id');
     assert.equal(result.telemetry.reduce((sum, summary) => sum + summary.events[0].count, 0), 8);
-    assert.equal(result.sockets[0].event, 'update');
+    assert.deepEqual(result.sockets.map(row => row.event), ['before-native-pair', 'update'], 'buffer early sockets and do not shift them with a future native clock step');
     assert.equal(result.react.commits, 2);
     assert.equal(result.cpu.functions[0].name, 'realOwner');
     assert.equal(result.attribution.mappedFrames, 1);

@@ -19,25 +19,33 @@ export async function startCapture(options) {
     throw error;
   }
   const salt = randomBytes(32).toString('hex');
-  const requests = [], sockets = [], telemetry = [], scripts = new Map();
+  const requests = [], sockets = [], telemetry = [], scripts = new Map(), nativePairs = [];
   const inFlight = new Map();
-  let recording = false, profileStarted = false, offsetMs, identifier, finished;
+  let recording = false, profileStarted = false, identifier, finished, unmappedRequests = 0;
   let startMs, phase = 'setup.connect';
   const diagnostic = (error, failedPhase) => ({ phase: failedPhase,
     kind: /timeout|timed out/i.test(error.message) ? 'timeout' : /closed|disconnect|socket/i.test(error.message) ? 'transport-closed' : 'protocol-or-evaluation' });
   const step = async (name, operation) => { phase = name; return await operation(); };
-  const at = timestamp => timestamp * 1000 + (offsetMs ?? 0);
+  const at = (timestamp, request) => timestamp * 1000 + request.clockOffsetMs;
   cdp.on('Debugger.scriptParsed', event => scripts.set(event.scriptId, { url: event.url, sourceMapURL: event.sourceMapURL }));
   cdp.on('Network.requestWillBeSent', event => {
+    // Both clocks are sampled together by Chromium, not by a queued renderer
+    // evaluation. Keep preparation pairs too: an idle window may have sockets
+    // before its first new HTTP request (or no HTTP requests at all).
+    const paired = Number.isFinite(event.wallTime) && Number.isFinite(event.timestamp);
+    const clockOffsetMs = paired ? event.wallTime * 1000 - event.timestamp * 1000 : undefined;
+    if (paired) nativePairs.push({ wallTime: event.wallTime, timestamp: event.timestamp, offsetMs: clockOffsetMs });
     if (!recording) return;
-    offsetMs ??= event.wallTime * 1000 - event.timestamp * 1000;
+    if (!paired) unmappedRequests++;
     if (event.redirectResponse && inFlight.has(event.requestId)) {
       const prior = inFlight.get(event.requestId);
-      prior.endMs = at(event.timestamp);
+      prior.endMs = at(event.timestamp, prior);
       prior.status = event.redirectResponse.status;
     }
     const row = { id: `${event.requestId}:${requests.length}`, requestId: event.requestId,
-      endpoint: safeUrl(event.request.url), method: event.request.method, startMs: at(event.timestamp), requestStartMs: at(event.timestamp),
+      endpoint: safeUrl(event.request.url), method: event.request.method,
+      startMs: paired ? event.wallTime * 1000 : undefined, requestStartMs: paired ? event.wallTime * 1000 : undefined,
+      nativeWallTime: event.wallTime, nativeTimestamp: event.timestamp, clockOffsetMs,
       fingerprint: requestFingerprint(event.request, salt),
       bodyUnknown: Boolean(event.request.hasPostData && !event.request.postData),
       requestBodyBytes: event.request.postData === undefined ? null : Buffer.byteLength(event.request.postData),
@@ -50,12 +58,13 @@ export async function startCapture(options) {
     row.status = event.response.status;
     row.fromCache = Boolean(event.response.fromDiskCache || event.response.fromServiceWorker);
     row.mimeType = event.response.mimeType;
-    row.responseReceivedMs = at(event.timestamp);
+    row.responseReceivedMs = at(event.timestamp, row);
+    row.nativeResponseTimestamp = event.timestamp;
     const timing = event.response.timing;
     if (timing && timing.requestTime >= 0) {
-      row.requestStartMs = at(timing.requestTime);
-      if (timing.sendStart >= 0) row.sendStartMs = at(timing.requestTime) + timing.sendStart;
-      if (timing.receiveHeadersStart >= 0) row.responseHeadersMs = at(timing.requestTime) + timing.receiveHeadersStart;
+      row.requestStartMs = at(timing.requestTime, row);
+      if (timing.sendStart >= 0) row.sendStartMs = at(timing.requestTime, row) + timing.sendStart;
+      if (timing.receiveHeadersStart >= 0) row.responseHeadersMs = at(timing.requestTime, row) + timing.receiveHeadersStart;
     }
     row.ttfbMs = (row.responseHeadersMs ?? row.responseReceivedMs) - row.requestStartMs;
     row.ttfbBasis = row.responseHeadersMs === undefined ? 'responseReceived.timestamp (headers timing unavailable)' : 'response.timing.receiveHeadersStart';
@@ -65,12 +74,12 @@ export async function startCapture(options) {
   });
   cdp.on('Network.loadingFinished', event => {
     const row = inFlight.get(event.requestId);
-    if (row) { row.endMs = at(event.timestamp); row.encodedBytes = event.encodedDataLength; inFlight.delete(event.requestId); }
+    if (row) { row.endMs = at(event.timestamp, row); row.nativeEndTimestamp = event.timestamp; row.encodedBytes = event.encodedDataLength; inFlight.delete(event.requestId); }
   });
   cdp.on('Network.loadingFailed', event => {
     const row = inFlight.get(event.requestId);
     if (row) {
-      row.endMs = at(event.timestamp); row.failed = true; row.canceled = typeof event.canceled === 'boolean' ? event.canceled : null;
+      row.endMs = at(event.timestamp, row); row.nativeEndTimestamp = event.timestamp; row.failed = true; row.canceled = typeof event.canceled === 'boolean' ? event.canceled : null;
       // CDP errorText can contain arbitrary content; retain only Chromium's code.
       row.failureCode = /^net::ERR_[A-Z0-9_]+$/.test(event.errorText) ? event.errorText : 'unclassified';
       if (/^[a-zA-Z0-9_-]+$/.test(event.blockedReason ?? '')) row.blockedReason = event.blockedReason;
@@ -88,7 +97,7 @@ export async function startCapture(options) {
       try { const payload = JSON.parse(payloadData.slice(payloadData.indexOf('['))); const value = payload[1]?.method;
         if (typeof value === 'string' && /^[a-zA-Z0-9_.:/-]+$/.test(value)) rpcMethod = value; } catch {}
     }
-    sockets.push({ atMs: at(event.timestamp), direction: direction.toLowerCase(), opcode,
+    sockets.push({ nativeTimestamp: event.timestamp, direction: direction.toLowerCase(), opcode,
       bytes: opcode === 2 ? Buffer.byteLength(payloadData, 'base64') : Buffer.byteLength(payloadData),
       event: name ?? 'protocol-or-binary', ...(rpcMethod ? { rpcMethod } : {}) });
   });
@@ -138,11 +147,8 @@ export async function startCapture(options) {
       ...(attestOff ? { freshDocumentOffAttestation: off ?? null } : {}) };
   };
   try {
-    for (const domain of ['Page', 'Network', 'Runtime', 'Debugger', 'Profiler', 'Performance']) await step(`setup.${domain}.enable`, () => cdp.send(`${domain}.enable`));
+    for (const domain of ['Page', 'Network', 'Runtime', 'Debugger', 'Profiler']) await step(`setup.${domain}.enable`, () => cdp.send(`${domain}.enable`));
     await step('setup.Runtime.addBinding', () => cdp.send('Runtime.addBinding', { name: '__happierPerfTelemetry' }));
-    const { metrics } = await step('setup.Performance.getMetrics', () => cdp.send('Performance.getMetrics'));
-    const timestamp = metrics.find(metric => metric.name === 'Timestamp')?.value;
-    if (typeof timestamp === 'number') offsetMs = await step('setup.clock', () => evaluate('Date.now()')) - timestamp * 1000;
     const probe = `globalThis.__HAPPIER_PERF_CAPTURE_MODE__ = ${JSON.stringify(options.captureMode)};\n` + await readFile(new URL('./browser-probe.js', import.meta.url), 'utf8');
     ({ identifier } = await step('setup.Page.addScript', () => cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: probe })));
     // Install on an already loaded J13 page too, then reload through the journey
@@ -206,12 +212,25 @@ export async function startCapture(options) {
         for (const [key, value] of symbols) { const parts = JSON.parse(key); parts[1] = safeUrl(parts[1]); cleanSymbols.set(JSON.stringify(parts), value); }
         const windowRequests = requests.filter(row => row.startMs >= startMs && row.startMs <= endMs).map(row => ({ ...row,
           pendingAtEnd: row.endMs === undefined || row.endMs > endMs, completedAfterWindow: row.endMs > endMs }));
-        const windowSockets = sockets.filter(row => row.atMs >= startMs && row.atMs <= endMs);
+        const orderedPairs = [...nativePairs].sort((a, b) => a.timestamp - b.timestamp);
+        const mappedSockets = sockets.map(row => {
+          let low = 0, high = orderedPairs.length;
+          while (low < high) { const middle = (low + high) >>> 1;
+            if (orderedPairs[middle].timestamp <= row.nativeTimestamp) low = middle + 1; else high = middle; }
+          const pair = orderedPairs[Math.max(0, low - 1)];
+          return { ...row, atMs: pair ? row.nativeTimestamp * 1000 + pair.offsetMs : null };
+        });
+        const unmappedSocketFrames = mappedSockets.filter(row => row.atMs === null).length;
+        if (unmappedRequests || unmappedSocketFrames) errors.push({ phase: 'finish.clock', kind: 'native-clock-pair-unavailable' });
+        const windowSockets = mappedSockets.filter(row => row.atMs !== null && row.atMs >= startMs && row.atMs <= endMs);
         return finished = { startMs, endMs, durationMs: endMs - startMs, profile: profile ?? null, cpu: profile ? summarizeProfile(profile, cleanSymbols) : null,
           network: { ...summarizeNetwork(windowRequests, { startMs, endMs }), records: windowRequests, observedThroughMs: Date.now() }, sockets: windowSockets, telemetry,
           react: probeData, observedUi: { url: safeUrl(pageUrl), scripts: [...new Set([...scripts.values()].map(script => safeUrl(script.url)).filter(Boolean))] },
           attribution: { sourceMaps: [...sourceMaps.values()].filter(Boolean).length, attemptedSourceMaps: sourceMaps.size,
             mappedFrames: symbols.size, mapResponses, mapFailures },
+          clock: { basis: 'Native Network.requestWillBeSent wallTime/timestamp pairs; request-local conversion, preceding pair (first pair for earlier sockets)',
+            rendererRoundTripUsed: false, controllerWindowClock: 'Date.now', nativePairs: [...nativePairs], unmappedRequests, unmappedSocketFrames,
+            ...(unmappedSocketFrames ? { unmappedSocketRecords: mappedSockets.filter(row => row.atMs === null) } : {}) },
           collectionErrors: errors, socketEventsPerSecond: windowSockets.length * 1000 / (endMs - startMs) };
       },
       close,
