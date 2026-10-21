@@ -43,6 +43,7 @@ import { PromptBundleCreateActionInputV1Schema, PromptBundleUpdateActionInputV1S
 import { PromptLibrarySaveOrganizationFieldsV1, isPromptLibrarySaveFolderAssignmentV1 } from '../prompts/library/promptFolderActionSchemasV1.js';
 import { PromptLibraryStackUpdateInputV1Schema, PromptLibraryStackUpdateResultV1Schema } from '../prompts/library/promptStacksV1.js';
 import { readRecord } from '../inputs/inputRecords.js';
+import { ACCOUNT_NOTICE_ARTIFACT_KIND_V1, USAGE_NOTICE_ARTIFACT_KIND_V1 } from '../activity/accountNoticeArtifactKindsV1.js';
 import { SessionSurfaceItemV1Schema } from '../sessions/board/item.js';
 import { readSessionVisualCapabilitiesV1 } from '../sessions/board/visualPolicy.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
@@ -5191,6 +5192,15 @@ const ARTIFACT_ACTION_SPECS: readonly (PreNormalizedActionSpec & Readonly<{
     // 2026-10-16); existing-document edits and revocation stay confirmed.
     ...(id === 'artifact.create' || id === 'artifact.publish_from_file' || id === 'artifact.public_link.create'
       ? { approvalPolicy: { uiConfirmation: 'direct' as const } } : {}),
+    // The present user's own Inbox notice read or dismissal is reversible bookkeeping on a private
+    // notice; the executor admits only those exact notice transitions. Document edits stay confirmed.
+    ...(id === 'artifact.update' ? { approvalPolicy: {
+      uiConfirmation: 'direct' as const,
+      uiConfirmationForInput: (input: unknown) => {
+        const header = readRecord(readRecord(input).header);
+        return header.kind !== USAGE_NOTICE_ARTIFACT_KIND_V1 && header.kind !== ACCOUNT_NOTICE_ARTIFACT_KIND_V1;
+      },
+    } } : {}),
     title: ARTIFACT_ACTION_COPY[id][0], description: 'Read, publish and manage ordinary Account Artifacts through their mode-aware store.',
     safety: read ? 'safe' : 'danger', sideEffectClass: read || id === 'artifact.public_link.list' ? 'read' : 'write',
     requiredAuthority: 'account_automation', executionPlacement: id === 'artifact.publish_from_file' || id === 'artifact.export' ? 'machine' : 'account',
