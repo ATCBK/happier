@@ -3274,6 +3274,47 @@ than inventing an account id. See [Triage source ownership](triage-sources.md).
 
 ### Connected Account refresh and quota identity (0.3 development)
 
+Claude subscription usage identifies a provider user and organization together.
+The Claude plugin attests that context through the profile endpoint with the same
+access token and preserves it in the existing credential KV and public
+`providerIdentity.organizationId` metadata. The descriptor declares
+`usageIdentity: { providerId: 'claude', requiredContext: 'organization' }`;
+shared usage projection and source admission apply that declaration rather than a
+second provider list. Native and polled observations use the same declared
+semantic provider identity. Codex declares `providerId: 'openai-codex'` without an
+organization requirement; undeclared plugin usage retains its qualified service
+identity.
+Different organizations never share a global usage alias solely because the user
+UUID matches. Missing organization leaves global usage provisional.
+
+Verified native or HTTP usage can still serve the exact selected profile without
+an organization: the existing runtime quota entry carries the actual access-token
+fingerprint that produced the observation. Current user and token must match;
+replacing that token invalidates unscoped local evidence. Known user/organization
+context survives ordinary token rotation. Local observations use the coordinator's
+existing freshness and polling policy and do not create global aliases.
+
+Claude's native codec writes user and organization into the actual root
+`.claude.json`, reconciles account caches when context changes and preserves
+workspace settings. Reset-credit debit verifies the current user and any known
+organization before posting. Metadata-only context enrichment joins the existing
+refresh lease, staging, CAS and distribution lifecycle; it neither rotates tokens
+nor provides positive authentication/quota evidence. A successful rotation without
+fresh attested context removes old organization metadata instead of preserving it.
+
+Credential settlement removes old profile and pool usage aliases when context
+changes. The UI's canonical qualified quota store checks current public credential
+metadata before presenting quota, invalidates the exact binding after a changed
+connection and rejects late results from retired requests. Ordinary metadata
+transport failures retain accepted cached observations; a successful replacement
+whose new context cannot be established does not retain the old context's quota.
+Fresh authentication results use explicit null identity fields when a replacement
+cannot attest them; omitted fields retain the existing partial-update contract.
+The existing identity-change approval guard still protects an established user,
+while unknown null facts can be enriched by later attestation.
+These are development-source contracts, not a claim of release availability or a
+diagnosis of every provider 429.
+
 Usage surfaces select exact qualified services through the connected-service
 registry's usage capability: a descriptor may declare `usage`, and bundled
 services retain their generated quota-read declaration. An e-mail connection

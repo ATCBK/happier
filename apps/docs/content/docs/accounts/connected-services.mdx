@@ -290,6 +290,17 @@ claude setup-token
 
 Then paste it into Happier.
 
+In development builds, Claude subscription quota is tied to both the provider
+user and organization. Two connections for the same user can have different
+organization budgets. Changing or reconnecting a connection therefore clears
+quota from a different organization until current usage is available. Connections
+for the same user and organization can share usage even if their labels differ.
+
+If the organization cannot be verified, Happier keeps global usage unlinked.
+Usage verified with the current credential can still support that connection's
+local recovery. Reconnecting with a different credential requires fresh evidence.
+This does not identify every cause of a Claude rate-limit or spend-limit response.
+
 ### Anthropic API key
 
 Supported methods:
