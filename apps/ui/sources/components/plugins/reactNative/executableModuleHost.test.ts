@@ -66,7 +66,7 @@ describe('PluginUiExecutableModuleHost', () => {
         expect(evaluations).toHaveBeenCalledTimes(1);
     });
 
-    it('shares one evaluated artifact across seven authority lifetimes while isolating activation scopes', async () => {
+    it('retains one evaluated artifact across seven lifetimes of the same authority and activation target', async () => {
         vi.stubGlobal('__dg8AccountRuntimeEvaluations', 0);
         onTestFinished(() => { vi.unstubAllGlobals(); });
         const artifactIdentity = { ...identity, artifactId: 'dg8-account-runtime' };
@@ -83,7 +83,7 @@ describe('PluginUiExecutableModuleHost', () => {
         for (let index = 0; index < 7; index += 1) {
             const host = createPluginUiExecutableModuleHost();
             const accountId = `account-${index}`;
-            const accountAuthority = { kind: 'account' as const, serverId: 'home', accountId, custodyId: 'release' };
+            const accountAuthority = { kind: 'account' as const, serverId: 'home', accountId: 'same-account', custodyId: 'release' };
             await host.replaceAuthority(accountAuthority);
             const cache = createPluginReactNativeBundleCache();
             cache.putInstalledArtifact({ identity: { ...artifactIdentity }, bytes: new Uint8Array(bytes), format: 'plainJs' });
@@ -100,6 +100,47 @@ describe('PluginUiExecutableModuleHost', () => {
         expect(Reflect.get(globalThis, '__dg8AccountRuntimeEvaluations')).toBe(1);
         expect(readers.map(read => read())).toEqual(Array.from({ length: 7 }, (_, index) => [`account-${index}`, 1]));
         expect(cleaned).toHaveBeenCalledTimes(7);
+    });
+
+    it('isolates module-level captured APIs between concurrent authorities and activation exports', async () => {
+        const artifactIdentity = { ...identity, artifactId: 'dg8b-isolated-runtime' };
+        const cache = createPluginReactNativeBundleCache();
+        cache.putInstalledArtifact({ identity: artifactIdentity, format: 'plainJs', bytes: new TextEncoder().encode(`
+            let currentApi;
+            const activate = api => {
+                currentApi = api;
+                api.register(() => currentApi.label);
+                return () => currentApi.cleaned();
+            };
+            exports.activateClientRuntime = activate;
+            exports.activateOtherRuntime = activate;
+        `) });
+        const accountAuthority = { kind: 'account' as const, serverId: 'home', accountId: 'a', custodyId: 'release' };
+        const authorities = [accountAuthority, { ...accountAuthority, accountId: 'b' }, authority];
+        const readers: Array<() => string> = [];
+        const cleanups: string[] = [];
+        const hosts = authorities.map(() => createPluginUiExecutableModuleHost());
+        onTestFinished(async () => { await Promise.all(hosts.map(host => host.unload())); });
+        for (const [index, scopedAuthority] of authorities.entries()) {
+            const host = hosts[index]!;
+            await host.replaceAuthority(scopedAuthority);
+            expect(await host.activate({ cache, identity: artifactIdentity, moduleReference,
+                backend: createPluginUiCommonJsLoaderBackend(), hostPlatform: 'web', authority: scopedAuthority,
+                createScope: () => ({ api: { label: `scope-${index}`, register: (read: () => string) => readers.push(read),
+                    cleaned: () => cleanups.push(`scope-${index}`) }, commit() {}, unwind() {} }),
+            })).toEqual({ ok: true });
+        }
+        // Two exports may each capture their activation API even under the same Account.
+        expect(await hosts[0]!.activate({ cache, identity: artifactIdentity,
+            moduleReference: { exportName: 'activateOtherRuntime' }, backend: createPluginUiCommonJsLoaderBackend(),
+            hostPlatform: 'web', authority: accountAuthority,
+            createScope: () => ({ api: { label: 'other-export', register: (read: () => string) => readers.push(read),
+                cleaned: () => cleanups.push('other-export') }, commit() {}, unwind() {} }),
+        })).toEqual({ ok: true });
+        expect(readers.map(read => read())).toEqual(['scope-0', 'scope-1', 'scope-2', 'other-export']);
+        await hosts[0]!.unload();
+        expect(cleanups).toEqual(['scope-0', 'other-export']);
+        expect(readers.slice(1, 3).map(read => read())).toEqual(['scope-1', 'scope-2']);
     });
 
     it('fails closed until the canonical projection owner establishes a generation', async () => {

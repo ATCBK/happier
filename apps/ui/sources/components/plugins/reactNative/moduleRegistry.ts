@@ -11,9 +11,11 @@ export type PluginReactNativeModuleRegistryWriteFence = Readonly<{
 }>;
 
 export type PluginReactNativeModuleRegistry = Readonly<{
-    /** Evaluation has document lifetime; publication and activation retain their own authority fences. */
+    /** Retain evaluation only for a caller's exact authority/activation scope. */
     loadExecutableExport: (
-        input: Omit<Parameters<typeof instantiatePluginUiCommonJsBundle>[0], 'hostModules'>,
+        input: Omit<Parameters<typeof instantiatePluginUiCommonJsBundle>[0], 'hostModules'> & Readonly<{
+            evaluationScopeKey?: string;
+        }>,
     ) => (...args: never[]) => unknown;
     read: (cacheKey: string | undefined) => PluginReactNativeSurfaceModule | null;
     /** Capture the key-local admission fact before beginning asynchronous work. */
@@ -34,10 +36,13 @@ export function createPluginReactNativeModuleRegistry(): PluginReactNativeModule
     const activeKeyTokens = new Map<string, symbol>();
     return Object.freeze({
         loadExecutableExport: (input) => {
-            // The universal bundle and host-module ABI are shared in this JS realm.
-            // Account/Home, contribution locators and requested exports select
-            // activations, not distinct evaluations of identical installed code.
-            const key = JSON.stringify([input.identity.pluginId, input.identity.artifactId, input.identity.digest]);
+            // A plugin may capture its activation API in module-level state.
+            // Unscoped loads retain the evaluator's fresh-namespace semantics.
+            if (input.evaluationScopeKey === undefined) {
+                return instantiatePluginUiCommonJsBundle(input).readExport(input.requestedExport);
+            }
+            const key = JSON.stringify([input.identity.pluginId, input.identity.artifactId,
+                input.identity.digest, input.evaluationScopeKey]);
             let module = executableModules.get(key);
             if (!module) {
                 module = instantiatePluginUiCommonJsBundle(input);

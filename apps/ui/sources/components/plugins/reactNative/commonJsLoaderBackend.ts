@@ -15,6 +15,7 @@ export function createPluginUiCommonJsLoaderBackend(): PluginReactNativeLoaderBa
                 digest: input.identity.artifactDigest,
             },
             requestedExport: input.moduleReference?.exportName ?? 'renderSurface',
+            ...(input.evaluationScopeKey !== undefined ? { evaluationScopeKey: input.evaluationScopeKey } : {}),
         }),
     });
 }
