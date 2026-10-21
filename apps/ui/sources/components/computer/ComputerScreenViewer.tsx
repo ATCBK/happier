@@ -24,13 +24,14 @@ import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SurfaceStateSizeProvider } from '@/components/ui/surfaces/surfaceStateSize';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { resolveComputerRecovery } from '@/sync/domains/computer/targets';
-import { StatusDot } from '@/components/ui/status/StatusDot';
+import { SessionViewerMachineMark } from '@/components/sessions/viewer/SessionViewerMachineMark';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useSessionCockpitBottomChromeHeight } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import type { BrowserCopresence } from '@/sync/domains/browser/automation/copresence';
 import type { LiveStreamInputGesture } from '@/sync/domains/machines/peer/mediation/stream/inputGesture';
 import { t } from '@/text';
+import { keepHyphenatedNameTogether } from '@/utils/sessions/machineDisplayNames';
 
 import { ComputerPermissionCard, type ComputerOpenSettingsState } from './ComputerPermissionCard';
 
@@ -62,22 +63,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         gap: theme.space.s8,
     },
-    barMachine: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: theme.space.s6,
-        flexShrink: 2,
-        minWidth: 0,
-    },
     barTitle: {
         ...Typography.variant('label', 'semiBold'),
         flexShrink: 1,
         color: theme.colors.text.primary,
-    },
-    barMeta: {
-        ...Typography.variant('meta'),
-        flexShrink: 2,
-        color: theme.colors.text.secondary,
     },
     stage: {
         flex: 1,
@@ -270,8 +259,10 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
     const hasRecovery = stopFailed || (recovery != null && (props.failure != null || recovery.cause !== 'failed'));
     const target = props.targetTitle ?? t('computerUse.presentation.tabFallback');
     const machine = props.machineName ?? '';
+    // Inside a sentence the name wraps before it, never at one of its hyphens ("NLDW3-" / "5-36-33").
+    const machineWords = keepHyphenatedNameTogether(machine);
     // A sentence that must name where the Computer is never leaves a blank while the Machine's name is unreadable.
-    const machineInSentence = machine || t('computerUse.presentation.tabFallback');
+    const machineInSentence = machineWords || t('computerUse.presentation.tabFallback');
     const agentName = props.agent.name;
     const screenUnanswered = !stopFailed && recovery?.cause === 'failed' && !props.shared && props.machineOnline === true;
     const recoveryTitle = stopFailed ? t('computerUse.presentation.stopFailed')
@@ -279,9 +270,9 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
         : recovery?.cause === 'driver_invalid' ? t('computerUse.presentation.driverInvalid')
         : recovery?.cause === 'geometry_changed' ? t('computerUse.presentation.geometryChanged')
         : recovery?.cause === 'input_unknown' ? t('computerUse.presentation.inputUnknown')
-        : recovery?.cause === 'headless' ? t('computerUse.picker.noScreenTitle', { machine })
-        : recovery?.cause === 'unsupported' ? t('computerUse.picker.unsupportedTitle', { machine })
-        : recovery?.cause === 'machine_mismatch' ? t('computerUse.picker.otherMachineTitle', { machine })
+        : recovery?.cause === 'headless' ? t('computerUse.picker.noScreenTitle', { machine: machineWords })
+        : recovery?.cause === 'unsupported' ? t('computerUse.picker.unsupportedTitle', { machine: machineWords })
+        : recovery?.cause === 'machine_mismatch' ? t('computerUse.picker.otherMachineTitle', { machine: machineWords })
         // Before any window is known to be shared, a failed call says which Machine didn't answer, unless
         // the Machine's own presence says it answers: then the cause is its screen, never the Machine.
         : screenUnanswered ? t('computerUse.presentation.screenUnavailableTitle', { machine: machineInSentence })
@@ -307,7 +298,7 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
         ? props.onRepairDriver ? { label: t('computerUse.presentation.repairDriver'), onPress: props.onRepairDriver, busy: props.repairingDriver, disabled: props.repairingDriver } : undefined
         : recovery?.action === 'choose_source' ? { label: t('computerUse.request.choose'), onPress: props.onChooseWindow }
         : recovery?.action === 'open_settings' ? props.onOpenSettings && recoveryPermission
-            ? { label: t('computerUse.permission.openPrivacy', { machine }), onPress: () => props.onOpenSettings?.(recoveryPermission) } : undefined
+            ? { label: t('computerUse.permission.openPrivacy', { machine: machineWords }), onPress: () => props.onOpenSettings?.(recoveryPermission) } : undefined
         : recovery?.action === 'capture' || recovery?.action === 'refresh' || recovery?.action === 'reconnect'
             ? checkAgain(recovery.action === 'capture' ? props.onCheckAgain : props.onRefresh ?? props.onCheckAgain)
             : undefined;
@@ -327,7 +318,7 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
     const stage = needsPermission && props.grants && props.onOpenSettings ? (
         <View style={stylesheet.centered} testID={`${testID}-permission`}>
             <ComputerPermissionCard
-                machineName={machine}
+                machineName={machineWords}
                 grants={props.grants}
                 openSettings={props.openSettings ?? 'idle'}
                 onOpenSettings={props.onOpenSettings}
@@ -380,7 +371,7 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
             <SurfaceStateCard
                 kind="loading"
                 title={machine
-                    ? t('computerUse.presentation.openingTitle', { target, machine })
+                    ? t('computerUse.presentation.openingTitle', { target, machine: machineWords })
                     : t('computerUse.presentation.connectingTitle', { target })}
                 reason={t('computerUse.presentation.openingBody')}
             />
@@ -470,12 +461,7 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                         </>
                     ) : null}
                     {machine ? (
-                        <View style={stylesheet.barMachine} testID={`${testID}-machine`}>
-                            <StatusDot
-                                color={props.machineOnline === false ? theme.colors.status.disconnected : theme.colors.status.connected}
-                            />
-                            <Text style={stylesheet.barMeta} numberOfLines={1}>{machine}</Text>
-                        </View>
+                        <SessionViewerMachineMark name={machine} online={props.machineOnline} testID={`${testID}-machine`} />
                     ) : null}
                 </View>
                 {props.shared ? (
@@ -522,8 +508,8 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                     testID={`${testID}-unconfirmed`}
                     tone="warning"
                     reason={props.compact
-                        ? t('computerUse.presentation.unconfirmedWarningCompact', { agent: agentName, machine: machine || target })
-                        : `${t('computerUse.presentation.unconfirmedWarning', { agent: agentName, target: props.appName ?? target, machine: machine || target })} ${t('computerUse.presentation.unconfirmedStuckHint', { machine: machine || target })}`}
+                        ? t('computerUse.presentation.unconfirmedWarningCompact', { agent: agentName, machine: machineWords || target })
+                        : `${t('computerUse.presentation.unconfirmedWarning', { agent: agentName, target: props.appName ?? target, machine: machineWords || target })} ${t('computerUse.presentation.unconfirmedStuckHint', { machine: machineWords || target })}`}
                 />
             ) : null}
             <View style={stylesheet.stage} onLayout={onLayout}>

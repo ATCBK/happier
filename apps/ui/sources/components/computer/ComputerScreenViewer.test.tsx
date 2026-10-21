@@ -271,14 +271,14 @@ describe('ComputerScreenViewer', () => {
     // screen, not the Machine. "isn't answering" stays for a Machine that is actually unreachable.
     const online = await renderScreen(<ComputerScreenViewer {...props({ failure: 'MACHINE_RPC_TIMEOUT', shared: false, machineOnline: true })} />);
     const card = online.findAllByType(SurfaceStateCard).find(node => node.props.testID === 'v-recovery');
-    expect(card?.props.title).toBe('computerUse.presentation.screenUnavailableTitle:{"machine":"mac-vm-1"}');
+    expect(card?.props.title).toBe('computerUse.presentation.screenUnavailableTitle:{"machine":"mac-\u2060vm-\u20601"}');
     expect(card?.props.reason).toBe('computerUse.presentation.screenUnavailableBody');
     expect(card?.props.diagnosticCode).toBe('MACHINE_RPC_TIMEOUT');
     expect(card?.props.action?.label).toBe('computerUse.permission.checkAgain');
     // An unreachable Machine still says so.
     const offline = await renderScreen(<ComputerScreenViewer {...props({ failure: 'machine_unreachable', shared: false, machineOnline: false })} />);
     expect(offline.findAllByType(SurfaceStateCard).find(node => node.props.testID === 'v-recovery')?.props.title)
-      .toBe('computerUse.presentation.offlineTitle:{"machine":"mac-vm-1"}');
+      .toBe('computerUse.presentation.offlineTitle:{"machine":"mac-\u2060vm-\u20601"}');
   });
 
   it('tells a failed reopen as the same calm unavailable state as a lost stream, its code only under Details', async () => {
@@ -303,7 +303,7 @@ describe('ComputerScreenViewer', () => {
     const unshared = await renderScreen(<ComputerScreenViewer {...props({ failure: 'MACHINE_RPC_TIMEOUT', shared: false })} />);
     const unsharedCard = unshared.findAllByType(SurfaceStateCard).find(node => node.props.testID === 'v-recovery');
     expect(unsharedCard).toBeDefined();
-    expect(unsharedCard?.props.title).toBe('computerUse.presentation.offlineTitle:{"machine":"mac-vm-1"}');
+    expect(unsharedCard?.props.title).toBe('computerUse.presentation.offlineTitle:{"machine":"mac-\u2060vm-\u20601"}');
     expect(unsharedCard?.props.reason).toBeUndefined();
     // It reads like the offline Machine card, not a hidden window.
     expect(unsharedCard?.props.iconName).toBeUndefined();
@@ -353,7 +353,7 @@ describe('ComputerScreenViewer', () => {
       />,
     );
     expect(screen.getTextContent()).toContain(
-      'computerUse.presentation.offlineTitle:{"machine":"mac-vm-1"}',
+      'computerUse.presentation.offlineTitle:{"machine":"mac-\u2060vm-\u20601"}',
     );
     expect(screen.findByTestId('v-recovery-action')).toBeTruthy();
     expect(screen.getTextContent()).not.toContain('common.details');
@@ -364,7 +364,7 @@ describe('ComputerScreenViewer', () => {
       <ComputerScreenViewer {...props({ machineOnline: false })} />,
     );
     expect(offline.getTextContent()).toContain(
-      'computerUse.presentation.offlineTitle:{"machine":"mac-vm-1"}',
+      'computerUse.presentation.offlineTitle:{"machine":"mac-\u2060vm-\u20601"}',
     );
     expect(offline.getTextContent()).not.toContain(
       'computerUse.presentation.unavailableTitle',
@@ -377,7 +377,7 @@ describe('ComputerScreenViewer', () => {
       />,
     );
     expect(unshared.getTextContent()).toContain(
-      'computerUse.presentation.offlineTitle:{"machine":"mac-vm-1"}',
+      'computerUse.presentation.offlineTitle:{"machine":"mac-\u2060vm-\u20601"}',
     );
     expect(unshared.findByTestId('v-not-shared')).toBeNull();
     expect(unshared.getTextContent()).toContain(
@@ -395,7 +395,7 @@ describe('ComputerScreenViewer', () => {
       />,
     );
     expect(denied.getTextContent()).toContain(
-      'computerUse.permission.captureTitle:{"machine":"mac-vm-1"}',
+      'computerUse.permission.captureTitle:{"machine":"mac-\u2060vm-\u20601"}',
     );
     // Nobody acts on a screen that cannot be seen: no presence capsule beside the card.
     expect(denied.findByTestId('v-presence')).toBeNull();
@@ -426,7 +426,7 @@ describe('ComputerScreenViewer', () => {
     );
     const line = held.findByTestId('v-unconfirmed');
     expect(line).not.toBeNull();
-    expect(held.getTextContent()).toContain('computerUse.presentation.unconfirmedWarning:{"agent":"Claude","target":"Simulator","machine":"mac-vm-1"}');
+    expect(held.getTextContent()).toContain('computerUse.presentation.unconfirmedWarning:{"agent":"Claude","target":"Simulator","machine":"mac-\u2060vm-\u20601"}');
     expect(held.getTextContent()).toContain('computerUse.presentation.unconfirmedStuckHint');
     const watched = await renderScreen(<ComputerScreenViewer {...props({ appName: 'Simulator', stream })} />);
     expect(watched.findByTestId('v-unconfirmed')).toBeNull();

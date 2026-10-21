@@ -769,6 +769,29 @@ describe('BrowserShell', () => {
         expect(screen.findAllByTestId('browser-shell-profile-status')).toHaveLength(0);
     });
 
+    it('says the Session\u2019s Machine once in the docked bar, and nothing for a browser that is not a Session\u2019s', async () => {
+        const { BrowserShell } = await import('./BrowserShell');
+        const state = await createShellState();
+
+        const withMachine = await renderScreen(
+            <BrowserShell
+                browserSessionId="browser_session_1"
+                platform="web"
+                state={state}
+                onCommand={vi.fn()}
+                machine={{ name: 'NLDW3-5-36-33', online: true }}
+                testID="browser-shell"
+            />,
+        );
+        expect(withMachine.getTextContent()).toContain('NLDW3-5-36-33');
+        expect(withMachine.findByTestId('browser-shell-machine')).not.toBeNull();
+
+        const without = await renderScreen(
+            <BrowserShell browserSessionId="browser_session_1" platform="web" state={state} onCommand={vi.fn()} testID="browser-shell" />,
+        );
+        expect(without.findByTestId('browser-shell-machine')).toBeNull();
+    });
+
     it('uses live local preview state and viewer Home admission for browser views without a current URL', async () => {
         const home = await upsertServerProfile({ serverUrl: 'https://shell-viewer-home.example.test' });
         const viewerUrl = 'https://preview.happier.test/live/?previewToken=viewer';

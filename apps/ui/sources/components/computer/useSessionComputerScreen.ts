@@ -3,6 +3,7 @@ import * as React from 'react';
 import { useBrowserSessionAgentIdentity } from '@/components/browser/copresence/BrowserShellPresence';
 import { noteSessionComputerMachine } from '@/sync/domains/computer/sessionComputerMachines';
 import { useSessionViewerSourceAccountLifetime } from '@/components/sessions/viewer/SessionViewerSourceAccountScope';
+import { resolveSessionViewerMachineName } from '@/components/sessions/viewer/useSessionViewerMachine';
 import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 
 import type { ComputerScreenViewerProps } from './ComputerScreenViewer';
@@ -63,6 +64,8 @@ export function useSessionComputerScreen(props: Readonly<{
     // The machine's presence, when this client holds its row: an unreachable machine is a cause to say.
     const machinePresence = useMachinePresenceSummary(serverId, enabled ? props.machineId : null);
     const machineOnline = machinePresence.reachability === 'unknown' ? undefined : machinePresence.reachability === 'reachable';
+    // The same name the viewer's controls give this Machine, so the pane's bar and sentences never name it differently.
+    const machineName = resolveSessionViewerMachineName(control.machineName, machinePresence.name);
     const selectedTarget = control.selection?.selectedTarget ?? null;
     const { applySelection, refresh } = control;
     const pickerParams = React.useCallback(() => ({
@@ -70,12 +73,12 @@ export function useSessionComputerScreen(props: Readonly<{
         serverId,
         accountLifetime,
         machineId: props.machineId,
-        machineName: control.machineName ?? props.machineId,
+        machineName: machineName ?? props.machineId,
         currentTargetKey: selectedTarget ? computerTargetKey(selectedTarget) : null,
         access: control.selection?.access ?? control.selection?.approvalDisplay.access,
         onSelected: applySelection,
         onStoppedSharing: refresh,
-    }), [accountLifetime, applySelection, control.machineName, control.selection?.access, control.selection?.approvalDisplay.access, props.machineId, serverId, props.sessionId, refresh, selectedTarget]);
+    }), [accountLifetime, applySelection, machineName, control.selection?.access, control.selection?.approvalDisplay.access, props.machineId, serverId, props.sessionId, refresh, selectedTarget]);
     const chooseWindow = React.useCallback(() => openComputerTargetPickerForSession(pickerParams()), [pickerParams]);
     const resolveChooseWindow = React.useCallback(() => resolveComputerTargetPickerForSession(pickerParams()), [pickerParams]);
 
@@ -85,7 +88,7 @@ export function useSessionComputerScreen(props: Readonly<{
         appName: control.appName,
         access: control.selection?.access ?? control.selection?.approvalDisplay.access,
         targetKind: control.selection?.approvalDisplay.target?.kind ?? null,
-        machineName: control.machineName,
+        machineName,
         shared: Boolean(control.selection?.sourceId),
         selectionPending: control.selection === null && control.failure === null,
         inputDenied: control.inputDenied,

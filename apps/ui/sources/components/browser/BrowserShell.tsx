@@ -74,6 +74,7 @@ import { useBrowserToolbarOverflowItems } from './toolbar/useBrowserToolbarOverf
 import { useBrowserPluginActions } from './useBrowserPluginActions';
 import { BROWSER_CHROME_WIDTH, BROWSER_PAGE_BASIS, resolveBrowserChromeControlMetrics, useBrowserChromeDensity } from './browserChromeDensity';
 import { useSessionCockpitBottomChromeHeight } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
+import { SessionViewerMachineMark } from '@/components/sessions/viewer/SessionViewerMachineMark';
 import { BrowserStatusBar } from './BrowserStatusBar';
 import { BrowserToolbar } from './BrowserToolbar';
 import { BrowserViewHost } from './BrowserViewHost';
@@ -314,6 +315,11 @@ export function BrowserShell(props: Readonly<{
      * automation: a daemon-owned view is the agent's browser even when in-app automation is off.
      */
     agent?: BrowserShellAgentPresence | null;
+    /**
+     * The Machine this browser runs on, when it is a Session's: the docked pane's bar says it once
+     * (the floating viewer's controls already do), the same mark the Computer pane's bar draws.
+     */
+    machine?: Readonly<{ name: string; online: boolean }> | null;
     browserRecording?: BrowserShellRecordingState | null;
     browserProfile?: BrowserShellProfileState | null;
     navigationEffect?: BrowserControlCommandEffect | null;
@@ -688,6 +694,9 @@ export function BrowserShell(props: Readonly<{
                     {markUpButton}
                     {attachPageButton}
                     {privacyControl}
+                    {props.machine ? (
+                        <SessionViewerMachineMark name={props.machine.name} online={props.machine.online} testID={`${testID}-machine`} />
+                    ) : null}
                     {overflowMenu}
                 </View>
             )}

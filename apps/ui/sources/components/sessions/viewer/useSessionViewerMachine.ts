@@ -24,9 +24,21 @@ export function useSessionViewerMachineId(
 }
 
 /**
+ * The one name the viewer gives a Machine, wherever it says it (the controls' identity capsule, a
+ * pane's bar, a recovery sentence): the name the source's owner states, else the Machine's own
+ * presence name. Never its raw id; a Machine nothing can name is left unnamed.
+ */
+export function resolveSessionViewerMachineName(
+  stated: string | null | undefined,
+  presenceName: string | null | undefined,
+): string | null {
+  return stated?.trim() || presenceName?.trim() || null;
+}
+
+/**
  * The Machine the viewer's source runs on, as every part of the viewer names it (the controls'
- * identity capsule and the frame's own label): the name the source's owner states, else the
- * Session's Machine. A source that publishes no name (the Browser) is still on that Machine.
+ * identity capsule and the frame's own label). A source that publishes no name (the Browser) is
+ * still on the Session's Machine.
  */
 export function useSessionViewerMachine(
   sessionId: string,
@@ -38,7 +50,7 @@ export function useSessionViewerMachine(
   const machineId = useSessionViewerMachineId(sessionId, serverId);
   const presence = useMachinePresenceSummary(serverId, machineId);
   return {
-    name: stated ?? presence.name ?? machineId ?? '',
+    name: resolveSessionViewerMachineName(stated, presence.name) ?? '',
     online: presence.reachability === 'reachable',
     targetTitle: facts?.targetTitle ?? null,
   };

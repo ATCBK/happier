@@ -98,7 +98,7 @@ export function getMachineSentenceName(machine: MachineNameInput | null | undefi
  * joiner (zero width, no glyph) after each hyphen leaves the break opportunity only at the spaces
  * around the name, so a sentence wraps before the name rather than inside it.
  */
-function keepHyphenatedNameTogether(name: string): string {
+export function keepHyphenatedNameTogether(name: string): string {
     return name.replace(/-(?=[^\s-])/g, '-\u2060');
 }
 

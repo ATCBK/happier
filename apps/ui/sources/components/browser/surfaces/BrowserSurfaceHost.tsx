@@ -36,6 +36,7 @@ import type { BrowserRuntimeControlAdapter } from '@/sync/domains/browser/action
 import { browserControlActionId } from '@/sync/domains/browser/actions/controlActionId';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { useSessionViewerSourceAccountLifetime } from '@/components/sessions/viewer/SessionViewerSourceAccountScope';
+import { useSessionViewerMachine } from '@/components/sessions/viewer/useSessionViewerMachine';
 import {
     buildCaptureElementRequestFromPickerResult,
     readRegisteredBrowserContextAnnotationAdapter,
@@ -360,6 +361,12 @@ export function BrowserSurfaceHost(props: Readonly<{
     const firstUse = useBrowserOpenFirstUse(firstUseScope);
     const machineIds = React.useMemo(() => (browserMachineId ? [browserMachineId] : []), [browserMachineId]);
     const browserMachineName = useMachineDisplayNamesById(machineIds)[browserMachineId ?? ''] ?? null;
+    // A Session's browser says its Machine once in the docked bar, by the viewer's one naming of it.
+    const viewerMachine = useSessionViewerMachine(presenceSessionId ?? '', presenceServerId, 'browser');
+    const browserMachineMark = React.useMemo(
+        () => (presenceSessionId && viewerMachine.name ? { name: viewerMachine.name, online: viewerMachine.online } : null),
+        [presenceSessionId, viewerMachine.name, viewerMachine.online],
+    );
     const focusedView = selectActiveBrowserView(surfaceState.browserState, props.browserSessionId)
         ?? (presenceSessionId ? selectActiveBrowserView(surfaceState.browserState, presenceSessionId) : null);
     const applyDaemonEvents = React.useCallback((events: readonly BrowserEventV1[]) => {
@@ -849,6 +856,7 @@ export function BrowserSurfaceHost(props: Readonly<{
             }}>
             <BrowserShell
                 agent={browserAgent}
+                machine={browserMachineMark}
                 browserSessionId={focusedView?.browserSessionId ?? props.browserSessionId}
                 viewId={focusedView?.viewId ?? null}
                 platform={props.platform}
