@@ -8,6 +8,64 @@ import {
 } from './outputEvents.js';
 
 describe('VoiceAgentOutputEventV1', () => {
+  it.each([
+    ['Run this:\n```ts\nconst a = 1;\n```\nThen restart.', 'Run this:\nThen restart.'],
+    ['## Summary\n- **Fixed** the `parser` bug\n> _really_ fixed', 'Summary\nFixed the parser bug\nreally fixed'],
+    ['See [the docs](https://example.com/a/b) and ![diagram](x.png).', 'See the docs and diagram.'],
+    ['Open https://www.github.com/happier-dev/happier/pull/1 now.', 'Open github.com now.'],
+    ['Set max_retry_count to 2 * 3.', 'Set max_retry_count to 2 * 3.'],
+    ['```\nls -la\n```', ''],
+    ['Before.\n~~~py\nprint(1)\n~~~\nAfter.', 'Before.\nAfter.'],
+    ['Example:\n````md\n```ts\nconst a = 1;\n```\n````\nThat is all.', 'Example:\nThat is all.'],
+    ['First part.\n- - -\nSecond part.', 'First part.\nSecond part.'],
+  ])('derives speakable prose while preserving final source text: %s', (text, spoken) => {
+    const result = ingestVoiceAgentOutputEventV1(createVoiceAgentOutputTurnV1('turn-1'), {
+      v: 1, kind: 'turn_final', turnId: 'turn-1', seq: 0, text,
+    });
+    expect(result.effects.filter(effect => effect.kind === 'speak').map(effect => effect.text)).toEqual(spoken ? [spoken] : []);
+    expect(result.effects.at(-1)).toEqual({ kind: 'persist_final', text });
+  });
+
+  it('keeps fence context across speech events and ignores replayed segments', () => {
+    const deltas = ['**Before.**\n``', '``md\n```ts\nconst a = 1;\n', '```\n', '````\nSee [docs](https://example.test).'];
+    let state = createVoiceAgentOutputTurnV1('turn-1');
+    const spoken: string[] = [];
+    for (const text of deltas) {
+      const event = { v: 1, kind: 'speech_segment', turnId: 'turn-1', seq: state.nextSeq,
+        segmentId: `segment-${state.nextSeq}`, text } as const;
+      const result = ingestVoiceAgentOutputEventV1(state, event);
+      state = result.state;
+      spoken.push(...result.effects.filter(effect => effect.kind === 'speak').map(effect => effect.text));
+      expect(ingestVoiceAgentOutputEventV1(state, event).effects).toEqual([]);
+    }
+    expect(spoken.join(' ').replace(/\s+/gu, ' ').trim()).toBe('Before. See docs.');
+    const text = deltas.join('');
+    expect(ingestVoiceAgentOutputEventV1(state, {
+      v: 1, kind: 'turn_final', turnId: 'turn-1', seq: state.nextSeq, text,
+    }).effects).toEqual([{ kind: 'persist_final', text }]);
+  });
+
+  it.each([true, false])('never speaks code split by the wire envelope (closed: %s)', closed => {
+    const text = `Before.\n~~~sh\n${'secret();\n'.repeat(3_000)}${closed ? '~~~\nAfter.' : ''}`;
+    let remaining = text;
+    let state = createVoiceAgentOutputTurnV1('turn-1');
+    const spoken: string[] = [];
+    while (remaining) {
+      const length = resolveVoiceAgentOutputSpeechSegmentLength(remaining, { force: true, firstSegment: state.nextSeq === 0 });
+      const result = ingestVoiceAgentOutputEventV1(state, {
+        v: 1, kind: 'speech_segment', turnId: 'turn-1', seq: state.nextSeq,
+        segmentId: `segment-${state.nextSeq}`, text: remaining.slice(0, length),
+      });
+      state = result.state;
+      spoken.push(...result.effects.filter(effect => effect.kind === 'speak').map(effect => effect.text));
+      remaining = remaining.slice(length);
+    }
+    expect(spoken.join(' ').replace(/\s+/gu, ' ').trim()).toBe(closed ? 'Before. After.' : 'Before.');
+    expect(ingestVoiceAgentOutputEventV1(state, {
+      v: 1, kind: 'turn_final', turnId: 'turn-1', seq: state.nextSeq, text,
+    }).effects).toEqual([{ kind: 'persist_final', text }]);
+  });
+
   it('keeps words intact when a semantic segment needs more than one wire event', () => {
     const text = 'word '.repeat(5_000);
     const length = resolveVoiceAgentOutputSpeechSegmentLength(text, {

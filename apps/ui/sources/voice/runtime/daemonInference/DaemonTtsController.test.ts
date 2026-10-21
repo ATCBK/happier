@@ -8,7 +8,8 @@ const network = await installSessionOpsNetworkBoundary();
 const rpcSocketBoundaries: typeof network.socketBoundaries = [];
 import { getEventListeners } from 'node:events';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const { createMachineFixture } = await import("@/dev/testkit");
+const { createDeferred, createMachineFixture } = await import("@/dev/testkit");
+import { createVoicePlaybackController } from '@/voice/runtime/playback/VoicePlaybackController';
 const { createPlainArtifactHomeFixture } = await import('@/dev/testkit/harness/artifactStoreBoundary');
 const { storage } = await import("@/sync/domains/state/storage");
 import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
@@ -162,6 +163,34 @@ afterEach(async () => {
 });
 
 describe('DaemonTtsController', () => {
+    it('stops audio whose platform target registers after an interruption', async () => {
+        const preparing = createDeferred<void>();
+        const finishPreparing = createDeferred<void>();
+        const playback = createVoicePlaybackController();
+        let audioStarted = false;
+        const controller = new DaemonTtsController({
+            client: createDaemonClientAtRpcBoundary({ synthesizeText: async () => ({
+                bytes: new Uint8Array([1]), output: { codec: 'wav', mimeType: 'audio/wav' },
+            }) }),
+            // Model asynchronous platform setup before the native player registers its target.
+            playAudioBytesWithStopper: async options => {
+                preparing.resolve();
+                await finishPreparing.promise;
+                let stopped = false;
+                const clear = options.registerPlaybackStopper(() => { stopped = true; });
+                if (!stopped) audioStarted = true;
+                clear();
+            },
+        });
+        const speaking = controller.speak({ text: 'Hello.', packId: 'pack', voiceId: null, speed: 1,
+            registerPlaybackStopper: playback.registerStopper.captureAttempt!(), onSpeaking: () => {} });
+        await preparing.promise;
+        playback.interrupt();
+        finishPreparing.resolve();
+
+        await speaking;
+        expect(audioStarted).toBe(false);
+    });
     it('preserves the real segmented client receiver through feature refusal', async () => {
         const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
         storage.getState().applySettingsLocal({ featureToggles: { 'voice.daemonInference': false } });

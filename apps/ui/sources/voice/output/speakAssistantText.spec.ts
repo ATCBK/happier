@@ -73,6 +73,18 @@ describe('speakAssistantText', () => {
     platformOsMock.value = 'ios';
   });
 
+  it.each([
+    ['**Done.** See [the PR](https://example.test/pull/1).\n```ts\nconst a = 1;\n```', 'Done. See the PR.'],
+    ['```sh\nls -la\n```', ''],
+  ])('normalizes complete assistant speech before provider dispatch: %s', async (text, spoken) => {
+    await speakAssistantText({ text, settings: { voice: { providerId: 'local_direct', providers: {
+      local_direct: { schemaVersion: 1, config: { tts: { provider: 'device' } } },
+    } } }, networkTimeoutMs: 15_000, registerPlaybackStopper: () => () => {}, onSpeaking: () => {} });
+
+    if (spoken) expect(expoSpeechSpeak).toHaveBeenCalledWith(spoken, expect.anything());
+    else expect(expoSpeechSpeak).not.toHaveBeenCalled();
+  });
+
   it('trims the voice provider id before selecting the TTS adapter', async () => {
     expoSpeechSpeak.mockClear();
 

@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
 import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
+import { createVoicePlaybackController } from '@/voice/runtime/playback/VoicePlaybackController';
 
 const speechBoundary = createVoiceSpeechOutputBoundary({ getAccount: () => { throw new Error('Unexpected daemon RPC in native Kokoro contract'); } });
 afterAll(() => speechBoundary.disposeAudioSession());
@@ -20,6 +21,23 @@ describe('speakKokoroText', () => {
     filesystem.files.set(`${filesystem.root}/${packId}/pack.json`, new TextEncoder().encode(JSON.stringify({ manifest })));
   });
   afterEach(() => { speechBoundary.disposeNativeSdkBridge(); });
+
+  it('does not start native audio when interrupted before its playback target registers', async () => {
+    const controller = createVoicePlaybackController();
+    playback.start.mockImplementationOnce(async () => { playback.emit('started'); playback.emit('finished'); });
+    const write = vi.spyOn(filesystem.fs.File.prototype, 'write').mockImplementationOnce(() => {
+      controller.interrupt();
+    });
+    try {
+      await speakKokoroText({ text: 'Hello.', assetSetId: packId, voiceId: 'af_heart', speed: 1,
+        timeoutMs: 15_000, registerPlaybackStopper: controller.registerStopper.captureAttempt!() });
+
+      expect(playback.start).not.toHaveBeenCalled();
+      expect(speechBoundary.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
+    } finally {
+      write.mockRestore();
+    }
+  });
 
   it('registers a stopper that aborts in-flight synthesis', async () => {
     native.initialize.mockImplementationOnce(() => new Promise<void>(() => {}));

@@ -1,5 +1,99 @@
 import type { VoiceSpeechSynthesisInputLimits } from './speech.js';
 
+type SpeechFence = Readonly<{ marker: '`' | '~'; length: number }>;
+type SpeechLine =
+  | Readonly<{ kind: 'start'; indent: number }>
+  | Readonly<{ kind: 'marker'; indent: number; marker: '`' | '~'; length: number }>
+  | Readonly<{ kind: 'prose' | 'code' | 'closing' }>;
+
+/** Parser context only: no accumulated assistant text or code is retained. */
+export type VoiceSpeechTextState = Readonly<{ fence: SpeechFence | null; line: SpeechLine }>;
+
+function normalizeSpeechMarkup(prose: string): string {
+  return prose
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/\bhttps?:\/\/(?:www\.)?([^\s/?#)]+)[^\s)]*/gi, '$1')
+    .replace(/`([^`\n]*)`/g, '$1')
+    .replace(/^[ \t]*#{1,6}[ \t]+/gm, '')
+    .replace(/^[ \t]*>[ \t]?/gm, '')
+    .replace(/^[ \t]*(?:[-*_][ \t]*){3,}$/gm, '')
+    .replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gm, '')
+    .replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, '$2')
+    .replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?!\w)/g, '$1$2')
+    .replace(/(^|[^\w])_(?=\S)([^_\n]*?\S)_(?!\w)/g, '$1$2')
+    .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '$1');
+}
+
+/**
+ * Derives speech without changing source events or transcript text. Fence context survives wire
+ * segmentation, including a delimiter split across events; code contents are discarded as read.
+ */
+export function normalizeVoiceSpeechTextChunk(
+  markdown: string,
+  state: VoiceSpeechTextState | null = null,
+  final = false,
+): Readonly<{ text: string; state: VoiceSpeechTextState }> {
+  let fence = state?.fence ?? null;
+  let line: SpeechLine = state?.line ?? { kind: 'start', indent: 0 };
+  let prose = '';
+  const input = markdown.replace(/\r\n?/g, '\n') + (final ? '\n' : '');
+  for (const char of input) {
+    if (char === '\n') {
+      if (line.kind === 'marker') {
+        if (!fence && line.length >= 3) fence = { marker: line.marker, length: line.length };
+        else if (fence && line.marker === fence.marker && line.length >= fence.length) fence = null;
+        else if (!fence) prose += `${' '.repeat(line.indent)}${line.marker.repeat(line.length)}`;
+      } else if (line.kind === 'closing') fence = null;
+      if (!fence) prose += '\n';
+      line = { kind: 'start', indent: 0 };
+      continue;
+    }
+    if (line.kind === 'start') {
+      if (char === ' ' && line.indent < 3) {
+        line = { kind: 'start', indent: line.indent + 1 };
+      } else if (char === '`' || char === '~') {
+        line = { kind: 'marker', indent: line.indent, marker: char, length: 1 };
+      } else if (fence) {
+        line = { kind: 'code' };
+      } else {
+        prose += `${' '.repeat(line.indent)}${char}`;
+        line = { kind: 'prose' };
+      }
+      continue;
+    }
+    if (line.kind === 'marker') {
+      if (char === line.marker) {
+        line = { ...line, length: line.length + 1 };
+      } else if (!fence && line.length >= 3) {
+        fence = { marker: line.marker, length: line.length };
+        line = { kind: 'code' };
+      } else if (!fence) {
+        prose += `${' '.repeat(line.indent)}${line.marker.repeat(line.length)}${char}`;
+        line = { kind: 'prose' };
+      } else if (line.marker === fence.marker && line.length >= fence.length && !char.trim()) {
+        line = { kind: 'closing' };
+      } else {
+        line = { kind: 'code' };
+      }
+      continue;
+    }
+    if (line.kind === 'closing') {
+      if (char.trim()) line = { kind: 'code' };
+    } else if (line.kind === 'prose') prose += char;
+  }
+  return { text: normalizeSpeechMarkup(prose), state: { fence, line } };
+}
+
+/** Complete-text speech uses the same policy as streamed speech effects. */
+export function toSpeechText(markdown: string): string {
+  return normalizeVoiceSpeechTextChunk(markdown, null, true).text
+    .split('\n')
+    .map(line => line.replace(/[ \t]+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
 /** Semantic speech boundaries shared by clients and daemon synthesis. */
 const ABBREVIATIONS = new Set([
   'e.g', 'i.e', 'etc', 'vs', 'mr', 'mrs', 'ms', 'dr', 'prof', 'sr', 'jr', 'st', 'fig', 'no', 'al',

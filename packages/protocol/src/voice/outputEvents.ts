@@ -2,7 +2,7 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
 import { VoiceAssistantActionSchema, type VoiceAssistantAction } from './actions.js';
-import { resolveVoiceSpeechSegmentLength, speechTextEndAtOrBefore } from './speechText.js';
+import { normalizeVoiceSpeechTextChunk, resolveVoiceSpeechSegmentLength, speechTextEndAtOrBefore, toSpeechText, type VoiceSpeechTextState } from './speechText.js';
 
 const VoiceOutputIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(128), z.regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)));
 const VoiceOutputTurnIdSchema = VoiceOutputIdSchema;
@@ -69,6 +69,7 @@ export type VoiceAgentOutputTurnV1 = Readonly<{
   payloadBytes: number;
   terminal: 'open' | 'final' | 'cancelled';
   spokeAnySegment: boolean;
+  speechTextState: VoiceSpeechTextState | null;
   seenSegmentIds: ReadonlySet<string>;
   seenStatusIds: ReadonlySet<string>;
   seenEffectIds: ReadonlySet<string>;
@@ -162,6 +163,7 @@ export function createVoiceAgentOutputTurnV1(turnId: string): VoiceAgentOutputTu
     payloadBytes: 0,
     terminal: 'open' as const,
     spokeAnySegment: false,
+    speechTextState: null,
     seenSegmentIds: new Set<string>(),
     seenStatusIds: new Set<string>(),
     seenEffectIds: new Set<string>(),
@@ -195,10 +197,13 @@ export function ingestVoiceAgentOutputEventV1(
 
   let terminal: VoiceAgentOutputTurnV1['terminal'] = state.terminal;
   let spokeAnySegment = state.spokeAnySegment;
+  let speechTextState = state.speechTextState;
   const effects: VoiceAgentOutputEffectV1[] = [];
   if (event.kind === 'speech_segment') {
     spokeAnySegment = true;
-    effects.push({ kind: 'speak', segmentId: event.segmentId, text: event.text });
+    const speech = normalizeVoiceSpeechTextChunk(event.text, speechTextState);
+    speechTextState = speech.state;
+    if (speech.text.trim()) effects.push({ kind: 'speak', segmentId: event.segmentId, text: speech.text });
   } else if (event.kind === 'display_status') {
     effects.push({ kind: 'display_status', statusId: event.statusId, text: event.text });
   } else if (event.kind === 'side_effect') {
@@ -206,8 +211,13 @@ export function ingestVoiceAgentOutputEventV1(
   } else if (event.kind === 'turn_final') {
     terminal = 'final';
     if (!spokeAnySegment && event.text.trim()) {
-      effects.push({ kind: 'speak', segmentId: `${state.turnId}:final`, text: event.text });
+      const text = toSpeechText(event.text);
+      if (text) effects.push({ kind: 'speak', segmentId: `${state.turnId}:final`, text });
       spokeAnySegment = true;
+    } else if (speechTextState) {
+      const tail = normalizeVoiceSpeechTextChunk('', speechTextState, true);
+      speechTextState = tail.state;
+      if (tail.text.trim()) effects.push({ kind: 'speak', segmentId: `${state.turnId}:final`, text: tail.text });
     }
     effects.push({ kind: 'persist_final', text: event.text });
   } else {
@@ -223,6 +233,7 @@ export function ingestVoiceAgentOutputEventV1(
       payloadBytes: nextPayloadBytes,
       terminal,
       spokeAnySegment,
+      speechTextState,
       seenSegmentIds,
       seenStatusIds,
       seenEffectIds,

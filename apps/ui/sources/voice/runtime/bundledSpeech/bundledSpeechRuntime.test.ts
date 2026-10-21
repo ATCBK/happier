@@ -16,6 +16,7 @@ import { createTransferRecipientKeyPair } from '@/sync/domains/transfers/runtime
 import { decryptEncryptedTransferChunkEnvelope } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
 import { createHash } from 'node:crypto';
 import type { SessionVoicePreferenceV1 } from '@happier-dev/protocol/sessions/instructions/sessionVoicePreferenceV1';
+import { createVoicePlaybackController } from '@/voice/runtime/playback/VoicePlaybackController';
 
 let account: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
 const speech = createVoiceSpeechOutputBoundary({ getAccount: () => account });
@@ -222,6 +223,24 @@ describe('bundledSpeechRuntime', () => {
     registry: createSpeechRegistry(declarations).registry,
   });
   const inputs = () => speech.speechSynthesizeRpc.mock.calls.map(([request]) => request.input);
+  it('does not start a prepared audio file after its playback attempt was interrupted', async () => {
+    const filesystem = speech.reset().filesystem;
+    const controller = createVoicePlaybackController();
+    const write = vi.spyOn(filesystem.fs.File.prototype, 'write').mockImplementationOnce(() => {
+      controller.interrupt();
+    });
+    try {
+      await runtimeFor([CATALOG_TTS_DECLARATION]).speak(CATALOG_TTS_ID, {
+        text: 'Hello.', providerConfig: config,
+        registerPlaybackStopper: controller.registerStopper.captureAttempt!(),
+      });
+
+      expect(speech.encodedAudio.start).not.toHaveBeenCalled();
+      expect(speech.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
+    } finally {
+      write.mockRestore();
+    }
+  });
   const prepare = (preference: SessionVoicePreferenceV1 | null) => {
     const target = createSessionFixture({ id: 'runtime-target', serverId: account.home.id, encryptionMode: 'plain',
       metadata: { path: '/runtime', host: 'runtime.test', machineId: 'runtime-machine',
