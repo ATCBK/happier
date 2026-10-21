@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
+import axios from 'axios';
 
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
@@ -25,6 +26,18 @@ import { createCurrentSessionPresentationHost } from '@/session/presentation/cur
 import { createManagedRunLaunchFixture } from '@/providers/lifecycle/managedRunLaunch.testkit';
 import { resolveHostSessionRuntimeFactoryResult } from '@/agent/runtime/session/loop/factoryResult';
 import type { HostSessionRuntimeHookRuntime } from '@/agent/runtime/session/loop/runHostSessionRuntime';
+import { DEFAULT_PROVIDER_SETTINGS_V1, ProviderConnectionIdSchema, ProviderSettingsV1Schema, splitProviderSettingsV1 } from '@happier-dev/protocol';
+import { ProviderModelBindingSourceV1Schema, ProviderModelConfirmationSourceV1Schema } from '@happier-dev/protocol/providers/binding-compatibility';
+import { setProviderExperimentalConfirmationV1 } from '@happier-dev/protocol/providers/settings/operationsV1';
+import { getProviderExperimentalConfirmationCatalogSourceKeyV1 } from '@happier-dev/protocol/providers/settings/v1';
+import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/savedSecretOperationContext';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { resolveTeamCredentialModelCompatibility } from '@/providers/broker/teamCredentialModelCompatibility';
+import { openSessionTeamCredentialProviderBinding } from '@/providers/broker/sessionTeamCredentialProviderBinding';
+import { PROVIDER_BROKER_ENDPOINT_PATH_HEADER, PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH } from '@/providers/broker/providerBrokerPrivateProtocol';
+import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit';
+import { MACHINE_HTTP_LOCAL_CAPABILITY_HEADER } from '@happier-dev/iroh-native/node';
 
 const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH']);
 
@@ -139,6 +152,152 @@ describe('SessionHostBridge current custom Agent (integration)', () => {
     } finally {
       await rm(happyHomeDir, { recursive: true, force: true });
       await rm(pluginRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([false, true])('hydrates the recipient catalog before real Team native open and rechecks withdrawn consent (ambient ready=%s)', async ambientReady => {
+    const upstreamRequests: unknown[] = [];
+    const upstream = createServer(async (request, response) => {
+      if (request.method === 'GET' && request.url === PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH) {
+        response.writeHead(204, { [PROVIDER_BROKER_ENDPOINT_PATH_HEADER]: '/v1' });
+        response.end();
+        return;
+      }
+      if (request.method !== 'POST' || request.url !== '/v1/responses') {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      if (request.headers[MACHINE_HTTP_LOCAL_CAPABILITY_HEADER] !== 'synthetic-consumer-token') {
+        response.writeHead(403);
+        response.end();
+        return;
+      }
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      upstreamRequests.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ output_text: 'RECIPIENT_TEAM_SENTINEL' }));
+    });
+    upstream.listen(0, '127.0.0.1');
+    await once(upstream, 'listening');
+    const address = upstream.address();
+    if (!address || typeof address === 'string') throw new Error('Missing controlled upstream address');
+    const fixture = await createManagedRunLaunchFixture({ runtimeCredentialHeader: { name: MACHINE_HTTP_LOCAL_CAPABILITY_HEADER, format: 'raw' } });
+    let disposeRuntime: (() => Promise<void>) | undefined;
+    try {
+      envScope.patch({ HAPPIER_HOME_DIR: fixture.happyHomeDir });
+      reloadConfiguration();
+      const recipient = { token: 'recipient-team-account', encryption: null };
+      const snapshot = { ...fixture.snapshot, scopeKey: resolveAccountSettingsScopeKey(recipient),
+        rawSettings: {}, providerConnectionsCatalog: undefined };
+      const account = createInvocationSavedSecretOperationContextV1({ credentials: recipient, snapshot,
+        serverHttpBaseUrl: 'https://recipient-team-home.invalid', isCurrent: async () => true });
+      const ambient = { ...snapshot, scopeKey: 'unrelated-daemon-account', providerConnectionsCatalog: ambientReady ? {
+        status: 'ready' as const, revision: 1, catalog: splitProviderSettingsV1(DEFAULT_PROVIDER_SETTINGS_V1).catalog } : undefined };
+      setActiveAccountSettingsSnapshot(ambient);
+      const model = {
+        selection: { kind: 'team_credential_provider_model' as const, resourceId: 'resource-1', teamId: 'team-1',
+          expectedResourceRevision: 3, deliveryMode: 'brokered' as const, agentTargetKey: fixture.agentTargetKey, modelId: 'gpt-5.6-luna' },
+        descriptor: { id: 'gpt-5.6-luna', name: 'Team model' },
+        application: { agentTargetKey: fixture.agentTargetKey,
+          implementationIdentity: { pluginId: 'acme.managed-run', localId: 'gateway' },
+          endpointTemplateId: 'responses', protocol: 'openai-responses' },
+        sourceRevision: 'source-3', availability: 'available' as const,
+        sourceFacts: ProviderModelBindingSourceV1Schema.parse({ endpoint: { id: 'responses', protocol: 'openai-responses',
+          capabilities: { streaming: 'supported', toolRoundTrips: 'supported', statefulResponses: 'supported', reasoningControls: 'supported' } },
+          compatibilityOverrides: [{ agentTargetKey: fixture.agentTargetKey, protocol: 'openai-responses', status: 'experimental',
+            reason: 'Recipient confirmation required' }] }),
+        confirmationSource: ProviderModelConfirmationSourceV1Schema.parse({ connectionId: 'connected-source:team-pool',
+          catalogSourceKey: getProviderExperimentalConfirmationCatalogSourceKeyV1({ connectionId: ProviderConnectionIdSchema.parse('connected-source:team-pool') }) }),
+      };
+      let settings = ProviderSettingsV1Schema.parse(DEFAULT_PROVIDER_SETTINGS_V1);
+      const compatibility = await resolveTeamCredentialModelCompatibility({ lease: fixture.lease, agentId: fixture.agentId,
+        model: { ...model, deliveryMode: 'brokered' }, providerSettings: settings });
+      if (compatibility.result.status !== 'experimental') throw new Error('Expected experimental worker binding');
+      settings = setProviderExperimentalConfirmationV1(settings, { ...model.confirmationSource,
+        agentTargetKey: fixture.agentTargetKey, modelId: compatibility.result.confirmationScope.kind === 'model' ? model.descriptor.id : null,
+        compatibilityFingerprint: compatibility.compatibilityFingerprint, confirmedAt: 1 });
+      // Only the authenticated Home HTTP boundary is substituted. Catalog loading,
+      // own-Account custody, confirmation matching and materialization stay real.
+      vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
+        expect(new URL(String(url)).origin).toBe(account.serverHttpBaseUrl);
+        expect(options?.headers?.Authorization).toBe(`Bearer ${recipient.token}`);
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+          mode: 'plain', version: 1, settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+        if (path === '/v1/account/entity-rows/provider-connections') return { status: 200, data: {
+          status: 'present', revision: 2, content: { t: 'plain', v: splitProviderSettingsV1(settings).catalog } } };
+        if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
+        if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+        const history = emptyAccountSettingsHistoryCaptureResponse(path);
+        if (history) return history;
+        throw new Error(`Unexpected Home read: ${path}`);
+      });
+      let withdrawConsentDuringTunnel = false;
+      const prepareTeamCredentialProviderBinding = async (input: Readonly<{ signal: AbortSignal }>) => {
+        const opened = await openSessionTeamCredentialProviderBinding({
+          sessionId: 'recipient-team-session', machineId: 'worker', agentId: fixture.agentId,
+          agentTargetKey: fixture.agentTargetKey, modelId: model.descriptor.id,
+          binding: { v: 1, slot: { kind: 'provider_model' }, resourceId: 'resource-1', expectedResourceRevision: 3,
+            deliveryMode: 'brokered', teamId: 'team-1' },
+          lease: fixture.lease, materializationBaseDir: join(fixture.happyHomeDir, 'materialized'), signal: input.signal,
+          providerSettingsOperationContext: account,
+          readCatalog: async () => [model],
+          openBroker: async request => ({ ok: true, target: { custodianAccountId: 'custodian', brokerMachineId: 'broker',
+            endpointId: 'b'.repeat(64), endpointRevision: 1, endpoint: { endpointId: 'b'.repeat(64) } },
+            authority: { payload: { v: 1, aud: 'happier-provider-broker-route-v1', grantId: 'grant', issuedAt: 1, expiresAt: 2,
+              teamId: 'team-1', resourceId: request.resourceId, sourceRevision: request.sourceRevision,
+              brokerPlacementFingerprint: 'c'.repeat(64), initiatorTokenEpoch: 0,
+              initiator: { accountId: 'recipient', machineId: 'worker', endpointId: 'a'.repeat(64) },
+              target: { custodianAccountId: 'custodian', machineId: 'broker', endpointId: 'b'.repeat(64) },
+              consumer: request.consumer, application: request.application },
+              signature: { alg: 'Ed25519', keyId: 'home', valueBase64Url: 'A'.repeat(86) } } }),
+          openTunnel: async () => {
+            if (withdrawConsentDuringTunnel) expect(await account.commitProviderConnectionsCatalog({ expectedSettingsVersion: 1,
+              catalog: { status: 'ready', revision: 3, catalog: splitProviderSettingsV1(DEFAULT_PROVIDER_SETTINGS_V1).catalog } })).toBe(true);
+            return { localPort: address.port, localCapability: 'synthetic-consumer-token', observedPath: 'direct',
+              retire: async () => undefined, close: async () => undefined };
+          },
+        });
+        if (!opened) throw new Error('Expected Team binding');
+        return opened;
+      };
+      const identity = fixture.contributes.agentDefinitionsById.get(fixture.agentId)?.identity;
+      if (!identity) throw new Error('Missing admitted Agent identity');
+      const plan = await new SessionHostBridge().createSessionRuntime(fixture.agentId, {
+        credentials: recipient, directory: fixture.happyHomeDir, happyHomeDir: fixture.happyHomeDir,
+        backendTarget: { kind: 'agent', identity },
+        teamCredentialBindings: [{ v: 1, slot: { kind: 'provider_model' }, resourceId: 'resource-1', expectedResourceRevision: 3,
+          deliveryMode: 'brokered', teamId: 'team-1' }],
+        modelSelection: { v: 1, updatedAt: 1, ref: { agentTargetKey: fixture.agentTargetKey, providerConnectionId: null, modelId: model.descriptor.id } },
+      }, { pluginRuntimeRegistryLease: fixture.lease, prepareTeamCredentialProviderBinding });
+      const session = createNativeSessionClientTestPort('recipient-team-session');
+      const presentationLifetime = new AbortController();
+      onTestFinished(() => presentationLifetime.abort());
+      const presentation = createCurrentSessionPresentationHost({ session, signal: presentationLifetime.signal });
+      const created = await plan.config.createSessionRuntime?.({ directory: fixture.happyHomeDir, metadata: {}, machineId: 'worker', session,
+        currentSessionPresentation: presentation.bindCurrentSession, transcriptSession: {}, messageBuffer: {}, mcpServers: {},
+        permissionHandler: { cancelByPluginTurn: async () => undefined }, getPermissionMode: () => 'safe-yolo', memoryRecallGuidanceEnabled: false } as never);
+      if (!created) throw new Error('Expected native runtime');
+      const operations = (created as { operations: NonNullable<HostSessionRuntimeHookRuntime['operations']> }).operations;
+      disposeRuntime = operations.resetOrDisposeRuntime;
+      await operations.sendTurnPrompt('recipient catalog admitted', { turnId: 'recipient-turn', localId: 'recipient-input', userMessageSeq: 1 });
+      expect(upstreamRequests).toEqual([{ model: model.descriptor.id, input: 'recipient catalog admitted' }]);
+      expect(account.readSnapshot()?.providerConnectionsCatalog).toMatchObject({ status: 'ready', revision: 2 });
+      expect(getActiveAccountSettingsSnapshot()).toEqual(ambient);
+      withdrawConsentDuringTunnel = true;
+      await expect(prepareTeamCredentialProviderBinding({ signal: new AbortController().signal }))
+        .rejects.toMatchObject({ code: 'provider_compatibility_unverified' });
+      await expect(prepareTeamCredentialProviderBinding({ signal: new AbortController().signal }))
+        .rejects.toMatchObject({ code: 'provider_compatibility_unverified' });
+      expect(upstreamRequests).toHaveLength(1);
+    } finally {
+      await disposeRuntime?.();
+      vi.restoreAllMocks();
+      resetActiveAccountSettingsSnapshotForTests();
+      await fixture.cleanup();
+      await new Promise<void>((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
     }
   });
 
