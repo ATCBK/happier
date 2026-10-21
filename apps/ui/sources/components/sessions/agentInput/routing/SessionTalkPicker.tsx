@@ -270,7 +270,7 @@ export function SessionTalkPicker(props: SessionTalkPickerProps) {
           filter={draftFilter}
           onFilterChange={setDraftFilter}
           summary={matchingSummary}
-          canUse={targets.matching.coverage === 'complete' && targets.matching.addresses.length > 0 && !targets.matching.loading}
+          canUse={targets.matching.coverage === 'complete' && targets.matching.addresses.length > 0}
           onUse={() => chooseTarget({ selector: 'matching', filter: draftFilter })}
           onBack={() => setStep('targets')}
           frameHeight={matchingFrame}

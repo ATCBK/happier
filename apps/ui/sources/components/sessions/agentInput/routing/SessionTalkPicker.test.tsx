@@ -272,7 +272,27 @@ describe('SessionTalkPicker (composer To: Send · Ask · Post update)', () => {
       const summary = screen.findByTestId('session-list-filter-result-count')?.props.children;
       expect(screen.findByTestId('session-list-filter-done')?.props.disabled, String(summary)).not.toBe(true);
     });
-    await act(async () => screen.pressByTestId('session-list-filter-done'));
+    // Choosing the filter does not freeze its rows or send. A last complete
+    // answer for this same filter remains choosable during a trailing refresh;
+    // final Action admission still resolves the selector again.
+    const held = createDeferred<void>();
+    let refreshing = false;
+    homes.answer(serverId, '/v2/sessions/query', { select: input => {
+      const query = SessionListQueryV1Schema.parse(input);
+      const matching = query.underSessionId === undefined && query.includeInactive;
+      if (matching) refreshing = true;
+      return { body: { sessions: owned.map(session => ({ ...createPlainSessionByIdResponseFixture(session).session,
+        viewer: createSessionOwnerViewerFixture(session) })), hasNext: false, nextCursor: null,
+        attentionHasNext: false, attentionNextCursor: null }, ...(matching ? { respondAfter: held.promise } : {}) };
+    } });
+    try {
+      await act(async () => publishHomeAccountChange(serverId, ['api'], {
+        changeKinds: ['session'], sessionListQueryAffects: true,
+      }));
+      await vi.waitFor(() => expect(refreshing).toBe(true));
+      expect(screen.findByTestId('session-list-filter-done')?.props.disabled).not.toBe(true);
+      await act(async () => screen.pressByTestId('session-list-filter-done'));
+    } finally { await act(async () => held.resolve()); }
     expect(writes).toHaveLength(1);
     const written = writes[0];
     if (!written || written.kind !== 'ask' || typeof written.target === 'string' || written.target.selector !== 'matching') {
