@@ -375,7 +375,8 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
       if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
       if (new URL(url).pathname === '/v1/artifacts') {
         inventoryReads += 1;
-        return { status: 200, data: [wireRow(artifactId, buildWidgetDefinitionArtifactHeaderV1(definition))] };
+        const items = [wireRow(artifactId, buildWidgetDefinitionArtifactHeaderV1(definition))];
+        return { status: 200, data: new URL(url).searchParams.has('kind') ? { items, hasUnclassified: false } : items };
       }
       if (new URL(url).pathname === `/v1/artifacts/${artifactId}/access/grants`) return { status: 200,
         data: { artifactId, ownerAccountId: accountId, access: 'owner', grants: [] } };

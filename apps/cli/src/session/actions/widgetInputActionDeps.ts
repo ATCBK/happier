@@ -29,10 +29,10 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
     serverId: string;
     accountId: string | null;
     getDeps(): ActionExecutorDeps;
-    readCandidates(signal?: AbortSignal, session?: Readonly<{ serverId: string; sessionId: string }>): Promise<readonly Candidate[]>;
+    readCandidates(signal?: AbortSignal, session?: Readonly<{ serverId: string; sessionId: string }>, requiredPluginId?: string): Promise<readonly Candidate[]>;
     readResources?(signal?: AbortSignal, session?: Readonly<{ serverId: string; sessionId: string }>): Promise<Readonly<{
         resources: readonly PluginProjectedResourceV2[]; connectedAccountDescriptors: readonly ConnectedAccountUiProjectionEntryV1[] }>>;
-    readInputTypes?(signal?: AbortSignal, session?: Readonly<{ serverId: string; sessionId: string }>): Promise<PluginProjectionV2['familiesById']['inputTypes'] | undefined>;
+    readInputTypes?(signal?: AbortSignal, session?: Readonly<{ serverId: string; sessionId: string }>, requiredPluginId?: string): Promise<PluginProjectionV2['familiesById']['inputTypes'] | undefined>;
     readViewerPurposeContext?(signal: AbortSignal | undefined, context: ActionExecutorContext): Promise<Readonly<{ profile: AccountProfile; purposeBindings: QualifiedConnectedAccountPurposeBindingsV1 }> | null>;
     validateSession(session: Readonly<{ serverId: string; sessionId: string }>, signal?: AbortSignal): Promise<boolean>;
     readWorkspaceRefs?(signal: AbortSignal | undefined, context: ActionExecutorContext): Promise<readonly WorkspaceRefV1[] | null>;
@@ -92,7 +92,8 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
         if ((reference.kind === 'inline' || reference.kind === 'artifact') && !authored) return unavailable;
         const definition = authored?.body.kind === 'installed' || authored?.body.kind === 'builtin' ? authored.body : reference;
         const sessionTarget = readWidgetActionSessionTargetV1(consumer.surface, consumer.selectedSession);
-        const candidate = (await input.readCandidates(context.signal, sessionTarget)).find(candidate => candidate.availability === 'available'
+        const candidate = (await input.readCandidates(context.signal, sessionTarget,
+            definition.kind === 'installed' ? definition.surface.pluginId : undefined)).find(candidate => candidate.availability === 'available'
             && isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), definition));
         const native = definition.kind === 'builtin' ? readBuiltinWidgetDescriptorV1(definition) : null;
         const resources = authored && authored.body.kind !== 'installed' && authored.body.kind !== 'builtin' ? await input.readResources?.(context.signal, sessionTarget) : null;
@@ -152,7 +153,8 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
             const matches = (candidate: Candidate) => candidate.availability === 'available'
                 && isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), definition);
             const ownerSession = readWidgetActionSessionTargetV1(request.ref.surface);
-            let candidate = (await input.readCandidates(request.signal, ownerSession)).find(matches);
+            const requiredPluginId = definition.kind === 'installed' ? definition.surface.pluginId : undefined;
+            let candidate = (await input.readCandidates(request.signal, ownerSession, requiredPluginId)).find(matches);
             // A saved definition supplies its exact target field even when physical A
             // has no matching plugin. Bare installed copies discover metadata through
             // a unique current binding value, retaining exact Session access checks.
@@ -165,7 +167,7 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
                     if (values.length !== 1) continue;
                     const target = VoiceTrackedSessionAddressV1Schema.safeParse(values[0]);
                     if (!target.success || !isSessionHomeAdmitted(target.data.serverId) || !await input.validateSession(target.data, request.signal)) continue;
-                    const current = (await input.readCandidates(request.signal, target.data)).filter(candidate => {
+                    const current = (await input.readCandidates(request.signal, target.data, requiredPluginId)).filter(candidate => {
                         const declaration = readWidgetInputTargetV1(candidate);
                         return matches(candidate) && declaration.kind === 'session' && declaration.path === path;
                     });
@@ -182,7 +184,7 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
                     providedContext: await readProvidedContext(request), viewerValues: (await readViewerPurpose(request, targetDescriptor))?.values ?? {} });
                 const target = bound.status === 'ready' ? VoiceTrackedSessionAddressV1Schema.safeParse(readInputPath(bound.input, targetDeclaration.path)) : null;
                 if (target?.success && isSessionHomeAdmitted(target.data.serverId) && await input.validateSession(target.data, request.signal)) {
-                    const current = (await input.readCandidates(request.signal, target.data)).find(matches);
+                    const current = (await input.readCandidates(request.signal, target.data, requiredPluginId)).find(matches);
                     candidate = current && sameStrictJsonValue(readWidgetInputTargetV1(current), targetDeclaration) ? current : undefined;
                 } else return null;
             }
@@ -207,7 +209,7 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
             // The widget's selected daemon projection is the type catalog for
             // standalone callers, runtime hosts and saved definitions alike.
             const types = await input.readInputTypes?.(request.signal,
-                readWidgetActionSessionTargetV1(request.ref.surface, selected?.success ? selected.data : undefined));
+                readWidgetActionSessionTargetV1(request.ref.surface, selected?.success ? selected.data : undefined), field.inputType.pluginId);
             request.signal?.throwIfAborted();
             const entry = types?.entriesById[buildQualifiedPluginContributionKey(field.inputType)];
             return entry?.occurrenceId && entry.pluginId === field.inputType.pluginId && entry.definition.id === field.inputType.localId

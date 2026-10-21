@@ -9,7 +9,7 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 export function createCliWidgetDefinitionActionDepsV1(input: Readonly<{
     transport: WidgetDefinitionArtifactTransportV1; accountId: string; serverHttpBaseUrl?: string;
     getDeps(): ActionExecutorDeps;
-    readCandidates(signal?: AbortSignal, session?: Readonly<{ serverId: string; sessionId: string }>): Promise<readonly (WidgetInputDescriptorV1 & WidgetCandidateIdentityV1)[]>;
+    readCandidates(signal?: AbortSignal, session?: Readonly<{ serverId: string; sessionId: string }>, requiredPluginId?: string): Promise<readonly (WidgetInputDescriptorV1 & WidgetCandidateIdentityV1)[]>;
 }>): Pick<ActionExecutorDeps, 'widgetDefinitionArtifacts' | 'widgetLayoutFragmentArtifacts' | 'readSessionWidgetDefinitionSource'> {
     const run = <T>(operation: () => Promise<T>) => input.serverHttpBaseUrl ? runWithServerHttpBaseUrl(input.serverHttpBaseUrl, operation) : operation();
     const transport: WidgetDefinitionArtifactTransportV1 = {
@@ -25,7 +25,8 @@ export function createCliWidgetDefinitionActionDepsV1(input: Readonly<{
             const action = input.getDeps().sessionBoardAction;
             if (!action) return { ok: false, errorCode: 'widget_definition_promotion_unavailable', error: 'widget_definition_promotion_unavailable' };
             return createSessionWidgetDefinitionSourceReaderV1({ sessionBoardAction: action,
-                readInstalledDescriptor: async (definition, read) => (await input.readCandidates(read.signal, read.session))
+                readInstalledDescriptor: async (definition, read) => (await input.readCandidates(read.signal, read.session,
+                    definition.kind === 'installed' ? definition.surface.pluginId : undefined))
                     .find(candidate => isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), definition)) ?? null,
             })(request);
         },

@@ -379,8 +379,9 @@ describe('Plugin Settings administration declaration defaults', () => {
     daemonReply.mockReset();
     readStoredCredentials.mockReset();
     readStoredCredentials.mockResolvedValue(credentials);
-    daemonReply.mockImplementation(async (params: { method: string }) => {
+    daemonReply.mockImplementation(async (params: { method: string; request?: unknown }) => {
       if (params.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+        expect(params.request).toEqual({ machineId: target.machineId, selection: 'settings' });
         return projection;
       }
       if (params.method === RPC_METHODS.DAEMON_PLUGIN_SETTINGS_GET) return snapshot;

@@ -626,7 +626,9 @@ describe('native connected-service Action adapter', () => {
           method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
           authority: 'present_user', context: { surface: 'cli', authority: 'present_user' },
           effectActionId: 'connectedServices.purposes.default.set', exactMachine: true });
-        expect(DaemonContributionRegistryProjectionDescribeRequestSchema.parse(request.request)).toEqual({ machineId: 'resource-machine' });
+        expect(DaemonContributionRegistryProjectionDescribeRequestSchema.parse(request.request)).toEqual({
+          machineId: 'resource-machine', selection: 'connectedAccountAdmission',
+        });
         return readProjection();
       },
     });

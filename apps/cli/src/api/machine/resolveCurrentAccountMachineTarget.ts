@@ -10,6 +10,7 @@ import { readMachineName, resolveMachineDisplayNameParts, type MachineNameMetada
 import type { StoredCredentials } from '@/persistence';
 import { resolvePublishedMachineContentCodec } from './machineDataEncryptionKey';
 import { readAccountEncryptionModeOnce } from '@/api/client/accountEncryptionMode';
+import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityMaterializationsReadActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability/actions';
 
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import { normalizeServerHttpBaseUrl, resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -155,13 +156,41 @@ export async function listCurrentAccountMachines(params: Readonly<{
  * target-unavailable verdict (`isMachineRequestReachabilityFailureV1`).
  */
 export async function listCurrentAccountAdministrationMachines(params: Parameters<typeof listCurrentAccountMachines>[0]
-  & Readonly<{ token: string; requestedMachineId?: string; preferredMachineId?: string | null }>): Promise<readonly string[]> {
+  & Readonly<{ token: string; requestedMachineId?: string; preferredMachineId?: string | null; requiredPluginId?: string }>): Promise<readonly string[]> {
   if (params.requestedMachineId !== undefined) {
     const resolution = await resolveCurrentAccountMachineTarget(params);
     return resolution.kind === 'selected' ? [resolution.target.machineId] : [];
   }
   const machines = await listCurrentAccountMachines(params);
+  let pluginMachines: ReadonlySet<string> | undefined;
+  if (params.requiredPluginId) {
+    try {
+      const projection = params.authorization?.requesterHttpProjection;
+      const path = PluginAvailabilityActionHttpPathsV1['account.plugins.availability.materializations.read'];
+      const headers = projection ? await projection.createRequestHeaders({ method: 'POST', path, body: {},
+        effectActionId: params.effectActionId ?? params.authorization!.binding.actionId,
+        ...(params.signal ? { signal: params.signal } : {}),
+      }) : { Authorization: `Bearer ${params.token}` };
+      if (!headers) throw new Error('Requester plugin inventory authority is unavailable');
+      const home = normalizeServerHttpBaseUrl(params.serverHttpBaseUrl ?? projection?.serverHttpBaseUrl ?? resolveServerHttpBaseUrl());
+      const response = await axios.post(`${home}${path}`, {}, {
+        headers: { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), ...headers },
+        timeout: 0, ...(params.signal ? { signal: params.signal } : {}),
+      });
+      params.signal?.throwIfAborted();
+      if (projection && !await projection.isCurrent()) throw new Error('Requester plugin inventory authority retired');
+      const census = PluginAvailabilityMaterializationsReadActionOutputV1Schema.parse(response.data);
+      if (!census.inventoryComplete) throw new Error('Plugin inventory is incomplete');
+      pluginMachines = new Set(census.snapshots.flatMap(snapshot => snapshot.materializations
+        .filter(entry => entry.pluginId === params.requiredPluginId && entry.enabled && entry.trustState === 'trusted')
+        .map(entry => entry.machineId)));
+    } catch (error) {
+      params.signal?.throwIfAborted();
+      throw Object.assign(new Error('The current plugin Machine inventory is unavailable.'), { code: 'machine_inventory_unavailable', cause: error });
+    }
+  }
   const reachable = machines.filter(machine => machine.kind === 'persistent' && !machine.replacedByMachineId
+    && (!pluginMachines || pluginMachines.has(machine.id))
     && (!machine.access || machine.access.accessState === 'ready') && isMachineReachableV1({ machine, nowMs: Date.now() }))
     .map(machine => machine.id);
   return params.preferredMachineId && reachable.includes(params.preferredMachineId)

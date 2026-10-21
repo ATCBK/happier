@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const boundaries = vi.hoisted(() => ({ axiosGet: vi.fn() }));
+const boundaries = vi.hoisted(() => ({ axiosGet: vi.fn(), axiosPost: vi.fn() }));
 
-vi.mock('axios', () => ({ default: { get: boundaries.axiosGet } }));
+vi.mock('axios', () => ({ default: { get: boundaries.axiosGet, post: boundaries.axiosPost } }));
 vi.mock('@/api/clientCompatibility/cliClientCompatibility', () => ({
   buildCurrentAccountStoredContentCompatibilityHttpHeaders: () => ({
     'X-Happier-Account-Content': 'current',
@@ -13,7 +13,8 @@ vi.mock('@/api/client/serverHttpBaseUrl', () => ({
   resolveServerHttpBaseUrl: () => 'https://api.example.test',
 }));
 
-import { listCurrentAccountMachines, resolveCurrentAccountMachineTarget } from './resolveCurrentAccountMachineTarget';
+import { listCurrentAccountAdministrationMachines, listCurrentAccountMachines, resolveCurrentAccountMachineTarget } from './resolveCurrentAccountMachineTarget';
+import { PluginAvailabilityMaterializationsReadActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability/actions';
 import { createMachineContentCodec } from './machineStoredContent';
 import { MachinePublishedMetadataV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import { AccountEncryptionModeResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
@@ -30,6 +31,51 @@ function currentMachine(id: string, host?: string) {
 
 beforeEach(() => {
   boundaries.axiosGet.mockReset();
+  boundaries.axiosPost.mockReset();
+});
+
+describe('plugin-aware Account administration Machine selection', () => {
+  const pluginId = 'example.widgets';
+  const census = (complete = true) => PluginAvailabilityMaterializationsReadActionOutputV1Schema.parse({ availabilityCursor: 1,
+    inventoryComplete: complete, snapshots: [{ serverIdentityId: 'srv_widgets', machineId: 'capable', materializations: [{
+      serverIdentityId: 'srv_widgets', machineId: 'capable', materializationId: 'materialization-counter', pluginId, version: '1.0.0',
+      sourceClass: 'localPath', portableRelease: false, enabled: true, trustState: 'trusted', uiArtifacts: [], observedAt: 1,
+    }] }], releases: [] });
+
+  it('filters the existing reachable selection by the plugin census before preferring a Machine', async () => {
+    boundaries.axiosGet.mockResolvedValue({ data: ['unrelated', 'capable'].map(id => ({ ...currentMachine(id), activeAt: Date.now() })) });
+    boundaries.axiosPost.mockResolvedValue({ data: census() });
+    expect(await listCurrentAccountAdministrationMachines({ token: 'captured', serverHttpBaseUrl: 'https://captured.test',
+      preferredMachineId: 'unrelated', requiredPluginId: pluginId })).toEqual(['capable']);
+    expect(boundaries.axiosPost).toHaveBeenCalledWith('https://captured.test/v1/plugins/availability/materializations/read', {},
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer captured' }) }));
+  });
+
+  it('returns no candidate when no reachable trusted enabled Machine carries the plugin', async () => {
+    boundaries.axiosGet.mockResolvedValue({ data: [{ ...currentMachine('unrelated'), activeAt: Date.now() }] });
+    boundaries.axiosPost.mockResolvedValue({ data: census() });
+    expect(await listCurrentAccountAdministrationMachines({ token: 'captured', requiredPluginId: pluginId })).toEqual([]);
+    const available = census();
+    const disabled = { ...available, snapshots: available.snapshots.map(snapshot => ({ ...snapshot,
+      materializations: snapshot.materializations.map(materialization => ({ ...materialization, enabled: false })),
+    })) };
+    boundaries.axiosGet.mockResolvedValue({ data: [{ ...currentMachine('capable'), activeAt: Date.now() }] });
+    boundaries.axiosPost.mockResolvedValue({ data: disabled });
+    expect(await listCurrentAccountAdministrationMachines({ token: 'captured', requiredPluginId: pluginId })).toEqual([]);
+  });
+
+  it('does not turn an incomplete census into proof that no Machine has the plugin', async () => {
+    boundaries.axiosGet.mockResolvedValue({ data: [{ ...currentMachine('capable'), activeAt: Date.now() }] });
+    boundaries.axiosPost.mockResolvedValue({ data: census(false) });
+    await expect(listCurrentAccountAdministrationMachines({ token: 'captured', requiredPluginId: pluginId }))
+      .rejects.toMatchObject({ code: 'machine_inventory_unavailable' });
+  });
+
+  it('preserves an explicit target without requiring a plugin census', async () => {
+    expect(await listCurrentAccountAdministrationMachines({ token: 'captured', requestedMachineId: 'explicit', requiredPluginId: pluginId }))
+      .toEqual(['explicit']);
+    expect(boundaries.axiosPost).not.toHaveBeenCalled();
+  });
 });
 
 describe('resolveCurrentAccountMachineTarget', () => {

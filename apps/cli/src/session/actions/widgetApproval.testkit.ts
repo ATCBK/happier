@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod/mini';
-import { ARTIFACT_PLAIN_DATA_KEY_MARKER, FeaturesResponseSchema, type AccountSettings } from '@happier-dev/protocol';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, FeaturesResponseSchema, decodePlainArtifactStoredContent, type AccountSettings } from '@happier-dev/protocol';
+import { deriveArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { normalizePluginUiInlineSurfaceBindingV1 } from '@happier-dev/protocol/plugins/ui';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
@@ -64,7 +65,12 @@ export function registerPlainArtifactRoutes(app: FastifyInstance, accountId: str
             dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
     };
     const idOf = (params: unknown) => String((params as { id: string }).id);
-    app.get('/v1/artifacts', async () => [...rows.values()]);
+    app.get('/v1/artifacts', async request => {
+        const kind = new URL(request.url, 'http://fixture.test').searchParams.get('kind');
+        const items = [...rows.values()];
+        return kind ? { items: items.filter(row => deriveArtifactCoarseKindV1(z.looseObject({}).parse(decodePlainArtifactStoredContent(row.header))) === kind),
+            hasUnclassified: false } : items;
+    });
     app.get('/v1/artifacts/:id', async (request, reply) => rows.get(idOf(request.params)) ?? reply.code(404).send({ error: 'not_found' }));
     app.get('/v1/artifacts/:id/access/recipients', async (request, reply) => {
         const row = rows.get(idOf(request.params));

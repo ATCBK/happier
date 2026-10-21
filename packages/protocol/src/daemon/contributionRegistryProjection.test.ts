@@ -1650,6 +1650,13 @@ describe('daemon contribution registry projection (wire)', () => {
       backendsById: {},
       familiesById: {},
     }).success).toBe(false);
+    for (const selection of ['agents', 'settings', 'connectedAccountAdmission'] as const) {
+      expect(DaemonContributionRegistryProjectionDescribeRequestSchema.parse({ machineId: 'm1', selection }))
+        .toEqual({ machineId: 'm1', selection });
+    }
+    expect(DaemonContributionRegistryProjectionDescribeRequestSchema.safeParse({
+      machineId: 'm1', selection: 'settings', skillIds: ['plugin:acme.skills/guide'],
+    }).success).toBe(false);
   });
 
   it('admits addressed skill source reads and validates the real bundle producer at the machine boundary', async () => {

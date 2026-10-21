@@ -1875,27 +1875,38 @@ export function createCliActionDeps(params: Readonly<{
   // Home, Project and plugin-area widgets belong to the Account, not to a Session or this process's
   // Machine. A host with neither (a standalone CLI replaying an approved Action) reads the plugin
   // projection from the Machine the CLI names with its explicit selector, otherwise from a reachable
-  // Account daemon. Account presence also lists daemons connected to other servers on a shared Account, so a
+  // Account daemon carrying the requested plugin in the availability census. Account presence also lists
+  // daemons connected to other servers on a shared Account, so a
   // target-unavailable verdict moves to the next one; the Machine that answered is reused.
-  let answeringAccountWidgetMachineId: string | undefined;
-  const readAccountWidgetProjection = async (signal?: AbortSignal) => {
+  const answeringAccountWidgetMachines = new Map<string, string>();
+  const readAccountWidgetProjection = async (signal?: AbortSignal, requiredPluginId?: string) => {
+    const key = requiredPluginId ?? '';
+    const answeringAccountWidgetMachineId = answeringAccountWidgetMachines.get(key);
     if (answeringAccountWidgetMachineId) {
       try { return await describeWidgetProjection(answeringAccountWidgetMachineId, signal); }
       catch (error) {
         signal?.throwIfAborted();
         if (!isMachineRequestReachabilityFailureV1(error)) throw error;
-        answeringAccountWidgetMachineId = undefined;
+        answeringAccountWidgetMachines.delete(key);
       }
     }
     const candidates = await listCurrentAccountAdministrationMachines({ token: params.token,
       ...(params.serverHttpBaseUrl ? { serverHttpBaseUrl: params.serverHttpBaseUrl } : {}),
-      ...(params.explicitMachineId ? { requestedMachineId: params.explicitMachineId } : {}) }).catch(() => []);
+      ...(signal ? { signal } : {}), ...(requiredPluginId ? { requiredPluginId } : {}),
+      ...(params.explicitMachineId ? { requestedMachineId: params.explicitMachineId } : {}) }).catch(error => {
+        signal?.throwIfAborted();
+        if (requiredPluginId) throw Object.assign(new RpcError('The plugin Machine inventory is unavailable.', 'widget_catalog_unavailable'), { cause: error });
+        return [];
+      });
     signal?.throwIfAborted();
+    if (requiredPluginId && !candidates.length) {
+      throw new RpcError(`No Machine on this Account has the plugin ${requiredPluginId} available.`, 'widget_type_unavailable');
+    }
     let unavailable: unknown;
     for (const machineId of candidates) {
       try {
         const projection = await describeWidgetProjection(machineId, signal);
-        answeringAccountWidgetMachineId = machineId;
+        answeringAccountWidgetMachines.set(key, machineId);
         return projection;
       } catch (error) {
         signal?.throwIfAborted();
@@ -1906,17 +1917,17 @@ export function createCliActionDeps(params: Readonly<{
     if (unavailable) throw unavailable;
     return null;
   };
-  const readWidgetProjection = async (signal?: AbortSignal, sessionRef?: Readonly<{ serverId: string; sessionId: string }>) => {
+  const readWidgetProjection = async (signal?: AbortSignal, sessionRef?: Readonly<{ serverId: string; sessionId: string }>, requiredPluginId?: string) => {
     signal?.throwIfAborted();
     const transport = sessionRef ? await resolveWidgetSessionTransport(sessionRef, signal) : null;
     const machineId = transport?.ok
       ? normalizeStringValue(readTransportSessionOwnerMetadata(transport)?.machineId)
       : params.machineActionDirectTargetTransport?.machineId ?? normalizeStringValue(await resolveCurrentSessionValue('machineId'));
     if (machineId) return await describeWidgetProjection(machineId, signal);
-    return transport ? null : await readAccountWidgetProjection(signal);
+    return transport ? null : await readAccountWidgetProjection(signal, requiredPluginId);
   };
-  const readWidgetCandidates = async (signal?: AbortSignal, sessionRef?: Readonly<{ serverId: string; sessionId: string }>) => {
-    const projection = await readWidgetProjection(signal, sessionRef);
+  const readWidgetCandidates = async (signal?: AbortSignal, sessionRef?: Readonly<{ serverId: string; sessionId: string }>, requiredPluginId?: string) => {
+    const projection = await readWidgetProjection(signal, sessionRef, requiredPluginId);
     return projection ? readCliWidgetCatalogProjectionV1(projection)
       : BUILTIN_WIDGET_DESCRIPTORS_V1.map(candidate => ({ ...candidate, fields: candidate.inputs?.fields ?? [], connectedAccountPurposeBindings: [] }));
   };
@@ -3931,7 +3942,7 @@ export function createCliActionDeps(params: Readonly<{
       serverId: widgetHomeId, accountId: homeAccountId,
       getDeps: () => readEffectiveDeps?.() ?? actionDeps, readCandidates: readWidgetCandidates,
       readWorkspaceRefs: async (signal, context) => (await readAdmittedProjectRows(signal, context, 'widgets.item.inputs.validate'))?.workspaceRefs ?? null,
-      readInputTypes: async (signal, session) => (await readWidgetProjection(signal, session))?.familiesById.inputTypes,
+      readInputTypes: async (signal, session, pluginId) => (await readWidgetProjection(signal, session, pluginId))?.familiesById.inputTypes,
       readResources: async (signal, session) => {
         const projection = await readWidgetProjection(signal, session);
         return { resources: Object.values(projection?.resourcesById ?? {}),
@@ -3971,11 +3982,12 @@ export function createCliActionDeps(params: Readonly<{
       return accountId ? { serverId: widgetHomeId, accountId, isSameServerId: isSameActionHomeId } : null;
     },
     widgetCatalog: { describeSurface: async (surface, _context, signal) => {
-      const projection = await readWidgetProjection(signal);
+      const projection = await readWidgetProjection(signal, undefined, surface.owner.kind === 'pluginArea' ? surface.owner.pluginId : undefined);
       return describeWidgetAreaApprovalSurfaceV1(surface, Object.values(projection?.familiesById.pluginUi?.entriesById ?? {}));
     }, readInstalledInputFields: async ({ surface, definition, signal, boundSession }) => {
       const physicalSession = readWidgetActionSessionTargetV1(surface);
-      const candidates = await readWidgetCandidates(signal, readWidgetActionSessionTargetV1(surface, boundSession));
+      const candidates = await readWidgetCandidates(signal, readWidgetActionSessionTargetV1(surface, boundSession),
+        definition.kind === 'installed' ? definition.surface.pluginId : undefined);
       if (physicalSession && boundSession && physicalSession.sessionId !== boundSession.sessionId) {
         await resolveWidgetSessionTransport(physicalSession, signal);
       }

@@ -23,6 +23,8 @@ import {
 import { PluginError } from '@happier-dev/plugin-sdk';
 import { logger } from '@/ui/logger';
 import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
+import { acquireRequesterAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentnessObservation';
+import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 
 import type { PluginAccountCollectionDefinition } from '@happier-dev/plugin-sdk/collections';
 import type { AccountKvTransaction } from '@happier-dev/plugin-sdk/storage';
@@ -236,8 +238,8 @@ function bindHost(params: Readonly<{
 
 describe('Account plugin Data storage host', () => {
     describe('in-flight encryption identity admission', () => {
-        function createHost() {
-            let credentials: StoredCredentials = plainCredentials;
+        function createHost(initialCredentials: StoredCredentials = plainCredentials) {
+            let credentials: StoredCredentials = initialCredentials;
             let baseUrl = 'https://data.example.test';
             const post = vi.fn(async (url: string) => ({ status: 200, data: url.endsWith('/query')
                 ? { rows: [], changeCursor: 17 }
@@ -259,6 +261,122 @@ describe('Account plugin Data storage host', () => {
             return { bind, post, setCredentials: (next: StoredCredentials) => { credentials = next; },
                 setBaseUrl: (next: string) => { baseUrl = next; } };
         }
+
+        it('borrows the authenticated socket identity for repeated reads while final sealing stays fresh before a delayed push', async () => {
+            const channel = await createRequesterCurrentnessSocketHarness();
+            const accountId = 'data-reader';
+            const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.authenticated`;
+            const credentials = { ...plainCredentials, token };
+            let serverFact: AccountEncryptionCurrentnessResponse = currentnessFor(credentials);
+            const get = vi.spyOn(axios, 'get').mockImplementation(async () => ({ status: 200, data: serverFact }));
+            const observation = acquireRequesterAccountEncryptionCurrentness({
+                accountId, token, serverBaseUrl: 'https://data.example.test',
+            });
+            try {
+                await observation.read();
+                expect(get).toHaveBeenCalledTimes(1);
+                const { bind, post } = createHost(credentials);
+                const account = bind();
+                const collection = account.collection(collectionDefinition);
+                expect(await Promise.all([
+                    collection.get('first'), collection.get('second'),
+                    collection.query({ index: 'by-status', prefix: [], order: 'asc' }),
+                    account.kv.get('cursor'),
+                ])).toEqual([null, null, { rows: [], changeCursor: 17 }, null]);
+                await expect(bind().collection(collectionDefinition).get('another-invocation')).resolves.toBeNull();
+                expect(get).toHaveBeenCalledTimes(1);
+                expect(post).toHaveBeenCalledTimes(4);
+                expect(channel.clients).toHaveLength(1);
+
+                // Home committed the new mode, but its socket publication has
+                // deliberately not reached the reader. Final sealing must see it.
+                serverFact = currentnessFor(encryptedCredentials);
+                await expect(account.kv.set('cursor', { value: 'private' })).rejects.toMatchObject({
+                    code: 'plugin_account_storage_unavailable',
+                });
+                expect(get).toHaveBeenCalledTimes(2);
+                expect(post).toHaveBeenCalledTimes(4);
+
+                await channel.push(accountId, serverFact);
+                await expect(collection.get('after-push')).rejects.toMatchObject({
+                    code: 'plugin_account_storage_unavailable',
+                });
+                expect(get).toHaveBeenCalledTimes(2);
+                expect(post).toHaveBeenCalledTimes(4);
+            } finally {
+                await observation.dispose();
+                await channel.close();
+                get.mockRestore();
+            }
+        });
+
+        it.each(['credential', 'Home', 'retired holder'] as const)('requires its own fresh admission after a different %s', async (changed) => {
+            const channel = await createRequesterCurrentnessSocketHarness();
+            const accountId = 'data-isolation';
+            const payload = Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url');
+            const credentials = { ...plainCredentials, token: `header.${payload}.authenticated` };
+            const get = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: currentnessFor(credentials) });
+            const observation = acquireRequesterAccountEncryptionCurrentness({
+                accountId, token: credentials.token, serverBaseUrl: 'https://data.example.test',
+            });
+            try {
+                await observation.read();
+                const host = createHost(credentials);
+                if (changed === 'credential') host.setCredentials({ ...credentials, token: `header.${payload}.unadmitted` });
+                if (changed === 'Home') host.setBaseUrl('https://other.example.test');
+                if (changed === 'retired holder') await observation.dispose();
+                get.mockResolvedValue({ status: 401, data: { error: 'unauthorized' } });
+                await expect(host.bind().collection(collectionDefinition).get('private')).rejects.toMatchObject({
+                    code: 'plugin_account_storage_unavailable',
+                });
+                expect(get).toHaveBeenCalledTimes(2);
+                expect(host.post).not.toHaveBeenCalled();
+                expect(channel.clients).toHaveLength(1);
+            } finally {
+                await observation.dispose();
+                await channel.close();
+                get.mockRestore();
+            }
+        });
+
+        it('cancels a Data reader without aborting its peer or the authenticated observation refresh', async () => {
+            const channel = await createRequesterCurrentnessSocketHarness();
+            const accountId = 'data-cancellation';
+            const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.authenticated`;
+            const credentials = { ...plainCredentials, token };
+            let release!: () => void;
+            const gate = new Promise<void>(resolve => { release = resolve; });
+            const get = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: currentnessFor(credentials) });
+            const observation = acquireRequesterAccountEncryptionCurrentness({
+                accountId, token, serverBaseUrl: 'https://data.example.test',
+            });
+            try {
+                await observation.read();
+                get.mockImplementation(async () => {
+                    await gate;
+                    return { status: 200, data: currentnessFor(credentials) };
+                });
+                await channel.push(accountId, null);
+                const { bind, post } = createHost(credentials);
+                const collection = bind().collection(collectionDefinition);
+                const first = new AbortController();
+                const cancelled = collection.get('first', { signal: first.signal }).catch((error: unknown) => error);
+                const retained = collection.get('second');
+                await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+                first.abort();
+                expect(await cancelled).toMatchObject({ code: 'plugin_collection_cancelled' });
+                expect(get.mock.calls[1]?.[1]?.signal?.aborted).toBe(false);
+                release();
+                await expect(retained).resolves.toBeNull();
+                expect(get).toHaveBeenCalledTimes(2);
+                expect(post).toHaveBeenCalledTimes(1);
+            } finally {
+                release();
+                await observation.dispose();
+                await channel.close();
+                get.mockRestore();
+            }
+        });
 
         it('shares overlapping identity acquisitions in one invocation, retaining each Collection cursor read and later freshness', async () => {
             let release!: () => void;

@@ -324,6 +324,16 @@ describe('Account activation source assembly', () => {
             const result = await resolveAccountPluginActivationSources({ contributes: createResolvedContributionRegistry({}),
                 paths: resolvePluginStorePaths({ happyHomeDir: home }), credentials: { token: 'fixture', encryption: null },
                 serverUrl: 'http://account-source.test', isCurrent: () => true, resolveBundledActivationSource: () => null });
+            const censusSelection = result.readSelection(pluginId);
+            const exactSelection = await readCurrentAccountPluginExecutionSelection({ pluginId,
+                credentials: { token: 'fixture', encryption: null }, serverUrl: 'http://account-source.test' });
+            for (const selection of [censusSelection, exactSelection]) {
+                expect(selection?.kind).toBe('available');
+                if (selection?.kind !== 'available' || !selection.release) throw new Error('Expected acquired Account release');
+                expect(Object.isFrozen(selection.release)).toBe(true);
+                expect(Object.isFrozen(selection.manifest.contributes.actions)).toBe(true);
+                expect(Object.isFrozen(selection.release.uiSlots)).toBe(true);
+            }
             expect(result.contributes.actions.map(action => action.definition.id).sort()).toEqual(manifest.contributes.actions.map(action => action.id).sort());
             expect(result.contributes.activationTargets).toMatchObject([{ account: { artifactId: 'account-runtime', exportName: 'activate' } }]);
             const module = await result.sourcesByPluginId.get(pluginId)?.resolveRelativeModule?.('account-runtime');

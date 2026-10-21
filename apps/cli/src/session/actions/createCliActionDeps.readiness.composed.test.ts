@@ -100,10 +100,14 @@ it('reads the operation execution Account purpose and repairs its expired exact 
   const operationContext = createInvocationSavedSecretOperationContextV1({ credentials, serverHttpBaseUrl: 'https://readiness.test',
     snapshot: { source: 'network', settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 1,
       loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) }, isCurrent: async () => true });
+  const describeSelections: unknown[] = [];
   const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials, mode: 'plain', ctx: null,
     sessionId: '', serverId: 'home-a', serverHttpBaseUrl: 'https://readiness.test', savedSecretOperationContext: operationContext,
     machineActionDirectTargetTransport: { machineId: 'machine-1', invoke: async (method, payload) => {
-      if (method.includes('contributionRegistryProjection.describe')) return projection;
+      if (method.includes('contributionRegistryProjection.describe')) {
+        describeSelections.push((payload as Readonly<{ selection?: unknown }>).selection);
+        return projection;
+      }
       if (method === CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD) {
         expect(payload).toMatchObject({ command: { operation: 'beginReconnect', account } });
         connected = true;
@@ -114,6 +118,7 @@ it('reads the operation execution Account purpose and repairs its expired exact 
   const context = { surface: 'cli' as const, serverId: 'home-a', authority: 'present_user' as const };
   const input = { sessionId, readiness: true, operation: 'credential', credentialPurpose: purpose };
   const result = await executor.execute('session.status.get', input, context);
+  expect(describeSelections).toContain('connectedAccountAdmission');
   expect(result).toMatchObject({ ok: true, result: { readiness: { operation: 'credential',
     credential: { kind: 'personal', purpose, usable: false, repair: {
       actionId: 'connectedServices.authentication.beginReconnect', input: { machineId: 'machine-1', account },
