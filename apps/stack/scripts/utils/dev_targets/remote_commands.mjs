@@ -203,9 +203,10 @@ const FINAL_COMMAND_RULES = [
   { when: { runnerKnown: ['1'] }, set: { preparationBuildMode: 'qa-runtime' } },
   { when: { family: ['test', 'vitest'] }, set: { preparationBuildMode: 'qa-runtime' } },
   // Artifact-consuming CLI setup retains its existing publication custody.
+  // Native tools come from the selected package declaration below.
   // Source-only readers release that resource after preparation below.
   { when: { component: ['apps/cli'], workerTool: ['vitest'], generatorCheck: ['0'] }, set: {
-    requiredTools: 'go', workspaceLock: '.project/tmp/cli-dist-build.lock',
+    workspaceLock: '.project/tmp/cli-dist-build.lock',
   } },
   { when: { script: ['types:check'], component: ['apps/docs'] }, set: { ...validation, kind: 'typecheck', workerTool: 'typescript-native' } },
   { when: { bootstrap: ['1'], heavyClass: [''] }, set: { heavyClass: 'dependency-install' } },
@@ -253,7 +254,7 @@ const FINAL_COMMAND_RULES = [
   // Native source prerequisites are staged under their own admitted producer
   // lease before the payload. Retaining it through tests prevents a nested
   // compiler from waiting for its legitimate larger resource envelope.
-  { when: { kind: ['source-test'], component: ['apps/cli'], workerTool: ['vitest'] }, set: { workspaceLock: '', requiredTools: '' } },
+  { when: { kind: ['source-test'], component: ['apps/cli'], workerTool: ['vitest'] }, set: { workspaceLock: '' } },
   // The complete source-unit lane executes real compiler owners. Explicit
   // file requests retain validation; compiler-consuming focused requests use
   // the existing explicit admission-class wrapper, not a filename registry.
@@ -508,7 +509,7 @@ export function resolveRemoteCommandPolicy(commandArgs, { cwd = '.', repoRoot = 
   else if (facts.component.startsWith(normalizedRepoRoot + '/')) facts.component = facts.component.slice(normalizedRepoRoot.length + 1);
   facts.packageComponent = facts.component.startsWith('packages/') ? '1' : '0';
   applyCommandRules(facts, FINAL_COMMAND_RULES, policy);
-  if (policy.kind === 'source-test' && policy.workerTool === 'vitest' && policy.generatorCheck === '0') {
+  if ((policy.kind === 'source-test' || facts.component === 'apps/cli') && policy.workerTool === 'vitest' && policy.generatorCheck === '0') {
     policy.requiredTools = resolveSourceTestRequiredTools(repoRoot, facts.component, policy.requiredTools);
   }
   if (['node', 'nodejs'].includes(facts.command) && facts.nativeTest === '1'
@@ -720,7 +721,7 @@ export function renderNativeCommandPolicy() {
     ...Object.entries(DEFAULT_COMMAND_POLICY).map(([key, value]) => '  policy_' + key + '=' + posixQuote(value)),
     renderShellCommandRules(COMMAND_RULES), '}',
     'native_command_policy_finish() {', renderShellCommandRules(FINAL_COMMAND_RULES),
-    '  if [ "$policy_kind" = source-test ] && [ "$policy_workerTool" = vitest ] && [ "$policy_generatorCheck" = 0 ]; then',
+    '  if { [ "$policy_kind" = source-test ] || [ "$policy_component" = apps/cli ]; } && [ "$policy_workerTool" = vitest ] && [ "$policy_generatorCheck" = 0 ]; then',
     '    policy_requiredTools=$(node "${projection_command_policy:-$repo_root/apps/stack/scripts/utils/dev_targets/remote_commands.mjs}" --source-test-tools "$repo_root" "$policy_component" "$policy_requiredTools") || return $?',
     '  fi', '}',
     'native_package_manager() { case "$1" in ' + REMOTE_COMMAND_CLASSIFICATION.packageManagerCommands.join('|') + ') return 0 ;; *) return 1 ;; esac; }',

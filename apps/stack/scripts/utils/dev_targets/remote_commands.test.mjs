@@ -691,12 +691,20 @@ test('source-test native requirements belong to the selected package declaration
   const cliDir = join(root, 'apps/cli');
   mkdirSync(cliDir, { recursive: true });
   writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
-  const manifest = { name: '@happier-dev/cli', scripts: { vitest: 'vitest' } };
+  const manifest = { name: '@happier-dev/cli', scripts: {
+    vitest: 'vitest',
+    'test:unit': 'yarn -s test:unit:vitest && yarn -s test:import-cycles',
+    'test:unit:vitest': 'node scripts/runVitestShards.mjs --config vitest.config.ts',
+    'test:import-cycles': 'node scripts/checkImportCycles.mjs',
+  } };
   const owner = fileURLToPath(new URL('./remote_commands.mjs', import.meta.url));
   const requests = [
     { cwd: cliDir, args: ['vitest', 'run', 'src/example.test.ts'] },
     { cwd: root, args: ['yarn', '--cwd', 'apps/cli', 'vitest', 'run', 'src/example.test.ts'] },
     { cwd: cliDir, args: ['hstack-exec', '--heavyweight-admission', '--class=compilation', '--', 'vitest', 'run', 'src/example.test.ts'] },
+    { cwd: root, args: ['yarn', 'workspace', '@happier-dev/cli', 'test:unit'] },
+    { cwd: cliDir, args: ['yarn', 'test:unit'] },
+    { cwd: cliDir, args: ['vitest', 'run', '--config', 'vitest.integration.config.ts', 'src/example.test.ts'] },
   ];
   const nativePolicy = request => spawnSync('/bin/sh', ['-c', `${renderNativeCommandPolicy()}\nrepo_root=$1; invoked_cwd=$2; projection_command_policy=$3; shift 3; resolve_native_command_policy "$@" || exit $?; printf '%s' "$policy_requiredTools"`,
     'policy', root, request.cwd, owner, ...request.args], { encoding: 'utf8' });
@@ -705,13 +713,13 @@ test('source-test native requirements belong to the selected package declaration
       ...(declaration === undefined ? {} : { happierSourceTestTools: declaration }) }));
     for (const request of requests) {
       const policy = await commandPolicy.resolvePackageCommandPolicy(request.args, { repoRoot: root, cwd: request.cwd });
-      assert.equal(policy.requiredTools, expected);
+      assert.equal(policy.requiredTools, expected, request.args.join(' '));
       if (process.platform !== 'win32') {
         const native = nativePolicy(request);
         assert.equal(native.status, 0, native.stderr);
         assert.equal(native.stdout, expected);
       }
-      if (declaration === undefined) {
+      if (declaration === undefined && policy.kind === 'source-test') {
         // A predecessor-shaped checkout has no native source owner or loader.
         // Its declared flow must remain usable without either new private API.
         const { prepareRemoteValidationWorkspace } = await import('./remote_validation_preparation.mjs');

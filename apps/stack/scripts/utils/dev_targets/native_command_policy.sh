@@ -302,7 +302,6 @@ native_command_policy_finish() {
     policy_preparationBuildMode='qa-runtime'
   fi
   if { [ "$policy_component" = 'apps/cli' ]; } && { [ "$policy_workerTool" = 'vitest' ]; } && { [ "$policy_generatorCheck" = '0' ]; }; then
-    policy_requiredTools='go'
     policy_workspaceLock='.project/tmp/cli-dist-build.lock'
   fi
   if { [ "$policy_script" = 'types:check' ]; } && { [ "$policy_component" = 'apps/docs' ]; }; then
@@ -416,7 +415,6 @@ native_command_policy_finish() {
   fi
   if { [ "$policy_kind" = 'source-test' ]; } && { [ "$policy_component" = 'apps/cli' ]; } && { [ "$policy_workerTool" = 'vitest' ]; }; then
     policy_workspaceLock=''
-    policy_requiredTools=''
   fi
   if { [ "$policy_kind" = 'source-test' ]; } && { [ "$policy_component" = 'apps/cli' ]; } && { [ "$policy_workerTool" = 'vitest' ]; } && { [ "$policy_config" = 'vitest.config.ts' ]; } && { [ "$policy_generatorCheck" = '0' ]; } && { [ "$policy_testFileSelected" = '0' ]; }; then
     policy_heavyClass='compilation'
@@ -427,7 +425,7 @@ native_command_policy_finish() {
   if { [ "$policy_heavyClass" = 'compilation' ] || [ "$policy_heavyClass" = 'compilation-ui' ] || [ "$policy_heavyClass" = 'compilation-cli' ] || [ "$policy_heavyClass" = 'compilation-server' ] || [ "$policy_heavyClass" = 'package-dist' ] || [ "$policy_heavyClass" = 'runtime-build' ]; }; then
     policy_localCompile='1'
   fi
-  if [ "$policy_kind" = source-test ] && [ "$policy_workerTool" = vitest ] && [ "$policy_generatorCheck" = 0 ]; then
+  if { [ "$policy_kind" = source-test ] || [ "$policy_component" = apps/cli ]; } && [ "$policy_workerTool" = vitest ] && [ "$policy_generatorCheck" = 0 ]; then
     policy_requiredTools=$(node "${projection_command_policy:-$repo_root/apps/stack/scripts/utils/dev_targets/remote_commands.mjs}" --source-test-tools "$repo_root" "$policy_component" "$policy_requiredTools") || return $?
   fi
 }
