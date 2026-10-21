@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { Platform } from 'react-native';
+import { useStoreWithEqualityFn } from 'zustand/traditional';
 
 import { MachineLiveStreamRelayDisabledReasonSchema, readMachineLiveStreamRelayCaps } from '@happier-dev/protocol/features/payload/capabilities/machineLiveStreamCapabilities';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
@@ -20,7 +21,8 @@ import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot'
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useServerFeaturesRuntimeSnapshot } from '@/sync/domains/features/featureDecisionRuntime';
 import { resolveMachineRpcDirectRoutePreflight } from '@/sync/domains/machines/peer/mediation/rpc/directRoutePreflight';
-import { useServerScopedMachine } from '@/sync/domains/state/storage';
+import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
+import { storage } from '@/sync/domains/state/storageStore';
 import {
     readDeviceSpeechRecognitionAvailability,
     type DeviceSpeechRecognitionAvailability,
@@ -450,7 +452,6 @@ export function useVoiceProviderLocalAvailability(input: Readonly<{
         ? serverFeaturesSnapshot.features
         : null;
     const daemonMachineId = normalizeId(input.daemonMachineId) ?? '';
-    const daemonMachine = useServerScopedMachine(activeServer.serverId, daemonMachineId);
     const { credentials } = useAuth();
     const browserSpeechCapability = useBrowserWebSpeechCapability();
     const nativeDeviceSpeechRecognition = useNativeDeviceSpeechRecognitionAvailability();
@@ -458,11 +459,16 @@ export function useVoiceProviderLocalAvailability(input: Readonly<{
     const daemonFeatureEnabled = useFeatureEnabled('voice.daemonInference', {
         scopeKind: 'runtime',
     });
-    const daemonDirectRouteAvailability = resolveVoiceDaemonDirectRouteAvailability({
-        serverFeatures,
-        credentials,
-        endpoint: daemonMachine?.daemonState?.peerMediation?.loopback?.endpoint ?? null,
-    });
+    // Read the consumed route fact, not the whole Machine. Resource publications
+    // stay quiet while preflight still observes endpoint expiry on source changes.
+    const daemonDirectRouteAvailability = useStoreWithEqualityFn(storage, React.useCallback(state => (
+        resolveVoiceDaemonDirectRouteAvailability({
+            serverFeatures,
+            credentials,
+            endpoint: resolveServerScopedMachine(state, activeServer.serverId, daemonMachineId)
+                ?.daemonState?.peerMediation?.loopback?.endpoint ?? null,
+        })
+    ), [activeServer.serverId, daemonMachineId, serverFeatures, credentials]));
 
     return React.useMemo(
         () => resolveVoiceProviderLocalAvailability({

@@ -156,14 +156,17 @@ describe('useVoiceProviderLocalAvailability', () => {
         resetServerFeaturesClientForTests();
     });
 
-    async function renderAvailabilityHook(input: AvailabilityHookInput = {}) {
+    async function renderAvailabilityHook(input: AvailabilityHookInput = {}, onRender?: () => void) {
         const Wrapper = ({ children }: React.PropsWithChildren) => (
             <AuthProvider initialCredentials={{ token: account.home.findByServerUrl('https://provider-settings-account.test')!.token! }}>
                 {children}
             </AuthProvider>
         );
         return await renderHook(
-            () => useVoiceProviderLocalAvailability(input),
+            () => {
+                onRender?.();
+                return useVoiceProviderLocalAvailability(input);
+            },
             { wrapper: Wrapper },
         );
     }
@@ -198,6 +201,57 @@ describe('useVoiceProviderLocalAvailability', () => {
             runtimeState: 'available',
             pcmCapture: 'available',
         });
+    });
+
+    it('keeps endpoint-only readiness quiet for unrelated Machine publications while observing endpoint expiry', async () => {
+        primeServerFeaturesSnapshot({
+            serverId: account.serverId,
+            snapshot: { status: 'ready', features: createRelayDisabledFeatures(readyFeatures) },
+        });
+        const machine = createDirectMachine();
+        let other = createMachineFixture({ id: 'other-machine', activeAt: Date.now() });
+        await account.publishMachines(account.serverId, [machine, other]);
+        let renders = 0;
+        const hook = await renderAvailabilityHook({
+            daemonMachineId: machine.id, daemonModelState: 'ready', daemonRuntimeState: 'available',
+        }, () => { renders += 1; });
+        expect(hook.getCurrent().daemon?.route).toBe('direct');
+        const held = hook.getCurrent();
+        const settledRenders = renders;
+        let latest = machine;
+        for (let tick = 1; tick <= 3; tick += 1) {
+            latest = createMachineFixture({
+                ...latest, seq: latest.seq + 1, daemonStateVersion: latest.daemonStateVersion + 1,
+                metadataVersion: latest.metadataVersion + 1,
+                metadata: { ...latest.metadata!, displayName: `Published name ${tick}` },
+                daemonState: MachinePublishedDaemonStateV1Schema.parse({
+                    ...structuredClone(machine.daemonState),
+                    resources: { v: 1, vitals: { state: 'unavailable', reason: 'reader_failed', since: tick },
+                        attention: { level: 'calm', reasons: [] } },
+                }),
+            });
+            await act(async () => { await account.publishMachines(account.serverId, [latest, other]); });
+            expect(hook.getCurrent()).toBe(held);
+            expect(renders).toBe(settledRenders);
+            other = createMachineFixture({ ...other, metadataVersion: other.metadataVersion + 1,
+                metadata: { ...other.metadata!, displayName: `Other machine ${tick}` } });
+            await act(async () => { await account.publishMachines(account.serverId, [latest, other]); });
+            expect(renders).toBe(settledRenders);
+        }
+
+        const endpoint = machine.daemonState?.peerMediation?.loopback?.endpoint;
+        if (!endpoint) throw new Error('Expected canonical direct endpoint fixture');
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(endpoint.expiresAt + 1);
+        try {
+            // Existing preflight observes expiry on a subsequent source publication;
+            // unrelated content must not suppress that consumed currentness fact.
+            await act(async () => {
+                await account.publishMachines(account.serverId, [latest,
+                    createMachineFixture({ ...other, metadataVersion: other.metadataVersion + 1 })]);
+            });
+            expect(hook.getCurrent().daemon?.route).toBe('relay_disabled');
+            expect(renders).toBe(settledRenders + 1);
+        } finally { clock.mockRestore(); }
     });
 
     it('recomputes the passive direct route when same-machine endpoint and server policy facts are lost and restored', async () => {
