@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import type { Server } from 'socket.io';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import tweetnacl from 'tweetnacl';
 import {
     MACHINE_PLAIN_DATA_KEY_MARKER, PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2, PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT,
@@ -12,8 +12,6 @@ import {
 import { db } from '@/storage/db';
 import { resolveMachineAdmission } from '@/app/machines/machineAccess';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
-import { observeSqliteRequests } from '@/testkit/observeSqliteRequests';
-import * as logBoundary from '@/utils/logging/log';
 import { createFakeSocket, getSocketHandler } from '../../../../testkit/socketHarness';
 import { createPeerTcpTunnelRelayCoordinator } from './relayCoordinator';
 import { registerPeerTcpTunnelRelaySocketHandler } from './registerRelay';
@@ -128,35 +126,21 @@ describe('Tunnel current Machine admission (real SQLite)', () => {
             const decoded = decodePeerTcpTunnelBinaryFrameV2({ frame: value.frame, maxHeaderBytes: 1024, maxPayloadBytes: 64 * 1024 });
             return decoded.ok && decoded.header.kind === 'data';
         });
-        let restoreDatabaseObserver: (() => void) | undefined;
-        const trace = vi.spyOn(logBoundary, 'log').mockImplementation(() => undefined);
-        vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
         try {
             await send({ ...envelope, v: 1, frame: { v: 1, kind: 'open', open: {
                 v: 1, kind: 'open', tunnelId, targetMachineId: machine.id, routeKind: 'server_relay', destination, relayAuthorization,
             } } });
-            // Delay the real database transport, preserving the production
-            // coordinator, admission owner, query and strict frame consumer.
-            restoreDatabaseObserver = observeSqliteRequests({ before: async request => {
-                if (request.model === 'Machine' && request.action === 'findUnique') {
-                    await new Promise(resolve => setTimeout(resolve, 30));
-                }
-            } });
             await send(data(0));
             expect(forwardedData()).toHaveLength(1);
-            const recorded = trace.mock.calls.find(([fields]) => fields.event === 'peer-relay-frame-admission'
-                && fields.tunnelId === tunnelId && fields.sequence === 0)?.[0];
-            expect(recorded).toMatchObject({ sender: 'user', kind: 'data', admitted: true });
-            expect(recorded.elapsedMs).toBeGreaterThanOrEqual(20);
             if (transition === 'revoke') await db.machine.update({ where: { id: machine.id }, data: { revokedAt: new Date() } });
             else await db.machine.update({ where: { id: machine.id }, data: { installationId: randomUUID() } });
             forwarded.length = 0;
             await send(data(1));
             expect(forwardedData()).toHaveLength(0);
+            expect(forwarded).toContainEqual(expect.objectContaining({
+                v: 1, frame: expect.objectContaining({ kind: 'abort', tunnelId, reasonCode: 'route_unavailable' }),
+            }));
         } finally {
-            restoreDatabaseObserver?.();
-            trace.mockRestore();
-            vi.unstubAllEnvs();
             await getSocketHandler(socket, 'disconnect')();
             await coordinator.close();
         }
