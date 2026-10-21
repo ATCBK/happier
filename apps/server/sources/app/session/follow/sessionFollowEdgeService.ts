@@ -1689,16 +1689,24 @@ export async function acknowledgeAdmittedSessionFollowInputInTx(tx: Tx, input: R
     };
     let admission = await readCurrentAdmission();
     if (!admission.ok) return admission;
-    if (admission.custody.admissions.length > 0) {
-        // Rule progress publishes the destination Session. Admit its complete
+    if (admission.custody.admissions.length > 0 || 'sourceSessionId' in admission.custody.delivery.original
+        && admission.custody.relations.length > 0) {
+        // Accepted progress publishes the destination Session. Admit its complete
         // audience and resource before KV/edge writes or terminal Account locks.
         await acquireSessionAccountCursorLocksInTx(tx, [admission.destination.id], [accountId]);
         admission = await readCurrentAdmission();
         if (!admission.ok) return admission;
     }
     const { custody, represented } = admission;
+    const relationProgressAdvanced = 'sourceSessionId' in custody.delivery.original && custody.relations.some(edge =>
+        edge.deliveredTranscriptSeq < represented.observed.transcriptSeq
+        || edge.deliveredAgentStateVersion < represented.observed.agentStateVersion);
     if (!await settleSessionFollowInputReasonsInTx(tx, { progresses: custody.admissions.map(row => row.progress),
         relations: custody.relations, observed: represented.observed, delivery: custody.delivery })) return { ok: false, rejection: 'stale_expected_frontier' };
+    // Rule progress already publishes through its KV owner. Manager/explicit
+    // progress must wake that same receiver recovery after an unconfirmed
+    // middle admission, even if no new source notification will arrive.
+    if (relationProgressAdvanced) await invalidateSessionFollowDestinationsInTx(tx, [admission.destination.id]);
     return { ok: true, delivered: represented.observed };
 }
 

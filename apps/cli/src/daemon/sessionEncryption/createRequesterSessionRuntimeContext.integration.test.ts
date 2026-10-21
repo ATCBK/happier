@@ -195,7 +195,7 @@ let openedRunPluginRuntime = false;
 beforeEach(async () => { channel = await createRequesterCurrentnessSocketHarness(); });
 afterEach(async () => { await channel.close(); });
 afterAll(async () => { if (openedRunPluginRuntime) await runPluginRuntimeController.shutdown(); });
-it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'startup-settings-cancel', 'startup-settings-forbidden', 'startup-settings-unbound', 'untracked-lifetime', 'profile-unavailable', 'action-policy', 'action-home-recovery', 'run-home-recovery', 'run-purpose-home-recovery', 'run-binding-home-recovery', 'authorization-observations', 'warm-account', 'background-home-failure', 'startup-home-failure', 'refresh-observations', 'request-auth-observations', 'follow-wake', 'follow-rules', 'follow-source', 'follow-receiver', 'follow-pending'] as const)('keeps requester %s isolated from active Alice', async (surface) => {
+it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'startup-settings-cancel', 'startup-settings-forbidden', 'startup-settings-unbound', 'untracked-lifetime', 'profile-unavailable', 'action-policy', 'action-home-recovery', 'run-home-recovery', 'run-purpose-home-recovery', 'run-binding-home-recovery', 'authorization-observations', 'warm-account', 'background-home-failure', 'startup-home-failure', 'refresh-observations', 'request-auth-observations', 'follow-wake', 'follow-rules', 'follow-source', 'follow-receiver', 'follow-pending', 'follow-idle-source'] as const)('keeps requester %s isolated from active Alice', async (surface) => {
   const actionPolicySurface = surface === 'action-policy' || surface === 'action-home-recovery' || surface === 'authorization-observations';
   const runSurface = surface === 'run-home-recovery' || surface === 'run-purpose-home-recovery' || surface === 'run-binding-home-recovery';
   const runPurposeSurface = surface === 'run-purpose-home-recovery' || surface === 'run-binding-home-recovery';
@@ -226,6 +226,8 @@ it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'st
   let sourceProject = 'other';
   let freshFollowRule = false;
   let followAccountChanges: ChangeEntry[] = [];
+  let followChangesReads = 0;
+  let receiverEnabled = surface !== 'follow-idle-source';
   const requesterSessionId = surface === 'follow-wake' || surface === 'follow-source' || surface === 'follow-receiver' || surface === 'follow-pending' ? 'c123456789012345678901234' : 'bob-session';
   const followDestinationId = surface === 'follow-receiver' ? requesterSessionId : 'c222222222222222222222222';
   const followSourceId = surface === 'follow-receiver' ? 'c333333333333333333333333' : requesterSessionId;
@@ -287,6 +289,7 @@ it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'st
       return { status: 200, data: { messages, hasMore: false, nextBeforeSeq: null, nextAfterSeq: null } };
     }
     if (path === '/v2/changes') {
+      followChangesReads++;
       const after = Number(config?.params?.after ?? new URL(url).searchParams.get('after') ?? 0);
       return { status: 200, data: { changes: followAccountChanges.filter(change => change.cursor > after),
         nextCursor: followAccountChanges.at(-1)?.cursor ?? after } };
@@ -297,7 +300,7 @@ it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'st
       followReads.push(path);
       if (path.endsWith('/session-follow-preferences')) return { status: 200, data: { assigned: true, direct: false, team: false, group: false } };
       const receiver = { kind: 'session' as const, sessionId: surface === 'follow-source' || surface === 'follow-receiver' ? followDestinationId : requesterSessionId };
-      const definition = { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1({ homeServerIds: ['bob-home'],
+      const definition = { v: 1 as const, enabled: receiverEnabled, filter: normalizeSessionListFilterV1({ homeServerIds: ['bob-home'],
         scope: 'all_accessible', ...(surface === 'follow-source' || surface === 'follow-receiver' ? { projects: { include: [{ serverId: 'bob-home', projectKey: 'payments' }], exclude: [] } } : {}) }), policy: { preset: 'important' as const } };
       const ruleId = freshFollowRule ? 'bob-fresh-rule' : 'bob-private-rule';
       return { status: 200, data: { rules: [{ ruleId, version: freshFollowRule ? 0 : 1, receiver,
@@ -307,6 +310,11 @@ it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'st
         ...(surface === 'follow-source' ? [{ ruleId: 'bob-personal-rule', version: 1, receiver: { kind: 'account' as const },
           content: sealSessionFollowRuleContentV1({ ruleId: 'bob-personal-rule', receiver: { kind: 'account' },
             definition: { ...definition, policy: { preset: 'custom', events: { finished: { delivery: 'quiet' } } } },
+            mode: 'plain', material: null }) }] : []),
+        ...(surface === 'follow-idle-source' ? [{ ruleId: 'other-receiver-rule', version: 1,
+          receiver: { kind: 'session' as const, sessionId: 'other-receiver' },
+          content: sealSessionFollowRuleContentV1({ ruleId: 'other-receiver-rule',
+            receiver: { kind: 'session', sessionId: 'other-receiver' }, definition: { ...definition, enabled: true },
             mode: 'plain', material: null }) }] : []),
       ], ...(freshFollowRule && new URL(url).searchParams.has('destinationSessionId') ? { sourceRanges: { status: 'available', sources: [{
         sourceSessionId: 'bob-follow-source', delivered: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 2 }, throughSeq: 3,
@@ -424,7 +432,7 @@ it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'st
         return { machineId: 'machine', serverIdentityId: 'bob-home' };
       } } } : {}) });
     const admitted = await admitRequesterSessionBootstrap({ bootstrap: { v: 1, disposition: 'ordinary_requester', credentials: { token: requesterToken } },
-      ...(actionPolicySurface || runSurface || surface === 'refresh-observations' || surface === 'request-auth-observations' || surface === 'follow-wake' || surface === 'follow-source' || surface === 'follow-receiver' || surface === 'follow-pending' ? { existingSessionId: requesterSessionId } : {}),
+      ...(actionPolicySurface || runSurface || surface === 'refresh-observations' || surface === 'request-auth-observations' || surface === 'follow-wake' || surface === 'follow-source' || surface === 'follow-receiver' || surface === 'follow-pending' || surface === 'follow-idle-source' ? { existingSessionId: requesterSessionId } : {}),
       boundary: { serverId: 'bob-home', serverHttpBaseUrl: 'https://bob-home.test', happyHomeDir: directory },
       context: { signal: new AbortController().signal, machineAdmission: { actorAccountId: 'bob', custodianAccountId: 'alice',
         machineId: 'machine', installationId: host.installation?.installationId ?? 'installation', role: 'use', encryptionMode: 'plain' },
@@ -454,6 +462,46 @@ it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'st
     }
     runtime = await runtimeConstruction;
     if (!runtime) throw new Error('Missing real requester runtime');
+    if (surface === 'follow-idle-source') {
+      const reconciled: (string | null)[] = [];
+      runtime.bindSessionFollowSourceReconciliation(async source => { reconciled.push(source); }, new AbortController().signal);
+      expect(await runtime.sessionFollowRuleCache.read()).toMatchObject({ status: 'available', rules: [
+        { receiver: { sessionId: requesterSessionId }, definition: { enabled: false } },
+        { receiver: { sessionId: 'other-receiver' }, definition: { enabled: true } },
+      ] });
+      const warmSessionReads = sessionReads;
+      for (let cursor = 1; cursor <= 5; cursor++) {
+        followAccountChanges.push({ cursor, kind: 'session', entityId: 'unrelated-session', changedAt: cursor, hint: null });
+        const before = followChangesReads;
+        await channel.hintAccountChange();
+        await vi.waitFor(() => expect(followChangesReads).toBeGreaterThan(before));
+        // The loopback event is acknowledged and the synchronous HTTP boundary
+        // has drained its microtasks before checking for forbidden fresh reads.
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(sessionReads).toBe(warmSessionReads);
+      }
+      expect(reconciled).toEqual([]);
+      // A receiver's own progress/turn invalidation recovers configured
+      // manager/explicit Follow sources even without a matching private rule.
+      followAccountChanges.push({ cursor: 6, kind: 'session', entityId: requesterSessionId, changedAt: 6, hint: null });
+      await channel.hintAccountChange();
+      await vi.waitFor(() => expect(reconciled).toEqual([null]));
+      receiverEnabled = true;
+      followAccountChanges.push({ cursor: 7, kind: 'account', entityId: 'bob', changedAt: 7,
+        hint: buildSessionFollowChangeHintV1() });
+      followAccountChanges.push({ cursor: 8, kind: 'session', entityId: 'new-source', changedAt: 8, hint: null });
+      await channel.hintAccountChange();
+      await vi.waitFor(() => expect(reconciled).toContain('new-source'));
+      expect(sessionReads).toBeGreaterThan(warmSessionReads);
+      const admittedReconciliations = reconciled.length;
+      current = false;
+      followAccountChanges.push({ cursor: 9, kind: 'session', entityId: 'revoked-source', changedAt: 9, hint: null });
+      await channel.hintAccountChange();
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(reconciled).toHaveLength(admittedReconciliations);
+      expect(getActiveAccountSettingsSnapshot()).toBe(alice);
+      return;
+    }
     if (surface === 'settings-refresh-failure' || surface.startsWith('startup-settings-')) {
       const homeGet = get.getMockImplementation()!;
       get.mockRestore();

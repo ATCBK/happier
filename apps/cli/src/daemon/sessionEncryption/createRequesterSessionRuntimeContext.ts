@@ -27,6 +27,7 @@ import { ProfileCatalogUnavailableError, readProfilesFromAccountSettings,
 import { readAuthoringMemoryLastUsedProfile } from '@/settings/profiles/readAuthoringMemoryLastUsedProfile';
 import type { ProfileCatalogSnapshotV1, ProfileCatalogUnavailableReasonV1 } from '@happier-dev/protocol/profiles/profileCatalogV1';
 import { createAccountSessionFollowRuleCache } from '@/agent/runtime/session/follow/accountSessionFollowRuleCache';
+import { createRequesterSessionFollowSourceReconciliation } from './requesterSessionFollowSourceReconciliation';
 import { logger } from '@/ui/logger';
 
 type CoordinatorInput = Parameters<typeof startDaemonConnectedServiceRuntime>[0];
@@ -88,20 +89,7 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
   const sessionFollowRuleCache = createAccountSessionFollowRuleCache({ accountId: bootstrap.attribution.accountId,
     credentials: bootstrap.credentials, serverHttpBaseUrl: bootstrap.serverHttpBaseUrl,
     signal: lifetime.signal, isCurrent, subscribeInvalidation: bootstrap.subscribeSessionFollowRules });
-  let followSourceBinding: Readonly<{ reconcile: (sourceSessionId: string | null) => Promise<void>; signal: AbortSignal }> | null = null;
-  const releaseFollowSources = bootstrap.subscribeSessionFollowSources(sourceSessionId => {
-    const binding = followSourceBinding;
-    if (!binding || binding.signal.aborted || disposed) return;
-    void (async () => {
-      if (!await isCurrent()) return;
-      const opened = await sessionFollowRuleCache.read();
-      const destinationSessionId = bootstrap.getBoundSessionId();
-      if (opened.status !== 'available' || !destinationSessionId || !await isCurrent()
-        || !opened.rules.some(rule => rule.definition.enabled && rule.receiver.kind === 'session'
-          && rule.receiver.sessionId === destinationSessionId)) return;
-      if (binding === followSourceBinding && !binding.signal.aborted) await binding.reconcile(sourceSessionId);
-    })().catch(() => { if (!disposed) logger.warn('[Session Follow] Requester source recovery remains pending'); });
-  });
+  const followSourceReconciliation = createRequesterSessionFollowSourceReconciliation({ bootstrap, sessionFollowRuleCache, isCurrent });
   const connectedServiceRuntimeRegistry = input.coordinatorInput.connectedServiceRuntimeRegistry.scopeToRequester(target => {
     const tracked = [...input.coordinatorInput.pidToTrackedSession.values()].find(candidate => candidate.happySessionId === target.sessionId);
     const stamp = target.requesterWorkAttributionV1 ?? tracked?.requesterWorkAttributionV1;
@@ -177,13 +165,13 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     subscribe: listener => { listeners.add(listener); return { dispose: () => { listeners.delete(listener); } }; },
   });
   const persistence = createQualifiedConnectedAccountDaemonPersistence({ credentials: bootstrap.credentials,
-    getAccountEncryptionMode: async () => await withHome(() => api.getAccountEncryptionMode()),
+    getAccountEncryptionMode: async options => await withHome(() => api.getAccountEncryptionMode(options)),
     operationContext: savedSecrets,
     secrets: createAccountSettingsConnectedAccountSecrets({ expectedScopeKey: resolveAccountSettingsScopeKey(bootstrap.credentials), operationContext: savedSecrets }),
   });
   const configurationOwner = createConnectedAccountDaemonConfigurationOwner({ reloadController: pluginReloadController, persistence: persistence.configuration });
   const established = createQualifiedConnectedAccountEstablishedRuntimeOwner({ reloadController: pluginReloadController,
-    credentials: bootstrap.credentials, getAccountEncryptionMode: async signal => await withHome(() => api.getAccountEncryptionMode({ signal })),
+    credentials: bootstrap.credentials, getAccountEncryptionMode: async (signal, options) => await withHome(() => api.getAccountEncryptionMode({ ...options, signal })),
     isAccountRuntimeCurrent: isCurrent,
     runAccountOperation: withHome,
     configuration: persistence.configuration, configurationOwner });
@@ -217,9 +205,9 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
   });
   const providerAccountUsageStore = createProviderAccountUsageStore();
   const providerAccountUsagePersistence = createProviderAccountUsagePersistenceScheduler({
-    api: { getAccountEncryptionMode: async () => {
+    api: { getAccountEncryptionMode: async options => {
       if (!await isCurrent()) throw requesterAccountContextUnavailable();
-      return await withHome(() => api.getAccountEncryptionMode());
+      return await withHome(() => api.getAccountEncryptionMode(options));
     } }, credentials: bootstrap.credentials, now: () => Date.now(), randomBytes,
     serverScope: bootstrap.attribution.serverId, accountScope: bootstrap.attribution.accountId,
     writeQualifiedProviderAccountUsage: async request => {
@@ -238,8 +226,7 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     disposed = true;
     lifetime.abort();
     sessionFollowRuleCache.dispose();
-    followSourceBinding = null;
-    releaseFollowSources();
+    followSourceReconciliation.dispose();
     releaseSettingsPublication();
     profileProjection = null;
     savedSecrets.withdrawCatalog();
@@ -280,9 +267,7 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     throw error;
   }
   return Object.freeze({ bootstrap, isCurrent, api, sessionFollowRuleCache,
-    bindSessionFollowSourceReconciliation: (reconcile: (sourceSessionId: string | null) => Promise<void>, signal: AbortSignal) => {
-      if (!disposed && !signal.aborted && followSourceBinding?.signal !== signal) followSourceBinding = { reconcile, signal };
-    },
+    bindSessionFollowSourceReconciliation: followSourceReconciliation.bind,
     readAccountSettingsSnapshot: readSnapshot, refreshAccountSettings, readAccountLaunchProfiles,
     subscribeAccountSettingsSnapshot: (listener: () => void) => {
       if (disposed) throw requesterAccountContextUnavailable();

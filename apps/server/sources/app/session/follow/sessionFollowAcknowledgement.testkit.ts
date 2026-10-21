@@ -9,7 +9,7 @@ import {
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 
 import { db } from '@/storage/db';
-import { createAuthenticatedFakeSocket, getSocketHandler } from '@/app/api/testkit/socketHarness';
+import { createAuthenticatedFakeSocket, createSocketRoomDiscoveryHarness, getSocketHandler } from '@/app/api/testkit/socketHarness';
 import { sessionUpdateHandler } from '@/app/api/socket/sessionUpdateHandler';
 import { createSessionPublisherPresence } from '@/app/presence/sessionPublisherPresence';
 import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
@@ -35,7 +35,9 @@ export async function assertConcurrentFailedTurnRouteAcknowledgements(options: R
     const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
     const authentication = createPresentUserSessionAccessAuthentication({ env: {} });
     const presence = createSessionPublisherPresence();
-    const socket = createAuthenticatedFakeSocket({ id: randomUUID() });
+    const socket = createAuthenticatedFakeSocket({ id: randomUUID(), nsp: {
+        server: createSocketRoomDiscoveryHarness(async () => []),
+    } });
     try {
         const machine = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id, metadata: '{}',
             dataEncryptionKey: new Uint8Array(decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER)),

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import axios, { AxiosError } from 'axios';
 import { decodeBase64 } from 'privacy-kit';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AccountEncryptionCurrentnessResponse, SessionFollowPendingObservationV1,
@@ -24,6 +25,7 @@ import { readCurrentSourceSessionFollowFrontier, writeSessionFollowFrontierColum
 import { acknowledgeSessionFollowFrontierInTx, observePendingSessionFollowForDestinationInTx, setSessionFollowSource } from './sessionFollowEdgeService';
 import { acknowledgeAccountVoiceFollowInTx, observePendingAccountVoiceFollowInTx, setAccountSessionFollow } from './accountFollowService';
 import { acknowledgeAdmittedSessionFollowInputInTx } from './sessionFollowEdgeService';
+import { sessionFollowInputFrontiers } from './sessionFollowRuleProgress';
 import { auth } from '@/app/auth/auth';
 import { createAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
 import { sessionPendingRoutes } from '@/app/api/routes/session/pendingRoutes';
@@ -280,7 +282,8 @@ describe('session → Follow WorkerUpdate acceptance', () => {
             }
             const app = createAuthenticatedTestApp({ authentication: 'real' });
             const requests: { url: string; status: number }[] = [];
-            const admissionFault = { originalSeq: null as number | null, boundary: 'admission' as 'admission' | 'routes' };
+            const admissionFault = { originalSeq: null as number | null, boundary: 'admission' as 'admission' | 'routes',
+                timeoutAfterCommitSeq: null as number | null };
             const rulesReadBarrier: { beforeRead?: () => Promise<void> } = {};
             app.addHook('preHandler', async (request, reply) => {
                 if (request.method === 'GET' && request.url === '/v2/account/session-follow-rules') await rulesReadBarrier.beforeRead?.();
@@ -308,6 +311,21 @@ describe('session → Follow WorkerUpdate acceptance', () => {
                 installAxiosFastifyAdapter(input: { app: typeof app; origin: string }): () => void;
             }>('../../../../../cli/src/testkit/http/axiosAdapter');
             cleanups.push(installAxiosFastifyAdapter({ app, origin: 'http://original-follow.test' }));
+            const httpAdapter = axios.getAdapter(axios.defaults.adapter);
+            axios.defaults.adapter = async config => {
+                const response = await httpAdapter(config);
+                if (config.method === 'post' && new URL(config.url!).pathname === `/v2/sessions/${destination.id}/pending`) {
+                    const body: unknown = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+                    const delivery = body && typeof body === 'object' && 'followDeliveryV1' in body
+                        ? SessionFollowInputV1Schema.safeParse(body.followDeliveryV1) : null;
+                    if (delivery?.success && 'sourceMessage' in delivery.data.original
+                        && delivery.data.original.sourceMessage.seq === admissionFault.timeoutAfterCommitSeq) {
+                        // The HTTP reply is lost after the real Pending transaction commits.
+                        throw new AxiosError('Test admission reply deadline', 'ECONNABORTED', config);
+                    }
+                }
+                return response;
+            };
             const token = await auth.createToken(account.id, undefined, { kind: 'account', authority: 'present_user' });
             const { runWithServerHttpBaseUrl } = await vi.importActual<{
                 runWithServerHttpBaseUrl: <T>(origin: string, run: () => Promise<T>) => Promise<T>;
@@ -321,16 +339,28 @@ describe('session → Follow WorkerUpdate acceptance', () => {
                     serverId: string; serverHttpBaseUrl: string; machineId: string; installationId: string; signal: AbortSignal;
                     isCurrent: () => Promise<boolean>; subscribeInvalidation: () => () => void;
                     isPersonalCurrent: () => boolean;
+                    rulesCache?: unknown;
                     resolveSourceKeyContext: () => Promise<null>; dispatchPersonal: () => Promise<void> }): {
                         dispatch(occurrence: SessionFollowRuleSourceOccurrenceV1): Promise<unknown>;
                         dispatchReceiverRange(input: { observations: SessionFollowPendingObservationV1[]; destinationSessionId: string }): Promise<unknown>;
                         dispose(): void;
                     };
             }>('../../../../../cli/src/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher');
+            const { createAccountSessionFollowRuleCache } = await vi.importActual<{
+                createAccountSessionFollowRuleCache(input: { accountId: string; credentials: { token: string; encryption: null };
+                    serverHttpBaseUrl: string; signal: AbortSignal; isCurrent: () => Promise<boolean>;
+                    subscribeInvalidation: () => () => void }): { dispose(): void; hasEnabledSessionReceiver(sessionId: string): Promise<boolean> };
+            }>('../../../../../cli/src/agent/runtime/session/follow/accountSessionFollowRuleCache');
+            const lifetime = new AbortController();
+            const rulesCache = createAccountSessionFollowRuleCache({ accountId: account.id, credentials: { token, encryption: null },
+                serverHttpBaseUrl: 'http://original-follow.test', signal: lifetime.signal,
+                isCurrent: async () => true, subscribeInvalidation: () => () => {} });
+            cleanups.push(() => { lifetime.abort(); rulesCache.dispose(); });
             const dispatcher = createSessionFollowOccurrenceDispatcher({ accountId: account.id, credentials: { token, encryption: null },
                 serverId: homeId, serverHttpBaseUrl: 'http://original-follow.test', machineId: machine.id,
                 installationId: machine.installationId!, signal: new AbortController().signal, isCurrent: async () => true,
                 isPersonalCurrent: () => false,
+                rulesCache,
                 subscribeInvalidation: () => () => {}, resolveSourceKeyContext: async () => null, dispatchPersonal: async () => {} });
             cleanups.push(() => dispatcher.dispose());
             const deliveries: { delivery: SessionFollowInputV1; localInputId: string; userMessageSeq: number | null }[] = [];
@@ -342,6 +372,33 @@ describe('session → Follow WorkerUpdate acceptance', () => {
             const dispatchReceiverPending = async (observations?: SessionFollowPendingObservationV1[]) => dispatcher.dispatchReceiverRange({
                 observations: observations ?? (await observe()).observations, destinationSessionId: destination.id,
             });
+            const sourceListeners = new Set<(sessionId: string | null) => void>();
+            let requesterCurrent = true;
+            const { createRequesterSessionFollowSourceReconciliation } = await vi.importActual<{
+                createRequesterSessionFollowSourceReconciliation(input: { bootstrap: {
+                    getBoundSessionId(): string;
+                    subscribeSessionFollowSources(listener: (sessionId: string | null) => void): () => void;
+                }; sessionFollowRuleCache: typeof rulesCache; isCurrent: () => Promise<boolean> }): {
+                    bind(reconcile: (sessionId: string | null) => Promise<void>, signal: AbortSignal): void;
+                    dispose(): void;
+                };
+            }>('../../../../../cli/src/daemon/sessionEncryption/requesterSessionFollowSourceReconciliation');
+            const recovery = createRequesterSessionFollowSourceReconciliation({ bootstrap: {
+                getBoundSessionId: () => destination.id,
+                subscribeSessionFollowSources: listener => { sourceListeners.add(listener); return () => { sourceListeners.delete(listener); }; },
+            }, sessionFollowRuleCache: rulesCache, isCurrent: async () => requesterCurrent });
+            const recoveries: Promise<unknown>[] = [];
+            recovery.bind(async sourceSessionId => {
+                const work = dispatcher.dispatchReceiverRange({ destinationSessionId: destination.id,
+                    observations: (await observe()).observations.filter(observation => !sourceSessionId || observation.sourceSessionId === sourceSessionId) });
+                recoveries.push(work);
+                await work;
+            }, lifetime.signal);
+            cleanups.push(async () => { recovery.dispose(); await Promise.allSettled(recoveries); });
+            const sourceChanged = (sessionId: string | null, current = true) => {
+                requesterCurrent = current;
+                for (const listener of sourceListeners) listener(sessionId);
+            };
             const dispatchPending = async () => {
                 if (entry === 'receiver') return dispatchReceiverPending();
                 const { readCommittedSessionFollowSourceOccurrence } = await vi.importActual<{
@@ -455,7 +512,7 @@ describe('session → Follow WorkerUpdate acceptance', () => {
                 await Promise.allSettled(acknowledgements);
             };
             return { prepare, accept, acceptNative, settleAcceptance, replacePublisher, deliveries, restart, dispatchPending,
-                dispatchReceiverPending, admissionFault, rulesReadBarrier, requests };
+                dispatchReceiverPending, admissionFault, rulesReadBarrier, requests, sourceChanged, recoveries };
         };
         const appendReply = async (text: string, turnId: string) => {
             await appendTurnInput(turnId);
@@ -999,6 +1056,92 @@ describe('session → Follow WorkerUpdate acceptance', () => {
             .toMatchObject({ deliveredTranscriptSeq: 11 });
         expect(await db.sessionPendingMessage.count({ where: { sessionId: f.destination.id } })).toBe(0);
         expect((await f.observe()).observations).toEqual([]);
+    });
+
+    it.each(['receiver change', 'reconnect'] as const)('recovers CONT18 originals 9–11 on %s after middle admission timeout and prefix ACK', async event => {
+        const f = await fixture('in_progress', { preset: 'quiet' });
+        for (let index = 0; index < 5; index++) await f.appendTurnInput(`earlier-turn-${index}`);
+        await f.follow({ preset: 'quiet' });
+        await db.sessionFollowEdge.updateMany({ where: { sourceSessionId: f.source.id, destinationSessionId: f.destination.id },
+            data: writeSessionFollowFrontierColumns(readCurrentSourceSessionFollowFrontier(
+                await db.session.findUniqueOrThrow({ where: { id: f.source.id } }))) });
+        const original = await f.originals(true, 'source');
+        const artifactId = randomUUID();
+        for (const [index, summary] of ['Quiet 7', 'A'.repeat(2479), 'B'.repeat(2479), 'Report A', 'Report B'].entries()) {
+            expect(await f.appendReport(summary, index === 3 ? [{ kind: 'artifact', artifactId }] : [])).toBe(index + 7);
+        }
+        original.admissionFault.timeoutAfterCommitSeq = 8;
+        await original.dispatchReceiverPending();
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: f.destination.id } })).toBe(2);
+        expect(await inTx(tx => readSessionManagerInTx(tx, f.source.id))).toMatchObject({ deliveredTranscriptSeq: 6 });
+        // The unconfirmed HTTP reply does not undo custody. Resume accepts only
+        // the 7/8 prefix, with no source notification or manual recovery pass.
+        await original.replacePublisher();
+        original.restart();
+        const prefix = await original.prepare('natural', 4096, true, 'admitted');
+        expect(prefix?.workerUpdates?.map(update => update.transcriptPointer?.kind === 'session' ? update.transcriptPointer.seq : null)).toEqual([7, 8]);
+        expect(await prefix!.recheckAdmission(new AbortController().signal)).toBe(true);
+        f.acceptedPrompts.push(renderSessionInputContextPromptV1({ transformedUserText: '',
+            sessionFollowUpdates: prefix!.updates, workerUpdates: prefix!.workerUpdates }));
+        for (const localId of prefix!.representedFollowLocalInputIds!) await original.settleAcceptance(localId);
+        const beforeAck = await db.accountChange.findFirstOrThrow({ where: { accountId: f.account.id,
+            kind: 'session', entityId: f.destination.id } });
+        for (const localId of prefix!.representedFollowLocalInputIds!) prefix!.acknowledgeAccepted({ kind: 'admitted_input',
+            localInputId: localId, userMessageSeq: original.deliveries.find(row => row.localInputId === localId)!.userMessageSeq });
+        await vi.waitFor(() => expect(f.acknowledgements).toHaveLength(2));
+        expect(await Promise.all(f.acknowledgements)).toEqual([7, 8].map(transcriptSeq =>
+            expect.objectContaining({ ok: true, delivered: expect.objectContaining({ transcriptSeq }) })));
+        expect(await inTx(tx => readSessionManagerInTx(tx, f.source.id))).toMatchObject({ deliveredTranscriptSeq: 8 });
+        expect((await f.observe()).observations.length).toBeGreaterThan(0);
+        const afterAck = await db.accountChange.findFirstOrThrow({ where: { accountId: f.account.id,
+            kind: 'session', entityId: f.destination.id } });
+        expect(afterAck.cursor).toBeGreaterThan(beforeAck.cursor);
+        original.admissionFault.timeoutAfterCommitSeq = null;
+        // A retired requester must not use a receiver hint as delivery authority.
+        original.sourceChanged(f.destination.id, false);
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: f.destination.id } })).toBe(0);
+        if (event === 'receiver change') {
+            original.admissionFault.originalSeq = 9;
+            original.admissionFault.boundary = 'routes';
+            original.sourceChanged(afterAck.entityId);
+            await vi.waitFor(() => expect(original.recoveries).toHaveLength(1));
+            await Promise.all(original.recoveries);
+            expect(original.requests).toContainEqual({ url: `/v2/sessions/${f.source.id}/follows/occurrence-routes`, status: 503 });
+            expect(await db.sessionPendingMessage.count({ where: { sessionId: f.destination.id } })).toBe(0);
+            expect(await inTx(tx => readSessionManagerInTx(tx, f.source.id))).toMatchObject({ deliveredTranscriptSeq: 8 });
+            original.admissionFault.originalSeq = null;
+        }
+        const priorRecoveries = original.recoveries.length;
+        original.sourceChanged(event === 'receiver change' ? afterAck.entityId : null);
+        await vi.waitFor(() => expect(original.recoveries).toHaveLength(priorRecoveries + 1));
+        await Promise.all(original.recoveries);
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: f.destination.id } })).toBe(3);
+        const suffix = await original.prepare('natural', 16384, true, 'admitted');
+        expect(suffix?.workerUpdates?.map(update => update.transcriptPointer?.kind === 'session' ? update.transcriptPointer.seq : null)).toEqual([9, 10, 11]);
+        expect(suffix?.workerUpdates?.[1]?.deliverables).toEqual([{ kind: 'artifact', artifactId }]);
+        await original.accept(suffix!);
+        expect(f.acceptedPrompts[1]).toContain(artifactId);
+        expect(await Promise.all(f.acknowledgements.slice(2))).toEqual([9, 10, 11].map(transcriptSeq =>
+            expect.objectContaining({ ok: true, delivered: expect.objectContaining({ transcriptSeq }) })));
+        expect(await inTx(tx => readSessionManagerInTx(tx, f.source.id))).toMatchObject({ deliveredTranscriptSeq: 11 });
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: f.destination.id } })).toBe(0);
+        expect((await f.observe()).observations).toEqual([]);
+        // A repeated accepted ACK must not create an invalidation feedback loop.
+        const settledChange = await db.accountChange.findFirstOrThrow({ where: { accountId: f.account.id,
+            kind: 'session', entityId: f.destination.id } });
+        const last = original.deliveries.at(-1)!;
+        const frontiers = sessionFollowInputFrontiers(last.delivery);
+        const publisherGeneration = (await db.session.findUniqueOrThrow({ where: { id: f.destination.id } })).publisherGeneration.toString();
+        expect(await inTx(tx => acknowledgeAdmittedSessionFollowInputInTx(tx, {
+            principal: { kind: 'destination_runtime', destinationRuntimeAccountId: f.account.id, authentication: f.authentication },
+            request: { v: 1, destinationSessionId: f.destination.id, sourceSessionId: f.source.id, localInputId: last.localInputId,
+                expectedPublisherGeneration: publisherGeneration,
+                ...frontiers, consumed: frontiers.observed,
+                acceptance: { kind: 'admitted_input', localInputId: last.localInputId, userMessageSeq: last.userMessageSeq } },
+        }))).toMatchObject({ ok: true });
+        expect((await db.accountChange.findFirstOrThrow({ where: { accountId: f.account.id,
+            kind: 'session', entityId: f.destination.id } })).cursor).toBe(settledChange.cursor);
     });
 
     it('holds a budget-omitted original and its queued suffix, then accepts the exact prefix before the later report', async () => {
