@@ -99,6 +99,7 @@ function Harness(props: Readonly<{
     onPrepareEncryption?: () => void;
     refresh?: () => void | Promise<void>;
     host?: 'details' | 'mobileCockpit';
+    navigationOnly?: boolean;
     onAskAgent?: () => void;
 }>): React.ReactElement {
     const controller = useSessionBoardController({
@@ -118,6 +119,7 @@ function Harness(props: Readonly<{
             resolvePrimaryHost={() => props.host ?? 'details'}
             density="full"
             layout={props.host === 'mobileCockpit' ? 'single' : 'grid'}
+            {...(props.navigationOnly ? { navigationOnly: true } : {})}
             {...(props.companionItemIds ? { companionItemIds: props.companionItemIds } : {})}
             {...(props.onAddToCompanion ? { onAddToCompanion: props.onAddToCompanion } : {})}
             {...(props.onRemoveFromCompanion ? { onRemoveFromCompanion: props.onRemoveFromCompanion } : {})}
@@ -677,6 +679,22 @@ describe('SessionBoardSurface', () => {
         const popover = await openAddPopover(screen, 'session-board-add-trigger');
         expect(popover.sections.flatMap((section) => section.entries.map((entry) => entry.id))).toEqual(['walkthrough', 'note']);
         expect(screen.getTextContent()).not.toContain(t('sessionBoard.add.interactiveView'));
+    });
+
+    it('draws no move handle on the read-only sidebar monitor, which has no view or card to carry onto', async () => {
+        const serverUrl = 'https://board-monitor.example.test';
+        const serverId = 'srv_board_monitor';
+        await upsertServerProfile({ serverUrl, name: 'Board monitor Home' });
+        await setServerProfileIdentityForUrl(serverUrl, serverId);
+        expect(await TokenStorage.setCredentialsForServerUrl(serverUrl, { serverId }, {
+            token: `e30.${Buffer.from(JSON.stringify({ sub: 'board-editor' })).toString('base64url')}.signature`,
+        })).toBe(true);
+        const items = [{ itemId: 'note-1', item: note('Plan') }, { itemId: 'note-2', item: note('Review') }];
+        const editable = await renderScreen(<Harness snapshot={snapshot({ layout: MOVABLE, items })} serverId={serverId} />);
+        await vi.waitFor(() => expect(editable.findHostByTestId('session-board-item-note-1-move-handle')).not.toBeNull());
+        const monitor = await renderScreen(<Harness snapshot={snapshot({ layout: MOVABLE, items })} serverId={serverId} navigationOnly />);
+        await vi.waitFor(() => expect(monitor.getTextContent()).toContain('Plan'));
+        expect(monitor.findHostByTestId('session-board-item-note-1-move-handle')).toBeNull();
     });
 
     it('offers no editing chrome at all to a viewer who cannot edit', async () => {

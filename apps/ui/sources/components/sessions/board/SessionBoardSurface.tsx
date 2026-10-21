@@ -1009,7 +1009,8 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
             // author copy that may be absent or blank, and `null` is not a label.
             .map((candidate) => ({ id: candidate.id, title: resolveSessionBoardViewTitle(candidate) }));
         const displayTitleOf = () => displayTitles.current.get(itemId) ?? resolveSessionBoardItemTitle(projected.state);
-        const entityDrag: SessionSurfaceEntityBinding | null = dragScope && dragAddress && props.retained !== true && placed && activeView && !activeView.synthetic ? {
+        // The read-only sidebar draws no move grip: its view strip and cards register no drop targets, so a carry would end nowhere.
+        const entityDrag: SessionSurfaceEntityBinding | null = dragScope && dragAddress && mutationControls && placed && activeView && !activeView.synthetic ? {
             scope: dragScope.scope,
             admitWidgetMovement,
             isCurrent: () => dragScope.isCurrent() && controller.snapshot?.itemsById.get(itemId)?.state.kind === 'ready'
