@@ -125,6 +125,11 @@ const random = vi.hoisted(() => ({ next: 0 }));
 vi.mock('@/platform/randomUUID', () => ({ randomUUID: () => `00000000-0000-4000-8000-${(++random.next).toString(16).padStart(12, '0')}` }));
 
 await loadSyncSingletonForTests();
+// Load pane composition before activating the test Account; its route graph initializes Sync.
+const [workspaceRunSurfaces, sessionRunSurfaces] = await Promise.all([
+    import('@/components/projects/panes/details/surfaces/workspaceDetailsSurfaceRenderers'),
+    import('@/components/sessions/panes/surfaces/sessionDetailsSurfaceRenderers'),
+]);
 
 type Screen = Awaited<ReturnType<typeof renderScreen>>;
 type ComposerProps = React.ComponentProps<typeof SessionParticipantComposer>;
@@ -462,7 +467,8 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
     });
     afterEach(async () => { await disconnectActiveServerConnection(); await standardCleanup(); await home?.dispose(); });
 
-    it.each(['project', 'session'] as const)('starts a quote-seeded detached conversation from the %s pane on the file Machine without a parent Session', async (pane) => {
+    it.each(['project', 'session'] as const)('starts a quote-seeded conversation from the %s pane with its owning context', async (pane) => {
+        detachedScopeSupported = pane === 'project';
         const opened = vi.fn();
         const scope = { kind: 'project' as const, workspaceRefId: 'workspace_1', serverId, machineId: 'machine_1', rootPath: '/repo', activeRootPath: '/repo' };
         let requestedTab: DetailsTab | undefined;
@@ -472,15 +478,20 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
                 navigateToNewSession: () => { throw new Error('A capable exact Machine must open its Run draft'); },
             } })).toBe(true);
         if (!requestedTab) throw new Error('The canonical Ask target did not open a draft');
+        if (pane === 'session') {
+            expect(transport.call.mock.calls.filter(([request]) => request.method === RPC_METHODS.CAPABILITIES_DETECT)).toEqual([]);
+            expect(requestedTab.resource).not.toHaveProperty('sessionId');
+            expect(requestedTab.resource).not.toHaveProperty('workspace');
+        }
         const tab = { ...requestedTab, isPinned: true, isPreview: false };
         const surfaceInput = { tab, scope, region: 'details' as const, active: true,
             descriptor: { surfaceId: 'project:workspace_1:details:run-draft', resourceKey: tab.key, scope, region: 'details' as const, status: 'available' as const },
             callbacks: { replaceTab: (_key: string, next: { resource?: unknown }) => opened(next.resource) } };
         const renderers = pane === 'project'
-            ? (await import('@/components/projects/panes/details/surfaces/workspaceDetailsSurfaceRenderers')).createWorkspaceDetailsSurfaceRenderers({ scopeId: 'project:workspace_1', workspaceRefId: 'workspace_1',
+            ? workspaceRunSurfaces.createWorkspaceDetailsSurfaceRenderers({ scopeId: 'project:workspace_1', workspaceRefId: 'workspace_1',
             workspaceCacheKey: 'workspace_1', workspaceScope: scope, serverId, machineId: 'machine_1', rootPath: '/repo', activeRootPath: '/repo',
             presentation: 'panel', pinDetailsTab: vi.fn(), openFileTab: vi.fn(), renderWorkspaceInfo: () => null })
-            : (await import('@/components/sessions/panes/surfaces/sessionDetailsSurfaceRenderers')).createSessionDetailsSurfaceRenderers({
+            : sessionRunSurfaces.createSessionDetailsSurfaceRenderers({
                 scopeId: 'session:session_1', sessionId: 'session_1', serverId, requestClose: vi.fn(), openFileTab: vi.fn(),
                 getStartEditingFileHandler: () => vi.fn(), sessionScreenTestIdsEnabled: false, closeDetailsTab: vi.fn(),
             });
@@ -488,15 +499,25 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         expect(renderer).toBeDefined();
         screen = await renderScreen(<>{renderer!.render(surfaceInput)}</>);
         await waitFor(() => expect(composer().isSendDisabled).toBe(false));
-        expect(input().props.value).toContain('selected code');
+        await waitFor(() => expect(input().props.value, JSON.stringify({ initialText: composer().initialText,
+            sessionId: composer().sessionId, launcherDraftKey: composer().launcherDraftKey,
+            draft: getSessionDraftSnapshot({ serverId, accountId: 'account_1' }, { kind: 'session', sessionId: 'session_1' }) })).toContain('selected code'));
         await act(async () => { await sendButton().props.onPress(); });
-        await waitFor(() => expect(opened, JSON.stringify({ visible: screen.getTextContent(), emittedStarts })).toHaveBeenCalledWith(expect.objectContaining({ kind: 'executionRun', runId: 'run_1',
-            sessionId: null, workspace: { machineId: 'machine_1', cwd: '/repo' } })));
-        expect(emittedStarts).toEqual([expect.objectContaining({ sessionId: null, cwd: '/repo', runClass: 'long_lived' })]);
-        expect(JSON.stringify(transport.call.mock.calls.filter(([request]) => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_SEND))).toContain('selected code');
-        expect(transport.call.mock.calls.filter(([request]) => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_SEND)
-            .every(([request]) => request.machineId === 'machine_1')).toBe(true);
-        expect(outbound).toEqual([]);
+        await waitFor(() => expect(opened, JSON.stringify({ visible: screen.getTextContent(), emittedStarts })).toHaveBeenCalledWith(expect.objectContaining({ kind: 'executionRun', runId: 'run_1' })));
+        if (pane === 'project') {
+            expect(opened.mock.calls[0]![0]).toMatchObject({ sessionId: null, workspace: { machineId: 'machine_1', cwd: '/repo' } });
+            expect(emittedStarts).toEqual([expect.objectContaining({ sessionId: null, cwd: '/repo', runClass: 'long_lived' })]);
+            expect(JSON.stringify(transport.call.mock.calls.filter(([request]) => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_SEND))).toContain('selected code');
+            expect(transport.call.mock.calls.filter(([request]) => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_SEND)
+                .every(([request]) => request.machineId === 'machine_1')).toBe(true);
+            expect(outbound).toEqual([]);
+        } else {
+            expect(opened.mock.calls[0]![0]).not.toHaveProperty('sessionId');
+            expect(opened.mock.calls[0]![0]).not.toHaveProperty('workspace');
+            expect(emittedStarts).toEqual([expect.objectContaining({ launchOrigin: { kind: 'session', sessionId: 'session_1', draftCorrelationId: expect.any(String) } })]);
+            expect(outbound[0]).toMatchObject({ path: '/v2/sessions/session_1/execution-runs/run_1/pending' });
+            expect(outboundText()).toContain('selected code');
+        }
     });
 
     it('starts a quote-seeded detached fallback when the exact Machine does not support detached conversations', async () => {
@@ -505,7 +526,7 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         const openDetailsTab = vi.fn();
         const quote = 'src/app.ts:3\n```\nselected code\n```';
         expect(await askSelectionQuote({ workspaceScope: { serverId, machineId: 'machine_1', rootPath: '/repo' },
-            sessionTarget: { sessionId: 'session_1' }, sideRun: true, quote, context: { openDetailsTab, navigateToNewSession: navigate } })).toBe(true);
+            sessionTarget: null, quote, context: { openDetailsTab, navigateToNewSession: navigate } })).toBe(true);
         expect(openDetailsTab).not.toHaveBeenCalled();
         expect(navigate).toHaveBeenCalledWith({ dataId: null, draftId: expect.any(String) });
         const draftId = navigate.mock.calls[0]![0].draftId;
