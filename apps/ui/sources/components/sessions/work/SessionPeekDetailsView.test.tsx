@@ -30,6 +30,9 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
   useFeatureEnabled: () => true,
 }));
 
+// Load the real Session/Follow graph during collection, not inside the assertion deadline.
+const { SessionPeekDetailsView } = await import('./SessionPeekDetailsView');
+
 describe('SessionPeekDetailsView', () => {
   let previousState = storage.getState();
   beforeEach(() => {
@@ -51,7 +54,6 @@ describe('SessionPeekDetailsView', () => {
   });
 
   it('offers this session’s notifications from the header bell, not as switches under its composer', async () => {
-    const { SessionPeekDetailsView } = await import('./SessionPeekDetailsView');
     const screen = await renderScreen(
       <SessionPeekDetailsView
         sessionId="worker-1"

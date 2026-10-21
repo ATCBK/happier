@@ -302,6 +302,16 @@ describe('projectWork', () => {
         expect(loading).toEqual({ nothingYet: false, holdWorkingPlace: false, managedUnavailable: false });
     });
 
+    it('does not invite a Session to start work while its archived reports are still being read', () => {
+        const projection = projectWork(input({}));
+        const read = (archivedLoading: boolean) => resolveWorkReadPresentation({
+            projection, managedRuns: { phase: 'loaded', refreshFailed: false }, transcriptLoaded: true, archivedLoading,
+        });
+        // An archived child is something the Session did: the invitation waits for that answer, holding the place.
+        expect(read(true)).toEqual({ nothingYet: false, holdWorkingPlace: true, managedUnavailable: false });
+        expect(read(false)).toEqual({ nothingYet: true, holdWorkingPlace: false, managedUnavailable: false });
+    });
+
     it('lists the manager subtree once, each session under its lead, and ignores unrelated sessions', () => {
         const projection = projectWork(input({
             reportSessions: [

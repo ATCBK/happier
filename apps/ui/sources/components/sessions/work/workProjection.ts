@@ -54,15 +54,18 @@ export function resolveWorkReadPresentation(input: Readonly<{
     projection: WorkProjection | null;
     managedRuns: Readonly<{ phase: 'idle' | 'loading' | 'loaded' | 'failed'; refreshFailed: boolean }> | null;
     transcriptLoaded: boolean;
+    /** The archived reports this Session led are still being read: an archived child counts as work it did. */
+    archivedLoading?: boolean;
 }>) {
     const managedLoading = input.managedRuns?.phase === 'loading';
+    const archivedLoading = input.archivedLoading === true;
     const managedUnavailable = input.managedRuns?.phase === 'failed';
     const itemCount = input.projection ? input.projection.sessions.length + input.projection.workflows.length
         + input.projection.backgroundRuns.length + input.projection.agents.length + input.projection.projectCommands.length : 0;
     return {
         nothingYet: input.projection !== null && input.transcriptLoaded && itemCount === 0
-            && !managedLoading && !managedUnavailable && !input.managedRuns?.refreshFailed,
-        holdWorkingPlace: managedLoading && itemCount === 0,
+            && !managedLoading && !archivedLoading && !managedUnavailable && !input.managedRuns?.refreshFailed,
+        holdWorkingPlace: (managedLoading || archivedLoading) && itemCount === 0,
         managedUnavailable,
     };
 }

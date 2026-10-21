@@ -19,7 +19,7 @@ export function useSessionArchivedReports(params: Readonly<{
     sessionId: string;
     serverId: string | null;
     enabled: boolean;
-}>): void {
+}>): Readonly<{ loading: boolean }> {
     const serverId = params.serverId?.trim() ?? '';
     const active = params.enabled && serverId !== '';
     const homeIds = React.useMemo(() => [serverId], [serverId]);
@@ -40,4 +40,8 @@ export function useSessionArchivedReports(params: Readonly<{
     React.useEffect(() => {
         if (cursor) fireAndForget(query.loadNext(), { tag: 'SessionWork.archivedReports.loadNext' });
     }, [cursor, query]);
+    // Until the first answer (the Home's support, then the query's first page), the pane cannot say whether
+    // this Session ever led anything. A Home that answers "no", or a query that settled, ends the wait.
+    const settled = state !== undefined && state.phase !== 'idle' && state.phase !== 'loading';
+    return { loading: active && support[serverId] !== false && !settled };
 }
