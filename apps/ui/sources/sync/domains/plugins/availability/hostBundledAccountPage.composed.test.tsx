@@ -2,6 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
 import * as canonicalDigest from '@happier-dev/protocol/crypto/canonicalDigest';
+import { PluginJsonSchemaV2Schema } from '@happier-dev/protocol/plugins/contributions/public-types';
 import { PluginAccountAvailabilityIntentReadResponseV1Schema, PluginPortableReleaseManifestV1Schema } from '@happier-dev/protocol/plugins/availability';
 import { PluginUiArtifactsManifestEntryV2Schema } from '@happier-dev/protocol/plugins/ui';
 import { projectPluginPortableUiDeclarationsV1 } from '@happier-dev/protocol/plugins/contributions/ui';
@@ -363,6 +364,30 @@ it('reuses bundled digests through current mounted admission while checking ever
     } finally { vi.useRealTimers(); controller.dispose(); }
 });
 
+it('reuses prepared Account target semantics across unchanged mounted contribution reads', async () => {
+    await account.restore({ machines: [], features: enabledPluginFeatures });
+    const lifetime = captureActiveServerAccountScopeLifetime()!;
+    replacePluginAccountAvailabilityProjection({ scope: lifetime.scope, snapshot: {
+        availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [],
+    } });
+    const { readPluginAccountAvailability, retirePluginAccountAvailabilityProjection } = await import('./projection');
+    const { readMountedAccountTargetedContributions } = await import('@/components/plugins/surfaces/mountedAccountTargetedContributions');
+    const availability = readPluginAccountAvailability(lifetime.scope);
+    const selected = availability.readCurrentAccountExecution('happier.fixture');
+    if (selected.kind !== 'available') throw new Error('Expected current Account target');
+    const read = () => readMountedAccountTargetedContributions({ pluginId: 'happier.fixture',
+        origin: { ...lifetime.scope, custodyId: selected.custodyId, sourceCustody: selected.sourceCustody,
+            declarationDigest: availability.readBundledAccountDeclarationDigest('happier.fixture')! },
+        accountLifetime: lifetime, signal: new AbortController().signal, isCurrent: lifetime.isCurrent });
+    expect((await read()).targetedSurfaceMounts).toHaveLength(1);
+    const schemaParses = vi.spyOn(PluginJsonSchemaV2Schema, 'safeParse');
+    onTestFinished(() => schemaParses.mockRestore());
+    for (let index = 0; index < 100; index += 1) expect((await read()).targetedSurfaceMounts).toHaveLength(1);
+    expect(schemaParses).not.toHaveBeenCalled();
+    retirePluginAccountAvailabilityProjection(['happier.fixture']);
+    await expect(read()).rejects.toMatchObject({ code: 'plugin_action_generation_retired' });
+});
+
 it.each([
     ['qualified with Machine', true, 'qualified'], ['qualified no Machine', false, 'qualified'], ['bare local no Machine', false, 'bare'],
     ['bare host Action precedence', false, 'host'], ['explicit local host-name no Machine', false, 'explicit'],
@@ -463,8 +488,9 @@ it.each([
     } finally { await screen.unmount(); }
 });
 
-it('invokes an Account Action from the real mounted Account page without a Machine', async () => {
-    await account.restore({ machines: [], features: enabledPluginFeatures, serverIdentityId: 'srv_account_page_execution' });
+it.each([false, true])('invokes an Account Action from the real mounted Account page with unavailable Machine presence: %s', async hasOfflineMachine => {
+    await account.restore({ machines: hasOfflineMachine ? [createMachineFixture({ id: 'offline-account-neighbor',
+        active: false, activeAt: 0 })] : [], features: enabledPluginFeatures, serverIdentityId: 'srv_account_page_execution' });
     const scope = storage.getState().profileScope!;
     replacePluginAccountAvailabilityProjection({ scope, snapshot: {
         availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [],
