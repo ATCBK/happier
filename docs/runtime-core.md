@@ -1516,6 +1516,12 @@ The [input consumer](../apps/cli/src/agent/runtime/session/input/sessionProvider
 
 In 0.3 development, a missing launchable Agent CLI carries `agent_cli_missing` from both the command/terminal launch owner and the native plugin system-tool binding. Startup sanitization preserves that code; the primary Session issue classifier projects `dependency_failure` with static installation/path remediation. It does not expose raw startup error text or infer acceptance from a failed prerequisite.
 
+The same closed startup-diagnostic owner preserves
+`plugin_services_managed_provider_authority_unavailable` in the existing primary
+Session issue and public status. Its fixed preview directs the reader to check
+the Gateway and its Machine connection before retrying; private authority or
+lease details never become the public error message.
+
 System-tool grants pin the selected absolute executable and captured arguments;
 they do not clear the inherited host `PATH` used by an Agent's descendants.
 The Agent binding's empty lookup `PATH` prevents a second executable selection,
@@ -2163,6 +2169,14 @@ Recipient, missing, malformed or retired callers refuse; they never borrow the
 Machine custodian's Account. Shared requester execution uses its own admitted
 per-Session requester Home and protected credential custody. This owner-only
 guard is not that shared execution channel or loaded-runtime certification.
+
+Native MCP discovery and Account Actions use the admitted operation's existing
+Account currentness check. Requester credentials come from protected Session
+custody and are not compared with the Machine profile's `access.key`. The
+bridge carries this same check into its Account, Follow and plugin Action
+owners; retirement still refuses subsequent calls. Callers without captured
+Account custody retain the profile credential check. This is development-source
+behavior and requires a freshly loaded runner for live validation.
 
 Retained requester Settings use the existing Account/Home user socket for both
 Session and finite custody. The Settings publication owner applies envelopes to
