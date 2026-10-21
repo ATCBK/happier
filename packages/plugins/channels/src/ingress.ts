@@ -66,6 +66,7 @@ import {
   ConversationProviderAutomationEventAdmitResultV1Schema,
   type ConversationProviderObservationIngestInputV1,
   ConversationProviderObservationIngestInputV1Schema,
+  getConversationAttachmentIdRepresentationsV1,
 } from '@happier-dev/channels-protocol/v1';
 
 import {
@@ -1373,6 +1374,25 @@ function ingressReplayEvidence<T extends ConversationNormalizedIngressV1>(input:
     : { ...input, shell: { ...input.shell, endpoint: withoutEndpointDisplayLabels(input.shell.endpoint) } };
 }
 
+function ingressAttachmentsWithRepresentation(
+  attachments: ConversationObservationV1['message']['attachments'],
+  representation: 'canonical' | 'native',
+): ConversationObservationV1['message']['attachments'] {
+  return attachments?.map(attachment => {
+    const ids = getConversationAttachmentIdRepresentationsV1(attachment.attachmentId);
+    return { ...attachment, attachmentId: representation === 'canonical' ? ids[0] : ids.at(-1)! };
+  });
+}
+
+function canonicalIngressReplayEvidence(input: ConversationNormalizedIngressV1): ConversationNormalizedIngressV1 {
+  const evidence = ingressReplayEvidence(input);
+  if (evidence.kind !== 'fullText' || evidence.observation.message.attachments === undefined) return evidence;
+  return { ...evidence, observation: { ...evidence.observation, message: {
+    ...evidence.observation.message,
+    attachments: ingressAttachmentsWithRepresentation(evidence.observation.message.attachments, 'canonical'),
+  } } };
+}
+
 /**
  * A compacted census answers both arms from the retained envelope: exact
  * re-delivery adds the keyed replay digest to the structural shell comparison,
@@ -1390,19 +1410,30 @@ async function immutableIngressMatches(
   const compacted = census.compacted;
   if (compacted === null) {
     if (
-      pluginJsonValuesEqual(ingressReplayEvidence(census.normalizedIngress), ingressReplayEvidence(normalized))
-      && pluginJsonValuesEqual(census.eventCandidate, input.eventCandidate)
+      pluginJsonValuesEqual(census.eventCandidate, input.eventCandidate)
+      && (
+        pluginJsonValuesEqual(ingressReplayEvidence(census.normalizedIngress), ingressReplayEvidence(normalized))
+        || pluginJsonValuesEqual(canonicalIngressReplayEvidence(census.normalizedIngress), canonicalIngressReplayEvidence(normalized))
+      )
     ) return true;
   } else if (
     normalized.kind === 'fullText'
     && pluginJsonValuesEqual(censusIngressShell(census), ingressShell(normalized))
-    && await deriveIngressCensusReplayDigest({
-      routingIdentityKey,
-      text: normalized.observation.message.text,
-      attachments: normalized.observation.message.attachments,
-      eventCandidate: input.eventCandidate,
-    }) === compacted.replayDigest
-  ) return true;
+  ) {
+    const attachments = normalized.observation.message.attachments;
+    // Historical Email producers encoded a whole attachment list uniformly.
+    // Try those two exact representations, never per-file combinations or a
+    // comparison that drops IDs or any other descriptor/content evidence.
+    const variants = [attachments,
+      ingressAttachmentsWithRepresentation(attachments, 'canonical'),
+      ingressAttachmentsWithRepresentation(attachments, 'native')];
+    for (const [index, variant] of variants.entries()) {
+      if (variants.slice(0, index).some(previous => pluginJsonValuesEqual(previous ?? null, variant ?? null))) continue;
+      if (await deriveIngressCensusReplayDigest({ routingIdentityKey,
+        text: normalized.observation.message.text, attachments: variant, eventCandidate: input.eventCandidate,
+      }) === compacted.replayDigest) return true;
+    }
+  }
   // Only a full-text admission can be superseded by an unsupported edit, and
   // only a full-text admission is ever compacted.
   if (

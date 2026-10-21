@@ -7,6 +7,7 @@ export {
 export {
     createConversationAttachmentIdV1,
     readConversationAttachmentIdV1,
+    getConversationAttachmentIdRepresentationsV1,
     encodeConversationAttachmentBytesV1,
     ConversationMessageAttachmentV1Schema,
     ConversationMessageAttachmentV1JsonSchema,

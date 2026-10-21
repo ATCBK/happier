@@ -36,6 +36,9 @@ import {
   resolveSessionPullRequestLinksV1,
 } from '@happier-dev/channels-protocol/v1';
 import { describe, expect, it, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { simpleParser } from 'mailparser';
+import { createConversationAttachmentIdV1 } from '@happier-dev/channels-protocol/v1';
 
 import {
   createIngressCensusValue,
@@ -6154,6 +6157,69 @@ pairingRequestId: 'pairing-request-1',
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it.each([
+    { compacted: false, historicalFirst: true, change: null },
+    { compacted: false, historicalFirst: false, change: null },
+    { compacted: true, historicalFirst: true, change: null },
+    { compacted: true, historicalFirst: false, change: null },
+    ...[false, true].flatMap(compacted => (['part', 'name', 'length'] as const).map(change => ({ compacted, historicalFirst: true, change }))),
+  ])('compares retained native Email attachment evidence across the codec transition: %j', async ({ compacted, historicalFirst, change }) => {
+    // Mailparser's stream scheduler uses real process ticks; freeze only the
+    // ingress owner's clock after the native-message boundary has completed.
+    const mail = await simpleParser(await readFile(new URL('../../channel-email/src/email/fixtures/seed1-forwarded-attachments.eml', import.meta.url)),
+      { skipImageLinks: true, skipHtmlToText: true, skipTextToHtml: true });
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    try {
+      // Real retained seed1 message #3. The historical descriptor formula is
+      // pinned to dd247000f8adde414c43ff0831ce4fb4e54bfe4f^ parseEmail.
+      const native = mail.attachments.map((attachment, index) => ({
+        attachmentId: `mime:${attachment.partId ?? index + 1}`, name: attachment.filename ?? `attachment-${index + 1}`,
+        mediaType: attachment.contentType, byteLength: attachment.content.length,
+      }));
+      expect(native).toEqual([{ attachmentId: 'mime:3', name: 'qa-live13-lead.pdf', mediaType: 'application/pdf', byteLength: 619 }]);
+      const portable = native.map(attachment => ({ ...attachment,
+        attachmentId: createConversationAttachmentIdV1('email', [attachment.attachmentId]),
+      }));
+      const original = observation({ messageRevision: 'retained-email:1', occurredAt: 1_000 });
+      const stored = ConversationProviderObservationIngestInputV1Schema.parse({ ...original, entry: { ...original.entry,
+        observation: { kind: 'fullText', observation: { ...fullTextIngress(original), message: {
+          ...fullTextIngress(original).message, attachments: historicalFirst ? native : portable,
+        } } } } });
+      const incomingAttachments = (historicalFirst ? portable : native).map(attachment => ({ ...attachment,
+        ...(change === 'part' ? { attachmentId: createConversationAttachmentIdV1('email', ['mime:4']) } : {}),
+        ...(change === 'name' ? { name: 'different.pdf' } : {}),
+        ...(change === 'length' ? { byteLength: attachment.byteLength + 1 } : {}),
+      }));
+      const incoming = ConversationProviderObservationIngestInputV1Schema.parse({ ...original, entry: { ...original.entry,
+        observation: { kind: 'fullText', observation: { ...fullTextIngress(original), message: {
+          ...fullTextIngress(original).message, attachments: incomingAttachments,
+        } } } } });
+      const harness = createIngressHarness();
+      const connection = channelConnection();
+      const censusId = await deriveIngressCensusRowId({ routingIdentityKey: connection.payload.routingIdentityKey,
+        connectionId: connection.id, occurrenceId: fullTextIngress(original).occurrenceId });
+      const value = createIngressCensusValue({ censusId, connectionId: connection.id, ingress: stored.entry.observation,
+        connectionAuthorityEpoch: connection.payload.authorityEpoch, maximumObservationAgeMs: 60_000,
+        matchedBindings: [], now: 1_000 });
+      harness.rows.set(censusId, stateRow({ ...value, payload: { ...record(value.payload), phase: 'prepared' } }));
+      if (compacted) {
+        await expect(runConversationIngressRetentionForInvocation({ now: 2_000, limit: 1 }, harness.context))
+          .resolves.toMatchObject({ compactedCensuses: 1 });
+        expect(record(harness.rows.get(censusId)?.value.payload).normalizedIngress).toBeNull();
+      }
+      const replay = ingestConversationProviderObservationForInvocation(incoming, harness.context);
+      if (change === null) {
+        await expect(replay).resolves.toBeUndefined();
+        expect(harness.rows.get(censusId)?.value.attention).toBe(false);
+      } else {
+        await expect(replay).rejects.toMatchObject({ code: 'channels_ingress_occurrence_conflict' });
+        expect(harness.rows.get(censusId)?.value.attention).toBe(true);
+      }
+      expect(harness.send).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
   });
 
   it('compacts a settled census in place, then still decides replay equality without its message body', async () => {

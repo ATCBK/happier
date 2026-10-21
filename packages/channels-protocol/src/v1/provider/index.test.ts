@@ -85,6 +85,7 @@ describe('Channels V1 provider barrel', () => {
             'compareCanonicalConversationResolutionCandidatesV1',
             'createConversationAttachmentIdV1',
             'encodeConversationAttachmentBytesV1',
+            'getConversationAttachmentIdRepresentationsV1',
             'hasCanonicalConversationResolutionCandidateOrderV1',
             'hasCurrentConversationProviderConnectionV1',
             'readConversationAttachmentIdV1',

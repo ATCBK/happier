@@ -31,6 +31,20 @@ export function readConversationAttachmentIdV1(value: string, providerId: string
     } catch { return null; }
 }
 
+/**
+ * dd247000f8 changed Email's slash-joined MIME part paths to the portable
+ * codec without changing native identity. Retained censuses (including keyed
+ * replay digests) and pending inputs can contain either representation.
+ * Keep the part sequence exact; never alias arbitrary provider-native refs.
+ */
+export function getConversationAttachmentIdRepresentationsV1(value: string): readonly [string, ...string[]] {
+    const decoded = readConversationAttachmentIdV1(value, 'email');
+    const parts = decoded ?? value.split('/');
+    if (parts.length === 0 || !parts.every((part): part is string =>
+        typeof part === 'string' && /^mime:[0-9]+(?:\.[0-9]+)*$/.test(part))) return [value];
+    return [createConversationAttachmentIdV1('email', parts), parts.join('/')];
+}
+
 /** The existing fetch wire carries padded base64, independently of descriptor identities. */
 export function encodeConversationAttachmentBytesV1(bytes: Uint8Array): string {
     return encodeBase64(bytes);

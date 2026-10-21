@@ -1,5 +1,6 @@
+import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import { readConversationAttachmentIdV1 } from '@happier-dev/channels-protocol/v1';
+import { getConversationAttachmentIdRepresentationsV1, readConversationAttachmentIdV1 } from '@happier-dev/channels-protocol/v1';
 import { simpleParser } from 'mailparser';
 import { assertEmailTransportContributionV1 } from '@happier-dev/email-transports-protocol/testing/v1';
 import { definePlugin, type JsonValue, type PluginInvocationContext, type PluginServices, type TargetedContributionPointRef, type TargetedContributionSnapshot } from '@happier-dev/plugin-sdk';
@@ -153,6 +154,36 @@ const delivery = { ...connection, endpoint: thread, content: { text: 'Reply' }, 
   replyContext: { replyToMessageId: '<incoming@example.com>' }, mentionPolicy: 'suppress', linkPreviewPolicy: 'providerDefault' };
 
 describe('email core with an external contributed raw transport', () => {
+  it('keeps retained seed1 attachment evidence stable across the portable attachment codec extraction', async () => {
+    // Original retained harness 3-wilson.eml, read-only from nl3 on 2026-10-21.
+    // Store with LF; reconstruct its original RFC5322 CRLF bytes at the boundary.
+    const raw = Buffer.from((await readFile(new URL('./email/fixtures/seed1-forwarded-attachments.eml', import.meta.url), 'utf8')).replace(/\r?\n/g, '\r\n'));
+    const native = await simpleParser(raw, { skipImageLinks: true, skipHtmlToText: true, skipTextToHtml: true });
+    // Exact pre-change derivation: dd247000f8^:channel-email/src/email/parse.ts.
+    // mailparser flattens this 8bit inline message/rfc822; only its PDF is
+    // returned as a file, under the native third MIME part.
+    const retained = native.attachments.map((file, index) => ({
+      attachmentId: `mime:${file.partId ?? index + 1}`,
+      name: file.filename!, mediaType: file.contentType, byteLength: file.content.byteLength,
+    }));
+    expect(retained.map(file => file.attachmentId)).toEqual(['mime:3']);
+    const f = await fixture();
+    try {
+      f.setMessages([['retained-seed1', raw]]);
+      const polled = ConversationPollResultV1Schema.parse(await f.invoke(ids.observationsPoll, {
+        ...connection, providerConnectionKey: 'email:wilson@test.local',
+        providerConfig: { ...config, mailbox: 'wilson@test.local', allowedDomains: ['test.local'],
+          trustStrategy: { kind: 'authenticationResults', authservId: 'mx.seed1.test.local' } },
+        checkpoint: null, limit: 10, waitMs: 0,
+      }));
+      expect(polled).toMatchObject({ kind: 'batch', observations: [{ observation: { kind: 'fullText', observation: {
+        message: { id: native.messageId, attachments: retained.map(file => ({
+          ...file, attachmentId: getConversationAttachmentIdRepresentationsV1(file.attachmentId)[0],
+        })) },
+      } } }] });
+    } finally { await f.dispose(); }
+  });
+
   it.each([false, true])('keeps immutable occurrence times across later polls (Date header: %s)', async withDate => {
     const f = await fixture();
     try {

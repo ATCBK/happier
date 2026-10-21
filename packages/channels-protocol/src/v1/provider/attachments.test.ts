@@ -3,9 +3,26 @@ import {
     createConversationAttachmentIdV1,
     encodeConversationAttachmentBytesV1,
     readConversationAttachmentIdV1,
+    getConversationAttachmentIdRepresentationsV1,
 } from './attachments.js';
 
 describe('portable provider attachment identity', () => {
+    it('recognizes only equivalent retained Email MIME paths in either encoding', () => {
+        const native = 'mime:2/mime:3.1';
+        const portable = createConversationAttachmentIdV1('email', ['mime:2', 'mime:3.1']);
+        expect(getConversationAttachmentIdRepresentationsV1(native)).toEqual([portable, native]);
+        expect(getConversationAttachmentIdRepresentationsV1(portable)).toEqual([portable, native]);
+        for (const id of ['mime:2/', 'mime:2//mime:3', 'mime:2/../mime:3',
+            createConversationAttachmentIdV1('email', []),
+            createConversationAttachmentIdV1('email', ['mime:2/mime:3']),
+            createConversationAttachmentIdV1('email', ['mime:2', null]),
+            createConversationAttachmentIdV1('telegram', ['mime:2'])]) {
+            expect(getConversationAttachmentIdRepresentationsV1(id)).toEqual([id]);
+        }
+        expect(getConversationAttachmentIdRepresentationsV1('mime:2')).not.toEqual(
+            getConversationAttachmentIdRepresentationsV1('mime:3'));
+    });
+
     it('preserves Unicode and delimiter-bearing native identities without a Node global', () => {
         vi.stubGlobal('Buffer', undefined);
         try {

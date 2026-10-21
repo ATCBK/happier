@@ -1,0 +1,46 @@
+Authentication-Results: mx.seed1.test.local; dmarc=pass header.from=test.local
+From: sales1@test.local
+To: wilson@test.local
+Subject: Fwd: qa-live13-forwarded-attachments
+Message-ID: <qa-live13-forwarded-attachments@test.local>
+Date: Mon, 19 Oct 2026 20:41:51 +0000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="--_NmP-839c668a4a25df2a-Part_1"
+
+----_NmP-839c668a4a25df2a-Part_1
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+Transfert de prospect QA LIVE13. Lis le texte d=C3=A9j=C3=A0 =
+int=C3=A9gr=C3=A9 des deux pi=C3=A8ces jointes et r=C3=A9ponds =
+bri=C3=A8vement sans outil.
+----_NmP-839c668a4a25df2a-Part_1
+Content-Type: message/rfc822; name=qa-live13-lead.eml
+Content-Transfer-Encoding: 8bit
+Content-Disposition: inline; filename=qa-live13-lead.eml
+
+From: client@example.invalid
+To: sales1@test.local
+Subject: QA LIVE13 lead
+Message-ID: <qa-live13-inner@example.invalid>
+Content-Type: text/plain; charset=utf-8
+
+Atelier Delta souhaite six chaises ergonomiques.
+
+----_NmP-839c668a4a25df2a-Part_1
+Content-Type: application/pdf; name=qa-live13-lead.pdf
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename=qa-live13-lead.pdf
+
+JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2Jq
+CjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2Jq
+CjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA1MDAg
+MTIwXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA0IDAgUiA+PiA+PiAvQ29udGVudHMgNSAw
+IFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNl
+Rm9udCAvSGVsdmV0aWNhID4+CmVuZG9iago1IDAgb2JqCjw8IC9MZW5ndGggNzUgPj4Kc3RyZWFt
+CkJUIC9GMSAxMiBUZiAzMCA4MCBUZCAoUUEgTElWRTEzIFBERjogbGVhZCBidXJlYXUsIGJlc29p
+biA2IGNoYWlzZXMuKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCnhyZWYKMCA2CjAwMDAwMDAwMDAg
+NjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDU4IDAwMDAwIG4gCjAwMDAwMDAx
+MTUgMDAwMDAgbiAKMDAwMDAwMDI0MSAwMDAwMCBuIAowMDAwMDAwMzExIDAwMDAwIG4gCnRyYWls
+ZXIKPDwgL1NpemUgNiAvUm9vdCAxIDAgUiA+PgpzdGFydHhyZWYKNDM2CiUlRU9GCg==
+----_NmP-839c668a4a25df2a-Part_1--
