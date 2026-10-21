@@ -34,7 +34,7 @@ import tweetnacl from 'tweetnacl';
 import { createDaemonMachineIrohRuntime } from '@/daemon/peer/iroh/daemonMachineIrohRuntime';
 import { createProviderBrokerMachineCarrierTunnelOpen } from '@/daemon/peer/iroh/providerBrokerMachineCarrierTunnelOpen';
 import { startPeerMediationLoopbackServer } from '@/daemon/peer/mediation/loopback/server';
-import { openAccountConnectionProviderBrokerAccess } from '@/providers/broker/accountConnectionClient';
+import { openAccountConnectionProviderBrokerAccess, readAccountConnectionProviderBrokerFailureDiagnostic } from '@/providers/broker/accountConnectionClient';
 import { startDaemonProviderBrokerRuntime } from '@/providers/broker/daemonProviderBrokerRuntime';
 import { createTeamCredentialBrokerSourceOwner } from '@/providers/broker/teamCredentialBrokerSourceOwner';
 
@@ -234,6 +234,7 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
                 });
                 consumerScope.register(broker.close);
                 let forwarding = true;
+                let refreshAllowed = true;
                 const admission = await startPeerMediationLoopbackServer({ nowMs: Date.now,
                   expected: { accountId: 'account', machineId: hubMachineId, flowKind: 'machine_rpc',
                     routeKind: 'loopback_direct', endpointFingerprint: hub.endpoint.endpointId },
@@ -253,6 +254,7 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
                   // Home signing/admission are the network boundary. Exact
                   // route verification, native carrier and hub custody stay real.
                   openBroker: async request => {
+                    if (request.refreshAuthority && !refreshAllowed) return { ok: false, reasonCode: 'broker_unavailable' };
                     const issuedAt = Date.now();
                     const payload = { v: 2 as const, grantId: 'peer-grant', aud: 'happier-provider-broker-route-v2' as const,
                       issuedAt, expiresAt: issuedAt + DIRECT_ROUTE_GRANT_TTL_MS.directTcpTunnel,
@@ -271,9 +273,28 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
                   openTunnel: createProviderBrokerMachineCarrierTunnelOpen({ homeId: 'home', accountId: 'account',
                     localMachineId: peerMachineId, runtime: worker, resolveTrustRoots: () => trustRoots }),
                 });
-                forwarding = false;
-                await expect(openPeer()).rejects.toBeDefined();
-                forwarding = true;
+                const brokerWarnings = vi.spyOn(logger, 'warnLocalFile');
+                try {
+                  refreshAllowed = false;
+                  const refreshRefusal = await openPeer().then(() => { throw new Error('Expected refresh refusal'); }, (error: unknown) => error);
+                  expect(readAccountConnectionProviderBrokerFailureDiagnostic(refreshRefusal)).toEqual({
+                    reason: 'endpoint_discovery_failed', discoveryCause: 'broker_refresh_refused',
+                  });
+                  expect(brokerWarnings.mock.calls.filter(([label]) => label === '[ProviderBroker] Machine stream admission refused')).toEqual([]);
+                  refreshAllowed = true;
+                  forwarding = false;
+                  const refusal = await openPeer().then(() => { throw new Error('Expected peer refusal'); }, (error: unknown) => error);
+                  expect(readAccountConnectionProviderBrokerFailureDiagnostic(refusal)).toEqual({
+                    reason: 'endpoint_discovery_failed', discoveryCause: 'socket_closed',
+                  });
+                  expect(brokerWarnings.mock.calls).toContainEqual([
+                    '[ProviderBroker] Machine stream admission refused', { reason: 'target_unavailable' },
+                  ]);
+                } finally {
+                  brokerWarnings.mockRestore();
+                  forwarding = true;
+                  refreshAllowed = true;
+                }
                 const remote = await openPeer();
                 consumerScope.register(remote.cleanup);
                 const remoteBinding = await remote.readHttpBinding();

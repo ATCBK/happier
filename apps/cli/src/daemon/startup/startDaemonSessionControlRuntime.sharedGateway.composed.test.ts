@@ -210,12 +210,12 @@ it.each([
         });
         for (const kind of ['runner_managed_provider_start_refused', 'runner_plugin_services_dispatch_refused']) {
           expect.soft(records.filter(record => record.kind === kind)).toContainEqual(expect.objectContaining({ kind, reason: failureReason,
-            ...(failureReason === 'endpoint_discovery_failed' ? { httpStatus: 403 } : {}),
+            ...(failureReason === 'endpoint_discovery_failed' ? { httpStatus: 403, discoveryCause: 'http_response' } : {}),
           }));
         }
         expect(warning.mock.calls.filter(([label]) => label === '[ProviderBroker] Account connection open refused')).toEqual([
           ['[ProviderBroker] Account connection open refused', { reason: failureReason,
-            ...(failureReason === 'endpoint_discovery_failed' ? { httpStatus: 403 } : {}),
+            ...(failureReason === 'endpoint_discovery_failed' ? { httpStatus: 403, discoveryCause: 'http_response' } : {}),
           }],
         ]);
         expect(JSON.stringify(records)).not.toContain('do-not-log');

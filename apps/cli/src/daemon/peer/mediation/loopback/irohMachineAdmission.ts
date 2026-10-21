@@ -22,6 +22,7 @@ import {
   providerBrokerRouteGrantExpectedBindingV2,
 } from '../verifyProviderBrokerRouteGrantV1';
 import type { DirectRouteGrantTrustRoot } from '../verifyDirectRouteGrant';
+import { logger } from '@/ui/logger';
 import {
   isFirstBytesLocalCapability,
   startFirstBytesLocalCapabilityProxy,
@@ -127,6 +128,16 @@ export function registerPeerMediationIrohMachineAdmissionRoute(
   });
   const remoteEndpointHeaderName = IROH_MACHINE_REMOTE_ENDPOINT_HEADER.toLowerCase();
   app.post(IROH_MACHINE_ADMISSION_PATH, async (request, reply) => {
+    const parsedProviderBrokerHandshake = IrohProviderBrokerHandshakeSchema.safeParse(request.body);
+    const isProviderBroker = parsedProviderBrokerHandshake.success;
+    const refuse = (reason: 'transport_identity_invalid' | 'resolver_unavailable' | 'binding_invalid'
+      | 'grant_invalid' | 'target_unavailable' | 'target_failed' | 'request_aborted') => {
+      if (isProviderBroker) {
+        try { logger.warnLocalFile('[ProviderBroker] Machine stream admission refused', { reason }); }
+        catch { /* Preserve the admission refusal if logging is unavailable. */ }
+      }
+      return reply.code(IROH_MACHINE_ADMISSION_REJECT_STATUS).send();
+    };
     // The Iroh transport supplies exactly one authenticated remote EndpointId. Node folds
     // duplicate header lines into one comma-separated value, which the strict endpoint
     // grammar (single 32-byte identity) rejects together with empty/malformed values.
@@ -138,28 +149,28 @@ export function registerPeerMediationIrohMachineAdmissionRoute(
       ? headerValues[0]
       : undefined;
     if (authenticatedRemoteEndpointId === undefined) {
-      return reply.code(IROH_MACHINE_ADMISSION_REJECT_STATUS).send();
+      return refuse('transport_identity_invalid');
     }
 
     // The canonical handshake schema is the single wire definition; parsing it here gates
     // the admitted operation flow. The pure verifier below re-validates the same body
     // through that one schema, so there is no second handshake parser or grant verifier.
     const parsedHandshake = IrohMachineHandshakeV1Schema.safeParse(request.body);
-    const parsedProviderBrokerHandshake = IrohProviderBrokerHandshakeSchema.safeParse(request.body);
     const parsedRunnerReadiness = RunnerBrokerReadinessRequestV1Schema.safeParse(request.body);
-    const isProviderBroker = parsedProviderBrokerHandshake.success;
     if (
       (!parsedHandshake.success || !options.admission.allowedFlows.includes(parsedHandshake.data.flow))
       && (!isProviderBroker || options.admission.resolveProviderBrokerApplicationTarget === undefined)
       && (!parsedRunnerReadiness.success || options.admission.resolveRunnerBrokerReadinessApplicationTarget === undefined)
-    ) return reply.code(IROH_MACHINE_ADMISSION_REJECT_STATUS).send();
+    ) return refuse('resolver_unavailable');
 
     // Authorization stays purpose-owned below. Once verified, every purpose
     // shares the same target validation and cancellation-through-reply custody.
+    let admissionSignal: AbortSignal | undefined;
     const admitApplicationTarget = (
       resolveTarget: (signal: AbortSignal) => ReturnType<PeerMediationLoopbackIrohMachineAdmissionOptions['resolveApplicationTarget']>,
       finiteTransfer = false,
     ) => resolveWhileAdmissionRequestIsOpen(request, async (signal) => {
+      admissionSignal = signal;
       const target = await resolveTarget(signal);
       if (
         !target
@@ -168,7 +179,7 @@ export function registerPeerMediationIrohMachineAdmissionRoute(
         || target.port > 65_535
         || (finiteTransfer && target.localCapability !== undefined)
         || (target.localCapability !== undefined && !isFirstBytesLocalCapability(target.localCapability))
-      ) return reply.code(IROH_MACHINE_ADMISSION_REJECT_STATUS).send();
+      ) return refuse('target_unavailable');
       let applicationTarget = target;
       if (!finiteTransfer && applicationTarget.localCapability === undefined) {
         const proxy = await startFirstBytesLocalCapabilityProxy({
@@ -199,7 +210,7 @@ export function registerPeerMediationIrohMachineAdmissionRoute(
           || readiness.initiator.endpointId !== authenticatedRemoteEndpointId
           || readiness.target.machineId !== options.machineId
           || readiness.target.endpointId !== options.admission.localEndpointId
-        ) return reply.code(IROH_MACHINE_ADMISSION_REJECT_STATUS).send();
+        ) return refuse('binding_invalid');
         return await admitApplicationTarget((signal) => (
           options.admission.resolveRunnerBrokerReadinessApplicationTarget!({
             request: readiness,
@@ -221,7 +232,7 @@ export function registerPeerMediationIrohMachineAdmissionRoute(
           || providerHandshake.authority.payload.target.machineId !== options.machineId
           || providerHandshake.authority.payload.target.endpointId !== options.admission.localEndpointId
           || providerHandshake.authority.payload.initiator.endpointId !== authenticatedRemoteEndpointId
-        ) return reply.code(IROH_MACHINE_ADMISSION_REJECT_STATUS).send();
+        ) return refuse('binding_invalid');
         // The machine/1 transport identity check above is necessary but not
         // sufficient: the Home-signed cross-account authority must also be
         // authentic and bound to this exact transport. Reuse the broker grant
@@ -245,7 +256,7 @@ export function registerPeerMediationIrohMachineAdmissionRoute(
           expected: providerBrokerRouteGrantExpectedBindingV1(providerHandshake.authority),
           authenticatedRemoteEndpointId,
         });
-        if (!verification.valid) return reply.code(IROH_MACHINE_ADMISSION_REJECT_STATUS).send();
+        if (!verification.valid) return refuse('grant_invalid');
         return await admitApplicationTarget((signal) => (
           options.admission.resolveProviderBrokerApplicationTarget!({
             handshake: providerHandshake,
@@ -273,8 +284,9 @@ export function registerPeerMediationIrohMachineAdmissionRoute(
           signal,
         })
       ), verified.handshake.flow === 'finite_transfer');
-    } catch {
-      return reply.code(IROH_MACHINE_ADMISSION_REJECT_STATUS).send();
+    } catch (error) {
+      return refuse(admissionSignal?.aborted || error instanceof Error && error.name === 'AbortError'
+        ? 'request_aborted' : 'target_failed');
     }
   });
 }

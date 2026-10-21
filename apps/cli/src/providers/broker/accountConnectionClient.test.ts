@@ -5,7 +5,7 @@ import tweetnacl from 'tweetnacl';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 import { createProviderBrokerRouteGrantSigningInputV2, type ProviderBrokerAccountOpenResponseV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { createProviderBrokerMachineCarrierTunnelOpen } from '@/daemon/peer/iroh/providerBrokerMachineCarrierTunnelOpen';
-import { openAccountConnectionProviderBrokerAccess } from './accountConnectionClient';
+import { openAccountConnectionProviderBrokerAccess, readAccountConnectionProviderBrokerFailureDiagnostic } from './accountConnectionClient';
 import { logger } from '@/ui/logger';
 import { ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
 const capturedFacts = { expectedConnectionSecurityFingerprint: 'connection-security:v1:test',
@@ -20,6 +20,10 @@ describe('personal connection broker consumer', () => {
     ['tunnel_open_failed', undefined, 'ordinary'],
     ['endpoint_discovery_failed', 403, 'ordinary'],
     ['endpoint_discovery_failed', 204, 'ordinary'],
+    ['endpoint_discovery_failed', undefined, 'socket'],
+    ['endpoint_discovery_failed', undefined, 'timeout'],
+    ['endpoint_discovery_failed', undefined, 'abort'],
+    ['endpoint_discovery_failed', undefined, 'unknown'],
   ] as const)('logs the private %s branch (HTTP %s, %s) without disclosing broker material', async (reason, httpStatus, variant) => {
     const connectionId = ProviderConnectionIdSchema.parse('gateway-1');
     const application = { agentTargetKey: 'backend:claude:built_in', protocol: 'anthropic',
@@ -42,13 +46,23 @@ describe('personal connection broker consumer', () => {
     let publishedClosed = false;
     let retirementAcknowledged = false;
     let nativeOpens = 0;
+    // A real closed HTTP connection reproduces c72's no-status discovery shape.
+    const discoveryServer = variant === 'socket' ? createServer((request) => request.socket.destroy()) : null;
+    let localPort = 43123;
+    if (discoveryServer) {
+      discoveryServer.listen(0, '127.0.0.1');
+      await once(discoveryServer, 'listening');
+      const address = discoveryServer.address();
+      if (!address || typeof address === 'string') throw new Error('Missing discovery listener');
+      localPort = address.port;
+    }
     // Home issuance/admission, native transport, and HTTP are system boundaries.
     // The signed binding verifier and Account broker consumer remain real.
     const openTunnel = createProviderBrokerMachineCarrierTunnelOpen({ homeId: 'home-1', accountId: 'account-1', localMachineId: 'worker-1',
       runtime: { endpoint: { endpointId: 'a'.repeat(64) }, openHttpTunnel: async () => {
         if (reason === 'tunnel_open_failed') throw new Error('synthetic-private-native-error?token=do-not-log');
         const first = nativeOpens++ === 0;
-        return { localPort: 43123, localCapability: 'c'.repeat(64), observedPath: 'unknown', remoteEndpointId: 'b'.repeat(64),
+        return { localPort, localCapability: 'c'.repeat(64), observedPath: 'unknown', remoteEndpointId: 'b'.repeat(64),
           close: async () => { if (first) publishedClosed = true; } };
       } }, resolveTrustRoots: () => [{ keyId: 'home', publicKey: Buffer.from(key.publicKey).toString('base64url') }], nowMs: () => 150,
       fetchImpl: async (_request, options) => {
@@ -64,15 +78,28 @@ describe('personal connection broker consumer', () => {
         openBroker: async () => reason === 'broker_open_refused' ? { ok: false, reasonCode: 'broker_unavailable' } : opened,
         admitConsumer: async () => reason !== 'admission_refused',
         openTunnel,
-        fetchImpl: async () => new Response(null, { status: httpStatus ?? 204,
-          headers: { 'x-happier-provider-endpoint-path': httpStatus === 204 ? 'https://private.example/?token=do-not-log' : '/' } }),
+        fetchImpl: async (request, options) => {
+          if (variant === 'socket') return await fetch(request, options);
+          if (variant === 'timeout') throw new DOMException('private-url?token=do-not-log', 'TimeoutError');
+          if (variant === 'abort') throw new DOMException('private-url?token=do-not-log', 'AbortError');
+          if (variant === 'unknown') throw Object.assign(new Error('private-url?token=do-not-log'), {
+            name: 'private-name-do-not-log', code: 'private-code-do-not-log',
+          });
+          return new Response(null, { status: httpStatus ?? 204,
+            headers: { 'x-happier-provider-endpoint-path': httpStatus === 204 ? 'https://private.example/?token=do-not-log' : '/' } });
+        },
       }).then(() => { throw new Error('Expected broker refusal'); }, (error: unknown) => error);
       // Tunnel exceptions retain their existing shape; diagnostics must not alter settlement.
       if (reason !== 'tunnel_open_failed' && variant !== 'signature') expect(ProviderErrorV1Schema.parse(error).code).toBe('provider_endpoint_unavailable');
       const records = warning.mock.calls.filter(([label]) => label === '[ProviderBroker] Account connection open refused');
-      expect(records).toEqual([['[ProviderBroker] Account connection open refused', {
+      const diagnostic = {
         reason, ...(httpStatus === undefined ? {} : { httpStatus }),
-      }]]);
+        ...(reason === 'endpoint_discovery_failed' ? { discoveryCause: variant === 'socket' ? 'socket_closed'
+          : variant === 'timeout' ? 'timeout' : variant === 'abort' ? 'aborted' : variant === 'unknown' ? 'transport_error'
+            : httpStatus === 204 ? 'invalid_metadata' : 'http_response' } : {}),
+      };
+      expect(records).toEqual([['[ProviderBroker] Account connection open refused', diagnostic]]);
+      expect(readAccountConnectionProviderBrokerFailureDiagnostic(error)).toEqual(diagnostic);
       const serialized = JSON.stringify(records);
       for (const privateValue of ['do-not-log', 'synthetic-private', 'home-1', 'account-1', 'gateway-1', 'worker-1', 'hub-1', 'a'.repeat(64), opened.authority.signature.valueBase64Url]) {
         expect(serialized).not.toContain(privateValue);
@@ -81,7 +108,10 @@ describe('personal connection broker consumer', () => {
         expect(publishedClosed).toBe(true);
         expect(retirementAcknowledged).toBe(true);
       }
-    } finally { warning.mockRestore(); }
+    } finally {
+      warning.mockRestore();
+      await new Promise<void>(resolve => discoveryServer ? discoveryServer.close(() => resolve()) : resolve());
+    }
   });
   it('withdraws the old bearer listener while remote retirement remains pending', async () => {
     const connectionId = ProviderConnectionIdSchema.parse('gateway-1');

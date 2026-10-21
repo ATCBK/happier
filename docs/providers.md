@@ -582,6 +582,21 @@ before returning the hub's response. The hub retains physical probe execution,
 its own grant checks and catalog ownership; the peer does not start a local
 Gateway or copy the hub's runtime catalog into its own cache.
 
+Session startup uses the authenticated native broker carrier rather than the
+probe's Machine RPC path. Opening its peer-local listener does not prove that
+the subsequent stream reached the hub application. In development source, the
+file-only `[ProviderBroker] Account connection open refused` record retains a
+bounded `discoveryCause` on endpoint-discovery failures and `httpStatus` only
+when HTTP responded. A failed per-stream Home grant refresh is retained as
+`broker_refresh_refused` before native transport can turn it into a closed
+socket. These facts also reach the existing runner dispatch
+refusal records. The hub's `[ProviderBroker] Machine stream admission refused`
+record distinguishes transport identity, binding, signature, unavailable
+resolver/target, target failure and cancellation. Diagnostics contain fixed
+classes rather than error messages, URLs, headers, bodies or signed authority;
+the public refusal remains `provider_endpoint_unavailable`. A missing HTTP
+status alone cannot distinguish a rejected stream from a transport failure.
+
 The development managed-runtime declaration can opt into
 `sharing: 'connectionMachine'`. The daemon's existing managed-services owner
 then owns one subscription gateway per admitted Home, Account, connection and

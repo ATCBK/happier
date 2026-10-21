@@ -13,9 +13,36 @@ import { MachineCarrierError } from '@/daemon/peer/iroh/machineCarrier';
 type BrokerOpenFailureReason = 'broker_open_refused' | 'binding_invalid' | 'tunnel_open_failed'
   | 'admission_refused' | 'endpoint_discovery_failed' | 'consumer_binding_invalid';
 
+type EndpointDiscoveryFailureCause = 'aborted' | 'timeout' | 'connection_reset' | 'connection_refused'
+  | 'socket_closed' | 'http_response' | 'invalid_metadata' | 'transport_error' | 'broker_refresh_refused';
+
+function endpointDiscoveryFailureCause(error: unknown, signal: AbortSignal, httpStatus?: number): EndpointDiscoveryFailureCause {
+  if (signal.aborted) return 'aborted';
+  if (error instanceof Error) {
+    if (error.name === 'AbortError') return 'aborted';
+    if (error.name === 'TimeoutError') return 'timeout';
+  }
+  if (httpStatus !== undefined) return httpStatus === 204 ? 'invalid_metadata' : 'http_response';
+  // Fetch wraps socket failures in TypeError.cause. Only these fixed codes
+  // become diagnostics; error names/messages/objects may contain private data.
+  const cause = error instanceof Error && error.cause ? error.cause : error;
+  const code = cause !== null && typeof cause === 'object' && 'code' in cause ? cause.code : undefined;
+  switch (code) {
+    case 'ECONNRESET': return 'connection_reset';
+    case 'ECONNREFUSED': return 'connection_refused';
+    case 'UND_ERR_SOCKET': return 'socket_closed';
+    case 'ETIMEDOUT':
+    case 'UND_ERR_CONNECT_TIMEOUT':
+    case 'UND_ERR_HEADERS_TIMEOUT':
+    case 'UND_ERR_BODY_TIMEOUT': return 'timeout';
+    default: return 'transport_error';
+  }
+}
+
 type AccountConnectionProviderBrokerFailureDiagnostic = Readonly<{
   reason: BrokerOpenFailureReason | 'native_runtime_absent';
   httpStatus?: number;
+  discoveryCause?: EndpointDiscoveryFailureCause;
 }>;
 // Same-process diagnostic custody only. Nothing is added to the public error,
 // serialized response, SDK, or native exception, and the original error is retained.
@@ -79,8 +106,10 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
   const unavailable = () => createProviderErrorV1('provider_endpoint_unavailable', { connectionId: input.connectionId, machineId: input.targetMachineId });
   let failedReason: BrokerOpenFailureReason = 'consumer_binding_invalid';
   let discoveryHttpStatus: number | undefined;
+  let discoveryCause: EndpointDiscoveryFailureCause | undefined;
   const reportFailure = (reason: BrokerOpenFailureReason, httpStatus?: number) => {
-    reportAccountConnectionProviderBrokerOpenFailure({ reason, ...(httpStatus === undefined ? {} : { httpStatus }) });
+    reportAccountConnectionProviderBrokerOpenFailure({ reason, ...(httpStatus === undefined ? {} : { httpStatus }),
+      ...(reason === 'endpoint_discovery_failed' && discoveryCause ? { discoveryCause } : {}) });
   };
   try {
     input.signal.throwIfAborted();
@@ -112,7 +141,16 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
     let tunnel: BrokerTunnel;
     try {
       tunnel = await input.openTunnel({ brokerOpen: opened, signal: input.signal,
-        refreshBrokerOpen: async (signal = input.signal) => await input.openBroker({ ...request, refreshAuthority: opened.authority }, signal) });
+        refreshBrokerOpen: async (signal = input.signal) => {
+          try {
+            const refreshed = await input.openBroker({ ...request, refreshAuthority: opened.authority }, signal);
+            if (!refreshed.ok) discoveryCause = 'broker_refresh_refused';
+            return refreshed;
+          } catch (error) {
+            discoveryCause = endpointDiscoveryFailureCause(error, signal);
+            throw error;
+          }
+        } });
     } catch (error) {
       // Classify the carrier's closed signature/binding failures, without
       // inspecting native messages or changing its verification decision.
@@ -162,7 +200,10 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
           return response;
         } });
       await assertAdmitted();
-    } catch {
+    } catch (error) {
+      if (failedReason === 'endpoint_discovery_failed') {
+        discoveryCause ??= endpointDiscoveryFailureCause(error, input.signal, discoveryHttpStatus);
+      }
       // Never publish an unverified base path or leave its listener exposed.
       // Preserve the opening failure even if remote retirement also fails.
       try { await cleanup(); } finally {
@@ -204,10 +245,11 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
       cleanup,
     });
   } catch (error) {
-    if (!input.signal.aborted) {
+    if (!input.signal.aborted || failedReason === 'endpoint_discovery_failed') {
       const httpStatus = failedReason === 'endpoint_discovery_failed' ? discoveryHttpStatus : undefined;
       withAccountConnectionProviderBrokerFailureDiagnostic(error, {
         reason: failedReason, ...(httpStatus === undefined ? {} : { httpStatus }),
+        ...(failedReason === 'endpoint_discovery_failed' && discoveryCause ? { discoveryCause } : {}),
       });
       reportFailure(failedReason, httpStatus);
     }

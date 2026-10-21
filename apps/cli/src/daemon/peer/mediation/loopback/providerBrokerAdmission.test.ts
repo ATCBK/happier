@@ -12,6 +12,14 @@ import {
 } from '@happier-dev/protocol';
 import { createPeerMediationLoopbackApp } from './server';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
+import { logger } from '@/ui/logger';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
+import { createProviderBrokerRouteGrantSigningInputV2, type SignedProviderBrokerRouteGrantV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { startDaemonProviderBrokerRuntime } from '@/providers/broker/daemonProviderBrokerRuntime';
+import { createAccountConnectionBrokerSourceOpen } from '@/providers/broker/accountConnectionSource';
+import { createTeamCredentialBrokerSourceOwner } from '@/providers/broker/teamCredentialBrokerSourceOwner';
+import { createManagedProviderExplicitStartCustody } from '@/providers/connections/publicManagedRuntimeStart';
+import { createBrokerProviderRegistry } from '@/providers/broker/providerBroker.testkit';
 
 const key = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(11));
 const sourceEndpoint = 'a'.repeat(64);
@@ -64,6 +72,59 @@ function createApp(
 }
 
 describe('provider-broker machine/1 admission', () => {
+  it.each(['target_unavailable', 'target_failed', 'request_aborted', 'grant_invalid', 'binding_invalid'] as const)(
+    'keeps a private bounded %s refusal while returning the same empty 403', async reason => {
+      const warning = vi.spyOn(logger, 'warnLocalFile');
+      const custody = createManagedProviderExplicitStartCustody({ machineId: 'machine-b', happyHomeDir: '/unreached-broker-source' });
+      const open = createAccountConnectionBrokerSourceOpen({ homeId: 'home', accountId: 'account-b', machineId: 'machine-b',
+        expectedAccountSettingsScopeKey: 'scope', custody, withRegistry: async read => read(createBrokerProviderRegistry()),
+        // Settings storage and Home admission are genuine boundaries. Keep the
+        // real source opener, broker, signature verifier and admission route.
+        getAccountSettingsSnapshot: () => {
+          if (reason === 'target_failed') throw new Error('private-url?token=do-not-log');
+          if (reason === 'request_aborted') throw new DOMException('private-url?token=do-not-log', 'AbortError');
+          return null;
+        },
+        admitConsumer: async () => true,
+        resolveBindingIntent: async () => { throw new Error('Unexpected credential lookup'); },
+        projectModels: async () => { throw new Error('Unexpected model RPC'); },
+      });
+      const runtime = await startDaemonProviderBrokerRuntime({ machineId: 'machine-b',
+        nowMs: () => 200, resolveTrustRoots: () => [{ keyId: 'home', publicKey: Buffer.from(key.publicKey).toString('base64url') }],
+        createRequestId: () => 'request', accountConnection: { homeId: 'home', accountId: 'account-b', open,
+          retire: async () => { throw new Error('Unexpected retirement'); } },
+        sourceOwner: createTeamCredentialBrokerSourceOwner({ machineId: 'machine-b', custody,
+          selectConnectedServicesSourceMember: async () => null, openConnectedServicesSource: async () => null,
+          openProviderConnectionSource: async () => null }),
+        resolveRequestPolicy: async () => { throw new Error('Unexpected Team policy'); },
+        admitRequest: async () => { throw new Error('Unexpected Team admission'); },
+        authorizeModelCatalog: async () => { throw new Error('Unexpected Team catalog'); },
+      });
+      const app = createApp(runtime.resolveProviderBrokerApplicationTarget);
+      const payload: SignedProviderBrokerRouteGrantV2['payload'] = {
+        v: 2, grantId: 'grant', aud: 'happier-provider-broker-route-v2', issuedAt: 100, expiresAt: 10_000,
+        homeId: 'home', accountId: 'account-b', initiatorTokenEpoch: 0,
+        source: { kind: 'account_connection', connectionId: ProviderConnectionIdSchema.parse('gateway'),
+          expectedConnectionSecurityFingerprint: 'connection-security:v1:test',
+          expectedManagedRuntimeBindingFingerprint: 'managed-runtime-binding:v1:test' },
+        initiator: { accountId: 'account-b', machineId: 'machine-a', endpointId: sourceEndpoint },
+        target: { custodianAccountId: 'account-b', machineId: 'machine-b', endpointId: targetEndpoint },
+        consumer: { kind: 'session', sessionId: 'session' }, application: signedAuthority().payload.application,
+      };
+      const authority: SignedProviderBrokerRouteGrantV2 = { payload, signature: { alg: 'Ed25519', keyId: 'home',
+        valueBase64Url: Buffer.from(tweetnacl.sign.detached(Buffer.from(createProviderBrokerRouteGrantSigningInputV2(payload)), key.secretKey)).toString('base64url') } };
+      if (reason === 'grant_invalid') authority.signature.valueBase64Url = Buffer.alloc(64).toString('base64url');
+      try {
+        const response = await app.inject({ method: 'POST', url: IROH_MACHINE_ADMISSION_PATH,
+          headers: { [IROH_MACHINE_REMOTE_ENDPOINT_HEADER]: reason === 'binding_invalid' ? 'c'.repeat(64) : sourceEndpoint },
+          payload: { v: 2, kind: 'provider_broker', authority } });
+        expect(response.statusCode).toBe(403);
+        expect(response.body).toBe('');
+        const records = warning.mock.calls.filter(([label]) => label === '[ProviderBroker] Machine stream admission refused');
+        expect(records).toEqual([['[ProviderBroker] Machine stream admission refused', { reason }]]);
+      } finally { await app.close(); await runtime.close(); warning.mockRestore(); }
+    },
+  );
   it('admits a Home-signed personal connection epoch without inventing a Team resource', async () => {
     const payload = {
       v: 2, grantId: 'personal-grant', aud: 'happier-provider-broker-route-v2',
