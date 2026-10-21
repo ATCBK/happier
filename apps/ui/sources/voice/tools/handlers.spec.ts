@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { SessionTurnsProjectionV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 import * as React from 'react';
 import { Conversation, TextConversation } from '@elevenlabs/client';
 import { createElevenLabsVoiceProviderRuntime } from '../../../../../packages/plugins/elevenlabs/src/ui/voice/runtime';
@@ -19,7 +20,7 @@ import { readSessionMessageProvenanceV1 } from '@happier-dev/protocol/sessions/m
 import { PendingRequestedActionV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { createSessionFixture, createSessionListRenderableSessionFixture, createSessionMessagesFixture, createSessionViewerFixture, createToolCallMessageFixture, renderHook, standardCleanup } from '@/dev/testkit';
 import type { Message } from '@happier-dev/session-core/messages';
-import { createMachineFixture, createPlainMachineRowFixture, createReadyMachineAgentInventoryFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture, createReadyMachineAgentInventoryFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { PLUGIN_UI_HOST_API_VERSION_V1, PLUGIN_UI_HOST_API_WIRE_VERSION_V1 } from '@happier-dev/protocol/plugins/ui';
 import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
@@ -831,6 +832,14 @@ describe('voice tool handlers', () => {
           sessionId: decodeURIComponent(pending[1]), runId: pending[2] ? decodeURIComponent(pending[2]) : null, init });
         return Response.json({ pending: [], discarded: [] });
       }
+      const turns = /^\/v1\/sessions\/([^/]+)\/turns$/.exec(pathname);
+      if (turns) {
+        const id = decodeURIComponent(turns[1]!);
+        const session = state.sessions[id];
+        return session ? Response.json(SessionTurnsProjectionV1Schema.parse(session.sessionTurns ?? {
+          v: 1, sessionId: id, updatedAt: session.updatedAt, turns: [],
+        })) : Response.json({ error: 'not_found' }, { status: 404 });
+      }
       const messages = /^\/v[12]\/sessions\/([^/]+)\/messages$/.exec(pathname);
       if (messages && (init?.method ?? 'GET') === 'GET') {
         const id = decodeURIComponent(messages[1]);
@@ -850,6 +859,8 @@ describe('voice tool handlers', () => {
           dataEncryptionKey: null, pendingCount: 0, pendingVersion: 0,
         }) });
       }
+      if (pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+        id => createPlainMachineRowFixture({ id, accountId: 'account-a' }));
       const machine = /^\/v1\/machines\/([^/]+)$/.exec(pathname);
       if (machine) return Response.json({ machine: createPlainMachineRowFixture({
         id: decodeURIComponent(machine[1]), accountId: 'account-a',
@@ -1001,6 +1012,10 @@ describe('voice tool handlers', () => {
       for (const boundary of boundaries) {
         const response = await boundary.handle(new URL(String(url)), init);
         if (!response) continue;
+        if (new URL(String(url)).pathname === '/v1/machines/read-batch') return createMachineReadBatchResponseFixture(init?.body,
+          id => id === boundary.machine.id ? { ...boundary.machine,
+            operationProtocolCapabilitiesRevision: 1, operationProtocolCapabilities: { sessionMessageReply: { protocolVersions: [1] } },
+          } : null);
         if (new URL(String(url)).pathname !== '/v1/machines') return response;
         const rows = await response.json();
         return Response.json(rows.map((row: ReturnType<typeof createPlainMachineRowFixture>) => ({ ...row,
@@ -1872,9 +1887,11 @@ describe('voice tool handlers', () => {
     } });
     daemonRpc.mockImplementation(request => daemon.dispatch(request.method, request.payload));
     const harness = await createStandaloneVoicePolicyHarness({ mode: 'off', dispatch: daemon.dispatch,
-      handleRequest: async path => {
+      handleRequest: async (path, init) => {
         const pathname = new URL(path, 'https://voice.test').pathname;
         if (pathname === '/v1/machines') return Response.json([machineRow]);
+        if (pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+          id => id === machineRow.id ? machineRow : null);
         if (pathname === '/v1/machines/machine-1') return Response.json({ machine: machineRow });
         return null;
       },
