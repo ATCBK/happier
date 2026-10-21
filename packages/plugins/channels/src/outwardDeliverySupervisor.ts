@@ -41,6 +41,7 @@ import {
 } from './permissionMediation.js';
 import {
   createConversationSessionProjectionCollectionStore,
+  type ConversationSessionProjectionSkippedAssistantItem,
   hasConversationInputOriginFromBinding,
   projectConversationSessionTranscriptPage,
 } from './sessionProjection.js';
@@ -237,6 +238,7 @@ function logOutwardDeliverySupervisorWorkFailure(
     bindingId?: string;
     error?: unknown;
     outcome?: Readonly<{ code: string; retryable: boolean; informational: boolean }>;
+    skippedAssistantItem?: ConversationSessionProjectionSkippedAssistantItem;
   }>,
 ): void {
   if (context.signal.aborted) return;
@@ -253,6 +255,7 @@ function logOutwardDeliverySupervisorWorkFailure(
       }),
       ...(identifiers?.connectionId === undefined ? {} : { connectionId: identifiers.connectionId }),
       ...(identifiers?.bindingId === undefined ? {} : { bindingId: identifiers.bindingId }),
+      ...identifiers?.skippedAssistantItem,
     },
   );
 }
@@ -746,6 +749,10 @@ export async function runConversationOutwardDeliveryCycle(
         bindingId,
         signal: context.signal,
         now,
+        onSkippedAssistantItem: skippedAssistantItem => logOutwardDeliverySupervisorWorkFailure(context, 'transcript-projection', {
+          bindingId, skippedAssistantItem,
+          outcome: { code: 'channels_projection_repliesOnlyInputNotConsumed', retryable: false, informational: true },
+        }),
         deliver: async ({ binding, item, source }) => {
           const relations = await readConversationSessionInputReplyRelations({
             stateCollection, bindingId: binding.bindingId, connectionId: binding.connectionId,

@@ -4,7 +4,7 @@ import { definePlugin } from '@happier-dev/plugin-sdk';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import {
   AccountEncryptionCurrentnessResponseSchema, V2SessionByIdResponseSchema, SessionOwnerMetadataV1Schema,
-  createPlainSessionOwnerMetadataEnvelopeV1, ExternalShareableTranscriptPageV1Schema, FeaturesResponseSchema, accountSettingsParse,
+  createPlainSessionOwnerMetadataEnvelopeV1, FeaturesResponseSchema, accountSettingsParse,
   SessionInputRequestV1Schema, SessionMessageProvenanceV1Schema, settleSessionInputRequestV1, settleSessionMessageProvenanceV1, withSessionInputAuthorityV1,
   type SessionPendingEnqueueByMachineRequestV1, type SessionPendingExecutionRunEnqueueByMachineRequestV2,
   SessionTurnV1Schema, type SessionTurnV1, materializeWorkflowAcceptedSnapshotV1, type WorkflowDefinitionV1,
@@ -30,7 +30,8 @@ import { projectExternalShareableTranscriptPage } from './transcript/projectExte
 import { createChannelsJourneyFixture } from '../../../../../packages/plugins/channels/src/testkit/channelsJourney';
 import { createCurrentConversationConnectionFixture } from '../../../../../packages/plugins/channels/src/testkit/currentConnectionFixture';
 import { CHANNEL_STATE_COLLECTION, CHANNEL_DELIVERIES_COLLECTION } from '../../../../../packages/plugins/channels/src/collections';
-import { CHANNELS_PLUGIN, CHANNELS_PROVIDER_POINT_REF } from '../../../../../packages/plugins/channels/src/manifest';
+import { CHANNELS_PLUGIN, CHANNELS_PROVIDER_POINT_REF, PLUGIN_MANIFEST } from '../../../../../packages/plugins/channels/src/manifest';
+import { CHANNEL_FILE_ATTACHMENT_RUNTIME } from '../../../../../packages/plugins/channels/src/channelAttachmentRuntime';
 import { createConversationSessionProjectionFrontierRow } from '../../../../../packages/plugins/channels/src/sessionProjection';
 import { readConversationOutwardDeliveryResolutionPage } from '../../../../../packages/plugins/channels/src/outwardDelivery';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
@@ -63,6 +64,9 @@ import { createSpawnNewSessionLifecycleActionHandler } from '@/session/actions/l
 import type { RpcHandler } from '@/api/rpc/types';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { deriveSessionCreationTagV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
+import { createTargetComposerAttachmentRegistry } from '@/plugins/runtime/lifecycle/contributions/targetComposerAttachments';
+import { HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1 } from '@happier-dev/protocol/runtime/input/structuredInputV1';
+import { SessionExternalShareableMessagesPageV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
 
 // Only the child process's Socket.IO transport is replaced. Its attach owner,
 // Session client constructor and runtime-handler registration remain real.
@@ -139,6 +143,7 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
     resolveCurrentPluginMaterializationRef: () => providerMaterialization });
   const sessions = new Map<string, ReturnType<typeof V2SessionByIdResponseSchema.parse>['session']>();
   const rows: Parameters<typeof projectExternalShareableTranscriptPage>[0]['rows'][number][] = [];
+  const rowSessions = new Map<unknown, string>();
   const turns: SessionTurnV1[] = [];
   const admissions: Array<SessionPendingEnqueueByMachineRequestV1 | SessionPendingExecutionRunEnqueueByMachineRequestV2> = [];
   const creations = new Map<string, string>();
@@ -155,6 +160,7 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
   addSession('session-journey-1');
   const spawnRequests: ReturnType<typeof SpawnDaemonSessionRequestSchema.parse>[] = [];
   const transcriptPages: unknown[] = [];
+  const diagnostics: unknown[] = [];
   const rpcRequests: string[] = [];
   vi.mocked(callSessionRpc).mockImplementation(async request => {
     rpcRequests.push(request.method);
@@ -172,6 +178,23 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
   // transcript producer beneath these boundaries are the production owners.
   const http = vi.spyOn(axios, 'get').mockImplementation(async url => {
     if (String(url).endsWith('/v1/account/encryption/currentness')) return { status: 200, data: currentness };
+    const messages = new URL(String(url));
+    const messageSessionId = decodeURIComponent(messages.pathname.split('/')[3] ?? '');
+    const sessionRows = rows.filter(row => rowSessions.get(row.id) === messageSessionId);
+    if (messages.pathname.endsWith('/pending')) return { status: 200, data: { pending: [] } };
+    if (messages.pathname.includes('/messages/by-local-id/')) {
+      const localId = decodeURIComponent(messages.pathname.split('/').at(-1)!);
+      const message = sessionRows.find(row => row.localId === localId);
+      if (!message) throw new axios.AxiosError('Message not found', 'ERR_BAD_REQUEST', undefined, undefined,
+        { status: 404, statusText: 'Not Found', headers: {}, config: { headers: new axios.AxiosHeaders() }, data: { error: 'Message not found' } });
+      return { status: 200, data: { message: { ...message, updatedAt: message.createdAt } } };
+    }
+    if (messages.pathname.endsWith('/messages')) {
+      const afterSeq = Number(messages.searchParams.get('afterSeq') ?? 0);
+      return { status: 200, data: SessionExternalShareableMessagesPageV1Schema.parse({ messages: sessionRows.filter(row => Number(row.seq) > afterSeq), hasMore: false,
+        externalShareableSnapshot: { turns, referencedUserRows: sessionRows.filter(row => row.messageRole === 'user')
+          .map(({ sidechainId: _sidechainId, ...row }) => ({ ...row, updatedAt: row.createdAt })) } }) };
+    }
     const id = [...sessions.keys()].find(candidate => String(url).includes(`/v2/sessions/${candidate}`));
     if (id) return { status: 200, data: { session: sessions.get(id) } };
     if (String(url).includes('/v1/access-keys/')) return { status: 200, data: { accessKey: 'existing' } };
@@ -226,9 +249,11 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
       return { type: 'success', sessionId: request.existingSessionId };
     } }),
   });
+  let attachments: ReturnType<typeof createTargetComposerAttachmentRegistry> | undefined;
   const { executor } = createCliActionExecutorHarness({ token: 'journey-token', credentials: { token: 'journey-token', encryption: null },
     sessionId: 'session-journey-1', mode: 'plain', ctx: null, rawSession: {}, serverId: 'server-1', serverHttpBaseUrl: 'https://channels-home.example.test',
     actionsSettingsProvider: createActionSettingsProvider({ getAccountSettings: () => accountSettingsParse({}) }),
+    resolveComposerAttachmentSendPreparation: () => attachments ?? null,
     sessionSpawnDirectTargetTransport: { machineId: 'machine-1',
       prepare: async () => ({ ok: true, directory: '/repo/channels', directoryKind: 'path', directoryCreationRequired: false, checkout: null }),
       spawnedSession: { spawn: async raw => {
@@ -252,6 +277,7 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
       rows.push({ id: `user-${rows.length + 1}`, seq: rows.length + 1, localId: request.localId, createdAt: Date.now(),
         messageRole: 'user', sidechainId: null, externalShareableActor: 'machine',
         content: { t: 'plain', v: { ...body, meta: { ...withSessionInputAuthorityV1(meta, authority), happierProvenanceV1: provenance } } } });
+      rowSessions.set(rows.at(-1)!.id, request.sessionId);
       return { status: 'accepted', localId: request.localId };
     } });
   const unavailable = async (): Promise<never> => { throw new Error('This journey does not use external Session or system record boundaries'); };
@@ -279,16 +305,9 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
     get occurrenceId() { return currentCore().occurrenceId; }, get sourceCustody() { return currentCore().sourceCustody; }, surface: 'background',
     signal: new AbortController().signal, isOccurrenceCurrent: isCoreCurrent, resolveCurrentPluginMaterializationRef: () => channelMaterialization,
   }, actionExecutor: { async execute(action, value, context) {
-    if (action === 'session.transcript.get') {
-      const request = record(value);
-      const page = await projectExternalShareableTranscriptPage({ sessionId: String(request.sessionId), rows, turns,
-        ctx: null, callerPluginId: 'happier.channels', cursorSeq: Number(request.cursor ?? 0), limit: 100,
-        upstreamHasMore: false, publicationBlocked: false });
-      ExternalShareableTranscriptPageV1Schema.parse(page);
-      transcriptPages.push(page);
-      return { ok: true, result: { ok: true, sessionId: String(request.sessionId), projection: 'externalShareableV1', ...page } };
-    }
-    return await executor.execute(action, value, context);
+    const result = await executor.execute(action, value, context);
+    if (action === 'session.transcript.get') transcriptPages.push(result.ok ? result.result : result);
+    return result;
   } }, invokeContributedAction: unavailable });
   const connection = createCurrentConversationConnectionFixture({ connectionId: 'connection-1',
     ...(input.socket ? { transport: { kind: 'socket' as const }, replayContinuity: 'sessionBound' as const } : {}), authority: {
@@ -308,6 +327,8 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
         : { kind: 'session', sessionId: 'session-journey-1', policy }), allowedPrincipalIds: ['sender-1'], allowBotSenders: false,
       inputMode: 'allAllowedMessages', inboundDebounceMs: 0, linkPreviewPolicy: 'suppress', senderFeedback: 'off' } };
   const core = await createChannelsJourneyFixture({ provider, connection, binding, sessions: inventory, actions,
+    logger: { debug() {}, info: (_message, fields) => { diagnostics.push(fields); },
+      warn: (_message, fields) => { diagnostics.push(fields); }, error() {}, diagnostic() {} },
     resolveCurrentProviderExecutionOrigin: () => ({ serverIdentityId: 'srv_plugin_testkit', materializationRef: providerMaterialization }),
     resolveCurrentPluginMaterializationRef: () => channelMaterialization }).catch(async error => {
       await provider.dispose(); http.mockRestore(); writes.mockRestore();
@@ -315,6 +336,16 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
       throw error;
     });
   activeCore = core;
+  attachments = createTargetComposerAttachmentRegistry({
+    declaredAttachments: (PLUGIN_MANIFEST.contributes?.composerAttachments ?? []).map(declaration => ({
+      ...declaration, attachment: { pluginId: 'happier.channels', localId: declaration.id },
+    })),
+    targetRegistrations: [{ pluginId: 'happier.channels', occurrenceId: currentCore().occurrenceId,
+      registration: { family: 'composerAttachments', localId: 'channel-file', value: CHANNEL_FILE_ATTACHMENT_RUNTIME } }],
+    resolveOccurrenceLifecycle: () => ({ isCurrent: isCoreCurrent, retirementSignal: new AbortController().signal }),
+    activateAttachmentOnDemand: async () => {},
+    createInvocationContext: () => { throw new Error('Channel-file has no admission-phase callback'); },
+  });
   if (!input.router) await core.state.put(createConversationSessionProjectionFrontierRow({ bindingId: binding.id,
     targetSessionId: 'session-journey-1', transcriptCursor: null, lastScannedSeq: 0, revision: 1, now: Date.now() }), { expectedRevision: 'absent' });
   function answer(text: string) {
@@ -323,6 +354,7 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
     const seq = rows.length + 1;
     rows.push({ id: `answer-${seq}`, seq, localId: null, createdAt: Date.now(), messageRole: 'agent', sidechainId: null,
       content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text } } } });
+    rowSessions.set(rows.at(-1)!.id, rowSessions.get(user.id)!);
     turns.push(SessionTurnV1Schema.parse({ turnId: `turn-${seq}`, status: 'completed', startedAt: 1, updatedAt: 2,
       transcriptAnchors: { startSeqInclusive: Number(user.seq), endSeqInclusive: seq, userMessageSeqs: [Number(user.seq)], finalAssistantMessageSeq: seq } }));
   }
@@ -332,7 +364,7 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
       for (const row of collection.rows.values()) expect(isValidPluginJsonSchemaValue(compiled, row.value), row.rowId).toBe(true);
     }
   }
-  return { ...core, pending, delivered, admissions, sessions, inventory, creations, spawnRequests, transcriptPages, answer, validateWrites, rpcRequests,
+  return { ...core, pending, delivered, admissions, sessions, inventory, creations, spawnRequests, transcriptPages, diagnostics, answer, validateWrites, rpcRequests,
     async dispose() { await core.dispose(); await provider.dispose(); http.mockRestore(); writes.mockRestore();
       activeCore = undefined;
       vi.unstubAllGlobals(); resetServerFeaturesClientForTests(); } };
@@ -587,7 +619,7 @@ describe('registered Channels composed journeys through real CLI Session admissi
       fixture.pending.push(inbound);
       await fixture.poll();
       fixture.pending.push(inbound); await fixture.poll();
-      expect(fixture.admissions).toHaveLength(1);
+      expect(fixture.admissions, JSON.stringify({ pages: fixture.transcriptPages, diagnostics: fixture.diagnostics })).toHaveLength(1);
       expect(fixture.admissions[0]?.sessionId).toBe(archived.id);
       expect(fixture.sessions.get(archived.id)?.archivedAt).toBeNull();
       fixture.answer('Bonjour, votre demande est reçue.');
@@ -595,6 +627,75 @@ describe('registered Channels composed journeys through real CLI Session admissi
       await fixture.outward();
       expect(fixture.delivered, JSON.stringify(fixture.transcriptPages)).toEqual([expect.objectContaining({ content: { text: 'Bonjour, votre demande est reçue.' },
         replyContext: expect.objectContaining({ replyToMessageId: 'inbound-1' }) })]);
+      fixture.validateWrites();
+    } finally { await fixture.dispose(); }
+  });
+
+  it('replies once to a follow-up in the same router child through authenticated transcript admission', async () => {
+    const fixture = await journey({ router: true });
+    try {
+      await fixture.poll();
+      fixture.pending.push(observation('thread-first', 'First question', true));
+      await fixture.poll();
+      fixture.answer('First answer');
+      await fixture.outward();
+      fixture.pending.push(observation('thread-follow-up', 'Follow-up question', true));
+      await fixture.poll();
+      fixture.answer('Follow-up answer');
+      await fixture.outward();
+      await fixture.outward();
+      expect(fixture.creations.size).toBe(1);
+      expect(fixture.admissions.map(request => request.sessionId)).toEqual(['session-born-1', 'session-born-1']);
+      expect(fixture.delivered, JSON.stringify({ pages: fixture.transcriptPages, diagnostics: fixture.diagnostics })).toEqual([
+        expect.objectContaining({ content: { text: 'First answer' }, replyContext: expect.objectContaining({ replyToMessageId: 'thread-first' }) }),
+        expect.objectContaining({ content: { text: 'Follow-up answer' }, replyContext: expect.objectContaining({ replyToMessageId: 'thread-follow-up' }) }),
+      ]);
+      const child = [...fixture.state.rows.values()].find(row => record(row.value.payload).parentBindingId === 'binding-1');
+      const finals = fixture.transcriptPages.flatMap(page => {
+        const items = record(page).items;
+        return Array.isArray(items) ? items.filter(item => record(item).kind === 'assistantText') : [];
+      });
+      expect(finals).toHaveLength(2);
+      for (const final of finals) expect(final).toMatchObject({ consumedInputs: [{ origin: { sourceAuthority: {
+        mediatorPluginId: 'happier.channels', sourceRef: `channels:binding:${child?.rowId}`,
+      } } }] });
+      fixture.validateWrites();
+    } finally { await fixture.dispose(); }
+  });
+
+  it('replies once to an attachment-bearing routed input without losing its child binding authority', async () => {
+    const fixture = await journey({ router: true });
+    try {
+      await fixture.poll();
+      const inbound = observation('thread-files', 'Forwarded attachment text', true);
+      fixture.pending.push(ConversationObservationV1Schema.parse({ ...inbound, message: { ...inbound.message,
+        contentProvenance: 'forwarded', attachments: [
+          { attachmentId: 'forwarded-eml', name: 'forwarded.eml', mediaType: 'message/rfc822' },
+          { attachmentId: 'lead-pdf', name: 'lead.pdf', mediaType: 'application/pdf' },
+        ],
+      } }));
+      await fixture.poll();
+      expect(fixture.admissions).toHaveLength(1);
+      const input = fixture.admissions[0]!;
+      expect(input.content.t).toBe('plain');
+      if (input.content.t !== 'plain') throw new Error('Expected plain fixture input');
+      expect(input.content.v).toMatchObject({ meta: { [HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]: { composerAttachments: [
+        expect.objectContaining({ attachment: { pluginId: 'happier.channels', localId: 'channel-file' } }),
+        expect.objectContaining({ attachment: { pluginId: 'happier.channels', localId: 'channel-file' } }),
+      ] } } });
+      fixture.answer('Attachment answer');
+      await fixture.outward();
+      await fixture.outward();
+      expect(fixture.delivered, JSON.stringify(fixture.transcriptPages)).toEqual([expect.objectContaining({
+        content: { text: 'Attachment answer' }, replyContext: expect.objectContaining({ replyToMessageId: 'thread-files' }),
+      })]);
+      const child = [...fixture.state.rows.values()].find(row => record(row.value.payload).parentBindingId === 'binding-1');
+      expect(fixture.transcriptPages).toContainEqual(expect.objectContaining({ items: expect.arrayContaining([
+        expect.objectContaining({ kind: 'assistantText', consumedInputs: [{ localId: input.localId, origin: expect.objectContaining({
+          sourceAuthority: expect.objectContaining({ mediatorPluginId: 'happier.channels', sourceRef: `channels:binding:${child?.rowId}` }),
+          contentProvenance: 'forwarded',
+        }) }] }),
+      ]) }));
       fixture.validateWrites();
     } finally { await fixture.dispose(); }
   });

@@ -28,6 +28,7 @@ export async function createChannelsJourneyFixture(input: Readonly<{
   /** Current provider identity supplied by the host fixture, independently of saved connection state. */
   resolveCurrentProviderExecutionOrigin?: () => PluginMachineExecutionOriginV1 | null;
   omitAttachmentRegistration?: boolean;
+  logger?: PluginServices['logger'];
 }>) {
   const state = new MemoryCollection();
   const deliveries = new MemoryCollection();
@@ -119,7 +120,7 @@ export async function createChannelsJourneyFixture(input: Readonly<{
     targetedContributionContributors: [input.provider],
     ...(input.resolveCurrentPluginMaterializationRef ? { resolveCurrentPluginMaterializationRef: input.resolveCurrentPluginMaterializationRef } : {}),
     services: { storage, sessions: input.sessions, actions: input.actions,
-      logger: { debug() {}, info() {}, warn() {}, error() {}, diagnostic() {} } },
+      logger: input.logger ?? { debug() {}, info() {}, warn() {}, error() {}, diagnostic() {} } },
   });
   async function invoke(action: string, value: JsonValue) {
     return await kit.invokeAction(action, value, { surface: action.startsWith('journey/') ? 'plugin' : 'cli',

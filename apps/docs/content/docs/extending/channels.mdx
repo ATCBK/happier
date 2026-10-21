@@ -36,6 +36,10 @@ codes without transcript content. In unreleased development source, the same
 diagnostics distinguish typed unavailability, deferred transcript approval,
 paused projection and pages with no eligible reply. A deferred approval does
 not start a repeating approval-request loop.
+When `repliesOnly` excludes a final answer because it consumed no input from
+that binding, development diagnostics record that decision with the semantic
+item and turn identifiers, sequence and consumed-input count, without message
+content. The frontier still advances; these records do not replay earlier answers.
 
 ## The two halves
 

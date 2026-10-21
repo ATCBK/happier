@@ -3174,6 +3174,44 @@ describe('Channels outward-delivery supervisor', () => {
     }]]);
   });
 
+  it.each([{ consumedInputs: [] }, { consumedInputs: [{ localId: 'other-input', origin: { v: 1, producer: 'pluginSession', actor: 'machine',
+    sourceAuthority: { mediatorPluginId: 'happier.channels', sourceRef: 'channels:binding:other-binding' } } }] }])(
+    'records an ineligible repliesOnly answer before advancing its frontier (%j)', async ({ consumedInputs }) => {
+      const state = new MemoryCollection();
+      const deliveries = new MemoryCollection();
+      await seedProjectionState(state);
+      const binding = state.rows.get('binding-1');
+      if (!binding || !isChannelStateJsonRecord(binding.value.payload)) throw new Error('Expected binding');
+      await state.put({ ...binding.value, payload: { ...binding.value.payload,
+        target: { ...sessionTarget, policy: { ...sessionTarget.policy, deliveryMode: 'repliesOnly' } },
+      } }, { expectedRevision: binding.revision });
+      const logger = { warn: vi.fn(), info: vi.fn() };
+      const execute = vi.fn(async (action: string, input: Readonly<{ cursor?: string | null }>) => action === 'session.permission.remote.pending.list'
+        ? emptyPendingPermissionPage()
+        : { ok: true, projection: 'externalShareableV1', sessionId: 'session-1',
+          items: input.cursor === '5' ? [] : [{ kind: 'assistantText', sessionId: 'session-1', seq: 5,
+            itemId: 'ineligible-final', turnId: 'ineligible-turn', final: 'completed', text: 'private answer', consumedInputs }],
+          scannedThroughSeq: 5, nextCursor: '5', hasMore: false });
+      const context = backgroundContext({ state, deliveries, execute, logger,
+        executeAdmittedTargetedOperationWithExecutionOrigin: vi.fn() });
+      expect((await runConversationOutwardDeliveryCycle({ context, now: () => 100 })).nextWakeAt).toBeUndefined();
+      expect(logger.info.mock.calls).toContainEqual(['[Channels] outward delivery supervisor work completed', {
+        boundary: 'transcript-projection', bindingId: 'binding-1',
+        code: 'channels_projection_repliesOnlyInputNotConsumed', retryable: false,
+        semanticItemId: 'ineligible-final', turnId: 'ineligible-turn', seq: 5, consumedInputCount: consumedInputs.length,
+      }]);
+      expect(state.rows.get('projection-frontier:binding-1')?.value.payload).toMatchObject({ lastScannedSeq: 5 });
+      expect(deliveries.rows.size).toBe(0);
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(JSON.stringify(logger.info.mock.calls)).not.toContain('private answer');
+      logger.info.mockClear();
+      await runConversationOutwardDeliveryCycle({ context, now: () => 101 });
+      expect(logger.info.mock.calls).toEqual([['[Channels] outward delivery supervisor work completed', {
+        boundary: 'transcript-projection', bindingId: 'binding-1', code: 'channels_projection_idle', retryable: false,
+      }]]);
+    },
+  );
+
   it.each([
     { name: 'second answer after a delivered frontier', firstSeq: 5, finalSeq: 9 },
     { name: 'answer to an attachment-backed shareable user item', firstSeq: 0, finalSeq: 5 },

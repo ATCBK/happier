@@ -128,6 +128,14 @@ export type ConversationSessionProjectionSource = Extract<
   Readonly<{ kind: 'sessionProjection' }>
 >;
 
+/** Content-free evidence for a final answer excluded by the binding's policy. */
+export type ConversationSessionProjectionSkippedAssistantItem = Readonly<{
+  semanticItemId: string;
+  turnId: string;
+  seq: number;
+  consumedInputCount: number;
+}>;
+
 export type ConversationSessionProjectionResult =
   | Readonly<{ kind: 'advanced'; hasMore: boolean; deliveredItemCount: number }>
   | Readonly<{ kind: 'idle'; deliveredItemCount: number }>
@@ -628,6 +636,7 @@ export async function readConversationSessionProjectionNoHistoryBaseline(input: 
 export async function projectConversationSessionTranscriptPage(input: Readonly<{
   actions: ActionsService;
   store: ConversationSessionProjectionStore;
+  onSkippedAssistantItem?: (item: ConversationSessionProjectionSkippedAssistantItem) => void;
   bindingId: string;
   signal: AbortSignal;
   now?: () => number;
@@ -730,7 +739,13 @@ export async function projectConversationSessionTranscriptPage(input: Readonly<{
       return await pauseForHistoryGap('projectionRegression');
     }
     previousItemSeq = item.seq;
-    if (!shouldProjectItem({ binding, item })) continue;
+    if (!shouldProjectItem({ binding, item })) {
+      if (binding.target.deliveryMode === 'repliesOnly' && item.kind === 'assistantText') {
+        input.onSkippedAssistantItem?.({ semanticItemId: item.itemId, turnId: item.turnId,
+          seq: item.seq, consumedInputCount: item.consumedInputs.length });
+      }
+      continue;
+    }
 
     const delivery = await input.deliver({
       binding,
