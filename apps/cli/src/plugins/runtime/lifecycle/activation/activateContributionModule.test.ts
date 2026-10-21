@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import fastify from 'fastify';
 import type { PluginApi } from '@happier-dev/plugin-sdk';
 import type { AgentExternalSessionsContribution } from '@happier-dev/plugin-sdk/sessions/external';
 import type { AgentRuntimeFactory } from '@happier-dev/plugin-sdk/agents/runtime';
@@ -8,6 +9,14 @@ import { logger } from '@/ui/logger';
 import { activateContributionModule } from './activateContributionModule';
 import { loadBundledPluginLocators } from '@/plugins/projection/registry/builtIn/locators';
 import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from '@/plugins/projection/registry/sources/generatedBundledPluginManifests';
+import { PluginAvailabilityActionHttpPathsV1 } from '@happier-dev/protocol/plugins/availability';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { projectLoadedPluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
+import { resolveAccountPluginActivationSources } from '../../accountPluginActivationSource';
+import { createBundledActivationSourceResolver } from '../../bundledActivationSource';
+import { resolvePluginStorePaths } from '@/plugins/store/paths';
+import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
+import { withTempDir } from '@/testkit/fs/tempDir';
 
 type PluginMcpServerRuntime = Parameters<PluginApi['mcp']['registerServer']>[1];
 
@@ -48,9 +57,56 @@ describe('contribution module activation', () => {
             expect(result.status, JSON.stringify(result.diagnostics)).toBe('active');
             const registeredActions = result.registrations.filter(row => row.family === 'actions').map(row => row.localId).sort();
             expect(registeredActions).toEqual(expected);
-            expect(registeredActions).toContain('internal/tasks/configure-v1');
-            expect(bundled.manifest.contributes.actions.find(action => action.id === 'internal/tasks/configure-v1')?.execution.target).toBe('daemon');
         } finally { await result.dispose(); }
+    });
+
+    it('activates the current bundled Triage portable Account artifact without daemon rights', async () => {
+        await withTempDir('happier-triage-account-activation-', async happyHomeDir => {
+            const triage = await import('@happier-dev/plugins-triage');
+            const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find(row => row.pluginId === triage.PLUGIN_MANIFEST.id);
+            if (!locator) throw new Error('Missing canonical bundled Triage locator');
+            const bundled = loadBundledPluginLocators([locator])[0];
+            if (!bundled) throw new Error('Missing current bundled Triage declaration');
+            const execution = bundled.manifest.contributes.actions.find(action => action.id === 'internal/tasks/configure-v1')?.execution;
+            expect(execution?.target).toBe('account');
+            if (execution?.target !== 'account') throw new Error('Triage Account declaration is not current');
+            const app = fastify();
+            const response = { availabilityCursor: 1, hostingCapability: { enabled: false },
+                intent: null, release: null, uiArtifacts: [], packageAssets: [] };
+            app.post(PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list'], async () => ({
+                availabilityCursor: 1, pluginIds: [bundled.pluginId],
+                intentReads: [{ pluginId: bundled.pluginId, response }], failedPluginIds: [],
+            }));
+            app.post(PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intent.read'], async () => response);
+            await app.ready();
+            const restore = installAxiosFastifyAdapter({ app, origin: 'http://triage-account-activation.test' });
+            try {
+                const sources = await resolveAccountPluginActivationSources({
+                    contributes: createResolvedContributionRegistry(projectLoadedPluginContributes({ provenance: 'first_party',
+                        loadResult: { loadedPlugins: [bundled], diagnosticsByPluginId: {} } })),
+                    paths: resolvePluginStorePaths({ happyHomeDir }), credentials: { token: 'fixture', encryption: null },
+                    serverUrl: 'http://triage-account-activation.test', isCurrent: () => true,
+                    resolveBundledActivationSource: createBundledActivationSourceResolver({
+                        bundledPackageNames: [bundled.sourceSpec.locator], bundledDeclarations: [bundled],
+                    }),
+                });
+                const loaded = await sources.sourcesByPluginId.get(bundled.pluginId)?.resolveRelativeModule?.(execution.account.artifactId);
+                if (!loaded) throw new Error('Missing current bundled Triage Account artifact');
+                const result = await activateContributionModule({ pluginId: bundled.pluginId, occurrenceId: 'triage-account-checkpoint',
+                    isOccurrenceCurrent: () => true, manifest: bundled.manifest, manifestAuthority: 'bundled_first_party',
+                    target: { realm: 'account', ...execution.account }, moduleNamespace: loaded.module });
+                try {
+                    expect(result.status, JSON.stringify(result.diagnostics)).toBe('active');
+                    const expected = bundled.manifest.contributes.actions.filter(action => action.execution.target === 'account'
+                        && action.execution.account.artifactId === execution.account.artifactId
+                        && action.execution.account.exportName === execution.account.exportName).map(action => action.id).sort();
+                    expect(result.registrations.every(row => row.family === 'actions')).toBe(true);
+                    expect(result.registrations.map(row => row.localId).sort()).toEqual(expected);
+                    expect(expected).toContain('internal/tasks/configure-v1');
+                    expect(expected).toContain('tasks/list-v1');
+                } finally { await result.dispose(); }
+            } finally { restore(); await app.close(); }
+        });
     });
 
     it('activates a portable Account export with only its declared Account Action rights', async () => {
