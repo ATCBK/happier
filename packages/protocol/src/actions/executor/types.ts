@@ -636,6 +636,8 @@ export type ActionExecutorContext = Readonly<{
     operationId: string;
     /** Actual host operation owner identity; never supplied by Action or RPC input. */
     actionId?: string;
+    /** Same-input failed creation receipt retained by the host; never transported or accepted from Action input. */
+    previousSessionCreationFailure?: Extract<SessionSpawnNewResultV1, Readonly<{ type: 'error' }>>;
     accept(result: unknown): void;
   }>;
   /** Receiving host's in-process runner port. Never serialized or accepted from Action input. */

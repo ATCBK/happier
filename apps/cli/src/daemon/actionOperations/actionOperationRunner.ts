@@ -168,6 +168,10 @@ export function createActionOperationRunner(deps: Readonly<{
       }), undefined, () => ({ operationId: existing.operationId,
         ...(request.requestId ? { executionRequestId: request.requestId } : {}), inputIdentityEqual: false }));
     }
+    const previousCreation = action.actionId === 'session.spawn_new' && existing?.state === 'succeeded'
+      ? SessionSpawnNewResultV1Schema.safeParse(existing.result) : null;
+    const previousSessionCreationFailure = previousCreation?.success && previousCreation.data.type === 'error'
+      && previousCreation.data.retryable ? previousCreation.data : undefined;
     const invoke = async (
       operationId: string,
       cancellation: 'unsupported' | 'supported',
@@ -231,7 +235,8 @@ export function createActionOperationRunner(deps: Readonly<{
             publishOwnerUpdate,
             onCancellationRequested,
             operationReview,
-            operationAcceptance: { operationId, actionId: action.actionId, accept: (result) => {
+            operationAcceptance: { operationId, actionId: action.actionId,
+              ...(previousSessionCreationFailure ? { previousSessionCreationFailure } : {}), accept: (result) => {
               if (isFiniteProjectCommand(action.actionId)) acceptFinite();
               else accept({ ok: true, result });
             } },

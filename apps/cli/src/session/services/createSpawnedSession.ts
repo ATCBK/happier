@@ -199,6 +199,8 @@ export type CreateSpawnedSessionParams = Readonly<import('@happier-dev/protocol'
   connectedServiceChildLaunch?: ConnectedServiceChildLaunchContext;
   /** Resolve an already-submitted launch attempt without sending another spawn. */
   resumeOnly?: boolean;
+  /** Authenticated same-input prior receipt, supplied only by the host's Action operation owner. */
+  previousSessionCreationFailure?: Extract<import('@happier-dev/protocol').SessionSpawnNewResultV1, Readonly<{ type: 'error' }>>;
   /** Exact-daemon in-process transport for the closed server-origin bridge. */
   directTransport?: DirectSpawnedSessionTransport;
   /** In-process current-daemon transport; preserves the canonical RPC handlers. */
@@ -1117,13 +1119,20 @@ export async function createSpawnedSession(
           { sessionId: existing.id },
         );
       }
-      // The exact Activity baseline plus no runner-authored process identity
-      // distinguishes a committed launch from a Session that ran and stopped.
-      // Older/migrated rows may have revision zero but retain their hostPid;
-      // missing Activity evidence must never authorize an automatic launch.
+      // Only the exact unstarted baseline authorizes automatic launch. A
+      // retained same-input refusal prevents runnerless input admission, but
+      // cannot establish that a separate Resume has never since succeeded.
+      const previousLaunchFailure = params.previousSessionCreationFailure?.code === 'spawn_failed'
+        ? params.previousSessionCreationFailure.launchError : undefined;
       const needsInitialRunner = existing.active === false
         && existing.runtimeActivityRevision === 0
         && ownerMetadata?.hostPid === undefined;
+      if (existing.active === false && previousLaunchFailure && !needsInitialRunner) {
+        // Activity/process identity may precede native startup or survive a
+        // later Stop. Preserve the refusal without launching or admitting input.
+        throw createCodedError(previousLaunchFailure.message, SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
+          { sessionId: existing.id, errorDetail: previousLaunchFailure });
+      }
       if (afterSpawnFailure && needsInitialRunner) return null;
       if ((existing.archivedAt !== null && existing.archivedAt !== undefined)
         || params.discussionParticipant || params.sessionCreationCorrespondence.recipe.discussionParticipant) {
@@ -1178,6 +1187,12 @@ export async function createSpawnedSession(
         const current = await fetchSessionById({ token: params.credentials.token, sessionId: existing.id,
           ...(params.signal ? { signal: params.signal } : {}) });
         if (current) existing = current;
+      }
+      if (params.resumeOnly === true && existing.active === false && initialInputRequested) {
+        // Re-entry of an unconfirmed launch observes its existing operation;
+        // finding the committed row cannot confirm a runner or admit its input.
+        throw createCodedError('Session startup has not been confirmed', SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT,
+          { sessionId: existing.id, spawnNonce });
       }
       let organizationPlacement = params.sessionCreationCorrespondence.recipe.organization;
       try {

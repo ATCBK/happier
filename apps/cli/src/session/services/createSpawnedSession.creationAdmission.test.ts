@@ -566,23 +566,27 @@ describe('canonical Session creation admission', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it.each(['restored', 'unavailable', 'different-session', 'stopped', 'legacy-stopped', 'resume-only'] as const)(
+  it.each(['restored', 'unavailable', 'different-session', 'stopped', 'stopped-prior-failure', 'legacy-stopped', 'resume-only', 'resume-only-input'] as const)(
     'restores an archived same-key candidate through ordinary tag rejoin before success (%s)', async (outcome) => {
+    const stopped = outcome === 'stopped' || outcome === 'stopped-prior-failure';
+    const resumeOnly = outcome === 'resume-only' || outcome === 'resume-only-input';
+    let admittedInputs = 0;
     const envelopes = buildSessionMetadataEnvelopeCreateFields({ credentials: params.credentials,
       accountEncryptionMode: 'plain', storedContentMode: 'plain', agentState: null,
       metadata: { path: '/repo', host: 'host', sessionCreationCorrespondenceV1: sessionCreationCorrespondence,
         ...(outcome === 'legacy-stopped' ? { hostPid: 123 } : {}) } });
     const session = { id: 'session-existing', seq: 0, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
-      ...(outcome === 'stopped' || outcome === 'legacy-stopped' || outcome === 'resume-only' ? {
-        runtimeActivityState: outcome === 'stopped' ? 'idle' : 'unknown', runtimeActivityActiveCount: 0,
-        runtimeActivityObservedAt: outcome === 'stopped' ? 1 : null,
-        runtimeActivityRevision: outcome === 'stopped' ? 2 : 0,
+      ...(stopped || outcome === 'legacy-stopped' || resumeOnly ? {
+        runtimeActivityState: stopped ? 'idle' : 'unknown', runtimeActivityActiveCount: 0,
+        runtimeActivityObservedAt: stopped ? 1 : null,
+        runtimeActivityRevision: stopped ? 2 : 0,
       } : {}),
       archivedAt: 123, metadataLayoutVersion: envelopes.metadataLayoutVersion, metadata: envelopes.sharedMetadata.ciphertext,
       ownerMetadata: envelopes.ownerMetadata, metadataVersion: 1, encryptionMode: 'plain',
       agentState: null, agentStateVersion: 0, dataEncryptionKey: null, share: null };
     vi.mocked(axios.post).mockImplementation(async (url, body) => {
       if (String(url).endsWith('/lookup-by-tags')) return { status: 200, data: { sessions: [session] } };
+      if (String(url).endsWith('/pending')) { admittedInputs += 1; return { status: 200, data: { didWrite: true } }; }
       if (String(url).endsWith('/v1/sessions')) {
         expect(body).toMatchObject({ tag: sessionCreationTag,
           ownerMetadata: { t: 'plain', v: { system: { sessionCreationCorrespondenceV1: sessionCreationCorrespondence } } } });
@@ -593,22 +597,39 @@ describe('canonical Session creation admission', () => {
       throw new Error(`Unexpected archived rejoin request ${url}`);
     });
     vi.mocked(axios.get).mockRejectedValue(new Error('Mutable organization placement unavailable'));
+    fetchSessionById.mockResolvedValue({ ...session, archivedAt: null });
     fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain', version: 1,
       signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
       recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } });
     vi.stubGlobal('fetch', vi.fn(async () => Response.json(FeaturesResponseSchema.parse({ features: {},
       capabilities: { encryption: { storagePolicy: 'optional', allowAccountOptOut: true, defaultAccountMode: 'plain' } } }))));
 
-    const result = createSpawnedSession({ ...params, ...(outcome === 'resume-only' ? { resumeOnly: true } : {}) });
+    const result = createSpawnedSession({ ...params, ...(resumeOnly ? { resumeOnly: true } : {}),
+      ...(outcome === 'resume-only-input' ? { initialInput: { text: 'Wait for confirmed startup' },
+        buildInitialInputHandoff: (localId: string) => buildSessionSpawnInitialInputAdmissionForLocalIdV1({ actionCaller: { kind: 'host' }, callerSurface: 'cli', localId }),
+        machineAdmissionTransport: async (request: { localId: string }) => { admittedInputs += 1; return { status: 'accepted' as const, localId: request.localId }; },
+      } : {}),
+      ...(outcome === 'stopped-prior-failure' ? { initialInput: { text: 'Must wait for explicit Resume' },
+        buildInitialInputHandoff: (localId: string) => buildSessionSpawnInitialInputAdmissionForLocalIdV1({ actionCaller: { kind: 'host' }, callerSurface: 'cli', localId }),
+        previousSessionCreationFailure: { type: 'error' as const, code: 'spawn_failed' as const,
+        retryable: true, launchError: { kind: 'launch_error' as const, code: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
+          message: 'A later Session projection could not be read' } } } : {}),
+    });
     if (outcome === 'restored' || outcome === 'stopped' || outcome === 'legacy-stopped' || outcome === 'resume-only') {
       await expect(result).resolves.toMatchObject({ disposition: 'rejoined', sessionId: session.id,
         session: { id: session.id, archivedAt: null } });
+    } else if (outcome === 'resume-only-input') {
+      await expect(result).rejects.toMatchObject({ code: SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT });
+    } else if (outcome === 'stopped-prior-failure') {
+      await expect(result).rejects.toMatchObject({ code: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
+        details: { errorDetail: { kind: 'launch_error', message: 'A later Session projection could not be read' } } });
     } else if (outcome === 'different-session') {
       await expect(result).rejects.toMatchObject({ code: 'creation_conflict' });
     } else {
       await expect(result).rejects.toThrow('Unexpected status from /v1/sessions: 503');
     }
     expect(spawn).not.toHaveBeenCalled();
+    expect(admittedInputs).toBe(0);
   });
 
   it('reconciles an uncertain archived restore by the original creation key before resending', async () => {

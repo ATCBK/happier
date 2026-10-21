@@ -1,4 +1,7 @@
 import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import axios from 'axios';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,10 +24,121 @@ import { waitForSessionWebhook } from '@/daemon/spawn/waitForSessionWebhook';
 import type { TrackedSession } from '@/daemon/types';
 import { createSpawnedSession } from './createSpawnedSession';
 import { buildSessionSpawnInitialInputAdmissionForLocalIdV1 } from './sessionInputAdmissionIdentity';
+import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
+import { awaitTrackedRunnerAgentSessionOpen } from '@/daemon/agentRuntime/runnerAgentSessionOpenAttestation';
+import { createMachineSessionSpawnRpcHandler } from '@/session/actions/sessionLifecycleActions';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { accountSettingsParse, createActionExecutor } from '@happier-dev/protocol';
+import { buildSessionMetadataEnvelopeCreateFields } from '@/session/metadata/buildSessionMetadataEnvelopeCreateFields';
+import { buildCommittedLaunchMetadata } from '@/agent/runtime/createSessionMetadata';
+import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
 
 afterEach(() => { vi.unstubAllEnvs(); reloadConfiguration(); });
 
 describe('durable creation after daemon startup refusal', () => {
+    it('preserves the same creation refusal after its runner exits before native startup despite published Activity and hostPid', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'happier-native-startup-failure-'));
+        const sessionId = 'c1234567890123456789012345';
+        const machineId = 'machine-native-startup-failure';
+        const credentials = { token: 'fixture-token', encryption: null } as const;
+        let operationSequence = 0;
+        const operations = createHostActionOperationRuntime({ machineId, resolveAccountId: async () => 'fixture-account',
+            generateOperationId: () => `native-startup-${++operationSequence}` });
+        let row: ReturnType<typeof createCurrentSessionProjectionRecordFixture> | null = null;
+        const runners: ReturnType<typeof spawn>[] = [];
+        const tracked = new Map<number, TrackedSession>();
+        let launches = 0;
+        let admittedInputs = 0;
+        const unknownRequests: string[] = [];
+        resetServerFeaturesClientForTests();
+        // HTTP/authentication and the OS child process are the only replaced
+        // boundaries; retained operation custody, native-open observation and
+        // same-key creation/rejoin all run their production implementations.
+        vi.stubGlobal('fetch', vi.fn(async value => String(value).endsWith('/v1/features')
+            ? Response.json({ features: {}, capabilities: { encryption: { storagePolicy: 'optional', allowAccountOptOut: true, defaultAccountMode: 'plain' } } })
+            : Response.json({ id: 'fixture-account' })));
+        vi.spyOn(axios, 'get').mockImplementation(async url => String(url).includes('/v1/access-keys/')
+            ? { status: 200, data: { accessKey: 'fixture-existing-binding' } }
+            : String(url).includes('/v2/sessions/') ? { status: 200, data: { session: row } }
+                : { status: 200, data: createAccountEncryptionCurrentnessFixture() });
+        vi.spyOn(axios, 'post').mockImplementation(async url => {
+            if (String(url).endsWith('/lookup-by-tags')) return { status: 200, data: { sessions: row ? [row] : [] } };
+            if (String(url).endsWith(`/sessions/${sessionId}/pending`)) {
+                admittedInputs += 1;
+                return { status: 200, data: { didWrite: true } };
+            }
+            unknownRequests.push(String(url));
+            throw new Error(`Unexpected native startup HTTP request ${url}`);
+        });
+        const handler = createMachineSessionSpawnRpcHandler({ handlers: {
+            spawnSession: async options => {
+                launches += 1;
+                tracked.clear();
+                const child = spawn(process.execPath, ['-e', 'process.exit(1)'], { stdio: 'ignore' });
+                runners.push(child);
+                if (!child.pid) throw new Error('Missing fixture runner pid');
+                tracked.set(child.pid, { pid: child.pid, startedBy: 'daemon', happySessionId: sessionId, childProcess: child });
+                const fields = buildSessionMetadataEnvelopeCreateFields({ credentials, accountEncryptionMode: 'plain',
+                    storedContentMode: 'plain', agentState: null, metadata: {
+                        ...buildCommittedLaunchMetadata({ options, directory: home }), hostPid: child.pid,
+                    } });
+                row = createCurrentSessionProjectionRecordFixture({ ...createSessionNotificationContextFixture(sessionId),
+                    encryptionMode: 'plain', share: null, active: false, archivedAt: null,
+                    runtimeActivityState: 'idle', runtimeActivityActiveCount: 0,
+                    runtimeActivityObservedAt: 1, runtimeActivityRevision: 1,
+                    metadataLayoutVersion: fields.metadataLayoutVersion, metadata: fields.sharedMetadata.ciphertext,
+                    ownerMetadata: fields.ownerMetadata, dataEncryptionKey: null });
+                SessionLookupByTagsResponseV2Schema.parse({ sessions: [row] });
+                return { type: 'success', sessionId };
+            },
+            stopSession: async () => ({ status: 'not_found' }),
+        }, awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ ...input, getTrackedSessions: () => [...tracked.values()] }) });
+        const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
+            sessionId: 'cli-global', mode: 'plain', ctx: null, rawSession: {}, serverId: 'fixture-home',
+            serverHttpBaseUrl: 'https://fixture.example.test',
+            actionsSettingsProvider: createActionSettingsProvider({ accountSettings: accountSettingsParse({}) }),
+            sessionSpawnDirectTargetTransport: { machineId,
+                prepare: async () => ({ ok: true, directory: home, directoryKind: 'managed', directoryCreationRequired: false, checkout: null }),
+                spawnedSession: { spawn: async (request, options) => {
+                    try { return await handler(request, options); }
+                    catch (error) { expect(error).toMatchObject({ code: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED }); throw error; }
+                },
+                    // The physical launch nonce is already successful; the
+                    // subsequent native startup refusal belongs to the Action.
+                    resolveSpawnSessionByNonce: async () => ({ status: 'success', sessionId }) },
+            } }));
+        const input = { creationKey: 'native-exit', executionTarget: { serverId: 'fixture-home', machineId },
+            directory: { kind: 'managed' as const },
+            agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+            initialInput: { text: 'Must wait for a native runner' }, initialTriggers: [],
+            connectedServices: { v: 2 as const, bindingsByServiceId: {} }, memoryEnabled: false };
+        const invoke = () => operations.observeExecution({ actionId: 'session.spawn_new', input,
+            actionRequestId: input.creationKey, execute: context => executor.execute('session.spawn_new', input,
+                { ...context, surface: 'cli', authority: 'present_user', serverId: 'fixture-home',
+                    presentUserConfirmation: { actionId: 'session.spawn_new' } }) });
+        try {
+            await invoke();
+            const first = await operations.handlers.getV2({ operationId: 'native-startup-1', waitForTerminal: true });
+            expect(first).toMatchObject({ kind: 'found', operation: { result: { type: 'error', code: 'spawn_failed',
+                launchError: { code: 'SPAWN_FAILED', message: 'Agent runner exited before native Session startup completed' } } } });
+            expect(launches).toBe(1);
+            await invoke();
+            expect(await operations.handlers.getV2({ operationId: 'native-startup-2', waitForTerminal: true }))
+                .toMatchObject({ kind: 'found', operation: { result: { type: 'error', code: 'spawn_failed',
+                    launchError: { code: 'SPAWN_FAILED', message: 'Agent runner exited before native Session startup completed' } } } });
+            expect(launches).toBe(1);
+            expect(admittedInputs).toBe(0);
+            expect(row).toMatchObject({ id: sessionId });
+            expect(unknownRequests).toEqual([]);
+        } finally {
+            await Promise.all(runners.map(async child => {
+                if (child.exitCode === null && child.signalCode === null) await once(child, 'exit');
+            }));
+            vi.restoreAllMocks(); vi.unstubAllGlobals(); resetServerFeaturesClientForTests();
+            await rm(home, { recursive: true, force: true });
+        }
+    });
     it.each([
         ['matched', 'returned'], ['conflicting', 'returned'], ['absent', 'returned'], ['matched', 'nonce'],
         ['archived', 'returned'], ['archived', 'nonce'],

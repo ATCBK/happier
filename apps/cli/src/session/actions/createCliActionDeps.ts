@@ -9202,9 +9202,15 @@ export function createCliActionDeps(params: Readonly<{
       }
     },
     sessionNeedsYouRaise: async ({ sessionId, input, context, signal }) => {
-      const transport = await resolveTransportForSession(sessionId, signal);
-      if (!transport.ok) return { ok: false, errorCode: transport.code, errorMessage: transport.code };
       try {
+        // The bound host already owns this Session's request store. Keep its
+        // private Agent origin rather than requiring unrelated Account transport.
+        if (sessionId === params.sessionId && params.invokeBoundSessionRpc && context.authority !== 'present_user') {
+          const origin = readSessionActionRpcOrigin(SESSION_RPC_METHODS.SESSION_NEEDS_YOU_RAISE, context);
+          return await params.invokeBoundSessionRpc(SESSION_RPC_METHODS.SESSION_NEEDS_YOU_RAISE, input, signal, origin);
+        }
+        const transport = await resolveTransportForSession(sessionId, signal);
+        if (!transport.ok) return { ok: false, errorCode: transport.code, errorMessage: transport.code };
         return await callSessionActionRpc(transport, SESSION_RPC_METHODS.SESSION_NEEDS_YOU_RAISE, input, context);
       } catch (error) {
         const errorCode = readRpcErrorCode(error) ?? 'question_request_failed';
