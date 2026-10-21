@@ -73,6 +73,32 @@ function evidence(
 }
 
 describe('Work display grouping of the canonical allocation', () => {
+  it('aggregates complete whole-call populations with linear contribution work', () => {
+    const measure = (count: number) => {
+      const rows = Array.from({ length: count }, (_, index) => {
+        const earlier = { ...contribution(`earlier-${index}`, 'session', `turn-${index}`),
+          cost: { reportedUsd: 0, estimatedUsd: 1, currency: 'USD', costSource: 'pricing_estimate' as const,
+            reportedTotalId: `final-${index}` } };
+        const final = { ...contribution(`final-${index}`, 'session', null),
+          tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          cost: { reportedUsd: 0.12, estimatedUsd: 0, currency: 'USD', costSource: 'provider_reported' as const,
+            reportedTotalContributionIds: [earlier.id] } };
+        return [earlier, final];
+      }).flat();
+      const work = allocateUsageOutcomes({ contributions: rows, evidence: [] });
+      let costReads = 0;
+      for (const row of work.allocations) {
+        const cost = row.contribution.cost;
+        Object.defineProperty(row.contribution, 'cost', { enumerable: true, get() { costReads++; return cost; } });
+      }
+      const summary = summarizeUsageWork(work, { metric: 'cost', costBasis: 'auto' });
+      for (const amount of [summary.total, summary.unallocated, summary.projects[0]?.amount,
+        summary.sessions[0]?.amount, summary.agents[0]?.amount]) expect(amount).toBeCloseTo(count * 0.12, 10);
+      return costReads;
+    };
+    const small = measure(32);
+    expect(measure(64), 'doubling the same grouped population must not rescan every prefix').toBeLessThanOrEqual(2 * small);
+  });
   it('groups unnamed project identities once without changing allocation or money conservation', () => {
     const work = allocateUsageOutcomes({ contributions: [contribution('a', 's1', 't1', 'known'),
       contribution('b', 's1', 't2', 'opaque-a'), contribution('c', 's2', 't3', 'opaque-b')], evidence: [] });
