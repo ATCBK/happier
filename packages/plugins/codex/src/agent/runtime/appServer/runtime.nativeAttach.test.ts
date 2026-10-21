@@ -441,6 +441,94 @@ describe('native Codex attachment preparation', () => {
       });
     });
   });
+  it.each(['provider', 'connectedAccount'] as const)('opens a no-tools thread with %s auth despite an inherited MCP map', async (authority) => {
+    const launches: Array<readonly string[]> = [];
+    const authBytes = new TextEncoder().encode(JSON.stringify({
+      auth_mode: 'chatgptAuthTokens', tokens: { access_token: 'fixture-access', account_id: 'fixture-account' },
+    }));
+    await withFixture(async ({ runtime, requests }) => {
+      await expect(runtime.prepareProviderCliAttach()).resolves.toBe('fresh-thread');
+      expect(launches[0]).toEqual(expect.arrayContaining([
+        'features.shell_tool=false', 'features.view_image=false', 'web_search="disabled"',
+        'features.code_mode.excluded_tool_namespaces=["functions"]',
+      ]));
+      expect(launches[0].some(value => value.startsWith('mcp_servers.'))).toBe(false);
+      const thread = requests.find(request => request.method === 'thread/start')?.params;
+      expect([':read-only', 'read-only']).toContain(thread?.permissions ?? thread?.sandbox);
+      if (authority === 'connectedAccount') {
+        expect(requests.find(request => request.method === 'account/login/start')?.params)
+          .toMatchObject({ type: 'chatgptAuthTokens', chatgptAccountId: 'fixture-account' });
+      }
+    }, {
+      ...(authority === 'provider'
+        ? { initialProviderBinding: { v: 1 as const, modelProvider: 'ollama', config: {} } }
+        : { processEnv: { HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: JSON.stringify([
+          { kind: 'profile', serviceId: 'openai-codex', profileId: 'fixture' },
+        ]) }, runtimeAuthHost: {
+          nativeHome: { root: '/fixture', readFiles: async () => ({ 'auth.json': authBytes }) },
+          refreshRuntimeAuth: async () => ({ status: 'refreshed' as const, result: {
+            accessToken: 'fixture-access', providerAccountId: 'fixture-account',
+          } }),
+        } }),
+      toolRestriction: { unlistedTools: 'deny', allowedTools: [] },
+      mcpServers: { wilson: { command: 'fixture-bridge', enabledTools: ['allowed_echo'] } },
+      // Native config and model catalog are independent process/network boundary evidence.
+      nativeMcpServers: {}, nativeToolMode: 'direct',
+      observer: { recordAppServerRequest() {}, recordLaunch: launch => { launches.push(launch.argv); } },
+    });
+  });
+  it.skipIf(process.platform === 'win32')('keeps a Connected Account no-tools Run confined through follow-up turns', async () => {
+    const authBytes = new TextEncoder().encode(JSON.stringify({
+      auth_mode: 'chatgptAuthTokens', tokens: { access_token: 'fixture-access', account_id: 'fixture-account' },
+    }));
+    await withFixture(async ({ openConfiguredRun, requests, nativeLaunches, emitNotification }) => {
+      const run = await openConfiguredRun();
+      const events: AgentExecutionRunConversationEventV1[] = [];
+      run.watch(event => events.push(event));
+      for (const [index, text] of ['Plain discussion answer', '{"summary":"Structured follow-up"}'].entries()) {
+        const turnId = `discussion-${index}`;
+        await expect(run.send({ inputIds: [turnId], input: { text: 'Discuss this stop.' },
+          delivery: { kind: 'newTurn', turnId } })).resolves.toMatchObject({ status: 'admitted' });
+        emitNotification('item/completed', { threadId: 'fresh-thread', turnId: `provider-turn-${index + 1}`,
+          item: { id: `answer-${index}`, type: 'agentMessage', text } });
+        emitNotification('turn/completed', { threadId: 'fresh-thread',
+          turn: { id: `provider-turn-${index + 1}`, status: 'completed' } });
+        await expect.poll(() => events.some(event => event.kind === 'turn-complete' && event.turnId === turnId)).toBe(true);
+        expect(events).toContainEqual(expect.objectContaining({ kind: 'message-delta', turnId, text }));
+      }
+      expect(nativeLaunches[0]).toContain('features.shell_tool=false');
+      expect(nativeLaunches[0].some(value => value.startsWith('mcp_servers.'))).toBe(false);
+      expect(requests.find(request => request.method === 'account/login/start')?.params)
+        .toMatchObject({ type: 'chatgptAuthTokens', chatgptAccountId: 'fixture-account' });
+      expect(requests.filter(request => request.method === 'turn/start').map(request => request.params.threadId))
+        .toEqual(['fresh-thread', 'fresh-thread']);
+    }, {
+      toolRestriction: { unlistedTools: 'deny', allowedTools: [] },
+      mcpServers: { wilson: { command: 'fixture-bridge', enabledTools: ['allowed_echo'] } },
+      nativeMcpServers: {}, nativeToolMode: 'direct',
+      processEnv: { HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: JSON.stringify([
+        { kind: 'profile', serviceId: 'openai-codex', profileId: 'fixture' },
+      ]) },
+      runtimeAuthHost: {
+        nativeHome: { root: '/fixture', readFiles: async () => ({ 'auth.json': authBytes }) },
+        refreshRuntimeAuth: async () => ({ status: 'refreshed', result: {
+          accessToken: 'fixture-access', providerAccountId: 'fixture-account',
+        } }),
+      },
+    });
+  });
+  it('rejects an MCP server the native process exposes despite the no-tools recipe', async () => {
+    await withFixture(async ({ runtime, requests }) => {
+      await expect(runtime.prepareProviderCliAttach()).rejects.toMatchObject({
+        code: 'codex_tool_restriction_unsupported_runtime',
+      });
+      expect(requests.some(request => request.method === 'thread/start')).toBe(false);
+    }, {
+      toolRestriction: { unlistedTools: 'deny', allowedTools: [] },
+      mcpServers: { wilson: { command: 'fixture-bridge', enabledTools: ['allowed_echo'] } },
+      nativeMcpServers: { happier__wilson: { enabled: true } },
+    });
+  });
   it.each([
     { initialProviderBinding: { v: 1 as const, modelProvider: 'ollama', config: {} } },
     { processEnv: { HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: JSON.stringify([{ kind: 'profile', serviceId: 'openai-codex', profileId: 'fixture' }]) } },

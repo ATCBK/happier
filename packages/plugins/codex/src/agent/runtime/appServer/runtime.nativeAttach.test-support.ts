@@ -44,6 +44,8 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   beforeThreadResumeResponse?: (input: Readonly<{ socket: WebSocket; params: Record<string, unknown> }>) => void | Promise<void>;
   turnIdForStart?: (occurrence: number) => string;
   nativeToolMode?: 'code_mode_only' | 'direct';
+  nativeMcpServers?: Readonly<Record<string, Readonly<{ enabled: boolean }>>>;
+  runtimeAuthHost?: Pick<CodexAppServerRuntimeHost, 'nativeHome' | 'refreshRuntimeAuth'>;
   initialProviderBinding?: CodexProviderBindingEngineConfigV1;
   providerBinding?: AgentSessionOpenRequest['providerBinding'];
   connectedAccounts?: AgentSessionRuntimeContext['services']['connectedAccounts'];
@@ -120,7 +122,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
     if (message.method === 'initialize') {
       result = { userAgent: 'happier_cli/0.162.1 (fixture)' };
     } else if (message.method === 'config/read') {
-      result = { config: { mcp_servers: options.mcpServers ? { happier__wilson: { enabled: true } } : {}, features: { code_mode: { excluded_tool_namespaces: ['functions'] } } } };
+      result = { config: { mcp_servers: options.nativeMcpServers ?? (options.mcpServers ? { happier__wilson: { enabled: true } } : {}), features: { code_mode: { excluded_tool_namespaces: ['functions'] } } } };
     } else if (message.method === 'thread/start') {
       result = { model: 'fixture-model', thread: { id: 'fresh-thread', turns: [] }, sandbox: { type: 'readOnly' }, reasoningEffort: 'low' };
     } else if (message.method.startsWith('thread/goal/')) {
@@ -216,7 +218,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
     resolveCurrentPolicy: () => options.permissionMode
       ? resolveCodexTerminalPermissionPolicy(options.permissionMode)
       : ({ approvalPolicy: 'never', sandbox: 'read-only', sandboxPolicy: { type: 'readOnly' } }),
-    host: { baseProcessEnv: {}, logger: { debug() {}, warn() {} }, createClient, ui: options.interactions },
+    host: { baseProcessEnv: {}, logger: { debug() {}, warn() {} }, createClient, ui: options.interactions, ...options.runtimeAuthHost },
   });
   const opened: { session: AgentSessionRuntime | null; run: AgentExecutionRunConversationRuntimeV1 | null } = {
     session: null, run: null,
@@ -315,16 +317,22 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
       const context = {
         signal: new AbortController().signal,
         services: { exec: nativeExec, logger: options.logger ?? { debug() {}, warn() {} } },
-        executionRun: { id: 'skills-run-1', services: {} },
+        executionRun: { id: 'skills-run-1', services: {
+          ...(options.runtimeAuthHost?.nativeHome ? { nativeHome: options.runtimeAuthHost.nativeHome } : {}),
+          ...(options.runtimeAuthHost?.refreshRuntimeAuth
+            ? { auth: { services: { refreshRuntimeAuth: options.runtimeAuthHost.refreshRuntimeAuth } } } : {}),
+        } },
       } as unknown as AgentExecutionRunRuntimeContextV1;
       opened.run = await openCodexNativeAppServerExecutionRunConversation({
         kind: 'create', runId: 'skills-run-1', cwd: root,
         profile: { pluginId: 'happier.agent.codex', localId: 'codex' },
         input: { text: 'Use the review skill.' },
-        launchEnvironment: { values: { CODEX_HOME: root }, unset: ['CODEX_SQLITE_HOME', 'HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON'] },
+        launchEnvironment: { values: { CODEX_HOME: root, ...options.processEnv }, unset: ['CODEX_SQLITE_HOME',
+          ...(options.processEnv?.HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON ? [] : ['HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON'])] },
         configuration: {
           mode: { value: null, updatedAtMs: 0 }, model: { value: 'fixture-model', updatedAtMs: 1 },
           permissionIntent: { value: options.permissionMode ?? 'read-only', updatedAtMs: 1 }, options: {},
+          ...options.toolRestriction,
         },
         ...(options.skills ? { skills: options.skills } : {}),
         ...(options.mcpServers ? { mcpServers: options.mcpServers } : {}),

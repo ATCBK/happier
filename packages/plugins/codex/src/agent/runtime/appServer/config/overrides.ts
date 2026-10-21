@@ -18,6 +18,14 @@ export type CodexAppServerMcpServerConfig = Readonly<{
 
 type CodexToolRestrictionConfiguration = Pick<AgentSessionConfigurationSnapshot, 'allowedTools' | 'unlistedTools'>;
 
+export function listCodexAppServerMcpServerNames(
+    mcpServers: Readonly<Record<string, CodexAppServerMcpServerConfig>>,
+    configuration?: CodexToolRestrictionConfiguration,
+): string[] {
+    return configuration?.unlistedTools === 'deny' && configuration.allowedTools?.length === 0
+        ? [] : Object.keys(mcpServers);
+}
+
 export function buildCodexUnlistedToolConfigOverrides(configuration?: CodexToolRestrictionConfiguration): string[] {
     if (configuration?.unlistedTools !== 'deny') return [];
     const policy = resolveCodexTerminalPermissionPolicy('default', undefined, configuration.unlistedTools);
@@ -121,8 +129,7 @@ export function buildCodexAppServerConfigOverrides(
         mcpToolPolicy?: Readonly<Record<string, AgentSessionMcpToolPolicy>>;
     }> & CodexToolRestrictionConfiguration = {},
 ): string[] {
-    const serverNames = options.unlistedTools === 'deny' && options.allowedTools?.length === 0
-        ? [] : Object.keys(mcpServers);
+    const serverNames = listCodexAppServerMcpServerNames(mcpServers, options);
     const injectedKeys = assignInjectedServerKeys(serverNames);
     const overrides = buildCodexUnlistedToolConfigOverrides(options);
     if (options.skills?.nativeDisables.length) {

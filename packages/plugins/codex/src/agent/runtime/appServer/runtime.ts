@@ -84,7 +84,7 @@ import {
   readCodexAppServerResumeRecoveryTimeoutMs,
   readCodexAppServerRpcTimeoutMs,
 } from './client/timeout.js';
-import { assignInjectedServerKeys, buildCodexAppServerConfigOverrides } from './config/overrides.js';
+import { assignInjectedServerKeys, buildCodexAppServerConfigOverrides, listCodexAppServerMcpServerNames } from './config/overrides.js';
 import {
   CODEX_APP_SERVER_REASONING_EFFORT_CONFIG_OPTION_ID,
   CODEX_APP_SERVER_SERVICE_TIER_CONFIG_OPTION_ID,
@@ -893,7 +893,8 @@ export function createCodexAppServerRuntime(
     throw new PluginError({ code: 'codex_mcp_tool_policy_unsupported_transport',
       message: 'Codex daemon proxy cannot apply MCP tool filters to its already-running server.' });
   }
-  const mcpServerKeys = assignInjectedServerKeys(Object.keys(normalizeMcpServers(params.mcpServers)));
+  const mcpServers = normalizeMcpServers(params.mcpServers);
+  const mcpServerKeys = assignInjectedServerKeys(listCodexAppServerMcpServerNames(mcpServers, params.toolRestriction));
   const runtimeTargetId = params.happierSessionId !== undefined
     ? params.happierSessionId
     : params.executionRunId;
@@ -953,7 +954,7 @@ export function createCodexAppServerRuntime(
   const providerDisablesReasoning =
     params.initialProviderBinding?.config.model_reasoning_effort === 'none';
   const requiresConfinedMcp = params.toolRestriction?.unlistedTools === 'deny'
-    && Object.keys(normalizeMcpServers(params.mcpServers)).length > 0;
+    && mcpServerKeys.size > 0;
   let currentReasoningEffort: string | null = null;
   let currentServiceTier: string | null = null;
   let modelsSnapshot: AgentSessionModelsSnapshot = { models: null };
@@ -2363,7 +2364,7 @@ export function createCodexAppServerRuntime(
       clientPromise = params.host.createClient({
         cwd: params.directory,
         processEnv,
-        configOverrides: buildCodexAppServerConfigOverrides(normalizeMcpServers(params.mcpServers), {
+        configOverrides: buildCodexAppServerConfigOverrides(mcpServers, {
           processEnv,
           ...params.toolRestriction,
           mcpToolPolicy: params.mcpToolPolicy,
@@ -2371,7 +2372,7 @@ export function createCodexAppServerRuntime(
         }),
         disableUserMcpServers: true,
         toolRestrictionRequired: params.toolRestriction?.unlistedTools === 'deny',
-        toolRestrictionAllowedMcpServerKeys: [...assignInjectedServerKeys(Object.keys(normalizeMcpServers(params.mcpServers))).values()],
+        toolRestrictionAllowedMcpServerKeys: [...mcpServerKeys.values()],
       }).then(async (createdClient) => {
         if (disposed) {
           void createdClient.dispose().catch(() => undefined);

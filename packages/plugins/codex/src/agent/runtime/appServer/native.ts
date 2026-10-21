@@ -54,7 +54,7 @@ import {
 } from '../../../protocol/runtimeDescriptorV1.js';
 import { CodexSharedAppServerStartupError, createCodexSharedAppServer, type CodexSharedAppServerStartupFailure } from './sharedServer.js';
 import { buildCodexExecutionRunBaseEnv } from '../../executionRuns/environment.js';
-import { assignInjectedServerKeys, buildCodexAppServerConfigOverrides } from './config/overrides.js';
+import { assignInjectedServerKeys, buildCodexAppServerConfigOverrides, listCodexAppServerMcpServerNames } from './config/overrides.js';
 import {
   AGENT_STARTUP_FAILURE_PREVIEWS,
   readAgentStartupFailureCode,
@@ -1013,7 +1013,7 @@ export async function openCodexNativeAppServerSession(
       configOverrides: buildCodexAppServerConfigOverrides(request.mcpServers ?? {}, { ...request.configuration, skills: request.skills, mcpToolPolicy: request.mcpToolPolicy }),
       disableUserMcpServers: request.configuration?.unlistedTools === 'deny',
       toolRestrictionRequired: request.configuration?.unlistedTools === 'deny',
-      toolRestrictionAllowedMcpServerKeys: [...assignInjectedServerKeys(Object.keys(request.mcpServers ?? {})).values()],
+      toolRestrictionAllowedMcpServerKeys: [...assignInjectedServerKeys(listCodexAppServerMcpServerNames(request.mcpServers ?? {}, request.configuration)).values()],
       // This Session action owns cancellation. Let a slow-but-live Codex initialize instead of
       // converting the generic startup budget into a false native-fork failure.
       initializeRequestOptions: { signal: context.signal, timeoutMs: null },
@@ -1190,7 +1190,7 @@ export async function openCodexNativeAppServerExecutionRunConversation(
       disableUserMcpServers: request.configuration?.unlistedTools === 'deny',
       initializeRequestOptions: { signal: context.signal, timeoutMs: null },
       toolRestrictionRequired: request.configuration?.unlistedTools === 'deny',
-      toolRestrictionAllowedMcpServerKeys: [...assignInjectedServerKeys(Object.keys(request.mcpServers ?? {})).values()],
+      toolRestrictionAllowedMcpServerKeys: [...assignInjectedServerKeys(listCodexAppServerMcpServerNames(request.mcpServers ?? {}, request.configuration)).values()],
     });
     try {
       const forked = await forkCodexNativeAppServerConversation({
