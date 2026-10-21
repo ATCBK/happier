@@ -481,12 +481,47 @@ function readDeclarationComparisonContent(entry: unknown): string {
     return snapshot.content ??= stableContent(snapshot.value);
 }
 
-function pluginDeclarationContent(member: PluginUiProjectionUnionMember & Readonly<{ projection: PluginUiProjectionModel }>, pluginId: string): string {
+type DeclarationComparisonEntry = readonly [string, string];
+type ProjectionDeclarationComparison = Readonly<{
+    familiesByPluginId: ReadonlyMap<string, readonly (readonly DeclarationComparisonEntry[])[]>;
+    stampedPluginIds: ReadonlySet<string>;
+}>;
+
+/** Index one comparison pass, not one full-family scan for every plugin. */
+function readProjectionDeclarationComparison(model: PluginUiProjectionModel): ProjectionDeclarationComparison {
+    const declarationFamilies = declarationMaps(model);
+    const families = [...declarationFamilies, model.resourcesById];
+    const familiesByPluginId = new Map<string, DeclarationComparisonEntry[][]>();
+    const stampedPluginIds = new Set<string>();
+    for (const [index, family] of families.entries()) {
+        for (const [key, entry] of Object.entries(family)) {
+            const pluginId = asRecord(entry)?.pluginId;
+            if (typeof pluginId !== 'string') continue;
+            let grouped = familiesByPluginId.get(pluginId);
+            if (!grouped) {
+                grouped = Array.from({ length: families.length }, (): DeclarationComparisonEntry[] => []);
+                familiesByPluginId.set(pluginId, grouped);
+            }
+            grouped[index]!.push([key, readDeclarationComparisonContent(entry)]);
+            if (index < declarationFamilies.length && !stampedPluginIds.has(pluginId)
+                && readPluginUiProjectionEntryExecutionOrigin(entry) !== null) stampedPluginIds.add(pluginId);
+        }
+    }
+    for (const grouped of familiesByPluginId.values()) for (const family of grouped) {
+        family.sort(([left], [right]) => left.localeCompare(right));
+    }
+    return { familiesByPluginId, stampedPluginIds };
+}
+
+function pluginDeclarationContent(
+    member: PluginUiProjectionUnionMember & Readonly<{ projection: PluginUiProjectionModel }>,
+    pluginId: string,
+    comparison: ProjectionDeclarationComparison,
+): string {
     const model = member.projection;
     const installed = model.installedPackagesById[pluginId];
     const materialization = member.materializationsByPluginId?.[pluginId];
-    const stamped = declarationMaps(model).some(map => Object.values(map)
-        .some(entry => asRecord(entry)?.pluginId === pluginId && readPluginUiProjectionEntryExecutionOrigin(entry) !== null));
+    const stamped = comparison.stampedPluginIds.has(pluginId);
     const contentCorrespondence = materialization?.portableRelease && materialization.archiveDigestSha256
         ? [materialization.archiveDigestSha256, [...materialization.uiArtifacts].sort((left, right) => stableContent(left).localeCompare(stableContent(right)))]
         : materialization && !materialization.portableRelease ? [materialization.declaredManifest,
@@ -495,13 +530,8 @@ function pluginDeclarationContent(member: PluginUiProjectionUnionMember & Readon
     return stableContent([
         contentCorrespondence,
         installed ? [installed.id, installed.displayName, installed.version, installed.executionTarget] : null,
-        ...declarationMaps(model).map(map => Object.entries(map)
-            .filter(([, entry]) => asRecord(entry)?.pluginId === pluginId)
-            .sort(([left], [right]) => left.localeCompare(right))
-            .map(([key, entry]) => [key, readDeclarationComparisonContent(entry)])),
-        Object.entries(model.resourcesById).filter(([, entry]) => entry.pluginId === pluginId)
-            .sort(([left], [right]) => left.localeCompare(right))
-            .map(([key, entry]) => [key, readDeclarationComparisonContent(entry)]),
+        ...(comparison.familiesByPluginId.get(pluginId)
+            ?? Array.from({ length: declarationMaps(model).length + 1 }, () => [])),
     ]);
 }
 
@@ -807,13 +837,24 @@ export function unionPluginUiProjections(
             suppliesByPluginId.set(pluginId, supplies);
         }
     }
+    // This bounded index belongs only to this union invocation. Entry decoding
+    // still uses the canonical immutable comparison snapshots above; authority
+    // and changed materialization correspondence are read afresh below.
+    const declarationComparisons = new Map<PluginUiProjectionModel, ProjectionDeclarationComparison>();
     const conflictedPluginIds = new Set([...suppliesByPluginId].flatMap(([pluginId, supplies]) => {
         // Retained declarations describe the Account catalog. Administration
         // owns exact selectability (reachability, trust and release admission);
         // a current projection alone cannot grant those facts.
         const agreement = resolveFleetSupplyAgreement({
             identity: () => pluginId,
-            content: (member) => pluginDeclarationContent(member, pluginId),
+            content: (member) => {
+                let comparison = declarationComparisons.get(member.projection);
+                if (!comparison) {
+                    comparison = readProjectionDeclarationComparison(member.projection);
+                    declarationComparisons.set(member.projection, comparison);
+                }
+                return pluginDeclarationContent(member, pluginId, comparison);
+            },
             supplies: supplies.map(member => ({ value: member, selectable:
                 member.phase === 'current' && member.interactionEnabled && Boolean(member.selectableExecutionOrigins?.length)
                 && declarationMaps(member.projection).some(map => Object.values(map).some(entry => {

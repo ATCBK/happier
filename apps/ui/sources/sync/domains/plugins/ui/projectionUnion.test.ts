@@ -369,6 +369,29 @@ it('retains runtime client callback graphs beside host-owned renderer bytes with
     } finally { await composition.unload(); }
 });
 
+it('indexes declaration families once per projection when comparing a wide fleet catalog', () => {
+    const entries = Array.from({ length: 24 }, (_, index) => placementEntry({
+        pluginId: `acme.wide-${index}`, localId: 'panel', container: 'appPage',
+    }));
+    const entriesById = Object.fromEntries(entries.map(entry => [entry.id, entry]));
+    const members = ['machine-a', 'machine-b'].map(machineId => member({ machineId, generation: 1, entriesById }));
+    const maps = members.map(input => input.projection!.surfacePlacementsById);
+    const enumeration = vi.spyOn(Object, 'entries');
+    try {
+        const first = unionPluginUiProjections(members, selectedOrigins(selectedOrigin('acme.wide-0', 'machine-a')));
+        const second = unionPluginUiProjections(members, selectedOrigins(selectedOrigin('acme.wide-0', 'machine-b')));
+        const scans = enumeration.mock.calls.filter(([value]) => maps.some(map => map === value)).length;
+        console.info('R-C wide catalog declaration scans', { plugins: entries.length, members: members.length, unions: 2, scans });
+        expect(scans).toBeLessThanOrEqual(8);
+        expect(Object.keys(first.pluginUiProjection!.surfacePlacementsById)).toHaveLength(entries.length);
+        expect(Object.keys(second.pluginUiProjection!.surfacePlacementsById)).toHaveLength(entries.length);
+        expect(readPluginUiContributionOrigin(first.pluginUiProjection!.surfacePlacementsById[entries[0]!.id]))
+            .toMatchObject({ machineId: 'machine-a' });
+        expect(readPluginUiContributionOrigin(second.pluginUiProjection!.surfacePlacementsById[entries[0]!.id]))
+            .toMatchObject({ machineId: 'machine-b' });
+    } finally { enumeration.mockRestore(); }
+});
+
 it('does not rescan retained union members during unchanged renders', () => {
     const entry = placementEntry({ pluginId: 'acme.retained-comparison', localId: 'panel', container: 'appPage' });
     const members = Array.from({ length: 32 }, (_, index) => member({ machineId: `machine-${index}`,
