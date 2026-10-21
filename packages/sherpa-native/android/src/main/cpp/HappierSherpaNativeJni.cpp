@@ -13,6 +13,7 @@
 #include <android/log.h>
 
 #include "sherpa-onnx/c-api/c-api.h"
+#include "HappierSherpaOnlineAsr.h"
 
 namespace {
 
@@ -80,6 +81,7 @@ struct AsrEngine {
 struct AsrStreamState {
   std::shared_ptr<AsrEngine> engine;
   const SherpaOnnxOnlineStream *stream = nullptr;
+  int32_t inputSampleRate = 16000;
   // Text of segments already closed by an endpoint. The stream is reset at each endpoint (otherwise the
   // utterance-length rule keeps reporting an endpoint on every frame), and callers receive the whole
   // transcript so far rather than only the open segment.
@@ -411,7 +413,7 @@ Java_dev_happier_sherpa_HappierSherpaNativeJni_nativeCreateStreamingRecognizer(
 
   const SherpaOnnxOnlineStream *stream = SherpaOnnxCreateOnlineStream(engine->recognizer);
   if (!stream) return 0;
-  g_asrStreamsByJobId[jobKey] = AsrStreamState{std::move(engine), stream, {}};
+  g_asrStreamsByJobId[jobKey] = AsrStreamState{std::move(engine), stream, 16000, {}};
   return 1;
 }
 
@@ -447,7 +449,8 @@ Java_dev_happier_sherpa_HappierSherpaNativeJni_nativePushAudioFrame(
   const auto mono = Pcm16LeToMonoFloats(samples16.data(), samples16.size(), channels);
   const SherpaOnnxOnlineRecognizer *recognizer = state->engine->recognizer;
   if (!mono.empty()) {
-    SherpaOnnxOnlineStreamAcceptWaveform(state->stream, sampleRate > 0 ? sampleRate : 16000, mono.data(),
+    state->inputSampleRate = sampleRate > 0 ? sampleRate : 16000;
+    SherpaOnnxOnlineStreamAcceptWaveform(state->stream, state->inputSampleRate, mono.data(),
                                          static_cast<int32_t>(mono.size()));
   }
 
@@ -481,10 +484,7 @@ Java_dev_happier_sherpa_HappierSherpaNativeJni_nativeFinishStreaming(JNIEnv *env
 
   if (!state.engine || !state.stream) return env->NewStringUTF("");
 
-  SherpaOnnxOnlineStreamInputFinished(state.stream);
-  while (SherpaOnnxIsOnlineStreamReady(state.engine->recognizer, state.stream)) {
-    SherpaOnnxDecodeOnlineStream(state.engine->recognizer, state.stream);
-  }
+  happier_sherpa::FinishOnlineTransducer(state.engine->recognizer, state.stream, state.inputSampleRate);
 
   const std::string text = JoinTranscript(state.committedText, ReadStreamText(state.engine->recognizer, state.stream));
 

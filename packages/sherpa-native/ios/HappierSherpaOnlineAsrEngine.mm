@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <sherpa-onnx/c-api/c-api.h>
+#include "HappierSherpaOnlineAsr.h"
 
 namespace {
 
@@ -55,6 +56,7 @@ std::string ReadStreamText(const SherpaOnnxOnlineRecognizer *recognizer, const S
   HappierSherpaOnlineAsrEngine *_engine;
   const SherpaOnnxOnlineRecognizer *_recognizer;
   const SherpaOnnxOnlineStream *_stream;
+  int32_t _inputSampleRate;
   // Text of segments already closed by an endpoint. The stream is reset at each endpoint (otherwise the
   // utterance-length rule keeps reporting an endpoint on every frame), and callers receive the whole
   // transcript so far rather than only the open segment.
@@ -170,6 +172,7 @@ std::string ReadStreamText(const SherpaOnnxOnlineRecognizer *recognizer, const S
   _engine = engine;
   _recognizer = recognizer;
   _stream = stream;
+  _inputSampleRate = 16000;
   return self;
 }
 
@@ -210,6 +213,7 @@ std::string ReadStreamText(const SherpaOnnxOnlineRecognizer *recognizer, const S
     }
   }
 
+  _inputSampleRate = sr;
   SherpaOnnxOnlineStreamAcceptWaveform(_stream, sr, mono.data(), static_cast<int32_t>(mono.size()));
 
   while (SherpaOnnxIsOnlineStreamReady(_recognizer, _stream)) {
@@ -237,10 +241,7 @@ std::string ReadStreamText(const SherpaOnnxOnlineRecognizer *recognizer, const S
     return @"";
   }
 
-  SherpaOnnxOnlineStreamInputFinished(_stream);
-  while (SherpaOnnxIsOnlineStreamReady(_recognizer, _stream)) {
-    SherpaOnnxDecodeOnlineStream(_recognizer, _stream);
-  }
+  happier_sherpa::FinishOnlineTransducer(_recognizer, _stream, _inputSampleRate);
 
   const std::string text = JoinTranscript(_committedText, ReadStreamText(_recognizer, _stream));
 
