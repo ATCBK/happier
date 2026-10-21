@@ -7,8 +7,11 @@ import type { ExactSessionMachineTargetIdentity } from '@/sync/ops/sessionMachin
 import { readRpcErrorCode } from '@/sync/runtime/rpcErrors';
 import {
     isTransferFinalizeRecoveryFailure,
+    createTransferFinalizeRecovery,
+    retainTransferFinalizeRecovery,
+    settleTransferFinalizeRecovery,
     type TransferFinalizeRecoveryFailure,
-} from '@/sync/domains/transfers/runtime/transferRuntime';
+} from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/directTransferFinalizeRecovery';
 import type { SessionAttachmentsUploadFinalizeResponse, SessionAttachmentTransferContext } from '@/sync/domains/transfers/runtime/transferRuntime/families/sessionAttachmentTransfers';
 import type { SessionAttachmentHandleV1 } from '@happier-dev/protocol';
 
@@ -108,8 +111,8 @@ type SessionAttachmentUploadArgs = Readonly<{
     sessionTarget?: ExactSessionMachineTargetIdentity;
     transferContext?: SessionAttachmentTransferContext;
     file: AttachmentUploadSource;
-    /** A draft id keeps one folder's files together without sharing another dropped root. */
-    folderUploadId?: string;
+    /** Tray identity is retained in the issued descriptor and scopes a folder's root. */
+    attachmentId?: string;
     relativePath?: string;
     directoryEntries?: readonly string[];
     messageLocalId: string;
@@ -119,30 +122,7 @@ type SessionAttachmentUploadArgs = Readonly<{
     isCurrent?: () => boolean;
 }>;
 
-// Eager upload and Send can hold the same immutable source snapshot. Reuse its
-// transfer/checkpoint rather than racing two writes into the same folder tree.
-const folderUploads = new WeakMap<AttachmentUploadSource, Map<string, Promise<SessionAttachmentsUploadFileResult>>>();
-
 export async function sessionAttachmentsUploadFile(args: SessionAttachmentUploadArgs): Promise<SessionAttachmentsUploadFileResult> {
-    if (args.file.kind !== 'folder') return await uploadSessionAttachmentSource(args);
-    if (args.signal?.aborted || args.isCurrent?.() === false) return { success: false, error: 'Upload canceled' };
-    const key = JSON.stringify([args.sessionId, args.sessionTarget, args.folderUploadId, args.config]);
-    let uploads = folderUploads.get(args.file);
-    if (!uploads) { uploads = new Map(); folderUploads.set(args.file, uploads); }
-    let pending = uploads.get(key);
-    if (!pending) {
-        pending = uploadSessionAttachmentSource(args);
-        uploads.set(key, pending);
-        const capturedUploads = uploads;
-        void pending.then(result => {
-            if (!result.success) capturedUploads.delete(key);
-        });
-    }
-    const result = await pending;
-    return args.signal?.aborted || args.isCurrent?.() === false ? { success: false, error: 'Upload canceled' } : result;
-}
-
-async function uploadSessionAttachmentSource(args: SessionAttachmentUploadArgs): Promise<SessionAttachmentsUploadFileResult> {
     const isCurrent = () => !args.signal?.aborted && (args.isCurrent?.() ?? true);
     const assertCurrent = () => {
         if (!isCurrent()) throw new Error('Upload canceled');
@@ -151,7 +131,7 @@ async function uploadSessionAttachmentSource(args: SessionAttachmentUploadArgs):
         assertCurrent();
         if (args.file.kind === 'folder') {
             const folder = args.file;
-            const root = resolveUploadRelativePath(args.folderUploadId ?? randomUUID(), folder.name);
+            const root = resolveUploadRelativePath(args.attachmentId ?? randomUUID(), folder.name);
             if (!root) return { success: false, error: 'Invalid attachment relativePath' };
             const entries = folder.entries.map(entry => ({ ...entry, path: resolveUploadRelativePath(root, entry.relativePath) }));
             if (entries.some(entry => !entry.path)) return { success: false, error: 'Invalid attachment relativePath' };
@@ -171,6 +151,7 @@ async function uploadSessionAttachmentSource(args: SessionAttachmentUploadArgs):
                     const entry = entries[index];
                     const result = recovered ?? await sessionAttachmentsUploadFile({ ...args,
                         file: entry ? entry.source : { kind: 'memory', name: folder.name, bytes: new Uint8Array(0) },
+                        attachmentId: entry ? undefined : args.attachmentId,
                         relativePath: entry ? entry.path! : root,
                         ...(entry ? {} : { directoryEntries: directories }),
                         onProgress: progress => args.onProgress?.({ uploadedBytes: completedBytes + progress.uploadedBytes, totalBytes }) });
@@ -180,21 +161,26 @@ async function uploadSessionAttachmentSource(args: SessionAttachmentUploadArgs):
                         if (!isTransferFinalizeRecoveryFailure<SessionAttachmentsUploadFinalizeResponse>(result)) return result;
                         let activeRecovery = result.recovery;
                         let resumeIndex: number | null = index;
-                        return { ...result, recovery: { ...activeRecovery,
-                            get expiresAt() { return activeRecovery.expiresAt; },
-                            invoke: async (action, signal) => {
-                                const outcome = await activeRecovery.invoke(action, signal);
-                                if (outcome.status !== 'finalized' || resumeIndex === null) return outcome;
+                        return { ...result, recovery: createTransferFinalizeRecovery<SessionAttachmentsUploadFinalizeResponse>({
+                            expiresAt: activeRecovery.expiresAt,
+                            retryFinalize: async (signal) => {
+                                const outcome = await activeRecovery.invoke('retry_finalize', signal);
+                                if (outcome.status !== 'finalized' || resumeIndex === null) return activeRecovery.isActionable()
+                                    ? retainTransferFinalizeRecovery(outcome) : settleTransferFinalizeRecovery(outcome);
                                 const remaining = await uploadNext(resumeIndex, outcome.response);
-                                if (remaining.success) return { status: 'finalized', response: remaining };
+                                if (remaining.success) return settleTransferFinalizeRecovery({ status: 'finalized', response: remaining });
                                 if (isTransferFinalizeRecoveryFailure<SessionAttachmentsUploadFinalizeResponse>(remaining)) {
                                     activeRecovery = remaining.recovery;
                                     resumeIndex = null;
-                                    return { status: 'recovery_required', error: remaining.error };
+                                    return retainTransferFinalizeRecovery({ status: 'recovery_required', error: remaining.error });
                                 }
-                                return { status: 'unavailable', reason: 'session_unavailable', error: remaining.error };
+                                return settleTransferFinalizeRecovery({ status: 'unavailable', reason: 'session_unavailable', error: remaining.error });
                             },
-                        } };
+                            discard: async (signal) => {
+                                const outcome = await activeRecovery.invoke('discard_staged', signal);
+                                return activeRecovery.isActionable() ? retainTransferFinalizeRecovery(outcome) : settleTransferFinalizeRecovery(outcome);
+                            },
+                        }) };
                     }
                     if (!entry) return { ...result, path: result.path, sizeBytes: completedBytes, sha256: '' };
                     completedBytes += result.sizeBytes;
@@ -256,6 +242,7 @@ async function uploadSessionAttachmentSource(args: SessionAttachmentUploadArgs):
                 request: {
                     messageLocalId: args.messageLocalId,
                     fileName: described.name,
+                    ...(args.attachmentId === undefined ? {} : { attachmentId: args.attachmentId }),
                     ...(args.relativePath === undefined ? {} : { relativePath: args.relativePath }),
                     ...(args.directoryEntries === undefined ? {} : { directoryEntries: [...args.directoryEntries] }),
                     sizeBytes: described.sizeBytes,

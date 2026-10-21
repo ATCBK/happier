@@ -167,6 +167,18 @@ describe('uploadSessionMessageAttachmentDrafts', () => {
             isCurrent: () => true, uploadFile })).toEqual([{ ...handle, id: 'draft-a.txt' }, { ...handle, id: 'draft-b.txt' }]);
     });
 
+    it('captures folder memory entries before an asynchronous target send', () => {
+        const bytes = new Uint8Array([1, 2]);
+        const original: AttachmentDraft = { id: 'folder-draft', status: 'pending', source: { kind: 'folder',
+            name: 'project', mimeType: 'inode/directory', directories: ['empty'], entries: [{ relativePath: 'a.txt',
+                source: { kind: 'memory', name: 'a.txt', bytes } }] } };
+        const captured = captureSessionMessageAttachmentDrafts([original]);
+        bytes[0] = 9;
+        const source = captured[0]?.source;
+        if (source?.kind !== 'folder' || source.entries[0]?.source.kind !== 'memory') throw new Error('Expected folder source');
+        expect([...source.entries[0].source.bytes]).toEqual([1, 2]);
+    });
+
     it.each([
         undefined,
         { ...handle, sessionId: 'wrong-session' },

@@ -70,7 +70,7 @@ describe('issued Session attachments at target intake', () => {
       }
       const folderInit = await call(RPC_METHODS.DAEMON_TRANSFER_UPLOAD_INIT, {
         t: 'session_attachment_upload_v1', sessionId: 'session-1', messageLocalId: 'folder-input',
-        fileName: 'project', relativePath: 'draft-1/project', directoryEntries: ['empty-child', 'nested/empty'], sizeBytes: 0,
+        fileName: 'project', attachmentId: 'draft-1', relativePath: 'draft-1/project', directoryEntries: ['empty-child', 'nested/empty'], sizeBytes: 0,
         uploadLocation: 'workspace', workspaceRelativeDir: '.uploads', vcsIgnoreStrategy: 'none', vcsIgnoreWritesEnabled: false,
       }) as { success: boolean; uploadId: string };
       expect(folderInit.success).toBe(true);
@@ -86,7 +86,7 @@ describe('issued Session attachments at target intake', () => {
         meta: { happierStructuredInputV1: { v: 1, sessionAttachments: [folderHandle] } },
         resolveSessionAttachment: registration.resolveSessionAttachment });
       expect(projected.meta).toMatchObject({ happier: { kind: 'attachments.v1', payload: { attachments: [{
-        name: 'project', path: '.uploads/messages/folder-input/draft-1/project', mimeType: 'inode/directory', sizeBytes: empty ? 0 : 11,
+        id: 'draft-1', name: 'project', path: '.uploads/messages/folder-input/draft-1/project', mimeType: 'inode/directory', sizeBytes: empty ? 0 : 11,
       }] } } });
     } finally {
       await registration.dispose();

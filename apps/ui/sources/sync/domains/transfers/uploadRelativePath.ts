@@ -1,6 +1,6 @@
 import { isSafeWorkspaceRelativePath } from '@/utils/path/isSafeWorkspaceRelativePath';
 
-export function joinUploadPath(parentDir: string, relativePath: string): string {
+function joinUploadPath(parentDir: string, relativePath: string): string {
     const parent = String(parentDir ?? '').trim().replace(/\\/g, '/').replace(/\/+$/g, '');
     const relative = String(relativePath ?? '').trim().replace(/\\/g, '/').replace(/^\/+/, '');
     if (!parent) return relative.replace(/\/+/g, '/');

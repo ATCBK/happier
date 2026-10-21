@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { chmod, mkdir, open, readdir, rm, stat } from 'fs/promises';
 import { tmpdir } from 'os';
-import { dirname, join } from 'path';
+import { dirname, join, relative, isAbsolute } from 'path';
 
 import { isPidPresent } from '@happier-dev/cli-common/process';
 import type { UploadTransferTarget } from './uploadTransferTarget.js';
@@ -13,7 +13,9 @@ type IssuedAttachment = Readonly<{
   name: string;
   displayPath: string;
   sizeBytes: number;
-  sha256: string;
+  sha256?: string;
+  mimeType?: string;
+  attachmentId?: string;
 }>;
 
 type UploadSession = {
@@ -304,13 +306,27 @@ export class TransferSessionStore {
   }
 
   issueAttachment(input: Readonly<{ uploadId: string; sessionId: string; filePath: string; name: string;
-    displayPath: string; sizeBytes: number; sha256: string;
+    displayPath: string; sizeBytes: number; sha256?: string; mimeType?: string; attachmentId?: string;
   }>): SessionAttachmentHandleV1 {
     this.assertOpen();
     const handle: SessionAttachmentHandleV1 = { v: 1, sessionId: input.sessionId, id: input.uploadId };
     this.attachments.set(handle.id, { handle, filePath: input.filePath, name: input.name,
-      displayPath: input.displayPath, sizeBytes: input.sizeBytes, sha256: input.sha256 });
+      displayPath: input.displayPath, sizeBytes: input.sizeBytes, sha256: input.sha256,
+      ...(input.mimeType ? { mimeType: input.mimeType } : {}), ...(input.attachmentId ? { attachmentId: input.attachmentId } : {}) });
     return handle;
+  }
+
+  /** Directory totals come from this Session's issued files, never a caller-supplied descriptor. */
+  issueDirectoryAttachment(input: Readonly<{ uploadId: string; sessionId: string; filePath: string; name: string; displayPath: string; attachmentId?: string }>): SessionAttachmentHandleV1 {
+    const files = new Map<string, number>();
+    for (const issued of this.attachments.values()) {
+      const path = relative(input.filePath, issued.filePath);
+      if (issued.handle.sessionId === input.sessionId && issued.mimeType !== 'inode/directory'
+        && path && path !== '..' && !path.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) && !isAbsolute(path)) {
+        files.set(issued.filePath, issued.sizeBytes);
+      }
+    }
+    return this.issueAttachment({ ...input, sizeBytes: [...files.values()].reduce((sum, size) => sum + size, 0), mimeType: 'inode/directory' });
   }
 
   getIssuedAttachment(handle: SessionAttachmentHandleV1): IssuedAttachment | null {

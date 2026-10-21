@@ -77,6 +77,7 @@ export function registerTransferUploadRpcHandlers(
             sessionId: deps.sessionAttachment.sessionId,
             messageLocalId: request.messageLocalId,
             fileName: request.fileName,
+            ...(request.attachmentId === undefined ? {} : { attachmentId: request.attachmentId }),
             ...(request.relativePath === undefined ? {} : { relativePath: request.relativePath }),
             ...(request.directoryEntries === undefined ? {} : { directoryEntries: request.directoryEntries }),
             sizeBytes: request.sizeBytes,
@@ -115,6 +116,7 @@ export function registerTransferUploadRpcHandlers(
                   if (uploadRequest.directoryEntries !== undefined) deps.store.issueDirectoryAttachment({
                     uploadId: input.uploadId, sessionId: deps.sessionAttachment!.sessionId,
                     filePath: resolved.target.destPath, name: basename(resolved.target.destPath), displayPath: finalized.path,
+                    ...(uploadRequest.attachmentId ? { attachmentId: uploadRequest.attachmentId } : {}),
                   });
                   else deps.store.issueAttachment({
                     uploadId: input.uploadId,
@@ -124,6 +126,7 @@ export function registerTransferUploadRpcHandlers(
                     displayPath: finalized.path,
                     sizeBytes: finalized.sizeBytes,
                     sha256: input.sha256,
+                    ...(uploadRequest.attachmentId ? { attachmentId: uploadRequest.attachmentId } : {}),
                   });
                 }
                 return finalized;

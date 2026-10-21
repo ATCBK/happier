@@ -74,6 +74,45 @@ function createAttachmentUploadFailureError(input: Readonly<{
     return normalizedCode ? new RpcError(input.error, normalizedCode) : new Error(input.error);
 }
 
+type DraftUploadArguments = Parameters<typeof uploadAttachmentDraftsToSession>[0];
+type DraftUploadResult = Awaited<ReturnType<typeof sessionAttachmentsUploadFile>>;
+// Eager upload and Send share one complete transfer, including finalize recovery.
+// Successful results also serve snapshots captured before the draft checkpoint arrived.
+const folderUploads = new WeakMap<AttachmentUploadSource, Map<string, Promise<DraftUploadResult>>>();
+
+async function uploadAndRecoverDraft(args: DraftUploadArguments, draft: AttachmentDraft, messageLocalId: string): Promise<DraftUploadResult> {
+    const upload = async (): Promise<DraftUploadResult> => {
+        let result = await (args.uploadFile ?? sessionAttachmentsUploadFile)({ sessionId: args.sessionId,
+            ...(args.sessionTarget ? { sessionTarget: args.sessionTarget } : {}),
+            ...(args.transferContext ? { transferContext: args.transferContext } : {}),
+            file: draft.source, attachmentId: draft.id, messageLocalId, config: args.config,
+            signal: args.signal ?? undefined,
+            onProgress: progress => args.applyDraftPatch(draft.id, { uploadProgress: progress }),
+        });
+        if (isTransferFinalizeRecoveryFailure<SessionAttachmentsUploadFinalizeResponse>(result)) {
+            const recovery = await runTransferFinalizeRecovery({ recovery: result.recovery, signal: args.signal,
+                title: t('transferRecovery.title'), message: t('transferRecovery.message') });
+            result = recovery?.status === 'finalized' ? recovery.response : { success: false,
+                error: recovery?.status === 'unavailable' ? t('transferRecovery.unavailable')
+                    : recovery?.status === 'discarded' ? t('transferRecovery.discarded') : result.error };
+        }
+        return result;
+    };
+    if (draft.source.kind !== 'folder') return await upload();
+    const key = JSON.stringify([draft.id, args.sessionId, args.sessionTarget?.serverId, args.sessionTarget?.accountId,
+        args.config.uploadLocation, args.config.workspaceRelativeDir, args.config.vcsIgnoreStrategy,
+        args.config.vcsIgnoreWritesEnabled, args.config.maxFileBytes]);
+    let uploads = folderUploads.get(draft.source);
+    if (!uploads) { uploads = new Map(); folderUploads.set(draft.source, uploads); }
+    const existing = uploads.get(key);
+    if (existing) return await existing;
+    const pending = upload();
+    uploads.set(key, pending);
+    const capturedUploads = uploads;
+    void pending.then(result => { if (!result.success) capturedUploads.delete(key); }, () => capturedUploads.delete(key));
+    return await pending;
+}
+
 export async function uploadAttachmentDraftsToSession(args: Readonly<{
     sessionId: string;
     /** Exact qualified Session target when the created Session is outside the active Account. */
@@ -125,38 +164,15 @@ export async function uploadAttachmentDraftsToSession(args: Readonly<{
                 ? { uploadedBytes: 0, totalBytes: described.sizeBytes }
                 : undefined;
         args.applyDraftPatch(stillPresent.id, { status: 'uploading', error: undefined, uploadProgress: initialProgress });
-        let uploadRes = await (args.uploadFile ?? sessionAttachmentsUploadFile)({
-            sessionId: args.sessionId,
-            ...(args.sessionTarget ? { sessionTarget: args.sessionTarget } : {}),
-            ...(args.transferContext ? { transferContext: args.transferContext } : {}),
-            file: stillPresent.source,
-            ...(stillPresent.source.kind === 'folder' ? { folderUploadId: stillPresent.id } : {}),
-            messageLocalId,
-            config: args.config,
-            signal: args.signal ?? undefined,
-            onProgress: (progress) => {
-                args.applyDraftPatch(stillPresent.id, { uploadProgress: progress });
-            },
-        });
-        if (isTransferFinalizeRecoveryFailure<SessionAttachmentsUploadFinalizeResponse>(uploadRes)) {
-            const recoveryResult = await runTransferFinalizeRecovery({
-                recovery: uploadRes.recovery,
-                signal: args.signal,
-                title: t('transferRecovery.title'),
-                message: t('transferRecovery.message'),
-            });
-            if (recoveryResult?.status === 'finalized') {
-                uploadRes = recoveryResult.response;
-            } else {
-                uploadRes = {
-                    success: false,
-                    error: recoveryResult?.status === 'unavailable'
-                        ? t('transferRecovery.unavailable')
-                        : recoveryResult?.status === 'discarded'
-                            ? t('transferRecovery.discarded')
-                            : uploadRes.error,
-                };
+        let uploadRes: DraftUploadResult;
+        try {
+            uploadRes = await uploadAndRecoverDraft(args, stillPresent, messageLocalId);
+        } catch (error) {
+            if (stillPresent.source.kind === 'folder' && !args.signal?.aborted) {
+                args.applyDraftPatch(stillPresent.id, { status: 'error',
+                    error: describeUploadFailure(classifyTransferFailure({ thrown: error }), t('common.machine')) });
             }
+            throw error;
         }
         args.signal?.throwIfAborted();
         if (!uploadRes.success) {

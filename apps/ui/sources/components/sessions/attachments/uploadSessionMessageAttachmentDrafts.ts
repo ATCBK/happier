@@ -5,6 +5,7 @@ import type { SessionAttachmentsUploadFinalizeResponse } from '@/sync/domains/tr
 import type { ExactSessionMachineTargetIdentity } from '@/sync/ops/sessionMachineTarget';
 import type { SessionExecutionTargetV1 } from '@happier-dev/protocol/sessions/creation/sessionExecutionTargetV1';
 import type { AttachmentDraft } from './attachmentDraftModel';
+import type { AttachmentsUploadFileSource } from '@/sync/domains/attachments/attachmentsUploadFileSource';
 import { uploadAttachmentDraftsToSession, type AttachmentTargetUploadedDraftCheckpoint } from './uploadAttachmentDraftsToSession';
 
 export function isAttachmentTargetUploadCheckpointFor(
@@ -32,9 +33,12 @@ export function recordAttachmentTargetUploadCheckpoint(
 export function captureSessionMessageAttachmentDrafts(drafts: readonly AttachmentDraft[]): readonly AttachmentDraft[] {
     // Files are immutable browser blobs. Memory content needs its own invocation copy;
     // native URIs retain the ordinary uploader's source-file lifetime contract.
+    const captureFile = (source: AttachmentsUploadFileSource): AttachmentsUploadFileSource => source.kind === 'memory'
+        ? { ...source, bytes: new Uint8Array(source.bytes) } : { ...source };
     return drafts.map(({ id, source, targetUploadedCheckpoints }) => ({
         id,
-        source: source.kind === 'memory' ? { ...source, bytes: new Uint8Array(source.bytes) } : { ...source },
+        source: source.kind === 'folder' ? { ...source, entries: source.entries.map(entry => ({ ...entry, source: captureFile(entry.source) })),
+            ...(source.directories ? { directories: [...source.directories] } : {}) } : captureFile(source),
         status: 'pending',
         ...(targetUploadedCheckpoints ? { targetUploadedCheckpoints: targetUploadedCheckpoints.map(checkpoint => ({
             ...checkpoint, target: { ...checkpoint.target },

@@ -10,7 +10,10 @@ export const SessionAttachmentUploadInitRequestV1Schema = lazyZodSchema(() => z.
   sessionId: asProtocolZod(SessionIdSchema),
   messageLocalId: z.unknown(),
   fileName: z.unknown(),
+  attachmentId: z.optional(z.string().check(z.minLength(1))),
   relativePath: z.optional(z.string()),
+  /** A zero-byte directory finalization preserves empty directories under relativePath. */
+  directoryEntries: z.optional(z.array(z.string())),
   sizeBytes: z.unknown(),
   uploadLocation: z.optional(z.enum(['workspace', 'os_temp'])),
   workspaceRootPath: z.optional(z.unknown()),

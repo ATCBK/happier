@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { sessionAttachmentsUploadFile, type AttachmentsUploadConfig } from './uploadSessionAttachment';
-import type { SessionAttachmentTransferContext } from '../runtime/transferRuntime/families/sessionAttachmentTransfers';
+import type { SessionAttachmentTransferContext, SessionAttachmentsUploadFinalizeResponse } from '../runtime/transferRuntime/families/sessionAttachmentTransfers';
 import { isTransferFinalizeRecoveryFailure } from '../runtime/transferRuntime/plumbing/directTransferFinalizeRecovery';
 import { createTransferRecipientKeyPair, decryptEncryptedTransferChunkEnvelope } from '../runtime/transferRuntime/plumbing/transferChunkEncryption';
 
@@ -98,6 +98,8 @@ describe('uploadSessionAttachment', () => {
         transport.call.mockImplementation(async (method, raw) => {
             const request = raw as Record<string, unknown>;
             if (method === RPC_METHODS.DAEMON_TRANSFER_UPLOAD_INIT) {
+                expect(request).toMatchObject({ uploadLocation: 'workspace', workspaceRelativeDir: '.happier/uploads',
+                    vcsIgnoreStrategy: 'git_info_exclude', vcsIgnoreWritesEnabled: true });
                 paths.push(String(request.relativePath));
                 return { success: true, uploadId: 'folder-upload', chunkSizeBytes: 8,
                     recipientPublicKeyBase64: createTransferRecipientKeyPair().recipientPublicKeyBase64 };
@@ -114,12 +116,53 @@ describe('uploadSessionAttachment', () => {
                 { relativePath: 'a.txt', source: { kind: 'web', file: webFile() } },
                 { relativePath: 'nested/b.txt', source: { kind: 'web', file: webFile() } },
             ] },
-            folderUploadId: 'draft-folder',
+            attachmentId: 'draft-folder',
         } satisfies Parameters<typeof sessionAttachmentsUploadFile>[0];
-        const [result, concurrent] = await Promise.all([sessionAttachmentsUploadFile(request), sessionAttachmentsUploadFile(request)]);
+        const { uploadAttachmentDraftsToSession } = await import('@/components/sessions/attachments/uploadAttachmentDraftsToSession');
+        const run = () => uploadAttachmentDraftsToSession({ sessionId: request.sessionId, transferContext: request.transferContext,
+            config: request.config, messageLocalId: request.messageLocalId,
+            drafts: [{ id: 'draft-folder', source: request.file, status: 'pending' }], applyDraftPatch: () => {} });
+        const [result, concurrent] = await Promise.all([run(), run()]);
         expect(paths).toEqual(['draft-folder/project/a.txt', 'draft-folder/project/nested/b.txt', 'draft-folder/project']);
-        expect(result).toMatchObject({ success: true, path: '.happier/uploads/messages/m1/draft-folder/project', sizeBytes: 10 });
+        expect(result.uploaded).toEqual([expect.objectContaining({ id: 'draft-folder', name: 'project', mimeType: 'inode/directory',
+            path: '.happier/uploads/messages/m1/draft-folder/project', sizeBytes: 10 })]);
         expect(concurrent).toEqual(result);
+    });
+    it('keeps folder recovery actionable across multiple file and directory finalizations', async () => {
+        const transport = createSessionTransport();
+        const paths = new Map<string, string>();
+        const attempts = new Set<string>();
+        transport.call.mockImplementation(async (method, raw) => {
+            const request = raw as Record<string, unknown>;
+            if (method === RPC_METHODS.DAEMON_TRANSFER_UPLOAD_INIT) {
+                const id = String(paths.size);
+                paths.set(id, String(request.relativePath));
+                return { success: true, uploadId: id, chunkSizeBytes: 8, expiresAt: Date.now() + 60_000,
+                    recipientPublicKeyBase64: createTransferRecipientKeyPair().recipientPublicKeyBase64 };
+            }
+            if (method === RPC_METHODS.DAEMON_TRANSFER_UPLOAD_FINALIZE) {
+                const id = String(request.uploadId);
+                if (!attempts.has(id)) { attempts.add(id); return { success: false,
+                    error: 'Commit needs confirmation', errorCode: 'TRANSFER_FINALIZE_RECOVERY_REQUIRED' }; }
+                return { ...finalized, path: `.uploads/messages/m1/${paths.get(id)}`, sizeBytes: paths.get(id)?.endsWith('.txt') ? 5 : 0 };
+            }
+            return { success: true };
+        });
+        const result = await sessionAttachmentsUploadFile({ sessionId: 's1', transferContext: transport.transferContext,
+            messageLocalId: 'm1', attachmentId: 'folder-draft', config,
+            file: { kind: 'folder', name: 'project', mimeType: 'inode/directory', entries: [
+                { relativePath: 'a.txt', source: { kind: 'web', file: webFile() } },
+                { relativePath: 'b.txt', source: { kind: 'web', file: webFile() } },
+            ] } });
+        if (!isTransferFinalizeRecoveryFailure<SessionAttachmentsUploadFinalizeResponse>(result)) throw new Error('Expected folder recovery');
+        expect(await result.recovery.invoke('retry_finalize')).toMatchObject({ status: 'recovery_required' });
+        expect(result.recovery.isActionable()).toBe(true);
+        expect(await result.recovery.invoke('retry_finalize')).toMatchObject({ status: 'recovery_required' });
+        expect(result.recovery.isActionable()).toBe(true);
+        expect(await result.recovery.invoke('retry_finalize')).toMatchObject({ status: 'finalized', response: {
+            path: '.uploads/messages/m1/folder-draft/project', sizeBytes: 10,
+        } });
+        expect(result.recovery.isActionable()).toBe(false);
     });
     beforeEach(() => {
         nativeOpenSpy.mockClear();
