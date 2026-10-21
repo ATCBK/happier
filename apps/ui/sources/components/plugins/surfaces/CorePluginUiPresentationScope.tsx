@@ -7,7 +7,7 @@ import { projectHappierUiEnvironment } from '@happier-dev/plugin-ui/environment'
 import { usePluginSurfaceEnvironment } from './pluginSurfaceContext';
 import { resolvePluginUiFrameworkTranslations } from './pluginUiFrameworkTranslations';
 import { createPluginUiPrivatePresentationHost } from './pluginUiPrivatePresentationHost';
-import { projectPluginUiHostPalette } from './pluginUiThemeProjection';
+import { usePluginUiHostPalette } from './pluginUiThemeProjection';
 import { usePluginUiMediaStage } from './usePluginUiMediaStage';
 
 /** Core uses the same public presenters and real platform bindings as an installed plugin, without plugin state. */
@@ -17,20 +17,22 @@ export function CorePluginUiPresentationScope(props: Readonly<{
 }>) {
   const { theme } = useUnistyles();
   const surface = usePluginSurfaceEnvironment(Platform.OS);
+  const translations = React.useMemo(() => resolvePluginUiFrameworkTranslations(), [surface.locale]);
   const environment = React.useMemo(
-    () => projectHappierUiEnvironment({ ...surface, translations: resolvePluginUiFrameworkTranslations() }),
-    [surface],
+    () => projectHappierUiEnvironment({ ...surface, translations }),
+    [surface, translations],
   );
   const { renderPageScroller } = props;
   const mediaStage = usePluginUiMediaStage();
+  const palette = usePluginUiHostPalette(theme);
   const presentationHost = React.useMemo((): PluginUiPresentationHost => ({
     ...createPluginUiPrivatePresentationHost(undefined, {
       direction: surface.direction,
-      palette: projectPluginUiHostPalette(theme),
+      palette,
       mediaStage,
     }),
     ...(renderPageScroller === undefined ? {} : { renderPageScroller }),
-  }) as unknown as PluginUiPresentationHost, [mediaStage, renderPageScroller, surface.direction, theme]);
+  }) as unknown as PluginUiPresentationHost, [mediaStage, palette, renderPageScroller, surface.direction]);
   return <PluginUiHostPresentationScope environment={environment} presentationHost={presentationHost}>
     {props.children}
   </PluginUiHostPresentationScope>;

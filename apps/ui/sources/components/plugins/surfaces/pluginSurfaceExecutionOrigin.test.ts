@@ -394,11 +394,20 @@ describe('plugin surface execution requirement', () => {
             const multiHook = await renderHook(() => usePluginSurfaceExecutionOrigin({ pluginId, projection: multiProjection,
                 entry: pageEntry, enabled: true }), { wrapper: Wrapper });
             expect(multiHook.getCurrent().selection.state).toMatchObject({ kind: 'selected', selectionSource: 'auto',
-                origin: { sourceRef: { machineId: otherMachineId } } });
-            expect(multiHook.getCurrent().selectedSupply).toBeNull();
-            await multiHook.unmount();
+                origin: { sourceRef: { machineId } } });
+            expect(multiHook.getCurrent().selectedSupply?.machineId).toBe(machineId);
             const savedOtherOrigin = readPluginUiContributionSupplies(otherEntry)[0]?.executionOrigin;
             if (!savedOtherOrigin || !('sourceRef' in savedOtherOrigin)) throw new Error('Other source must have an exact origin');
+            // A second mounted consumer shares the incumbent Auto choice. An
+            // explicit pin can still select a Machine without this page.
+            await act(async () => storage.setState({ settings: { ...storage.getState().settings,
+                machineAdministrationTargetsLocalV1: setPluginMachineExecutionOriginPreference({}, pluginId, savedOtherOrigin) } }));
+            expect(multiHook.getCurrent().selection.state).toMatchObject({ kind: 'selected', selectionSource: 'pinned',
+                origin: savedOtherOrigin });
+            expect(multiHook.getCurrent().selectedSupply).toBeNull();
+            await multiHook.unmount();
+            await act(async () => storage.setState({ settings: { ...storage.getState().settings,
+                machineAdministrationTargetsLocalV1: {} } }));
             const savedPreferences = { v: 1 as const, pluginExecutionOriginsByPluginId: { [pluginId]: savedOtherOrigin } };
             await act(async () => storage.setState({ settingsVersion: 1, settings: { ...storage.getState().settings,
                 machineAdministrationSelectionsV1: savedPreferences } }));

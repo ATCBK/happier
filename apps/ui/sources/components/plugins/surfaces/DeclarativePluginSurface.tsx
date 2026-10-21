@@ -93,7 +93,7 @@ import {
     resolvePluginSurfaceDestinationIcon,
     resolvePluginSurfaceDestinationLabel,
 } from './pluginSurfaceDestinations';
-import { projectPluginUiHostPalette, readPluginUiHostTypography, usePluginUiTheme } from './pluginUiThemeProjection';
+import { usePluginUiHostPalette, readPluginUiHostTypography, usePluginUiTheme } from './pluginUiThemeProjection';
 import { getPreferredLanguage, t } from '@/text';
 import { createPluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -647,6 +647,7 @@ export function DeclarativePluginSurface(props: Readonly<{
     contrast?: HappierUiAccessibility['contrast'];
 }>) {
     const { theme } = useUnistyles();
+    const hostPalette = usePluginUiHostPalette(theme);
     const hostActivelyViewed = useHostActivelyViewed();
     const widgetPresentation = useWidgetPresentation();
     const activeServer = useActiveServerSnapshot();
@@ -1591,7 +1592,7 @@ export function DeclarativePluginSurface(props: Readonly<{
     // host's real type roles and page colours, exactly as an executable plugin surface does.
     const typedSurface = (
         <HappierUiTypographyProvider typography={readPluginUiHostTypography()}>
-            <HappierUiPaletteProvider palette={projectPluginUiHostPalette(theme)}>{renderedSurface}</HappierUiPaletteProvider>
+            <HappierUiPaletteProvider palette={hostPalette}>{renderedSurface}</HappierUiPaletteProvider>
         </HappierUiTypographyProvider>
     );
     return props.environment

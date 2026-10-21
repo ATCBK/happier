@@ -10,6 +10,10 @@ import { createPluginReactNativeModuleRegistry } from './moduleRegistry';
 import {
     createPluginUiReactNativeRuntimeProjectionReconciler,
 } from './projectionInvalidation';
+import { getPluginUiClientExecutableComposition } from './clientExecutableContributions';
+import { createPluginUiCommonJsLoaderBackend } from './commonJsLoaderBackend';
+import { PluginContributesV2Schema } from '@happier-dev/protocol';
+import { settleAppShellPluginRuntimeUpdate } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import {
     EMPTY_PLUGIN_UI_PROJECTION,
     type PluginUiProjectionModel,
@@ -102,6 +106,52 @@ function createRetirableAccountLifetime(): Readonly<{
 }
 
 describe('plugin UI React Native runtime projection invalidation owner', () => {
+    it('retains an exact Account registration while settling the next complete set and replaces changed Account custody', async () => {
+        const composition = getPluginUiClientExecutableComposition();
+        const cache = createPluginReactNativeBundleCache();
+        const cacheIdentity = identity(12);
+        const target = { realm: 'account' as const, artifactId: cacheIdentity.artifactId,
+            exportName: 'activate', platform: 'web' as const };
+        const contributes = PluginContributesV2Schema.parse({ actions: [{
+            id: 'read', title: 'Read Account', scopes: ['global'], surfaces: ['ui'], placementBindings: [], dangerLevel: 'safe',
+            execution: { target: 'account', account: { artifactId: target.artifactId, exportName: target.exportName } },
+        }] });
+        cache.putInstalledArtifact({ identity: cacheIdentity, format: 'plainJs', bytes: new TextEncoder().encode(
+            "exports.activate = function(api) { api.actions.register('read', async function() { return 'Account value'; }); };",
+        ) });
+        const authority = { kind: 'account' as const, serverId: 'server-1', accountId: 'account-1', custodyId: 'account-release-1' };
+        const activation = { pluginId: cacheIdentity.pluginId, contributes, target, executionOrigin: null,
+            occurrenceId: authority.custodyId, hostUiApiRange: '^1.0.0', pluginVersion: '1.0.0',
+            cache, identity: cacheIdentity, moduleReference: { exportName: target.exportName },
+            backend: createPluginUiCommonJsLoaderBackend(), authority, isCurrent: () => true };
+        const address = { family: 'actions' as const, pluginId: activation.pluginId, localId: 'read',
+            target, executionOrigin: null, occurrenceId: authority.custodyId };
+        try {
+            expect(await composition.reconcile([activation])).toMatchObject([{ result: { ok: true } }]);
+            const registration = composition.read(address);
+            expect(registration).not.toBeNull();
+            // The Account target has not changed. A foreign Machine/census
+            // publication must not withdraw its already committed capability.
+            await composition.retain([activation]);
+            expect(await settleAppShellPluginRuntimeUpdate({
+                isCancelled: () => false,
+                activate: async () => {
+                    expect(composition.read(address)).toBe(registration);
+                    return await composition.reconcile([activation]);
+                },
+            })).toMatchObject({ status: 'ready' });
+            expect(composition.read(address)).toBe(registration);
+            expect(registration?.lifecycle.isCurrent()).toBe(true);
+
+            const replacement = { ...activation, authority: { ...authority, accountId: 'account-2', custodyId: 'account-release-2' },
+                occurrenceId: 'account-release-2' };
+            expect(await composition.reconcile([replacement])).toMatchObject([{ result: { ok: true } }]);
+            expect(registration?.lifecycle.signal.aborted).toBe(true);
+            expect(composition.read(address)).toBeNull();
+            expect(composition.read({ ...address, occurrenceId: replacement.occurrenceId })).not.toBeNull();
+        } finally { await composition.unload(); }
+    });
+
     it('does not retain dormant alternate hot-reload or runtime-policy owners', () => {
         expect(existsSync(new URL('./hotReload.ts', import.meta.url))).toBe(false);
         expect(existsSync(new URL('./hotReload.test.ts', import.meta.url))).toBe(false);

@@ -13,6 +13,7 @@ import type { ThemeProfileMode, ThemeProfileV1 } from '@/theme/profiles/themePro
 import {
     PLUGIN_UI_THEME_COLOR_TOKEN_IDS,
     projectPluginUiTheme,
+    usePluginUiHostPalette,
     readPluginUiHostTypography,
     usePluginUiTheme,
 } from './pluginUiThemeProjection';
@@ -28,6 +29,25 @@ function builtInProfile(index: number): ThemeProfileV1 {
 }
 
 describe('plugin UI semantic theme projection (§3.3, UI-D12)', () => {
+    it('retains same-realm and SDK theme inputs across Unistyles wrapper replacement, without losing profile geometry', async () => {
+        const theme = themeFor(null, 'dark');
+        const palette = await renderHook((input: typeof theme) => usePluginUiHostPalette(new Proxy(input, {})), { initialProps: theme });
+        const firstPalette = palette.getCurrent();
+        expect(await palette.rerender(theme)).toBe(firstPalette);
+        const hook = await renderHook((input: typeof theme) => usePluginUiTheme(new Proxy(input, {})), { initialProps: theme });
+        const initial = hook.getCurrent();
+        expect(await hook.rerender(theme)).toBe(initial);
+        const resized = { ...theme, borderRadius: { ...theme.borderRadius, lg: theme.borderRadius.lg + 2 } };
+        const scoped = await renderHook(() => usePluginUiHostPalette(new Proxy(resized, {})));
+        expect(scoped.getCurrent().searchFieldRadiusPx).toBe(resized.borderRadius.lg);
+        expect(await palette.rerender(theme)).toBe(firstPalette);
+        expect((await palette.rerender(resized)).searchFieldRadiusPx).toBe(resized.borderRadius.lg);
+        const changed = { ...theme, space: { ...theme.space, s4: theme.space.s4 + 1 } };
+        expect((await hook.rerender(changed)).spacing.xsmall).toBe(changed.space.s4);
+        await hook.unmount();
+        await palette.unmount();
+        await scoped.unmount();
+    });
     it('gives every plugin UI theme on backed glass the material\'s stronger faint ink, and the theme\'s own ink elsewhere', async () => {
         // A Home card's table, metric or snapshot draws its column headers and captions in this theme's quiet inks:
         // on glass with a picture behind it they take the same step core text takes there (FA22 GL1e).

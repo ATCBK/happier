@@ -1519,11 +1519,15 @@ export function useBoundPluginSurfaceController(input: Readonly<{
     // unrelated catalog delivery is not work or a lifetime at this reader.
     const actionInputSelectionFactsKey = facts.actionInputSelectionFactsKey;
     const resourceFactsKey = React.useMemo(() => stableJsonStringify(Object.fromEntries(
-        Object.entries(facts.pluginUiProjection?.resourcesById ?? {}).map(([key, entry]) => {
-            const { hostOrigin, hostSupplies, hostCompatibility, ...resource } = entry;
-            return [key, resource];
-        }),
-    )), [facts.pluginUiProjection?.resourcesById]);
+        // The declared Resource store admits only this plugin's namespace.
+        // Other plugins' publication cannot replace this physical controller.
+        Object.entries(facts.pluginUiProjection?.resourcesById ?? {})
+            .filter(([, entry]) => entry.pluginId === facts.pluginId)
+            .map(([key, entry]) => {
+                const { hostOrigin, hostSupplies, hostCompatibility, ...resource } = entry;
+                return [key, resource];
+            }),
+    )), [facts.pluginId, facts.pluginUiProjection?.resourcesById]);
     const controller = React.useMemo(
         () => createBoundPluginSurfaceController({
             facts: { ...facts, get machineDisplayName() { return machineDisplayNameRef.current; },
@@ -1549,7 +1553,9 @@ export function useBoundPluginSurfaceController(input: Readonly<{
             facts.serverId,
             facts.sessionId,
             facts.targetAuthorityKey,
-            facts.targetSourceCustody,
+            // Validation may reconstruct equal custody on a new descriptor.
+            // Custody facts, not that allocation, identify the controller.
+            stableJsonStringify(facts.targetSourceCustody ?? null),
             facts.occurrenceId,
             stableJsonStringify(facts.accountExecutionOrigin ?? null),
             facts.readCurrentUiContext,

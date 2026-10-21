@@ -613,6 +613,57 @@ afterEach(async () => {
 });
 
 describe('BrowserSurfaceHost', () => {
+    it('settles Browser navigation facts through the real retained binder and keeps reload current', async () => {
+        const { RetainedPresentationSlotBinder, RetainedPresentationSlotsProvider } = await import('@/components/ui/presentation/retainedPresentationSlots');
+        const { SessionViewerControllerProvider } = await import('@/components/sessions/viewer/SessionViewerControllerProvider');
+        const { SessionViewerBodyPresentation, useOptionalSessionViewerController } = await import('@/components/sessions/viewer/SessionViewerController');
+        const { createBrowserAutomationControlService } = await import('@/sync/domains/browser/automation');
+        const browserAutomation = { controlService: createBrowserAutomationControlService({ nowMs: Date.now }) };
+        let controller: ReturnType<typeof useOptionalSessionViewerController> = null;
+        function Probe() { controller = useOptionalSessionViewerController(); return null; }
+        const initialBrowserState = openBrowserTarget(createBrowserViewState(), externalTarget, {
+            platform: 'web', currentUrl: externalTarget.url,
+        });
+        // React's passive-effect loop can starve Vitest's timeout while act drains commits. Bound
+        // only this test's runaway renderer so the real feedback cycle reports a finite RED.
+        let commits = 0;
+        const onRender = () => {
+            if (++commits > 100) throw new Error('Retained Browser source facts never settle');
+        };
+        const render = (visible: boolean) => <React.Profiler id="retained-browser" onRender={onRender}>
+            <SessionViewerControllerProvider sessionId="session_1" serverId={null}
+                phone canPresentSource={() => true} openDocked={() => {}}>
+                <Probe />
+                <RetainedPresentationSlotsProvider>
+                    <RetainedPresentationSlotBinder slotId="phone-browser" visible={visible} enabled
+                        windowGeometry={{ x: 16, y: 145, width: 358, height: 272 }}>
+                        <SessionViewerBodyPresentation presentation="viewer">
+                            <BrowserSurfaceHost browserSessionId="browser_session_default" platform="web"
+                                initialBrowserState={initialBrowserState} keepAliveAboveRouter={false}
+                                browserAutomation={browserAutomation}
+                                policy={{ browserEnabled: true, viewTargetsEnabled: true, diagnosticsEnabled: false, contextEnabled: false, automationEnabled: true }} />
+                        </SessionViewerBodyPresentation>
+                    </RetainedPresentationSlotBinder>
+                </RetainedPresentationSlotsProvider>
+            </SessionViewerControllerProvider>
+        </React.Profiler>;
+        const screen = await renderScreen(render(true));
+        const readController = () => { if (!controller) throw new Error('Missing viewer owner'); return controller; };
+        try {
+            await act(async () => { screen.findByType('iframe').props.onLoad?.(); });
+            expect(readController().facts.browser?.navigation?.reload).toBeTypeOf('function');
+            const page = screen.findByType('iframe');
+            const navigation = readController().facts.browser?.navigation;
+            await screen.update(render(false));
+            await screen.update(render(true));
+            expect(screen.findByType('iframe')).toBe(page);
+            expect(readController().facts.browser?.navigation).toBe(navigation);
+            const key = screen.findByType('iframe').props['data-browser-navigation-key'];
+            await act(async () => { await readController().facts.browser?.navigation?.reload?.(); });
+            expect(screen.findByType('iframe').props['data-browser-navigation-key']).not.toBe(key);
+        } finally { await screen.unmount(); }
+    });
+
     it('does not reload the mounted page when the Browser Action is disabled for UI', async () => {
         const { BrowserSurfaceHost } = await import('./BrowserSurfaceHost');
         const { BrowserShell } = await import('@/components/browser/BrowserShell');

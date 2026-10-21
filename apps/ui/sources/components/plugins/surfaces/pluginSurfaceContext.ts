@@ -20,7 +20,7 @@ import {
 } from '@/sync/api/account/apiAccountEncryptionMode';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { useLocalSetting } from '@/sync/store/settingsReadHooks';
-import { getPreferredLanguage } from '@/text';
+import { usePreferredLanguage } from '@/text';
 import { useAppShellColumn } from '@/components/navigation/shell/appRail/appShellColumnContext';
 import type { PluginSurfaceTargetKind } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
 import type { PluginSurfaceTargetUndeclaredReason } from '@/sync/domains/plugins/ui/scope/resolveResourceScope';
@@ -250,7 +250,7 @@ export function usePluginSurfaceEnvironment(
     const screenReaderEnabled = useScreenReaderEnabled();
     const highContrast = useHighContrastPreference();
     const columnVisible = useAppShellColumn().columnVisible;
-    const locale = getPreferredLanguage();
+    const locale = usePreferredLanguage();
     const resolvedPlatform = normalizePluginSurfacePlatform(platform);
     const spinnerStyle = useLocalSetting('loadingIndicatorStyle');
     const spinnerSpeed = useLocalSetting('loadingIndicatorSpeed');

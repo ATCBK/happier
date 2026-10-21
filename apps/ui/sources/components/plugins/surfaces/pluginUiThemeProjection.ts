@@ -156,7 +156,11 @@ export function readPluginUiHostTypography(): HappierUiTypography {
  * projection itself. Render code takes its plugin theme here; `projectPluginUiTheme` is the pure projection.
  */
 export function usePluginUiTheme(theme: Theme, spinner?: PluginUiThemeV1['spinner']): PluginUiThemeV1 {
-    const projected = React.useMemo(() => projectPluginUiTheme(theme, spinner), [theme, spinner]);
+    // Unistyles replaces its outer Proxy each render, not the resolved fields. Read those fields
+    // here (also registering the theme dependency) rather than invalidating on the wrapper.
+    const projected = React.useMemo(() => projectPluginUiTheme(theme, spinner), [
+        theme.colors, theme.dark, theme.space, theme.borderRadius, theme.finish, theme.parts, theme.typography, spinner,
+    ]);
     const faintInk = useGlassBackedInk();
     return React.useMemo(() => {
         const secondaryText = faintInk(projected.colors.secondaryText) ?? projected.colors.secondaryText;
@@ -241,18 +245,22 @@ export function projectPluginUiTheme(theme: Theme, spinner?: PluginUiThemeV1['sp
     });
 }
 
-const hostPalettes = new WeakMap<Theme, HappierUiPalette>();
+/** Retain a mount's palette across Unistyles Proxy replacement; independent scoped themes never evict each other. */
+export function usePluginUiHostPalette(theme: Theme): HappierUiPalette {
+    const { colors, dark } = theme;
+    const searchFieldRadiusPx = theme.borderRadius.lg;
+    return React.useMemo(() => projectPluginUiHostPalette({ colors, dark, borderRadius: { lg: searchFieldRadiusPx } }),
+        [colors, dark, searchFieldRadiusPx]);
+}
 
 /**
  * The same-realm host fact for configuration-page anatomy: the exact colour
  * roles Happier's own pages draw sheets, row seams, field boxes, switches,
  * segmented choices and tiles with, so a mounted plugin page renders in the
  * app's colours rather than the snapshot's nearest roles. Theme-dependent,
- * memoized per resolved theme object.
+ * projected from the resolved colour graph and the geometry/mode it consumes.
  */
-export function projectPluginUiHostPalette(theme: Theme): HappierUiPalette {
-    const existing = hostPalettes.get(theme);
-    if (existing) return existing;
+export function projectPluginUiHostPalette(theme: Pick<Theme, 'colors' | 'dark'> & Readonly<{ borderRadius: Pick<Theme['borderRadius'], 'lg'> }>): HappierUiPalette {
     const colors = theme.colors;
     const palette: HappierUiPalette = Object.freeze({
         page: colors.surface.base,
@@ -283,6 +291,5 @@ export function projectPluginUiHostPalette(theme: Theme): HappierUiPalette {
         searchFieldRadiusPx: theme.borderRadius.lg,
         searchFieldEdge: resolveThemeControlEdge(theme, 'default') ?? undefined,
     });
-    hostPalettes.set(theme, palette);
     return palette;
 }

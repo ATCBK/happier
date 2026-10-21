@@ -5,13 +5,6 @@ import {
     type PluginReactNativeBundleCacheIdentity,
 } from './bundleCache';
 import {
-    getInstalledPluginUiExecutableModuleHost,
-    type PluginUiExecutableModuleHost,
-} from './executableModuleHost';
-import {
-    getPluginUiClientExecutableComposition,
-} from './clientExecutableContributions';
-import {
     getInstalledPluginReactNativeModuleRegistry,
     type PluginReactNativeModuleRegistry,
 } from './moduleRegistry';
@@ -174,14 +167,4 @@ const installedPluginUiReactNativeRuntimeProjectionReconciler =
 
 export function createInstalledPluginUiReactNativeRuntimeProjectionSource(): PluginUiReactNativeRuntimeProjectionSource {
     return installedPluginUiReactNativeRuntimeProjectionReconciler.createSource();
-}
-
-export function applyInstalledAppShellPluginUiReactNativeExecutableAuthorityInvalidation(
-    previous: PluginUiProjectionModel,
-    next: PluginUiProjectionModel,
-): Promise<void> {
-    if (previous.generation === next.generation) return Promise.resolve();
-    // The installed root now owns multiple exact-authority lifecycle leaves.
-    // Only its generic composition can fence all of them atomically.
-    return getPluginUiClientExecutableComposition(getInstalledPluginUiExecutableModuleHost()).unload();
 }
