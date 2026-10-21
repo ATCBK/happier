@@ -7,14 +7,14 @@ import { useDeviceType } from '@/utils/platform/responsive';
 import { t } from '@/text';
 
 import { SelectionToolbar } from './SelectionToolbar';
-import { useAskSelection, type UseAskSelectionInput } from './useAskSelection';
+import { useAskSelection, type AskSelection, type UseAskSelectionInput } from './useAskSelection';
 
 export type AskSelectionControlsProps = UseAskSelectionInput &
   Readonly<{
     /** Comment opens this surface's own inline composer; omit where the surface has none. */
     commentEnabled?: boolean;
     /** The surface's own Comment for the selected lines (opens its inline composer); implies Comment. */
-    onCommentSelection?: (range: Readonly<{ startLine: number; endLine: number }>) => void;
+    onCommentSelection?: (selection: AskSelection) => void;
     /** Clears the source selection (phone ✕). */
     onDismissSelection?: () => void;
     testID?: string;
@@ -53,7 +53,7 @@ export function AskSelectionControls(
       return () => {
         const current = ask.selection;
         setActedOnKey(selectionKey);
-        if (current) onCommentSelection({ startLine: current.startLine, endLine: current.endLine });
+        if (current) onCommentSelection(current);
       };
     }
     if (!commentEnabled || !ask.canComment) return null;

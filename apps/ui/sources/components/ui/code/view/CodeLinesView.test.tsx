@@ -52,6 +52,34 @@ async function waitForCodeLinesViewScrollFallback(): Promise<void> {
 }
 
 describe('CodeLinesView', () => {
+    it('keeps native text naming and long-press line selection distinct in a selectable read view', async () => {
+        const { CodeLinesViewCore } = await import('./CodeLinesViewCore');
+        const { buildCodeLinesFromFile } = await import('../model/buildCodeLinesFromFile');
+        const lines = buildCodeLinesFromFile({ text: 'target();' });
+        const activate = vi.fn(() => true), select = vi.fn();
+        const screen = await renderScreen(<CodeLinesViewCore lines={lines} virtualized={false} interactionMode="commitSelection"
+            onPressLine={select} onPressLineRange={vi.fn()} intelligence={{ onPointerToken: vi.fn(), onActivateToken: activate }} />);
+        const text = screen.tree.root.findAll(node => typeof node.type === 'string' && node.props.onTextLayout)[0]!;
+        await renderer.act(async () => {
+            text.props.onTextLayout({ nativeEvent: { lines: [{ text: 'target();', x: 0, y: 0, width: 90, height: 20 }] } });
+            text.props.onPress({ nativeEvent: { locationX: 35, locationY: 10 }, stopPropagation: vi.fn() });
+        });
+        expect(activate).toHaveBeenCalledExactlyOnceWith(lines[0]!.id, 3, { via: 'touch', rect: null }, 1);
+        expect(select).not.toHaveBeenCalled();
+        activate.mockClear();
+        await renderer.act(async () => {
+            text.props.onLongPress();
+            text.props.onPress({ nativeEvent: { locationX: 35, locationY: 10 }, stopPropagation: vi.fn() });
+        });
+        expect(select).toHaveBeenCalledExactlyOnceWith(lines[0], undefined);
+        expect(activate).not.toHaveBeenCalled();
+        select.mockClear(); activate.mockReturnValue(false);
+        await renderer.act(async () => {
+            text.props.onPress({ nativeEvent: { locationX: 35, locationY: 10 }, stopPropagation: vi.fn() });
+        });
+        expect(select).toHaveBeenCalledExactlyOnceWith(lines[0], expect.anything());
+        await screen.unmount();
+    });
     it('uses the file-wide digit count for every number column while keeping the review inset stable', async () => {
         const { CodeLinesView } = await import('./CodeLinesView');
         const { buildCodeLinesFromFile } = await import('../model/buildCodeLinesFromFile');

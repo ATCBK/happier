@@ -442,26 +442,28 @@ export function useFilePageCodeIntelligence(
             },
             onActivate: (line, character, activation) => {
               const position = { line: line - 1, character };
+              controller.inspect({
+                ...position,
+                ...(activation.rect ? { anchor: activation.rect } : {}),
+              });
+              if (!controller.getSnapshot().selection) return false;
               if (activation.via === 'touch') {
                 // After the sheet's room under the code has been laid out, so the line can scroll above it.
                 requestAnimationFrame(() =>
                   requestAnimationFrame(() => latest.current.revealLine?.(line)),
                 );
-                controller.inspect({
-                  ...position,
-                  ...(activation.rect ? { anchor: activation.rect } : {}),
-                });
                 interaction.open({
                   anchor: activation.rect,
                   via: 'tap',
                   references: false,
                 });
                 void controller.hover(position);
-                return;
+                return true;
               }
               interaction.close();
               interaction.remember(activation.rect);
               void controller.definition(position);
+              return true;
             },
           }
         : null,

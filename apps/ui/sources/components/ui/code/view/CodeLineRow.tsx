@@ -21,7 +21,7 @@ export { CODE_LINE_BASE_HEIGHT } from '../editor/codeEditorFontMetrics';
 
 export type CodeLinePressEvent = GestureResponderEvent & Readonly<{
     shiftKey?: boolean;
-    nativeEvent: GestureResponderEvent['nativeEvent'] & Readonly<{ shiftKey?: boolean }>;
+    nativeEvent: GestureResponderEvent['nativeEvent'] & Readonly<{ shiftKey?: boolean; type?: string; button?: number; metaKey?: boolean; ctrlKey?: boolean; clientX?: number; clientY?: number }>;
 }>;
 type PreventableInteractionEvent = Readonly<{
     preventDefault?: () => void;
@@ -98,6 +98,10 @@ export function CodeLineRow(props: {
     reviewed?: boolean;
     /** A line an agent just wrote while you read: the add tint over the row, faded by the view's one clock. */
     liveTintOpacity?: SharedValue<number>;
+    /** The block an agent is writing now (P5 Track): a quiet ink wash behind the row, until the write ends. */
+    agentWash?: string;
+    /** The agent's caret, drawn after this row's text (the last line of the written block). */
+    agentCaret?: React.ReactNode;
     onPressLine?: (line: CodeLine, event?: CodeLinePressEvent) => void;
     onPressInLine?: (line: CodeLine, event?: PreventableInteractionEvent) => void;
     onHoverLine?: (line: CodeLine, event?: PreventableInteractionEvent) => void;
@@ -117,7 +121,8 @@ export function CodeLineRow(props: {
     advancedTokens?: readonly Readonly<{ text: string; color: string }>[];
     findRanges?: readonly FindTextRange[];
     diagnostics?: readonly CodeLineDiagnosticRange[];
-    onActivateToken?: (lineId: string, offset16: number) => void;
+    onActivateToken?: (lineId: string, offset16: number) => boolean;
+    onLongPressLine?: (line: CodeLine) => void;
 }) {
     const { theme } = useUnistyles();
     const diagnostics = props.diagnostics;
@@ -146,7 +151,7 @@ export function CodeLineRow(props: {
     const isWeb = Platform.OS === 'web';
     const textLayoutsRef = React.useRef<TextLayoutEventData['lines']>([]);
     const longPressedRef = React.useRef(false);
-    const canActivateToken = !isWeb && Boolean(props.onActivateToken) && !line.renderIsHeaderLine && line.newLine !== null;
+    const canActivateToken = !isWeb && Boolean(props.onActivateToken) && !line.renderIsHeaderLine && line.newLine !== null && Boolean(line.renderCodeText.trim());
     const [isHovered, setIsHovered] = React.useState(false);
     const commentActive = props.commentActive === true;
     const highlighted = props.highlighted === true;
@@ -161,14 +166,15 @@ export function CodeLineRow(props: {
         ? line.renderIntraLineDiffSegments
         : null;
 
-    const onPress = !line.renderIsHeaderLine && (line.selectable || pressLineWhenNotSelectable === true) && onPressLine
+    const onPress = !line.renderIsHeaderLine && (line.selectable || pressLineWhenNotSelectable === true || (isWeb && props.onActivateToken)) && onPressLine
         ? (event: GestureResponderEvent) => onPressLine(line, event as CodeLinePressEvent)
         : undefined;
     // Web reading keeps code text selectable (copy, Ask about selection); a line-range gesture owns the drag instead.
     const textSelectable = isWeb && line.selectable && !line.renderIsHeaderLine && !(onPressInLine || onHoverLine || onPressOutLine);
-    const onLongPress = !isWeb && onPressAddComment && !line.renderIsHeaderLine ? () => {
+    const longPressLine = onPressAddComment ?? props.onLongPressLine;
+    const onLongPress = longPressLine && !line.renderIsHeaderLine ? () => {
         longPressedRef.current = true;
-        onPressAddComment(line);
+        longPressLine(line);
     } : undefined;
     const activateText = canActivateToken ? (event: GestureResponderEvent) => {
         if (longPressedRef.current) { longPressedRef.current = false; return; }
@@ -184,7 +190,7 @@ export function CodeLineRow(props: {
         const foundStart = line.renderCodeText.indexOf(layout.text, previousLength);
         const offset = (foundStart < 0 ? previousLength : foundStart) + characters.slice(0, character).join('').length;
         event.stopPropagation?.();
-        props.onActivateToken?.(line.id, offset);
+        if (props.onActivateToken?.(line.id, offset) !== true) onPress?.(event);
     } : undefined;
     const onHoverIn = React.useCallback((event?: PreventableInteractionEvent) => {
         if (isWeb && onPressAddComment) setIsHovered(true);
@@ -303,6 +309,7 @@ export function CodeLineRow(props: {
                 ] : null,
             ]}
         >
+            {props.agentWash ? <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: props.agentWash }]} /> : null}
             {props.liveTintOpacity ? <CodeLineLiveTint opacity={props.liveTintOpacity} color={theme.colors.diff.added.background} /> : null}
             {props.leadingLane != null ? <View style={styles.leadingLane}>{props.leadingLane}</View> : null}
             <Pressable
@@ -418,6 +425,7 @@ export function CodeLineRow(props: {
                                 ))
                                 : renderFindText(line.renderCodeText || ' ', props.findRanges, textSelectable, diagnostics, squiggles)}
                     </Text>
+                    {props.agentCaret}
                 </View>
             </Pressable>
         </View>

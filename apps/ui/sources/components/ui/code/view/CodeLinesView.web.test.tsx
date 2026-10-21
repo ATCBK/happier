@@ -83,6 +83,27 @@ async function flushReactAsyncWork(): Promise<void> {
 }
 
 describe('CodeLinesView (web)', () => {
+    it('washes the block the agent writes and stands its caret after the block\'s last line (P5 Track)', async () => {
+        const { CodeLinesViewCore } = await import('./CodeLinesViewCore');
+        const { EditorAgentCaret } = await import('@/components/ui/motion/EditorAgentCaret');
+        const { buildCodeLinesFromFile } = await import('../model/buildCodeLinesFromFile');
+        const lines = buildCodeLinesFromFile({ text: Array.from({ length: 6 }, (_, index) => `line ${index + 1}`).join('\n') });
+        const presence = { startLine: 3, endLine: 4, agentId: null, agentName: 'Claude', reducedMotion: false };
+        const screen = await renderScreen(<CodeLinesViewCore lines={lines} agentPresence={presence} />);
+        const rows = await findCodeRows(screen.tree);
+        expect(rows.filter(row => row.props.agentWash).map(row => row.props.line.newLine)).toEqual([3, 4]);
+        expect(rows.filter(row => row.props.agentCaret).map(row => row.props.line.newLine)).toEqual([4]);
+        expect(screen.tree.root.findAllByType(EditorAgentCaret)).toHaveLength(1);
+
+        // The next region: the caret leaves line 4 and arrives after line 6, travelling from where it stood.
+        await screen.update(<CodeLinesViewCore lines={lines} agentPresence={{ ...presence, startLine: 6, endLine: 6 }} />);
+        const moved = await findCodeRows(screen.tree);
+        expect(moved.filter(row => row.props.agentCaret).map(row => row.props.line.newLine)).toEqual([6]);
+        expect(screen.tree.root.findByType(EditorAgentCaret).props.travelFromPx).toBeLessThan(0);
+        await screen.update(<CodeLinesViewCore lines={lines} agentPresence={null} />);
+        expect(screen.tree.root.findAllByType(EditorAgentCaret)).toHaveLength(0);
+    });
+
     it('opens a web list at a later line from the top, so rows before that line are not left as an unrendered gap', async () => {
         // React Native Web's list rendered only the window after `initialScrollIndex` and never filled the rows
         // above it when the content did not scroll (File page Changes opening at its first change). The scroll
@@ -120,10 +141,7 @@ describe('CodeLinesView (web)', () => {
             expect(list.props.onPointerMove).toEqual(expect.any(Function));
             list.props.onPointerMove({ target, clientX: 10, clientY: 20 });
             expect(pointer).toHaveBeenLastCalledWith(lines[0].id, 5, { x: 10, y: 10, width: 1, height: 20 }, 1);
-            // Rows stop bubbling clicks; the genuine document capture listener still sees them.
-            target.addEventListener('click', event => event.stopPropagation());
-            target.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 10, clientY: 20, metaKey: true }));
-            expect(activate).toHaveBeenLastCalledWith(lines[0].id, 5, { via: 'modifier', rect: { x: 10, y: 10, width: 1, height: 20 } }, 1);
+            // Activation is covered through the real row press in CodeLinesView.touch.web.test.
             pointer.mockClear(); activate.mockClear();
             await screen.update(<CodeLinesViewCore lines={[{ ...lines[0], kind: 'remove', newLine: null }]} intelligence={{ onPointerToken: pointer, onActivateToken: activate }} />);
             const updated = screen.tree.root.findByType('FlatList');
@@ -139,50 +157,6 @@ describe('CodeLinesView (web)', () => {
             else Reflect.deleteProperty(document, 'caretPositionFromPoint');
         }
     });
-    it('names the tapped token on touch where line ranges are selectable, and keeps a tap off the code selecting the line', async () => {
-        const { CodeLinesViewCore } = await import('./CodeLinesViewCore');
-        const { buildCodeLinesFromFile } = await import('../model/buildCodeLinesFromFile');
-        const lines = buildCodeLinesFromFile({ text: 'const target = 1;' });
-        const activate = vi.fn();
-        const onPressLine = vi.fn();
-        const screen = await renderScreen(<CodeLinesViewCore lines={lines} interactionMode="commitSelection"
-            onPressLine={onPressLine} onPressLineRange={vi.fn()} intelligence={{ onPointerToken: vi.fn(), onActivateToken: activate }} />);
-        const row = document.createElement('div');
-        row.id = screen.tree.root.findAll(node => typeof node.props.nativeID === 'string' && node.props.nativeID.endsWith(`-${lines[0].id}`))[0].props.nativeID;
-        const code = document.createElement('span');
-        code.setAttribute('data-code-text', lines[0].id);
-        code.textContent = 'const target = 1;';
-        row.append(code);
-        document.body.append(row);
-        const previousCaret = Object.getOwnPropertyDescriptor(document, 'caretPositionFromPoint');
-        Object.defineProperty(document, 'caretPositionFromPoint', { configurable: true, value: () => ({ offsetNode: code.firstChild, offset: 8 }) });
-        const geometry = vi.spyOn(code, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 10, 200, 20));
-        const touchUp = (target: EventTarget) => {
-            const event = new MouseEvent('pointerup', { bubbles: true, clientX: 60, clientY: 20 });
-            Object.defineProperty(event, 'pointerType', { value: 'touch' });
-            target.dispatchEvent(event);
-        };
-        try {
-            const rows = await findCodeRows(screen.tree);
-            touchUp(code);
-            expect(activate).toHaveBeenLastCalledWith(lines[0].id, 8, expect.objectContaining({ via: 'touch' }), 1);
-            // The same tap's row press belongs to the name, not to a one-line selection.
-            rows[0]!.props.onPressLine(lines[0], {});
-            expect(onPressLine).not.toHaveBeenCalled();
-            // A tap that names nothing still selects the line.
-            Object.defineProperty(document, 'caretPositionFromPoint', { configurable: true, value: () => null });
-            touchUp(row);
-            rows[0]!.props.onPressLine(lines[0], {});
-            expect(onPressLine).toHaveBeenCalledTimes(1);
-        } finally {
-            await screen.unmount();
-            row.remove();
-            geometry.mockRestore();
-            if (previousCaret) Object.defineProperty(document, 'caretPositionFromPoint', previousCaret);
-            else Reflect.deleteProperty(document, 'caretPositionFromPoint');
-        }
-    });
-
     it('completes a web drag range in an explicit interaction mode', async () => {
         const { CodeLinesView } = await import('./CodeLinesView.web');
 

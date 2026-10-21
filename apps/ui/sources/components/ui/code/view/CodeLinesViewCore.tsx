@@ -18,7 +18,9 @@ import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
 import type { Rect } from '../editor/codeEditorTypes';
 import { CODE_GUTTER_METRICS } from '../editor/codeEditorFontMetrics';
 import { readCodeTextPointer } from '../interactions/codeTextDom';
-import { resolveCodeSelectionColor } from '../editor/editorTheme';
+import { resolveCodeTokenPress } from '../interactions/codeTokenPress';
+import { resolveAgentWashColor, resolveCodeSelectionColor } from '../editor/editorTheme';
+import { EditorAgentCaret } from '@/components/ui/motion/EditorAgentCaret';
 import { useCodeTextSelectionPaint } from './useCodeTextSelectionPaint';
 
 export type CodeLinesExternalScrollView = Readonly<{
@@ -43,6 +45,37 @@ function measureExternalLayout(
             measured(x, y - viewportY + owner.offsetRef.current, width, height);
         });
     });
+}
+
+export type CodeLinesAgentPresence = Readonly<{
+    startLine: number;
+    endLine: number;
+    agentId: string | null;
+    agentName: string;
+    reducedMotion: boolean;
+}>;
+
+/** The wash and the caret for one region; the caret element is made once per region so it arrives once. */
+function useCodeLinesAgentPresence(presence: CodeLinesAgentPresence | null | undefined, washColor: string) {
+    const previousEndLine = React.useRef<number | null>(null);
+    const endLine = presence?.endLine ?? null;
+    const caret = React.useMemo(() => {
+        if (!presence) return null;
+        const from = previousEndLine.current;
+        const travelFromPx = from !== null && from !== presence.endLine ? (from - presence.endLine) * CODE_LINE_BASE_HEIGHT : undefined;
+        return <EditorAgentCaret key={presence.endLine} agentId={presence.agentId} agentName={presence.agentName}
+            lineHeight={CODE_LINE_BASE_HEIGHT} travelFromPx={travelFromPx} reducedMotion={presence.reducedMotion} />;
+        // A new caret per region; its name and mark follow the presence it was made for.
+    }, [presence?.endLine, presence?.agentId, presence?.agentName, presence?.reducedMotion]); // eslint-disable-line react-hooks/exhaustive-deps
+    React.useEffect(() => { if (endLine !== null) previousEndLine.current = endLine; }, [endLine]);
+    return React.useMemo(() => presence ? {
+        startLine: presence.startLine, endLine: presence.endLine, washColor, caret,
+    } : null, [caret, presence?.startLine, presence?.endLine, washColor]); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+function agentPresenceCovers(presence: Readonly<{ startLine: number; endLine: number }> | null, line: CodeLine): boolean {
+    return presence !== null && typeof line.newLine === 'number' && line.kind !== 'remove' && !line.renderIsHeaderLine
+        && line.newLine >= presence.startLine && line.newLine <= presence.endLine;
 }
 
 export type CodeLinesViewProps = {
@@ -84,6 +117,11 @@ export type CodeLinesViewProps = {
     highlightLineId?: string;
     highlightLineIds?: ReadonlySet<string>;
     reviewedLineIds?: ReadonlySet<string>;
+    /**
+     * The agent writing in this file now (P5 Track): new-side lines `startLine..endLine` carry the ink wash and the
+     * agent caret stands after `endLine`. It jumps per region and travels from the last one.
+     */
+    agentPresence?: CodeLinesAgentPresence | null;
     /** An agent's write landing while you read (P3-R8): these lines take the add tint, faded by `opacity`. */
     liveTint?: Readonly<{ lineIds: ReadonlySet<string>; opacity: SharedValue<number> }>;
     findRangesByLineId?: ReadonlyMap<string, readonly FindTextRange[]>;
@@ -91,7 +129,8 @@ export type CodeLinesViewProps = {
         /** `rect` is the pointed line's box at the pointer (window space), for anchoring a card. */
         onPointerToken: (lineId: string, offset16: number, rect: Rect | null, newLine: number) => void;
         /** Modifier-click (desktop) or a plain tap (touch, outside a selection). */
-        onActivateToken: (lineId: string, offset16: number, activation: Readonly<{ via: 'modifier' | 'touch'; rect: Rect | null }>, newLine: number) => void;
+        /** True only when the canonical identifier owner accepted the press; otherwise ordinary line selection wins. */
+        onActivateToken: (lineId: string, offset16: number, activation: Readonly<{ via: 'modifier' | 'touch'; rect: Rect | null }>, newLine: number) => boolean;
         /** The pointer left code text (whitespace past a line's end, the gutter, outside the view). */
         onPointerAway?: () => void;
         /** The file's problems by 1-based file line (squiggles on new-side lines), from the page's language answers. */
@@ -161,6 +200,7 @@ export function CodeLinesViewCore(
 ) {
     const { theme } = useUnistyles();
     useCodeTextSelectionPaint(resolveCodeSelectionColor(theme.colors.accent.blue));
+    const agentPresence = useCodeLinesAgentPresence(props.agentPresence, resolveAgentWashColor(theme));
     const lineRefs = React.useRef(new Map<string, View>());
     const externalRowLayouts = React.useRef(new Map<string, { y: number; height: number }>());
     const measureExternalRow = React.useCallback((id: string) => {
@@ -236,11 +276,6 @@ export function CodeLinesViewCore(
         if (token) onPointerToken?.(token.lineId, token.offset16, token.rect, token.newLine);
         else onPointerAway?.();
     }, [intelligenceLines, onPointerAway, onPointerToken]);
-    const handleTokenClick = React.useCallback((event: CodePointerEvent) => {
-        if (!(event.metaKey || event.ctrlKey || event.nativeEvent?.metaKey || event.nativeEvent?.ctrlKey)) return;
-        const token = intelligenceLines ? resolvePointerToken(event, intelligenceLines) : null;
-        if (token) onActivateToken?.(token.lineId, token.offset16, { via: 'modifier', rect: token.rect }, token.newLine);
-    }, [intelligenceLines, onActivateToken]);
     // Resolve while the touch still targets the code, but commit through the row's Pressability click.
     // Opening a sheet on pointerup retargets that touch's compatibility click to its dismiss layer.
     const pendingTouchToken = React.useRef<ReturnType<typeof resolvePointerToken>>(null);
@@ -255,14 +290,12 @@ export function CodeLinesViewCore(
     // Native rows resolve a tap themselves (tap-to-name); they report no anchor rect.
     const onRowActivateToken = React.useCallback((lineId: string, offset16: number) => {
         const newLine = intelligenceLines?.get(lineId)?.newLine;
-        if (typeof newLine === 'number') onActivateToken?.(lineId, offset16, { via: 'touch', rect: null }, newLine);
-    }, [intelligenceLines, onActivateToken]);
+        return rangeSelectionActive !== true && typeof newLine === 'number'
+            && onActivateToken?.(lineId, offset16, { via: 'touch', rect: null }, newLine) === true;
+    }, [intelligenceLines, onActivateToken, rangeSelectionActive]);
     const intelligenceEvents = Platform.OS === 'web' && props.intelligence
         ? { onPointerMove: handlePointerMove, onPointerLeave: onPointerAway } : {};
-    // Rows are Pressables, whose click handler stops propagation; read clicks and taps in the capture phase
-    // (rows carry `${lineNativeIdPrefix}-<line id>` as their DOM id), without taking the press from them.
-    const tokenClickRef = React.useRef(handleTokenClick);
-    tokenClickRef.current = handleTokenClick;
+    // Resolve touch coordinates in capture; the row's real press owns both touch and modifier activation.
     const tokenTouchRef = React.useRef(handleTokenTouch);
     tokenTouchRef.current = handleTokenTouch;
     React.useEffect(() => {
@@ -272,15 +305,12 @@ export function CodeLinesViewCore(
             const element = target as Partial<Pick<Element, 'closest'>> | null;
             return typeof element?.closest === 'function' && element.closest(rowSelector) !== null;
         };
-        const onClick = (event: MouseEvent) => { if (owns(event.target)) tokenClickRef.current(event as unknown as CodePointerEvent); };
         const onPointerUp = (event: PointerEvent) => { if (owns(event.target)) tokenTouchRef.current(event as unknown as CodePointerEvent); };
         const clearTouch = () => { pendingTouchToken.current = null; };
-        document.addEventListener('click', onClick, true);
         document.addEventListener('pointerdown', clearTouch, true);
         document.addEventListener('pointercancel', clearTouch, true);
         document.addEventListener('pointerup', onPointerUp, true);
         return () => {
-            document.removeEventListener('click', onClick, true);
             document.removeEventListener('pointerdown', clearTouch, true);
             document.removeEventListener('pointercancel', clearTouch, true);
             document.removeEventListener('pointerup', onPointerUp, true);
@@ -315,6 +345,14 @@ export function CodeLinesViewCore(
     }, [onPressLineRange, resolveRange]);
 
     const handlePressLine = React.useCallback((line: CodeLine, event?: CodeLinePressEvent) => {
+        const touch = pendingTouchToken.current;
+        pendingTouchToken.current = null;
+        const via = event ? resolveCodeTokenPress(event.nativeEvent, touch?.lineId === line.id, rangeSelectionActive === true) : null;
+        const token = via === 'touch' ? touch : via === 'modifier' && event && intelligenceLines
+            ? resolvePointerToken({ target: event.target, nativeEvent: event.nativeEvent }, intelligenceLines) : null;
+        if (via && token && onActivateToken?.(token.lineId, token.offset16, { via, rect: token.rect }, token.newLine) === true) {
+            return;
+        }
         if (!rangeGesturesEnabled) {
             lastPressedLineIdRef.current = line.id;
             onPressLine?.(line, event);
@@ -344,7 +382,12 @@ export function CodeLinesViewCore(
 
         lastPressedLineIdRef.current = line.id;
         onPressLine?.(line, event);
-    }, [completeRange, onPressLine, rangeGesturesEnabled, rangeSelectionActive]);
+    }, [completeRange, intelligenceLines, onActivateToken, onPressLine, rangeGesturesEnabled, rangeSelectionActive]);
+
+    const handleLongPressLine = React.useCallback((line: CodeLine) => {
+        pendingTouchToken.current = null;
+        handlePressLine(line);
+    }, [handlePressLine]);
 
     const handlePressInLine = React.useCallback((line: CodeLine, event?: PreventableEvent) => {
         if (!rangeGesturesEnabled || Platform.OS !== 'web') return;
@@ -393,10 +436,13 @@ export function CodeLinesViewCore(
                 highlighted={isHighlighted(item.id)}
                 reviewed={props.reviewedLineIds?.has(item.id) === true}
                 liveTintOpacity={props.liveTint?.lineIds.has(item.id) ? props.liveTint.opacity : undefined}
+                agentWash={agentPresenceCovers(agentPresence, item) ? agentPresence?.washColor : undefined}
+                agentCaret={agentPresence && agentPresenceCovers(agentPresence, item) && item.newLine === agentPresence.endLine ? agentPresence.caret : undefined}
                 findRanges={props.findRangesByLineId?.get(item.id)}
                 diagnostics={item.kind !== 'remove' && typeof item.newLine === 'number' ? diagnosticsByNewLine?.get(item.newLine) : undefined}
-                onActivateToken={rangeGesturesEnabled || !onActivateToken ? undefined : onRowActivateToken}
+                onActivateToken={onActivateToken ? onRowActivateToken : undefined}
                 onPressLine={handlePressLine}
+                onLongPressLine={rangeGesturesEnabled ? handleLongPressLine : undefined}
                 onPressInLine={rangeGesturesEnabled && Platform.OS === 'web' ? handlePressInLine : undefined}
                 onHoverLine={rangeGesturesEnabled && Platform.OS === 'web' ? handleHoverLine : undefined}
                 onPressOutLine={rangeGesturesEnabled && Platform.OS === 'web' ? handlePressOutLine : undefined}
@@ -424,12 +470,14 @@ export function CodeLinesViewCore(
         onRowActivateToken,
         effectiveSyntaxHighlighting,
         handleHoverLine,
+        handleLongPressLine,
         handlePressInLine,
         handlePressLine,
         handlePressOutLine,
         isHighlighted,
         props.reviewedLineIds,
         props.liveTint,
+        agentPresence,
         props.getAdvancedTokens,
         props.isCommentActive,
         props.onPressAddComment,
@@ -627,6 +675,7 @@ export function CodeLinesViewCore(
         renderLeadingLane: props.renderLeadingLane,
         onPressLine: handlePressLine,
         onPressInLine: rangeGesturesEnabled && Platform.OS === 'web' ? handlePressInLine : undefined,
+        onLongPressLine: rangeGesturesEnabled ? handleLongPressLine : undefined,
         onHoverLine: rangeGesturesEnabled && Platform.OS === 'web' ? handleHoverLine : undefined,
         onPressOutLine: rangeGesturesEnabled && Platform.OS === 'web' ? handlePressOutLine : undefined,
         interactionMode,
@@ -644,6 +693,7 @@ export function CodeLinesViewCore(
         highlightLineIds: props.highlightLineIds,
         reviewedLineIds: props.reviewedLineIds,
         liveTint: props.liveTint,
+        agentPresence,
         findRangesByLineId: props.findRangesByLineId,
         diagnosticsByNewLine,
         advancedTokensRevision,
@@ -653,6 +703,7 @@ export function CodeLinesViewCore(
         effectiveSyntaxHighlighting,
         advancedTokensRevision,
         handleHoverLine,
+        handleLongPressLine,
         handlePressInLine,
         handlePressLine,
         handlePressOutLine,
@@ -662,6 +713,7 @@ export function CodeLinesViewCore(
         props.highlightLineIds,
         props.reviewedLineIds,
         props.liveTint,
+        agentPresence,
         props.findRangesByLineId,
         diagnosticsByNewLine,
         props.isCommentActive,

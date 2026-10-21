@@ -61,6 +61,17 @@ export function resolveCodeSelectionColor(accentBlue: string): string {
     return parseThemeColor(accentBlue)?.alpha(SELECTION_TINT).rgb().string() ?? accentBlue;
 }
 
+const AGENT_WASH_TINT = { light: 0.04, dark: 0.06 } as const;
+
+/**
+ * The block an agent is writing now (P5 Track, lab tr T1): a breath of ink, never a hue, so it reads as presence
+ * rather than as a change. The read view, the diff and the editor overlay share it.
+ */
+export function resolveAgentWashColor(theme: Readonly<{ dark?: boolean; colors: Readonly<{ text: Readonly<{ primary: string }> }> }>): string {
+    const ink = theme.colors.text.primary;
+    return parseThemeColor(ink)?.alpha(theme.dark ? AGENT_WASH_TINT.dark : AGENT_WASH_TINT.light).rgb().string() ?? ink;
+}
+
 function withoutHash(value: string): string {
     return value.startsWith('#') ? value.slice(1) : value;
 }

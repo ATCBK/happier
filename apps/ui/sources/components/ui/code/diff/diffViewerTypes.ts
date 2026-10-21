@@ -76,6 +76,8 @@ export type DiffViewerBaseProps = Readonly<{
     externalScrollView?: CodeLinesViewProps['externalScrollView'];
     highlightLineId?: string;
     highlightLineIds?: CodeLinesViewProps['highlightLineIds'];
+    /** The agent writing in this file now (P5 Track): wash over its new-side lines and its caret after the last. */
+    agentPresence?: CodeLinesViewProps['agentPresence'];
     findActive?: boolean;
     /** Bind this mounted renderer's temporary Find refold operation to its surface controller. */
     registerFindRefold?: (refold: NonNullable<FindController['refold']>) => (() => void) | undefined;

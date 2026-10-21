@@ -84,6 +84,25 @@ describe('File-page intelligence composition', () => {
     });
     afterEach(async () => { await standardCleanup(); await cleanupWorkspaceFileDetailsActionBoundary(); portal.restore(); browser.restore(); });
 
+    it('claims a read-view tap only when the existing controller resolves an identifier', async () => {
+        machine.query.mockResolvedValue({ status: 'ok', kind: 'hover', sections: [] });
+        const liveValue = { get: () => '    target();' };
+        const hook = await renderHook(() => useFilePageCodeIntelligence(input({ liveValue })), { wrapper: PageWrapper });
+        const binding = hook.getCurrent().viewBinding;
+        const layer = hook.getCurrent().layer;
+        if (!binding || !layer) throw new Error('Expected the live read-view intelligence binding');
+        let claimed: unknown;
+        await act(async () => { claimed = binding.onActivate(1, 0, { via: 'touch', rect: null }); });
+        expect(claimed).toBe(false);
+        expect(hook.getCurrent().controller?.getSnapshot().selection).toBeNull();
+        expect(layer.props.interaction.getState()).toBeNull();
+        expect(machine.query).not.toHaveBeenCalled();
+        await act(async () => { claimed = binding.onActivate(1, 6, { via: 'touch', rect: null }); });
+        expect(claimed).toBe(true);
+        expect(hook.getCurrent().controller?.getSnapshot().selection?.identifier.symbol).toBe('target');
+        expect(layer.props.interaction.getState()).toMatchObject({ via: 'tap' });
+    });
+
     it('offers Markdown headings to passive @ Search in View, Source and Edit without starting a server', async () => {
         let text = '# First\n\n## Target';
         const liveValue = { get: () => text };

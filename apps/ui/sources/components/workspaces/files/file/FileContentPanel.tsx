@@ -58,7 +58,7 @@ const MARKDOWN_PREVIEW_WIDE_BOTTOM_PADDING = 32;
 export type FileCodeIntelligenceBinding = Readonly<{
     onPointer: (line: number, character: number, rect: Rect | null) => void;
     onPointerAway: () => void;
-    onActivate: (line: number, character: number, activation: Readonly<{ via: 'modifier' | 'touch'; rect: Rect | null }>) => void;
+    onActivate: (line: number, character: number, activation: Readonly<{ via: 'modifier' | 'touch'; rect: Rect | null }>) => boolean;
     /** This file's problems by 1-based line (stable until they change), for squiggles in View and Changes. */
     getDiagnosticsByLine: () => ReadonlyMap<number, readonly CodeLineDiagnosticRange[]> | undefined;
     subscribeDiagnostics: (listener: () => void) => () => void;
@@ -87,7 +87,7 @@ type FileContentPanelProps = {
     lineSelectionEnabled: boolean;
     onToggleLine: (key: string) => void;
     /** Open the inline comment composer on these file lines (the selection toolbar's Comment). */
-    commentRangeRequest?: Readonly<{ startLine: number; endLine: number; key: number }> | null;
+    commentRangeRequest?: Readonly<{ startLine: number; endLine: number; side?: 'before' | 'after'; key: number }> | null;
     wrapLines?: boolean;
     showLineNumbers?: boolean;
     showPrefix?: boolean;
@@ -110,6 +110,8 @@ type FileContentPanelProps = {
      * `liveEdit.flashMs`; a later batch redirects the running fade from where it is, never back to full.
      */
     liveMoment?: WorkspaceFileLiveMoment | null;
+    /** The agent writing in this file now (P5 Track): its caret and wash, in View and Changes alike. */
+    agentPresence?: CodeLinesViewProps['agentPresence'];
     /**
      * Language features on the read view (P7): the pointer, a modifier-click or a tap on a name, in
      * 1-based file lines and 0-based UTF-16 characters. Keep it referentially stable.
@@ -166,7 +168,8 @@ function hasReviewCommentDrafts(drafts: readonly ReviewCommentDraft[] | undefine
 
 function reviewCommentCallbacksAffectRenderedOutput(props: FileContentPanelProps): boolean {
     return props.reviewCommentsEnabled === true
-        && (props.reviewCommentModeActive === true || hasReviewCommentDrafts(props.reviewCommentDrafts));
+        && (props.reviewCommentModeActive === true || hasReviewCommentDrafts(props.reviewCommentDrafts)
+            || props.displayMode === 'diff' && props.hunks !== undefined);
 }
 
 export function areFileContentPanelPropsEqual(
@@ -245,6 +248,7 @@ function FileContentPanelInner({
     renderLeadingLane,
     emphasizedLines,
     liveMoment,
+    agentPresence,
     intelligence,
     codeBottomInset,
     scrollTestID,
@@ -299,8 +303,10 @@ function FileContentPanelInner({
             drafts: reviewCommentDrafts ?? [],
         });
     }, [commentSource, filePath, reviewCommentDrafts, reviewCommentsEnabled]);
-    const reviewCommentControlsEnabled = reviewCommentsEnabled === true
+    const reviewCommentPresentationActive = reviewCommentsEnabled === true
         && (reviewCommentModeActive === true || draftsForThisView.length > 0);
+    const reviewCommentControlsEnabled = reviewCommentsEnabled === true
+        && (reviewCommentPresentationActive || displayMode === 'diff' && hunks !== undefined);
 
     const needsDiffCodeLines = displayMode === 'diff'
         && typeof diffContent === 'string'
@@ -345,8 +351,11 @@ function FileContentPanelInner({
     React.useEffect(() => {
         if (!commentRangeRequest || handledCommentRangeKey.current === commentRangeRequest.key || !reviewCommentControls) return;
         handledCommentRangeKey.current = commentRangeRequest.key;
-        const rangeLines = lines.filter((line) => typeof line.newLine === 'number'
-            && line.newLine >= commentRangeRequest.startLine && line.newLine <= commentRangeRequest.endLine);
+        const rangeLines = lines.filter((line) => {
+            const number = commentRangeRequest.side === 'before' ? line.oldLine : line.newLine;
+            return !line.renderIsHeaderLine && number !== null
+                && number >= commentRangeRequest.startLine && number <= commentRangeRequest.endLine;
+        });
         if (rangeLines.length > 0) reviewCommentControls.onPressAddCommentRange(rangeLines);
     }, [commentRangeRequest, lines, reviewCommentControls]);
     const markdownSourceRangeActionsEnabled = reviewCommentsEnabled === true
@@ -547,7 +556,7 @@ function FileContentPanelInner({
 
     const { lineThreshold, byteThreshold } = useInlineDiffVirtualizationThresholds();
     const virtualized = React.useMemo(() => {
-        if (!reviewCommentControlsEnabled) return true;
+        if (!reviewCommentPresentationActive) return true;
         if (displayMode === 'diff') {
             return resolveInlineDiffVirtualization({
                 unifiedDiff: typeof diffContent === 'string' ? diffContent : null,
@@ -565,7 +574,7 @@ function FileContentPanelInner({
             });
         }
         return false;
-    }, [byteThreshold, diffContent, displayMode, fileContent, lineThreshold, reviewCommentControlsEnabled]);
+    }, [byteThreshold, diffContent, displayMode, fileContent, lineThreshold, reviewCommentPresentationActive]);
 
     const liveTint = useFileLiveEditTint(liveMoment ?? null, lines);
     const diagnosticsByNewLine = React.useSyncExternalStore(
@@ -582,7 +591,7 @@ function FileContentPanelInner({
             },
             onPointerAway: intelligence.onPointerAway,
             onActivateToken: (_lineId: string, offset16: number, activation: Readonly<{ via: 'modifier' | 'touch'; rect: Rect | null }>, newLine: number) => {
-                intelligence.onActivate(newLine, offset16, activation);
+                return intelligence.onActivate(newLine, offset16, activation);
             },
             ...(diagnosticsByNewLine ? { diagnosticsByNewLine } : {}),
         };
@@ -602,6 +611,7 @@ function FileContentPanelInner({
                 renderAfterLine={reviewCommentControls?.renderAfterLine}
                 renderLeadingLane={renderLeadingLane}
                 liveTint={liveTint}
+                agentPresence={agentPresence}
                 intelligence={codeIntelligence}
                 contentPaddingHorizontal={CODE_CANVAS_CONTENT_PADDING}
                 contentPaddingVertical={CODE_CANVAS_CONTENT_PADDING}
@@ -643,7 +653,7 @@ function FileContentPanelInner({
                 onPressLine={lineSelectionEnabled ? handlePressLine : reviewCommentLineActionsEnabled ? reviewCommentControls?.onPressAddComment : undefined}
                 onPressLineRange={lineSelectionEnabled || reviewCommentLineActionsEnabled ? handlePressLineRange : undefined}
                 pressLineWhenNotSelectable={!lineSelectionEnabled && reviewCommentLineActionsEnabled}
-                onPressAddComment={reviewCommentLineActionsEnabled ? reviewCommentControls?.onPressAddComment : undefined}
+                onPressAddComment={reviewCommentControls?.onPressAddComment}
                 isCommentActive={reviewCommentControls?.isCommentActive}
                 renderAfterLine={reviewCommentControls?.renderAfterLine}
                 renderLeadingLane={renderLeadingLane}
@@ -658,6 +668,7 @@ function FileContentPanelInner({
                 intelligence={codeIntelligence}
                 highlightLineId={jumpHighlight?.scrollToLineId}
                 highlightLineIds={highlightLineIds}
+                agentPresence={agentPresence}
                 wrapLines={effectiveWrapLines}
                 showLineNumbers={effectiveShowLineNumbers}
                 showPrefix={effectiveShowPrefix}
