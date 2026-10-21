@@ -1751,6 +1751,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                         />
                     </>
                 )}
+                {/* Rename / quick-fix review takes this body region like Changes do (P7 U7). */}
+                {codeIntelligence.editSetLayer}
             </View>
             {partial && displayMode !== 'diff' ? (
                 <FilePartialFooter slice={partial.slice} sliceBytes={partial.length} totalBytes={partial.totalBytes}

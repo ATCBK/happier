@@ -876,22 +876,21 @@ export function useFilePageCodeIntelligence(
       onOpenReference={openReference}
       onQuickFix={() => openEditSet('fixes')}
       onRename={() => openEditSet('rename')}
-      editSets={
-        input.scope ? (
-          <FileCodeEditSetLayer
-            store={editSets}
-            controller={controller}
-            scope={input.scope}
-            accountId={input.accountId}
-            filePath={input.filePath}
-            languageId={input.language}
-            machineName={input.machineName}
-            readText={input.liveValue.get}
-            isUnsaved={input.getUnsaved}
-            save={saveThisFile}
-          />
-        ) : null
-      }
+    />
+  ) : null;
+  // The rename / quick-fix flow mounts inside the page body: its review takes that region like Changes do.
+  const editSetLayer = controller && input.scope ? (
+    <FileCodeEditSetLayer
+      store={editSets}
+      controller={controller}
+      scope={input.scope}
+      accountId={input.accountId}
+      filePath={input.filePath}
+      languageId={input.language}
+      machineName={input.machineName}
+      readText={input.liveValue.get}
+      isUnsaved={input.getUnsaved}
+      save={saveThisFile}
     />
   ) : null;
 
@@ -918,6 +917,7 @@ export function useFilePageCodeIntelligence(
     headerFacts,
     notice,
     layer,
+    editSetLayer,
     menuCommands,
     symbols,
     showProblems,
@@ -990,8 +990,6 @@ function FileCodeIntelligenceCardLayer(
     onOpenReference: (row: CodeReferenceRow) => void;
     onQuickFix: () => void;
     onRename: () => void;
-    /** The rename / quick-fix leaf, mounted beside the card. */
-    editSets: React.ReactNode;
   }>,
 ) {
   const { controller, interaction } = props;
@@ -1104,15 +1102,9 @@ function FileCodeIntelligenceCardLayer(
   }, [controller, interaction]);
   const position = query?.position ?? null;
   if (state?.problems) {
-    return (
-      <>
-        <CodeProblemsSheet scopeId={props.scopeId} onRequestClose={close} />
-        {props.editSets}
-      </>
-    );
+    return <CodeProblemsSheet scopeId={props.scopeId} onRequestClose={close} />;
   }
   return (
-    <>
     <CodeIntelligenceCard
       open={open}
       anchor={state?.anchor ?? query?.anchor ?? null}
@@ -1147,8 +1139,6 @@ function FileCodeIntelligenceCardLayer(
       onQuickFix={props.onQuickFix}
       onRename={props.onRename}
     />
-    {props.editSets}
-    </>
   );
 }
 
@@ -1181,6 +1171,7 @@ function FileCodeEditSetLayer(
       readText={props.readText}
       isUnsaved={props.isUnsaved}
       save={props.save}
+      syncDocument={props.controller.syncDocument}
       sourceLabel={server ? `${server} · ${props.machineName}` : null}
       onRequestClose={props.store.close}
     />

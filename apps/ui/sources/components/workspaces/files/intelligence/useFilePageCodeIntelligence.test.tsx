@@ -21,11 +21,13 @@ vi.mock('expo-router', async () => {
     return createExpoRouterMock().module;
 });
 // Only the remote Machine is scripted; the page controller, holder and Search source remain real.
-const machine = vi.hoisted(() => ({ sync: vi.fn(), query: vi.fn(), watch: vi.fn(), fallback: vi.fn() }));
+const machine = vi.hoisted(() => ({ sync: vi.fn(), query: vi.fn(), watch: vi.fn(), fallback: vi.fn(), preview: vi.fn() }));
 vi.mock('@/sync/ops/machineLanguageIntelligence', () => ({
     machineLanguageIntelligenceSync: machine.sync, machineLanguageIntelligenceQuery: machine.query,
     machineLanguageIntelligenceWatch: machine.watch, machineCodeIntelligenceFallback: machine.fallback,
     machineLanguageIntelligenceRestartAction: async () => ({ status: 'ok' }),
+    machineLanguageIntelligencePreviewAction: machine.preview,
+    machineLanguageIntelligenceApplyAction: async () => ({ ok: false, errorCode: 'not_scripted' }),
 }));
 
 const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
@@ -76,6 +78,7 @@ describe('File-page intelligence composition', () => {
         machine.watch.mockReset().mockImplementation((_machine, _request, options: { signal: AbortSignal }) =>
             new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true })));
         machine.fallback.mockReset();
+        machine.preview.mockReset();
     });
     afterEach(async () => { await standardCleanup(); await cleanupWorkspaceFileDetailsActionBoundary(); portal.restore(); browser.restore(); });
 
@@ -127,6 +130,32 @@ describe('File-page intelligence composition', () => {
             range: { start: { line: 0, character: 0 }, end: { line: 0, character: 7 } } }] }); });
         expect(hook.getCurrent().controller?.getSnapshot().status).toBe('ready');
         expect(interaction.getState()).toMatchObject({ via: 'command', references: false });
+    });
+
+    it('lets the Machine hold the saved file before it is asked for fixes', async () => {
+        // A save changes no text, only whether the editor holds unsaved edits; the Machine refuses
+        // fixes while its held copy is unsaved, so the flow must hand it the saved state first.
+        let dirty = true;
+        const events: string[] = [];
+        machine.sync.mockImplementation(async (_machine, request: { op: { op: string; unsaved?: boolean; version?: number } }) => {
+            events.push(`sync:${request.op.unsaved === true ? 'unsaved' : 'saved'}`);
+            return { status: 'ok', generation: 'g1', version: request.op.version ?? 1, servers: [server] };
+        });
+        machine.query.mockResolvedValue({ status: 'ok', kind: 'hover', sections: [] });
+        machine.preview.mockImplementation(async (_machine, actionId: string) => {
+            events.push(actionId);
+            return { status: 'ok', kind: 'codeActions', actions: [], fileHash: 'disk' };
+        });
+        const hook = await renderHook(() => useFilePageCodeIntelligence(input({ getUnsaved: () => dirty })), { wrapper: PageWrapper });
+        await act(async () => { await hook.getCurrent().controller?.hover({ line: 0, character: 7 }); });
+        expect(events).toContain('sync:unsaved');
+        dirty = false;
+        const layer = hook.getCurrent().editSetLayer;
+        if (!layer) throw new Error('Expected the edit-set layer');
+        await renderScreen(layer);
+        await act(async () => { hook.getCurrent().menuCommands?.['code.quickFix'](); });
+        await vi.waitFor(() => expect(events).toContain('code.codeActions.list'));
+        expect(events.slice(events.indexOf('code.codeActions.list') - 1)).toEqual(['sync:saved', 'code.codeActions.list']);
     });
 
     it('keeps the explanation closed for an ordinary in-workspace definition', async () => {

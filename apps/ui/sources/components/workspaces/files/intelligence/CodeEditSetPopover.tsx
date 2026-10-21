@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ScrollView, View } from 'react-native';
+import { Platform, ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { LanguageIntelligenceCodeAction } from '@happier-dev/protocol/machines/languageIntelligence';
 import type { WorkspaceFileEditSetFile } from '@happier-dev/protocol/machines/workspaceFiles';
@@ -24,7 +24,10 @@ import {
 import { machineWorkspaceFileReplaceApply } from '@/sync/ops/machineWorkspaceFileReplace';
 import { workspaceReadFile } from '@/sync/ops/workspaceFileSystem/fileReadWrite';
 import { t } from '@/text';
+import { useDeviceType } from '@/utils/platform/responsive';
 
+import { CODE_CARD_WIDTH } from './CodeIntelligenceCard';
+import { useFilePageBox } from './filePageBox';
 import {
   buildEditSetPreviewDiff,
   countEditSetChanges,
@@ -51,6 +54,11 @@ export type CodeEditSetPopoverProps = Readonly<{
   isUnsaved: () => boolean;
   /** Saves this file's editor; true when the disk now holds what the person sees. */
   save: () => Promise<boolean>;
+  /**
+   * Hands the Machine this page's current text and saved state. A save changes no text, so nothing else
+   * tells the Machine its held copy is no longer unsaved; every request of this flow syncs first.
+   */
+  syncDocument: () => Promise<unknown>;
   /** "TypeScript · NLDW3" when a server answered on this page. */
   sourceLabel: string | null;
   onRequestClose: () => void;
@@ -92,7 +100,8 @@ type Stage =
     }>
   | Readonly<{ kind: 'note'; text: string }>;
 
-const POPOVER_WIDTH = 560;
+/** The name stages are the intelligence card's width (LS1); the review takes the page body. */
+const POPOVER_WIDTH = CODE_CARD_WIDTH;
 const POPOVER_MAX_HEIGHT = 560;
 
 function refusalText(
@@ -115,7 +124,10 @@ function refusalText(
 /**
  * Semantic edits on the File page (P7 U7): the rename field or the fix list at the name, then the
  * edit set as the review renderer's diffs, one apply through the guarded writer, its per-file results
- * and one Undo through the canonical restore. A floating card on desktop, the shared sheet on phones.
+ * and one Undo through the canonical restore. On desktop the name stages are a card at the name, kept
+ * inside the File page's width, and the review and its result take the page body like Changes do
+ * (a band over per-file diffs); phones keep every stage in the shared sheet. Mount it inside the page
+ * body so the review covers exactly that region.
  */
 export function CodeEditSetPopover(
   props: CodeEditSetPopoverProps,
@@ -162,6 +174,8 @@ export function CodeEditSetPopover(
 
   const begin = React.useCallback(async () => {
     setStage({ kind: 'loading' });
+    await latest.current.syncDocument().catch(() => null);
+    if (!alive.current) return;
     const machineId = latest.current.scope.machineId;
     const result = await machineLanguageIntelligencePreviewAction(
       machineId,
@@ -249,6 +263,8 @@ export function CodeEditSetPopover(
       const name = value.trim();
       if (!name || name === request.symbol) return;
       setStage({ kind: 'naming', value, previewing: true });
+      await latest.current.syncDocument().catch(() => null);
+      if (!alive.current) return;
       const result = await machineLanguageIntelligencePreviewAction(
         latest.current.scope.machineId,
         'code.rename.preview',
@@ -318,6 +334,7 @@ export function CodeEditSetPopover(
       ReturnType<typeof machineLanguageIntelligenceApplyAction>
     >;
     try {
+      await current.syncDocument().catch(() => null);
       response = await machineLanguageIntelligenceApplyAction(
         current.scope.machineId,
         {
@@ -388,6 +405,17 @@ export function CodeEditSetPopover(
     else setStage({ kind: 'unsaved', saving: false });
   }, [begin]);
 
+  const back = React.useCallback(
+    () =>
+      setStage((previous) =>
+        previous.kind === 'review' && previous.back && !previous.applying
+          ? previous.back
+          : previous,
+      ),
+    [],
+  );
+  const phone = useDeviceType() === 'phone';
+  const pageBox = useFilePageBox();
   const anchor = request.anchor;
   const popoverAnchor = React.useMemo(
     () =>
@@ -420,24 +448,34 @@ export function CodeEditSetPopover(
       onPreview={preview}
       onChoose={choose}
       onApply={apply}
-      onBack={() =>
-        setStage((previous) =>
-          previous.kind === 'review' && previous.back
-            ? previous.back
-            : previous,
-        )
-      }
+      onBack={back}
       onUndo={undo}
       onSave={saveFirst}
       onClose={props.onRequestClose}
     />
   );
+  if (!phone && (stage.kind === 'review' || stage.kind === 'result'))
+    return (
+      <CodeEditSetPage
+        request={request}
+        stage={stage}
+        texts={texts}
+        filePath={props.filePath}
+        onApply={apply}
+        onBack={back}
+        onUndo={undo}
+        onClose={props.onRequestClose}
+      />
+    );
   return (
+    <>
+    {pageBox.box}
     <Popover
       open
       anchor={popoverAnchor ?? undefined}
       backdrop={false}
       boundaryRef={null}
+      horizontalBoundaryRef={pageBox.ref}
       onRequestClose={props.onRequestClose}
       phonePresentation="sheet"
       sheetHeader="none"
@@ -483,6 +521,175 @@ export function CodeEditSetPopover(
         )
       }
     </Popover>
+    </>
+  );
+}
+
+type PageStage = Extract<Stage, { kind: 'review' | 'result' }>;
+
+/** The page's own file leads; the others keep the server's order. */
+function orderPageFirst<T extends Readonly<{ path: string }>>(files: readonly T[], filePath: string): readonly T[] {
+  const own = files.filter((file) => file.path === filePath);
+  return own.length ? [...own, ...files.filter((file) => file.path !== filePath)] : files;
+}
+
+/** Desktop review and result in the page body: one band (what, how much, the actions) over the files. */
+function CodeEditSetPage(
+  props: Readonly<{
+    request: CodeEditSetRequest;
+    stage: PageStage;
+    texts: ReadonlyMap<string, string | null>;
+    filePath: string;
+    onApply: () => void;
+    onBack: () => void;
+    onUndo: () => void;
+    onClose: () => void;
+  }>,
+) {
+  const { theme } = useUnistyles();
+  const { stage, request } = props;
+  const rename = request.op === 'rename';
+  const latest = React.useRef(props);
+  latest.current = props;
+  // Esc steps back to the name from the review and leaves from the result, as the card did.
+  React.useEffect(() => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      const current = latest.current;
+      if (current.stage.kind === 'review' && current.stage.applying) return;
+      event.preventDefault();
+      if (current.stage.kind === 'review' && current.stage.back) current.onBack();
+      else current.onClose();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  if (stage.kind === 'review') {
+    const counts = countEditSetChanges(stage.files);
+    const commandOnly = Boolean(stage.action?.hasCommand) && stage.files.length === 0;
+    const empty = stage.files.length === 0 && !commandOnly;
+    return (
+      <View style={[styles.page, { backgroundColor: theme.colors.surface.base }]} testID="code-edit-set-page">
+        <View style={styles.band}>
+          <View style={styles.bandText}>
+            {/* The primary names the verb ("Rename in 2 files"); the title is what changes. */}
+            <Text variant="label" emphasis={stage.action ? 'semiBold' : undefined} numberOfLines={2}
+              style={[styles.primaryText, stage.action ? null : styles.mono]}>
+              {stage.action
+                ? stage.action.title
+                : t('files.pane.intelligence.renameTo', { from: request.symbol, to: stage.newName ?? '' })}
+            </Text>
+            {commandOnly || empty ? null : (
+              <Text variant="meta" numberOfLines={1} style={[styles.tertiaryText, styles.tabular]}>
+                {t('files.pane.intelligence.changesInFiles', counts)}
+              </Text>
+            )}
+          </View>
+          {stage.back ? (
+            <RoundButton size="small" display="secondary" title={t('common.back')} disabled={stage.applying}
+              onPress={props.onBack} testID="code-edit-set-back" />
+          ) : null}
+          {empty ? null : (
+            <RoundButton size="small"
+              title={stage.action ? t('files.pane.intelligence.applyFix') : t('files.pane.intelligence.renameInFiles', { files: counts.files })}
+              loading={stage.applying} onPress={props.onApply} testID="code-edit-set-apply" />
+          )}
+        </View>
+        <ScrollView style={styles.pageScroll} contentContainerStyle={styles.pageContent} testID="code-edit-set-review">
+          {commandOnly || empty ? (
+            <Text variant="body" style={[styles.secondaryText, styles.pageNote]}>
+              {empty ? t('files.pane.intelligence.nothingToChange') : t('files.pane.intelligence.runsCommand')}
+            </Text>
+          ) : (
+            orderPageFirst(stage.files, props.filePath).map((file, index) => (
+              <EditSetFile key={file.path} file={file} text={props.texts.get(file.path)} inPage breakBefore={index > 0} />
+            ))
+          )}
+          {stage.action?.hasCommand && !commandOnly ? (
+            <Text variant="meta" style={[styles.tertiaryText, styles.pageNote]}>
+              {t('files.pane.intelligence.alsoRunsCommand')}
+            </Text>
+          ) : null}
+        </ScrollView>
+      </View>
+    );
+  }
+
+  const written = stage.receipts.filter((receipt) => receipt.status === 'replaced');
+  const undo = stage.undo;
+  const undone = typeof undo === 'object' ? undo : null;
+  const title = undone && undone.restored > 0
+    ? t('files.pane.intelligence.undone', { files: undone.restored })
+    : written.length
+      ? rename ? t('files.pane.intelligence.renamed', { files: written.length }) : t('files.pane.intelligence.fixApplied')
+      : t('files.pane.intelligence.nothingChanged');
+  return (
+    <View style={[styles.page, { backgroundColor: theme.colors.surface.base }]} testID="code-edit-set-page">
+      <View style={styles.band} testID="code-edit-set-result">
+        <Icon name={written.length ? 'check' : 'warning'} size={ICON_SIZE.sm}
+          color={written.length ? theme.colors.text.secondary : theme.colors.state.warning.foreground} />
+        <Text variant="label" emphasis="semiBold" numberOfLines={1} style={[styles.primaryText, styles.bandText]}>
+          {title}
+        </Text>
+        {written.length && !undone ? (
+          <RoundButton size="small" display="secondary" title={t('common.undo')} loading={undo === 'running'}
+            onPress={props.onUndo} testID="code-edit-set-undo" />
+        ) : null}
+        <RoundButton size="small" title={t('common.done')} onPress={props.onClose} testID="code-edit-set-done" />
+      </View>
+      <ScrollView style={styles.pageScroll} contentContainerStyle={styles.pageContent} testID="code-edit-set-results">
+        {/* Every file says what happened; written files stay quiet (the band says it once). */}
+        {orderPageFirst(stage.receipts, props.filePath).map((receipt) => (
+          <ResultRow key={`${receipt.path}:${receipt.status}`} receipt={receipt} />
+        ))}
+        {undone && undone.changed > 0 ? (
+          <Text variant="meta" style={[styles.tertiaryText, styles.pageNote]}>
+            {t('files.pane.intelligence.undoChanged', { files: undone.changed })}
+          </Text>
+        ) : null}
+        {undone?.failed ? (
+          <Text variant="meta" style={[styles.failureText, styles.pageNote]}>
+            {t('files.pane.intelligence.undoFailed')}
+          </Text>
+        ) : null}
+      </ScrollView>
+    </View>
+  );
+}
+
+function ResultRow(props: Readonly<{ receipt: Receipt; inset?: 'page' | 'card' }>) {
+  const { theme } = useUnistyles();
+  const { receipt } = props;
+  const path = receipt.renameTo ?? receipt.path;
+  const slash = path.lastIndexOf('/');
+  const name = path.slice(slash + 1);
+  const directory = slash > 0 ? path.slice(0, slash) : '';
+  const written = receipt.status === 'replaced';
+  const reason = written
+    ? null
+    : receipt.status === 'changed'
+      ? t('files.pane.intelligence.resultChanged')
+      : receipt.status === 'skipped'
+        ? t('files.pane.intelligence.resultSkipped')
+        : t('files.pane.intelligence.resultFailed', { reason: receipt.reason ?? '' });
+  return (
+    <View style={[styles.fileHeader, props.inset === 'card' ? null : styles.pageInset]} testID="code-edit-set-result-file">
+      <FileIcon fileName={name} size={ICON_SIZE.sm} appearance="line" />
+      <Text numberOfLines={1} style={[Typography.variant('label'), styles.fileName]}>
+        <Text style={[Typography.default('medium'), styles.primaryText]}>{name}</Text>
+        {directory ? <Text style={styles.tertiaryText}>{`  ${directory}`}</Text> : null}
+      </Text>
+      {reason ? (
+        <Text variant="meta" numberOfLines={1}
+          style={receipt.status === 'failed' ? styles.failureText : styles.tertiaryText}>
+          {reason}
+        </Text>
+      ) : (
+        <Icon name="check" size={ICON_SIZE.sm} color={theme.colors.text.tertiary} />
+      )}
+    </View>
   );
 }
 
@@ -767,9 +974,6 @@ function CodeEditSetBody(
   const written = stage.receipts.filter(
     (receipt) => receipt.status === 'replaced',
   );
-  const others = stage.receipts.filter(
-    (receipt) => receipt.status !== 'replaced',
-  );
   const undo = stage.undo;
   const title =
     typeof undo === 'object' && undo.restored > 0
@@ -800,54 +1004,22 @@ function CodeEditSetBody(
           {title}
         </Text>
       </View>
-      {others.length ||
-      (typeof undo === 'object' && (undo.changed > 0 || undo.failed)) ? (
-        <View style={styles.block}>
-          {others.map((receipt) => (
-            <View
-              key={`${receipt.path}:${receipt.status}`}
-              style={styles.resultRow}
-            >
-              <Text
-                variant="meta"
-                numberOfLines={1}
-                style={[styles.mono, styles.secondaryText, styles.resultPath]}
-              >
-                {receipt.path}
-              </Text>
-              <Text
-                variant="meta"
-                numberOfLines={2}
-                style={
-                  receipt.status === 'failed'
-                    ? styles.failureText
-                    : styles.tertiaryText
-                }
-              >
-                {receipt.status === 'changed'
-                  ? t('files.pane.intelligence.resultChanged')
-                  : receipt.status === 'skipped'
-                    ? t('files.pane.intelligence.resultSkipped')
-                    : t('files.pane.intelligence.resultFailed', {
-                        reason: receipt.reason ?? '',
-                      })}
-              </Text>
-            </View>
-          ))}
-          {typeof undo === 'object' && undo.changed > 0 ? (
-            <Text variant="meta" style={styles.tertiaryText}>
-              {t('files.pane.intelligence.undoChanged', {
-                files: undo.changed,
-              })}
-            </Text>
-          ) : null}
-          {typeof undo === 'object' && undo.failed ? (
-            <Text variant="meta" style={styles.failureText}>
-              {t('files.pane.intelligence.undoFailed')}
-            </Text>
-          ) : null}
-        </View>
-      ) : null}
+      {/* Every file says what happened, as in the page's result. */}
+      <View style={styles.resultList}>
+        {stage.receipts.map((receipt) => (
+          <ResultRow key={`${receipt.path}:${receipt.status}`} receipt={receipt} inset="card" />
+        ))}
+        {typeof undo === 'object' && undo.changed > 0 ? (
+          <Text variant="meta" style={[styles.tertiaryText, styles.block]}>
+            {t('files.pane.intelligence.undoChanged', { files: undo.changed })}
+          </Text>
+        ) : null}
+        {typeof undo === 'object' && undo.failed ? (
+          <Text variant="meta" style={[styles.failureText, styles.block]}>
+            {t('files.pane.intelligence.undoFailed')}
+          </Text>
+        ) : null}
+      </View>
       <Footer>
         {written.length && typeof undo !== 'object' ? (
           <RoundButton
@@ -874,6 +1046,9 @@ function EditSetFile(
   props: Readonly<{
     file: WorkspaceFileEditSetFile;
     text: string | null | undefined;
+    /** In the page body the file rows align with the band's inset. */
+    inPage?: boolean;
+    breakBefore?: boolean;
   }>,
 ) {
   const { file } = props;
@@ -889,8 +1064,8 @@ function EditSetFile(
   );
   const count = file.edits.length + (file.renameTo ? 1 : 0);
   return (
-    <View testID="code-edit-set-file">
-      <View style={styles.fileHeader}>
+    <View testID="code-edit-set-file" style={props.breakBefore ? styles.fileBreak : null}>
+      <View style={[styles.fileHeader, props.inPage ? styles.pageInset : null]}>
         <FileIcon fileName={name} size={ICON_SIZE.sm} appearance="line" />
         <Text
           numberOfLines={1}
@@ -917,7 +1092,7 @@ function EditSetFile(
           presentationStyleOverride="unified"
         />
       ) : (
-        <Text variant="meta" style={[styles.tertiaryText, styles.fileNote]}>
+        <Text variant="meta" style={[styles.tertiaryText, styles.fileNote, props.inPage ? styles.pageInset : null]}>
           {props.text === undefined
             ? t('files.pane.intelligence.readingFile')
             : t('files.pane.intelligence.changesNotShown', { count })}
@@ -934,6 +1109,50 @@ function Footer(props: Readonly<{ children: React.ReactNode }>) {
 const styles = StyleSheet.create((theme) => ({
   sheet: {
     paddingBottom: theme.space.s12,
+  },
+  page: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  band: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s8,
+    paddingLeft: theme.space.s16,
+    paddingRight: theme.space.s12,
+    paddingVertical: theme.space.s8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border.subtle,
+  },
+  bandText: {
+    flex: 1,
+    minWidth: 0,
+    gap: theme.space.s2,
+  },
+  /** Files after the first are set off by one ink hairline, like the Changes body's file breaks. */
+  fileBreak: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border.subtle,
+  },
+  pageScroll: {
+    flex: 1,
+    minHeight: 0,
+  },
+  pageContent: {
+    paddingBottom: theme.space.s16,
+  },
+  resultList: {
+    paddingBottom: theme.space.s4,
+  },
+  pageInset: {
+    paddingHorizontal: theme.space.s16,
+  },
+  pageNote: {
+    paddingHorizontal: theme.space.s16,
+    paddingVertical: theme.space.s10,
   },
   header: {
     flexDirection: 'row',
@@ -994,12 +1213,6 @@ const styles = StyleSheet.create((theme) => ({
   footerStatus: {
     flex: 1,
     minWidth: 0,
-  },
-  resultRow: {
-    gap: theme.space.s2,
-  },
-  resultPath: {
-    flexShrink: 1,
   },
   mono: {
     ...Typography.mono(),

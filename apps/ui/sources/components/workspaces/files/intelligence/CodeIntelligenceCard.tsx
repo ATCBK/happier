@@ -21,6 +21,7 @@ import type {
   LanguageStateNote,
 } from './codeIntelligencePresentation';
 import { CodeIntelligencePaneTab } from './CodeIntelligencePaneTab';
+import { useFilePageBox } from './filePageBox';
 import {
   CodeReferencesList,
   type CodeReferenceRow,
@@ -28,6 +29,8 @@ import {
 
 /** The lab's card (LS1 `rv-hover`) is 440 wide; a longer signature widens it up to the cap before it wraps. */
 const CARD_MIN_WIDTH = 440;
+/** The card's own width before a signature widens it; other cards at a name (rename, fixes) share it. */
+export const CODE_CARD_WIDTH = CARD_MIN_WIDTH;
 const CARD_MAX_WIDTH = 600;
 const CARD_MAX_HEIGHT = 420;
 /** Signature type: the mono meta pair (lab `.sig` 12/19). IBM Plex Mono advances 0.6 em per character. */
@@ -130,6 +133,7 @@ export function CodeIntelligenceCard(
   const definitionKey = useKeyboardShortcutLabel('code.goToDefinition');
   const referencesKey = useKeyboardShortcutLabel('code.findReferences');
   const quickFixKey = useKeyboardShortcutLabel('code.quickFix');
+  const pageBox = useFilePageBox();
   const anchor = props.anchor;
   const popoverAnchor = React.useMemo(
     () =>
@@ -164,11 +168,14 @@ export function CodeIntelligenceCard(
     space: theme.space,
   });
   return (
+    <>
+    {pageBox.box}
     <Popover
       open
       anchor={popoverAnchor ?? undefined}
       backdrop={false}
       boundaryRef={null}
+      horizontalBoundaryRef={pageBox.ref}
       onRequestClose={props.onRequestClose}
       phonePresentation="sheet"
       sheetHeader="none"
@@ -226,6 +233,7 @@ export function CodeIntelligenceCard(
         )
       }
     </Popover>
+    </>
   );
 }
 
