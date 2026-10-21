@@ -13378,6 +13378,8 @@ settingsSession: {
         },
       },
       modelPackDownload: {
+        insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+          `空き容量が足りません。このダウンロードには ${required} が必要ですが、空きは ${available} しかありません。`,
         progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} / ${total}`,
         progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
           `${loaded} / ${total} · ${filesDone} / ${filesTotal} ファイル`,

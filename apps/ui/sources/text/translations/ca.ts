@@ -12184,6 +12184,8 @@ settingsSession: {
                 },
             },
             modelPackDownload: {
+              insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+                `No hi ha prou espai lliure. Aquesta baixada necessita ${required}, però només hi ha ${available} lliures.`,
                 progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} de ${total}`,
                 progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
                     `${loaded} de ${total} · ${filesDone} de ${filesTotal} ${filesTotal === 1 ? 'fitxer' : 'fitxers'}`,

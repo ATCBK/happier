@@ -12660,6 +12660,8 @@ settingsSession: {
         },
       },
       modelPackDownload: {
+        insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+          `可用空间不足。此下载需要 ${required}，但仅剩 ${available} 可用。`,
         progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} / ${total}`,
         progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
           `${loaded} / ${total} · ${filesDone} / ${filesTotal} 个文件`,

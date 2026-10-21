@@ -12928,6 +12928,8 @@ settingsSession: {
         },
       },
       modelPackDownload: {
+        insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+          `Za mało wolnego miejsca. To pobieranie wymaga ${required}, a wolne jest tylko ${available}.`,
         progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} z ${total}`,
         progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
           `${loaded} z ${total} · ${filesDone} z ${filesTotal} ${filesTotal === 1 ? 'pliku' : 'plików'}`,

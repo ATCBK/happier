@@ -13315,6 +13315,8 @@ settingsSession: {
         },
       },
       modelPackDownload: {
+        insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+          `Spazio libero insufficiente. Questo download richiede ${required}, ma ne sono liberi solo ${available}.`,
         progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} di ${total}`,
         progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
           `${loaded} di ${total} · ${filesDone} di ${filesTotal} file`,

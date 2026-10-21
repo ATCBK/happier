@@ -15991,6 +15991,8 @@ const enSettingsVoice = {
       },
     },
     modelPackDownload: {
+      insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+        `Not enough free space. This download needs ${required}, but only ${available} is free.`,
       progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} of ${total}`,
       progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
         `${loaded} of ${total} · ${filesDone} of ${filesTotal} ${filesTotal === 1 ? 'file' : 'files'}`,

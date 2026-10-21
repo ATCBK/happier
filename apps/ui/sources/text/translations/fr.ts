@@ -12968,6 +12968,8 @@ settingsSession: {
         },
       },
       modelPackDownload: {
+        insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+          `Pas assez d'espace libre. Ce téléchargement nécessite ${required}, mais seulement ${available} sont disponibles.`,
         progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} sur ${total}`,
         progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
           `${loaded} sur ${total} · ${filesDone} ${filesDone <= 1 ? 'fichier' : 'fichiers'} sur ${filesTotal}`,
