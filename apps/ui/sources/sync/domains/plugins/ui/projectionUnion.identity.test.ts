@@ -1,15 +1,293 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
-import { PluginMachineMaterializationV1Schema } from '@happier-dev/protocol/plugins/availability/v1';
+import { PluginMachineMaterializationV1Schema, PluginMachineUiArtifactV1Schema } from '@happier-dev/protocol/plugins/availability/v1';
 import { PluginPortableReleaseManifestV1Schema } from '@happier-dev/protocol/plugins/availability/v1';
 import { projectPluginPortableUiDeclarationsV1 } from '@happier-dev/protocol/plugins/contributions/ui';
 import { PluginProjectedResourceV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { PluginSourceCustodyV1Schema } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
+import * as sourceCustodyComparison from '@happier-dev/protocol/plugins/runtime/sourceCustody';
+import * as strictJsonProjection from '@happier-dev/protocol/json/strictJsonValue';
 import { resolveAtmospherePictureCatalog } from '@/components/atmosphere/pictureCatalog';
 import { EMPTY_PLUGIN_UI_PROJECTION, normalizePluginInstalledUiDeclarations } from './projection';
-import { preparePluginUiProjectionOrigins } from './projectionOrigins';
-import { createInstalledPluginUiProjectionPublication, createPluginUiExecutionOriginCandidatePublication, createPluginUiProjectionUnionPublication, readPluginUiContributionOrigin, readPluginUiContributionSupplies, readPluginUiExecutionOriginCandidates, readPluginUiProjectionEntryExecutionOrigin, unionPluginUiProjections, type PluginUiProjectionUnionMember } from './projectionUnion';
+import { preparePluginUiProjectionOrigins, readPluginUiAccountExecutableOrigin } from './projectionOrigins';
+import { createInstalledPluginUiProjectionPublication, createPluginUiExecutionOriginCandidatePublication, createPluginUiProjectionUnionPublication, mergeInstalledPluginUiProjections, readPluginUiContributionOrigin, readPluginUiContributionSupplies, readPluginUiExecutionOriginCandidates, readPluginUiProjectionEntryExecutionOrigin, unionPluginUiProjections, type PluginUiProjectionUnionMember } from './projectionUnion';
 
 describe('execution-origin projection identity', () => {
+    it('updates reporting-Machine provenance without deep-walking retained facts across a 56-Machine catalog', () => {
+        const pluginId = 'acme.streaming';
+        const payload = Object.freeze({ sections: Object.freeze([Object.freeze({ title: 'Retained declaration',
+            children: Object.freeze([Object.freeze({ text: 'Unchanged authored payload' })]) })]) });
+        const otherPayload = Object.freeze({ sections: Object.freeze([Object.freeze({ title: 'Retained declaration',
+            children: Object.freeze([Object.freeze({ text: 'Conflicting authored payload' })]) })]) });
+        const nativeManifest = PluginPortableReleaseManifestV1Schema.parse({ schemaVersion: 2, id: pluginId, version: '1.0.0',
+            displayName: 'Retained native manifest', runtime: { apiVersion: 1 }, contributes: { ui: {
+                renderers: [{ id: 'content', kind: 'declarative', root: { kind: 'text', text: 'Native manifest comparison payload' } }],
+                views: [{ id: 'content', container: 'appPage', target: { kind: 'app' }, title: 'Native manifest comparison', renderer: 'content' }],
+            } } });
+        let members = Array.from({ length: 56 }, (_, index) => {
+            const member = sourceMember(`stream-${String(index).padStart(2, '0')}`, pluginId, 'row');
+            const projection = preparePluginUiProjectionOrigins({ ...member.projection!, installedPackagesById: {
+                [pluginId]: { ...member.projection!.installedPackagesById[pluginId]!, displayName: 'Streaming' },
+            }, unknownEntriesById: {
+                row: Object.freeze({ ...member.projection!.unknownEntriesById.row!, payload: index < 28 ? payload : otherPayload }),
+            } });
+            const slots = ['native-slot-a', 'native-slot-b'].map((artifactId, at) => ({ contributionId: 'content', artifactId,
+                tier: 'hostedWeb' as const, platform: 'web' as const, artifactDigest: `sha256:${(at ? 'b' : 'a').repeat(64)}`, hostUiApiRange: '^1.0.0' }));
+            const materialization = PluginMachineMaterializationV1Schema.parse({ serverIdentityId: 'srv_identity', machineId: member.machineId,
+                materializationId: member.machineId, pluginId, version: '1.0.0', sourceClass: 'localPath', portableRelease: false,
+                enabled: true, trustState: 'trusted', observedAt: 1,
+                declaredManifest: index % 2 ? { ...nativeManifest, displayName: 'Conflicting native manifest' } : nativeManifest,
+                uiArtifacts: index % 2 ? slots.reverse() : slots });
+            return { ...member, projection, materializationsByPluginId: { [pluginId]: materialization },
+                selectableExecutionOrigins: [projection.installedPackagesById[pluginId]!.executionOrigin!] } satisfies PluginUiProjectionUnionMember;
+        });
+        const selections = new Map([[pluginId, members[0]!.projection.installedPackagesById[pluginId]!.executionOrigin!]]);
+        const account = accountDeclarationModel();
+        const union = createPluginUiProjectionUnionPublication();
+        const installed = createInstalledPluginUiProjectionPublication();
+        const candidates = createPluginUiExecutionOriginCandidatePublication();
+        const publish = () => {
+            const runtime = union.publish(members, selections).pluginUiProjection;
+            const merged = installed.publish([account], runtime, undefined, selections)!;
+            candidates.publish(merged, members, [pluginId]);
+            return merged;
+        };
+        let projection = publish();
+        const retainedFacts = new Set<object>();
+        const remember = (value: unknown): void => {
+            if (!value || typeof value !== 'object' || retainedFacts.has(value)) return;
+            retainedFacts.add(value);
+            for (const child of Object.values(value)) remember(child);
+        };
+        remember(projection.unknownEntriesById.row!.hostSupplies);
+        remember(payload);
+        const sourceRows = new Set(members.map(member => member.projection.unknownEntriesById.row));
+        const entries = vi.spyOn(Object, 'entries');
+        const keys = vi.spyOn(Object, 'keys');
+        const custody = vi.spyOn(PluginSourceCustodyV1Schema, 'safeParse');
+        const compareCustody = vi.spyOn(sourceCustodyComparison, 'pluginSourceCustodyV1Equal');
+        const projectJson = vi.spyOn(strictJsonProjection, 'projectNativeJsonValueForTransport');
+        const sourceManifests = new Set<unknown>(members.map(member => member.materializationsByPluginId[pluginId]!.declaredManifest));
+        let untouchedSupplierPreparations = 0;
+        let reportingSupplierPreparations = 0;
+        let untouchedSupplierComparisons = 0;
+        try {
+            for (let index = 0; index < members.length; index++) {
+                const before = readPluginUiContributionSupplies(projection.unknownEntriesById.row);
+                const member = members[index]!;
+                const firstPreparation = custody.mock.calls.length;
+                const firstComparison = compareCustody.mock.calls.length;
+                const reportingCustody = member.projection.installedPackagesById[pluginId]!.sourceCustody;
+                const untouchedCustodies = new Set<unknown>(members.filter((_, at) => at !== index)
+                    .map(value => value.projection.installedPackagesById[pluginId]!.sourceCustody));
+                const phase = index % 2 ? 'retainedOffline' as const : 'establishing' as const;
+                members = members.map((value, at) => at === index
+                    ? { ...member, phase, interactionEnabled: false, projection: { ...member.projection, generation: 2 } } : value);
+                projection = publish();
+                const untouchedFacts = new Set(before.filter((_, at) => at !== index).map(supply => supply.sourceCustody));
+                untouchedSupplierComparisons += compareCustody.mock.calls.slice(firstComparison)
+                    .filter(([left, right]) => untouchedFacts.has(left) || untouchedFacts.has(right)).length;
+                for (const [value] of custody.mock.calls.slice(firstPreparation)) {
+                    if (untouchedCustodies.has(value)) untouchedSupplierPreparations++;
+                    if (value === reportingCustody) reportingSupplierPreparations++;
+                }
+                const after = readPluginUiContributionSupplies(projection.unknownEntriesById.row);
+                expect(after[index]).toMatchObject({ machineId: member.machineId, generation: 2, phase, interactionEnabled: false });
+                for (let other = 0; other < members.length; other++) if (other !== index) expect(after[other]).toBe(before[other]);
+                expect(projection.unknownEntriesById.row!.payload).toBe(payload);
+                remember(after);
+            }
+            expect.soft(keys.mock.calls.filter(([value]) => retainedFacts.has(value))).toHaveLength(0);
+            expect.soft(untouchedSupplierPreparations).toBe(0);
+            expect.soft(untouchedSupplierComparisons).toBe(0);
+            expect(reportingSupplierPreparations).toBeGreaterThan(0);
+            // Comparison snapshots own cloned portable JSON. Checking only
+            // original payload identities misses equality walks over those
+            // unchanged copies during currentness-only publications.
+            const deepDeclarationEqualityWalks = keys.mock.calls.filter(([value]) =>
+                Object.getOwnPropertyDescriptor(value, 'title')?.value === 'Retained declaration'
+                || Object.getOwnPropertyDescriptor(value, 'text')?.value === 'Unchanged authored payload').length;
+            expect.soft(deepDeclarationEqualityWalks).toBe(0);
+            const nativeManifestProjections = projectJson.mock.calls.filter(([value]) => sourceManifests.has(value)).length;
+            const nativeCorrespondenceWalks = keys.mock.calls.filter(([value]) =>
+                Object.getOwnPropertyDescriptor(value, 'displayName')?.value === 'Retained native manifest'
+                || ['native-slot-a', 'native-slot-b'].includes(Object.getOwnPropertyDescriptor(value, 'artifactId')?.value)).length;
+            expect.soft(nativeManifestProjections).toBe(0);
+            expect.soft(nativeCorrespondenceWalks).toBe(0);
+            const sourceDeclarationTraversals = entries.mock.results.filter(result => result.type === 'return'
+                && result.value.some(([, value]) => sourceRows.has(value))).length;
+            // Canonical fleet agreement and row assembly still inspect the
+            // affected plugin's sources; this is not a zero-total-work claim.
+            expect(sourceDeclarationTraversals).toBeGreaterThan(0);
+        } finally { entries.mockRestore(); keys.mockRestore(); custody.mockRestore(); compareCustody.mockRestore(); projectJson.mockRestore(); }
+        const first = { ...members[0]!, phase: 'current' as const, interactionEnabled: true };
+        members = [{ ...first, phase: 'establishing', interactionEnabled: false }, ...members.slice(1)];
+        projection = publish();
+        expect(readPluginUiContributionOrigin(projection.unknownEntriesById.row)).toMatchObject({ generation: 2,
+            phase: 'establishing', interactionEnabled: false });
+        members = [{ ...first, unavailableReasonCode: 'plugin_source_not_ready', interactionEnabled: false }, ...members.slice(1)];
+        projection = publish();
+        expect(readPluginUiContributionOrigin(projection.unknownEntriesById.row)).toMatchObject({
+            unavailableReasonCode: 'plugin_source_not_ready', interactionEnabled: false });
+        const edited = Object.freeze({ sections: Object.freeze([Object.freeze({ title: 'Changed declaration' })]) });
+        members = [{ ...first, projection: { ...first.projection, unknownEntriesById: {
+            row: { ...first.projection.unknownEntriesById.row!, payload: edited },
+        } } }, ...members.slice(1)];
+        projection = publish();
+        expect(projection.unknownEntriesById.row!.payload).toEqual(edited);
+        expect(readPluginUiContributionOrigin(projection.unknownEntriesById.row)?.interactionEnabled).toBe(true);
+        const materialization = PluginMachineMaterializationV1Schema.parse({ serverIdentityId: 'srv_identity', machineId: first.machineId,
+            materializationId: first.machineId, pluginId, version: '1.0.0', sourceClass: 'localPath', portableRelease: false,
+            enabled: true, trustState: 'revoked', observedAt: 1, uiArtifacts: [] });
+        members = [{ ...first, materializationsByPluginId: { [pluginId]: materialization } }, ...members.slice(1)];
+        expect(readPluginUiContributionOrigin(publish().unknownEntriesById.row)?.interactionEnabled).toBe(false);
+        const sourceCustody = { kind: 'development' as const, registeredRootId: 'replacement-source' };
+        const executionOrigin = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_identity', sourceRef: {
+            machineId: first.machineId, pluginId, sourceCustody,
+        } });
+        const replaced = { ...first, projection: preparePluginUiProjectionOrigins({ ...first.projection,
+            installedPackagesById: { [pluginId]: { ...first.projection.installedPackagesById[pluginId]!, sourceCustody, executionOrigin } },
+            unknownEntriesById: { row: { ...first.projection.unknownEntriesById.row!, executionOrigin } },
+        }) };
+        selections.set(pluginId, executionOrigin);
+        members = [replaced, ...members.slice(1)];
+        expect(readPluginUiContributionSupplies(publish().unknownEntriesById.row)[0]).toMatchObject({ sourceCustody, executionOrigin,
+            interactionEnabled: true });
+        members = members.slice(1);
+        expect(readPluginUiContributionSupplies(publish().unknownEntriesById.row).some(supply => supply.machineId === first.machineId)).toBe(false);
+        members = [];
+        expect(publish().unknownEntriesById.row).toBeUndefined();
+        members = [replaced];
+        expect(readPluginUiContributionOrigin(publish().unknownEntriesById.row)).toMatchObject({ executionOrigin, generation: 2, interactionEnabled: true });
+    });
+
+    it('publishes a fresh empty Account through absent, native-only, UI, pending, clearing and reacquired inputs', () => {
+        const visible = sourceMember('visible');
+        const nativeSource = sourceMember('native');
+        const native = { ...nativeSource, projection: { ...nativeSource.projection!, unknownEntriesById: {} } };
+        const installation = PluginMachineMaterializationV1Schema.parse({ serverIdentityId: 'srv_identity', machineId: 'native',
+            materializationId: 'native-installation', pluginId: 'acme.native', version: '1.0.0', sourceClass: 'localPath',
+            portableRelease: false, enabled: true, trustState: 'trusted', observedAt: 1, uiArtifacts: [] });
+        const pending: PluginUiProjectionUnionMember = { ...native, projection: null, phase: 'establishing', interactionEnabled: false,
+            materializationsByPluginId: { 'acme.native': installation } };
+        const selected = new Map([['acme.visible', visible.projection!.installedPackagesById['acme.visible']!.executionOrigin!]]);
+        const publications: readonly (readonly PluginUiProjectionUnionMember[])[] = [[], [], [native], [pending],
+            [visible, native], [visible, pending], [visible, native],
+            [{ ...visible, phase: 'establishing', interactionEnabled: false }, native],
+            [{ ...visible, projection: { ...visible.projection!, generation: 2 } }, native],
+            [], [native], [visible], []];
+        const ids = ['acme.native', 'acme.visible', 'acme.account'];
+        for (const declarations of [[], [EMPTY_PLUGIN_UI_PROJECTION], [accountDeclarationModel()]]) {
+            const union = createPluginUiProjectionUnionPublication();
+            const installed = createInstalledPluginUiProjectionPublication();
+            const candidates = createPluginUiExecutionOriginCandidatePublication();
+            expect(union.getSnapshot().pluginUiProjection).toBeNull();
+            expect(installed.getSnapshot()).toBeNull();
+            expect(candidates.getSnapshot().size).toBe(0);
+            for (const members of publications) {
+                const actual = union.publish(members, selected);
+                expect(actual).toEqual(unionPluginUiProjections(members, selected));
+                const merged = installed.publish(declarations, actual.pluginUiProjection, undefined, selected);
+                expect(merged).toEqual(mergeInstalledPluginUiProjections(declarations, actual.pluginUiProjection, undefined, selected));
+                const facts = candidates.publish(merged, members, ids);
+                for (const pluginId of ids) expect(facts.get(pluginId)).toEqual(readPluginUiExecutionOriginCandidates({
+                    projection: merged, members, pluginId,
+                }));
+            }
+            // Direct one-shot/raw callers have no owned runtime index and no
+            // previous output. They use the same total publication boundary.
+            const rawInstalled = createInstalledPluginUiProjectionPublication();
+            for (const runtime of [null, EMPTY_PLUGIN_UI_PROJECTION, native.projection, visible.projection, null, visible.projection]) {
+                expect(rawInstalled.publish(declarations, runtime, undefined, selected))
+                    .toEqual(mergeInstalledPluginUiProjections(declarations, runtime, undefined, selected));
+            }
+        }
+    });
+
+    it('bounds installed declaration comparisons to current published runtime rows', () => {
+        const member = sourceMember('retention', 'acme.retention', 'row');
+        const installed = { ...EMPTY_PLUGIN_UI_PROJECTION, unknownEntriesById: {
+            row: { pluginId: 'acme.retention', contributionKind: 'unknown' },
+        } };
+        const union = createPluginUiProjectionUnionPublication();
+        const owner = createInstalledPluginUiProjectionPublication();
+        const initial = union.publish([member]).pluginUiProjection!;
+        const retired = initial.unknownEntriesById.row;
+        expect(retired).toBeDefined();
+        const set = vi.spyOn(Map.prototype, 'set');
+        try {
+            owner.publish([installed], initial);
+            const preparedInstalled = set.mock.calls.find(([key]) => key === installed.unknownEntriesById.row)?.[1];
+            expect(preparedInstalled).toBeDefined();
+            let latest = retired;
+            for (let generation = 2; generation <= 4; generation++) {
+                const runtime = union.publish([{ ...member, projection: { ...member.projection!, generation } }]).pluginUiProjection!;
+                owner.publish([installed], runtime);
+                latest = runtime.unknownEntriesById.row;
+            }
+            // Observe the real comparison Maps that prepared the latest row,
+            // not detached historical Maps retained by this instrumentation.
+            const currentMaps = set.mock.calls.flatMap(([key], index) => {
+                const context = set.mock.contexts[index];
+                return key === latest && context instanceof Map ? [context] : [];
+            });
+            expect(currentMaps.length).toBeGreaterThan(0);
+            expect(latest).not.toBe(retired);
+            expect(currentMaps.some(map => map.has(retired))).toBe(false);
+            expect(currentMaps.every(map => map.get(installed.unknownEntriesById.row) === preparedInstalled)).toBe(true);
+        } finally { set.mockRestore(); }
+    });
+
+    it('does not reread a retained Resource-only sibling while another Machine changes currentness', () => {
+        const source = sourceMember('resource-only');
+        const other = sourceMember('other-ui');
+        const origin = source.projection!.installedPackagesById['acme.resource-only']!.executionOrigin!;
+        const resource = PluginProjectedResourceV2Schema.parse({ id: 'asset', pluginId: 'acme.resource-only',
+            resourceKind: 'asset', scope: 'global', contentType: 'application/json' });
+        const model = { ...source.projection!, unknownEntriesById: {}, resourcesById: {
+            asset: { ...resource, occurrenceId: source.machineId, executionOrigin: origin },
+        } };
+        const member = { ...source, projection: model };
+        const selections = new Map([['acme.resource-only', origin]]);
+        const owner = createPluginUiProjectionUnionPublication();
+        owner.publish([member, other], selections);
+        const values = vi.spyOn(Object, 'values');
+        try {
+            const actual = owner.publish([member, { ...other, phase: 'establishing', interactionEnabled: false }], selections);
+            expect(actual.pluginUiProjection?.resourcesById.asset).toBeDefined();
+            expect(values.mock.calls.filter(([value]) => value === model.resourcesById)).toHaveLength(0);
+            const replacement = { ...member, projection: { ...model, generation: 2, resourcesById: {} } };
+            expect(owner.publish([replacement, other], selections)).toEqual(unionPluginUiProjections([replacement, other], selections));
+            expect(owner.getSnapshot().pluginUiProjection?.resourcesById.asset).toBeUndefined();
+        } finally { values.mockRestore(); }
+    });
+
+    it('matches the canonical union through currentness, source, materialization and topology publications', () => {
+        const first = sourceMember('first');
+        const other = sourceMember('other');
+        const installation = PluginMachineMaterializationV1Schema.parse({ serverIdentityId: 'srv_identity', machineId: 'first',
+            materializationId: 'first-installation', pluginId: 'acme.first', version: '1.0.0', sourceClass: 'localPath',
+            portableRelease: false, enabled: true, trustState: 'trusted', observedAt: 1, uiArtifacts: [] });
+        const publication = createPluginUiProjectionUnionPublication();
+        const check = (members: readonly PluginUiProjectionUnionMember[]) => expect(publication.publish(members)).toEqual(unionPluginUiProjections(members));
+        check([]);
+        check([{ ...first, projection: null, phase: 'establishing', interactionEnabled: false,
+            materializationsByPluginId: { 'acme.first': installation } }]);
+        check([first, other]);
+        check([{ ...first, phase: 'establishing', interactionEnabled: false,
+            materializationsByPluginId: { 'acme.first': installation } }, other]);
+        check([{ ...first, phase: 'retainedOffline', interactionEnabled: false, unavailableReasonCode: 'plugin_machine_unreachable' }, other]);
+        check([{ ...first, projection: { ...first.projection!, generation: 2 } }, other]);
+        check([{ ...first, materializationsByPluginId: { 'acme.first': { ...installation, enabled: false } } }, other]);
+        check([{ ...first, materializationsByPluginId: { 'acme.first': { ...installation, trustState: 'untrusted' } } }, other]);
+        check([{ ...first, projection: { ...first.projection!, unknownEntriesById: {
+            first: { ...first.projection!.unknownEntriesById.first!, payload: 'same-generation changed declaration' },
+        } } }, other]);
+        check([other]);
+        check([{ ...first, projection: null, phase: 'unavailable', unavailableReasonCode: 'plugin_daemon_unsupported' }]);
+        check([]);
+    });
+
     it('does not accept copied publication metadata as proof for another shallow-frozen runtime snapshot', () => {
         const source = sourceMember('copied');
         const runtime = createPluginUiProjectionUnionPublication().publish([source]).pluginUiProjection!;
@@ -25,15 +303,7 @@ describe('execution-origin projection identity', () => {
     });
 
     it('updates only the affected plugin through union, nonempty Account declarations and candidate publication', () => {
-        const manifest = PluginPortableReleaseManifestV1Schema.parse({ schemaVersion: 2, id: 'acme.account', version: '1.0.0',
-            displayName: 'Account', runtime: { apiVersion: 1 }, contributes: { ui: {
-                renderers: [{ id: 'page', kind: 'declarative', root: { kind: 'text', text: 'Account page' } }],
-                views: [{ id: 'page', container: 'appPage', target: { kind: 'app' }, title: 'Account page', renderer: 'page' }],
-            } } });
-        const account = normalizePluginInstalledUiDeclarations(projectPluginPortableUiDeclarationsV1(manifest), 'web', {
-            id: manifest.id, displayName: 'Account', version: manifest.version, enabled: true,
-            source: { kind: 'bundled', locator: '@happier-dev/account-fixture' },
-        });
+        const account = accountDeclarationModel();
         const members = Array.from({ length: 11 }, (_, index) => sourceMember(`stage${index}`));
         const ids = members.map((_, index) => `acme.stage${index}`);
         const union = createPluginUiProjectionUnionPublication();
@@ -291,13 +561,89 @@ describe('execution-origin projection identity', () => {
             const agreed = publication.publish([first, second]);
             expect(agreed.pluginUiProjection?.unknownEntriesById.shared).toMatchObject({ hostCompatibility: 'compatible' });
             expect(serialize).not.toHaveBeenCalled();
-            const changed = publication.publish([first, member(right, { title: 'Changed', nested: { count: 1, enabled: true } })]);
+            const changedSecond = member(right, { title: 'Changed', nested: { count: 1, enabled: true } });
+            const changed = publication.publish([first, changedSecond]);
             expect(changed.pluginUiProjection?.unknownEntriesById.shared).toMatchObject({
                 hostCompatibility: 'conflict', hostOrigin: null,
                 executionOrigin: undefined, occurrenceId: undefined,
             });
+            const convergedFirst = member(left, { nested: { enabled: true, count: 1 }, title: 'Changed' });
+            const converged = publication.publish([
+                { ...convergedFirst, projection: { ...convergedFirst.projection!, generation: 2 } },
+                { ...changedSecond, projection: { ...changedSecond.projection!, generation: 2 } },
+            ]);
+            expect(converged.pluginUiProjection?.unknownEntriesById.shared).toMatchObject({ hostCompatibility: 'compatible' });
             expect(serialize).not.toHaveBeenCalled();
         } finally { serialize.mockRestore(); }
+    });
+
+    it('keeps native manifest and artifact correspondence fresh and bounded to current materializations', () => {
+        const pluginId = 'acme.native';
+        const manifest = PluginPortableReleaseManifestV1Schema.parse({ schemaVersion: 2, id: pluginId, version: '1.0.0',
+            displayName: 'Native', runtime: { apiVersion: 1 }, contributes: {} });
+        const slots = ['a', 'b'].map(artifactId => PluginMachineUiArtifactV1Schema.parse({ contributionId: 'content', artifactId,
+            tier: 'hostedWeb', platform: 'web', artifactDigest: `sha256:${artifactId.repeat(64)}`, hostUiApiRange: '^1.0.0' }));
+        const member = (machineId: string) => {
+            const source = sourceMember(machineId, pluginId, 'shared');
+            return { ...source, projection: { ...source.projection!, installedPackagesById: {
+                [pluginId]: { ...source.projection!.installedPackagesById[pluginId]!, displayName: 'Native' },
+            } }, selectableExecutionOrigins: [source.projection!.installedPackagesById[pluginId]!.executionOrigin!],
+                materializationsByPluginId: { [pluginId]: PluginMachineMaterializationV1Schema.parse({
+                    serverIdentityId: 'srv_identity', machineId, materializationId: machineId, pluginId, version: '1.0.0',
+                    sourceClass: 'localPath', portableRelease: false, enabled: true, trustState: 'trusted', observedAt: 1,
+                    declaredManifest: manifest, uiArtifacts: slots,
+                }) } };
+        };
+        let left = member('left');
+        let right = member('right');
+        const retired = right.materializationsByPluginId[pluginId]!;
+        const owner = createPluginUiProjectionUnionPublication();
+        const compatibility = () => {
+            const members = [left, right];
+            const actual = owner.publish(members);
+            expect(actual).toEqual(unionPluginUiProjections(members));
+            return actual.pluginUiProjection?.unknownEntriesById.shared?.hostCompatibility;
+        };
+        expect(compatibility()).toBe('compatible');
+        right = { ...right, materializationsByPluginId: { [pluginId]: { ...retired, uiArtifacts: [...retired.uiArtifacts].reverse() } } };
+        expect(compatibility()).toBe('compatible');
+        right = { ...right, materializationsByPluginId: { [pluginId]: PluginMachineMaterializationV1Schema.parse({
+            ...retired, declaredManifest: { ...manifest, displayName: 'Changed native manifest' },
+        }) } };
+        expect(compatibility()).toBe('conflict');
+        left = { ...left, materializationsByPluginId: { [pluginId]: PluginMachineMaterializationV1Schema.parse({
+            ...left.materializationsByPluginId[pluginId], declaredManifest: { ...manifest, displayName: 'Changed native manifest' },
+        }) } };
+        expect(compatibility()).toBe('compatible');
+        right = { ...right, materializationsByPluginId: { [pluginId]: PluginMachineMaterializationV1Schema.parse({
+            ...right.materializationsByPluginId[pluginId], uiArtifacts: [{ ...slots[0]!, artifactDigest: `sha256:${'c'.repeat(64)}` }, slots[1]],
+        }) } };
+        expect(compatibility()).toBe('conflict');
+        right = { ...right, materializationsByPluginId: { [pluginId]: { ...right.materializationsByPluginId[pluginId]!,
+            uiArtifacts: [slots[0]!, slots[0]!],
+        } } };
+        expect(compatibility()).toBe('conflict'); // Equal length is not equal artifact multiplicity.
+        right = { ...right, materializationsByPluginId: { [pluginId]: PluginMachineMaterializationV1Schema.parse({
+            ...right.materializationsByPluginId[pluginId], uiArtifacts: slots,
+        }) } };
+        const current = right.materializationsByPluginId[pluginId]!;
+        const set = vi.spyOn(Map.prototype, 'set');
+        try {
+            expect(compatibility()).toBe('compatible');
+            const currentMaps = set.mock.calls.flatMap(([key], index) => {
+                const context = set.mock.contexts[index];
+                return key === current && context instanceof Map ? [context] : [];
+            });
+            expect(currentMaps.length).toBeGreaterThan(0);
+            expect(currentMaps.every(map => !map.has(retired))).toBe(true);
+        } finally { set.mockRestore(); }
+        // Unowned one-shot inputs are normalized again, even if a caller
+        // mutates a shallow-frozen carrier's nested manifest between reads.
+        const mutableManifest = { ...manifest, displayName: 'Changed native manifest' };
+        const raw = { ...right, materializationsByPluginId: { [pluginId]: Object.freeze({ ...current, declaredManifest: mutableManifest }) } };
+        expect(unionPluginUiProjections([left, raw]).pluginUiProjection?.unknownEntriesById.shared?.hostCompatibility).toBe('compatible');
+        mutableManifest.displayName = 'Mutated unowned native manifest';
+        expect(unionPluginUiProjections([left, raw]).pluginUiProjection?.unknownEntriesById.shared?.hostCompatibility).toBe('conflict');
     });
 
     it('performs no scans, parsing or serialization over unchanged publications, sibling owners and snapshot reads', () => {
@@ -478,11 +824,23 @@ describe('execution-origin projection identity', () => {
             pluginId: 'acme.first', machineId: 'first' }, serverIdentityId: 'srv_identity' };
         const hostOrigin = { machineId: 'first', serverId: 'server', generation: 1,
             phase: 'current', interactionEnabled: true, executionOrigin };
-        const entry = { pluginId: 'acme.first', executionOrigin, hostOrigin };
+        const hostAccountOrigin = { custodyId: 'account-custody', serverId: 'server', sourceCustody: {
+            archiveDigestSha256: `sha256:${'a'.repeat(64)}`, version: '1.0.0', pluginId: 'acme.first', kind: 'account_release',
+        }, accountId: 'account', declarationDigest: undefined };
+        const entry = { pluginId: 'acme.first', executionOrigin, hostOrigin, hostAccountOrigin };
         const model = { ...EMPTY_PLUGIN_UI_PROJECTION, unknownEntriesById: { entry } };
         const prepared = preparePluginUiProjectionOrigins(model);
         expect(JSON.stringify(prepared)).toBe(JSON.stringify(model));
         expect(preparePluginUiProjectionOrigins(prepared)).toBe(prepared);
+        const accountCarrier = prepared.unknownEntriesById.entry!.hostAccountOrigin;
+        expect(Object.keys(accountCarrier!)).toEqual(Object.keys(hostAccountOrigin));
+        expect(Object.hasOwn(accountCarrier!, 'declarationDigest')).toBe(true);
+        const accountOrigin = readPluginUiAccountExecutableOrigin(prepared.unknownEntriesById.entry);
+        expect(accountOrigin?.sourceCustody).toMatchObject({ version: '1.0.0' });
+        expect(readPluginUiAccountExecutableOrigin({ ...prepared.unknownEntriesById.entry, pluginId: 'other.plugin' })).toBeNull();
+        if (!accountCarrier || typeof accountCarrier !== 'object' || !('sourceCustody' in accountCarrier)
+            || !accountCarrier.sourceCustody || typeof accountCarrier.sourceCustody !== 'object') throw new Error('Expected owned Account origin');
+        expect(Reflect.set(accountCarrier.sourceCustody, 'version', 'changed-through-carrier')).toBe(false);
         const carrier = prepared.unknownEntriesById.entry!.executionOrigin;
         if (!carrier || typeof carrier !== 'object' || !('sourceRef' in carrier)
             || !carrier.sourceRef || typeof carrier.sourceRef !== 'object') throw new Error('Expected owned source origin');
@@ -492,15 +850,19 @@ describe('execution-origin projection identity', () => {
             for (let index = 0; index < 100; index++) {
                 expect(readPluginUiProjectionEntryExecutionOrigin(prepared.unknownEntriesById.entry)).not.toBeNull();
                 expect(readPluginUiContributionOrigin(prepared.unknownEntriesById.entry)?.phase).toBe('current');
+                expect(readPluginUiAccountExecutableOrigin(prepared.unknownEntriesById.entry)).toBe(accountOrigin);
             }
             expect(parse).not.toHaveBeenCalled();
         } finally { parse.mockRestore(); }
         executionOrigin.sourceRef.sourceCustody.registeredRootId = 'changed';
         hostOrigin.phase = 'retainedOffline';
         hostOrigin.interactionEnabled = false;
+        hostAccountOrigin.sourceCustody.version = '2.0.0';
         const next = preparePluginUiProjectionOrigins(model);
         expect(readPluginUiContributionOrigin(next.unknownEntriesById.entry)).toMatchObject({ phase: 'retainedOffline', interactionEnabled: false });
         expect(readPluginUiContributionOrigin(prepared.unknownEntriesById.entry)?.phase).toBe('current');
+        expect(readPluginUiAccountExecutableOrigin(next.unknownEntriesById.entry)?.sourceCustody).toMatchObject({ version: '2.0.0' });
+        expect(accountOrigin?.sourceCustody).toMatchObject({ version: '1.0.0' });
         executionOrigin.sourceRef.pluginId = 'other.plugin';
         expect(readPluginUiProjectionEntryExecutionOrigin(entry)).toBeNull();
         expect(readPluginUiProjectionEntryExecutionOrigin(preparePluginUiProjectionOrigins(model).unknownEntriesById.entry)).toBeNull();
@@ -542,4 +904,16 @@ function sourceMember(id: string, pluginId = `acme.${id}`, localId = id): Plugin
                 source: { kind: 'localPath', locator: `/${id}` }, occurrenceId: id, sourceCustody, executionOrigin } },
             unknownEntriesById: { [localId]: { pluginId, contributionKind: 'unknown', occurrenceId: id, executionOrigin } } },
     };
+}
+
+function accountDeclarationModel() {
+    const manifest = PluginPortableReleaseManifestV1Schema.parse({ schemaVersion: 2, id: 'acme.account', version: '1.0.0',
+        displayName: 'Account', runtime: { apiVersion: 1 }, contributes: { ui: {
+            renderers: [{ id: 'page', kind: 'declarative', root: { kind: 'text', text: 'Account page' } }],
+            views: [{ id: 'page', container: 'appPage', target: { kind: 'app' }, title: 'Account page', renderer: 'page' }],
+        } } });
+    return normalizePluginInstalledUiDeclarations(projectPluginPortableUiDeclarationsV1(manifest), 'web', {
+        id: manifest.id, displayName: 'Account', version: manifest.version, enabled: true,
+        source: { kind: 'bundled', locator: '@happier-dev/account-fixture' },
+    });
 }

@@ -20,7 +20,7 @@ const { storage } = await import('@/sync/domains/state/storage');
 const { observePromptLibraryCatalog, resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
 const { getPromptLibraryCatalogValue, resetPromptLibraryCatalogSnapshotsForTests } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
 const { useSkillsLibrary, readSkillsLibraryItems } = await import('./useSkillsLibrary');
-const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+const { AppShellPluginUiProjectionValueProvider, useAppShellPluginUiDeclarationSources } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
 const { EMPTY_PLUGIN_UI_PROJECTION } = await import('@/sync/domains/plugins/ui/projection');
 const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { useSkillsFirstRun } = await import('@/components/settings/skills/firstRun/useSkillsFirstRun');
@@ -64,6 +64,97 @@ it('does not rerender the real library for executable-only AppShell updates', as
         expect(renders).toBe(settled);
         expect(library?.items).toBe(retainedItems);
         expect(home.requests).toHaveLength(reads);
+    } finally { await screen.unmount(); await home.dispose(); }
+});
+
+it('does not serialize unchanged Skills declarations when the real library observes a new declaration publication', async () => {
+    const home = await createSeededSkillsHome('https://skills-source-revision.test', { skills: [{ id: 'unchanged-source' }] });
+    let renders = 0;
+    let library: ReturnType<typeof useSkillsLibrary> | undefined;
+    const Probe = React.memo(function LibraryProbe() { renders++; library = useSkillsLibrary(); return null; });
+    const child = <Probe />;
+    const value = {
+        pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION, pluginBrowserProjection: null,
+        phase: 'current' as const, interactionEnabled: true, machineId: null, serverId: null,
+        platform: 'web' as const, accountLifetime: captureActiveServerAccountScopeLifetime(),
+        connectedAccountProjectionRevision: 1, clientExecutableActivation: { status: 'ready' as const },
+        reloadConnectedAccountProjection() {}, reloadClientExecutables() {},
+    };
+    const screen = await renderScreen(<AppShellPluginUiProjectionValueProvider value={value}>{child}</AppShellPluginUiProjectionValueProvider>);
+    let serializations = 0;
+    const original = JSON.stringify;
+    const stringify = vi.spyOn(JSON, 'stringify').mockImplementation((...args: Parameters<typeof JSON.stringify>) => {
+        // Count the real revision path, not unrelated HTTP/schema serialization.
+        const stack = new Error().stack;
+        if (stack?.includes('uiPluginSkillSourceRevisionV1') || stack?.includes('pluginSkillSourceIdentity')) serializations++;
+        return Reflect.apply(original, JSON, args);
+    });
+    try {
+        await vi.waitFor(() => expect(library?.status).toBe('ready'));
+        await flushHookEffects();
+        const settled = renders;
+        const items = library?.items;
+        const reads = home.requests.length;
+        serializations = 0;
+        for (let generation = 1; generation <= 5; generation++) {
+            await screen.update(<AppShellPluginUiProjectionValueProvider value={{ ...value,
+                pluginUiProjection: { ...EMPTY_PLUGIN_UI_PROJECTION, generation } }}>{child}</AppShellPluginUiProjectionValueProvider>);
+        }
+        expect(renders).toBeGreaterThan(settled);
+        expect(library?.items).toBe(items);
+        expect(home.requests).toHaveLength(reads);
+        expect(serializations).toBe(0);
+    } finally { stringify.mockRestore(); await screen.unmount(); await home.dispose(); }
+});
+
+it('marks the retained complete library stale in the first layout after Skills declaration replacement or withdrawal', async () => {
+    const home = await createSeededSkillsHome('https://skills-source-layout.test', { skills: [] });
+    storage.setState({ artifactsLoaded: true });
+    const { projectPluginSkillDeclarationV1 } = await import('@happier-dev/protocol/plugins/contributions/skills');
+    const entry = projectPluginSkillDeclarationV1({ pluginId: 'com.acme.skills', pluginVersion: '2.0.0',
+        definition: { id: 'check', directory: './resources/check-v2' } });
+    const changedProjection = { ...EMPTY_PLUGIN_UI_PROJECTION, skillsById: { [entry.id]: entry } };
+    const observed: Array<Readonly<{ status: string; stale: boolean; source: ReturnType<typeof useAppShellPluginUiDeclarationSources> }>> = [];
+    let library: ReturnType<typeof useSkillsLibrary> | undefined;
+    const Probe = React.memo(function LibraryProbe() {
+        const current = useSkillsLibrary();
+        const source = useAppShellPluginUiDeclarationSources();
+        library = current;
+        React.useLayoutEffect(() => { observed.push({ status: current.status, stale: current.stale, source }); });
+        return null;
+    });
+    const child = <Probe />;
+    const value = {
+        pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION, pluginBrowserProjection: null,
+        phase: 'current' as const, interactionEnabled: true, machineId: null, serverId: null,
+        platform: 'web' as const, accountLifetime: captureActiveServerAccountScopeLifetime(),
+        connectedAccountProjectionRevision: 1, clientExecutableActivation: { status: 'ready' as const },
+        reloadConnectedAccountProjection() {}, reloadClientExecutables() {},
+    };
+    const screen = await renderScreen(<AppShellPluginUiProjectionValueProvider value={value}>{child}</AppShellPluginUiProjectionValueProvider>);
+    try {
+        expect(observed[0]?.source).toMatchObject({ projection: null, accountLifetime: value.accountLifetime, ready: false });
+        await vi.waitFor(() => expect(library).toMatchObject({ status: 'ready', stale: false }));
+        const firstIdentity = observed.at(-1)?.source.skillSourceIdentity;
+        observed.length = 0;
+        await screen.update(<AppShellPluginUiProjectionValueProvider value={{ ...value,
+            pluginUiProjection: changedProjection }}>{child}</AppShellPluginUiProjectionValueProvider>);
+        expect(observed[0]).toMatchObject({ status: 'ready', stale: true });
+        expect(observed[0]?.source).toMatchObject({ projection: changedProjection, accountLifetime: value.accountLifetime, ready: true });
+        expect(observed[0]?.source.skillSourceIdentity).not.toBe(firstIdentity);
+        observed.length = 0;
+        await screen.update(<AppShellPluginUiProjectionValueProvider value={{ ...value,
+            pluginUiProjection: null }}>{child}</AppShellPluginUiProjectionValueProvider>);
+        expect(observed[0]).toMatchObject({ stale: true });
+        expect(observed[0]?.source.projection).toBeNull();
+        const lifetime = value.accountLifetime;
+        if (!lifetime) throw new Error('Expected the real Account lifetime');
+        await act(async () => {
+            storage.getState().activateProfileScope({ ...lifetime.scope, accountId: 'replacement-account' });
+            captureActiveServerAccountScopeLifetime();
+        });
+        expect(lifetime.isCurrent()).toBe(false);
+        expect(observed.at(-1)?.source).toMatchObject({ projection: null, accountLifetime: lifetime, ready: false });
     } finally { await screen.unmount(); await home.dispose(); }
 });
 
