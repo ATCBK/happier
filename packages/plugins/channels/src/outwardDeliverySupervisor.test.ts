@@ -1077,18 +1077,26 @@ describe('Channels outward-delivery supervisor', () => {
     const running = supervisor.run(context);
     try {
       await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(execute).toHaveBeenCalledWith(
+        'session.transcript.get',
+        expect.objectContaining({ sessionId: 'session-1', cursor: null }),
+        expect.anything(),
+      ), { interval: 0 });
+      await vi.advanceTimersByTimeAsync(0);
       expect(deliveries.rows.size).toBe(0);
       expect(state.rows.get('projection-frontier:binding-1')?.value.payload).toMatchObject({ lastScannedSeq: 0 });
       // Publication metadata can recover after the transcript write. No new
       // Session/Collection invalidation accompanies release of this page.
       published = true;
       await vi.advanceTimersByTimeAsync(1_000);
-      expect([...deliveries.rows.values()].map(row => row.value.payload)).toEqual([
-        expect.objectContaining({ state: 'delivered', providerMessageIds: ['held-answer-receipt'] }),
-      ]);
-      expect(state.rows.get('projection-frontier:binding-1')?.value.payload).toMatchObject({
-        transcriptCursor: '5', lastScannedSeq: 5,
-      });
+      await vi.waitFor(() => {
+        expect([...deliveries.rows.values()].map(row => row.value.payload)).toEqual([
+          expect.objectContaining({ state: 'delivered', providerMessageIds: ['held-answer-receipt'] }),
+        ]);
+        expect(state.rows.get('projection-frontier:binding-1')?.value.payload).toMatchObject({
+          transcriptCursor: '5', lastScannedSeq: 5,
+        });
+      }, { interval: 0 });
       await runConversationOutwardDeliveryCycle({ context, now: () => Date.now() });
       expect(deliveries.rows.size).toBe(1);
       expect(deliver).toHaveBeenCalledTimes(1);
