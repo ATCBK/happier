@@ -1,12 +1,41 @@
 import { describe, expect, it } from 'vitest';
-import { computeFileReplacement, type ReplaceMatcher } from './workspaceFilesReplace.js';
+import { buildWorkspaceFileRestoreOperation, computeFileReplacement, type ReplaceMatcher } from './workspaceFilesReplace.js';
 import { applyInverseEdits } from '../diff/hunks.js';
+import { DaemonWorkspaceFileReplaceApplyRequestSchema } from './workspaceFiles.js';
 
 const encode = (text: string) => new TextEncoder().encode(text);
 const decode = (bytes: Uint8Array) => new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
 const literal: ReplaceMatcher = { query: 'old', replacement: 'new', matchCase: true, regex: false };
 
 describe('computeFileReplacement', () => {
+  it('restores ordered writer receipts in reverse, including repeated paths and an empty-edit move', () => {
+    const first = computeFileReplacement(encode('old'), { ...literal, replacement: 'mid' });
+    const second = computeFileReplacement(encode('mid'), { ...literal, query: 'mid', replacement: 'fixed' });
+    if (first.kind !== 'ok' || second.kind !== 'ok') throw new Error('Expected text replacements');
+    const operation = buildWorkspaceFileRestoreOperation([
+      { path: 'a.ts', status: 'replaced', hash: 'a'.repeat(64), edits: first.edits },
+      { path: 'source.ts', status: 'replaced', renameTo: 'moved.ts', hash: 'b'.repeat(64), edits: [] },
+      { path: 'a.ts', status: 'replaced', hash: 'c'.repeat(64), edits: second.edits },
+      { path: 'refused.ts', status: 'changed' },
+    ]);
+    expect(operation.files.map(file => [file.path, file.expectedHash, file.renameTo])).toEqual([
+      ['a.ts', 'c'.repeat(64), undefined], ['moved.ts', 'b'.repeat(64), 'source.ts'], ['a.ts', 'a'.repeat(64), undefined],
+    ]);
+    let text = 'fixed';
+    for (const file of operation.files.filter(file => file.path === 'a.ts')) {
+      const restored = applyInverseEdits(text, file.edits);
+      expect(restored.ok).toBe(true);
+      if (restored.ok) text = restored.text;
+    }
+    expect(text).toBe('old');
+  });
+  it('admits guarded semantic edit sets through the canonical multi-file operation schema', () => {
+    expect(DaemonWorkspaceFileReplaceApplyRequestSchema.safeParse({ rootPath: '/repo', operation: { kind: 'editSet', files: [
+      { path: 'source.ts', expectedHash: 'a'.repeat(64), renameTo: 'renamed.ts', edits: [
+        { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }, text: 'new' },
+      ] },
+    ] } }).success).toBe(true);
+  });
   it.each<[string, string, ReplaceMatcher, string]>([
     ['BOM and CRLF', '\uFEFFold\r\nold\r\n', literal, '\uFEFFnew\r\nnew\r\n'],
     ['literal dollars and hyphens', 'old-old', { ...literal, query: 'old-', replacement: '$1-' }, '$1-old'],

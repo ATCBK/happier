@@ -1,5 +1,7 @@
 import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { WorkspaceFileEditSetFileSchema, WorkspaceFileEditPositionSchema, WorkspaceFileEditRangeSchema, DaemonWorkspaceFileReplaceApplyResponseSchema } from './workspaceFiles.js';
+import { PluginJsonValueV2Schema } from '../plugins/contributions/publicTypes.js';
 
 const nonempty = () => z.string().check(z.minLength(1));
 const revision = () => z.number().check(z.int(), z.nonnegative());
@@ -25,16 +27,15 @@ export const LanguageIntelligencePathSchema = lazyZodSchema(() => nonempty().che
   !value.includes('\0') && !value.includes('\\') && !value.startsWith('/') && !/^[a-z]:/iu.test(value)
   && value.split('/').every((part) => part !== '' && part !== '.' && part !== '..'), 'Expected a workspace-relative path')));
 
-export const LanguageIntelligencePositionSchema = lazyZodSchema(() => z.strictObject({ line: revision(), character: revision() }));
+export const LanguageIntelligencePositionSchema = WorkspaceFileEditPositionSchema;
 export type LanguageIntelligencePosition = z.infer<typeof LanguageIntelligencePositionSchema>;
-export const LanguageIntelligenceRangeSchema = lazyZodSchema(() => z.strictObject({
-  start: LanguageIntelligencePositionSchema, end: LanguageIntelligencePositionSchema,
-}).check(z.refine(({ start, end }) => end.line > start.line || (end.line === start.line && end.character >= start.character), 'Range ends before its start')));
+export const LanguageIntelligenceRangeSchema = WorkspaceFileEditRangeSchema;
 export type LanguageIntelligenceRange = z.infer<typeof LanguageIntelligenceRangeSchema>;
 
 export const LanguageIntelligenceCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
   hover: z.boolean(), definition: z.boolean(), references: z.boolean(), documentSymbol: z.boolean(),
   diagnostics: z.enum(['pull', 'push', 'none']), acceptsExternalChanges: z.boolean(),
+  rename: z.optional(z.boolean()), prepareRename: z.optional(z.boolean()), fileRename: z.optional(z.boolean()), codeAction: z.optional(z.boolean()),
 }));
 export type LanguageIntelligenceCapabilities = z.infer<typeof LanguageIntelligenceCapabilitiesSchema>;
 
@@ -113,10 +114,11 @@ export const LanguageIntelligenceQueryPositionSchema = lazyZodSchema(() => z.uni
 ]));
 export const DaemonLspQueryRequestSchema = lazyZodSchema(() => z.strictObject({
   rootPath: nonempty(), path: LanguageIntelligencePathSchema,
-  kind: z.enum(['hover', 'definition', 'references', 'documentSymbols', 'diagnostics']),
+  kind: z.enum(['hover', 'definition', 'references', 'documentSymbols', 'diagnostics', 'prepareRename', 'rename', 'willRenameFiles', 'codeActions']),
   version: z.optional(revision()), generation: z.optional(nonempty()), position: z.optional(LanguageIntelligenceQueryPositionSchema),
   includeDeclaration: z.optional(z.boolean()), text: z.optional(z.enum(['held', 'disk'])),
   serverId: z.optional(nonempty()), languageId: z.optional(nonempty()),
+  newName: z.optional(nonempty()), newPath: z.optional(LanguageIntelligencePathSchema), range: z.optional(LanguageIntelligenceRangeSchema),
 }));
 export type DaemonLspQueryRequest = z.infer<typeof DaemonLspQueryRequestSchema>;
 const queryProvenance = { status: z.literal('ok'), fileHash: z.optional(hash()), version: z.optional(revision()), generation: z.optional(nonempty()) };
@@ -125,6 +127,16 @@ const definitionLocationSchema = lazyZodSchema(() => z.strictObject({
 }).check(z.refine((value) => value.outsideWorkspace === true
   ? !value.path.includes('\0') && /^(?:\/|[a-z]:[\\/]|\\\\)/iu.test(value.path)
   : LanguageIntelligencePathSchema.safeParse(value.path).success, 'Definition target must match its workspace authority')));
+export const LanguageIntelligenceCommandSchema = lazyZodSchema(() => z.strictObject({
+  command: nonempty(), arguments: z.optional(z.array(PluginJsonValueV2Schema)),
+}));
+export const LanguageIntelligenceCodeActionSchema = lazyZodSchema(() => z.strictObject({
+  serverId: nonempty(), title: nonempty(), kind: z.optional(z.string()),
+  range: LanguageIntelligenceRangeSchema,
+  files: z.array(WorkspaceFileEditSetFileSchema), hasCommand: z.boolean(),
+  disabledReason: z.optional(z.string()),
+}));
+export type LanguageIntelligenceCodeAction = z.infer<typeof LanguageIntelligenceCodeActionSchema>;
 export const DaemonLspQueryResponseSchema = lazyZodSchema(() => z.union([
   z.discriminatedUnion('kind', [
     z.strictObject({ ...queryProvenance, kind: z.literal('hover'), sections: z.array(z.strictObject({
@@ -136,9 +148,30 @@ export const DaemonLspQueryResponseSchema = lazyZodSchema(() => z.union([
     })), hasMore: z.boolean() }),
     z.strictObject({ ...queryProvenance, kind: z.literal('documentSymbols'), symbols: z.array(LanguageIntelligenceDocumentSymbolSchema), hasMore: z.boolean() }),
     z.strictObject({ ...queryProvenance, kind: z.literal('diagnostics'), diagnostics: z.array(LanguageIntelligenceDiagnosticSchema), hasMore: z.boolean() }),
+    z.strictObject({ ...queryProvenance, kind: z.literal('prepareRename'), targets: z.array(z.strictObject({
+      serverId: nonempty(), range: z.optional(LanguageIntelligenceRangeSchema), placeholder: z.optional(z.string()),
+    })) }),
+    z.strictObject({ ...queryProvenance, kind: z.enum(['rename', 'willRenameFiles']), files: z.array(WorkspaceFileEditSetFileSchema) }),
+    z.strictObject({ ...queryProvenance, kind: z.literal('codeActions'), actions: z.array(LanguageIntelligenceCodeActionSchema) }),
   ]), failureSchema,
 ]));
 export type DaemonLspQueryResponse = z.infer<typeof DaemonLspQueryResponseSchema>;
+
+/** Mutation envelopes are closed; preview queries never acquire write authority. */
+export const LanguageIntelligenceCodeActionOperationSchema = lazyZodSchema(() => z.strictObject({
+  kind: z.literal('codeAction'), action: LanguageIntelligenceCodeActionSchema, expectedHash: hash(),
+}));
+export const DaemonLspApplyRequestSchema = lazyZodSchema(() => z.strictObject({
+  rootPath: nonempty(), path: LanguageIntelligencePathSchema, languageId: z.optional(nonempty()),
+  operation: z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('rename'), files: z.array(WorkspaceFileEditSetFileSchema) }),
+    z.strictObject({ kind: z.literal('fileRename'), files: z.array(WorkspaceFileEditSetFileSchema) }),
+    LanguageIntelligenceCodeActionOperationSchema,
+  ]),
+}));
+export type DaemonLspApplyRequest = z.infer<typeof DaemonLspApplyRequestSchema>;
+export const DaemonLspApplyResponseSchema = lazyZodSchema(() => z.union([DaemonWorkspaceFileReplaceApplyResponseSchema, failureSchema]));
+export type DaemonLspApplyResponse = z.infer<typeof DaemonLspApplyResponseSchema>;
 
 export const LanguageIntelligenceDiagnosticsEntrySchema = lazyZodSchema(() => z.strictObject({
   state: z.enum(['ready', 'checking', 'unavailable']), version: revision(), generation: nonempty(),

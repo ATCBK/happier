@@ -7,6 +7,47 @@ import { isPluginSurfaceExcludedActionId } from './pluginActionSurface.js';
 import { DaemonWorkspaceFileSearchRequestSchema, DaemonWorkspaceFileSearchResponseSchema } from '../machines/workspaceFiles.js';
 
 describe('search-backed code Actions', () => {
+  it('keeps reviewed semantic writes behind real agent approval', async () => {
+    const requests: unknown[] = [];
+    let applied = false;
+    const executor = createActionExecutor({
+      languageIntelligenceApply: async () => { applied = true; return { ok: true, results: [] }; },
+      approvalsCreate: async ({ request }) => { requests.push(request); return { artifactId: 'rename-approval' }; },
+      approvalsUpdate: async () => ({ ok: true }),
+      approvalsWaitForDecision: async ({ request }) => ({ decision: 'reject', request }),
+      isActionApprovalRequired: (id, context, input) => isApprovalRequiredByActionsSettings(id, { v: 1, actions: {} }, context, undefined, undefined, input),
+    });
+    const input = { machineId: 'machine', rootPath: '/repo', path: 'a.ts', files: [{ path: 'a.ts', expectedHash: 'a'.repeat(64), edits: [] }] };
+    expect(await executor.execute('code.rename.apply', input, { surface: 'agent', authority: 'account_automation',
+      actionRequestId: 'rename-request', serverId: 'home', runtimeAccountId: 'account', externalActionTarget: { kind: 'machine', machineId: 'machine' },
+    })).toMatchObject({ ok: false, errorCode: 'approval_rejected' });
+    expect(requests).toMatchObject([{ actionId: 'code.rename.apply', actionArgs: input }]);
+    expect(applied).toBe(false);
+  });
+  it('exposes semantic previews safely and routes reviewed edits through the mutation Action dependency', async () => {
+    const preview = ActionIdSchema.parse('code.rename.preview');
+    const apply = ActionIdSchema.parse('code.rename.apply');
+    const files = [{ path: 'a.ts', expectedHash: 'a'.repeat(64), edits: [{
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }, text: 'next',
+    }] }];
+    const requests: unknown[] = [];
+    const executor = createActionExecutor({
+      languageIntelligenceQuery: async (args: unknown) => { requests.push(args); return { status: 'ok', kind: 'rename', fileHash: 'a'.repeat(64), files }; },
+      languageIntelligenceApply: async (args: unknown) => { requests.push(args); return { ok: true, results: [{ path: 'a.ts', status: 'replaced', hash: 'b'.repeat(64), edits: [] }] }; },
+    } as unknown as ActionExecutorDeps);
+    expect(await executor.execute(preview, { machineId: 'machine', rootPath: '/repo', path: 'a.ts', line: 1, symbol: 'old', newName: 'next' }, { surface: 'agent' }))
+      .toMatchObject({ ok: true, result: { status: 'ok', files } });
+    expect(await executor.execute(apply, { machineId: 'machine', rootPath: '/repo', path: 'a.ts', files }, { surface: 'ui', authority: 'present_user' }))
+      .toMatchObject({ ok: true, result: { results: [{ status: 'replaced' }] } });
+    expect(requests).toMatchObject([
+      { request: { kind: 'rename', position: { line: 0, symbol: 'old' }, text: 'disk', newName: 'next' } },
+      { actionId: apply, request: { operation: { kind: 'rename', files } } },
+    ]);
+    for (const id of ['code.rename.apply', 'code.file.rename.apply', 'code.codeAction.apply'] as const) {
+      expect(isApprovalRequiredByActionsSettings(id, { v: 1, actions: {} }, { surface: 'agent' })).toBe(true);
+      expect(isApprovalRequiredByActionsSettings(id, { v: 1, actions: {} }, { surface: 'ui', authority: 'present_user' })).toBe(false);
+    }
+  });
   it('queries disk text by one-based line and preserves typed semantic outcomes', async () => {
     const id = ActionIdSchema.parse('code.hover.get');
     const requests: unknown[] = [];

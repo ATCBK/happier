@@ -2,8 +2,8 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import type { RuntimeActionExecuteArgs } from './executor/types.js';
 import { DaemonLocalServiceLauncherStartRequestV1Schema, LocalServiceStartApprovalReviewV1Schema } from '../local/services/launcher/v1.js';
 import { actionInputValidationFailure } from './executor/actionInputValidation.js';
-import { CodeIntelligenceActionInputSchema, CodeIntelligenceFileActionInputSchema, CodeIntelligenceRestartActionInputSchema } from './codeIntelligenceActionFamily.js';
-import { DaemonLspQueryResponseSchema, DaemonLspRestartResponseSchema, type DaemonLspQueryRequest } from '../machines/languageIntelligence.js';
+import { CodeIntelligenceActionInputSchema, CodeIntelligenceFileActionInputSchema, CodeIntelligenceRestartActionInputSchema, CodeIntelligenceRenamePreviewInputSchema, CodeIntelligenceFileRenamePreviewInputSchema, CodeIntelligenceEditApplyInputSchema, CodeIntelligenceCodeActionApplyInputSchema } from './codeIntelligenceActionFamily.js';
+import { DaemonLspQueryResponseSchema, DaemonLspRestartResponseSchema, DaemonLspApplyResponseSchema, type DaemonLspApplyRequest, type DaemonLspQueryRequest } from '../machines/languageIntelligence.js';
 import { queryCodeIntelligenceFallback } from '../machines/codeIntelligenceFallback.js';
 import { ActionInvokeInputSchema } from './actionInvokeInput.js';
 import { PetChooseInputV1Schema } from '../pets/selection.js';
@@ -9021,6 +9021,44 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return completeActionResult(res);
         }
 
+        if (actionId === 'code.rename.apply' || actionId === 'code.file.rename.apply' || actionId === 'code.codeAction.apply') {
+          if (!deps.languageIntelligenceApply) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+          let machineId: string, request: DaemonLspApplyRequest;
+          if (actionId === 'code.codeAction.apply') {
+            const input = CodeIntelligenceCodeActionApplyInputSchema.parse(parsed.data);
+            ({ machineId, ...request } = input);
+          } else {
+            const { machineId: machine, files, ...target } = CodeIntelligenceEditApplyInputSchema.parse(parsed.data);
+            machineId = machine;
+            request = { ...target, operation: { kind: actionId === 'code.rename.apply' ? 'rename' : 'fileRename', files } };
+          }
+          const response = await deps.languageIntelligenceApply({ machineId, request, actionId }, ctx);
+          if ('ok' in response && response.ok === false && 'errorCode' in response) return completeActionResult(response);
+          return completeActionResult(DaemonLspApplyResponseSchema.parse(response));
+        }
+        if (actionId === 'code.rename.preview' || actionId === 'code.file.rename.preview' || actionId === 'code.codeActions.list') {
+          if (!deps.languageIntelligenceQuery) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+          let machineId: string, request: DaemonLspQueryRequest;
+          if (actionId === 'code.file.rename.preview') {
+            const { machineId: machine, ...target } = CodeIntelligenceFileRenamePreviewInputSchema.parse(parsed.data);
+            machineId = machine;
+            request = { ...target, kind: 'willRenameFiles', text: 'disk' };
+          } else {
+            const input = CodeIntelligenceRenamePreviewInputSchema.parse(parsed.data);
+            if ((input.symbol === undefined) === (input.character === undefined) || input.occurrence !== undefined && input.symbol === undefined)
+              return completeActionResult({ status: 'error', errorCode: 'invalid_position' });
+            const { rootPath, path, languageId, newName } = input;
+            machineId = input.machineId;
+            const position = input.symbol !== undefined ? { line: input.line - 1, symbol: input.symbol, ...(input.occurrence ? { occurrence: input.occurrence } : {}) }
+              : { line: input.line - 1, character: input.character! };
+            request = { rootPath, path, ...(languageId ? { languageId } : {}), text: 'disk', position,
+              kind: actionId === 'code.codeActions.list' ? 'codeActions' : newName === undefined ? 'prepareRename' : 'rename', ...(newName ? { newName } : {}) };
+          }
+          const response = await deps.languageIntelligenceQuery({ machineId, request }, ctx);
+          if ('ok' in response && response.ok === false) return completeActionResult(response);
+          const output = getActionSpec(actionId).outputSchema?.safeParse(response);
+          return output?.success ? completeActionResult(output.data) : { ok: false, errorCode: 'invalid_response', error: 'invalid_response' };
+        }
         if (actionId === 'code.restart') {
           if (!deps.languageIntelligenceRestart) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
           const { machineId, ...request } = CodeIntelligenceRestartActionInputSchema.parse(parsed.data);

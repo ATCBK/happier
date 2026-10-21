@@ -1,8 +1,8 @@
 import type { SessionFollowActionIdV1 } from '../../sessions/follow/actions.js';
 import type { DaemonLocalServiceLauncherStartRequestV1, LocalServiceStartApprovalReviewV1 } from '../../local/services/launcher/v1.js';
-import type { DaemonLspQueryRequest, DaemonLspQueryResponse, DaemonLspRestartRequest, DaemonLspRestartResponse } from '../../machines/languageIntelligence.js';
-import type { WorkspaceFilesReplacePreviewActionInput, WorkspaceFilesReplaceActionInput } from '../actionSpecs.js';
-import type { DaemonWorkspaceFileReplacePreviewResponse, DaemonWorkspaceFileReplaceApplyResponse } from '../../machines/workspaceFiles.js';
+import type { DaemonLspApplyRequest, DaemonLspApplyResponse, DaemonLspQueryRequest, DaemonLspQueryResponse, DaemonLspRestartRequest, DaemonLspRestartResponse } from '../../machines/languageIntelligence.js';
+import type { WorkspaceFilesReplacePreviewActionInput, WorkspaceFilesReplaceActionInput, WorkspaceFilesReplaceActionOutput } from '../actionSpecs.js';
+import type { DaemonWorkspaceFileReplacePreviewResponse } from '../../machines/workspaceFiles.js';
 import type { PetChooseInputV1 } from '../../pets/selection.js';
 import type { QualifiedConnectedAccountPurposeV1 } from '../../connect/connectedAccountPurposeIdentity.js';
 import type { QualifiedConnectedAccountPurposeTeamResourceSelectionV1 } from '../../connect/connectedAccountPurposeBindings.js';
@@ -1735,8 +1735,9 @@ export type ActionExecutorDeps = Readonly<{
   workspaceFilesSearch?: (args: PublicActionInputById['workspace.files.search'], context: ActionExecutorContext) => Promise<DaemonWorkspaceFileSearchResponse | ActionExecuteFailure>;
   languageIntelligenceQuery?: (args: Readonly<{ machineId: string; request: DaemonLspQueryRequest }>, context: ActionExecutorContext) => Promise<DaemonLspQueryResponse | ActionExecuteFailure>;
   languageIntelligenceRestart?: (args: Readonly<{ machineId: string; request: DaemonLspRestartRequest }>, context: ActionExecutorContext) => Promise<DaemonLspRestartResponse | ActionExecuteFailure>;
+  languageIntelligenceApply?: (args: Readonly<{ machineId: string; request: DaemonLspApplyRequest; actionId: 'code.rename.apply' | 'code.file.rename.apply' | 'code.codeAction.apply' }>, context: ActionExecutorContext) => Promise<DaemonLspApplyResponse | ActionExecuteFailure>;
   workspaceFilesReplacePreview?: (args: WorkspaceFilesReplacePreviewActionInput, context: ActionExecutorContext) => Promise<DaemonWorkspaceFileReplacePreviewResponse | ActionExecuteFailure>;
-  workspaceFilesReplace?: (args: WorkspaceFilesReplaceActionInput, context: ActionExecutorContext) => Promise<DaemonWorkspaceFileReplaceApplyResponse | ActionExecuteFailure>;
+  workspaceFilesReplace?: (args: WorkspaceFilesReplaceActionInput, context: ActionExecutorContext) => Promise<WorkspaceFilesReplaceActionOutput | ActionApprovalRequestCreatedResult | ActionExecuteFailure>;
   machineAgentInstallStart?: (args: DaemonAgentInstallStartRequest & { machineId: string; serverId?: string; signal?: AbortSignal }) => Promise<DaemonAgentInstallStartResponse | ActionExecuteFailure>;
   machineAgentInstallRead?: (args: DaemonAgentInstallReadRequest & { machineId: string; serverId?: string; signal?: AbortSignal }) => Promise<DaemonAgentInstallReadResponse>;
   machineAgentInstallCancel?: (args: DaemonAgentInstallCancelRequest & { machineId: string; serverId?: string; signal?: AbortSignal }) => Promise<DaemonAgentInstallCancelResponse>;

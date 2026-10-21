@@ -146,20 +146,25 @@ import {
 } from '../daemon/agentSignIn.js';
 import { MachinesAgentsListInputSchema, MachinesAgentsListOutputSchema } from '../capabilities/machineAgentInventory.js';
 import { DaemonWorkspaceFileSearchRequestSchema, DaemonWorkspaceFileSearchResponseSchema } from '../machines/workspaceFiles.js';
-import { DaemonWorkspaceFileReplacePreviewRequestSchema, DaemonWorkspaceFileReplacePreviewResponseSchema, DaemonWorkspaceFileReplaceApplyResponseSchema, WorkspaceFileReplaceMatcherSchema, WorkspaceFileReplaceSelectionSchema } from '../machines/workspaceFiles.js';
+import { DaemonWorkspaceFileReplacePreviewRequestSchema, DaemonWorkspaceFileReplacePreviewResponseSchema, DaemonWorkspaceFileReplaceApplyRequestSchema, DaemonWorkspaceFileReplaceApplyResponseSchema, WorkspaceFileReplaceOperationSchema, WorkspaceFileRestoreOperationSchema } from '../machines/workspaceFiles.js';
+import { ActionOperationGetV1RequestSchema } from './operations/v1.js';
 
 export const WorkspaceFilesReplacePreviewActionInputSchema = lazyZodSchema(() => z.strictObject({
   ...DaemonWorkspaceFileReplacePreviewRequestSchema.shape,
   machineId: z.string().check(z.trim(), z.minLength(1)),
 }));
 export const WorkspaceFilesReplaceActionInputSchema = lazyZodSchema(() => z.strictObject({
-  ...WorkspaceFileReplaceMatcherSchema.shape,
+  ...DaemonWorkspaceFileReplaceApplyRequestSchema.shape,
+  operation: z.discriminatedUnion('kind', [WorkspaceFileReplaceOperationSchema, WorkspaceFileRestoreOperationSchema]),
   machineId: z.string().check(z.trim(), z.minLength(1)),
-  rootPath: z.string().check(z.trim(), z.minLength(1)),
-  files: z.array(WorkspaceFileReplaceSelectionSchema),
 }));
 export type WorkspaceFilesReplacePreviewActionInput = z.infer<typeof WorkspaceFilesReplacePreviewActionInputSchema>;
 export type WorkspaceFilesReplaceActionInput = z.infer<typeof WorkspaceFilesReplaceActionInputSchema>;
+export const WorkspaceFilesReplaceActionOutputSchema = lazyZodSchema(() => z.union([
+  DaemonWorkspaceFileReplaceApplyResponseSchema,
+  z.strictObject({ operation: ActionOperationGetV1RequestSchema }),
+]));
+export type WorkspaceFilesReplaceActionOutput = z.infer<typeof WorkspaceFilesReplaceActionOutputSchema>;
 
 export const WorkspaceFilesSearchActionInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(DaemonWorkspaceFileSearchRequestSchema, {
   machineId: z.string().check(z.trim(), z.minLength(1)),
@@ -8380,18 +8385,18 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
   },
   {
     id: 'workspace.files.replace', approval: { result: 'required' }, approvalPolicy: { uiConfirmation: 'direct' },
+    operation: { version: 1, visibility: 'activity', progress: 'indeterminate', presentation: { onStart: 'current' } },
     title: 'Replace text in workspace files',
-    description: 'Apply the reviewed replacement only to selected files and matches whose raw file hashes still match the preview.',
+    description: 'Apply a reviewed replacement or restore its inverse edits only when the raw file hashes still match.',
     sideEffectClass: 'danger', safety: 'danger', placements: [],
-    bindings: { mcpToolName: 'workspace_files_replace', sdkMethod: 'workspace.files.replace.apply' },
-    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    bindings: { mcpToolName: 'workspace_files_replace', sdkMethod: 'workspace.files.replace.apply', rpcMethod: RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_APPLY },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     inputSchema: WorkspaceFilesReplaceActionInputSchema,
-    outputSchema: DaemonWorkspaceFileReplaceApplyResponseSchema,
+    outputSchema: WorkspaceFilesReplaceActionOutputSchema,
     inputHints: { fields: [
       { path: 'machineId', title: 'Machine id', widget: 'text' },
       { path: 'rootPath', title: 'Workspace root', widget: 'text' },
-      { path: 'query', title: 'Search text', widget: 'text' },
-      { path: 'replacement', title: 'Replacement text', widget: 'text' },
+      { path: 'operation', title: 'Guarded replacement or restore', widget: 'json' },
     ] },
   },
   {

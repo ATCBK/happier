@@ -155,21 +155,42 @@ export const DaemonWorkspaceFileReplacePreviewResponseSchema = lazyZodSchema(() 
     context.addIssue({ code: 'custom', message: 'A paged replace preview has partial coverage' });
   }
 })));
+/** Semantic edits use LSP's zero-based UTF-16 positions in the original text. */
+export const WorkspaceFileEditPositionSchema = lazyZodSchema(() => z.strictObject({
+  line: z.number().check(z.int(), z.nonnegative()), character: z.number().check(z.int(), z.nonnegative()),
+}));
+export const WorkspaceFileEditRangeSchema = lazyZodSchema(() => z.strictObject({
+  start: WorkspaceFileEditPositionSchema, end: WorkspaceFileEditPositionSchema,
+}).check(z.refine(({ start, end }) => end.line > start.line || end.line === start.line && end.character >= start.character,
+  'Range ends before its start')));
+export const WorkspaceFileTextEditSchema = lazyZodSchema(() => z.strictObject({ range: WorkspaceFileEditRangeSchema, text: z.string() }));
+export const WorkspaceFileEditSetFileSchema = lazyZodSchema(() => z.strictObject({
+  path: z.string().check(z.minLength(1)), expectedHash: z.string().check(z.regex(/^[a-f0-9]{64}$/u)),
+  edits: z.array(WorkspaceFileTextEditSchema), renameTo: z.optional(z.string().check(z.minLength(1))),
+}));
+export type WorkspaceFileEditSetFile = z.infer<typeof WorkspaceFileEditSetFileSchema>;
+export const WorkspaceFileReplaceOperationSchema = lazyZodSchema(() => z.strictObject({
+  kind: z.literal('replace'), matcher: WorkspaceFileReplaceMatcherSchema, files: z.array(WorkspaceFileReplaceSelectionSchema),
+}));
+export const WorkspaceFileRestoreOperationSchema = lazyZodSchema(() => z.strictObject({
+  kind: z.literal('restore'), files: z.array(z.strictObject({
+    path: z.string().check(z.minLength(1)), expectedHash: z.string().check(z.regex(/^[a-f0-9]{64}$/u)),
+    edits: z.array(WorkspaceFileReplaceInverseEditSchema), renameTo: z.optional(z.string().check(z.minLength(1))),
+  })),
+}));
 export const DaemonWorkspaceFileReplaceApplyRequestSchema = lazyZodSchema(() => z.strictObject({
   rootPath: z.string().check(z.trim(), z.minLength(1)),
   operation: z.discriminatedUnion('kind', [
-    z.strictObject({ kind: z.literal('replace'), matcher: WorkspaceFileReplaceMatcherSchema, files: z.array(WorkspaceFileReplaceSelectionSchema) }),
-    z.strictObject({ kind: z.literal('restore'), files: z.array(z.strictObject({
-      path: z.string().check(z.minLength(1)), expectedHash: z.string().check(z.regex(/^[a-f0-9]{64}$/u)),
-      edits: z.array(WorkspaceFileReplaceInverseEditSchema),
-    })) }),
+    WorkspaceFileReplaceOperationSchema,
+    WorkspaceFileRestoreOperationSchema,
+    z.strictObject({ kind: z.literal('editSet'), files: z.array(WorkspaceFileEditSetFileSchema) }),
   ]),
 }));
 export const DaemonWorkspaceFileReplaceApplyResponseSchema = lazyZodSchema(() => z.discriminatedUnion('ok', [
   z.strictObject({ ok: z.literal(true), results: z.array(z.strictObject({
     path: z.string(), status: z.enum(['replaced', 'restored', 'changed', 'skipped', 'failed']),
     hash: z.optional(z.string()), matchCount: z.optional(z.number().check(z.int(), z.nonnegative())),
-    edits: z.optional(z.array(WorkspaceFileReplaceInverseEditSchema)), reason: z.optional(z.string()),
+    edits: z.optional(z.array(WorkspaceFileReplaceInverseEditSchema)), reason: z.optional(z.string()), renameTo: z.optional(z.string()),
   })), cancelled: z.optional(z.array(z.string())) }),
   z.strictObject({ ok: z.literal(false), code: z.enum(['invalid_request', 'invalid_pattern', 'root_not_allowed']) }),
 ]));

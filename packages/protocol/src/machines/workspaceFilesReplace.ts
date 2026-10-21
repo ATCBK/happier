@@ -1,4 +1,17 @@
 import type { InverseEdit } from '../diff/hunks.js';
+import type { DaemonWorkspaceFileReplaceApplyRequest, DaemonWorkspaceFileReplaceApplyResponse } from './workspaceFiles.js';
+
+type WriterReceipt = Extract<DaemonWorkspaceFileReplaceApplyResponse, { ok: true }>['results'][number];
+/** Retained UI results may expose their inverse arrays as readonly. */
+type ReadonlyWriterReceipt = Readonly<Omit<WriterReceipt, 'edits'> & { edits?: readonly InverseEdit[] }>;
+
+/** A command can write a path repeatedly: Undo consumes each receipt in reverse order. */
+export function buildWorkspaceFileRestoreOperation(results: readonly ReadonlyWriterReceipt[]): Extract<DaemonWorkspaceFileReplaceApplyRequest['operation'], { kind: 'restore' }> {
+  return { kind: 'restore', files: [...results].reverse().flatMap(result =>
+    result.status === 'replaced' && result.hash && result.edits && (result.edits.length > 0 || result.renameTo)
+      ? [{ path: result.renameTo ?? result.path, expectedHash: result.hash, edits: [...result.edits],
+        ...(result.renameTo ? { renameTo: result.path } : {}) }] : []) };
+}
 
 export type ReplaceMatcher = Readonly<{ query: string; replacement: string; matchCase: boolean; regex: boolean }>;
 export type ReplaceMatchPosition = Readonly<{ line: number; column16: number }>;
