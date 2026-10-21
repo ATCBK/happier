@@ -869,6 +869,7 @@ import {
   type SessionConnectedServiceAuthSwitchResult,
 } from '../connectedServices/sessionAuthSwitch/switchSessionConnectedServiceAuth';
 import {
+  applyConnectedServiceCredentialUpdate,
   readConnectedServiceBindingsOrEmpty,
   readConnectedServiceCredentialApplicationState,
 } from '../connectedServices/sessionAuthSwitch/credentialApplicationState';
@@ -6798,7 +6799,13 @@ export async function startDaemonSessionControlRuntime(
       restartDiagnostic: ConnectedServiceDaemonRestartDiagnosticInput;
       onSignalFailureLogMessage: string;
     }>,
-  ): Promise<Readonly<{ signaled: boolean }>> => {
+  ): Promise<Readonly<{ signaled: boolean; completion?: RestartSessionRunnerCompletion }>> => {
+    const completionTarget = {
+      sessionId: input.sessionId,
+      previousPid: input.tracked.pid,
+      tracked: input.tracked,
+      transientSpawnOptions: input.tracked.spawnOptions,
+    };
     return await withSessionAccountContext(input.sessionId, async (accountContext) =>
       await requestPlannedRunnerRestart({
         reason: input.restartDiagnostic.reason ?? input.restartDiagnostic.trigger,
@@ -6806,6 +6813,17 @@ export async function startDaemonSessionControlRuntime(
           AbortSignal.any([signal, shutdownCancellationDomains.daemonWorkSignal])),
         sessionId: input.sessionId,
         tracked: input.tracked,
+        // Keep transition custody through the existing exact-predecessor
+        // handoff. A signal is not yet a registered replacement runner.
+        completion: {
+          hasPending: () => versionRuntimeRefreshAttemptHandoff.has(input.sessionId, input.tracked.pid),
+          join: () => versionRuntimeRefreshAttemptHandoff.join(completionTarget),
+          create: () => {
+            const attempt = versionRuntimeRefreshAttemptHandoff.create(completionTarget);
+            return { ...attempt, retire: () => attempt.settle({ ok: false, status: 'partial_failure',
+              diagnostics: { respawnTerminalReason: 'runner_retirement_unobserved' } }) };
+          },
+        },
         deferral: {
           kind: 'connected_service_switch',
           source: input.source,
@@ -7086,7 +7104,7 @@ export async function startDaemonSessionControlRuntime(
         reason?: string;
       }>,
     ): Promise<ConnectedServiceAuthGroupGenerationApplyResult> => {
-      return await withSessionAccountContext(builderInput.sessionId, async (accountContext) => {
+      const apply = async () => await withSessionAccountContext(builderInput.sessionId, async (accountContext) => {
         const sessionCredentials =
           accountContext?.bootstrap.credentials ?? params.credentials;
         const sessionApi = accountContext?.api ?? params.api;
@@ -7145,7 +7163,7 @@ export async function startDaemonSessionControlRuntime(
             );
             // The FSM's restart-resume fallback when hot-apply is ineligible is
             // gated through deferral and spawn-time reachability.
-            await requestConnectedServiceRestartWithDeferral({
+            return await requestConnectedServiceRestartWithDeferral({
               sessionId: builderInput.sessionId,
               tracked,
               source: 'automatic',
@@ -7182,7 +7200,8 @@ export async function startDaemonSessionControlRuntime(
                 });
               }
               try {
-                await signalRestart();
+                const restart = await signalRestart();
+                if (!restart.signaled || restart.completion?.ok === false) throw new Error('restart_not_completed');
               } catch {
                 return connectedServiceAuthGroupGenerationApplyFailure({
                   errorCode: 'restart_failed',
@@ -7358,7 +7377,7 @@ export async function startDaemonSessionControlRuntime(
                 );
               },
               restartSession: async () => {
-                await signalRestart();
+                return await signalRestart();
               },
               persistSessionBindings: async ({
                 sessionId,
@@ -7522,6 +7541,13 @@ export async function startDaemonSessionControlRuntime(
             });
           return result;
         });
+      });
+      // Generation application and notification admission mutate the same runner
+      // selection. Keep every application writer under the same Session owner.
+      return await connectedServiceSessionAuthSwitchCore.run({
+        sessionId: builderInput.sessionId,
+        reason: 'automatic_runtime_failure',
+        execute: apply,
       });
     };
 
@@ -7830,55 +7856,14 @@ export async function startDaemonSessionControlRuntime(
         executionAuthority: ConnectedServiceExecutionAuthorityV1;
       }>,
     ) => {
-      const sessionId = input.sessionId.trim();
-      const tracked =
-        Array.from(params.pidToTrackedSession.values()).find(
-          (child) => child.happySessionId === sessionId,
-        ) ?? null;
-      if (!sessionId || !tracked) {
-        return { status: 'failed' as const, errorCode: 'session_not_found' };
-      }
-      const applicationState = readConnectedServiceCredentialApplicationState({
-        serviceId: input.serviceId,
-        connectedServicesBindingsRaw:
-          resolveTrackedConnectedServiceBindingsRaw(tracked),
-        connectedServiceSelectionsEnv:
-          tracked.spawnOptions?.environmentVariables,
+      return await applyConnectedServiceCredentialUpdate({ ...input,
+        core: connectedServiceSessionAuthSwitchCore,
+        getTrackedSession: sessionId => findTrackedSessionByHappySessionId(params.pidToTrackedSession.values(), sessionId),
+        applyGeneration: request => buildConnectedServiceAuthApplicationSession({
+          sessionId: request.sessionId, restartReason: input.reason, commitAccountSwitchEvents: false,
+          allowRestart: input.executionAuthority !== 'passive_projection', executionAuthority: input.executionAuthority,
+        })({ ...request, reason: input.reason }),
       });
-      if (!applicationState)
-        return { status: 'failed' as const, errorCode: 'unsupported_service' };
-      const childSelection = applicationState.childSelection;
-      const groupSelection =
-        childSelection?.kind === 'group' &&
-        childSelection.activeProfileId === input.profileId
-          ? childSelection
-          : null;
-      const result = await buildConnectedServiceAuthApplicationSession({
-        sessionId,
-        restartReason: input.reason,
-        commitAccountSwitchEvents: false,
-        allowRestart: input.executionAuthority !== 'passive_projection',
-        executionAuthority: input.executionAuthority,
-      })({
-        sessionId,
-        serviceId: applicationState.serviceId,
-        groupId: groupSelection?.groupId ?? null,
-        activeProfileId: input.profileId,
-        generation: groupSelection?.generation ?? null,
-        reason: input.reason,
-      });
-      if (!result.ok) {
-        return { status: 'failed' as const, errorCode: result.errorCode };
-      }
-      const action = 'action' in result ? result.action : undefined;
-      switch (action) {
-        case 'hot_applied':
-          return { status: 'hot_applied' as const };
-        case 'restart_requested':
-          return { status: 'restart_requested' as const };
-        default:
-          return { status: 'unchanged' as const };
-      }
     },
   };
 
@@ -18933,7 +18918,7 @@ export async function startDaemonSessionControlRuntime(
                 );
                 // Manual restart-resume fallback (hot-apply ineligible) is gated
                 // through deferral and spawn-time reachability.
-                await requestConnectedServiceRestartWithDeferral({
+                return await requestConnectedServiceRestartWithDeferral({
                   sessionId: input.sessionId,
                   tracked,
                   source: 'manual',

@@ -606,7 +606,11 @@ export type SwitchSessionConnectedServiceAuthInput = Readonly<{
   materializeRuntimeAuthSelection?(
     input: SessionConnectedServiceRuntimeAuthSelectionMaterializerInput,
   ): Promise<unknown | null>;
-  restartSession(tracked: TrackedSession): Promise<void>;
+  /** Void means the restart completed; planned restarts retain admission/completion outcomes. */
+  restartSession(tracked: TrackedSession): Promise<void | Readonly<{
+    signaled: boolean;
+    completion?: Readonly<{ ok: boolean }>;
+  }>>;
 	  hotApply(input: Readonly<{
 	    tracked: TrackedSession;
 	    normalizedBindings: ConnectedServiceBindingsV2;
@@ -1487,13 +1491,25 @@ function resolveMaterializationIdentityForAcceptedBindings(input: Readonly<{
     : null;
 }
 
-function previousEffectiveBindings(raw: unknown): ReadonlyMap<ConnectedServiceId, EffectiveBinding> {
+function previousEffectiveBindings(
+  raw: unknown,
+  environmentVariables?: Record<string, string>,
+): ReadonlyMap<ConnectedServiceId, EffectiveBinding> {
   const parsed = readConnectedServiceBindingsOrEmpty(raw);
+  const selections = readConnectedServiceChildSelectionsFromEnv(environmentVariables ?? {});
   const out = new Map<ConnectedServiceId, EffectiveBinding>();
   for (const [serviceIdRaw, binding] of Object.entries(parsed.bindingsByServiceId)) {
     const serviceId = serviceIdRaw as ConnectedServiceId;
     const effective = toEffectiveBinding(serviceId, binding);
-    if (effective) out.set(serviceId, effective);
+    if (!effective) continue;
+    const selection = selections?.get(serviceId);
+    // Durable group bindings retain the group intent, not its selected member.
+    // The runner selection supplies the prior member for change comparison;
+    // it still does not prove live provider adoption for group convergence.
+    out.set(serviceId, effective.selection === 'group' && selection?.kind === 'group'
+      && effective.groupId === selection.groupId
+      ? { ...effective, profileId: selection.activeProfileId }
+      : effective);
   }
   return out;
 }
@@ -1735,6 +1751,34 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
       diagnosticSource: input.diagnosticSource,
     });
   }
+  // Account notifications invalidate credential truth; they do not by themselves
+  // authorize replacing the runner. Compare the freshly resolved revision before
+  // continuity/restart. Group convergence still requires its live adoption proof.
+  if (input.runtimeAuthApplyReason === 'account_changed') {
+    const previousSelection = readConnectedServiceChildSelectionsFromEnv(
+      input.tracked.spawnOptions?.environmentVariables ?? {},
+    )?.get(serviceId);
+    const binding = input.normalizedBindings.bindingsByServiceId[serviceId];
+    const nextSelection = binding?.source === 'connected'
+      ? buildConnectedServiceChildSelection({ serviceId, binding, runtimeAuthSelection,
+          previousSelection, groupMetadata: input.groupMetadataByServiceId.get(serviceId) })
+      : null;
+    if (!nextSelection?.credentialRevision) {
+      return failureResult('profile_missing', { serviceId, failurePhase: 'materialization',
+        diagnosticSource: input.diagnosticSource });
+    }
+    const sameSelection = previousSelection?.kind === 'profile' && nextSelection?.kind === 'profile'
+      ? previousSelection.profileId === nextSelection.profileId
+      : previousSelection?.kind === 'group' && nextSelection?.kind === 'group'
+        && previousSelection.groupId === nextSelection.groupId
+        && previousSelection.activeProfileId === nextSelection.activeProfileId
+        && previousSelection.generation === nextSelection.generation;
+    if (sameSelection && previousSelection?.credentialRevision
+      && previousSelection.credentialRevision === nextSelection?.credentialRevision) {
+      return { ok: true, action: 'unchanged', normalizedBindings: input.normalizedBindings,
+        continuityByServiceId: {}, warnings: [] };
+    }
+  }
   const previousSpawnOptions = input.tracked.spawnOptions;
   const connectedServiceMaterializationIdentityV1 = resolveMaterializationIdentityForAcceptedBindings({
     existingIdentity: previousSpawnOptions?.connectedServiceMaterializationIdentityV1,
@@ -1907,7 +1951,8 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
       };
     }
 
-    await input.restartSession(input.tracked);
+    const restart = await input.restartSession(input.tracked);
+    if (restart && (!restart.signaled || restart.completion?.ok === false)) throw new Error('restart_not_completed');
     const continuationOutcome = await runPostSwitchVerificationRecoveryAndContinuation({
       recoverAfterRuntimeAuthSwitch: input.recoverAfterRuntimeAuthSwitch,
       continueAfterRuntimeAuthSwitch: input.continueAfterRuntimeAuthSwitch,
@@ -2127,7 +2172,7 @@ async function applyConnectedServiceAuthGenerationToTrackedSessionWithGroupConve
   const previousBindings = readConnectedServiceBindingsOrEmpty(
     resolveTrackedConnectedServiceBindingsRaw(tracked),
   );
-  const previousByServiceId = previousEffectiveBindings(previousBindings);
+  const previousByServiceId = previousEffectiveBindings(previousBindings, tracked.spawnOptions?.environmentVariables);
   const nextByServiceId = resolveNextEffectiveBindings({
     previousByServiceId,
     requestedByServiceId: normalized.effectiveByServiceId,
@@ -2416,7 +2461,8 @@ async function applyConnectedServiceAuthGenerationToTrackedSessionWithGroupConve
         return failureResult('metadata_update_failed', { failurePhase: 'metadata', diagnosticSource });
       }
       try {
-        await input.restartSession(tracked);
+        const restart = await input.restartSession(tracked);
+        if (restart && (!restart.signaled || restart.completion?.ok === false)) throw new Error('restart_not_completed');
       } catch (error) {
         // Pure restart-rematerialize: no credential was ever hot-applied, so this attempt really is
         // PRE-EFFECT and the previous persisted bindings must be restored.

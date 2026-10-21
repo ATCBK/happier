@@ -21,13 +21,20 @@ import { CODEX_PLUGIN } from '@happier-dev/plugins-codex/manifest';
 import type { AgentConnectedAccountLaunchContributionV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import type { TrackedSession } from '@/daemon/types';
-import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
+import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY, readConnectedServiceChildSelectionsFromEnv } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
+import { requestPlannedRunnerRestart } from '@/daemon/plannedRunnerRestart/requestPlannedRunnerRestart';
+import { createVersionRuntimeRefreshAttemptHandoff } from '@/daemon/plannedRunnerRestart/versionRuntimeRefreshAttemptHandoff';
+import type { RestartSessionRunnerCompletion } from '@/daemon/plannedRunnerRestart/restartSessionRunnerOnCurrentRuntime';
+import { createSessionRunnerRespawnManager } from '@/daemon/processSupervision/sessionRunnerRespawn';
+import { requestConnectedServiceSessionRestartSignal } from './requestConnectedServiceSessionRestartSignal';
+import { applyConnectedServiceCredentialUpdate } from './credentialApplicationState';
 import { createSessionConnectedServiceAuthHotApply } from './sessionConnectedServiceAuthHotApply';
 import { ConnectedServiceRuntimeRegistry } from '../runtimeRegistry/registry';
 import { ConnectedServiceSessionAuthSwitchLockRegistry, createConnectedServiceSessionAuthSwitchCore } from '../runtimeAuth/connectedServiceSessionAuthSwitchCore';
 import { projectConnectedServiceRuntimeAuthTargetInput } from '../runtimeAuth/projectRuntimeAuthTargetInput';
 import { projectAgentConnectedAccountLaunchCatalogEntry } from '@/plugins/projection/registry/agentCatalogEntryHooks';
 import {
+  applyConnectedServiceAuthGenerationToTrackedSession,
   switchSessionConnectedServiceAuth as switchSessionConnectedServiceAuthImpl,
   type SwitchSessionConnectedServiceAuthInput,
 } from './switchSessionConnectedServiceAuth';
@@ -370,6 +377,211 @@ function expectMaterializationIdentity(value: unknown): ConnectedServiceMaterial
 }
 
 describe('switchSessionConnectedServiceAuth', () => {
+  it.each(['profile', 'group', 'group_activity', 'group_capture', 'group_overlap_failed', 'group_overlap_thrown', 'group_overlap_accepted'] as const)('admits one account-change restart only for a fresh credential revision (%s)', async scenario => {
+    const selection = scenario === 'profile' ? 'profile' : 'group';
+    const serviceId = selection === 'profile' ? 'happier.agent.codex/openai-codex' : 'happier.agent.claude/anthropic';
+    const agentId = selection === 'profile' ? 'codex' : 'claude';
+    const selectedBindings: ConnectedServiceBindingsV2 = { v: 2, bindingsByServiceId: { [serviceId]: selection === 'group'
+      ? { source: 'connected', selection: 'group', profileId: 'selected', groupId: 'pool' }
+      : { source: 'connected', selection: 'profile', profileId: 'selected' },
+    } };
+    const selectedGroup = group({ groupId: 'pool', activeProfileId: 'selected', generation: 7,
+      members: group().members.map(member => ({ ...member, profileId: 'selected' })) });
+    let revision = 'csr_aaaaaaaaaaaaaaaaaaaaaa';
+    let tracked = trackedSession({ pid: 2147482901, processStartTimeMs: 1, processCommandHash: 'a'.repeat(64), spawnOptions: {
+      directory: '/tmp/project', backendTarget: { kind: 'backend', backendId: agentId, sourceKind: 'built_in' },
+      connectedServices: selectedBindings,
+      connectedServiceMaterializationIdentityV1: { v: 1, id: 'csm_revision_cutover', createdAt: 1 },
+      environmentVariables: { [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([
+        selection === 'profile' ? { kind: 'profile', serviceId, profileId: 'selected', credentialRevision: revision }
+          : { kind: 'group', serviceId, groupId: 'pool', activeProfileId: 'selected', fallbackProfileId: 'selected',
+              generation: 7, policy: selectedGroup.policy, credentialRevision: revision },
+      ]) },
+    } });
+    const accountApi = { getAccountEncryptionMode: async () => 'plain' as const,
+      getConnectedServiceAuthGroup: async () => selectedGroup,
+      listConnectedServiceProfiles: async () => ({ profiles: [{ profileId: 'selected', status: 'connected' as const }] }) };
+    // Qualified Home HTTP and the physical restart are the external boundaries.
+    const transport = vi.spyOn(axios, 'get').mockImplementation(async () => ({ status: 200,
+      data: QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
+        ref: { service: selection === 'profile' ? { pluginId: 'happier.agent.codex', localId: 'openai-codex' }
+          : { pluginId: 'happier.agent.claude', localId: 'anthropic' }, accountId: 'selected' },
+        authenticationModeId: selection === 'profile' ? 'oauth' : 'api-key', revisionSemantics: 'revisioned', credentialRevision: revision, configurationRevision: null,
+        content: { t: 'plain', v: { v: 1, values: selection === 'profile'
+          ? { accessToken: 'synthetic-access', refreshToken: 'synthetic-refresh' } : { apiKey: 'synthetic-key' } } },
+        metadata: { scopes: [] },
+      }) }));
+    const restarts: number[] = [];
+    const trackedByPid = new Map([[tracked.pid, tracked]]);
+    const restartRequestedPids = new Set<number>();
+    const handoff = createVersionRuntimeRefreshAttemptHandoff<RestartSessionRunnerCompletion>({ timeoutMs: null,
+      timeoutCompletion: { ok: false, status: 'partial_failure' },
+      supersededCompletion: { ok: false, status: 'partial_failure' },
+      cancelledCompletion: { ok: false, status: 'partial_failure', diagnostics: { respawnTerminalReason: 'cancelled_before_signal' } },
+    });
+    let signalAllowed = false;
+    let successor: TrackedSession | undefined;
+    let resolveSuccessor!: () => void;
+    const successorReady = new Promise<void>(resolve => { resolveSuccessor = resolve; });
+    const respawn = createSessionRunnerRespawnManager({ enabled: true, maxRestarts: 2,
+      baseDelayMs: 50, maxDelayMs: 50, jitterMs: 0,
+      isSessionAlreadyRunning: sessionId => [...trackedByPid.values()].some(child => child.happySessionId === sessionId),
+      // This is the OS spawn boundary. Observe the actual respawn owner's options.
+      spawnSession: async options => {
+        successor = { startedBy: 'daemon', happySessionId: 'sess_1', pid: tracked.pid + 1,
+          processStartTimeMs: 2, processCommandHash: 'b'.repeat(64), spawnOptions: options };
+        tracked = successor;
+        trackedByPid.set(tracked.pid, tracked);
+        return { type: 'success', sessionId: tracked.happySessionId };
+      },
+      onRespawnSuccess: ({ sessionId, previousPid }) => {
+        restartRequestedPids.delete(previousPid);
+        handoff.settle(sessionId, previousPid, { ok: true });
+        resolveSuccessor();
+      },
+      onRespawnTerminal: ({ sessionId, previousPid }) => {
+        restartRequestedPids.delete(previousPid);
+        handoff.settle(sessionId, previousPid, { ok: false, status: 'spawn_failed' });
+      },
+      random: () => 0, logDebug: () => {}, logWarn: () => {},
+    });
+    const signalBoundary = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid !== tracked.pid || signal !== 'SIGTERM') throw new Error('Unexpected process signal');
+      restarts.push(pid);
+      return true;
+    });
+    const core = createCore();
+    const overlaps = scenario === 'group_overlap_failed' || scenario === 'group_overlap_thrown' || scenario === 'group_overlap_accepted';
+    let pauseAdmission = overlaps;
+    let releaseAdmission!: () => void;
+    let enterAdmission!: () => void;
+    const admissionEntered = new Promise<void>(resolve => { enterAdmission = resolve; });
+    const admissionRelease = new Promise<void>(resolve => { releaseAdmission = resolve; });
+    const { resolveSessionConnectedServiceSwitchContinuity } = await import('@/daemon/startup/startDaemonSessionControlRuntime');
+    const apply = (materialize = true) => applyConnectedServiceAuthGenerationToTrackedSession({
+      getChildren: () => [...trackedByPid.values()], api: accountApi,
+      qualifiedConnectedAccountApi: qualifiedAuthGroupApiFromLegacyTestApi(accountApi),
+      runtimeAuthApplyReason: 'account_changed',
+      materializeRuntimeAuthSelection: materialize ? input => materializeSessionConnectedServiceRuntimeAuthSelection({
+        credentials: { token: 'synthetic-token', encryption: null }, api: accountApi as unknown as ApiClient, input,
+      }) : undefined,
+      resolveContinuity: input => resolveSessionConnectedServiceSwitchContinuity({
+        sessionId: input.sessionId, agentId: input.agentId, serviceId: input.serviceId,
+        previousBinding: input.previous, nextBinding: input.next, tracked,
+        fromBindingsRaw: tracked.spawnOptions?.connectedServices, toBindings: input.normalizedBindings,
+        accountSettings: null, runtimeAuthSelection: input.runtimeAuthSelection,
+      }),
+      restartSession: async child => await requestPlannedRunnerRestart({
+        sessionId: 'sess_1', tracked: child, reason: 'account_changed', deferral: { kind: 'none' },
+        restartRequestedPids, pidToTrackedSession: trackedByPid,
+        completion: {
+          hasPending: () => handoff.has('sess_1', child.pid),
+          join: () => handoff.join({ sessionId: 'sess_1', previousPid: child.pid, tracked: child,
+            transientSpawnOptions: child.spawnOptions }),
+          create: () => handoff.create({ sessionId: 'sess_1', previousPid: child.pid, tracked: child,
+            transientSpawnOptions: child.spawnOptions }),
+        },
+        isProcessSafeToSignal: async witness => witness.pid === child.pid
+          && witness.expectedProcessStartTimeMs === child.processStartTimeMs
+          && witness.expectedProcessCommandHash === child.processCommandHash,
+        canSignal: async () => {
+          const allowed = signalAllowed || scenario === 'group_capture';
+          if (pauseAdmission) { pauseAdmission = false; enterAdmission(); await admissionRelease; }
+          if (!allowed && scenario === 'group_overlap_thrown') throw new Error('External restart refused before signal');
+          return allowed ? true : scenario === 'group_activity' ? 'activity_in_progress' : 'approval_pending';
+        },
+        captureRunnerRemainder: scenario === 'group_capture' ? async () => signalAllowed
+          ? { scope: 'subtree', roots: [], ownership: [] } : undefined : undefined,
+        requestSignal: async request => {
+          const result = await requestConnectedServiceSessionRestartSignal({ pid: child.pid, delayMs: 0,
+            shouldSignal: request.shouldSignal, onSignalFailure: request.onSignalFailure });
+          if (result.status === 'requested') {
+            trackedByPid.delete(child.pid);
+            respawn.handleUnexpectedExit(child, { reason: 'process-exit', code: 143, signal: 'SIGTERM' },
+              { forceRestart: true, restartReason: 'account_changed' });
+          }
+          return result;
+        },
+      }),
+      hotApply: async () => { throw new Error('Unexpected hot apply'); },
+      registerHotApplyTargets: () => {}, emitSessionEvent: async () => {},
+      request: { sessionId: 'sess_1', agentId, bindings: selectedBindings, rematerializeServiceId: serviceId,
+        ...(selection === 'group' ? { expectedGroupGenerationByServiceId: { [serviceId]: 7 } } : {}) },
+    });
+    const admittedRevisions: Array<string | undefined> = [];
+    const pendingApplications: Promise<unknown>[] = [];
+    const notify = () => {
+      const application = applyConnectedServiceCredentialUpdate({ sessionId: 'sess_1', serviceId,
+      profileId: 'selected', core,
+      getTrackedSession: sessionId => {
+        const child = [...trackedByPid.values()].find(item => item.happySessionId === sessionId) ?? null;
+        admittedRevisions.push(readConnectedServiceChildSelectionsFromEnv(child?.spawnOptions?.environmentVariables ?? {})
+          ?.get(serviceId)?.credentialRevision);
+        return child;
+      },
+        applyGeneration: () => apply(),
+      });
+      pendingApplications.push(application);
+      return application;
+    };
+    try {
+      const unchanged = await apply();
+      expect(unchanged.ok && unchanged.action, JSON.stringify(unchanged)).toBe('unchanged');
+      expect(restarts).toEqual([]);
+      await expect(apply(false)).resolves.toMatchObject({ ok: false, errorCode: 'profile_missing',
+        diagnostics: { failurePhase: 'materialization' } });
+      expect(restarts).toEqual([]);
+      // Codex supports in-place application; the restart-required cutover is
+      // exercised through Claude's real same-group continuity contribution.
+      if (selection === 'profile') return;
+      revision = 'csr_bbbbbbbbbbbbbbbbbbbbbb';
+      const original = tracked;
+      const originalSpawnOptions = tracked.spawnOptions;
+      if (overlaps) {
+        signalAllowed = scenario === 'group_overlap_accepted';
+        const first = notify();
+        await admissionEntered;
+        expect(readConnectedServiceChildSelectionsFromEnv(original.spawnOptions?.environmentVariables ?? {})
+          ?.get(serviceId)?.credentialRevision).toBe(revision);
+        const second = notify();
+        let secondSettled = false;
+        void second.then(() => { secondSettled = true; }, () => { secondSettled = true; });
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(secondSettled).toBe(false);
+        signalAllowed = true;
+        releaseAdmission();
+        const results = await Promise.all([first, second]);
+        expect(results).toEqual(scenario === 'group_overlap_accepted'
+          ? [{ status: 'restart_requested' }, { status: 'unchanged' }]
+          : [{ status: 'failed', errorCode: 'restart_failed' }, { status: 'restart_requested' }]);
+        expect(admittedRevisions).toEqual(scenario === 'group_overlap_accepted'
+          ? ['csr_aaaaaaaaaaaaaaaaaaaaaa', revision]
+          : ['csr_aaaaaaaaaaaaaaaaaaaaaa', 'csr_aaaaaaaaaaaaaaaaaaaaaa']);
+      } else {
+        const declined = await notify();
+        expect(declined).toEqual({ status: 'failed', errorCode: 'restart_failed' });
+        expect(restarts).toEqual([]);
+        expect(tracked.spawnOptions).toBe(originalSpawnOptions);
+        expect(restartRequestedPids.size).toBe(0);
+        expect(successor).toBeUndefined();
+        signalAllowed = true;
+        expect(await notify()).toEqual({ status: 'restart_requested' });
+      }
+      await successorReady;
+      expect(restarts).toEqual([original.pid]);
+      expect(successor?.pid).not.toBe(original.pid);
+      expect(readConnectedServiceChildSelectionsFromEnv(successor?.spawnOptions?.environmentVariables ?? {})?.get(serviceId))
+        .toMatchObject({ kind: 'group', credentialRevision: revision });
+      const repeated = await notify();
+      expect(repeated).toEqual({ status: 'unchanged' });
+      expect(restarts).toEqual([original.pid]);
+    } finally {
+      releaseAdmission();
+      await Promise.allSettled(pendingApplications);
+      if (restarts.length > 0) await successorReady;
+      transport.mockRestore(); signalBoundary.mockRestore();
+    }
+  });
   it('preflights an inactive account change against its actual target without writing credentials or metadata', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-inactive-target-preflight-'));
     const unexpectedAccountBoundary = async (): Promise<never> => { throw new Error('Inactive preflight must not write account state or credentials'); };
@@ -1449,7 +1661,7 @@ describe('switchSessionConnectedServiceAuth', () => {
     expect(tracked.spawnOptions?.connectedServices).toEqual(bindings('old-profile'));
   });
 
-  it('returns restart failure diagnostics when a switch cannot restart the active session', async () => {
+  it.each(['thrown', 'declined', 'completion_failed'] as const)('returns restart failure diagnostics when a switch cannot restart the active session (%s)', async failure => {
     const tracked = trackedSession();
     const persistSessionBindings = vi
       .fn()
@@ -1469,6 +1681,8 @@ describe('switchSessionConnectedServiceAuth', () => {
       },
       resolveContinuity: async () => ({ mode: 'restart_rematerialize' }),
       restartSession: async () => {
+        if (failure === 'declined') return { signaled: false };
+        if (failure === 'completion_failed') return { signaled: true, completion: { ok: false } };
         throw new Error('restart failed');
       },
       persistSessionBindings,

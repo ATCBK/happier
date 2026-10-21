@@ -72,6 +72,20 @@ it.each(['retained', 'removed'] as const)('skips connected credential reconcilia
         // a retired target must never rematerialize using a disposed purpose lease.
         const accountReads = vi.spyOn(axios, 'get').mockRejectedValue(new Error('fixture Home unavailable'));
         const diagnostics = vi.spyOn(logger, 'debug');
+        await expect(runtime.connectedServiceAuthGroupPreTurnSwitchCoordinator.applyCredentialUpdate({
+            sessionId: activeSessionId, serviceId: 'happier.agent.codex/openai-codex', profileId: 'unrelated',
+            reason: 'account_changed', executionAuthority: 'runtime_recovery',
+        })).resolves.toEqual({ status: 'unchanged' });
+        expect(accountReads).not.toHaveBeenCalled();
+        active.spawnOptions = { directory: home, connectedServices: { v: 2, bindingsByServiceId: {
+            'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: 'selected' },
+        } } };
+        await expect(runtime.connectedServiceAuthGroupPreTurnSwitchCoordinator.applyCredentialUpdate({
+            sessionId: activeSessionId, serviceId: 'happier.agent.codex/openai-codex', profileId: 'other-member',
+            reason: 'account_changed', executionAuthority: 'runtime_recovery',
+        })).resolves.toEqual({ status: 'unchanged' });
+        expect(accountReads).not.toHaveBeenCalled();
+        delete active.spawnOptions;
         const register = (pid: number, sessionId: string) => registry.registerTarget({
             pid, sessionId, agentId: 'claude', materializationKey: 'csm_' + sessionId,
             connectedServicesBindingsRaw: {
