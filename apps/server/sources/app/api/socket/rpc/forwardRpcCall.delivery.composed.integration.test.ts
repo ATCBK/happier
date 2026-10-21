@@ -32,8 +32,9 @@ describe('client to daemon RPC reply delivery across Redis adapter nodes', () =>
     afterAll(async () => { await cluster?.close(); });
     afterEach(() => { for (const client of clients.splice(0)) client.disconnect(); });
 
-    async function fixture() {
-        const [source, destination] = cluster.nodes;
+    async function fixture(destinationIndex: 0 | 1 = 1) {
+        const source = cluster.nodes[0];
+        const destination = cluster.nodes[destinationIndex];
         const accepted = once(destination.io, 'connection');
         const target = connect(`http://127.0.0.1:${destination.port}`, {
             path: '/v1/updates', transports: ['websocket'], reconnection: false, forceNew: true,
@@ -89,7 +90,7 @@ describe('client to daemon RPC reply delivery across Redis adapter nodes', () =>
             const discovery = vi.spyOn(source.io.of('/').adapter, 'fetchSockets').mockRejectedValue(new Error('cluster timeout'));
             try {
                 const unavailable = await call().catch((error: unknown) => error);
-                expect(unavailable).toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
+                expect(unavailable).toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE });
                 expect(isMachineDaemonRpcUnsupportedError(unavailable)).toBe(false);
             } finally {
                 discovery.mockRestore();
@@ -113,6 +114,47 @@ describe('client to daemon RPC reply delivery across Redis adapter nodes', () =>
             vi.mocked(db.machine.findFirst).mockReset();
         }
     });
+
+    it.each(['capabilities.describe', 'plugin.delivery.read'])(
+        'delivers a local Machine %s reply while cluster discovery is unavailable', async rpcMethod => {
+            const { source, target, targetSocket, method: fixtureMethod } = await fixture(0);
+            const machineId = fixtureMethod.slice(0, fixtureMethod.indexOf(':'));
+            const method = `${machineId}:${rpcMethod}`;
+            targetSocket.data = { clientType: 'machine-scoped', machineId };
+            vi.mocked(db.machine.findFirst).mockResolvedValue({ revokedAt: null, replacedByMachineId: null } as Awaited<ReturnType<typeof db.machine.findFirst>>);
+            await targetSocket.leave(buildRpcMethodRoom({ userId: 'account-one', method: fixtureMethod }));
+            await targetSocket.join(buildRpcMethodRoom({ userId: 'account-one', method }));
+            const manager = new RpcHandlerManager({ scopePrefix: machineId, encryptionMode: 'plain', logger() {} });
+            manager.registerHandler(rpcMethod, (value: unknown) => ({ echoed: value }));
+            target.on(SOCKET_RPC_EVENTS.REQUEST, async (request: SocketRpcRequestPayload, acknowledge: (value: unknown) => void) => {
+                acknowledge(await manager.handleRequest(request));
+            });
+            const census = vi.spyOn(source.io.of('/').adapter, 'fetchSockets')
+                .mockRejectedValue(new Error('timeout reached: only 1 responses received out of 2'));
+            const relay = (socket: Socket) => {
+                socket.on(SOCKET_RPC_EVENTS.CALL, async (request: SocketRpcRequestPayload, acknowledge: (value: unknown) => void) => {
+                    acknowledge(await forwardRpcCall({ io: source.io, targetUserId: 'account-one', method: request.method,
+                        callParams: request.params, callerSocketId: socket.id }));
+                });
+            };
+            source.io.on('connection', relay);
+            const ui = connect(`http://127.0.0.1:${source.port}`, {
+                path: '/v1/updates', transports: ['websocket'], reconnection: false, forceNew: true,
+            });
+            clients.push(ui);
+            try {
+                await new Promise<void>(resolve => ui.once('connect', resolve));
+                await expect(callSocketRpc({ socket: ui, target: { kind: 'machine', id: machineId },
+                    method: rpcMethod, params: { probe: rpcMethod }, content: { mode: 'plain' } }))
+                    .resolves.toEqual({ echoed: { probe: rpcMethod } });
+                expect(census).not.toHaveBeenCalled();
+            } finally {
+                source.io.off('connection', relay);
+                census.mockRestore();
+                vi.mocked(db.machine.findFirst).mockReset();
+            }
+        },
+    );
 
     it('delivers the exact daemon reply without waiting for unrelated cluster client counts', async () => {
         const { source, target, method } = await fixture();
