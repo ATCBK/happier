@@ -720,9 +720,8 @@ describe('createProductionDaemonWorkspaceSyncRuntime', () => {
       })).resolves.toMatchObject({ ok: false, errorCode, ...(carrierReason ? { error: carrierReason } : {}) });
       expect(completions).toContainEqual(expect.objectContaining({ outcomeCode: errorCode }));
       if (carrierTrace) expect(carrierTrace.mock.calls.filter(([message]) => message === '[workspace-sync-carrier-stage]')).toEqual([]);
-      expect(getActiveProjectAccountRowsSnapshot()?.relationships).toEqual([expect.objectContaining({
-        relationshipId: deriveWorkspaceSyncRelationshipId(request.operationId), enabled: false, committedAtMs: null,
-      })]);
+      // A refused preparation restores the pre-create rows: no staged paused link remains.
+      expect(getActiveProjectAccountRowsSnapshot()?.relationships).toEqual([]);
       await expect(stat(fixture.targetPath)).rejects.toMatchObject({ code: 'ENOENT' });
       return;
     }

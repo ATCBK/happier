@@ -112,8 +112,14 @@ const ACP_AGENT_IDS = new Set([
 
 const EXTERNAL_SESSION_AGENT_IDS = new Set([
     'antigravity',
+    'auggie',
     'claude',
     'codex',
+    'copilot',
+    'cursor',
+    'gemini',
+    'grok',
+    'kilo',
     'ohMyPi',
     'opencode',
     'pi',

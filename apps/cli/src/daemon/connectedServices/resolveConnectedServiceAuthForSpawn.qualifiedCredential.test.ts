@@ -550,7 +550,8 @@ describe('qualified first-party spawn credential authority', () => {
     const healthWrites = vi.spyOn(axios, 'patch').mockImplementation(async (url, body) => {
       expect(new URL(String(url)).pathname).toBe('/v4/connect/qualified/credential/health');
       healthPatches.push(body);
-      primaryNeedsReauth = true;
+      // The boundary persists the settled health: only a reconnect-required patch makes the profile need re-auth.
+      primaryNeedsReauth = (body as { health?: { status?: string } }).health?.status === 'needs_reauth';
       return { status: 200, data: { success: true, credentialRevision: currentRevision, configurationRevision: null } };
     });
     const writes = vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {

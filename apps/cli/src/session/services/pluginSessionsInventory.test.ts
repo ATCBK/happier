@@ -19,6 +19,7 @@ import {
   type PluginSessionHandleCapabilities,
   type PluginSessionsInventoryParams,
 } from './pluginSessionsInventory';
+import { logger } from '@/ui/logger';
 import type { PluginSubagentsHostService } from '@/session/subagents/pluginSubagentsService';
 import type { HostExternalSessionsAuthorService } from '@/session/external/privateContract';
 
@@ -949,6 +950,8 @@ describe('plugin sessions inventory public service boundary', () => {
     expect(JSON.stringify(ordinaryEvents)).not.toContain('must-not-project');
 
     const baselineReads = get.mock.calls.length;
+    // The log file appender's buffered flush is not a watch poll timer.
+    logger.flushSync();
     expect(vi.getTimerCount()).toBe(0);
     const provisional = {
       type: 'transcript-stream-segment-delta', sessionId: 'session-ordinary',
@@ -1028,6 +1031,8 @@ describe('plugin sessions inventory public service boundary', () => {
     expect(get.mock.calls.length).toBeGreaterThan(readsAfterReconnect);
     expect(ordinaryEvents).toHaveLength(3);
     expect(ordinaryChanges).toHaveLength(1);
+    // The log file appender's buffered flush is not a watch poll timer.
+    logger.flushSync();
     expect(vi.getTimerCount()).toBe(0);
 
     ordinarySubscription.dispose();
@@ -1115,6 +1120,8 @@ describe('plugin sessions inventory public service boundary', () => {
     expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({
       kind: 'message', sequence: 2, message: expect.objectContaining({ messageId: 'recovered-message' }),
     }));
+    // The log file appender's buffered flush is not a watch poll timer.
+    logger.flushSync();
     expect(vi.getTimerCount()).toBe(0);
     const readsAtAbort = get.mock.calls.length;
     lifetime.abort();
@@ -1123,6 +1130,8 @@ describe('plugin sessions inventory public service boundary', () => {
     expect(socket.eventNames()).toEqual([]);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(get.mock.calls).toHaveLength(readsAtAbort);
+    // The log file appender's buffered flush is not a watch poll timer.
+    logger.flushSync();
     expect(vi.getTimerCount()).toBe(0);
     subscription.dispose();
   });

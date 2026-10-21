@@ -1441,7 +1441,7 @@ describe('buildPluginProjectionV2', () => {
         ).not.toHaveProperty('executionRuns');
     });
 
-    it('projects declared built-in external-session Agents and omits unsupported Agent packages', () => {
+    it('projects declared built-in external-session Agents', () => {
         const builtIns = resolveBuiltInContributions();
         const registry = {
             ...createEmptyResolvedContributionRegistry(),
@@ -1468,7 +1468,7 @@ describe('buildPluginProjectionV2', () => {
             localId: 'ohmypi',
         });
 
-        for (const agentId of ['pi', 'antigravity']) {
+        for (const agentId of ['pi', 'antigravity', 'auggie', 'cursor', 'copilot']) {
             const externalSessions = projection.agentsById[agentId]?.externalSessions;
             expect(externalSessions).toMatchObject({
                 generation: 21,
@@ -1480,9 +1480,6 @@ describe('buildPluginProjectionV2', () => {
                 },
             });
             expect(projection.installedPackagesById[externalSessions!.agent.pluginId]?.enabled).toBe(true);
-        }
-        for (const agentId of ['auggie', 'cursor', 'copilot']) {
-            expect(projection.agentsById[agentId]?.externalSessions).toBeUndefined();
         }
 
         // DF35: New Session consumes the complete response, including Connected

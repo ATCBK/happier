@@ -1055,8 +1055,11 @@ describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () =>
     const handler = new ProviderEnforcedPermissionHandler(session as any, { logPrefix: '[Test]' });
     const abort = new AbortController();
 
-    const first = handler.handleToolCall('plugin-caller-aborted', 'AskUserQuestion', {
-      questions: [{ id: 'language', question: 'Language?' }],
+    // A structured question deliberately outlives its native waiter (it stays
+    // answerable by the durable Session), so the terminalizing contract is
+    // exercised on an ordinary plugin tool request.
+    const first = handler.handleToolCall('plugin-caller-aborted', 'Bash', {
+      command: 'echo caller-aborted',
     }, {
       owner: { kind: 'plugin', pluginId: 'plugin-a', runtimeId: 'runtime-a' },
       signal: abort.signal,
@@ -1064,11 +1067,10 @@ describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () =>
     expect(session.agentState.requests['plugin-caller-aborted']).toBeTruthy();
 
     abort.abort();
-    const racingAnswer = session.rpcHandlerManager.handlers.get('session.user_action.answer')?.({
+    const racingAnswer = session.rpcHandlerManager.handlers.get('permission')?.({
       id: 'plugin-caller-aborted',
       approved: true,
       decision: 'approved',
-      answers: { language: ['TypeScript'] },
     });
 
     await expect(first).rejects.toThrow('Permission request aborted');

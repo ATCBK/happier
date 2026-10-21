@@ -6,7 +6,7 @@ import { expect, onTestFinished, vi } from 'vitest';
 import axios, { type AxiosRequestConfig } from 'axios';
 import tweetnacl from 'tweetnacl';
 import { createIrohNodeNativeModule } from '@happier-dev/iroh-native/node';
-import type { StoredCredentials } from '@/persistence';
+import { updateSettings, type StoredCredentials } from '@/persistence';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { computeWorkspaceSyncPolicyDigest, createDirectRouteGrantSigningInputV2 } from '@happier-dev/protocol';
 import { resolveHomeTargetFromDescriptor, type ResolvedHomeTarget } from '@happier-dev/cli-common/homeTarget';
@@ -107,6 +107,13 @@ export async function composeBindChildSourcePhaseTestRuntime(options: Readonly<{
     v: 1, homeServerIdentityId: managedHomeId, canonicalServerUrl: homeServerUrl,
     revision: 1, endpoints: [{ kind: 'https', url: homeServerUrl }],
   });
+  // Project Open resolves the Home by the exact saved profile (profile persistence is the
+  // boundary); the daemon always runs with one.
+  if (!options.homeTarget && defaultHomeDescriptor) {
+    await updateSettings((current) => ({ ...current, servers: { ...current.servers, [serverId]: {
+      id: serverId, name: serverId, serverUrl: homeServerUrl, webappUrl: homeServerUrl, createdAt: 1, updatedAt: 1, lastUsedAt: 0,
+      homeConnectionDescriptor: defaultHomeDescriptor } } }));
+  }
   const defaultHomeTarget = defaultHomeDescriptor ? resolveHomeTargetFromDescriptor({ descriptor: defaultHomeDescriptor,
     authority: 'saved_profile', profile: { id: 'server-1', serverUrl: homeServerUrl, webappUrl: homeServerUrl,
       homeConnectionDescriptor: defaultHomeDescriptor },

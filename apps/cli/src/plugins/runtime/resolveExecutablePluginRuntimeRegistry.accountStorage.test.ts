@@ -1011,6 +1011,7 @@ describe('executable plugin Account Collections binding', () => {
         accountDataBoundary.readStoredCredentials.mockResolvedValue(credentials);
         const written: Array<{ header: unknown; body: unknown }> = [];
         accountDataBoundary.get.mockImplementation(async (url: string) => {
+            if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
             if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
                 mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
             if (new URL(url).pathname === '/v1/artifacts') return { status: 200, data: [] };
