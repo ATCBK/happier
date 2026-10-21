@@ -414,15 +414,15 @@ function declarationContent(entry: unknown): unknown {
 // their declaration-only JSON once per input identity, including the canonical
 // treatment of native optional members. This is presentation comparison, never
 // an execution-origin or currentness decision. Weak keys retire with the input.
-const declarationComparisonSnapshots = new WeakMap<UnknownRecord, JsonValue>();
+const declarationComparisonSnapshots = new WeakMap<UnknownRecord, { value: JsonValue; content?: string }>();
 
 function readDeclarationComparisonSnapshot(entry: unknown): JsonValue {
     const record = asRecord(entry);
     if (!record) return projectNativeJsonValueForTransport(entry);
     const previous = declarationComparisonSnapshots.get(record);
-    if (previous !== undefined) return previous;
+    if (previous !== undefined) return previous.value;
     const snapshot = projectNativeJsonValueForTransport(declarationContent(record));
-    declarationComparisonSnapshots.set(record, snapshot);
+    declarationComparisonSnapshots.set(record, { value: snapshot });
     return snapshot;
 }
 
@@ -435,6 +435,15 @@ function stableContent(value: unknown): string {
         const record = asRecord(child);
         return record ? Object.fromEntries(Object.keys(record).sort().map(key => [key, record[key]])) : child;
     });
+}
+
+/** Fleet authority changes do not change these immutable declaration bytes. */
+function readDeclarationComparisonContent(entry: unknown): string {
+    const value = readDeclarationComparisonSnapshot(entry);
+    const record = asRecord(entry);
+    const snapshot = record ? declarationComparisonSnapshots.get(record) : undefined;
+    if (!snapshot) return stableContent(value);
+    return snapshot.content ??= stableContent(snapshot.value);
 }
 
 function pluginDeclarationContent(member: PluginUiProjectionUnionMember & Readonly<{ projection: PluginUiProjectionModel }>, pluginId: string): string {
@@ -454,10 +463,10 @@ function pluginDeclarationContent(member: PluginUiProjectionUnionMember & Readon
         ...declarationMaps(model).map(map => Object.entries(map)
             .filter(([, entry]) => asRecord(entry)?.pluginId === pluginId)
             .sort(([left], [right]) => left.localeCompare(right))
-            .map(([key, entry]) => [key, readDeclarationComparisonSnapshot(entry)])),
+            .map(([key, entry]) => [key, readDeclarationComparisonContent(entry)])),
         Object.entries(model.resourcesById).filter(([, entry]) => entry.pluginId === pluginId)
             .sort(([left], [right]) => left.localeCompare(right))
-            .map(([key, entry]) => [key, readDeclarationComparisonSnapshot(entry)]),
+            .map(([key, entry]) => [key, readDeclarationComparisonContent(entry)]),
     ]);
 }
 

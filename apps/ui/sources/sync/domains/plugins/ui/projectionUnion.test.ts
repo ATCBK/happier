@@ -352,13 +352,24 @@ it('reuses validated declaration comparisons when only fleet execution selection
     } }));
     // Observe the real decoder without replacing validation or union policy.
     const parse = vi.spyOn(PluginDeclarativeProjectedModelV1Schema, 'safeParse');
+    const serialize = vi.spyOn(JSON, 'stringify');
+    const containsRenderedModel = (value: unknown): boolean => {
+        if (Array.isArray(value)) return value.some(containsRenderedModel);
+        if (!value || typeof value !== 'object') return false;
+        if ('root' in value && 'requiredHostMethods' in value) return true;
+        return Object.values(value).some(containsRenderedModel);
+    };
     try {
         const initial = unionPluginUiProjections(members);
         expect(initial.pluginUiProjection?.surfacePlacementsById[entry.id]).toBeDefined();
         expect(parse.mock.calls.length).toBeGreaterThan(0);
         parse.mockClear();
+        serialize.mockClear();
         unionPluginUiProjections([...members], selectedOrigins(selectedOrigin(pluginId, 'machine-b')));
         expect(parse).not.toHaveBeenCalled();
+        // Fleet selection changes must not serialize the unchanged renderer
+        // tree again. Observe real JSON inputs, without replacing the codec.
+        expect(serialize.mock.calls.filter(([value]) => containsRenderedModel(value))).toHaveLength(0);
         const changed = member({ machineId: 'machine-b', generation: 2, entriesById: {
             [entry.id]: { ...entry, renderer: { kind: 'declarative', contributionId: 'inspector', model: {
                 ...model, root: { ...model.root, text: 'Changed declaration' },
@@ -367,7 +378,7 @@ it('reuses validated declaration comparisons when only fleet execution selection
         const replaced = unionPluginUiProjections([members[0]!, changed]);
         expect(replaced.pluginUiProjection?.surfacePlacementsById[entry.id]).toMatchObject({ hostCompatibility: 'conflict' });
         expect(parse.mock.calls.length).toBeGreaterThan(0);
-    } finally { parse.mockRestore(); }
+    } finally { parse.mockRestore(); serialize.mockRestore(); }
 });
 
 it('compares declaration snapshots without serialization while preserving native optional fields and authored payloads', () => {
