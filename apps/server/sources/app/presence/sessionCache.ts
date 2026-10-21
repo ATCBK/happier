@@ -3,6 +3,7 @@ import { inTx } from "@/storage/inTx";
 import { log } from "@/utils/logging/log";
 import { sessionCacheCounter, databaseUpdatesSkippedCounter, recordPresenceFlushRetry } from "@/app/monitoring/metrics/index";
 import { isRetryableSqliteWriteError } from "@/storage/sqliteRetryClassifier";
+import { persistMachinePresence } from './persistMachinePresence';
 
 interface SessionCacheEntry {
     validUntil: number;
@@ -271,15 +272,15 @@ class ActivityCache {
         // If the machine is currently marked inactive, force a DB write to flip it back to active
         // even if `lastActiveAt` is already recent (e.g. after a restart or previously-buggy writes).
         if (!cached.active) {
-            cached.pendingUpdate = timestamp;
+            cached.pendingUpdate = Math.max(cached.pendingUpdate ?? 0, cached.lastUpdateSent, timestamp);
             cached.active = true;
             return true;
         }
 
         // Only queue if time difference is significant
-        const timeDiff = Math.abs(timestamp - cached.lastUpdateSent);
+        const timeDiff = timestamp - cached.lastUpdateSent;
         if (timeDiff > this.UPDATE_THRESHOLD) {
-            cached.pendingUpdate = timestamp;
+            cached.pendingUpdate = Math.max(cached.pendingUpdate ?? 0, timestamp);
             return true;
         }
         
@@ -299,8 +300,8 @@ class ActivityCache {
     markMachineUpdateSent(machineId: string, timestamp: number): void {
         const cached = this.machineCache.get(machineId);
         if (!cached) return;
-        cached.lastUpdateSent = timestamp;
-        cached.pendingUpdate = null;
+        cached.lastUpdateSent = Math.max(cached.lastUpdateSent, timestamp);
+        if (cached.pendingUpdate !== null && cached.pendingUpdate <= cached.lastUpdateSent) cached.pendingUpdate = null;
         cached.active = true;
     }
 
@@ -344,24 +345,19 @@ class ActivityCache {
                 // keep this batch (and the rows it already locked) open past it.
                 await inTx(async (tx) => {
                     for (const update of machineUpdates) {
-                        await tx.machine.updateMany({
-                            where: {
-                                accountId: update.entry.userId,
-                                id: update.machineId,
-                                revokedAt: null,
-                                replacedByMachineId: null,
-                            },
-                            data: { lastActiveAt: new Date(update.timestamp), active: true }
+                        await persistMachinePresence(tx, {
+                            accountId: update.entry.userId,
+                            machineId: update.machineId,
+                            timestamp: update.timestamp,
                         });
                     }
                 }, { transactionClass: "presence-machine-flush" });
 
                 for (const update of machineUpdates) {
-                    update.entry.lastUpdateSent = update.timestamp;
-                    // Preserve newer queued updates that arrived while awaiting the DB write.
-                    const pending = update.entry.pendingUpdate;
-                    update.entry.pendingUpdate = pending !== null && pending > update.timestamp ? pending : null;
-                    update.entry.active = true;
+                    // Do not acknowledge a replacement cache entry seeded during this write.
+                    if (this.machineCache.get(update.machineId) === update.entry) {
+                        this.markMachineUpdateSent(update.machineId, update.timestamp);
+                    }
                 }
                 okCount = machineUpdates.length;
             } catch (error) {

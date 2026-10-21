@@ -96,6 +96,36 @@ describe("ActivityCache machine presence", () => {
         expect(ok).toBe(false);
     });
 
+    it.each(['delayed heartbeat', 'older publication acknowledgement'] as const)(
+        'flushes the newest pending heartbeat despite a %s', async (ordering) => {
+            const { activityCache: cache } = await import('./sessionCache');
+            activityCache = cache;
+            cache.enableDbFlush();
+            const base = Date.now();
+            cache.seedMachineValidity({ machineId: 'm1', userId: 'u1', active: true, lastActiveAt: new Date(base) });
+            const newest = base + 80_000;
+            expect(cache.queueMachineUpdate('m1', newest)).toBe(true);
+            if (ordering === 'delayed heartbeat') cache.queueMachineUpdate('m1', base + 40_000);
+            else cache.markMachineUpdateSent('m1', base + 40_000);
+
+            await cache.shutdown();
+
+            expect(dbMocks.db.machine.updateMany.mock.calls.map(([args]) => args.data.lastActiveAt))
+                .toEqual([new Date(newest)]);
+        },
+    );
+
+    it('does not queue a heartbeat older than the committed presence', async () => {
+        const { activityCache: cache } = await import('./sessionCache');
+        activityCache = cache;
+        cache.enableDbFlush();
+        cache.seedMachineValidity({ machineId: 'm1', userId: 'u1', active: true, lastActiveAt: new Date() });
+
+        expect(cache.queueMachineUpdate('m1', Date.now() - 40_000)).toBe(false);
+        await cache.shutdown();
+        expect(dbMocks.db.machine.updateMany).not.toHaveBeenCalled();
+    });
+
     it("treats replaced machines as invalid", async () => {
         machineReplacedByMachineId = "m2";
 

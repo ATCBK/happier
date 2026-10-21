@@ -34,6 +34,37 @@ describe('Machine presence through current C41 recipients (real SQLite)', () => 
         } });
     }
 
+    it('does not let a delayed presence flush overwrite newer published Machine liveness', async () => {
+        const owner = await db.account.create({ data: { publicKey: `presence-order-${randomUUID()}`, encryptionMode: 'plain' } });
+        const machine = await createMachine(owner.id);
+        const base = Date.now() - 100_000;
+        const pending = base + 40_000;
+        const published = base + 80_000;
+        await db.machine.update({ where: { id: machine.id }, data: { active: true, lastActiveAt: new Date(base) } });
+        activityCache.enableDbFlush();
+        try {
+            expect(await activityCache.isMachineValid(machine.id, owner.id)).toBe(true);
+            expect(activityCache.queueMachineUpdate(machine.id, pending)).toBe(true);
+            // The independent daemon-state publication commits while this presence batch waits.
+            await db.machine.update({ where: { id: machine.id }, data: { lastActiveAt: new Date(published) } });
+            await activityCache.shutdown();
+
+            expect(await db.machine.findUniqueOrThrow({ where: { id: machine.id }, select: { active: true, lastActiveAt: true } }))
+                .toEqual({ active: true, lastActiveAt: new Date(published) });
+
+            // Equal-time inactive recovery still writes: ignoring every batch is not a valid fix.
+            await db.machine.update({ where: { id: machine.id }, data: { active: false } });
+            activityCache.enableDbFlush();
+            expect(await activityCache.isMachineValid(machine.id, owner.id)).toBe(true);
+            expect(activityCache.queueMachineUpdate(machine.id, published)).toBe(true);
+            await activityCache.shutdown();
+            expect(await db.machine.findUniqueOrThrow({ where: { id: machine.id }, select: { active: true, lastActiveAt: true } }))
+                .toEqual({ active: true, lastActiveAt: new Date(published) });
+        } finally {
+            activityCache.invalidateMachine(machine.id);
+        }
+    });
+
     it.each(['installation', 'credential', 'custodian', 'revoked', 'scope', 'private_payload'] as const)(
         'admits content-free usage source settlement only while publisher authority is current (%s)', async loss => {
             const owner = await db.account.create({ data: { publicKey: `usage-${randomUUID()}`, encryptionMode: 'plain' } });

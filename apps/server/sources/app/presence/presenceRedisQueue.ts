@@ -6,6 +6,7 @@ import { delay } from "@/utils/runtime/delay";
 import { shutdownSignal } from "@/utils/process/shutdown";
 import { log } from "@/utils/logging/log";
 import { randomUUID } from "node:crypto";
+import { persistMachinePresence } from './persistMachinePresence';
 import { readPresenceRedisWorkerConfigFromEnv, readPresenceStreamConfigFromEnv } from "@/config/presence";
 import {
     observePresenceStreamFlush,
@@ -107,14 +108,7 @@ async function flushBatch(batcher: PresenceBatcher, dbWriteConcurrency: number):
             dbWriteConcurrency,
             async (machinePresence) => {
                 try {
-                    await db.machine.updateMany({
-                        where: {
-                            accountId: machinePresence.accountId,
-                            id: machinePresence.machineId,
-                            revokedAt: null,
-                        },
-                        data: { lastActiveAt: new Date(machinePresence.timestamp), active: true },
-                    });
+                    await persistMachinePresence(db, machinePresence);
                 } catch (error) {
                     log(
                         { module: "presence-redis-worker", level: "warn" },
