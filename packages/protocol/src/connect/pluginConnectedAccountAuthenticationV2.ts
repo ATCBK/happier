@@ -12,6 +12,7 @@ import {
   PluginLocalizedStringV2Schema,
 } from '../plugins/contributions/publicTypes.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
+import { ProviderAccountUsageRecordKeyV1Schema } from './providerAccountUsagePrimitives.js';
 
 const PluginConnectedAccountAuthenticationFieldV2Schema =
   lazyZodSchema(() => z.pipe(PluginSettingFieldV2Schema, z.transform((field) => ({
@@ -263,6 +264,10 @@ export const PluginConnectedAccountDescriptorContributionV2Schema = lazyZodSchem
   title: PluginLocalizedStringV2Schema,
   description: z.optional(PluginLocalizedStringV2Schema),
   authentication: PluginConnectedAccountAuthenticationV2Schema,
+  usageIdentity: z.optional(z.strictObject({
+    providerId: z.optional(ProviderAccountUsageRecordKeyV1Schema.shape.providerId),
+    requiredContext: z.optional(z.literal('organization')),
+  }).check(z.refine(identity => identity.providerId !== undefined || identity.requiredContext !== undefined))),
   recoveryCredits: z.optional(z.strictObject({ supported: z.literal(true) })),
   billingUrl: z.optional(ConnectedAccountBillingUrlSchema),
   capabilities: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),

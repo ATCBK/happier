@@ -118,6 +118,80 @@ function createSnapshot(overrides: Partial<ProviderAccountUsageSnapshotV1> = {})
 }
 
 describe('provider account usage protocol', () => {
+    it('preserves organization allowance identity through scalar and qualified quota projections', () => {
+        for (const quotaScope of ['organization', 'account'] as const) {
+            const snapshot = accountUsageModule.ProviderAccountUsageSnapshotV1Schema.parse(createSnapshot({
+                recordKey: { providerId: 'claude', accountSubjectId: 'user-a', subjectKind: 'account', quotaScope, quotaScopeId: 'org-a' },
+            }));
+            const scalar = accountUsageModule.projectProviderAccountUsageToConnectedServiceQuotaSnapshot(snapshot, {
+                serviceId: 'happier.agent.claude/claude-subscription', profileId: 'work', bindingKind: 'profile',
+            });
+            const qualified = projectProviderAccountUsageSnapshotToQualifiedConnectedAccountQuotaSnapshotV4({
+                snapshot, ref: { service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' }, accountId: 'work' },
+            });
+            expect(scalar).not.toBeNull();
+            for (const quota of [scalar, qualified]) {
+                expect(quota).toMatchObject({ activeAccountId: 'user-a' });
+                if (quotaScope === 'organization') expect(quota).toHaveProperty('providerOrganizationId', 'org-a');
+                else expect(quota).not.toHaveProperty('providerOrganizationId');
+            }
+        }
+    });
+
+    it('matches declared provider identity and the current account while preserving opaque non-organization observations', () => {
+        const match = requireExport('isProviderAccountUsageIdentityMatch', isFunction);
+        const policy = { providerId: 'openai-codex' };
+        const current = { providerAccountId: 'user-a', providerOrganizationId: null };
+        const key = { providerId: 'openai-codex', accountSubjectId: 'user-a', subjectKind: 'account', quotaScope: 'account' };
+        const quota = { providerId: 'openai-codex', activeAccountId: 'user-a' };
+        for (const observed of [key, quota]) {
+            expect(match(observed, current, policy)).toBe(true);
+            expect(match(observed, current, { providerId: 'other-provider' })).toBe(false);
+            expect(match(observed, { ...current, providerAccountId: 'user-b' }, policy)).toBe(false);
+            expect(match(observed, null, policy)).toBe(true);
+            expect(match(observed, current)).toBe(true);
+        }
+        expect(match({ activeAccountId: 'user-a' }, current, policy)).toBe(true);
+        expect(match({ ...key, subjectKind: 'organization' }, current, policy)).toBe(false);
+        expect(match({ ...key, subjectKind: 'unknown', accountSubjectId: 'opaque', quotaScope: 'unknown' }, null, policy)).toBe(true);
+        expect(match({ ...key, quotaScope: 'provider' }, current, policy)).toBe(true);
+    });
+
+    it('requires exact organization proof when declared, observed, or currently known', () => {
+        const match = requireExport('isProviderAccountUsageIdentityMatch', isFunction);
+        const current = { providerAccountId: 'user-a', providerOrganizationId: 'org-a' };
+        const key = { providerId: 'claude', accountSubjectId: 'user-a', subjectKind: 'account', quotaScope: 'organization', quotaScopeId: 'org-a' };
+        const quota = { providerId: 'claude', activeAccountId: 'user-a', providerOrganizationId: 'org-a' };
+        for (const observed of [key, quota]) {
+            expect(match(observed, current, { providerId: 'claude' })).toBe(true);
+            expect(match(observed, current, { providerId: 'other-provider' })).toBe(false);
+            expect(match(observed, null, { providerId: 'claude' })).toBe(false);
+            expect(match(observed, { ...current, providerOrganizationId: 'org-b' }, { providerId: 'claude' })).toBe(false);
+            expect(match(observed, { ...current, providerAccountId: null }, { providerId: 'claude' })).toBe(false);
+        }
+        const accountKey = { ...key, quotaScope: 'account', quotaScopeId: undefined };
+        expect(match(accountKey, current, { providerId: 'claude' })).toBe(false);
+        expect(match(accountKey, { ...current, providerOrganizationId: null }, { requiredContext: 'organization' })).toBe(false);
+        expect(match({ ...quota, providerOrganizationId: undefined }, current, { providerId: 'claude' })).toBe(false);
+    });
+
+    it('matches both PAU keys and quota projections only to the exact current account and organization', () => {
+        const match = requireExport('isProviderAccountUsageOrganizationContextMatch', isFunction);
+        const current = { providerAccountId: 'user-a', providerOrganizationId: 'org-a' };
+        const key = { accountSubjectId: 'user-a', subjectKind: 'account', quotaScope: 'organization', quotaScopeId: 'org-a' };
+        const quota = { activeAccountId: 'user-a', providerOrganizationId: 'org-a' };
+        for (const observed of [key, quota]) {
+            expect(match(observed, current)).toBe(true);
+            expect(match(observed, null)).toBe(false);
+            expect(match(observed, { ...current, providerAccountId: 'user-b' })).toBe(false);
+            expect(match(observed, { ...current, providerOrganizationId: 'org-b' })).toBe(false);
+            expect(match(observed, { ...current, providerOrganizationId: null })).toBe(false);
+        }
+        expect(match({ ...key, subjectKind: 'organization' }, current)).toBe(false);
+        expect(match({ ...key, quotaScope: 'account' }, current)).toBe(false);
+        expect(match({ activeAccountId: 'user-a' }, current)).toBe(false);
+    });
+
     it('opens the moving 0.2 saved-reset envelope through the canonical legacy adapter', () => {
         // Synthetic bytes emitted by ../0.2 connect/accountUsage.ts after the
         // validated recoveryCreditDetails batch on 2026-10-11; no live credentials.

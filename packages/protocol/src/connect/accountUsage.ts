@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { parseBuiltInLegacyProviderAccountUsageSnapshotV1 } from './legacyConnectedServiceCompatibility.js';
+import type { PluginConnectedAccountDescriptorContributionV2 } from './pluginConnectedAccountAuthenticationV2.js';
 import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
@@ -34,6 +35,7 @@ import {
     SealedProviderAccountUsageRecoveryCreditDetailsV1Schema,
     buildProviderAccountUsageRecordId,
     type ProviderAccountUsageConfidenceV1,
+    type ProviderAccountUsageRecordKeyV1,
     type ProviderAccountUsageSnapshotV1,
     type ProviderAccountUsageSourceV1,
 } from './providerAccountUsagePrimitives.js';
@@ -43,6 +45,49 @@ import {
 } from './accountSubscription.js';
 
 export * from './providerAccountUsagePrimitives.js';
+
+export type ProviderAccountUsageOrganizationContext = Readonly<{
+    providerAccountId: string | null;
+    providerOrganizationId: string | null;
+}>;
+
+/** Compare the account-owned organization allowance across PAU and its quota projection. */
+export function isProviderAccountUsageOrganizationContextMatch(
+    observed: Pick<ProviderAccountUsageRecordKeyV1, 'accountSubjectId' | 'subjectKind' | 'quotaScope' | 'quotaScopeId'>
+        | Pick<ConnectedServiceQuotaSnapshotV1, 'activeAccountId' | 'providerOrganizationId'>,
+    current: ProviderAccountUsageOrganizationContext | null,
+): boolean {
+    if (!current?.providerAccountId || !current.providerOrganizationId) return false;
+    if ('quotaScope' in observed) {
+        return observed.subjectKind === 'account'
+            && observed.quotaScope === 'organization'
+            && observed.accountSubjectId === current.providerAccountId
+            && observed.quotaScopeId === current.providerOrganizationId;
+    }
+    return observed.activeAccountId === current.providerAccountId
+        && observed.providerOrganizationId === current.providerOrganizationId;
+}
+
+/** Admit a usage observation against its declared provider and current account context. */
+export function isProviderAccountUsageIdentityMatch(
+    observed: Pick<ProviderAccountUsageRecordKeyV1, 'providerId' | 'accountSubjectId' | 'subjectKind' | 'quotaScope' | 'quotaScopeId'>
+        | Pick<ConnectedServiceQuotaSnapshotV1, 'providerId' | 'activeAccountId' | 'providerOrganizationId'>,
+    current: ProviderAccountUsageOrganizationContext | null,
+    usageIdentity?: PluginConnectedAccountDescriptorContributionV2['usageIdentity'],
+): boolean {
+    if (usageIdentity?.providerId !== undefined && observed.providerId !== undefined
+        && observed.providerId !== usageIdentity.providerId) return false;
+    const observedOrganization = 'quotaScope' in observed
+        ? observed.quotaScope === 'organization'
+        : Boolean(observed.providerOrganizationId);
+    if (usageIdentity?.requiredContext === 'organization' || observedOrganization || current?.providerOrganizationId) {
+        return isProviderAccountUsageOrganizationContextMatch(observed, current);
+    }
+    if (!current?.providerAccountId) return true;
+    return 'quotaScope' in observed
+        ? observed.subjectKind === 'account' && observed.accountSubjectId === current.providerAccountId
+        : observed.activeAccountId === current.providerAccountId;
+}
 
 export const SealedProviderAccountUsageSnapshotV1Schema = lazyZodSchema(() => z.object({
     format: ConnectedServiceCredentialFormatSchema,
@@ -170,6 +215,8 @@ export function projectProviderAccountUsageSnapshotToQuotaFieldsV1(
         accountLabel: parsed.accountLabel ?? null,
         providerId: parsed.providerId,
         activeAccountId: parsed.recordKey.accountSubjectId,
+        ...(parsed.recordKey.quotaScope === 'organization' && parsed.recordKey.quotaScopeId
+            ? { providerOrganizationId: parsed.recordKey.quotaScopeId } : {}),
         fetchedAtMs: parsed.fetchedAtMs,
         staleAtMs: parsed.fetchedAtMs + parsed.staleAfterMs,
         source: mapUsageSourceToQuotaSource(parsed.source),

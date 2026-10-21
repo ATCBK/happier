@@ -2413,6 +2413,8 @@ export {
 export {
   buildProviderAccountUsageRecordId,
   buildProviderAccountUsageOpaqueLocalCredentialRef,
+  isProviderAccountUsageIdentityMatch,
+  isProviderAccountUsageOrganizationContextMatch,
   openProviderAccountUsageSnapshotCiphertext,
   openSealedProviderAccountUsageSnapshot,
   openProviderAccountUsageEncryptedContentV4,
@@ -2437,6 +2439,7 @@ export {
   SealedProviderAccountUsageSnapshotV1Schema,
   type ProviderAccountSubjectRefV1,
   type ProviderAccountUsageConfidenceV1,
+  type ProviderAccountUsageOrganizationContext,
   type ProviderAccountUsageDiagnosticV1,
   type ProviderAccountUsageQuotaScopeV1,
   type ProviderAccountUsageRecordId,

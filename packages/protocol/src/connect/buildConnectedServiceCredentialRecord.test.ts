@@ -83,6 +83,7 @@ describe('buildConnectedServiceCredentialRecord', () => {
           claudeAiOauth: {
             subscriptionType: ' max ',
             rateLimitTier: 'max_20x',
+            organizationUuid: ' organization-a ',
             accessToken: 'must-not-persist',
           },
           unrelated: {
@@ -98,6 +99,7 @@ describe('buildConnectedServiceCredentialRecord', () => {
         claudeAiOauth: {
           subscriptionType: 'max',
           rateLimitTier: 'max_20x',
+          organizationUuid: 'organization-a',
         },
       });
     }

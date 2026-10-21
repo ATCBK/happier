@@ -463,6 +463,7 @@ export function projectQualifiedConnectedAccountCredentialPlaintextV1(params: Re
         claudeAiOauth: {
             subscriptionType: payload.values.subscriptionType,
             rateLimitTier: payload.values.rateLimitTier,
+            organizationUuid: payload.values.organizationUuid,
         },
     });
     return ConnectedServiceCredentialRecordV1Schema.parse({

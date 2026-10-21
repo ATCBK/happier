@@ -528,6 +528,7 @@ export const ConnectedServiceQuotaSnapshotV1Schema = lazyZodSchema(() => z.objec
     accountLabel: z.nullable(z.string().check(z.minLength(1))),
     providerId: z.optional(z.string().check(z.trim(), z.minLength(1))),
     activeAccountId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    providerOrganizationId: z.optional(z.string().check(z.trim(), z.minLength(1))),
     fetchedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
     staleAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
     source: z.optional(ConnectedServiceQuotaSourceV1Schema),

@@ -4,43 +4,16 @@ import {
   type ConnectedServiceId,
 } from './connectedServiceSchemas.js';
 
+import { readClaudeOauthCredentialMetadata, type ClaudeOauthCredentialMetadata } from '../providers/claude/oauthProfile.js';
+
 export type ConnectedServiceOauthCredentialRawMetadata = Readonly<{
-  claudeAiOauth?: Readonly<{
-    subscriptionType?: string;
-    rateLimitTier?: string;
-  }>;
-  'claude.ai_oauth'?: Readonly<{
-    subscriptionType?: string;
-    rateLimitTier?: string;
-  }>;
+  claudeAiOauth?: ClaudeOauthCredentialMetadata;
+  'claude.ai_oauth'?: ClaudeOauthCredentialMetadata;
 }>;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function readString(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-export function normalizeConnectedServiceOauthCredentialRawMetadata(
-  raw: unknown,
-): ConnectedServiceOauthCredentialRawMetadata | null {
-  const root = isRecord(raw) ? raw : {};
-  const claudeAiOauthRaw = isRecord(root.claudeAiOauth)
-    ? root.claudeAiOauth
-    : isRecord(root['claude.ai_oauth'])
-      ? root['claude.ai_oauth']
-      : {};
-  const subscriptionType = readString(claudeAiOauthRaw.subscriptionType);
-  const rateLimitTier = readString(claudeAiOauthRaw.rateLimitTier);
-  const claudeAiOauth = {
-    ...(subscriptionType ? { subscriptionType } : {}),
-    ...(rateLimitTier ? { rateLimitTier } : {}),
-  };
-  return Object.keys(claudeAiOauth).length > 0 ? { claudeAiOauth } : null;
+export function normalizeConnectedServiceOauthCredentialRawMetadata(raw: unknown): ConnectedServiceOauthCredentialRawMetadata | null {
+  const claudeAiOauth = readClaudeOauthCredentialMetadata(raw);
+  return claudeAiOauth ? { claudeAiOauth } : null;
 }
 
 export function buildConnectedServiceCredentialRecord(

@@ -21,12 +21,12 @@ describe('normalizeClaudeOauthProfileEntitlement', () => {
     });
   });
 
-  it('projects only native Claude plan facts', () => {
+  it('projects only provider-attested Claude context facts', () => {
     expect(normalizeClaudeOauthProfileEntitlement({
       account: { has_claude_max: true, email: 'not-retained@example.test' },
-      organization: { organization_type: 'claude_max', rate_limit_tier: 'default_claude_max_20x' },
+      organization: { uuid: 'organization-a', organization_type: 'claude_max', rate_limit_tier: 'default_claude_max_20x' },
     })).toEqual({
-      claudeAiOauth: { subscriptionType: 'max', rateLimitTier: 'default_claude_max_20x' },
+      claudeAiOauth: { subscriptionType: 'max', rateLimitTier: 'default_claude_max_20x', organizationUuid: 'organization-a' },
     });
   });
 });

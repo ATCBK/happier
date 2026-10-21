@@ -227,3 +227,26 @@ describe('connected-account service-base configuration semantic', () => {
     }).success).toBe(false);
   });
 });
+
+it('admits an explicit organization usage identity requirement as a closed descriptor fact', () => {
+  const descriptor = { id: 'work', title: 'Work', authentication: { defaultModeId: 'manual', modes: [
+    { id: 'manual', kind: 'manual', outcomeReconciliation: 'none', fields: [] },
+  ] }, usageIdentity: { requiredContext: 'organization' } };
+  expect(PluginConnectedAccountDescriptorContributionV2Schema.parse(descriptor)).toMatchObject({ usageIdentity: descriptor.usageIdentity });
+  for (const usageIdentity of [{ requiredContext: 'account' }, { requiredContext: 'organization', fallback: true }, {}]) {
+    expect(PluginConnectedAccountDescriptorContributionV2Schema.safeParse({ ...descriptor, usageIdentity }).success).toBe(false);
+  }
+});
+
+it('admits the declared native provider identity independently of organization requirements', () => {
+  const descriptor = { id: 'work', title: 'Work', authentication: { defaultModeId: 'manual', modes: [
+    { id: 'manual', kind: 'manual', outcomeReconciliation: 'none', fields: [] },
+  ] }, usageIdentity: { providerId: 'openai-codex' } };
+  expect(PluginConnectedAccountDescriptorContributionV2Schema.parse(descriptor)).toMatchObject({ usageIdentity: descriptor.usageIdentity });
+  expect(PluginConnectedAccountDescriptorContributionV2Schema.parse({ ...descriptor,
+    usageIdentity: { providerId: 'claude', requiredContext: 'organization' },
+  })).toMatchObject({ usageIdentity: { providerId: 'claude', requiredContext: 'organization' } });
+  for (const usageIdentity of [{ providerId: '   ' }, { providerId: 'openai-codex', selectAccount: 'other' }]) {
+    expect(PluginConnectedAccountDescriptorContributionV2Schema.safeParse({ ...descriptor, usageIdentity }).success).toBe(false);
+  }
+});

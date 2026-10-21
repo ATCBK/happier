@@ -55,6 +55,29 @@ const service = {
 const credentialRevision = 'csr_abcdefghijklmnopqrstuvwxyz';
 
 describe('qualified connected-account V4 wire contract', () => {
+  it('round-trips organization identity while accepting metadata from before organization attestation', () => {
+    const snapshot = {
+      ref: { service, accountId: 'connected-account' },
+      authenticationModeId: 'oauth',
+      revisionSemantics: 'revisioned',
+      credentialRevision,
+      configurationRevision: null,
+      content: { t: 'plain', v: { v: 1, values: { accessToken: 'token' } } },
+      metadata: { providerIdentity: { accountId: 'provider-user' }, scopes: [] },
+    };
+    expect(QualifiedConnectedAccountCredentialSnapshotV4Schema.parse(snapshot).metadata.providerIdentity)
+      .toEqual({ accountId: 'provider-user' });
+    const attested = QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
+      ...snapshot,
+      metadata: { ...snapshot.metadata, providerIdentity: { accountId: 'provider-user', organizationId: ' org-b ' } },
+    });
+    expect(attested.metadata.providerIdentity).toEqual({ accountId: 'provider-user', organizationId: 'org-b' });
+    expect(QualifiedConnectedAccountCredentialSnapshotV4Schema.safeParse({
+      ...attested,
+      metadata: { ...attested.metadata, providerIdentity: { ...attested.metadata.providerIdentity, selectionAuthority: true } },
+    }).success).toBe(false);
+  });
+
   it('compares every field in a qualified group identity', () => {
     const group = { service, groupId: 'team' };
     expect(sameQualifiedConnectedAccountGroupRef(group, group)).toBe(true);

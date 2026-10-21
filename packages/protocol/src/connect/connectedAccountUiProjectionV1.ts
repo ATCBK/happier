@@ -2,7 +2,7 @@ import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { PluginContributionLocalIdSchema } from '../plugins/contributionIdentity.js';
-import { PluginConnectedAccountAuthenticationV2Schema, ConnectedAccountBillingUrlSchema } from './pluginConnectedAccountAuthenticationV2.js';
+import { PluginConnectedAccountAuthenticationV2Schema, PluginConnectedAccountDescriptorContributionV2Schema, ConnectedAccountBillingUrlSchema } from './pluginConnectedAccountAuthenticationV2.js';
 import { PluginIdSchema } from '../plugins/pluginId.js';
 import { ConnectedServiceIdSchema } from './connectedServiceSchemas.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
@@ -25,6 +25,7 @@ export const ConnectedAccountUiProjectionEntryV1Schema = lazyZodSchema(() => z.s
   description: z.optional(ProjectedLocalizedTextSchema),
   authentication: PluginConnectedAccountAuthenticationV2Schema,
   capabilities: z.array(z.string()),
+  usageIdentity: PluginConnectedAccountDescriptorContributionV2Schema.shape.usageIdentity,
   recoveryCredits: z.optional(z.strictObject({ supported: z.literal(true) })),
   billingUrl: zMini.optional(ConnectedAccountBillingUrlSchema),
   availability: z.strictObject({ state: z.enum(['available', 'disabled', 'blocked']), reason: z.string().check(z.trim(), z.minLength(1)) }),

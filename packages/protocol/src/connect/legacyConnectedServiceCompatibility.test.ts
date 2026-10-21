@@ -325,8 +325,9 @@ describe('built-in legacy Connected Services compatibility', () => {
                 happierQualifiedConnectedAccountCredentialV1: { v: 1, authenticationModeId: 'setup-token', payload: { v: 1, values: { setupToken: 1 } } },
             } } } })).toThrow('connected_service_credential_invalid');
     });
-    it('retains predecessor Claude OAuth plan facts when reading historical credentials', () => {
-        // Native credential metadata produced by ../0.2 at ba32a228cdb99b4f6edb50d699234261a970b56b.
+    it('retains predecessor Claude OAuth plan and organization facts through the qualified credential round trip', () => {
+        // Plan fields were characterized at ../0.2 ba32a228cdb99b4f6edb50d699234261a970b56b.
+        // Organization is additive metadata from the current 0.2 credential owner.
         const ref = { service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' }, accountId: 'work' };
         const plaintext = {
             v: 1, serviceId: 'claude-subscription', profileId: 'work', createdAt: 1, updatedAt: 1, expiresAt: null,
@@ -334,14 +335,14 @@ describe('built-in legacy Connected Services compatibility', () => {
             oauth: {
                 accessToken: 'access', refreshToken: 'refresh', idToken: null, tokenType: null, scope: null,
                 providerAccountId: null, providerEmail: 'person@example.test',
-                raw: { claudeAiOauth: { subscriptionType: 'max', rateLimitTier: 'max_20x' } },
+                raw: { claudeAiOauth: { subscriptionType: 'max', rateLimitTier: 'max_20x', organizationUuid: 'org-work' } },
             },
         };
         const payload = parseQualifiedConnectedAccountCredentialPlaintextV1({ ref, authenticationModeId: 'oauth', plaintext });
-        expect(payload.values).toMatchObject({ subscriptionType: 'max', rateLimitTier: 'max_20x' });
+        expect(payload.values).toMatchObject({ subscriptionType: 'max', rateLimitTier: 'max_20x', organizationUuid: 'org-work' });
         const currentPayload = { ...payload, values: { ...payload.values, lastRefreshAtMs: '2' } };
         const projected = projectQualifiedConnectedAccountCredentialPlaintextV1({ ref, authenticationModeId: 'oauth', payload: currentPayload, now: 2 });
-        expect(projected).toMatchObject({ oauth: { raw: { claudeAiOauth: { subscriptionType: 'max', rateLimitTier: 'max_20x' } } } });
+        expect(projected).toMatchObject({ oauth: { raw: { claudeAiOauth: { subscriptionType: 'max', rateLimitTier: 'max_20x', organizationUuid: 'org-work' } } } });
         expect(parseQualifiedConnectedAccountCredentialPlaintextV1({ ref, authenticationModeId: 'oauth', plaintext: projected })).toEqual(currentPayload);
     });
     it.each([

@@ -106,6 +106,7 @@ export const QualifiedConnectedAccountGroupIncarnationV4Schema = lazyZodSchema((
 export const QualifiedConnectedAccountProviderIdentityV4Schema = lazyZodSchema(() => z.strictObject({
   accountId: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(256)))),
   email: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(512)))),
+  organizationId: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(256)))),
 }));
 
 const QualifiedConnectedAccountScopesV4Schema = lazyZodSchema(() => z._default(z
