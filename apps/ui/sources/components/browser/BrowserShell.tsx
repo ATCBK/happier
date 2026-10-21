@@ -409,7 +409,7 @@ export function BrowserShell(props: Readonly<{
             browserSessionId: activeView.browserSessionId,
             viewId: activeView.viewId,
         });
-    }, [activeView, props]);
+    }, [activeView?.browserSessionId, activeView?.viewId, props.onCommand]);
 
     const dispatchNavigate = React.useCallback((url: string) => {
         if (!activeView) {
