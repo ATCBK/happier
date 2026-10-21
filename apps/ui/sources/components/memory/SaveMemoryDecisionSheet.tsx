@@ -76,6 +76,15 @@ export function seedMemoryDecisionFromMessage(
  */
 export function SaveMemoryDecisionForm(props: FormProps) {
   const model = useSaveMemoryDecision(props);
+  return <SaveMemoryDecisionFormContent model={model} onClose={props.onClose} onSaved={props.onSaved} />;
+}
+
+function SaveMemoryDecisionFormContent(props: Readonly<{
+  model: ReturnType<typeof useSaveMemoryDecision>;
+  onClose: () => void;
+  onSaved: () => void;
+}>) {
+  const { model } = props;
   const { text, setText, reason, setReason, expiry, setExpiry, nowMs, expiryDraft, setExpiryDraft,
     review, choice, setChoice, candidateId, setCandidateId, notice, busy, canSave, save, sessionSource,
     creationReceipt, selectedTarget, targets } = model;
@@ -279,6 +288,8 @@ export function SaveMemoryDecisionForm(props: FormProps) {
 export function SaveMemoryDecisionSheet(
   props: FormProps & Readonly<{ anchorRef: React.RefObject<View | null> }>,
 ) {
+  // The responsive Popover replaces its presentation subtree; draft and custody belong to the open sheet.
+  const model = useSaveMemoryDecision(props);
   return (
     <Popover
       open
@@ -301,9 +312,8 @@ export function SaveMemoryDecisionSheet(
     >
       {({ maxHeight, presentation }) => presentation === 'sheet' ? (
         <View style={[styles.sheetBody, { maxHeight }]}>
-          <SaveMemoryDecisionForm
-            seed={props.seed}
-            onCreatedMemory={props.onCreatedMemory}
+          <SaveMemoryDecisionFormContent
+            model={model}
             onClose={props.onClose}
             onSaved={props.onSaved}
           />
@@ -311,9 +321,8 @@ export function SaveMemoryDecisionSheet(
       ) : (
         <FloatingOverlay surfaceChrome="theme" maxHeight={maxHeight}>
           <View style={[styles.popoverBody, { maxHeight }]}>
-            <SaveMemoryDecisionForm
-              seed={props.seed}
-              onCreatedMemory={props.onCreatedMemory}
+            <SaveMemoryDecisionFormContent
+              model={model}
               onClose={props.onClose}
               onSaved={props.onSaved}
             />

@@ -1,6 +1,8 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
+import { MemoryDocBodyV1Schema } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createMemoryDecisionHomeFixture } from '@/dev/testkit/harness/memoryDecisionHomeFixture';
@@ -50,6 +52,64 @@ describe('Save as decision presentation', () => {
     try {
       expect(screen.findAll(node => node.props.role === 'dialog')).toHaveLength(0);
       expect(screen.findByTestId('save-memory-decision')).toBeTruthy();
+    } finally { await screen.unmount(); await f.home.dispose(); }
+  });
+
+  it('keeps the edited Project decision and duplicate choice across phone and panel presentations', async () => {
+    const f = await createMemoryDecisionHomeFixture();
+    f.recover();
+    const { memoryDocumentActions, readMemoryCreationReceipt } = await import('@/sync/ops/promptLibrary/memoryDocuments');
+    const target = { scope: 'project' as const, projectRef: { serverId: f.serverId, projectKey: 'payments' } };
+    const initial = await memoryDocumentActions.rememberInScope(target, { text: 'Retry cap stays at 5' }, f.serverId);
+    const receipt = readMemoryCreationReceipt(initial);
+    if (!receipt) throw new Error('Missing existing Project memory');
+    const before = MemoryDocBodyV1Schema.parse(JSON.parse(f.home.boundary.readPlainBody(receipt.ref.artifactId)!));
+    const source: CoordinationMessageRefV1 = { kind: 'discussion',
+      discussion: { serverId: f.serverId, discussionId: 'discussion-1' }, messageId: 'committed-source' };
+    const seed = seedMemoryDecisionFromMessage(source, 'Initial decision\nInitial reason');
+    const onSaved = vi.fn();
+    const anchorRef = { current: null };
+    const sheet = () => <SaveMemoryDecisionSheet seed={seed} anchorRef={anchorRef} onClose={() => {}} onSaved={onSaved} />;
+    const screen = await renderScreen(sheet());
+    const projectId = `save-memory-decision.target:project:${f.serverId}:payments`;
+    const text = 'Retry cap stays at 5 with bounded backoff';
+    const reason = 'Retries must leave time for the next attempt.';
+    try {
+      await vi.waitFor(() => expect(screen.findByTestId(projectId)).toBeTruthy());
+      await screen.pressByTestIdAsync(projectId);
+      await act(async () => {
+        screen.changeTextByTestId('save-memory-decision.text', text);
+        screen.changeTextByTestId('save-memory-decision.reason', reason);
+      });
+      const save = async () => {
+        const button = screen.find(node => node.props.testID === 'save-memory-decision.save' && typeof node.props.action === 'function');
+        await act(async () => { await button.props.action(); });
+      };
+      await save();
+      expect(screen.findHostByTestId('save-memory-decision.duplicate')).toBeTruthy();
+      await screen.pressByTestIdAsync('save-memory-decision.duplicate.choice:keep_both');
+      expect(onSaved).not.toHaveBeenCalled();
+      expect(f.home.boundary.readPlainBody(receipt.ref.artifactId)).toBe(JSON.stringify(before));
+
+      for (const width of [390, 1440]) {
+        viewport.width = width;
+        await screen.update(sheet());
+        expect(screen.findAll(node => node.props.role === 'dialog').length > 0).toBe(width === 390);
+        expect(screen.findByTestId('save-memory-decision.text')?.props.value).toBe(text);
+        expect(screen.findByTestId('save-memory-decision.reason')?.props.value).toBe(reason);
+        expect(screen.findByTestId(projectId)?.props['aria-checked']).toBe(true);
+        expect(screen.findHostByTestId('save-memory-decision.duplicate')).toBeTruthy();
+        expect(screen.findHostByTestId(`save-memory-decision.duplicate.candidate.${before.index[0]!.id}`)).toBeTruthy();
+        expect(screen.findByTestId('save-memory-decision.duplicate.choice:keep_both')?.props['aria-checked']).toBe(true);
+      }
+
+      await save();
+      expect(onSaved).toHaveBeenCalledTimes(1);
+      const after = MemoryDocBodyV1Schema.parse(JSON.parse(f.home.boundary.readPlainBody(receipt.ref.artifactId)!));
+      expect(after.index).toHaveLength(2);
+      expect(after.index).toContainEqual(before.index[0]);
+      expect(after.index).toContainEqual(expect.objectContaining({ text, decision: expect.objectContaining({ reason, sourceMessageRef: source }) }));
+      expect(f.home.boundary.list()).toHaveLength(1);
     } finally { await screen.unmount(); await f.home.dispose(); }
   });
 });
