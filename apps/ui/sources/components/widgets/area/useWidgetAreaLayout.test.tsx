@@ -56,6 +56,9 @@ it('keeps a connecting plugin area loading, retains authorized data, and clears 
         readiness = 'denied';
         await act(async () => { await hook.getCurrent().reload(); });
         expect(hook.getCurrent().state).toMatchObject({ status: 'unavailable', reasonCode: 'plugin_action_caller_forbidden' });
+        // An explicit refusal is positive evidence: the write is refused too.
+        expect(await hook.getCurrent().write({ actionId: 'widgets.item.rename', instanceId: 'vitals', displayName: 'Denied' }))
+            .toEqual({ kind: 'refused', errorCode: 'widget_area_unavailable' });
         readiness = 'pending';
         await act(async () => { await hook.getCurrent().reload(); });
         expect(hook.getCurrent().state).toEqual({ status: 'loading' });
@@ -327,7 +330,9 @@ it('withdraws mounted effect admission on exact Artifact publication before a de
     };
     const owner = createWidgetSurfaceArtifactPortV1(transport, { surface, isCurrent: () => true });
     const area = createWidgetAreaActionPortV1(() => owner);
-    const port: WidgetAreaPort = { execute: async () => {
+    const port: WidgetAreaPort = { execute: async (operation) => {
+        // The writer's own acknowledgement does not depend on this area's failing read.
+        if (operation.actionId !== 'widgets.item.list') return { ok: true, result: {} };
         const result = await area.read(surface, {});
         return PluginUiWidgetAreaResultV1Schema.parse('ok' in result ? result : { ok: true, result });
     } };
@@ -352,6 +357,9 @@ it('withdraws mounted effect admission on exact Artifact publication before a de
     await act(async () => { waitForRead = false; releaseRead?.(); });
     await flushHookEffects();
     expect(hook.getCurrent().state).toMatchObject({ status: 'unavailable', reasonCode: 'widget_area_unavailable' });
+    // Mounted effects stay withdrawn, but a failed refresh never refuses a person's Add on the layout they opened.
+    expect(await hook.getCurrent().write({ actionId: 'widgets.item.rename', instanceId: 'copy', displayName: 'Kept' }))
+        .toEqual({ kind: 'applied' });
     readFails = false;
     await act(async () => { await hook.getCurrent().reload(); });
     await flushHookEffects();

@@ -121,12 +121,17 @@ export function useWidgetAreaLayout<C extends WidgetSurfaceContext>(port: Widget
     const [state, setState] = React.useState<WidgetAreaLayoutState<C>>({ status: 'loading' });
     const displayed = React.useRef(state);
     displayed.current = state;
+    // The last admitted layout, kept while a refresh is transient (connecting, or a read that failed
+    // without an answer): a failed read never proves the area gone. An explicit refusal clears it.
+    const lastAdmitted = React.useRef<Readonly<{ state: Extract<WidgetAreaLayoutState<C>, { status: 'ready' }>; binding: object }> | null>(null);
     const artifactId = state.status === 'ready' ? state.surface.artifactId ?? buildWidgetSurfaceArtifactIdV1(state.surface) : '';
     const artifact = useArtifact(artifactId);
     const generation = React.useRef(0);
     const mounted = React.useRef(true);
     const binding = React.useRef({ port, context });
     if (binding.current.port !== port || binding.current.context !== context) binding.current = { port, context };
+    if (state.status === 'ready') lastAdmitted.current = { state, binding: binding.current };
+    else if (state.status === 'unavailable' && state.reasonCode !== 'widget_area_unavailable') lastAdmitted.current = null;
     React.useEffect(() => {
         mounted.current = true;
         return () => { mounted.current = false; };
@@ -213,11 +218,15 @@ export function useWidgetAreaLayout<C extends WidgetSurfaceContext>(port: Widget
     const write = React.useCallback(async (operation: PluginUiWidgetAreaOperationV1): Promise<WidgetAreaWriteOutcome> => {
         if (!mounted.current || binding.current.port !== port || binding.current.context !== context)
             return { kind: 'refused', errorCode: 'widget_area_unavailable' };
-        const admitted = displayed.current;
+        const shown = displayed.current;
+        const transient = shown.status === 'loading' || (shown.status === 'unavailable' && shown.reasonCode === 'widget_area_unavailable');
+        const retained = transient && lastAdmitted.current?.binding === binding.current ? lastAdmitted.current.state : null;
+        const admitted = shown.status === 'ready' ? shown : retained;
         // A newer publication suspends mounted reads, but not a person's edit to the displayed
         // area. Its canonical writer re-reads access and the latest revision before CAS/replay.
         // Both facts fail closed on Account retirement; never retarget to a pending selection.
-        if (admitted.status !== 'ready' || (!admitted.isCurrent() && !admitted.isReadPending()))
+        // A transient refresh leaves the layout the person opened their Add on as the target.
+        if (!admitted || (!admitted.isCurrent() && !admitted.isReadPending()))
             return { kind: 'refused', errorCode: 'widget_area_unavailable' };
         let outcome: WidgetAreaWriteOutcome;
         try {
