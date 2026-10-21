@@ -9,6 +9,10 @@ const files: readonly HunkReviewFile[] = [
 ];
 
 describe('review cursor and counter', () => {
+    it('keeps loaded image and metadata files reachable through file navigation', () => {
+        expect(moveHunkReviewCursor([{ path: 'a.png', keys: [] }, { path: 'b.png', keys: [] }],
+            { path: 'a.png', key: null }, 1, new Set(), true)).toEqual({ path: 'b.png', key: null });
+    });
     it('classifies live paths with no captured metadata through the canonical path classifier', () => {
         expect(orderHunkReviewFiles([{ path: 'a.ts', keys: ['a'] }, { path: 'yarn.lock', keys: ['lock'] },
             { path: 'z.ts', keys: ['z'] }]).map(file => file.path)).toEqual(['a.ts', 'z.ts', 'yarn.lock']);

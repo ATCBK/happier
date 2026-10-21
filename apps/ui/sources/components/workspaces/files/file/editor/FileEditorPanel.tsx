@@ -26,7 +26,7 @@ export type FileEditorPanelProps = CodeEditorWithFindProps &
     /** Phone composition: the key row sits on the keyboard with Save pinned (files lab ED1p). */
     accessory?: Readonly<{ save: CodeEditorAccessoryBarProps['save'] }> | null;
     /** The gutter peek's facts and the review owner's action slot (ade-shell ED3). */
-    peek?: Pick<ChangeMarkerPeekProps, 'attribution' | 'renderChangeActions'> &
+    peek?: Pick<ChangeMarkerPeekProps, 'attribution' | 'renderChangeActions' | 'resolveChangeActions'> &
       Readonly<{ dirty: boolean }>;
   }>;
 
@@ -69,6 +69,7 @@ export const FileEditorPanel = React.memo(function FileEditorPanel(
             dirty={peek?.dirty ?? false}
             attribution={peek?.attribution}
             renderChangeActions={peek?.renderChangeActions}
+            resolveChangeActions={peek?.resolveChangeActions}
           />
         ) : null}
       </View>

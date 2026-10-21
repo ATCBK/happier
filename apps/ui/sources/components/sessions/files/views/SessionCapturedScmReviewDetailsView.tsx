@@ -17,6 +17,8 @@ import { useReviewComposerHandoff } from '@/components/sessions/reviews/comments
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { useSession, useSetting } from '@/sync/domains/state/storage';
+import { useWorkspaceScopeForSession } from '@/sync/domains/session/resolveWorkspaceScopeForSession';
+import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useSessionMachineReachability } from '@/components/sessions/model/useSessionMachineReachability';
 import { t } from '@/text';
 import { activeReviewFileKeyForSession } from '@/components/workspaces/scm/review/activeReviewFile';
@@ -29,6 +31,8 @@ export function SessionCapturedScmReviewDetailsView(props: SessionScmReviewDetai
     const activeReviewFile = React.useMemo(() => ({ key: activeReviewFileKeyForSession(props.sessionId, props.serverId),
         presented: props.active !== false, externalLifecycle: true }), [props.sessionId, props.serverId, props.active]);
     const session = useSession(props.sessionId);
+    const workspaceScope = useWorkspaceScopeForSession(props.sessionId, props.serverId);
+    const scmWriteEnabled = useFeatureEnabled('scm.writeOperations') === true;
     const latestTurnId = (!props.serverId || session?.serverId === props.serverId) ? session?.latestTurnId ?? null : null;
     const pane = useAppPaneScope(props.scopeId);
     const openDetailsTab = props.onOpenDetailsTab ?? pane.openDetailsTab;
@@ -93,6 +97,7 @@ export function SessionCapturedScmReviewDetailsView(props: SessionScmReviewDetai
         renderFiles={(chrome) => <>
             {captured.error ? <AttentionBanner presentation="strip" testID="captured-comparison-error" tone="warning" title={captured.error} /> : null}
             {captured.comparison ? <CapturedComparisonFilesView activeReviewFile={activeReviewFile} comparison={captured.comparison} sessionId={props.sessionId}
+                workspaceScope={workspaceScope} marks={marks} discardEnabled={scmWriteEnabled} onRefresh={captured.retry}
                 comparisonChrome={chrome} initialCollapsedPaths={mountedInitialReviewState.collapsedPaths}
                 onCollapsedPathsChange={onCollapsedPathsChange} initialScrollTop={mountedInitialReviewState.scrollTop}
                 onScrollTopChange={onScrollTopChange} maxFiles={typeof maxFilesSetting === 'number' ? maxFilesSetting : 25}

@@ -31,11 +31,12 @@ import type { ChangedFilesReviewDiffStateSource } from '@/components/workspaces/
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import type { ChangedFilesReviewFindModel } from './useChangedFilesReviewFind';
-import { useHunkReviewController, type HunkReviewControllerParams } from './hunkReview/useHunkReviewController';
+import type { HunkReviewControllerParams } from './hunkReview/useHunkReviewController';
+import type { ReviewUnit } from '@happier-dev/protocol/scm/comparisonOccurrences';
 
 /** Keep / Discard on a Review file's changes (P5): the list's checkout and its one discard owner. */
 export type ReviewBlockHunkReview = Readonly<Pick<HunkReviewControllerParams, 'source' | 'host' | 'serverId' | 'onDiscard'
-    | 'discardDisabledReason' | 'undo' | 'onReviewAction'>>;
+    | 'discardDisabledReason' | 'undo' | 'onReviewAction' | 'onAsk' | 'onOutOfDate' | 'marks'>>;
 
 export type ReviewDiffState = Readonly<{
     status: 'idle' | 'loading' | 'loaded' | 'error';
@@ -75,7 +76,8 @@ export type ChangedFilesReviewDiffBlockProps = Readonly<{
         render: (path: string, hunkIndex: number, placement: 'column' | 'inline') => React.ReactNode;
     }> | null;
     /** Hunk rows with Keep / Discard (absent: notes and navigation only). */
-    hunkReview?: ReviewBlockHunkReview | null;
+    hunkReview?: DiffViewerHunks | null;
+    reviewUnits?: readonly ReviewUnit[];
 }>;
 
 function buildDiffDraftsSignature(filePath: string, drafts: readonly ReviewCommentDraft[]): string {
@@ -119,6 +121,7 @@ function areChangedFilesReviewDiffBlockPropsEqual(
         || prev.imageCompare !== next.imageCompare
         || prev.hunkNotes !== next.hunkNotes
         || prev.hunkReview !== next.hunkReview
+        || prev.reviewUnits !== next.reviewUnits
     ) {
         return false;
     }
@@ -236,6 +239,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
         const currentIndex = hunkTable.hunks.findIndex((hunk) => hunk.firstChangeLineId === props.scrollToLineId);
         return { currentIndex: currentIndex < 0 ? null : currentIndex, renderNote: props.hunkNotes ? renderNote : undefined };
     }, [hunkTable.hunks, props.hunkNotes, props.scrollToLineId, renderNote]);
+    const reviewHunks = props.hunkReview ? { ...props.hunkReview, ...(props.hunkNotes ? { renderNote } : {}) } : hunks;
     const notesColumn = useHunkNotesColumn({ filePath, hunkNotes: columnNotes ?? EMPTY_COLUMN_NOTES, tops: columnNotes ? noteTops : EMPTY_NOTE_TOPS,
         borderColor: theme.colors.border.default });
     const noteColumnStyle = columnNotes ? { paddingRight: columnNotes.columnWidth, minHeight: notesColumn.minHeight } : null;
@@ -255,9 +259,9 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
     };
     const imagePreview = useFilePreviewSource(imagePreviewInput);
     // An SVG change reads as pictures and as text (lab files RV1v).
-    const svgPictures = fileViewer.kind === 'svg' && props.workspaceScope && props.evidenceOnly !== true ? (
+    const svgPictures = fileViewer.kind === 'svg' && props.workspaceScope && props.imageCompare ? (
         <ReviewBlockImageCompare scope={props.workspaceScope} filePath={filePath} viewer={fileViewer}
-            source={props.imageCompare ?? null} signature={snapshotSignature} testID="scm-review-svg-preview" />
+            source={props.imageCompare} signature={snapshotSignature} testID="scm-review-svg-preview" />
     ) : null;
 
     const wrapLines = useSetting('wrapLinesInDiffs');
@@ -331,14 +335,14 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
             </View>
         );
     }
-    if (!state.diff) {
+    if (!state.diff || fileViewer.kind === 'image') {
         if (fileIsImage) {
             // Workspace images compare as images (one owner: `ImageCompare`, P5 modes).
-            if (props.workspaceScope) {
+            if (props.workspaceScope && props.imageCompare) {
                 return (
                     <View testID={blockTestId} style={noOverflowAnchor}>
                         <ReviewBlockImageCompare scope={props.workspaceScope} filePath={filePath} viewer={fileViewer}
-                            source={props.imageCompare ?? null} signature={snapshotSignature} testID="scm-review-image-preview" />
+                            source={props.imageCompare} signature={snapshotSignature} testID="scm-review-image-preview" />
                     </View>
                 );
             }
@@ -385,11 +389,11 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
         return (
             <View ref={frameRef} collapsable={false} onLayout={columnNotes ? onFrameLayout : undefined} testID={blockTestId} style={[props.flat ? FLAT_BLOCK_STYLE : { paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s8 }, noOverflowAnchor, noteColumnStyle]}>
             {svgPictures}
-                <WithHunkReview review={props.hunkReview} path={filePath} unifiedDiff={state.diff} base={hunks}>{(reviewHunks) => (
                 <DiffReviewCommentsViewer
                     findActive={props.findActive}
                     findRangesByLineId={findRangesByLineId}
                     hunks={reviewHunks}
+                    reviewUnits={props.reviewUnits}
                     scrollToLineId={props.scrollToLineId}
                     highlightLineId={props.scrollToLineId}
                     onScrollToLine={props.onScrollToLine}
@@ -404,7 +408,6 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
                     onDeleteReviewCommentDraft={props.onDeleteReviewCommentDraft}
                     onReviewCommentError={props.onReviewCommentError}
                 />
-                )}</WithHunkReview>
                 {columnNotes ? notesColumn.column : null}
             </View>
         );
@@ -414,12 +417,12 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
             <View ref={frameRef} collapsable={false} onLayout={columnNotes ? onFrameLayout : undefined} testID={blockTestId} style={[props.flat ? FLAT_BLOCK_STYLE : { paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s8 }, noOverflowAnchor, noteColumnStyle]}>
             {svgPictures}
             <View style={[props.flat ? FLAT_DIFF_FRAME_STYLE : { borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: theme.colors.border.default }, diffContainerStyle]}>
-                <WithHunkReview review={props.hunkReview} path={filePath} unifiedDiff={state.diff} base={hunks}>{(reviewHunks) => (
                 <DiffViewer
                     findActive={props.findActive}
                     registerFindRefold={registerFindRefold}
                     findRangesByLineId={findRangesByLineId}
                     hunks={reviewHunks}
+                    reviewUnits={props.reviewUnits}
                     scrollToLineId={props.scrollToLineId}
                     highlightLineId={props.scrollToLineId}
                     onScrollToLine={props.onScrollToLine}
@@ -431,44 +434,11 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
                     showLineNumbers={effectiveShowLineNumbers}
                     virtualized={virtualized}
                 />
-                )}</WithHunkReview>
             </View>
             {columnNotes ? notesColumn.column : null}
         </View>
     );
 }, areChangedFilesReviewDiffBlockPropsEqual);
-
-/**
- * A Review file's diff with its review rows: one controller per rendered file (marks, cursor, Keep, Discard),
- * its Explain notes kept. Without `review` the block's own hunks pass through untouched.
- */
-function WithHunkReview(props: Readonly<{
-    review: ReviewBlockHunkReview | null | undefined;
-    path: string;
-    unifiedDiff: string;
-    base: DiffViewerHunks | undefined;
-    children: (hunks: DiffViewerHunks | undefined) => React.ReactElement;
-}>): React.ReactElement {
-    if (!props.review) return props.children(props.base);
-    return <ReviewedHunks {...props} review={props.review} />;
-}
-
-function ReviewedHunks(props: Readonly<{
-    review: ReviewBlockHunkReview;
-    path: string;
-    unifiedDiff: string;
-    base: DiffViewerHunks | undefined;
-    children: (hunks: DiffViewerHunks | undefined) => React.ReactElement;
-}>): React.ReactElement {
-    const controller = useHunkReviewController({ ...props.review, path: props.path, unifiedDiff: props.unifiedDiff });
-    const renderNote = props.base?.renderNote;
-    const hunks = React.useMemo<DiffViewerHunks>(() => ({
-        ...controller.hunks,
-        numberTotal: controller.strip.total,
-        ...(renderNote ? { renderNote } : {}),
-    }), [controller.hunks, controller.strip.total, renderNote]);
-    return props.children(hunks);
-}
 
 const EMPTY_NOTE_TOPS: ReadonlyMap<number, number> = new Map();
 const EMPTY_COLUMN_NOTES: NonNullable<ChangedFilesReviewDiffBlockProps['hunkNotes']> = { placement: 'column', columnWidth: 0, render: () => null };
@@ -478,7 +448,7 @@ function ReviewBlockImageCompare(props: Readonly<{
     scope: WorkspaceScopeBase;
     filePath: string;
     viewer: FileViewerClass;
-    source: ImageCompareSource | null;
+    source: ImageCompareSource;
     signature: string | null;
     testID: string;
 }>) {
@@ -486,7 +456,7 @@ function ReviewBlockImageCompare(props: Readonly<{
         enabled: true,
         scope: props.scope,
         filePath: props.filePath,
-        source: props.source ?? { kind: 'workingTree', changeKind: 'modified', area: 'both', signature: props.signature },
+        source: props.source,
     });
     const stage = useMediaStage();
     const openStage = (side: 'before' | 'after') => {

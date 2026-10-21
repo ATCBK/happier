@@ -9,6 +9,8 @@ import { installFilesContentCommonModuleMocks } from './filesContentTestHelpers'
 import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
 import { createChangedFilesReviewDiffStateSource } from './ChangedFilesReviewDiffStore';
 import { t } from '@/text';
+import { ScmComparisonSchema } from '@happier-dev/protocol/scm';
+import { ImageCompare } from './imageCompare/ImageCompare';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -68,6 +70,22 @@ vi.mock('@/components/ui/code/diff/reviewComments/DiffReviewCommentsViewer', () 
 }));
 
 describe('ChangedFilesReviewDiffBlock', () => {
+    it.each(['deleted.png', 'deleted.svg'])('renders %s as a truthful captured image even with a nonempty patch', async (filePath) => {
+        const source = createChangedFilesReviewDiffStateSource();
+        const diff = filePath.endsWith('.svg') ? '@@ -1 +0,0 @@\n-<svg />\n' : `Binary files a/${filePath} and /dev/null differ\n`;
+        source.setDiffState(filePath, { status: 'loaded', diff, error: null });
+        const comparison = ScmComparisonSchema.parse({ id: 'a'.repeat(64), source: { kind: 'session', sessionId: 's1' },
+            repository: { rootPath: '/repo' }, endpoints: {}, inventory: { state: 'complete', reasons: [], files: [{
+                path: filePath, changeKind: 'deleted', binary: !filePath.endsWith('.svg'), generated: false, lockfile: false,
+                evidence: { state: 'available', unifiedDiff: diff }, occurrences: [],
+            }] } });
+        const screen = await renderScreen(<ChangedFilesReviewDiffBlock theme={createThemeFixture()} sessionId="s1"
+            snapshotSignature="sig" filePath={filePath} diffStateSource={source} reviewCommentsEnabled={false} reviewCommentDrafts={[]}
+            evidenceOnly workspaceScope={{ serverId: 'home', machineId: 'machine', rootPath: '/repo' }}
+            imageCompare={{ kind: 'captured', comparisonId: comparison.id, file: comparison.inventory.files[0]! }} />);
+        expect(screen.tree.root.findByType(ImageCompare).props.after.kind).toBe('deleted');
+        expect(screen.tree.root.findAllByType('DiffViewer' as never)).toHaveLength(filePath.endsWith('.svg') ? 1 : 0);
+    });
     beforeEach(() => {
         diffReviewCommentsViewerMock.renderCount = 0;
     });

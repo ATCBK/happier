@@ -1,4 +1,4 @@
-import { buildReviewUnits } from '@happier-dev/protocol/scm/comparisonOccurrences';
+import { buildReviewUnits, type ReviewUnit } from '@happier-dev/protocol/scm/comparisonOccurrences';
 import { revertHunks, type Hunk, type HunkApplyResult } from '@happier-dev/protocol/diff/hunks';
 import type { ScmChangeOccurrence } from '@happier-dev/protocol';
 import type { EditorDecoration } from './codeEditorTypes';
@@ -7,8 +7,9 @@ export type EditorChangeMarker = Extract<EditorDecoration, { kind: string }> & R
 export type EditorChangeMarkerSeed = Readonly<{ key: string; items: readonly EditorChangeMarker[] }>;
 export type EditorChangeRevertResult = HunkApplyResult | Readonly<{ ok: false; reason: 'unavailable' }>;
 
-export function buildEditorChangeMarkers(path: string, layer: ScmChangeOccurrence['layer'] | null | undefined, unifiedDiff: string): readonly EditorChangeMarker[] {
-    return buildReviewUnits(path, layer, unifiedDiff).map((unit) => {
+export function buildEditorChangeMarkers(path: string, layer: ScmChangeOccurrence['layer'] | null | undefined, unifiedDiff: string,
+    reviewUnits: readonly ReviewUnit[] = buildReviewUnits(path, layer, unifiedDiff)): readonly EditorChangeMarker[] {
+    return reviewUnits.map((unit) => {
         const original = unit.hunk;
         // Context is anchoring evidence for disk writes. A tracked editor range already supplies the
         // location, and only the changed lines must match when reverting the person's draft.

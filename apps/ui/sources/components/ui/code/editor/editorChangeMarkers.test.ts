@@ -5,6 +5,11 @@ import { buildReviewUnits } from '@happier-dev/protocol/scm/comparisonOccurrence
 const diff = '@@ -1,5 +1,5 @@\n first\n-old\n+new\n middle\n-gone\n last\n+added\n';
 
 describe('editor change markers from canonical review units', () => {
+    it('retains the selected review owner layer keys rather than rebuilding combined keys', () => {
+        const units = buildReviewUnits('file.ts', 'staged', diff);
+        const markers = buildEditorChangeMarkers('file.ts', null, diff, units);
+        expect(markers.map(marker => marker.key)).toEqual(units.map(unit => unit.key));
+    });
     it('projects individual runs with their removed lines and content keys', () => {
         const markers = buildEditorChangeMarkers('file.ts', null, diff);
         expect(markers.map((marker) => ({ kind: marker.kind, start: marker.startLine, end: marker.endLine, removed: marker.removedLines }))).toEqual([

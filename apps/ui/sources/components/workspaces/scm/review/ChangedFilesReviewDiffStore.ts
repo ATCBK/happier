@@ -3,6 +3,8 @@ import type { ReviewDiffState } from '@/components/workspaces/scm/review/Changed
 type Listener = () => void;
 
 export type ChangedFilesReviewDiffStateSource = Readonly<{
+    getSnapshot: () => ReadonlyMap<string, ReviewDiffState>;
+    subscribeAll: (listener: Listener) => () => void;
     getDiffState: (path: string) => ReviewDiffState;
     subscribe: (path: string, listener: Listener) => () => void;
     reset: () => void;
@@ -16,8 +18,12 @@ const INITIAL_DIFF_STATE: ReviewDiffState = { status: 'idle', diff: '', error: n
 export function createChangedFilesReviewDiffStateSource(): ChangedFilesReviewDiffStateSource {
     const stateByPath = new Map<string, ReviewDiffState>();
     const listenersByPath = new Map<string, Set<Listener>>();
+    const allListeners = new Set<Listener>();
+    let snapshot: ReadonlyMap<string, ReviewDiffState> = new Map();
 
     const emit = (path: string) => {
+        snapshot = new Map(stateByPath);
+        for (const listener of allListeners) listener();
         const listeners = listenersByPath.get(path);
         if (!listeners || listeners.size === 0) return;
         for (const listener of Array.from(listeners)) {
@@ -78,5 +84,7 @@ export function createChangedFilesReviewDiffStateSource(): ChangedFilesReviewDif
         for (const path of removed) emit(path);
     };
 
-    return { getDiffState, subscribe, reset, prune, setDiffState, updateDiffState };
+    return { getDiffState, subscribe, reset, prune, setDiffState, updateDiffState,
+        getSnapshot: () => snapshot,
+        subscribeAll: listener => { allListeners.add(listener); return () => { allListeners.delete(listener); }; } };
 }

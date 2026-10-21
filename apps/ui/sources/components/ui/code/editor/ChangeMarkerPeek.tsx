@@ -11,12 +11,14 @@ import {
   CODE_EDITOR_BASE_FONT_SIZE,
   CODE_EDITOR_BASE_LINE_HEIGHT,
 } from './codeEditorFontMetrics';
-import type { EditorChangeMarker } from './editorChangeMarkers';
+import type { EditorChangeMarker, EditorChangeRevertResult } from './editorChangeMarkers';
 import type { EditorChangeMarkersController } from './useEditorChangeMarkers';
+import type { HunkReviewChangeActions } from '@/components/workspaces/scm/review/hunkReview/useHunkReviewController';
 
 export type ChangeMarkerActionContext = Readonly<{
   dirty: boolean;
   revertInDraft: EditorChangeMarkersController['revertInDraft'];
+  actions?: HunkReviewChangeActions<EditorChangeRevertResult> | null;
 }>;
 
 /** Where the peek hangs in its editor region: under (or, near the bottom, over) the marked line. */
@@ -33,6 +35,7 @@ export type ChangeMarkerPeekProps = Readonly<{
   attribution?: string | null;
   dirty: boolean;
   controller: EditorChangeMarkersController;
+  resolveChangeActions?: (marker: EditorChangeMarker, context: ChangeMarkerActionContext) => HunkReviewChangeActions<EditorChangeRevertResult> | null;
   /** The review owner's actions for this change (Keep · Discard · Ask · Copy), P5's slot. */
   renderChangeActions?: (
     marker: EditorChangeMarker,
@@ -62,6 +65,8 @@ export const ChangeMarkerPeek = React.memo(function ChangeMarkerPeek(
   const { theme } = useUnistyles();
   const { marker, controller } = props;
   const removed = marker.removedLines ?? [];
+  const context = { dirty: props.dirty, revertInDraft: controller.revertInDraft };
+  const actions = props.resolveChangeActions?.(marker, context);
   const header = (
     <View style={stylesheet.header}>
       <Text style={stylesheet.summary} numberOfLines={1}>
@@ -69,10 +74,7 @@ export const ChangeMarkerPeek = React.memo(function ChangeMarkerPeek(
         {props.attribution ? ` · ${props.attribution}` : ''}
       </Text>
       <View style={stylesheet.headerActions}>
-        {props.renderChangeActions?.(marker, {
-          dirty: props.dirty,
-          revertInDraft: controller.revertInDraft,
-        }) ?? null}
+        {props.renderChangeActions?.(marker, { ...context, actions }) ?? null}
         <IconButton
           testID="change-marker-peek-previous"
           variant="plain"

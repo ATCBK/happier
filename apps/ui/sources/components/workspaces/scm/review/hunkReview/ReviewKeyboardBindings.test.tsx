@@ -7,8 +7,8 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { storage } from '@/sync/domains/state/storage';
 import { KeyboardShortcutProvider } from '@/keyboard/KeyboardShortcutProvider';
 import { buildDiffHunkTable } from '@/components/ui/code/diff/hunks/buildDiffHunkTable';
-import { createChangedFilesReviewDiffStateSource } from '../ChangedFilesReviewDiffStore';
 import { ReviewKeyboardBindings } from './ReviewKeyboardBindings';
+import { useHunkReviewController } from './useHunkReviewController';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 
@@ -20,14 +20,21 @@ describe('Review keyboard bindings', () => {
     it('uses the real command dispatcher for changes, Shift files and rebinding, without taking editor typing', async () => {
         storage.setState({ settings: { ...initialSettings, keyboardShortcutsV2Enabled: true,
             keyboardSingleKeyShortcutsEnabled: true, keyboardShortcutOverridesV1: {}, keyboardShortcutDisabledCommandIdsV1: [] } });
-        const source = createChangedFilesReviewDiffStateSource();
-        source.setDiffState('a.ts', { status: 'loaded', diff, error: null });
         const focusPath = vi.fn();
         const focusLine = vi.fn();
         const table = buildDiffHunkTable({ mode: 'unified', filePath: 'a.ts', unifiedDiff: diff });
-        await renderScreen(<KeyboardShortcutProvider handlers={{}}><ReviewKeyboardBindings enabled
-            paths={['a.ts', 'b.ts']} activePath="a.ts" onFocusPath={focusPath}
-            onFocusLine={focusLine} diffStateSource={source} /></KeyboardShortcutProvider>);
+        function Review() {
+            const controller = useHunkReviewController({ source: { kind: 'live', root: '/repo' },
+                path: 'a.ts', unifiedDiff: diff, host: null, serverId: null,
+                liveFiles: [{ path: 'a.ts', unifiedDiff: diff }, { path: 'b.ts', unifiedDiff: '', pending: true }],
+                onNavigate: cursor => {
+                    if (cursor.path !== 'a.ts') { focusPath(cursor.path); return; }
+                    const hunk = table.hunks.find(hunk => hunk.key === cursor.key);
+                    if (hunk) focusLine({ filePath: cursor.path, lineId: hunk.firstChangeLineId });
+                } });
+            return <ReviewKeyboardBindings enabled controller={controller} />;
+        }
+        await renderScreen(<KeyboardShortcutProvider handlers={{}}><Review /></KeyboardShortcutProvider>);
         const key = async (value: string, extra: KeyboardEventInit = {}, target: EventTarget = window) => {
             const event = new KeyboardEvent('keydown', { key: value, code: `Key${value.toUpperCase()}`, bubbles: true, cancelable: true, ...extra });
             await act(async () => { target.dispatchEvent(event); });

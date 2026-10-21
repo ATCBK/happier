@@ -60,7 +60,9 @@ import { preserveWebScrollAnchorAfterToggle } from './preserveWebScrollAnchorAft
 import { ChangedFilesReviewIndex } from './ChangedFilesReviewIndex';
 import { ChangedFilesReviewPhoneFileControl } from './ChangedFilesReviewPhoneFileControl';
 import { ReviewKeyboardBindings } from './hunkReview/ReviewKeyboardBindings';
-import type { ReviewKeyboardController } from './hunkReview/useReviewKeyboard';
+import { useHunkReviewController } from './hunkReview/useHunkReviewController';
+import { buildDiffHunkTable } from '@/components/ui/code/diff/hunks/buildDiffHunkTable';
+import { buildScmFileReviewUnits } from '@happier-dev/protocol/scm/comparisonOccurrences';
 import { ChangedFilesReviewMoreMenu, useChangedFilesReviewDisplayMenu } from './ChangedFilesReviewMoreMenu';
 import type { ScmComparisonMenuSection } from '@/components/sessions/files/comparison/ScmComparisonPhoneHeader';
 import { useFindSurfaceRuntime } from '@/keyboard/KeyboardShortcutProvider';
@@ -104,7 +106,7 @@ export type ChangedFilesReviewCoverage = Readonly<{
 
 
 type ChangedFilesReviewProps = {
-    /** Captured endpoints: one fixed comparison, with no checkout file reads or mutation controls. */
+    /** Captured endpoints: diffs remain evidence-backed; admitted review controls are supplied separately. */
     evidenceOnly?: boolean;
     toolbarLeading?: React.ReactNode;
     /**
@@ -152,8 +154,6 @@ type ChangedFilesReviewProps = {
      * is on and brings a file a changed-files list asks for into view.
      */
     activeReviewFile?: Readonly<{ key: string; presented: boolean; externalLifecycle?: boolean }> | null;
-    /** The comparison's one review controller also owns row/bar keyboard actions. */
-    keyboardController?: ReviewKeyboardController;
     /** Keep / Discard rows on each file's changes (the live checkout; `useReviewListHunkReview`). */
     hunkReview?: ReviewBlockHunkReview | null;
     theme: ChangedFilesReviewTheme;
@@ -1046,6 +1046,57 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         columnWidth: props.comparisonChrome.hunkNotesColumnWidth ?? 0,
         render: props.comparisonChrome.renderHunkNotes,
     } : null, [props.comparisonChrome?.renderHunkNotes, props.comparisonChrome?.indexPlacement, props.comparisonChrome?.hunkNotesColumnWidth]);
+    const reviewEnabled = Boolean(props.hunkReview);
+    const reviewDiffs = React.useSyncExternalStore(
+        React.useCallback(listener => reviewEnabled ? diffStateSource.subscribeAll(listener) : () => {}, [reviewEnabled, diffStateSource]),
+        React.useCallback(() => reviewEnabled ? diffStateSource.getSnapshot() : null, [reviewEnabled, diffStateSource]),
+        () => null,
+    );
+    const activeReadOnlyDiff = React.useSyncExternalStore(
+        React.useCallback(listener => !reviewEnabled && activeReviewPath ? diffStateSource.subscribe(activeReviewPath, listener) : () => {},
+            [reviewEnabled, activeReviewPath, diffStateSource]),
+        React.useCallback(() => !reviewEnabled && activeReviewPath ? diffStateSource.getDiffState(activeReviewPath) : null,
+            [reviewEnabled, activeReviewPath, diffStateSource]),
+        () => null,
+    );
+    const reviewControllerFiles = React.useMemo(() => navigationPaths.map(path => ({ path,
+        unifiedDiff: reviewDiffs?.get(path)?.diff ?? '', pending: reviewDiffs?.get(path)?.status !== 'loaded',
+    })), [navigationPaths, reviewDiffs]);
+    const activeDiff = activeReviewPath ? props.hunkReview?.source.kind === 'captured'
+        ? props.hunkReview.source.comparison.inventory.files.find(file => file.path === activeReviewPath)?.evidence
+        : reviewDiffs?.get(activeReviewPath)?.diff ?? activeReadOnlyDiff?.diff : null;
+    const activeUnifiedDiff = typeof activeDiff === 'string' ? activeDiff
+        : activeDiff?.state === 'available' ? activeDiff.unifiedDiff : '';
+    const controller = useHunkReviewController({
+        ...props.hunkReview,
+        enabled: reviewEnabled,
+        source: props.hunkReview?.source ?? { kind: 'live', root: workspaceScope?.rootPath ?? '' },
+        host: props.hunkReview?.host ?? null, serverId: props.hunkReview?.serverId ?? null,
+        path: activeReviewPath ?? '', unifiedDiff: activeUnifiedDiff, liveFiles: reviewControllerFiles,
+        onNavigate: cursor => {
+            const file = props.hunkReview?.source.kind === 'captured'
+                ? props.hunkReview.source.comparison.inventory.files.find(file => file.path === cursor.path) : null;
+            const diff = file ? file.evidence : diffStateSource.getDiffState(cursor.path).diff;
+            const unifiedDiff = typeof diff === 'string' ? diff : diff?.state === 'available' ? diff.unifiedDiff : '';
+            const destination = buildDiffHunkTable({ mode: 'unified', filePath: cursor.path, unifiedDiff,
+                ...(file ? { reviewUnits: buildScmFileReviewUnits({ ...file, evidence: { state: 'available', unifiedDiff } }) } : {}) }).hunks
+                .find(hunk => hunk.key === cursor.key);
+            if (cursor.path !== activeReviewPath) focusFile(cursor.path);
+            if (destination) focusLine({ filePath: cursor.path, lineId: destination.firstChangeLineId });
+        },
+    });
+    const getHunkReview = props.hunkReview ? (path: string) => ({
+        hunks: controller.hunksForPath(path), reviewUnits: props.hunkReview?.source.kind === 'captured' ? controller.reviewUnitsForPath(path) : undefined,
+    }) : undefined;
+    const getImageCompare = React.useCallback((path: string) => {
+        if (props.hunkReview?.source.kind === 'captured') {
+            const comparison = props.hunkReview.source.comparison;
+            const file = comparison.inventory.files.find(file => file.path === path);
+            return file ? { kind: 'captured' as const, file, comparisonId: comparison.id } : null;
+        }
+        const entry = snapshot?.entries.find(file => file.path === path);
+        return entry ? { kind: 'workingTree' as const, changeKind: entry.kind, area: diffArea, signature: snapshotSignature } : null;
+    }, [props.hunkReview?.source, snapshot, diffArea, snapshotSignature]);
     const renderDiffBlock = useChangedFilesReviewDiffBlockRenderer({
         binaryPaths: binaryReviewPaths,
         hunkNotes,
@@ -1067,7 +1118,8 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         onDeleteReviewCommentDraft: props.onDeleteReviewCommentDraft,
         onReviewCommentError: props.onReviewCommentError,
         flat: Boolean(props.comparisonChrome),
-        hunkReview: props.evidenceOnly ? null : props.hunkReview ?? null,
+        getHunkReview,
+        getImageCompare,
     });
 
     const onFilePressPinned = props.onFilePressPinned;
@@ -1418,9 +1470,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
             <ChangedFilesReviewNavigation
                 paths={navigationPaths}
                 activePath={activeReviewPath}
-                onFocusPath={focusFile}
-                diffStateSource={diffStateSource}
-                onFocusLine={focusLine}
+                controller={controller}
             />
         </>
     );
@@ -1430,8 +1480,9 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
     const comparisonDisplayActions = <><ChangedFilesReviewFindButton surfaceId={findSurfaceId} /><ChangedFilesReviewMoreMenu diffArea={diffArea} availableDiffAreas={diffConfig.availableModes}
         diffAreaLabels={diffAreaLabels} onDiffArea={setDiffArea} leadingSections={comparisonChrome?.menuSections} /></>;
     const comparisonKeyboardShortcuts = <ReviewKeyboardBindings enabled={props.activeReviewFile?.presented !== false}
-        paths={navigationPaths} activePath={activeReviewPath} onFocusPath={focusFile} diffStateSource={diffStateSource} onFocusLine={focusLine}
-        controller={props.keyboardController} containsFocus={props.keyboardContainsFocus} />;
+        controller={props.hunkReview ? controller : {
+            next: controller.next, previous: controller.previous, nextFile: controller.nextFile, previousFile: controller.previousFile,
+        }} containsFocus={props.keyboardContainsFocus} />;
     // A phone has one comparison menu: Find and the display choices are rows of it, not a row of buttons in it.
     const findRuntime = useFindSurfaceRuntime();
     const displayMenu = useChangedFilesReviewDisplayMenu({ diffArea, availableDiffAreas: diffConfig.availableModes,
@@ -1444,7 +1495,6 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
     ];
     const detailsHeaderElement = comparisonChrome?.renderBar ? <>
         {comparisonChrome.renderBar(coverage, null, comparisonMenuSections)}
-        {comparisonKeyboardShortcuts}
     </> : comparisonChrome ? (
         <ScmComparisonBar
             leading={comparisonChrome.renderBarLeading(coverage)}
@@ -1454,9 +1504,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
                     {comparisonDisplayActions}
                 </>
             )}
-        >
-            {comparisonKeyboardShortcuts}
-        </ScmComparisonBar>
+        />
     ) : detailsHeader ? (
         <DetailsTabHeader
             testID="scm-review-header"
@@ -1476,6 +1524,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
 
     return (
         <View ref={findSurfaceRef} collapsable={false} style={{ flex: 1, minHeight: 0 }}>
+            {comparisonKeyboardShortcuts}
             {detailsHeaderElement ?? (
             <HorizontalScrollableRow testID="scm-review-toolbar" fadeColor={theme.colors.surface.base ?? theme.colors.surface.inset} indicatorColor={theme.colors.text.secondary} containerStyle={{ flexGrow: 0, flexShrink: 0 }} contentStyle={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, paddingHorizontal: theme.space.s12, paddingVertical: theme.space.s4 }}>
                 {props.toolbarLeading}
@@ -1492,9 +1541,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
             <ChangedFilesReviewNavigation
                 paths={navigationPaths}
                 activePath={activeReviewPath}
-                onFocusPath={focusFile}
-                diffStateSource={diffStateSource}
-                onFocusLine={focusLine}
+                controller={controller}
             />
                 <WrapLinesToggleButton />
                 {tooLarge && reviewFiles.length > 0 ? (

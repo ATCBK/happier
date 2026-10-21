@@ -29,15 +29,23 @@ export function useEditorChangeMarkers(params: Readonly<{
         return () => { selectionRef.current = null; editor?.setDecorations?.('change', []); };
     }, [editor, seedKey, seeded]);
     React.useEffect(() => { if (!active) close(); }, [active, close]);
-    React.useEffect(() => editor?.onDecorationPress?.((layer, item: EditorDecoration) => {
-        if (!active || layer !== 'change' || !('kind' in item)) return;
-        const source = seeded.find((marker) => marker.id === item.id);
-        if (source && editor) {
-            const marker = { ...source, startLine: item.startLine, endLine: item.endLine };
-            selectionRef.current = { marker, text: editor.getValue() };
-            setSelected(marker);
-        }
-    }), [active, editor, seeded]);
+    React.useEffect(() => {
+        let retired = false;
+        const unsubscribe = editor?.onDecorationPress?.(async (layer, item: EditorDecoration) => {
+            if (!active || layer !== 'change' || !('kind' in item)) return;
+            const source = seeded.find((marker) => marker.id === item.id);
+            if (source && editor) {
+                close();
+                // Publish the engine's pending debounce before the host chooses draft or disk Discard.
+                await editor.flushPendingChange();
+                if (retired) return;
+                const marker = { ...source, startLine: item.startLine, endLine: item.endLine };
+                selectionRef.current = { marker, text: editor.getValue() };
+                setSelected(marker);
+            }
+        });
+        return () => { retired = true; unsubscribe?.(); };
+    }, [active, close, editor, seeded]);
     const onDocumentChange = React.useCallback((text: string) => {
         if (selectionRef.current && selectionRef.current.text !== text) close();
     }, [close]);

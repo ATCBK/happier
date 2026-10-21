@@ -463,6 +463,9 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
                 </View>}
                 renderFiles={(comparisonChrome) => comparison.kind !== 'workingTree' || comparison.comparisonId
                     ? capture.comparison ? <CapturedComparisonFilesView activeReviewFile={activeReviewFile} comparison={capture.comparison} reviewScopeKey={activeReviewFileKey}
+                        workspaceScope={scope} discardEnabled={scmWriteEnabled && snapshot?.capabilities?.writeDiscard === true}
+                        sessionId={props.evidenceSessionId ?? props.host.sessionId ?? undefined}
+                        marks={bound.capturedComparison?.id === capture.comparison.id ? marks : undefined} onRefresh={capture.retry}
                         comparisonChrome={comparisonChrome} maxFiles={maxFiles} maxChangedLines={maxChangedLines}
                         initialScrollTop={mountedInitialReviewState.scrollTop} onScrollTopChange={onScrollTopChange}
                         initialCollapsedPaths={mountedInitialReviewState.collapsedPaths} onCollapsedPathsChange={onCollapsedPathsChange} />

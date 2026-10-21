@@ -36,7 +36,8 @@ export function useChangedFilesReviewDiffBlockRenderer(input: Readonly<{
     /** Before/after facts per changed image path, from the Review's comparison entries. */
     getImageCompare?: (path: string) => ChangedFilesReviewDiffBlockProps['imageCompare'];
     /** Keep / Discard rows on every file's changes (one checkout, one discard owner). */
-    hunkReview?: ChangedFilesReviewDiffBlockProps['hunkReview'];
+    getHunkReview?: (path: string) => Readonly<{ hunks: NonNullable<ChangedFilesReviewDiffBlockProps['hunkReview']>;
+        reviewUnits: ChangedFilesReviewDiffBlockProps['reviewUnits'] }>;
 }>): (path: string) => React.ReactNode {
     const {
         theme,
@@ -81,6 +82,7 @@ export function useChangedFilesReviewDiffBlockRenderer(input: Readonly<{
         const estimated = getEstimatedChangedLines ? getEstimatedChangedLines(path) : null;
         const fileReviewCommentDrafts = reviewCommentDraftsByDiffFilePath.get(path)
             ?? EMPTY_REVIEW_COMMENT_DRAFTS;
+        const review = input.getHunkReview?.(path);
         return (
             <ChangedFilesReviewDiffBlock
                 theme={theme}
@@ -105,7 +107,8 @@ export function useChangedFilesReviewDiffBlockRenderer(input: Readonly<{
                 evidenceOnly={input.evidenceOnly}
                 hunkNotes={input.hunkNotes}
                 imageCompare={input.getImageCompare?.(path) ?? null}
-                hunkReview={input.hunkReview ?? null}
+                hunkReview={review?.hunks ?? null}
+                reviewUnits={review?.reviewUnits}
             />
         );
     }, [
@@ -113,7 +116,7 @@ export function useChangedFilesReviewDiffBlockRenderer(input: Readonly<{
         flat,
         input.evidenceOnly,
         input.hunkNotes,
-        input.hunkReview,
+        input.getHunkReview,
         input.getImageCompare,
         input.findModel,
         input.findActive,

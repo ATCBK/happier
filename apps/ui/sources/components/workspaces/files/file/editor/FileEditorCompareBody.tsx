@@ -54,7 +54,7 @@ export const FileEditorCompareBody = React.memo(function FileEditorCompareBody(
   const renderActions = React.useCallback(
     (hunk: DiffHunkInfo) => {
       const current = latest.current;
-      const place = current.comparison.places[hunk.index];
+      const place = current.comparison.places[hunk.hunkIndex];
       if (!place) return null;
       const agent = current.agentName;
       const detail = place.automatic
@@ -140,11 +140,12 @@ export const FileEditorCompareBody = React.memo(function FileEditorCompareBody(
         ]}
       />
       <View style={stylesheet.body}>
-        {/* Yours first, the version on disk as the change: what the agent did reads as additions to your text. */}
+        {/* Match the controller's immutable disk-to-draft places exactly. */}
         <DiffViewer
           mode="text"
-          oldText={comparison.mineText}
-          newText={comparison.theirsText}
+          oldText={comparison.theirsText}
+          newText={comparison.mineText}
+          contextLines={0}
           filePath={props.filePath}
           // Always wrapped: a choice between two versions of a line needs the whole line, and the place rows
           // (with their Use mine / Use theirs) then span the visible width instead of the scrolled code width.

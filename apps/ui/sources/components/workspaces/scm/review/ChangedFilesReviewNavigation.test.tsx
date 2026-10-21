@@ -2,7 +2,9 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import { ChangedFilesReviewNavigation } from './ChangedFilesReviewNavigation';
+import { ChangedFilesReviewNavigation as Navigation } from './ChangedFilesReviewNavigation';
+import { useHunkReviewController } from './hunkReview/useHunkReviewController';
+import { buildDiffHunkTable } from '@/components/ui/code/diff/hunks/buildDiffHunkTable';
 import { createChangedFilesReviewDiffStateSource } from './ChangedFilesReviewDiffStore';
 import { installFilesContentCommonModuleMocks } from './filesContentTestHelpers';
 
@@ -11,6 +13,25 @@ vi.mock('@/sync/store/hooks', async () => {
     return createStorageModuleStub({ useLocalSetting: () => 1 });
 });
 installFilesContentCommonModuleMocks();
+
+function ChangedFilesReviewNavigation(props: Readonly<{
+    paths: readonly string[]; activePath: string | null; onFocusPath: (path: string) => void;
+    diffStateSource: ReturnType<typeof createChangedFilesReviewDiffStateSource>;
+    onFocusLine: (target: { filePath: string; lineId: string } | null) => void;
+}>) {
+    const path = props.activePath && props.paths.includes(props.activePath) ? props.activePath : props.paths[0] ?? '';
+    const controller = useHunkReviewController({ source: { kind: 'live', root: '/repo' }, path,
+        unifiedDiff: props.diffStateSource.getDiffState(path).diff, host: null, serverId: null, enabled: false,
+        liveFiles: props.paths.map(path => ({ path, unifiedDiff: props.diffStateSource.getDiffState(path).diff,
+            pending: props.diffStateSource.getDiffState(path).status !== 'loaded' })),
+        onNavigate: cursor => {
+            if (cursor.path !== path) { props.onFocusPath(cursor.path); return; }
+            const hunk = buildDiffHunkTable({ mode: 'unified', filePath: path, unifiedDiff: props.diffStateSource.getDiffState(path).diff })
+                .hunks.find(hunk => hunk.key === cursor.key);
+            if (hunk) props.onFocusLine({ filePath: path, lineId: hunk.firstChangeLineId });
+        } });
+    return <Navigation paths={props.paths} activePath={path} controller={controller} />;
+}
 
 describe('ChangedFilesReviewNavigation', () => {
     it('focuses neighboring files and stops at both ends of the current review scope', async () => {
@@ -51,8 +72,9 @@ describe('ChangedFilesReviewNavigation', () => {
         expect(targets.at(-1)).toEqual({ filePath: 'a.ts', lineId: 'r:4' });
         expect(screen.findByTestId('scm-review-next-hunk')?.props.disabled).toBe(true);
         await act(async () => screen.tree.update(<ChangedFilesReviewNavigation paths={['a.ts', 'b.ts']} activePath="b.ts" onFocusPath={() => {}} diffStateSource={source} onFocusLine={onFocusLine} />));
+        expect(screen.findByTestId('scm-review-previous-hunk')?.props.disabled).toBe(true);
         await act(async () => { screen.findByTestId('scm-review-next-hunk')?.props.onPress(); });
-        expect(targets.at(-1)).toEqual({ filePath: 'b.ts', lineId: 'r:1' });
+        expect(targets.at(-1)).toEqual({ filePath: 'b.ts', lineId: 'r:4' });
     });
 
 });

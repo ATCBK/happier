@@ -13,6 +13,9 @@ import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessL
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
+import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+import type { ScmReviewedMarks } from './useScmReviewedMarks';
+import { useReviewListHunkReview } from '@/components/workspaces/scm/review/hunkReview/useReviewListHunkReview';
 
 type ReviewProps = React.ComponentProps<typeof ChangedFilesReview>;
 const NO_ATTRIBUTED_FILES: ReviewProps['sessionAttributedFiles'] = [];
@@ -32,6 +35,10 @@ export function CapturedComparisonFilesView(props: Readonly<{
     initialScrollTop?: number | null;
     onScrollTopChange?: (top: number) => void;
     activeReviewFile?: ReviewProps['activeReviewFile'];
+    workspaceScope?: WorkspaceScopeBase | null;
+    marks?: ScmReviewedMarks;
+    discardEnabled?: boolean;
+    onRefresh?: () => void;
 }>) {
     const { theme } = useUnistyles();
     const projected = React.useMemo(() => buildCapturedComparisonFiles(props.comparison), [props.comparison]);
@@ -62,18 +69,30 @@ export function CapturedComparisonFilesView(props: Readonly<{
         return typeof diff === 'string' ? { success: true, diff }
             : { success: false, error: projected.unavailableByPath.get(path) ?? t('scmComparison.unsupportedReason') };
     }, [projected]);
+    const renderReview = (hunkReview?: ReviewProps['hunkReview']) => <ChangedFilesReview activeReviewFile={props.activeReviewFile} theme={theme} sessionId={props.sessionId}
+            reviewScopeKey={props.reviewScopeKey ?? props.sessionId ?? props.comparison.id}
+            snapshot={projected.snapshot} changedFilesViewMode="repository"
+            allRepositoryChangedFiles={projected.files} sessionAttributedFiles={NO_ATTRIBUTED_FILES} repositoryOnlyFiles={NO_FILES}
+            maxFiles={props.maxFiles} maxChangedLines={props.maxChangedLines} onFilePress={doNotOpenWorkingFile}
+            evidenceOnly workspaceScope={props.workspaceScope} hunkReview={hunkReview}
+            comparisonChrome={chrome} providerDiffByPath={projected.diffByPath} fetchUnifiedDiffForPath={fetchCapturedDiff}
+            initialCollapsedPaths={initiallyCollapsed} onCollapsedPathsChange={props.onCollapsedPathsChange}
+            initialScrollTop={props.initialScrollTop} onScrollTopChange={props.onScrollTopChange} rowDensity="compact" />;
     return <View testID="captured-comparison-files" style={{ flex: 1, minHeight: 0 }}>
         {props.comparison.inventory.state !== 'complete' ? <AttentionBanner presentation="strip" testID="captured-inventory-incomplete" tone="warning"
             title={t('walkthrough.evidence.unavailable', { reason: props.comparison.inventory.reasons.join(' · ') })} /> : null}
         {props.comparison.freshness === 'stale' || props.comparison.freshness === 'unknown' ? <SurfaceFreshnessLine testID="captured-comparison-freshness" tone="warning"
             reason={t(props.comparison.freshness === 'stale' ? 'scmComparison.capturedStale' : 'scmComparison.capturedFreshnessUnknown')} /> : null}
-        <ChangedFilesReview activeReviewFile={props.activeReviewFile} theme={theme} sessionId={props.sessionId}
-            reviewScopeKey={props.reviewScopeKey ?? props.sessionId ?? props.comparison.id}
-            snapshot={projected.snapshot} changedFilesViewMode="repository"
-            allRepositoryChangedFiles={projected.files} sessionAttributedFiles={NO_ATTRIBUTED_FILES} repositoryOnlyFiles={NO_FILES}
-            maxFiles={props.maxFiles} maxChangedLines={props.maxChangedLines} onFilePress={doNotOpenWorkingFile}
-            evidenceOnly comparisonChrome={chrome} providerDiffByPath={projected.diffByPath} fetchUnifiedDiffForPath={fetchCapturedDiff}
-            initialCollapsedPaths={initiallyCollapsed} onCollapsedPathsChange={props.onCollapsedPathsChange}
-            initialScrollTop={props.initialScrollTop} onScrollTopChange={props.onScrollTopChange} rowDensity="compact" />
+        {props.workspaceScope ? <CapturedReviewControls scope={props.workspaceScope} comparison={props.comparison}
+            sessionId={props.sessionId} marks={props.marks} discard={props.discardEnabled === true}
+            refresh={props.onRefresh ?? doNotOpenWorkingFile}>{renderReview}</CapturedReviewControls> : renderReview()}
     </View>;
+}
+
+function CapturedReviewControls(props: Readonly<{
+    scope: WorkspaceScopeBase; comparison: ScmComparison; sessionId?: string; marks?: ScmReviewedMarks;
+    discard: boolean; refresh: () => void; children: (review: NonNullable<ReviewProps['hunkReview']>) => React.ReactNode;
+}>) {
+    const review = useReviewListHunkReview(props);
+    return props.children(review);
 }
