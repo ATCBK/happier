@@ -183,6 +183,9 @@ export async function inspectVoiceSettingsSemanticReadiness(input: Readonly<{
     const resolveSavedSecret = (ref: string) => resolveSavedSecretReference(scope, settings.secrets, ref);
     const rawTargets = purpose === 'dictation' || localSelected
         ? projectVoiceRawSpeechReadinessTargets(settings, registry, machine.machineId, purpose, connectedPurposes) : [];
+    // A selected speech credential that cannot be resolved without the connected-purpose catalog is not "ready":
+    // the Action reports the catalog unavailable instead of projecting readiness from unknown credentials.
+    if (rawTargets === null) throw Object.assign(new Error('connected_purpose_catalog_unavailable'), { code: 'connected_purpose_catalog_unavailable' });
     if (purpose === 'dictation') {
         const selection = resolveVoiceDictationNativeLocalNeuralModelSelection({ registry, settings, platform });
         const inspection = await inspectVoiceDictationSettingsReadiness({ packId: selection.packId, rawTarget: rawTargets?.[0] ?? null, signal: context.signal });

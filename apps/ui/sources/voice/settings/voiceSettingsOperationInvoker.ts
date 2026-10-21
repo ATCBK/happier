@@ -277,6 +277,6 @@ export async function invokeVoiceSettingsOperation(operation: VoiceSettingsOpera
         if (!current()) return { status: 'cancelled' };
         const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : null;
         // Error messages can contain provider/credential material; return only structural known codes.
-        return unavailable(code && ['feature_disabled', 'machine_unreachable', 'runtime_unavailable', 'unsupported_runtime_family', 'request_timeout', 'internal_error', 'invalid_response'].includes(code) ? code : 'voice_settings_operation_failed');
+        return unavailable(code && ['feature_disabled', 'connected_purpose_catalog_unavailable', 'machine_unreachable', 'runtime_unavailable', 'unsupported_runtime_family', 'request_timeout', 'internal_error', 'invalid_response'].includes(code) ? code : 'voice_settings_operation_failed');
     }
 }

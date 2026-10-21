@@ -157,6 +157,12 @@ export async function createOpenAiVoiceRuntimeEnvironment(options: Readonly<{
         }
         const parsed = DaemonVoiceClientAccountOperationRequestV1Schema.parse(request.params);
         const response = await daemonAccountOperationTransport(parsed);
+        // The daemon contract carries only 2xx provider responses; a refused credential is a typed failure.
+        if (response.status < 200 || response.status > 299) {
+          return { ok: true, result: DaemonVoiceClientAccountOperationResponseV1Schema.parse({
+            ok: false, errorCode: 'plugin_voice_credential_access_unavailable',
+          }) };
+        }
         return { ok: true, result: DaemonVoiceClientAccountOperationResponseV1Schema.parse({ ok: true,
           response: { status: response.status, finalUrl: response.finalUrl, headers: response.headers,
             bodyBase64: Buffer.from(response.body).toString('base64') },
