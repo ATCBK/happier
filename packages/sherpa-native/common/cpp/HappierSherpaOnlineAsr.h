@@ -1,6 +1,7 @@
 #pragma once
 
 #include <sherpa-onnx/c-api/c-api.h>
+#include <limits>
 #include <vector>
 #include "HappierSherpaCapiAbi.h"
 
@@ -23,7 +24,9 @@ inline SherpaOnnxOnlineRecognizerConfig OnlineTransducerConfig(
   config.enable_endpoint = 1;
   config.rule1_min_trailing_silence = 1.2f;
   config.rule2_min_trailing_silence = 0.6f;
-  config.rule3_min_utterance_length = 15.0f;
+  // Rule 3 fires on duration alone, including uninterrupted speech. Only trailing
+  // silence may end a voice turn; zero would restore Sherpa's duration default.
+  config.rule3_min_utterance_length = std::numeric_limits<float>::max();
   return config;
 }
 

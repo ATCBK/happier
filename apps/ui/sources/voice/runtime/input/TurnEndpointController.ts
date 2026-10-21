@@ -48,6 +48,7 @@ type ActiveTurnEndpointSession = Readonly<{
 type TurnEndpointControllerDeps = Readonly<{
     clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
     now?: () => number;
+    shouldAcceptAcousticEndpoint?: (source: Exclude<TurnEndpointSignalSource, 'heuristic'>) => boolean;
     onSignal: (signal: TurnEndpointSignal) => void;
     queueTask?: (task: () => void) => void;
     setTimer?: (task: () => void, waitMs: number) => ReturnType<typeof setTimeout>;
@@ -241,6 +242,9 @@ export function createTurnEndpointController(deps: TurnEndpointControllerDeps): 
             if (!activeSession || !normalizedSessionId || activeSession.sessionId !== normalizedSessionId) {
                 return;
             }
+            // A capture can have a configured VAD alongside recognition. A segmentation
+            // signal must not spend its endpoint session while that VAD owns turn-taking.
+            if (deps.shouldAcceptAcousticEndpoint?.(source) === false) return;
 
             const expectedToken = activeSession.token;
             replaceActiveSession({

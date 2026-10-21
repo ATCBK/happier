@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cassert>
+#include <limits>
 #include <vector>
 
 #include "HappierSherpaOnlineAsr.h"
@@ -37,7 +38,7 @@ int main() {
   assert(config.model_config.transducer.encoder != nullptr);
   assert(config.model_config.tokens != nullptr && config.model_config.provider != nullptr);
   assert(config.rule1_min_trailing_silence == 1.2f && config.rule2_min_trailing_silence == 0.6f);
-  assert(config.rule3_min_utterance_length == 15.0f);
+  assert(config.rule3_min_utterance_length == std::numeric_limits<float>::max());
 
   SherpaOnnxOnlineRecognizer recognizer;
   SherpaOnnxOnlineStream stream;

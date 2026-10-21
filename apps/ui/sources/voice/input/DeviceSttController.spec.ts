@@ -367,6 +367,37 @@ describe('createDeviceSttController', () => {
     }));
   });
 
+  it.each(['interim result', 'speechstart'])(
+    'cancels a stale heuristic deadline when an %s resumes speech',
+    async (resumedEvent) => {
+      vi.useFakeTimers();
+      const onEndpointSignal = vi.fn();
+      const { createDeviceSttController } = await import('./DeviceSttController');
+      const controller = createDeviceSttController({
+        getSettings: () => baseSettings(true, { silenceMs: 450, minSpeechMs: 0 }),
+        onEndpointSignal,
+      });
+      await controller.start({ micSession: createMicSession(), sink: createSink() });
+      listeners.result?.({ results: [{ transcript: 'hello runtime' }], isFinal: true });
+      await vi.advanceTimersByTimeAsync(200);
+      if (resumedEvent === 'speechstart') {
+        listeners.speechstart?.({});
+      } else {
+        listeners.result?.({ results: [{ transcript: 'more words' }], isFinal: false });
+      }
+      await vi.advanceTimersByTimeAsync(300);
+      expect(onEndpointSignal).not.toHaveBeenCalled();
+
+      listeners.result?.({ results: [{ transcript: 'more words' }], isFinal: true });
+      await vi.advanceTimersByTimeAsync(449);
+      expect(onEndpointSignal).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(onEndpointSignal).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        source: 'heuristic', transcript: 'hello runtime more words',
+      }));
+    },
+  );
+
   it('uses web VAD as the primary endpoint while its session is active', async () => {
     platformOsMock.value = 'web';
     (globalThis as { window?: object }).window = {};

@@ -532,6 +532,8 @@ export function createLocalVoiceCaptureOwner(
     };
     const createEndpointController = (): TurnEndpointController => createTurnEndpointController({
         onSignal: forwardEndpointSignal,
+        shouldAcceptAcousticEndpoint: (source) => source !== 'native_stream'
+            || !nativeVadController?.isActiveSession(activeCaptureSessionId),
     });
     // Latest in-flight partial transcript for the active capture, so the acoustic
     // VAD endpoint signal carries the recognized text (and, via duration, lets the
