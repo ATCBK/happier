@@ -72,7 +72,7 @@ export type WidgetAddTranslation = Readonly<{
     noChoices: string;
     optionsLoading: string;
     optionsFailed: string;
-    widgetLoadFailed: string;
+    yoursFailed: string;
     invalidValue: string;
     invalidReason: string;
     inputsInvalid: string;
@@ -214,7 +214,7 @@ export const widgetAddTranslationsEnglish = { en: {
         noChoices: 'Nothing to choose here yet',
         optionsLoading: 'Loading choices…',
         optionsFailed: 'Couldn’t load the choices',
-        widgetLoadFailed: 'Couldn’t load this widget',
+        yoursFailed: 'Couldn’t load your widgets',
         invalidValue: 'not found',
         inputsInvalid: 'Review this widget’s inputs',
         inputsUnavailable: 'A selected input is unavailable',

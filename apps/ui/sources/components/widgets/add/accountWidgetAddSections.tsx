@@ -178,17 +178,17 @@ export function useAccountWidgetAddSections(input: Readonly<{
     /** Aggregate saved-inventory state retained for callers migrating to pendingSections. */
     loading: boolean;
     /** Local sections are ready independently; only these remote sections are still unresolved. */
-    pendingSections: readonly Pick<WidgetAddSection, 'id' | 'title'>[];
+    pendingSections: readonly (Pick<WidgetAddSection, 'id' | 'title'> & Readonly<{ retry?: () => void }>)[];
 }> {
     const installed = useHomeWidgetCandidates();
     const appRuntime = useAppShellPluginUiProjection();
     const { scope, instances, addInstance, labels, context, testID } = input;
-    const { candidates: yours, loaded: yoursLoaded } = useYourWidgetCandidatesState(scope ? { serverId: scope.serverId, accountId: scope.accountId } : null, appRuntime.pluginUiProjection);
+    const { candidates: yours, status: yoursStatus, retry: retryYours } = useYourWidgetCandidatesState(scope ? { serverId: scope.serverId, accountId: scope.accountId } : null, appRuntime.pluginUiProjection);
     const candidates = React.useMemo(() => (yours.length > 0 ? [...installed, ...yours] : installed), [installed, yours]);
     const phone = useDeviceType() === 'phone';
     // Saved groups only where groups can be placed (Home, Project, plugin and core-page areas).
     const groupCapable = scope !== null && supportsWidgetGroupsV1(scope.owner.kind);
-    const { fragments, loaded: fragmentsLoaded, actionsFor: fragmentActions } = useYourWidgetLayoutFragments(groupCapable ? { serverId: scope.serverId, accountId: scope.accountId } : null);
+    const { fragments, status: fragmentsStatus, retry: retryFragments, actionsFor: fragmentActions } = useYourWidgetLayoutFragments(groupCapable ? { serverId: scope.serverId, accountId: scope.accountId } : null);
     const area = input.area;
     const addGroup = React.useCallback(async (fragment: WidgetLayoutFragmentSummaryV1) => {
         if (!scope) throw new Error('widget_area_unavailable');
@@ -218,9 +218,17 @@ export function useAccountWidgetAddSections(input: Readonly<{
             ),
         } : {}),
     }), [addGroup, addInstance, appRuntime, candidates, context, fragmentActions, fragments, groupCapable, instances, labels, phone, scope, testID]);
-    const loading = !yoursLoaded || (groupCapable && !fragmentsLoaded);
-    const pendingSections = React.useMemo(() => loading
-        ? [{ id: 'yours', title: t('widgetDefinition.yourWidgets') }]
-        : [], [loading, sections]);
+    const statuses = [yoursStatus, ...(groupCapable ? [fragmentsStatus] : [])];
+    const loading = statuses.includes('loading');
+    const failed = statuses.includes('failed');
+    const retry = React.useCallback(() => {
+        if (yoursStatus === 'failed') retryYours();
+        if (fragmentsStatus === 'failed') retryFragments();
+    }, [fragmentsStatus, retryFragments, retryYours, yoursStatus]);
+    // Only the Account's own read can still be unresolved; a refused read says so and offers Retry, so
+    // the section never reads "Loading…" for a read that has already answered.
+    const pendingSections = React.useMemo(() => loading || failed
+        ? [{ id: 'yours', title: t('widgetDefinition.yourWidgets'), ...(!loading ? { retry } : {}) }]
+        : [], [failed, loading, retry]);
     return { sections, loading, pendingSections };
 }

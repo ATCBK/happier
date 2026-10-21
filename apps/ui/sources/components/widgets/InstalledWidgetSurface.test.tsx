@@ -219,24 +219,6 @@ describe('InstalledWidgetSurface', () => {
         expect(state.mounts).toHaveLength(0);
     });
 
-    it('says a failed choices read is retryable, not that the pinned value was removed', async () => {
-        const instance: WidgetInstanceV1 = { v: 1, id: 'read-failed', definition: { kind: 'installed', surface: source.surface },
-            bindings: { period: { kind: 'value', value: '7d' } } };
-        const descriptor = { inputs: { fields: [{ path: 'period', title: 'Period', widget: 'select' as const, optionsSourceId: 'usage.periods' }] } };
-        const retry = vi.fn();
-        const resolution = { ...withWidgetInputRepairOutcome({ status: 'unavailable' as const, reasonCode: 'action_failed',
-            fields: [{ path: 'period', status: 'unavailable' as const, reasonCode: 'action_failed' }] }, { instance, descriptor }), retry };
-        const screen = await renderScreen(<ConfiguredWidgetRefusal resolution={resolution} testID="read-failed" />);
-        const card = screen.tree.findByType(SurfaceStateCard).props;
-        const { t } = await import('@/text');
-        // The card names the widget that could not load (SB11); only the setup step names the choices.
-        expect(card.title).toBe(t('widgetAdd.widgetLoadFailed'));
-        expect(card.reason).toBeUndefined();
-        expect(card.action?.label).toBe(t('common.retry'));
-        await screen.pressByTestIdAsync('read-failed-retry');
-        expect(retry).toHaveBeenCalledTimes(1);
-    });
-
     it('retires the mounted lifetime when an exact Session target changes under the same instance revision', async () => {
         const current = runtime();
         const render = (sessionId: string) => React.createElement(InstalledWidgetSurface, {

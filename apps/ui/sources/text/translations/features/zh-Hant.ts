@@ -13719,7 +13719,7 @@ const widgetAddTranslations = { 'zh-Hant': {
         noChoices: '目前沒有可選項',
         optionsLoading: '正在載入選項…',
         optionsFailed: '無法載入選項',
-        widgetLoadFailed: '無法載入此小工具',
+        yoursFailed: '無法載入你的小工具',
         invalidValue: '找不到',
         inputsInvalid: '請檢查此小工具的輸入',
         inputsUnavailable: '所選輸入無法使用',

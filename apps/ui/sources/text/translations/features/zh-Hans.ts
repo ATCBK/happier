@@ -13719,7 +13719,7 @@ const widgetAddTranslations = { 'zh-Hans': {
         noChoices: '暂时没有可选项',
         optionsLoading: '正在加载选项…',
         optionsFailed: '无法加载选项',
-        widgetLoadFailed: '无法加载此小组件',
+        yoursFailed: '无法加载你的小组件',
         invalidValue: '未找到',
         inputsInvalid: '请检查此小组件的输入',
         inputsUnavailable: '所选输入不可用',

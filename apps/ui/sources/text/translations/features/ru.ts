@@ -13767,7 +13767,7 @@ const widgetAddTranslations = { ru: {
         noChoices: 'Пока не из чего выбрать',
         optionsLoading: 'Загрузка вариантов…',
         optionsFailed: 'Не удалось загрузить варианты',
-        widgetLoadFailed: 'Не удалось загрузить этот виджет',
+        yoursFailed: 'Не удалось загрузить ваши виджеты',
         invalidValue: 'не найдено',
         inputsInvalid: 'Проверьте входные данные этого виджета',
         inputsUnavailable: 'Выбранные входные данные недоступны',

@@ -13229,7 +13229,7 @@ const widgetAddTranslations = { de: {
         noChoices: 'Hier gibt es noch nichts zur Auswahl',
         optionsLoading: 'Auswahl wird geladen…',
         optionsFailed: 'Die Auswahl konnte nicht geladen werden',
-        widgetLoadFailed: 'Dieses Widget konnte nicht geladen werden',
+        yoursFailed: 'Deine Widgets konnten nicht geladen werden',
         invalidValue: 'nicht gefunden',
         inputsInvalid: 'Überprüfe die Eingaben dieses Widgets',
         inputsUnavailable: 'Eine ausgewählte Eingabe ist nicht verfügbar',

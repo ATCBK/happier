@@ -13786,7 +13786,7 @@ const widgetAddTranslations = { es: {
         noChoices: 'Todavía no hay nada que elegir',
         optionsLoading: 'Cargando opciones…',
         optionsFailed: 'No se pudieron cargar las opciones',
-        widgetLoadFailed: 'No se pudo cargar este widget',
+        yoursFailed: 'No se pudieron cargar tus widgets',
         invalidValue: 'no encontrado',
         inputsInvalid: 'Revisa las entradas de este widget',
         inputsUnavailable: 'Una entrada seleccionada no está disponible',

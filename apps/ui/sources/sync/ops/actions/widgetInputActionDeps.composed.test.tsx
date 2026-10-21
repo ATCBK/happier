@@ -13,6 +13,7 @@ import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testki
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { widgetProjectionEntry, widgetProjectionOf, widgetInstalledPackage } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import type { ConnectedAccountPurposeDefaultsIntent } from '@/hooks/server/connectedServices/useConnectedAccountPurposeDefaults';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -582,6 +583,51 @@ it('validates a mounted schema-only typed pin from its selected origin before ex
         await hook.rerender('repo');
         expect(hook.getCurrent()).toMatchObject({ status: 'unavailable', reasonCode: 'input_type_unavailable' });
         await hook.unmount();
+    } finally { storage.setState(previous, true); await connection.dispose(); }
+});
+
+it('shows a mounted pin of a Resource-backed typed input while the type\'s serving machine cannot be reached for its choices', async () => {
+    await import('@/sync/syncEngine');
+    const connection = await restoreServerAccountForTest({ serverUrl: 'http://typed-widget-unreachable.test', accountId: 'viewer',
+        request: createHomeHubArtifactHttpBoundary('viewer').request });
+    const previous = storage.getState();
+    try {
+        const { useConfiguredWidgetTarget } = await import('@/sync/domains/widgets/useConfiguredWidgetTarget');
+        const inputType = { pluginId: 'com.acme.types', localId: 'kind' };
+        const surface = { pluginId: 'com.acme.binding', localId: 'count' };
+        const typeOrigin = { serverIdentityId: 'srv_types', materializationRef: {
+            machineId: 'machine', materializationId: 'types-materialization', pluginId: inputType.pluginId,
+        } };
+        const widget = widgetProjectionEntry({ ...surface, entryId: 'count-widget', target: 'app', inputs: { fields: [
+            { path: 'filter', title: 'Count', widget: 'select', inputType },
+        ] }, inputSchema: { type: 'object', properties: { filter: { type: 'string' } }, additionalProperties: false } });
+        const projection = normalizePluginUiProjection(PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+            installedPackagesById: { [surface.pluginId]: { id: surface.pluginId, displayName: 'Binding', enabled: true,
+                source: { kind: 'local', locator: `/plugins/${surface.pluginId}` } },
+                [inputType.pluginId]: { id: inputType.pluginId, displayName: 'Types', enabled: true, occurrenceId: 'current',
+                    source: { kind: 'local', locator: `/plugins/${inputType.pluginId}` } } },
+            familiesById: { pluginUi: { family: 'pluginUi', entriesById: { 'count-widget': widget } },
+                inputTypes: { family: 'inputTypes', entriesById: { [`${inputType.pluginId}/${inputType.localId}`]: {
+                    id: `${inputType.pluginId}/${inputType.localId}`, pluginId: inputType.pluginId, pluginVersion: '1.0.0', occurrenceId: 'current',
+                    executionOrigin: typeOrigin,
+                    definition: { id: inputType.localId, title: 'Kind', semantic: 'kind', valueSchema: { type: 'string' },
+                        options: { resource: 'kinds' } },
+                } } } },
+        }));
+        // The machine that serves the type's choices is unreachable: its origin is retained, not current.
+        const union = unionPluginUiProjections([{ machineId: 'machine', serverId: connection.home.id, projection,
+            phase: 'retainedOffline', interactionEnabled: false }], new Map([[inputType.pluginId, typeOrigin]]));
+        if (!union.pluginUiProjection) throw new Error('Expected the retained projection');
+        const descriptor = readWidgetDescriptor(union.pluginUiProjection, surface)!;
+        const scope = { serverId: connection.home.id, accountId: 'viewer', owner: { kind: 'home' as const } };
+        const hook = await renderHook(() => useConfiguredWidgetTarget({ scope, descriptor, providedContext: {},
+            instance: { v: 1, id: 'count-copy', definition: { kind: 'installed', surface }, bindings: { filter: { kind: 'value', value: 'files' } } },
+            appRuntime: { pluginUiProjection: union.pluginUiProjection, pluginBrowserProjection: null, phase: 'current', interactionEnabled: true,
+                machineId: 'machine', serverId: scope.serverId, platform: 'web', accountLifetime: captureActiveServerAccountScopeLifetime() } }));
+        try {
+            await flushHookEffects({ cycles: 3 });
+            expect(hook.getCurrent()).toMatchObject({ status: 'ready', input: { filter: 'files' } });
+        } finally { await hook.unmount(); }
     } finally { storage.setState(previous, true); await connection.dispose(); }
 });
 

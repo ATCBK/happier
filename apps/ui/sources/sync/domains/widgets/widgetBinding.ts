@@ -20,9 +20,7 @@ export const WidgetConnectedAccountSelectionReadSchema = createProtocolStoredRea
 export type ConfiguredWidgetTargetResolution =
   | Readonly<{ status: 'ready'; target: InstalledWidgetTarget | Readonly<{ kind: 'workspace'; workspace: WorkspaceAddressV1; checkout: WorkspaceRefV1 }>; runtime: PluginUiProjectionCurrentness; input: Readonly<Record<string, JsonValue>> }>
   | Readonly<{ status: 'loading'; reasonCode: string }>
-  | Readonly<{ status: 'selection_required' | 'invalid' | 'unavailable' | 'denied'; reasonCode: string; fields?: readonly WidgetInputIssueV1[]; repair?: WidgetInputRepairOutcome;
-    /** Present when the refusal is a failed choices read: asking again is the repair, not editing the input. */
-    retry?: () => void }>;
+  | Readonly<{ status: 'selection_required' | 'invalid' | 'unavailable' | 'denied'; reasonCode: string; fields?: readonly WidgetInputIssueV1[]; repair?: WidgetInputRepairOutcome }>;
 /** Credential-free facts for one next action; Connect never needs a shared inputs writer. */
 export type WidgetInputRepairOutcome = Readonly<{
   kind: 'connect' | 'session_denied' | 'session_unavailable' | 'type_unavailable' | 'input';

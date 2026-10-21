@@ -107,7 +107,7 @@ async function renderPanel(props: Readonly<{
     composition?: 'split' | 'push';
     ask?: WidgetAddAsk;
     initialEntryId?: string;
-    pendingSections?: readonly Readonly<{ id: string; title: string }>[];
+    pendingSections?: readonly Readonly<{ id: string; title: string; retry?: () => void }>[];
     onRequestClose?: () => void;
 }>, options: Parameters<typeof renderScreen>[1] = {}) {
     const screen = await renderScreen(
@@ -385,6 +385,20 @@ describe('WidgetAddSurface', () => {
         expect(screen.findAllByTestId('add.clearSearch').length).toBeGreaterThan(0);
         expect(screen.findAllByTestId('add.pending.yours').length).toBeGreaterThan(0);
         expect(screen.getTextContent()).toContain('Your widgets');
+    });
+
+    it('says a refused Your widgets read could not load and offers Retry, instead of reading Loading', async () => {
+        const rec = recorder();
+        const retry = vi.fn();
+        const screen = await renderPanel({
+            sections: [{ id: 'all', title: 'All', entries: [widgetEntry(SIGNUPS, rec)] }],
+            pendingSections: [{ id: 'yours', title: 'Your widgets', retry }],
+        });
+        expect(screen.findAllByTestId('add.pending.yours.failed').length).toBeGreaterThan(0);
+        expect(screen.getTextContent()).toContain('widgetAdd.yoursFailed');
+        expect(screen.getTextContent()).not.toContain('common.loading');
+        await act(async () => { screen.pressByTestId('add.pending.yours.retry'); });
+        expect(retry).toHaveBeenCalledTimes(1);
     });
 
     it('narrows by search and offers the ask entry, which drafts and closes', async () => {

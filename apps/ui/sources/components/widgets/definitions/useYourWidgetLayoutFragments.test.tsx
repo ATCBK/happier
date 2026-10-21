@@ -126,6 +126,26 @@ describe('saved-group Gallery management', () => {
         }
     });
 
+    it('settles a refused Account inventory as a retryable section and reads again, never staying on Loading', async () => {
+        const { account, screen, serverId } = await renderGallery();
+        await screen.unmount();
+        const inventory = await harness.artifacts(serverId).handle('/v1/artifacts?includeBody=true');
+        if (!inventory) throw new Error('Expected the canonical Artifact inventory boundary');
+        const body = await inventory.json();
+        harness.answer(serverId, 'GET /v1/artifacts', { status: 403, body: { error: 'forbidden' } });
+        const scope = { ...account, owner: { kind: 'home' } } as const;
+        const hook = await renderHook(() => useAccountWidgetAddSections({ scope, instances: NO_INSTANCES,
+            labels: LABELS, addInstance, testID: 'refused-gallery' }));
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent().pendingSections).toEqual([{ id: 'yours', title: expect.any(String), retry: expect.any(Function) }]));
+            // Everything that is not the Account's own read stays searchable meanwhile.
+            expect(hook.getCurrent().sections.some(section => section.id.startsWith('builtins') && section.entries.length > 0)).toBe(true);
+            harness.answer(serverId, 'GET /v1/artifacts', { body });
+            await act(async () => { hook.getCurrent().pendingSections[0]!.retry!(); await flushHookEffects({ cycles: 2 }); });
+            await vi.waitFor(() => expect(hook.getCurrent().pendingSections).toEqual([]));
+        } finally { await hook.unmount(); }
+    });
+
     it('ends Save group on a failed platform operation and lets Retry save through the real Artifact Action without a daemon', async () => {
         const { account, serverId } = await renderGallery();
         const group = instantiateWidgetLayoutFragmentGroupV1(DRAFT.group, { groupId: 'source-group', childIds: ['source-widget'] });

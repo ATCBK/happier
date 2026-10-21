@@ -13723,7 +13723,7 @@ const widgetAddTranslations = { ja: {
         noChoices: 'まだ選べるものがありません',
         optionsLoading: '候補を読み込み中…',
         optionsFailed: '候補を読み込めませんでした',
-        widgetLoadFailed: 'このウィジェットを読み込めませんでした',
+        yoursFailed: 'ウィジェットを読み込めませんでした',
         invalidValue: '見つかりません',
         inputsInvalid: 'このウィジェットの入力を確認してください',
         inputsUnavailable: '選択した入力を利用できません',

@@ -13755,7 +13755,7 @@ const widgetAddTranslations = { pl: {
         noChoices: 'Na razie nie ma czego wybrać',
         optionsLoading: 'Wczytywanie opcji…',
         optionsFailed: 'Nie udało się wczytać opcji',
-        widgetLoadFailed: 'Nie udało się wczytać tego widżetu',
+        yoursFailed: 'Nie udało się wczytać Twoich widżetów',
         invalidValue: 'nie znaleziono',
         inputsInvalid: 'Sprawdź dane wejściowe tego widżetu',
         inputsUnavailable: 'Wybrane dane wejściowe są niedostępne',

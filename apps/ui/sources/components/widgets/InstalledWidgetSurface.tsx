@@ -380,12 +380,7 @@ export function ConfiguredWidgetRefusal(props: Readonly<{
     const label = field?.label ?? t('widgetAdd.inputsUnavailable');
     const session = field?.selectedLabel ?? field?.label ?? t('widgetAdd.thisSession');
     const missing = resolution.status === 'selection_required';
-    // A failed choices read is neither a lost value nor a missing input: say it could not be read and offer
-    // the read again (the same Retry every other failed read offers).
-    const readFailed = resolution.status === 'unavailable' && resolution.retry !== undefined && repair.kind === 'input';
-    // On the card the failure is the widget's; "the choices" is the setup step's own word for it.
-    const title = readFailed ? t('widgetAdd.widgetLoadFailed')
-        : repair.kind === 'connect' ? t('widgetAdd.connectionNeeded', { field: field?.label ?? t('settings.connectedServices') })
+    const title = repair.kind === 'connect' ? t('widgetAdd.connectionNeeded', { field: field?.label ?? t('settings.connectedServices') })
         : repair.kind === 'session_denied' ? t('widgetAdd.sessionDenied', { session })
         : repair.kind === 'session_unavailable' ? t('widgetAdd.sessionUnavailable', { session })
         // An input whose type is gone names that input; with no input it is the widget's own plugin that is missing.
@@ -395,16 +390,12 @@ export function ConfiguredWidgetRefusal(props: Readonly<{
         : field ? t('widgetAdd.inputUnavailable', { field: label })
         : resolution.status === 'invalid' ? t('widgetAdd.inputsInvalid') : t('widgetAdd.inputsUnavailable');
     // Why a pinned value stopped resolving; a missing input or a type needs no cause line.
-    const reason = repair.kind === 'input' && !missing && field && !readFailed ? t('widgetAdd.invalidReason')
+    const reason = repair.kind === 'input' && !missing && field ? t('widgetAdd.invalidReason')
         : repair.kind === 'type_unavailable' && !field ? t('sessionBoard.item.pluginUnavailable.reason') : undefined;
     const repairLabel = !field ? t('widgetAdd.editInputs')
         : missing ? t('widgetAdd.chooseField', { field: field.label })
         : t('widgetAdd.chooseAnother', { field: field.label });
-    const action = readFailed ? {
-        label: t('common.retry'),
-        onPress: resolution.retry!,
-        testID: `${props.testID}-retry`,
-    } : repair.kind === 'connect' && repair.connection ? {
+    const action = repair.kind === 'connect' && repair.connection ? {
         label: t('connectedServicesSettings.connect'),
         onPress: () => router.push(buildConnectedAccountPurposeSetupRoute(repair.connection!)),
         testID: `${props.testID}-connect`,

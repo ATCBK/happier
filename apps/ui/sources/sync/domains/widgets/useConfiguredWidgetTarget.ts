@@ -206,23 +206,12 @@ function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions, re
         if (schema.status !== 'valid') return refuse(schema);
         const contextBound = input.instance.bindings[field.path]?.kind === 'context';
         const constraint = readInputFieldOptionsConstraint(field, type, input.instance.bindings[field.path]?.kind === 'viewer', { contextBound, value: value as JsonValue });
-        let options: readonly InputOption[] | undefined;
-        if (constraint.kind === 'dynamic') {
-            const state = optionReads.state(field, { consumer, draftInput, values: readInputFieldSelectedValues(field, value as JsonValue) });
-            if (state.status !== 'ready') {
-                if (state.status === 'loading') {
-                    // No choices read is demanded while the executable runtime is not current, so none will ever
-                    // answer. An establishing runtime still settles by itself; a settled one is this card's answer.
-                    if (!optionReadsDemanded && executableRuntime.phase !== 'establishing') return { status: 'unavailable',
-                        reasonCode: executableRuntime.unavailableReasonCode ?? `widget_runtime_${executableRuntime.phase}` };
-                    return { status: 'loading', reasonCode: 'widget_input_options_loading' };
-                }
-                const reasonCode = state.errorCode ?? 'widget_input_options_loading';
-                return { status: 'unavailable', reasonCode, fields: [{ path: field.path, status: 'unavailable', reasonCode }], retry: optionReads.retry };
-            }
-            options = state.options;
-        }
-        const admitted = validateInputFieldValue({ field, value: value as JsonValue, type, options,
+        // Choices are needed to pick a value, not to show one: a stored value renders while they load or
+        // cannot be read. Once they are known, choices that no longer name it still retire it.
+        const state = constraint.kind === 'dynamic'
+            ? optionReads.state(field, { consumer, draftInput, values: readInputFieldSelectedValues(field, value as JsonValue) }) : undefined;
+        const options: readonly InputOption[] | undefined = state?.status === 'ready' ? state.options : undefined;
+        const admitted = validateInputFieldValue({ field, value: value as JsonValue, type, options, storedValue: true,
             viewerPurpose: input.instance.bindings[field.path]?.kind === 'viewer', contextBound });
         if (admitted.status !== 'valid') return refuse(admitted);
     }

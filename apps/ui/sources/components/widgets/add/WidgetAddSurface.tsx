@@ -86,8 +86,11 @@ export type WidgetAddPanelProps = Readonly<{
     hint?: string;
     searchPlaceholder: string;
     sections: readonly WidgetAddSection[];
-    /** Sections still being read (Your widgets): only they say so; what is already here is searched and shown at once. */
-    pendingSections?: readonly Readonly<{ id: string; title: string }>[];
+    /**
+     * Sections still being read (Your widgets): only they say so; what is already here is searched and shown at once.
+     * A section whose read was refused carries `retry` and says so instead of reading "Loading…".
+     */
+    pendingSections?: readonly Readonly<{ id: string; title: string; retry?: () => void }>[];
     ask?: WidgetAddAsk;
     /** Where an entry without its own setup goes ("Add to Home"). */
     addLabel: string;
@@ -471,8 +474,12 @@ function WidgetAddList(props: WidgetAddPanelProps & Readonly<{
                     <View key={section.id} style={styles.section} accessibilityLabel={section.title} testID={`${props.testID}.pending.${section.id}`}>
                         <View style={styles.sectionHeader}>
                             <Text style={styles.sectionTitle} accessibilityRole="header" numberOfLines={1}>{section.title}</Text>
-                            <Text style={styles.sectionHint} numberOfLines={1}>{t('common.loading')}</Text>
+                            {section.retry ? null : <Text style={styles.sectionHint} numberOfLines={1}>{t('common.loading')}</Text>}
                         </View>
+                        {section.retry ? (
+                            <SurfaceStateCard kind="error" size="line" title={t('widgetAdd.yoursFailed')} testID={`${props.testID}.pending.${section.id}.failed`}
+                                action={{ testID: `${props.testID}.pending.${section.id}.retry`, label: t('common.retry'), onPress: section.retry }} />
+                        ) : null}
                     </View>
                 ))}
                 {props.askEntry ? <View style={styles.section}>{row(props.askEntry)}</View> : null}

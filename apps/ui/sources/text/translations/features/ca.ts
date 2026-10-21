@@ -13759,7 +13759,7 @@ const widgetAddTranslations = { ca: {
         noChoices: 'Encara no hi ha res per triar',
         optionsLoading: 'Carregant opcions…',
         optionsFailed: 'No s’han pogut carregar les opcions',
-        widgetLoadFailed: 'No s’ha pogut carregar aquest widget',
+        yoursFailed: 'No s’han pogut carregar els teus widgets',
         invalidValue: 'no trobat',
         inputsInvalid: 'Revisa les entrades d’aquest giny',
         inputsUnavailable: 'Una entrada seleccionada no està disponible',

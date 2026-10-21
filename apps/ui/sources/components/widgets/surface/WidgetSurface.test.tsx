@@ -587,7 +587,8 @@ it('retains exact WorkBoard option admission across delayed responsive remounts 
         period = { relative: '7days' };
         const beforeChangedInput = observed.length;
         await screen.update(<Probe key="changed-context" />);
-        expect(observed.slice(beforeChangedInput).map(state => state.status)).toContain('loading');
+        // The new context asks for its own choices; the stored value keeps rendering while they load.
+        expect(observed.slice(beforeChangedInput).map(state => state.status)).not.toContain('loading');
         await vi.waitFor(() => expect(observed.at(-1)?.status).toBe('ready'));
         await screen.update(<></>);
         await flushHookEffects({ cycles: 2 });
@@ -595,7 +596,7 @@ it('retains exact WorkBoard option admission across delayed responsive remounts 
             field.path === 'period' ? { ...field, title: 'Reporting period' } : field) } };
         const beforeChangedDeclaration = observed.length;
         await screen.update(<Probe key="changed-declaration" />);
-        expect(observed.slice(beforeChangedDeclaration).map(state => state.status)).toContain('loading');
+        expect(observed.slice(beforeChangedDeclaration).map(state => state.status)).not.toContain('loading');
         await vi.waitFor(() => expect(observed.at(-1)?.status).toBe('ready'));
         await screen.update(<></>);
         await flushHookEffects({ cycles: 2 });
@@ -605,7 +606,7 @@ it('retains exact WorkBoard option admission across delayed responsive remounts 
     } finally { await screen.unmount(); store.retire(); if (!disconnected) await connection.dispose(); disposeActionLoader(); }
 });
 
-it('keeps an input-options read pending, then preserves the canonical terminal refusal', async () => {
+it('shows its stored value while its choices are pending, and after the read is refused', async () => {
     const disposeActionLoader = await installRealActionExecutorModuleLoader();
     const http = createHomeHubArtifactHttpBoundary('actor');
     const connection = await restoreServerAccountForTest({ serverUrl: 'https://usage-widget-options.test', accountId: 'actor', request: http.request });
@@ -629,16 +630,17 @@ it('keeps an input-options read pending, then preserves the canonical terminal r
         return state;
     });
     try {
-        expect(observed.find(state => state.status !== 'ready' && state.reasonCode === 'widget_input_options_loading'))
-            .toMatchObject({ status: 'loading' });
-        await vi.waitFor(() => expect(hook.getCurrent().status).not.toBe('loading'));
-        // This inline definition is not published in the Account catalog. The real Action
-        // refuses it after discovery; that terminal fact must not become permanent loading.
-        expect(hook.getCurrent()).toMatchObject({ status: 'unavailable', reasonCode: 'input_type_consumer_unavailable' });
+        // Choices are needed to pick a value, not to show one: the card never waits on them.
+        expect(observed[0]).toMatchObject({ status: 'ready' });
+        // This inline definition is not published in the Account catalog, so the real Action refuses
+        // the read after discovery. That refusal says nothing about the stored value.
+        await flushHookEffects({ cycles: 3 });
+        await vi.waitFor(() => expect(observed.length).toBeGreaterThan(1));
+        expect(observed.every(state => state.status === 'ready')).toBe(true);
     } finally { await hook.unmount(); await connection.dispose(); disposeActionLoader(); }
 });
 
-it('settles as unavailable, never loading, when its plugin runtime is offline and the saved input needs a choices read', async () => {
+it('shows its stored value from the retained runtime even when its saved input would need a choices read', async () => {
     const disposeActionLoader = await installRealActionExecutorModuleLoader();
     const http = createHomeHubArtifactHttpBoundary('actor');
     const connection = await restoreServerAccountForTest({ serverUrl: 'https://offline-widget-options.test', accountId: 'actor', request: http.request });
@@ -652,14 +654,14 @@ it('settles as unavailable, never loading, when its plugin runtime is offline an
     const reference = { kind: 'inline' as const, definition };
     const instance: WidgetInstanceV1 = { v: 1, id: 'options', definition: reference, bindings: { home: { kind: 'value', value: connection.home.id } } };
     const descriptor = describeAuthoredWidgetDefinitionV1(definition, reference, null);
-    // The daemon is unreachable and only the retained snapshot remains: no choices read is demanded, so none will ever answer.
+    // The daemon is unreachable and only the retained snapshot remains: no choices read is demanded, and none is needed.
     const runtime = { pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION, pluginBrowserProjection: null, phase: 'retainedOffline' as const,
         unavailableReasonCode: 'plugin_machine_unreachable', interactionEnabled: false, machineId: null, serverId: null, platform: 'web' as const,
         accountLifetime: captureActiveServerAccountScopeLifetime() };
     const hook = await renderHook(() => useConfiguredWidgetTarget({ scope, instance, descriptor, providedContext: {}, appRuntime: runtime }));
     try {
         await flushHookEffects({ cycles: 3 });
-        expect(hook.getCurrent()).toMatchObject({ status: 'unavailable', reasonCode: 'plugin_machine_unreachable' });
+        expect(hook.getCurrent()).toMatchObject({ status: 'ready' });
     } finally { await hook.unmount(); await connection.dispose(); disposeActionLoader(); }
 });
 

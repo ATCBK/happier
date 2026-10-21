@@ -422,6 +422,33 @@ describe('widget definition flows', () => {
         finally { await act(async () => { screen.tree.unmount(); }); }
     });
 
+    it('settles a refused definition read as failed, never as endless loading, and reads again on Retry', async () => {
+        const serverId = await addDefinitionHome();
+        const account = { serverId, accountId: ACCOUNT_ID };
+        const React = await import('react');
+        const { act } = await import('react-test-renderer');
+        const { Text } = await import('react-native');
+        const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
+        const { useYourWidgetCandidatesState } = await import('./useYourWidgetCandidates');
+        let retry = () => {};
+        function Gallery() {
+            const state = useYourWidgetCandidatesState(account, null);
+            retry = state.retry;
+            return React.createElement(Text, {}, state.status);
+        }
+        harness.answer(serverId, '/v1/artifacts?limit=500', { status: 403, body: { error: 'forbidden' } });
+        const reads = () => harness.requestsFor('/v1/artifacts?limit=500').length;
+        const screen = await renderScreen(React.createElement(Gallery));
+        try {
+            await vi.waitFor(() => { expect(screen.getTextContent()).toBe('failed'); });
+            const first = reads();
+            await act(async () => { retry(); });
+            // Retry asks again, and a second refusal settles again.
+            await vi.waitFor(() => { expect(reads()).toBeGreaterThan(first); });
+            await vi.waitFor(() => { expect(screen.getTextContent()).toBe('failed'); });
+        } finally { await act(async () => { screen.tree.unmount(); }); }
+    });
+
     it('keeps the Gallery empty before its Account scope is available', async () => {
         const React = await import('react');
         const { act } = await import('react-test-renderer');

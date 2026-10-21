@@ -9,14 +9,16 @@ import { publishPresentationNotice } from '@/components/sessions/presentation/pr
 import { t } from '@/text';
 import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 import { createWidgetArtifactWriteAttempt, runWidgetDefinitionCommand, type WidgetCommandTarget } from './widgetDefinitionCommands';
+import type { AccountInventoryStatus } from './useYourWidgetCandidates';
 
 const EMPTY_FRAGMENTS: readonly WidgetLayoutFragmentSummaryV1[] = Object.freeze([]);
 
 /** Mount only for an open group-capable Gallery; summaries never read executable child bodies. */
 export function useYourWidgetLayoutFragments(account: WidgetCommandTarget | null): Readonly<{
     fragments: readonly WidgetLayoutFragmentSummaryV1[];
-    /** False until the Account's saved groups have been read (always true without an Account). */
-    loaded: boolean;
+    /** Loading until the Account's saved groups have been read (ready without an Account); a refused read is failed. */
+    status: AccountInventoryStatus;
+    retry: () => void;
     actionsFor: (fragment: WidgetLayoutFragmentSummaryV1) => ItemAction[];
 }> {
     const [inventory, setInventory] = React.useState<Readonly<{
@@ -28,14 +30,19 @@ export function useYourWidgetLayoutFragments(account: WidgetCommandTarget | null
     // Several Gallery entries can each hold an unresolved copy; one cannot replace another's id.
     const duplicateAttempts = React.useMemo(() => new Map<string, ReturnType<typeof createWidgetArtifactWriteAttempt<'widgets.fragment.duplicate'>>>(), [scope]);
     const [reload, refresh] = React.useReducer((value: number) => value + 1, 0);
+    // A refused first read of this Account; a refused refresh keeps the groups already shown.
+    const [refused, setRefused] = React.useState<WidgetCommandTarget | null>(null);
     const mountedAccount = React.useRef<WidgetCommandTarget | null>(null);
     React.useEffect(() => {
-        if (!scope) { setInventory(null); return; }
+        if (!scope) { setInventory(null); setRefused(null); return; }
         const controller = new AbortController();
         mountedAccount.current = scope;
+        setRefused(null);
         void (async () => {
             const listed = await runWidgetDefinitionCommand('widgets.fragment.list', { account: scope }, scope, controller.signal);
-            if (listed.kind === 'applied' && !controller.signal.aborted) setInventory({ ...scope, fragments: listed.result.fragments });
+            if (controller.signal.aborted) return;
+            if (listed.kind === 'applied') setInventory({ ...scope, fragments: listed.result.fragments });
+            else setRefused(scope);
         })();
         return () => { controller.abort(); if (mountedAccount.current === scope) mountedAccount.current = null; };
     }, [reload, scope]);
@@ -118,5 +125,6 @@ export function useYourWidgetLayoutFragments(account: WidgetCommandTarget | null
         { id: 'delete', title: t('common.delete'), icon: 'trash', destructive: true, onPress: () => { void manage(fragment, 'delete'); } },
     ], [manage]);
     const current = inventory !== null && inventory.serverId === serverId && inventory.accountId === accountId;
-    return { fragments: current ? inventory.fragments : EMPTY_FRAGMENTS, loaded: current || scope === null, actionsFor };
+    const status: AccountInventoryStatus = current || scope === null ? 'ready' : refused === scope ? 'failed' : 'loading';
+    return { fragments: current ? inventory.fragments : EMPTY_FRAGMENTS, status, retry: refresh, actionsFor };
 }

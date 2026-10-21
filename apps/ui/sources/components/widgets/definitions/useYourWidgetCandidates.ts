@@ -31,33 +31,42 @@ export function useYourWidgetCandidates(account: Account | null, projection: Plu
     return useYourWidgetCandidatesState(account, projection).candidates;
 }
 
-/** The same candidates, with whether the Account's definitions have been read (a search can wait for them). */
+/** Where an Account inventory read stands: it settles as ready or failed, it never stays loading. */
+export type AccountInventoryStatus = 'loading' | 'ready' | 'failed';
+
+/** The same candidates, with how the Account's definitions read went (a search can wait for them, a failure offers Retry). */
 export function useYourWidgetCandidatesState(account: Account | null, projection: PluginUiProjectionModel | null | undefined): Readonly<{
     candidates: readonly WidgetCandidate[];
-    loaded: boolean;
+    status: AccountInventoryStatus;
+    retry: () => void;
 }> {
+    // `definitions: null` is a refused read of that Account.
     const [inventory, setInventory] = React.useState<Readonly<{ serverId: string; accountId: string;
-        definitions: readonly WidgetDefinitionSummaryV1[] }> | null>(null);
+        definitions: readonly WidgetDefinitionSummaryV1[] | null }> | null>(null);
+    const [reload, retry] = React.useReducer((value: number) => value + 1, 0);
     const serverId = account?.serverId;
     const accountId = account?.accountId;
     React.useEffect(() => {
         if (!serverId || !accountId) { setInventory(null); return; }
         const controller = new AbortController();
         const scope = { serverId, accountId };
+        setInventory(null);
         void (async () => {
             const listed = await runWidgetDefinitionCommand('widgets.definition.list', { account: scope }, scope, controller.signal);
-            if (listed.kind !== 'applied' || controller.signal.aborted) return;
-            if (!controller.signal.aborted) setInventory({ ...scope, definitions: listed.result.definitions });
+            if (controller.signal.aborted) return;
+            setInventory({ ...scope, definitions: listed.kind === 'applied' ? listed.result.definitions : null });
         })();
         return () => controller.abort();
-    }, [accountId, serverId]);
+    }, [accountId, serverId, reload]);
     return React.useMemo(() => {
-        if (!inventory || inventory.serverId !== serverId || inventory.accountId !== accountId) return { candidates: [], loaded: !account };
+        if (!inventory || inventory.serverId !== serverId || inventory.accountId !== accountId)
+            return { candidates: [], status: account ? 'loading' : 'ready', retry };
+        if (!inventory.definitions) return { candidates: [], status: 'failed', retry };
         const candidates = inventory.definitions.map(summary => {
             const installed = summary.sourceDefinition ? readWidgetDescriptor(projection, summary.sourceDefinition) : null;
             const candidate = describeWidgetDefinitionSummaryV1(summary, installed);
             return { ...candidate, pluginName: installed?.pluginName ?? describeYourWidgetSource(candidate, projection) };
         });
-        return { candidates, loaded: true };
+        return { candidates, status: 'ready', retry };
     }, [inventory, serverId, accountId, account, projection]);
 }
